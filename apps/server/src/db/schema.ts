@@ -86,11 +86,9 @@ export const settings = sqliteTable(
   "settings",
   {
     id: integer("id").primaryKey(),
-    providerType: text("provider_type").notNull().default("builtin"),
-    provider: text("provider").notNull().default("anthropic"),
-    modelId: text("model_id").notNull().default("claude-sonnet-4-5"),
-    baseUrl: text("base_url"),
-    apiKey: text("api_key"),
+    defaultModelId: text("default_model_id").references(
+      () => providerModels.id
+    ),
     environment: text("environment").notNull().default("local"),
     containerImage: text("container_image").notNull().default("alpine:3.22"),
     cpuLimit: integer("cpu_limit").notNull().default(1000),
@@ -102,12 +100,50 @@ export const settings = sqliteTable(
   (table) => [
     check("settings_singleton_check", sql`${table.id} = 1`),
     check(
-      "settings_provider_type_check",
-      sql`${table.providerType} in ('builtin', 'openai-compatible')`
-    ),
-    check(
       "settings_environment_check",
       sql`${table.environment} in ('local', 'container')`
+    ),
+  ]
+)
+
+export const providerConnections = sqliteTable(
+  "provider_connections",
+  {
+    id: text("id").primaryKey(),
+    label: text("label").notNull(),
+    type: text("type").notNull(),
+    baseUrl: text("base_url").notNull(),
+    apiKey: text("api_key").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "provider_connections_type_check",
+      sql`${table.type} in ('openai-compatible', 'openai-responses', 'anthropic-messages')`
+    ),
+  ]
+)
+
+export const providerModels = sqliteTable(
+  "provider_models",
+  {
+    id: text("id").primaryKey(),
+    providerId: text("provider_id")
+      .notNull()
+      .references(() => providerConnections.id, { onDelete: "cascade" }),
+    modelId: text("model_id").notNull(),
+    label: text("label").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("provider_models_provider_id_idx").on(table.providerId),
+    index("provider_models_provider_model_idx").on(
+      table.providerId,
+      table.modelId
     ),
   ]
 )

@@ -21,6 +21,7 @@ import { createApp } from "../src/app"
 const roots: string[] = []
 const closeApps: Array<() => void> = []
 const providers: Array<{ unregister(): void }> = []
+const configuredModels = new WeakMap<object, Promise<string>>()
 
 afterEach(() => {
   for (const close of closeApps.splice(0)) close()
@@ -39,10 +40,8 @@ function setup() {
   const instance = createApp({
     dataDir,
     authStorage,
-    resolveModel: (provider, modelId) =>
-      provider === "faux" && modelId === faux.getModel().id
-        ? (faux.getModel() as never)
-        : undefined,
+    resolveModel: (_provider, modelId) =>
+      modelId === faux.getModel().id ? (faux.getModel() as never) : undefined,
   })
   closeApps.push(instance.close)
   return { ...instance, dataDir, faux }
@@ -92,15 +91,44 @@ function docker(...args: string[]) {
   })
 }
 
+function configureFaux(app: ReturnType<typeof createApp>["app"]) {
+  const cached = configuredModels.get(app)
+  if (cached) return cached
+  const configured = (async () => {
+    const providers = await (await app.request("/api/providers")).json()
+    const provider = providers.items[0]
+    await app.request(`/api/providers/${provider.id}`, {
+      ...json({
+        label: "Faux",
+        type: "openai-compatible",
+        baseUrl: "http://localhost:4011/v1",
+        apiKey: "host-only-secret",
+        enabled: true,
+      }),
+      method: "PATCH",
+    })
+    const model = await (
+      await app.request(
+        `/api/providers/${provider.id}/models`,
+        json({ modelId: "faux-1", label: "Faux 1" })
+      )
+    ).json()
+    return model.id as string
+  })()
+  configuredModels.set(app, configured)
+  return configured
+}
+
 describe("phase three", () => {
   test("browses and downloads workspace files without crossing its real path", async () => {
     const instance = setup()
     const challenge = await createChallenge(instance.app)
     instance.faux.setResponses([fauxAssistantMessage("Waiting for guidance.")])
+    const modelId = await configureFaux(instance.app)
     const run = await (
       await instance.app.request(
         `/api/challenges/${challenge.id}/runs`,
-        json({ provider: "faux", modelId: "faux-1", environment: "local" })
+        json({ modelId, environment: "local" })
       )
     ).json()
     const workspace = join(instance.dataDir, "workspaces", run.id)
@@ -166,11 +194,11 @@ describe("phase three", () => {
   test("rejects Docker option injection through the image field", async () => {
     const instance = setup()
     const challenge = await createChallenge(instance.app)
+    const modelId = await configureFaux(instance.app)
     const response = await instance.app.request(
       `/api/challenges/${challenge.id}/runs`,
       json({
-        provider: "faux",
-        modelId: "faux-1",
+        modelId,
         environment: "container",
         image: "--privileged",
       })
@@ -184,6 +212,7 @@ describe("phase three", () => {
   test("routes all environment tools into a limited container and removes it", async () => {
     const instance = setup()
     const challenge = await createChallenge(instance.app)
+    const modelId = await configureFaux(instance.app)
     await instance.app.request(
       `/api/challenges/${challenge.id}/attachments?filename=attachment.txt`,
       {
@@ -205,8 +234,7 @@ describe("phase three", () => {
       await instance.app.request(
         `/api/challenges/${challenge.id}/runs`,
         json({
-          provider: "faux",
-          modelId: "faux-1",
+          modelId,
           environment: "container",
           image: "alpine:3.22",
         })

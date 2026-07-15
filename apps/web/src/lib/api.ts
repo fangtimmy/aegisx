@@ -86,12 +86,7 @@ export type UsageSummary = {
 }
 
 export type SettingsPublic = {
-  providerType: "builtin" | "openai-compatible"
-  provider: string
-  modelId: string
-  baseUrl: string | null
-  hasApiKey: boolean
-  apiKeyMask: string | null
+  defaultModelId: string | null
   environment: "local" | "container"
   containerImage: string
   cpus: number
@@ -99,6 +94,33 @@ export type SettingsPublic = {
   pidsLimit: number
   maxConcurrency: number
   updatedAt: string
+}
+
+export type ProviderType =
+  | "openai-compatible"
+  | "openai-responses"
+  | "anthropic-messages"
+
+export type ProviderModel = {
+  id: string
+  providerId: string
+  modelId: string
+  label: string
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProviderConnection = {
+  id: string
+  label: string
+  type: ProviderType
+  baseUrl: string
+  apiKey: string
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+  models: ProviderModel[]
 }
 
 export type EventStats = {

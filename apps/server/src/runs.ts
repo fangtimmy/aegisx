@@ -38,6 +38,7 @@ type EnvironmentConfig =
     }
 type ModelConfig = {
   provider: string
+  providerLabel?: string
   modelId: string
   baseUrl?: string
   costKnown?: boolean
@@ -70,7 +71,9 @@ type Options = {
   dataDir: string
   maxConcurrency: number
   authStorage?: AuthStorage
+  modelRegistry?: ModelRegistry
   resolveModel?: (provider: string, modelId: string) => Model<Api> | undefined
+  getApiKeys?: (provider: string) => Iterable<string>
 }
 
 type CurrentSession = {
@@ -84,7 +87,8 @@ export function createRunManager(options: Options) {
   const { db, dataDir } = options
   let maxConcurrency = options.maxConcurrency
   const authStorage = options.authStorage ?? AuthStorage.create()
-  const modelRegistry = ModelRegistry.create(authStorage)
+  const modelRegistry =
+    options.modelRegistry ?? ModelRegistry.inMemory(authStorage)
   const current = new Map<string, CurrentSession>()
   const activeContainers = new Map<string, string>()
   const listeners = new Map<string, Set<(event: RunEvent) => void>>()
@@ -130,7 +134,7 @@ export function createRunManager(options: Options) {
       challengeName: row.challengeName,
       eventId: row.eventId,
       status: row.run.status as RunStatus,
-      provider: config.provider ?? "",
+      provider: config.providerLabel ?? config.provider ?? "",
       modelId: config.modelId ?? "",
       environment: environment.type,
       createdAt: row.run.createdAt,
@@ -289,6 +293,9 @@ export function createRunManager(options: Options) {
     }
     const modelConfig = parseModelConfig(run.modelConfig)
     const model = await resolveRequestedModel(modelConfig)
+    const apiKey = await authStorage.getApiKey(modelConfig.provider, {
+      includeFallback: false,
+    })
     const workspacePath = join(dataDir, run.workspacePath)
     const sessionFile = join(dataDir, run.sessionPath)
     const sessionManager = SessionManager.open(
@@ -301,7 +308,9 @@ export function createRunManager(options: Options) {
       workspacePath,
       sessionManager,
       model,
-      parseEnvironment(run.environmentConfig)
+      parseEnvironment(run.environmentConfig),
+      apiKey,
+      modelConfig.provider
     )
   }
 
@@ -310,7 +319,9 @@ export function createRunManager(options: Options) {
     workspacePath: string,
     sessionManager: SessionManager,
     model: Model<Api>,
-    environment: EnvironmentConfig
+    environment: EnvironmentConfig,
+    apiKey: string | undefined,
+    provider: string
   ) {
     let environmentTools: ReturnType<typeof createContainerTools> | undefined
     if (environment.type === "container") {
@@ -417,7 +428,17 @@ export function createRunManager(options: Options) {
       throw error
     }
     session = created.session
-    const unsubscribe = session.subscribe((event) => emit(runId, event))
+    const secrets = new Set(options.getApiKeys?.(provider))
+    if (apiKey) secrets.add(apiKey)
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_end") {
+        for (const secret of options.getApiKeys?.(provider) ?? []) {
+          secrets.add(secret)
+        }
+        for (const secret of secrets) redactSecret(event.message, secret)
+      }
+      emit(runId, event)
+    })
     current.set(runId, { session, unsubscribe })
     return session
   }
@@ -488,12 +509,17 @@ export function createRunManager(options: Options) {
 
     try {
       const model = await resolveRequestedModel(modelConfig)
+      const apiKey = await authStorage.getApiKey(modelConfig.provider, {
+        includeFallback: false,
+      })
       const session = await attachSession(
         id,
         workspacePath,
         sessionManager,
         model,
-        environment
+        environment,
+        apiKey,
+        modelConfig.provider
       )
       startPrompt(id, session, prompt)
     } catch (error) {
@@ -696,6 +722,9 @@ function parseModelConfig(value: string): ModelConfig {
     const parsed = JSON.parse(value) as Partial<ModelConfig>
     return {
       provider: typeof parsed.provider === "string" ? parsed.provider : "",
+      ...(typeof parsed.providerLabel === "string"
+        ? { providerLabel: parsed.providerLabel }
+        : {}),
       modelId: typeof parsed.modelId === "string" ? parsed.modelId : "",
       ...(typeof parsed.baseUrl === "string"
         ? { baseUrl: parsed.baseUrl }
@@ -722,4 +751,24 @@ function redactFlags<T>(value: T): T {
   return JSON.parse(
     JSON.stringify(value, (key, item) => (key === "flag" ? undefined : item))
   ) as T
+}
+
+function redactSecret<T>(value: T, secret: string | undefined): T {
+  if (!secret) return value
+  if (typeof value === "string") {
+    return value.replaceAll(secret, "[redacted]") as T
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      value[index] = redactSecret(value[index], secret)
+    }
+    return value
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const key of Object.keys(value)) {
+      const record = value as Record<string, unknown>
+      record[key] = redactSecret(record[key], secret)
+    }
+  }
+  return value
 }

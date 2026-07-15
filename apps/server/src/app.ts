@@ -1,13 +1,21 @@
 import { existsSync } from "node:fs"
 import type { Api, Model } from "@earendil-works/pi-ai/compat"
-import { AuthStorage } from "@earendil-works/pi-coding-agent"
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent"
 import { tbValidator } from "@hono/typebox-validator"
 import { and, count, eq, getTableColumns, inArray } from "drizzle-orm"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 import { createDatabase } from "./db"
-import { attachments, challenges, events, runs, settings } from "./db/schema"
+import {
+  attachments,
+  challenges,
+  events,
+  providerConnections,
+  providerModels,
+  runs,
+  settings,
+} from "./db/schema"
 import { createRunManager, RunActionError } from "./runs"
 import { createStorage, isSafeFilename } from "./storage"
 import { sumUsage } from "./usage"
@@ -41,7 +49,6 @@ const challengeInput = Type.Object({
 
 const runInput = Type.Object(
   {
-    provider: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
     modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
     environment: Type.Optional(
       Type.Union([Type.Literal("local"), Type.Literal("container")])
@@ -57,21 +64,9 @@ const runInput = Type.Object(
   { additionalProperties: false }
 )
 
-const settingsInput = Type.Object(
+const runtimeSettingsInput = Type.Object(
   {
-    providerType: Type.Union([
-      Type.Literal("builtin"),
-      Type.Literal("openai-compatible"),
-    ]),
-    provider: Type.String({ minLength: 1, maxLength: 100 }),
-    modelId: Type.String({ minLength: 1, maxLength: 200 }),
-    baseUrl: Type.Union([
-      Type.String({ minLength: 1, maxLength: 2_000 }),
-      Type.Null(),
-    ]),
-    apiKey: Type.Optional(
-      Type.Union([Type.String({ maxLength: 10_000 }), Type.Null()])
-    ),
+    defaultModelId: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
     environment: Type.Union([Type.Literal("local"), Type.Literal("container")]),
     containerImage: Type.String({
       minLength: 1,
@@ -83,6 +78,46 @@ const settingsInput = Type.Object(
     pidsLimit: Type.Integer({ minimum: 16, maximum: 4_096 }),
     maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
   },
+  { additionalProperties: false }
+)
+
+const providerType = Type.Union([
+  Type.Literal("openai-compatible"),
+  Type.Literal("openai-responses"),
+  Type.Literal("anthropic-messages"),
+])
+
+const providerInput = Type.Object(
+  {
+    label: Type.String({ minLength: 1, maxLength: 100 }),
+    type: providerType,
+    baseUrl: Type.String({ minLength: 1, maxLength: 2_000 }),
+    apiKey: Type.String({ maxLength: 10_000 }),
+    enabled: Type.Boolean(),
+  },
+  { additionalProperties: false }
+)
+
+const providerUpdateInput = Type.Partial(providerInput, {
+  additionalProperties: false,
+})
+
+const modelInput = Type.Object(
+  {
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+    label: Type.String({ minLength: 1, maxLength: 200 }),
+  },
+  { additionalProperties: false }
+)
+
+const modelUpdateInput = Type.Partial(
+  Type.Object(
+    {
+      label: Type.String({ minLength: 1, maxLength: 200 }),
+      enabled: Type.Boolean(),
+    },
+    { additionalProperties: false }
+  ),
   { additionalProperties: false }
 )
 
@@ -119,6 +154,22 @@ function cleanDate(value: string | null | undefined) {
   return Number.isNaN(timestamp) ? undefined : new Date(timestamp).toISOString()
 }
 
+const providerName = (id: string) => `aegisx-${id}`
+
+function providerApi(
+  type: "openai-compatible" | "openai-responses" | "anthropic-messages"
+): Api {
+  return type === "openai-compatible" ? "openai-completions" : type
+}
+
+function normalizeBaseUrl(value: string) {
+  const url = new URL(value.trim())
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Provider endpoint must use HTTP or HTTPS")
+  }
+  return url.toString().replace(/\/$/, "")
+}
+
 export function createApp(options: {
   dataDir: string
   maxConcurrency?: number
@@ -127,9 +178,100 @@ export function createApp(options: {
 }) {
   const { db, sqlite } = createDatabase(options.dataDir)
   const storage = createStorage(options.dataDir)
+  const authStorage = options.authStorage ?? AuthStorage.inMemory()
+  const modelRegistry = ModelRegistry.inMemory(authStorage)
+  const registeredProviders = new Set<string>()
+  const providerSecrets = new Map<string, Set<string>>()
+  const listProviderModels = (providerId: string) =>
+    db
+      .select()
+      .from(providerModels)
+      .where(eq(providerModels.providerId, providerId))
+      .all()
+  const getProvider = (providerId: string) =>
+    db
+      .select()
+      .from(providerConnections)
+      .where(eq(providerConnections.id, providerId))
+      .get()
+  const syncModelRegistry = () => {
+    const activeProviders = db
+      .select()
+      .from(providerConnections)
+      .all()
+      .map((provider) => ({
+        provider,
+        models: listProviderModels(provider.id).filter(
+          (model) => model.enabled
+        ),
+      }))
+      .filter(
+        ({ provider, models }) =>
+          provider.enabled && Boolean(provider.apiKey) && models.length > 0
+      )
+    const activeNames = new Set(
+      activeProviders.map(({ provider }) => providerName(provider.id))
+    )
+    for (const name of registeredProviders) {
+      if (activeNames.has(name)) continue
+      authStorage.removeRuntimeApiKey(name)
+      modelRegistry.unregisterProvider(name)
+      registeredProviders.delete(name)
+    }
+    for (const { provider, models } of activeProviders) {
+      const name = providerName(provider.id)
+      const secrets = providerSecrets.get(name) ?? new Set<string>()
+      secrets.add(provider.apiKey)
+      providerSecrets.set(name, secrets)
+      authStorage.setRuntimeApiKey(name, provider.apiKey)
+      modelRegistry.registerProvider(name, {
+        name: provider.label,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        api: providerApi(
+          provider.type as
+            | "openai-compatible"
+            | "openai-responses"
+            | "anthropic-messages"
+        ),
+        models: models.map((model) => ({
+          id: model.modelId,
+          name: model.label,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 16_384,
+        })),
+      })
+      registeredProviders.add(name)
+    }
+  }
   if (!db.select().from(settings).where(eq(settings.id, 1)).get()) {
+    const now = new Date().toISOString()
+    db.insert(providerConnections)
+      .values({
+        id: "default-provider",
+        label: "Anthropic",
+        type: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com/v1",
+        apiKey: "",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run()
+    db.insert(providerModels)
+      .values({
+        id: "default-model",
+        providerId: "default-provider",
+        modelId: "claude-sonnet-4-5",
+        label: "Claude Sonnet 4.5",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run()
     db.insert(settings)
-      .values({ id: 1, updatedAt: new Date().toISOString() })
+      .values({ id: 1, defaultModelId: "default-model", updatedAt: now })
       .run()
   }
   const getSettings = () => {
@@ -137,24 +279,8 @@ export function createApp(options: {
     if (!value) throw new Error("Settings are unavailable")
     return value
   }
-  const authStorage = options.authStorage ?? AuthStorage.create()
-  let credentialProvider: string | undefined
-  const applyCredential = (provider: string, apiKey: string | null) => {
-    if (credentialProvider && credentialProvider !== provider) {
-      authStorage.removeRuntimeApiKey(credentialProvider)
-    }
-    if (apiKey) {
-      authStorage.setRuntimeApiKey(provider, apiKey)
-      credentialProvider = provider
-    } else {
-      authStorage.removeRuntimeApiKey(provider)
-      credentialProvider = undefined
-    }
-  }
+  syncModelRegistry()
   const initialSettings = getSettings()
-  if (initialSettings.apiKey) {
-    applyCredential(initialSettings.provider, initialSettings.apiKey)
-  }
   const environmentConcurrency = process.env.AEGISX_MAX_CONCURRENCY
     ? Number(process.env.AEGISX_MAX_CONCURRENCY)
     : undefined
@@ -170,6 +296,8 @@ export function createApp(options: {
         ? configuredConcurrency
         : 2,
     authStorage,
+    getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
+    modelRegistry,
     resolveModel: options.resolveModel,
   })
   const app = new Hono()
@@ -177,12 +305,7 @@ export function createApp(options: {
   const publicSettings = () => {
     const value = getSettings()
     return {
-      providerType: value.providerType as "builtin" | "openai-compatible",
-      provider: value.provider,
-      modelId: value.modelId,
-      baseUrl: value.baseUrl,
-      hasApiKey: Boolean(value.apiKey),
-      apiKeyMask: value.apiKey ? `****${value.apiKey.slice(-4)}` : null,
+      defaultModelId: value.defaultModelId,
       environment: value.environment as "local" | "container",
       containerImage: value.containerImage,
       cpus: value.cpuLimit / 1000,
@@ -192,6 +315,12 @@ export function createApp(options: {
       updatedAt: value.updatedAt,
     }
   }
+  const publicProvider = (
+    provider: typeof providerConnections.$inferSelect
+  ) => ({
+    ...provider,
+    models: listProviderModels(provider.id),
+  })
 
   const listEvents = () =>
     db
@@ -256,48 +385,24 @@ export function createApp(options: {
 
   app.get("/api/settings", (c) => c.json(publicSettings()))
 
-  app.patch("/api/settings", validateJson(settingsInput), (c) => {
+  app.patch("/api/settings", validateJson(runtimeSettingsInput), (c) => {
     const input = c.req.valid("json")
-    const provider = input.provider.trim()
-    const modelId = input.modelId.trim()
-    const baseUrl = cleanText(input.baseUrl)
-    if (!provider || !modelId) {
+    const defaultModel = input.defaultModelId
+      ? db
+          .select()
+          .from(providerModels)
+          .where(eq(providerModels.id, input.defaultModelId))
+          .get()
+      : undefined
+    if (input.defaultModelId && !defaultModel) {
       return c.json(
-        {
-          error: {
-            code: "invalid_settings",
-            message: "Provider and model ID are required",
-          },
-        },
-        400
+        { error: { code: "not_found", message: "Default model not found" } },
+        404
       )
     }
-    if (input.providerType === "openai-compatible") {
-      try {
-        const url = new URL(baseUrl ?? "")
-        if (url.protocol !== "http:" && url.protocol !== "https:") throw null
-      } catch {
-        return c.json(
-          {
-            error: {
-              code: "invalid_base_url",
-              message: "OpenAI-compatible endpoint must be an HTTP URL",
-            },
-          },
-          400
-        )
-      }
-    }
-    const existing = getSettings()
-    const apiKey =
-      input.apiKey === undefined ? existing.apiKey : cleanText(input.apiKey)
     db.update(settings)
       .set({
-        providerType: input.providerType,
-        provider,
-        modelId,
-        baseUrl: input.providerType === "openai-compatible" ? baseUrl : null,
-        apiKey,
+        defaultModelId: input.defaultModelId,
         environment: input.environment,
         containerImage: input.containerImage.trim(),
         cpuLimit: Math.round(input.cpus * 1000),
@@ -308,9 +413,300 @@ export function createApp(options: {
       })
       .where(eq(settings.id, 1))
       .run()
-    applyCredential(provider, apiKey)
     runManager.setMaxConcurrency(input.maxConcurrency)
     return c.json(publicSettings())
+  })
+
+  app.get("/api/providers", (c) =>
+    c.json({
+      items: db
+        .select()
+        .from(providerConnections)
+        .orderBy(providerConnections.createdAt)
+        .all()
+        .map(publicProvider),
+    })
+  )
+
+  app.post("/api/providers", validateJson(providerInput), (c) => {
+    const input = c.req.valid("json")
+    try {
+      const now = new Date().toISOString()
+      const provider = {
+        id: crypto.randomUUID(),
+        label: input.label.trim(),
+        type: input.type,
+        baseUrl: normalizeBaseUrl(input.baseUrl),
+        apiKey: input.apiKey,
+        enabled: input.enabled,
+        createdAt: now,
+        updatedAt: now,
+      }
+      if (!provider.label) {
+        return c.json(
+          {
+            error: {
+              code: "invalid_provider",
+              message: "Provider name is required",
+            },
+          },
+          400
+        )
+      }
+      db.insert(providerConnections).values(provider).run()
+      syncModelRegistry()
+      return c.json(publicProvider(provider), 201)
+    } catch {
+      return c.json(
+        {
+          error: {
+            code: "invalid_base_url",
+            message: "Invalid provider endpoint",
+          },
+        },
+        400
+      )
+    }
+  })
+
+  app.patch(
+    "/api/providers/:providerId",
+    validateJson(providerUpdateInput),
+    (c) => {
+      const existing = getProvider(c.req.param("providerId"))
+      if (!existing) {
+        return c.json(
+          { error: { code: "not_found", message: "Provider not found" } },
+          404
+        )
+      }
+      const input = c.req.valid("json")
+      try {
+        const next = {
+          label:
+            input.label === undefined ? existing.label : input.label.trim(),
+          type: input.type ?? existing.type,
+          baseUrl:
+            input.baseUrl === undefined
+              ? existing.baseUrl
+              : normalizeBaseUrl(input.baseUrl),
+          apiKey: input.apiKey ?? existing.apiKey,
+          enabled: input.enabled ?? existing.enabled,
+          updatedAt: new Date().toISOString(),
+        }
+        if (!next.label) {
+          return c.json(
+            {
+              error: {
+                code: "invalid_provider",
+                message: "Provider name is required",
+              },
+            },
+            400
+          )
+        }
+        db.update(providerConnections)
+          .set(next)
+          .where(eq(providerConnections.id, existing.id))
+          .run()
+        syncModelRegistry()
+        return c.json(publicProvider({ ...existing, ...next }))
+      } catch {
+        return c.json(
+          {
+            error: {
+              code: "invalid_base_url",
+              message: "Invalid provider endpoint",
+            },
+          },
+          400
+        )
+      }
+    }
+  )
+
+  app.delete("/api/providers/:providerId", (c) => {
+    const provider = getProvider(c.req.param("providerId"))
+    if (!provider) {
+      return c.json(
+        { error: { code: "not_found", message: "Provider not found" } },
+        404
+      )
+    }
+    const defaultModelId = getSettings().defaultModelId
+    if (
+      defaultModelId &&
+      listProviderModels(provider.id).some(
+        (model) => model.id === defaultModelId
+      )
+    ) {
+      db.update(settings)
+        .set({ defaultModelId: null, updatedAt: new Date().toISOString() })
+        .where(eq(settings.id, 1))
+        .run()
+    }
+    db.delete(providerConnections)
+      .where(eq(providerConnections.id, provider.id))
+      .run()
+    syncModelRegistry()
+    return c.body(null, 204)
+  })
+
+  app.post(
+    "/api/providers/:providerId/models",
+    validateJson(modelInput),
+    (c) => {
+      const provider = getProvider(c.req.param("providerId"))
+      if (!provider) {
+        return c.json(
+          { error: { code: "not_found", message: "Provider not found" } },
+          404
+        )
+      }
+      const input = c.req.valid("json")
+      const modelId = input.modelId.trim()
+      const label = input.label.trim()
+      if (!modelId || !label) {
+        return c.json(
+          {
+            error: {
+              code: "invalid_model",
+              message: "Model ID and name are required",
+            },
+          },
+          400
+        )
+      }
+      const duplicate = listProviderModels(provider.id).find(
+        (model) => model.modelId === modelId
+      )
+      if (duplicate) {
+        return c.json(
+          {
+            error: { code: "duplicate_model", message: "Model already exists" },
+          },
+          409
+        )
+      }
+      const now = new Date().toISOString()
+      const model = {
+        id: crypto.randomUUID(),
+        providerId: provider.id,
+        modelId,
+        label,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      }
+      db.insert(providerModels).values(model).run()
+      syncModelRegistry()
+      return c.json(model, 201)
+    }
+  )
+
+  app.patch(
+    "/api/provider-models/:modelId",
+    validateJson(modelUpdateInput),
+    (c) => {
+      const model = db
+        .select()
+        .from(providerModels)
+        .where(eq(providerModels.id, c.req.param("modelId")))
+        .get()
+      if (!model) {
+        return c.json(
+          { error: { code: "not_found", message: "Model not found" } },
+          404
+        )
+      }
+      const input = c.req.valid("json")
+      const label = input.label === undefined ? model.label : input.label.trim()
+      if (!label) {
+        return c.json(
+          {
+            error: { code: "invalid_model", message: "Model name is required" },
+          },
+          400
+        )
+      }
+      const next = {
+        label,
+        enabled: input.enabled ?? model.enabled,
+        updatedAt: new Date().toISOString(),
+      }
+      db.update(providerModels)
+        .set(next)
+        .where(eq(providerModels.id, model.id))
+        .run()
+      syncModelRegistry()
+      return c.json({ ...model, ...next })
+    }
+  )
+
+  app.delete("/api/provider-models/:modelId", (c) => {
+    const model = db
+      .select()
+      .from(providerModels)
+      .where(eq(providerModels.id, c.req.param("modelId")))
+      .get()
+    if (!model) {
+      return c.json(
+        { error: { code: "not_found", message: "Model not found" } },
+        404
+      )
+    }
+    if (getSettings().defaultModelId === model.id) {
+      db.update(settings)
+        .set({ defaultModelId: null, updatedAt: new Date().toISOString() })
+        .where(eq(settings.id, 1))
+        .run()
+    }
+    db.delete(providerModels).where(eq(providerModels.id, model.id)).run()
+    syncModelRegistry()
+    return c.body(null, 204)
+  })
+
+  app.post("/api/providers/:providerId/models/discover", async (c) => {
+    const provider = getProvider(c.req.param("providerId"))
+    if (!provider) {
+      return c.json(
+        { error: { code: "not_found", message: "Provider not found" } },
+        404
+      )
+    }
+    try {
+      const headers: Record<string, string> =
+        provider.type === "anthropic-messages"
+          ? {
+              "anthropic-version": "2023-06-01",
+              "x-api-key": provider.apiKey,
+            }
+          : { Authorization: `Bearer ${provider.apiKey}` }
+      const response = await fetch(`${provider.baseUrl}/models`, {
+        headers,
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!response.ok) throw new Error("Provider model request failed")
+      const body = (await response.json()) as {
+        data?: Array<{ id?: string }>
+        models?: Array<{ id?: string } | string>
+      }
+      const source = body.data ?? body.models ?? []
+      const models = source
+        .map((model) => (typeof model === "string" ? model : model.id))
+        .filter((model): model is string => Boolean(model))
+      return c.json({ models: [...new Set(models)].sort() })
+    } catch {
+      return c.json(
+        {
+          error: {
+            code: "provider_unavailable",
+            message: "Could not fetch provider models",
+          },
+        },
+        502
+      )
+    }
   })
 
   app.get("/api/platform/status", (c) => c.json({ available: false }))
@@ -611,12 +1007,40 @@ export function createApp(options: {
       const input = c.req.valid("json")
       try {
         const defaults = getSettings()
-        const provider = input.provider?.trim() || defaults.provider
-        const modelId = input.modelId?.trim() || defaults.modelId
-        const customModel =
-          defaults.providerType === "openai-compatible" &&
-          provider === defaults.provider &&
-          modelId === defaults.modelId
+        const selectedModelId = input.modelId ?? defaults.defaultModelId
+        const selected = selectedModelId
+          ? db
+              .select({ model: providerModels, provider: providerConnections })
+              .from(providerModels)
+              .innerJoin(
+                providerConnections,
+                eq(providerModels.providerId, providerConnections.id)
+              )
+              .where(eq(providerModels.id, selectedModelId))
+              .get()
+          : undefined
+        if (!selected?.model.enabled || !selected.provider.enabled) {
+          return c.json(
+            {
+              error: {
+                code: "model_unavailable",
+                message: "Choose an enabled model and provider",
+              },
+            },
+            400
+          )
+        }
+        if (!selected.provider.apiKey) {
+          return c.json(
+            {
+              error: {
+                code: "credentials_unavailable",
+                message: "Enter an API key for the selected provider",
+              },
+            },
+            400
+          )
+        }
         const environmentType = input.environment ?? defaults.environment
         const environment =
           environmentType === "container"
@@ -632,14 +1056,10 @@ export function createApp(options: {
           await runManager.create(
             c.req.param("challengeId"),
             {
-              provider,
-              modelId,
-              ...(customModel && defaults.baseUrl
-                ? {
-                    baseUrl: defaults.baseUrl,
-                    costKnown: false,
-                  }
-                : {}),
+              provider: providerName(selected.provider.id),
+              providerLabel: selected.provider.label,
+              modelId: selected.model.modelId,
+              costKnown: false,
             },
             environment
           ),

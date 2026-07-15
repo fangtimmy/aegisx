@@ -61,6 +61,7 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import type {
   Challenge,
+  ProviderConnection,
   RunFile,
   RunFileEntry,
   RunPublic,
@@ -363,6 +364,7 @@ export function CreateRunDialog({
 }) {
   const [open, setOpen] = useState(false)
   const [environment, setEnvironment] = useState<"local" | "container">("local")
+  const [modelId, setModelId] = useState("")
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const settings = useQuery({
@@ -370,23 +372,26 @@ export function CreateRunDialog({
     queryKey: ["settings"],
     queryFn: () => apiRequest<SettingsPublic>("/settings"),
   })
+  const providers = useQuery({
+    enabled: open,
+    queryKey: ["providers"],
+    queryFn: () => apiRequest<{ items: ProviderConnection[] }>("/providers"),
+  })
   const mutation = useMutation({
     mutationFn: ({
       challengeId,
-      provider,
       modelId,
       environment,
       image,
     }: {
       challengeId: string
-      provider: string
       modelId: string
       environment: "local" | "container"
       image?: string
     }) =>
       apiRequest<RunPublic>(
         `/challenges/${challengeId}/runs`,
-        jsonRequest("POST", { provider, modelId, environment, image })
+        jsonRequest("POST", { modelId, environment, image })
       ),
     onSuccess: async (run) => {
       await queryClient.invalidateQueries({
@@ -402,13 +407,28 @@ export function CreateRunDialog({
     if (open && settings.data) setEnvironment(settings.data.environment)
   }, [open, settings.data])
 
+  const availableModels = (providers.data?.items ?? []).flatMap((provider) =>
+    provider.enabled && provider.apiKey
+      ? provider.models
+          .filter((model) => model.enabled)
+          .map((model) => ({ ...model, provider }))
+      : []
+  )
+
+  useEffect(() => {
+    if (!open || !settings.data || modelId) return
+    const defaultModel = availableModels.find(
+      (model) => model.id === settings.data.defaultModelId
+    )
+    setModelId(defaultModel?.id ?? availableModels[0]?.id ?? "")
+  }, [availableModels, modelId, open, settings.data])
+
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
     mutation.mutate({
       challengeId: challenge?.id ?? String(data.get("challengeId")),
-      provider: String(data.get("provider")).trim(),
-      modelId: String(data.get("modelId")).trim(),
+      modelId,
       environment,
       image:
         environment === "container"
@@ -426,6 +446,7 @@ export function CreateRunDialog({
         if (next) {
           mutation.reset()
           if (settings.data) setEnvironment(settings.data.environment)
+          setModelId("")
         }
       }}
     >
@@ -506,22 +527,25 @@ export function CreateRunDialog({
                 </Field>
               )}
               <Field>
-                <FieldLabel htmlFor="run-provider">Provider</FieldLabel>
-                <Input
-                  defaultValue={settings.data.provider}
-                  id="run-provider"
-                  name="provider"
-                  required
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="run-model">Model ID</FieldLabel>
-                <Input
-                  defaultValue={settings.data.modelId}
+                <FieldLabel htmlFor="run-model">Model</FieldLabel>
+                <select
+                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   id="run-model"
                   name="modelId"
                   required
-                />
+                  onChange={(event) => setModelId(event.target.value)}
+                  value={modelId}
+                >
+                  {availableModels.length === 0 ? (
+                    <option value="">No enabled models</option>
+                  ) : (
+                    availableModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.provider.label} / {model.label}
+                      </option>
+                    ))
+                  )}
+                </select>
               </Field>
               <Field>
                 <FieldLabel htmlFor="run-environment">Environment</FieldLabel>
@@ -578,7 +602,11 @@ export function CreateRunDialog({
               <DialogClose render={<Button type="button" variant="ghost" />}>
                 Cancel
               </DialogClose>
-              <Button loading={mutation.isPending} type="submit">
+              <Button
+                disabled={!modelId}
+                loading={mutation.isPending}
+                type="submit"
+              >
                 <Play /> Start run
               </Button>
             </DialogFooter>

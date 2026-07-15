@@ -15,6 +15,7 @@ import { createApp } from "../src/app"
 const tempDirs: string[] = []
 const closeApps: Array<() => void> = []
 const fauxProviders: Array<{ unregister(): void }> = []
+const configuredModels = new WeakMap<object, Promise<string>>()
 
 afterEach(() => {
   for (const close of closeApps.splice(0)) close()
@@ -35,10 +36,8 @@ function setup(maxConcurrency = 2, dataDir?: string) {
     dataDir: root,
     maxConcurrency,
     authStorage,
-    resolveModel: (provider, modelId) =>
-      provider === "faux" && modelId === faux.getModel().id
-        ? (faux.getModel() as never)
-        : undefined,
+    resolveModel: (_provider, modelId) =>
+      modelId === faux.getModel().id ? (faux.getModel() as never) : undefined,
   })
   closeApps.push(instance.close)
   return { ...instance, dataDir: root, faux }
@@ -74,10 +73,39 @@ async function createRun(
   app: ReturnType<typeof createApp>["app"],
   challengeId: string
 ) {
+  const modelId = await configureFaux(app)
   return app.request(
     `/api/challenges/${challengeId}/runs`,
-    json("POST", { provider: "faux", modelId: "faux-1" })
+    json("POST", { modelId })
   )
+}
+
+function configureFaux(app: ReturnType<typeof createApp>["app"]) {
+  const cached = configuredModels.get(app)
+  if (cached) return cached
+  const configured = (async () => {
+    const providers = await (await app.request("/api/providers")).json()
+    const provider = providers.items[0]
+    await app.request(
+      `/api/providers/${provider.id}`,
+      json("PATCH", {
+        label: "Faux",
+        type: "openai-compatible",
+        baseUrl: "http://localhost:4010/v1",
+        apiKey: "test-only",
+        enabled: true,
+      })
+    )
+    const model = await (
+      await app.request(
+        `/api/providers/${provider.id}/models`,
+        json("POST", { modelId: "faux-1", label: "Faux 1" })
+      )
+    ).json()
+    return model.id as string
+  })()
+  configuredModels.set(app, configured)
+  return configured
 }
 
 async function waitFor<T>(
@@ -161,9 +189,10 @@ describe("phase two run API", () => {
     expect(isAbsolute(stored[0].workspace_path)).toBe(false)
     expect(isAbsolute(stored[0].session_path)).toBe(false)
     expect(stored[0].prompt).toContain("evidence.bin")
-    expect(JSON.parse(stored[0].model_config)).toEqual({
-      provider: "faux",
+    expect(JSON.parse(stored[0].model_config)).toMatchObject({
+      providerLabel: "Faux",
       modelId: "faux-1",
+      costKnown: false,
     })
     expect(JSON.parse(stored[0].environment_config)).toEqual({ type: "local" })
 

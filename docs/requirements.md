@@ -223,7 +223,7 @@ paused  -> stopped
 
 - 配置内置供应商或 OpenAI-compatible 端点、模型 ID 和 API Key。
 - 配置默认本机/容器环境、镜像名、资源限制和最大并发数。
-- API Key 存入本地 SQLite；读取接口只返回是否已配置和掩码。
+- API Key 存入本地 SQLite，并在本地设置页面与 API 中直接返回和编辑。
 - 设置变更只影响新运行。
 
 ## 7. 前端信息架构
