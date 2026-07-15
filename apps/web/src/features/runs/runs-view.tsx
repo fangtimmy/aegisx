@@ -174,8 +174,8 @@ export function RunsView({
       </Alert>
     )
   return (
-    <section className="h-full min-h-0 min-w-0">
-      <div className="grid h-full min-h-0 min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">
+    <section className="h-full min-h-0 w-full min-w-0">
+      <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">
         <CardFrame className="flex h-full min-h-0">
           <CardFrameHeader>
             <CardFrameTitle>
@@ -184,7 +184,7 @@ export function RunsView({
               </span>
             </CardFrameTitle>
           </CardFrameHeader>
-          <Card>
+          <Card className="min-h-0 flex-1">
             <CardPanel className="min-h-0 flex-1 overflow-y-auto p-2">
               <RunTree
                 challenges={challenges}
@@ -195,15 +195,7 @@ export function RunsView({
             </CardPanel>
           </Card>
         </CardFrame>
-        <Card className="h-full min-h-0 min-w-0">
-          <CardPanel className="h-full min-h-0 p-0">
-            <RunWorkspace
-              challenges={challenges}
-              eventId={eventId}
-              runId={runId}
-            />
-          </CardPanel>
-        </Card>
+        <RunWorkspace challenges={challenges} eventId={eventId} runId={runId} />
       </div>
     </section>
   )

@@ -70,7 +70,9 @@ export function EventPage() {
       {eventQuery.data && (
         <Tabs
           className={
-            workspace ? "h-full min-h-0 items-start gap-4" : "items-start gap-4"
+            workspace
+              ? "h-full min-h-0 w-full items-start gap-4"
+              : "items-start gap-4"
           }
           onValueChange={(value) =>
             navigate(

@@ -1,12 +1,21 @@
 import {
-  Bot,
   Brain,
+  ChevronRight,
   CircleAlert,
-  Clock3,
-  MessageSquare,
+  FileText,
+  Flag,
+  FolderOpen,
+  LoaderCircle,
+  Pencil,
+  Play,
+  Search,
+  Square,
   Terminal,
   Wrench,
 } from "lucide-react"
+import { useEffect, useRef } from "react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import {
   Empty,
   EmptyDescription,
@@ -20,12 +29,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function text(value: unknown): string {
-  if (typeof value === "string") {
-    return value
-  }
-  if (value === null || value === undefined) {
-    return ""
-  }
+  if (typeof value === "string") return value
+  if (value === null || value === undefined) return ""
   try {
     return JSON.stringify(value, null, 2)
   } catch {
@@ -34,9 +39,7 @@ export function text(value: unknown): string {
 }
 
 export function formatTime(value: string | number | null | undefined) {
-  if (!value) {
-    return "Not available"
-  }
+  if (!value) return "Not available"
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "medium",
@@ -50,156 +53,126 @@ function formatConversationTime(value: string | number) {
   }).format(new Date(value))
 }
 
-function messageKey(message: unknown) {
-  if (!isRecord(message)) return null
+function messageKey(message: Record<string, unknown>) {
   const role = text(message.role)
   const timestamp = text(message.timestamp)
-  return role && timestamp ? `${role}:${timestamp}` : null
+  return role && timestamp ? `message:${role}:${timestamp}` : null
 }
 
-export type TimelineItem = {
+export type LiveEntry =
+  | {
+      key: string
+      type: "message"
+      message: Record<string, unknown>
+      endedAt?: number
+    }
+  | {
+      key: string
+      type: "tool"
+      toolCallId: string
+      toolName: string
+      args: unknown
+      result?: unknown
+      isError: boolean
+      status: "running" | "done"
+    }
+  | {
+      key: string
+      type: "error"
+      body: string
+    }
+
+type ToolBlock = {
   key: string
-  kind:
-    | "user"
-    | "assistant"
-    | "thinking"
-    | "tool"
-    | "result"
-    | "error"
-    | "system"
-  label: string
-  body: string
-  timestamp?: string | number
+  type: "tool"
+  id: string
+  name: string
+  args: unknown
+  output: string
+  status: "pending" | "running" | "done" | "error"
 }
 
-function contentItems(
-  content: unknown,
-  key: string,
-  role: string,
-  timestamp?: string | number
-): TimelineItem[] {
+type AgentBlock =
+  | { key: string; type: "text"; body: string }
+  | {
+      key: string
+      type: "reasoning"
+      body: string
+      durationMs?: number
+    }
+  | { key: string; type: "error"; body: string }
+  | ToolBlock
+
+export type ConversationItem =
+  | {
+      key: string
+      type: "user"
+      body: string
+      timestamp?: string | number
+    }
+  | {
+      key: string
+      type: "agent"
+      blocks: AgentBlock[]
+      timestamp?: string | number
+    }
+  | {
+      key: string
+      type: "notice"
+      label: string
+      body: string
+      timestamp?: string | number
+    }
+
+function contentText(content: unknown) {
   const values = Array.isArray(content) ? content : [content]
-  return values.flatMap<TimelineItem>((part, index) => {
-    if (typeof part === "string") {
-      return [
-        {
-          key: `${key}:${index}`,
-          kind: role === "user" ? "user" : "assistant",
-          label: role,
-          body: part,
-          timestamp,
-        },
-      ]
-    }
-    if (!isRecord(part)) return []
-    if (part.type === "text") {
-      return [
-        {
-          key: `${key}:${index}`,
-          kind: role === "user" ? "user" : "assistant",
-          label: role,
-          body: text(part.text),
-          timestamp,
-        },
-      ]
-    }
-    if (part.type === "thinking") {
-      return [
-        {
-          key: `${key}:${index}`,
-          kind: "thinking",
-          label: "Thinking",
-          body: text(part.thinking),
-          timestamp,
-        },
-      ]
-    }
-    if (part.type === "toolCall") {
-      return [
-        {
-          key: `${key}:${text(part.id) || index}`,
-          kind: "tool",
-          label: `Tool call · ${text(part.name) || "unknown"}`,
-          body: text(part.arguments),
-          timestamp,
-        },
-      ]
-    }
-    if (part.type === "image") {
-      return [
-        {
-          key: `${key}:${index}`,
-          kind: "system",
-          label: "Image",
-          body: text(part.mimeType) || "Image content",
-          timestamp,
-        },
-      ]
-    }
-    return [
-      {
-        key: `${key}:${index}`,
-        kind: "system",
-        label: text(part.type) || role,
-        body: text(part),
-        timestamp,
-      },
-    ]
-  })
+  return values
+    .flatMap((part) => {
+      if (typeof part === "string") return part
+      if (!isRecord(part)) return []
+      if (part.type === "text") return text(part.text)
+      if (part.type === "image") return `[Image: ${text(part.mimeType)}]`
+      return []
+    })
+    .filter(Boolean)
+    .join("\n")
 }
 
-function entryItems(entry: SessionEntry): TimelineItem[] {
-  if (entry.type === "message" && isRecord(entry.message)) {
-    const message = entry.message
-    const role = text(message.role)
-    const timestamp =
-      typeof message.timestamp === "number"
-        ? message.timestamp
-        : entry.timestamp
-    if (role === "toolResult") {
-      return [
-        {
-          key: entry.id,
-          kind: message.isError ? "error" : "result",
-          label: `${message.isError ? "Tool error" : "Tool result"} · ${text(message.toolName) || "unknown"}`,
-          body:
-            contentItems(message.content, entry.id, role, timestamp)
-              .map((item) => item.body)
-              .filter(Boolean)
-              .join("\n") || text(message.details),
-          timestamp,
-        },
-      ]
-    }
-    return contentItems(message.content, entry.id, role, timestamp)
+function resultText(value: unknown) {
+  if (isRecord(value) && "content" in value) {
+    return contentText(value.content) || text(value)
   }
-  if (entry.type === "model_change") {
-    return [
-      {
-        key: entry.id,
-        kind: "system",
-        label: "Model changed",
-        body: `${text(entry.provider)} / ${text(entry.modelId)}`,
-        timestamp: entry.timestamp,
-      },
-    ]
-  }
-  if (entry.type === "compaction" || entry.type === "branch_summary") {
-    return [
-      {
-        key: entry.id,
-        kind: "system",
-        label:
-          entry.type === "compaction" ? "Context compacted" : "Branch summary",
-        body: text(entry.summary),
-        timestamp: entry.timestamp,
-      },
-    ]
-  }
-  return []
+  return text(value)
 }
 
-export function liveItems(payload: Record<string, unknown>): TimelineItem[] {
+function messageTimestamp(
+  message: Record<string, unknown>,
+  fallback?: string | number
+) {
+  return typeof message.timestamp === "number" ? message.timestamp : fallback
+}
+
+function messageDuration(
+  message: Record<string, unknown>,
+  endedAt?: string | number
+) {
+  if (typeof message.timestamp !== "number" || endedAt === undefined) {
+    return undefined
+  }
+  const end =
+    typeof endedAt === "number" ? endedAt : new Date(endedAt).getTime()
+  const duration = end - message.timestamp
+  return Number.isFinite(duration) && duration >= 0 ? duration : undefined
+}
+
+function formatDuration(durationMs: number) {
+  const seconds = durationMs / 1000
+  if (seconds < 10) return `${Math.max(0.1, seconds).toFixed(1)}s`
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+}
+
+export function liveEntries(payload: Record<string, unknown>): LiveEntry[] {
   const type = text(payload.type)
   const message = isRecord(payload.message) ? payload.message : null
   if (
@@ -208,33 +181,40 @@ export function liveItems(payload: Record<string, unknown>): TimelineItem[] {
       type === "message_end") &&
     message
   ) {
-    const items = contentItems(
-      message.content,
-      messageKey(message) ?? type,
-      text(message.role),
-      typeof message.timestamp === "number" ? message.timestamp : undefined
-    )
-    return items
+    const key = messageKey(message)
+    return key
+      ? [
+          {
+            key,
+            type: "message",
+            message,
+            endedAt: type === "message_end" ? Date.now() : undefined,
+          },
+        ]
+      : []
   }
   if (type.startsWith("tool_execution_")) {
+    const toolCallId = text(payload.toolCallId)
+    if (!toolCallId) return []
     const ended = type === "tool_execution_end"
     return [
       {
-        key: `tool:${text(payload.toolCallId)}`,
-        kind: payload.isError ? "error" : ended ? "result" : "tool",
-        label: `${ended ? (payload.isError ? "Tool error" : "Tool result") : "Running tool"} · ${text(payload.toolName) || "unknown"}`,
-        body: text(
-          ended ? payload.result : (payload.partialResult ?? payload.args)
-        ),
+        key: `tool:${toolCallId}`,
+        type: "tool",
+        toolCallId,
+        toolName: text(payload.toolName) || "unknown",
+        args: payload.args,
+        result: ended ? payload.result : payload.partialResult,
+        isError: Boolean(payload.isError),
+        status: ended ? "done" : "running",
       },
     ]
   }
   if (type.includes("error") || payload.error) {
     return [
       {
-        key: `event:${type}`,
-        kind: "error",
-        label: "Run error",
+        key: `error:${type}`,
+        type: "error",
         body: text(payload.error ?? payload.errorMessage ?? payload.message),
       },
     ]
@@ -242,106 +222,365 @@ export function liveItems(payload: Record<string, unknown>): TimelineItem[] {
   return []
 }
 
-function TimelineRow({ item }: { item: TimelineItem }) {
-  const Icon =
-    item.kind === "thinking"
-      ? Brain
-      : item.kind === "tool"
-        ? Wrench
-        : item.kind === "result"
-          ? Terminal
-          : item.kind === "error"
-            ? CircleAlert
-            : item.kind === "user"
-              ? MessageSquare
-              : item.kind === "assistant"
-                ? Bot
-                : Clock3
-  const time = item.timestamp ? formatConversationTime(item.timestamp) : null
+export function buildConversation(
+  history: SessionEntry[],
+  live: LiveEntry[]
+): ConversationItem[] {
+  const items: ConversationItem[] = []
+  const tools = new Map<string, ToolBlock>()
+  const persistedMessages = new Set<string>()
+  const persistedTools = new Set<string>()
+  let agent: Extract<ConversationItem, { type: "agent" }> | null = null
 
-  if (item.kind === "user") {
-    return (
-      <article className="flex justify-end py-3">
-        <div className="max-w-[46rem] rounded-lg border bg-muted/45 px-3 py-2.5">
-          <div className="mb-1 flex items-center justify-between gap-4 text-muted-foreground text-xs">
-            <span className="font-medium">You</span>
-            {time && <time>{time}</time>}
-          </div>
-          <p className="whitespace-pre-wrap break-words text-sm leading-6">
-            {item.body}
-          </p>
-        </div>
-      </article>
-    )
+  function currentAgent(timestamp?: string | number) {
+    if (agent) return agent
+    agent = {
+      key: `agent:${items.length}:${timestamp ?? "live"}`,
+      type: "agent",
+      blocks: [],
+      timestamp,
+    }
+    items.push(agent)
+    return agent
   }
 
-  if (item.kind === "assistant") {
-    return (
-      <article className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2.5 py-4">
-        <div className="flex size-7 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground">
-          <Bot className="size-4" />
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="font-medium text-sm">Assistant</h4>
-            {time && (
-              <time className="shrink-0 text-muted-foreground text-xs">
-                {time}
-              </time>
-            )}
-          </div>
-          <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">
-            {item.body}
-          </p>
-        </div>
-      </article>
-    )
-  }
-
-  if (item.kind === "thinking") {
-    return (
-      <article className="border-l-2 border-muted px-3 py-2.5">
-        <details>
-          <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground text-xs">
-            <Brain className="size-3.5" />
-            <span className="font-medium">Thinking</span>
-            {time && <time className="ml-auto">{time}</time>}
-          </summary>
-          <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-muted-foreground text-xs leading-5">
-            {item.body}
-          </pre>
-        </details>
-      </article>
-    )
-  }
-
-  return (
-    <article
-      className={
-        item.kind === "error"
-          ? "grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2.5 border-l-2 border-destructive bg-destructive/5 px-3 py-3"
-          : "grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2.5 border-l-2 border-muted px-3 py-3"
+  function applyMessage(
+    message: Record<string, unknown>,
+    fallback?: string | number
+  ) {
+    const role = text(message.role)
+    const timestamp = messageTimestamp(message, fallback)
+    if (role === "user") {
+      const body = contentText(message.content)
+      if (body) {
+        items.push({
+          key: messageKey(message) ?? `user:${items.length}`,
+          type: "user",
+          body,
+          timestamp,
+        })
       }
-    >
-      <Icon
-        className={
-          item.kind === "error"
-            ? "mt-0.5 size-4 text-destructive"
-            : "mt-0.5 size-4 text-muted-foreground"
+      agent = null
+      return
+    }
+    if (role === "toolResult") {
+      const id = text(message.toolCallId)
+      const existing = tools.get(id)
+      const block =
+        existing ??
+        ({
+          key: `tool:${id}`,
+          type: "tool",
+          id,
+          name: text(message.toolName) || "unknown",
+          args: null,
+          output: "",
+          status: "pending",
+        } satisfies ToolBlock)
+      block.output = contentText(message.content) || resultText(message.details)
+      block.status = message.isError ? "error" : "done"
+      if (!existing) {
+        currentAgent(timestamp).blocks.push(block)
+        tools.set(id, block)
+      }
+      return
+    }
+    if (role !== "assistant") return
+
+    const blocks = currentAgent(timestamp).blocks
+    const blockPrefix =
+      messageKey(message) ?? `message:${timestamp ?? items.length}`
+    const durationMs = messageDuration(message, fallback)
+    const content = Array.isArray(message.content)
+      ? message.content
+      : [message.content]
+    for (const [index, part] of content.entries()) {
+      const key = `${blockPrefix}:${index}`
+      if (typeof part === "string") {
+        if (part.trim()) blocks.push({ key, type: "text", body: part })
+        continue
+      }
+      if (!isRecord(part)) continue
+      if (part.type === "text") {
+        const body = text(part.text)
+        if (body.trim()) blocks.push({ key, type: "text", body })
+      } else if (part.type === "thinking") {
+        const body = text(part.thinking)
+        if (body.trim()) {
+          blocks.push({ key, type: "reasoning", body, durationMs })
         }
-      />
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h4 className="font-medium text-xs">{item.label}</h4>
-          {time && (
-            <time className="text-[11px] text-muted-foreground">{time}</time>
-          )}
-        </div>
-        {item.body && (
-          <pre className="mt-1.5 whitespace-pre-wrap break-words font-mono text-xs leading-5">
-            {item.body}
+      } else if (part.type === "toolCall") {
+        const id = text(part.id)
+        const block: ToolBlock = {
+          key: `tool:${id}`,
+          type: "tool",
+          id,
+          name: text(part.name) || "unknown",
+          args: part.arguments,
+          output: "",
+          status: "pending",
+        }
+        blocks.push(block)
+        tools.set(id, block)
+      }
+    }
+    if (message.stopReason === "error" && message.errorMessage) {
+      blocks.push({
+        key: `${blockPrefix}:error`,
+        type: "error",
+        body: text(message.errorMessage),
+      })
+    }
+  }
+
+  for (const entry of history) {
+    if (entry.type === "message" && isRecord(entry.message)) {
+      const key = messageKey(entry.message)
+      if (key) persistedMessages.add(key)
+      if (entry.message.role === "toolResult") {
+        const id = text(entry.message.toolCallId)
+        if (id) persistedTools.add(`tool:${id}`)
+      }
+      applyMessage(entry.message, entry.timestamp)
+    } else if (entry.type === "model_change") {
+      items.push({
+        key: entry.id,
+        type: "notice",
+        label: `Model changed to ${text(entry.modelId)}`,
+        body: "",
+        timestamp: entry.timestamp,
+      })
+      agent = null
+    } else if (entry.type === "compaction" || entry.type === "branch_summary") {
+      items.push({
+        key: entry.id,
+        type: "notice",
+        label:
+          entry.type === "compaction" ? "Context compacted" : "Branch summary",
+        body: text(entry.summary),
+        timestamp: entry.timestamp,
+      })
+      agent = null
+    }
+  }
+
+  for (const entry of live) {
+    if (entry.type === "message") {
+      const key = messageKey(entry.message)
+      const toolKey =
+        entry.message.role === "toolResult"
+          ? `tool:${text(entry.message.toolCallId)}`
+          : null
+      if (
+        (key && persistedMessages.has(key)) ||
+        (toolKey && persistedTools.has(toolKey))
+      ) {
+        continue
+      }
+      applyMessage(entry.message, entry.endedAt)
+    } else if (entry.type === "tool") {
+      if (persistedTools.has(entry.key)) continue
+      const existing = tools.get(entry.toolCallId)
+      const block =
+        existing ??
+        ({
+          key: entry.key,
+          type: "tool",
+          id: entry.toolCallId,
+          name: entry.toolName,
+          args: entry.args,
+          output: "",
+          status: "pending",
+        } satisfies ToolBlock)
+      block.args = entry.args ?? block.args
+      block.output = resultText(entry.result)
+      block.status = entry.isError
+        ? "error"
+        : entry.status === "done"
+          ? "done"
+          : "running"
+      if (!existing) {
+        currentAgent().blocks.push(block)
+        tools.set(entry.toolCallId, block)
+      }
+    } else if (entry.body) {
+      currentAgent().blocks.push({
+        key: entry.key,
+        type: "error",
+        body: entry.body,
+      })
+    }
+  }
+
+  return items.filter((item) => item.type !== "agent" || item.blocks.length > 0)
+}
+
+function Markdown({ children }: { children: string }) {
+  return (
+    <div className="min-w-0 break-words text-sm leading-6 [&_a]:underline [&_a]:underline-offset-4 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_h1]:mb-3 [&_h1]:font-semibold [&_h1]:text-xl [&_h2]:mb-2 [&_h2]:font-semibold [&_h2]:text-lg [&_h3]:mb-2 [&_h3]:font-semibold [&_h3]:text-base [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:mb-3 [&_p:last-child]:mb-0 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:bg-muted/40 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:bg-muted/40 [&_th]:p-2 [&_ul]:my-3">
+      <ReactMarkdown
+        components={{
+          a: ({ node: _node, ...props }) => (
+            <a {...props} rel="noreferrer" target="_blank" />
+          ),
+        }}
+        remarkPlugins={[remarkGfm]}
+      >
+        {children}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+function toolSummary(tool: ToolBlock) {
+  const args = isRecord(tool.args) ? tool.args : null
+  const subject =
+    tool.name === "bash"
+      ? text(args?.command).split("\n", 1)[0]
+      : text(args?.path ?? args?.pattern ?? args?.summary)
+  const verb =
+    tool.name === "bash"
+      ? "Ran"
+      : tool.name === "read"
+        ? "Read"
+        : tool.name === "grep"
+          ? "Searched"
+          : tool.name === "edit" || tool.name === "write"
+            ? "Updated"
+            : tool.name
+  const label = subject ? `${verb} ${subject}` : verb
+  return label.length > 100 ? `${label.slice(0, 99)}…` : label
+}
+
+function toolIcon(name: string) {
+  if (name === "bash") return Terminal
+  if (name === "read") return FileText
+  if (name === "grep" || name === "find") return Search
+  if (name === "edit" || name === "write") return Pencil
+  if (name === "ls") return FolderOpen
+  if (name === "start_target") return Play
+  if (name === "stop_target") return Square
+  if (name === "finish_run" || name === "submit_flag") return Flag
+  return Wrench
+}
+
+function ToolActivity({ tool }: { tool: ToolBlock }) {
+  const StatusIcon =
+    tool.status === "running"
+      ? LoaderCircle
+      : tool.status === "error"
+        ? CircleAlert
+        : toolIcon(tool.name)
+  return (
+    <details
+      className="group py-0.5"
+      open={tool.status === "running" || tool.status === "error" || undefined}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-1.5 text-muted-foreground text-sm hover:text-foreground">
+        <StatusIcon
+          className={
+            tool.status === "error"
+              ? "size-3.5 shrink-0 text-destructive"
+              : tool.status === "running"
+                ? "size-3.5 shrink-0 animate-spin text-muted-foreground"
+                : "size-3.5 shrink-0 text-muted-foreground"
+          }
+        />
+        <span className="min-w-0 flex-1 truncate">{toolSummary(tool)}</span>
+        <ChevronRight className="size-3.5 shrink-0 transition-transform group-open:rotate-90" />
+      </summary>
+      <div className="mt-1 ml-5 flex min-w-0 flex-col gap-2 pb-2">
+        {tool.args !== null && tool.args !== undefined && (
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5">
+            {text(tool.args)}
           </pre>
         )}
+        {tool.output && (
+          <pre
+            className={
+              tool.status === "error"
+                ? "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 font-mono text-xs leading-5"
+                : "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5"
+            }
+          >
+            {tool.output}
+          </pre>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function ConversationRow({ item }: { item: ConversationItem }) {
+  const time = item.timestamp ? formatConversationTime(item.timestamp) : null
+  if (item.type === "user") {
+    return (
+      <article className="flex justify-end py-5">
+        <div className="max-w-[90%] rounded-lg border bg-muted/45 px-4 py-3">
+          <Markdown>{item.body}</Markdown>
+        </div>
+      </article>
+    )
+  }
+  if (item.type === "notice") {
+    return (
+      <div className="flex items-center gap-3 py-3 text-muted-foreground text-xs">
+        <div className="h-px flex-1 bg-border" />
+        {item.body ? (
+          <details>
+            <summary className="cursor-pointer">{item.label}</summary>
+            <p className="mt-2 max-w-xl whitespace-pre-wrap text-center leading-5">
+              {item.body}
+            </p>
+          </details>
+        ) : (
+          <span>{item.label}</span>
+        )}
+        {time && <time>{time}</time>}
+        <div className="h-px flex-1 bg-border" />
+      </div>
+    )
+  }
+  return (
+    <article className="py-5">
+      <div className="flex min-w-0 flex-col gap-3">
+        {item.blocks.map((block) => {
+          if (block.type === "text") {
+            return <Markdown key={block.key}>{block.body}</Markdown>
+          }
+          if (block.type === "reasoning") {
+            return (
+              <details className="group py-0.5" key={block.key}>
+                <summary className="flex cursor-pointer list-none items-center gap-2 py-1.5 text-muted-foreground text-sm">
+                  <Brain className="size-3.5" />
+                  <span>
+                    Reasoning
+                    {block.durationMs !== undefined
+                      ? ` · ${formatDuration(block.durationMs)}`
+                      : ""}
+                  </span>
+                  <ChevronRight className="ml-auto size-3.5 transition-transform group-open:rotate-90" />
+                </summary>
+                <div className="mt-2 ml-5 text-muted-foreground">
+                  <Markdown>{block.body}</Markdown>
+                </div>
+              </details>
+            )
+          }
+          if (block.type === "error") {
+            return (
+              <div
+                className="flex gap-2 border-l-2 border-destructive bg-destructive/5 px-3 py-2 text-destructive-foreground text-sm"
+                key={block.key}
+                role="alert"
+              >
+                <CircleAlert className="mt-0.5 size-4 shrink-0" />
+                <span>{block.body}</span>
+              </div>
+            )
+          }
+          return <ToolActivity key={block.key} tool={block} />
+        })}
       </div>
     </article>
   )
@@ -352,22 +591,36 @@ export function Conversation({
   live,
 }: {
   history: SessionEntry[]
-  live: TimelineItem[]
+  live: LiveEntry[]
 }) {
-  const persistedKeys = history.flatMap((entry) => {
-    if (entry.type !== "message" || !isRecord(entry.message)) return []
-    const key = messageKey(entry.message)
-    const toolKey = text(entry.message.toolCallId)
-    return [key, toolKey ? `tool:${toolKey}` : null].filter(Boolean) as string[]
-  })
-  const historyItems = history.flatMap(entryItems)
-  const liveOnly = live.filter(
-    (item) =>
-      !persistedKeys.some(
-        (key) => item.key === key || item.key.startsWith(`${key}:`)
-      )
-  )
-  if (historyItems.length === 0 && liveOnly.length === 0) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLElement>(null)
+  const followsLatest = useRef(true)
+  const items = buildConversation(history, live)
+  const latestItem = items.at(-1)
+
+  useEffect(() => {
+    const viewport = rootRef.current?.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!viewport) return
+    viewportRef.current = viewport
+    const updateFollowState = () => {
+      followsLatest.current =
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 80
+    }
+    viewport.addEventListener("scroll", updateFollowState, { passive: true })
+    return () => viewport.removeEventListener("scroll", updateFollowState)
+  }, [])
+
+  useEffect(() => {
+    if (latestItem && followsLatest.current) {
+      const viewport = viewportRef.current
+      viewport?.scrollTo({ top: viewport.scrollHeight })
+    }
+  }, [latestItem])
+
+  if (items.length === 0) {
     return (
       <Empty className="py-12">
         <EmptyHeader>
@@ -380,14 +633,12 @@ export function Conversation({
     )
   }
   return (
-    <div className="mx-auto w-full max-w-3xl px-1">
-      {historyItems.map((item) => (
-        <TimelineRow item={item} key={item.key} />
+    <div className="mx-auto w-full max-w-3xl px-6 pb-6" ref={rootRef}>
+      {items.map((item) => (
+        <ConversationRow item={item} key={item.key} />
       ))}
-      <div aria-live="polite">
-        {liveOnly.map((item) => (
-          <TimelineRow item={item} key={item.key} />
-        ))}
+      <div aria-live="polite" className="sr-only">
+        {live.length > 0 ? "Agent activity updated" : ""}
       </div>
     </div>
   )

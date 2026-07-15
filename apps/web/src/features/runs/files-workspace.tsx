@@ -151,7 +151,7 @@ export function FilesWorkspace({
   })
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[18rem_minmax(0,1fr)] gap-4 py-4">
+    <div className="grid h-full min-h-0 grid-cols-[18rem_minmax(0,1fr)] gap-4 px-6 py-4">
       <section className="flex min-h-0 min-w-0 flex-col border-r pr-4">
         <h3 className="mb-2 font-medium text-sm">Workspace files</h3>
         <ScrollArea className="flex-1" scrollFade>
