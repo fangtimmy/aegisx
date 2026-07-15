@@ -34,6 +34,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -89,31 +97,6 @@ import { EventStatistics } from "@/statistics"
 const eventKeys = {
   all: ["events"] as const,
   detail: (id: string) => ["events", id] as const,
-}
-
-function getOptionalDate(value: FormDataEntryValue | null) {
-  return typeof value === "string" && value
-    ? new Date(value).toISOString()
-    : null
-}
-
-function toLocalDateTime(value: string | null) {
-  if (!value) {
-    return ""
-  }
-
-  const date = new Date(value)
-  const offset = date.getTimezoneOffset() * 60_000
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
-}
-
-function formatDate(value: string | null) {
-  return value
-    ? new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(new Date(value))
-    : "Not scheduled"
 }
 
 function formatBytes(value: number) {
@@ -235,9 +218,6 @@ function EventDialog({ event }: { event?: EventSummary }) {
     const data = new FormData(formEvent.currentTarget)
     mutation.mutate({
       name: String(data.get("name")).trim(),
-      description: String(data.get("description")).trim(),
-      startsAt: getOptionalDate(data.get("startsAt")),
-      endsAt: getOptionalDate(data.get("endsAt")),
     })
   }
 
@@ -270,7 +250,7 @@ function EventDialog({ event }: { event?: EventSummary }) {
           <DialogTitle>{event ? "Edit event" : "Create event"}</DialogTitle>
           <DialogDescription>
             {event
-              ? "Update the event details and schedule."
+              ? "Rename this event."
               : "Set up a workspace for challenges and runs."}
           </DialogDescription>
         </DialogHeader>
@@ -285,32 +265,6 @@ function EventDialog({ event }: { event?: EventSummary }) {
                 type="text"
               />
             </Field>
-            <Field>
-              <FieldLabel>Description</FieldLabel>
-              <Textarea
-                defaultValue={event?.description}
-                name="description"
-                required
-              />
-            </Field>
-            <div className="grid gap-5 sm:grid-cols-2">
-              <Field>
-                <FieldLabel>Starts at</FieldLabel>
-                <Input
-                  defaultValue={toLocalDateTime(event?.startsAt ?? null)}
-                  name="startsAt"
-                  type="datetime-local"
-                />
-              </Field>
-              <Field>
-                <FieldLabel>Ends at</FieldLabel>
-                <Input
-                  defaultValue={toLocalDateTime(event?.endsAt ?? null)}
-                  name="endsAt"
-                  type="datetime-local"
-                />
-              </Field>
-            </div>
             {mutation.error && (
               <p className="text-destructive-foreground text-sm" role="alert">
                 {mutation.error.message}
@@ -392,9 +346,6 @@ function EventCard({ event }: { event: EventSummary }) {
             {event.name}
           </Link>
         </CardTitle>
-        <CardDescription className="line-clamp-2">
-          {event.description || "No description"}
-        </CardDescription>
         <CardAction className="gap-1">
           <IconTooltip label={`Edit ${event.name}`}>
             <EventDialog event={event} />
@@ -404,11 +355,7 @@ function EventCard({ event }: { event: EventSummary }) {
           </IconTooltip>
         </CardAction>
       </CardHeader>
-      <CardPanel className="grid grid-cols-2 gap-4 px-5 pt-1 pb-5 text-sm">
-        <div>
-          <p className="text-muted-foreground text-xs">Schedule</p>
-          <p className="mt-1 truncate">{formatDate(event.startsAt)}</p>
-        </div>
+      <CardPanel className="px-5 pt-1 pb-5 text-sm">
         <div>
           <p className="text-muted-foreground text-xs">Challenges</p>
           <p className="mt-1 font-medium">{event.challengeCount}</p>
@@ -853,15 +800,6 @@ function EventPage() {
     <div className="min-h-svh bg-muted/30">
       <ProductHeader />
       <main className="mx-auto w-full max-w-6xl px-4 py-7 sm:px-6 sm:py-9">
-        <Button
-          className="mb-5"
-          render={<Link aria-label="Back to events" to="/" />}
-          size="sm"
-          variant="ghost"
-        >
-          <ArrowLeft /> Events
-        </Button>
-
         {eventQuery.isPending && (
           <p className="py-16 text-center text-muted-foreground text-sm">
             Loading event...
@@ -875,46 +813,31 @@ function EventPage() {
         )}
         {eventQuery.data && (
           <>
-            <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <div className="flex items-center gap-3">
-                  <h1 className="truncate font-semibold text-2xl">
+            <Breadcrumb>
+              <BreadcrumbList>
+                <BreadcrumbItem>
+                  <BreadcrumbLink render={<Link to="/" />}>
+                    Events
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem className="min-w-0">
+                  <BreadcrumbPage className="truncate">
                     {eventQuery.data.event.name}
-                  </h1>
-                  <Badge variant="secondary">
-                    {eventQuery.data.challenges.length} challenges
-                  </Badge>
-                </div>
-                <p className="mt-2 max-w-3xl whitespace-pre-line text-muted-foreground text-sm">
-                  {eventQuery.data.event.description || "No description"}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-muted-foreground text-xs">
-                  <span>
-                    Starts {formatDate(eventQuery.data.event.startsAt)}
-                  </span>
-                  <span>Ends {formatDate(eventQuery.data.event.endsAt)}</span>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <IconTooltip label="Import unavailable: no platform adapter configured">
-                  <Button
-                    aria-label="Import unavailable: no platform adapter configured"
-                    disabled
-                    type="button"
-                    variant="outline"
-                  >
-                    <Download /> Import
-                  </Button>
-                </IconTooltip>
-                <ChallengeDialog
-                  eventId={eventId}
-                  onUploadError={setUploadError}
-                />
-              </div>
+                  </BreadcrumbPage>
+                </BreadcrumbItem>
+              </BreadcrumbList>
+            </Breadcrumb>
+            <div className="mt-4 flex items-center gap-3">
+              <h1 className="truncate font-semibold text-2xl">
+                {eventQuery.data.event.name}
+              </h1>
+              <Badge variant="secondary">
+                {eventQuery.data.challenges.length} challenges
+              </Badge>
             </div>
-
             <Tabs
-              className="mt-7"
+              className="mt-7 items-start gap-6"
               onValueChange={(value) =>
                 navigate(
                   value === "run"
@@ -924,6 +847,7 @@ function EventPage() {
                       : `/events/${eventId}`
                 )
               }
+              orientation="vertical"
               value={
                 location.pathname === `/events/${eventId}/statistics`
                   ? "statistics"
@@ -933,62 +857,80 @@ function EventPage() {
               }
             >
               <TabsList
-                className="w-full justify-start border-b"
+                className="w-28 shrink-0 items-stretch border-r pr-3 sm:w-36"
                 variant="underline"
               >
                 <TabsTab value="overview">Overview</TabsTab>
                 <TabsTab value="run">Run</TabsTab>
                 <TabsTab value="statistics">Statistics</TabsTab>
               </TabsList>
-              <TabsPanel className="pt-6" value="overview">
-                {uploadError && (
-                  <Alert className="mb-5 rounded-lg" variant="warning">
-                    <TriangleAlert />
-                    <AlertTitle>Attachment upload failed</AlertTitle>
-                    <AlertDescription>{uploadError}</AlertDescription>
-                  </Alert>
-                )}
-                {eventQuery.data.challenges.length === 0 ? (
-                  <Empty className="rounded-lg border bg-card">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <Flag />
-                      </EmptyMedia>
-                      <EmptyTitle>No challenges</EmptyTitle>
-                      <EmptyDescription>
-                        Add the first challenge for this event.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                    <EmptyContent>
-                      <ChallengeDialog
-                        eventId={eventId}
-                        onUploadError={setUploadError}
-                      />
-                    </EmptyContent>
-                  </Empty>
-                ) : (
-                  <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    {eventQuery.data.challenges.map((challenge) => (
-                      <ChallengeCard
-                        challenge={challenge}
-                        eventId={eventId}
-                        key={challenge.id}
-                        onUploadError={setUploadError}
-                      />
-                    ))}
+              <div className="min-w-0 flex-1">
+                <TabsPanel value="overview">
+                  <div className="mb-6 flex flex-wrap justify-end gap-2">
+                    <IconTooltip label="Import unavailable: no platform adapter configured">
+                      <Button
+                        aria-label="Import unavailable: no platform adapter configured"
+                        disabled
+                        type="button"
+                        variant="outline"
+                      >
+                        <Download /> Import
+                      </Button>
+                    </IconTooltip>
+                    <ChallengeDialog
+                      eventId={eventId}
+                      onUploadError={setUploadError}
+                    />
                   </div>
-                )}
-              </TabsPanel>
-              <TabsPanel value="run">
-                <RunsView
-                  challenges={eventQuery.data.challenges}
-                  eventId={eventId}
-                  runId={runId}
-                />
-              </TabsPanel>
-              <TabsPanel className="pt-6" value="statistics">
-                <EventStatistics eventId={eventId} />
-              </TabsPanel>
+                  {uploadError && (
+                    <Alert className="mb-5 rounded-lg" variant="warning">
+                      <TriangleAlert />
+                      <AlertTitle>Attachment upload failed</AlertTitle>
+                      <AlertDescription>{uploadError}</AlertDescription>
+                    </Alert>
+                  )}
+                  {eventQuery.data.challenges.length === 0 ? (
+                    <Empty className="rounded-lg border bg-card">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <Flag />
+                        </EmptyMedia>
+                        <EmptyTitle>No challenges</EmptyTitle>
+                        <EmptyDescription>
+                          Add the first challenge for this event.
+                        </EmptyDescription>
+                      </EmptyHeader>
+                      <EmptyContent>
+                        <ChallengeDialog
+                          eventId={eventId}
+                          onUploadError={setUploadError}
+                        />
+                      </EmptyContent>
+                    </Empty>
+                  ) : (
+                    <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {eventQuery.data.challenges.map((challenge) => (
+                        <ChallengeCard
+                          challenge={challenge}
+                          eventId={eventId}
+                          key={challenge.id}
+                          onUploadError={setUploadError}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </TabsPanel>
+                <TabsPanel value="run">
+                  <RunsView
+                    challenges={eventQuery.data.challenges}
+                    eventId={eventId}
+                    runId={runId}
+                  />
+                </TabsPanel>
+                <TabsPanel className="pt-0" value="statistics">
+                  <EventStatistics eventId={eventId} />
+                </TabsPanel>
+              </div>
             </Tabs>
           </>
         )}

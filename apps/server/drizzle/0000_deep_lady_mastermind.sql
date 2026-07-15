@@ -27,9 +27,6 @@ CREATE INDEX `challenges_event_id_idx` ON `challenges` (`event_id`);--> statemen
 CREATE TABLE `events` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
-	`description` text NOT NULL,
-	`starts_at` text,
-	`ends_at` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );

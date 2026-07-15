@@ -56,10 +56,7 @@ function json(method: "POST" | "PATCH", body: object) {
 
 async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
   const event = await (
-    await app.request(
-      "/api/events",
-      json("POST", { name: "Phase 4", description: "Settings and stats" })
-    )
+    await app.request("/api/events", json("POST", { name: "Phase 4" }))
   ).json()
   const challenge = await (
     await app.request(

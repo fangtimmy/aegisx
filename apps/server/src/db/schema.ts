@@ -10,9 +10,6 @@ import {
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  description: text("description").notNull(),
-  startsAt: text("starts_at"),
-  endsAt: text("ends_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 })

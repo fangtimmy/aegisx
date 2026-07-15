@@ -57,10 +57,7 @@ function json(body: object) {
 
 async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
   const event = await (
-    await app.request(
-      "/api/events",
-      json({ name: "Phase 3", description: "Containers and files" })
-    )
+    await app.request("/api/events", json({ name: "Phase 3" }))
   ).json()
   return (
     await app.request(

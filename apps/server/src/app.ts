@@ -25,16 +25,12 @@ import {
   workspaceDownload,
 } from "./workspace-files"
 
-const eventInput = Type.Object({
-  name: Type.String({ minLength: 1, maxLength: 160 }),
-  description: Type.String({ maxLength: 50_000 }),
-  startsAt: Type.Optional(
-    Type.Union([Type.String({ maxLength: 64 }), Type.Null()])
-  ),
-  endsAt: Type.Optional(
-    Type.Union([Type.String({ maxLength: 64 }), Type.Null()])
-  ),
-})
+const eventInput = Type.Object(
+  {
+    name: Type.String({ minLength: 1, maxLength: 160 }),
+  },
+  { additionalProperties: false }
+)
 
 const challengeInput = Type.Object({
   name: Type.String({ minLength: 1, maxLength: 160 }),
@@ -146,12 +142,6 @@ const validateJson = <T extends Parameters<typeof tbValidator>[1]>(schema: T) =>
 function cleanText(value: string | null | undefined) {
   const cleaned = value?.trim()
   return cleaned ? cleaned : null
-}
-
-function cleanDate(value: string | null | undefined) {
-  if (!value) return null
-  const timestamp = Date.parse(value)
-  return Number.isNaN(timestamp) ? undefined : new Date(timestamp).toISOString()
 }
 
 const providerName = (id: string) => `aegisx-${id}`
@@ -715,32 +705,10 @@ export function createApp(options: {
 
   app.post("/api/events", validateJson(eventInput), (c) => {
     const input = c.req.valid("json")
-    const startsAt = cleanDate(input.startsAt)
-    const endsAt = cleanDate(input.endsAt)
-    if (startsAt === undefined || endsAt === undefined) {
-      return c.json(
-        { error: { code: "invalid_date", message: "Invalid event date" } },
-        400
-      )
-    }
-    if (startsAt && endsAt && startsAt > endsAt) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_date_range",
-            message: "End time must be after start time",
-          },
-        },
-        400
-      )
-    }
     const now = new Date().toISOString()
     const event = {
       id: crypto.randomUUID(),
       name: input.name.trim(),
-      description: input.description.trim(),
-      startsAt,
-      endsAt,
       createdAt: now,
       updatedAt: now,
     }
@@ -792,25 +760,6 @@ export function createApp(options: {
       )
     }
     const input = c.req.valid("json")
-    const startsAt = cleanDate(input.startsAt)
-    const endsAt = cleanDate(input.endsAt)
-    if (startsAt === undefined || endsAt === undefined) {
-      return c.json(
-        { error: { code: "invalid_date", message: "Invalid event date" } },
-        400
-      )
-    }
-    if (startsAt && endsAt && startsAt > endsAt) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_date_range",
-            message: "End time must be after start time",
-          },
-        },
-        400
-      )
-    }
     const name = input.name.trim()
     if (!name) {
       return c.json(
@@ -821,9 +770,6 @@ export function createApp(options: {
     db.update(events)
       .set({
         name,
-        description: input.description.trim(),
-        startsAt,
-        endsAt,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(events.id, eventId))

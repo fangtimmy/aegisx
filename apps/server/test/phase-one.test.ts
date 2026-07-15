@@ -37,9 +37,6 @@ async function createEvent(app: ReturnType<typeof createApp>["app"]) {
     "/api/events",
     json("POST", {
       name: "Spring CTF",
-      description: "Qualification event",
-      startsAt: "2026-04-01T08:00:00Z",
-      endsAt: "2026-04-02T08:00:00Z",
     })
   )
   expect(response.status).toBe(201)
@@ -151,23 +148,21 @@ describe("phase one API", () => {
     expect((await app.request(`/api/events/${event.id}`)).status).toBe(404)
   })
 
-  test("validates event names and date ranges", async () => {
+  test("validates event names", async () => {
     const { app } = createTestApp()
     const blank = await app.request(
       "/api/events",
-      json("POST", { name: "   ", description: "" })
+      json("POST", { name: "   " })
     )
     expect(blank.status).toBe(400)
 
-    const reversed = await app.request(
+    const extraFields = await app.request(
       "/api/events",
       json("POST", {
-        name: "Invalid",
-        description: "",
-        startsAt: "2026-04-02T08:00:00Z",
-        endsAt: "2026-04-01T08:00:00Z",
+        name: "Only name",
+        description: "Not accepted",
       })
     )
-    expect(reversed.status).toBe(400)
+    expect(extraFields.status).toBe(400)
   })
 })

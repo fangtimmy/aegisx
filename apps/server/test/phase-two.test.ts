@@ -54,7 +54,7 @@ function json(method: string, body: unknown) {
 async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
   const eventResponse = await app.request(
     "/api/events",
-    json("POST", { name: "Phase 2", description: "Agent integration" })
+    json("POST", { name: "Phase 2" })
   )
   const event = await eventResponse.json()
   const challengeResponse = await app.request(

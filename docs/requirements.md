@@ -101,7 +101,7 @@ Pi 不支持冻结并恢复当前工具调用，因此暂停是中止点，不�
 
 ### 6.1 赛事管理
 
-- 赛事字段：名称、描述、开始时间和结束时间。
+- 赛事字段：名称。
 - 首页显示赛事列表并支持创建赛事。
 - 可以编辑和删除没有活动运行的赛事。
 - 删除赛事时同步删除数据库记录，并在提交后清理附件和工作区目录。
@@ -292,7 +292,7 @@ src/
 
 | 实体 | 关键字段 |
 | --- | --- |
-| events | id, name, description, starts_at, ends_at, timestamps |
+| events | id, name, timestamps |
 | challenges | id, event_id, name, description, category, points, timestamps |
 | attachments | id, challenge_id, original_name, storage_key, size, sha256, created_at |
 | runs | id, challenge_id, status, prompt, model_config, environment_config, session_path, workspace_path, timestamps, error |

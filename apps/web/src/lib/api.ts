@@ -1,9 +1,6 @@
 export type EventSummary = {
   id: string
   name: string
-  description: string
-  startsAt: string | null
-  endsAt: string | null
   createdAt: string
   updatedAt: string
   challengeCount: number
@@ -35,9 +32,6 @@ export type Challenge = {
 
 export type EventInput = {
   name: string
-  description: string
-  startsAt: string | null
-  endsAt: string | null
 }
 
 export type ChallengeInput = {
