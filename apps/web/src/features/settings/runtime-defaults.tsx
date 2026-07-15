@@ -61,7 +61,7 @@ export function RuntimeDefaults({
     : ""
   return (
     <form
-      className="grid grid-cols-2 gap-5"
+      className="grid grid-cols-2 gap-4"
       key={settings.updatedAt}
       onSubmit={(event) => {
         event.preventDefault()

@@ -102,7 +102,7 @@ export function SettingsScreen() {
   const selected = items.find((provider) => provider.id === selectedId)
   return (
     <Tabs
-      className="w-full flex-row items-start gap-6"
+      className="w-full flex-row items-start gap-4"
       onValueChange={(value) => setSection(value as "models" | "runtime")}
       orientation="vertical"
       value={section}
@@ -133,7 +133,7 @@ export function SettingsScreen() {
           </Frame>
         </TabsPanel>
         <TabsPanel value="models">
-          <div className="grid min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-6">
+          <div className="grid min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">
             <CardFrame className="h-min">
               <CardFrameHeader>
                 <CardFrameTitle>Providers</CardFrameTitle>

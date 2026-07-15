@@ -118,7 +118,7 @@ function EventDialog({ event }: { event?: EventSummary }) {
           </DialogDescription>
         </DialogHeader>
         <form className="contents" onSubmit={handleSubmit}>
-          <DialogPanel className="grid gap-5">
+          <DialogPanel className="grid gap-4">
             <Field>
               <FieldLabel>Name</FieldLabel>
               <Input
@@ -248,7 +248,7 @@ export function HomePage() {
 
   return (
     <AppLayout>
-      <div className="mb-7 flex items-start justify-between gap-4">
+      <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="font-semibold text-2xl">Events</h1>
           <p className="mt-1 text-muted-foreground text-sm">

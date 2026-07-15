@@ -209,7 +209,7 @@ export function CreateRunDialog({
             key={settings.data.updatedAt}
             onSubmit={submit}
           >
-            <DialogPanel className="grid gap-5">
+            <DialogPanel className="grid gap-4">
               {!challenge && (
                 <Field name="challengeId">
                   <FieldLabel>Challenge</FieldLabel>

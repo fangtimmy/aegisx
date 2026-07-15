@@ -121,7 +121,7 @@ export function EventPage() {
                 />
               </div>
               {uploadError && (
-                <Alert className="mb-5" variant="warning">
+                <Alert className="mb-4" variant="warning">
                   <TriangleAlert />
                   <AlertTitle>Attachment upload failed</AlertTitle>
                   <AlertDescription>{uploadError}</AlertDescription>

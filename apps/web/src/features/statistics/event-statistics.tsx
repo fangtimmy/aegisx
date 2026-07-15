@@ -91,7 +91,7 @@ export function EventStatistics({ eventId }: { eventId: string }) {
   )
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-6">
       <section aria-labelledby="usage-summary">
         <div className="mb-4 flex items-baseline justify-between gap-4">
           <h2 className="font-semibold text-base" id="usage-summary">

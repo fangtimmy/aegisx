@@ -199,7 +199,7 @@ export function ChallengeDialog({
           </DialogDescription>
         </DialogHeader>
         <form className="contents" onSubmit={handleSubmit}>
-          <DialogPanel className="grid gap-5">
+          <DialogPanel className="grid gap-4">
             <Field>
               <FieldLabel>Name</FieldLabel>
               <Input
@@ -217,7 +217,7 @@ export function ChallengeDialog({
                 required
               />
             </Field>
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-2 gap-4">
               <Field>
                 <FieldLabel>Category</FieldLabel>
                 <Input

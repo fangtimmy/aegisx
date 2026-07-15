@@ -23,7 +23,7 @@ export function AppLayout({
         className={
           workspace
             ? "mx-auto flex min-h-0 w-full max-w-6xl flex-1 px-6 py-4"
-            : "mx-auto w-full max-w-6xl px-6 py-8"
+            : "mx-auto w-full max-w-6xl px-6 py-4"
         }
       >
         {children}

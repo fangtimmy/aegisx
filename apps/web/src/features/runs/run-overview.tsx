@@ -19,7 +19,7 @@ export function RunOverview({
   stats: UsageSummary
 }) {
   return (
-    <div className="flex flex-col gap-5 py-4">
+    <div className="flex flex-col gap-4 py-4">
       {run.environment === "local" ? (
         <Alert variant="warning">
           <Monitor />
