@@ -66,6 +66,8 @@ import type {
   RunPublic,
   RunStatus,
   SessionEntry,
+  SettingsPublic,
+  UsageSummary,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
 
@@ -363,6 +365,11 @@ export function CreateRunDialog({
   const [environment, setEnvironment] = useState<"local" | "container">("local")
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const settings = useQuery({
+    enabled: open,
+    queryKey: ["settings"],
+    queryFn: () => apiRequest<SettingsPublic>("/settings"),
+  })
   const mutation = useMutation({
     mutationFn: ({
       challengeId,
@@ -391,6 +398,10 @@ export function CreateRunDialog({
     },
   })
 
+  useEffect(() => {
+    if (open && settings.data) setEnvironment(settings.data.environment)
+  }, [open, settings.data])
+
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
@@ -414,7 +425,7 @@ export function CreateRunDialog({
         setOpen(next)
         if (next) {
           mutation.reset()
-          setEnvironment("local")
+          if (settings.data) setEnvironment(settings.data.environment)
         }
       }}
     >
@@ -445,104 +456,134 @@ export function CreateRunDialog({
               : "Choose a challenge and model for this run."}
           </DialogDescription>
         </DialogHeader>
-        <form className="contents" onSubmit={submit}>
-          <DialogPanel className="grid gap-5">
-            {!challenge && (
-              <Field>
-                <FieldLabel htmlFor="run-challenge">Challenge</FieldLabel>
-                <select
-                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  defaultValue={available[0]?.id}
-                  id="run-challenge"
-                  name="challengeId"
-                  required
-                >
-                  {available.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
-            <Field>
-              <FieldLabel htmlFor="run-provider">Provider</FieldLabel>
-              <Input
-                defaultValue="anthropic"
-                id="run-provider"
-                name="provider"
-                required
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="run-model">Model ID</FieldLabel>
-              <Input
-                defaultValue="claude-sonnet-4-5"
-                id="run-model"
-                name="modelId"
-                required
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="run-environment">Environment</FieldLabel>
-              <select
-                className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                id="run-environment"
-                name="environment"
-                onChange={(event) =>
-                  setEnvironment(event.target.value as "local" | "container")
-                }
-                value={environment}
+        {settings.isPending && (
+          <DialogPanel>
+            <p className="text-muted-foreground text-sm" role="status">
+              Loading defaults...
+            </p>
+          </DialogPanel>
+        )}
+        {settings.error && (
+          <DialogPanel>
+            <Alert className="rounded-lg" variant="error">
+              <CircleAlert />
+              <AlertTitle>Unable to load defaults</AlertTitle>
+              <AlertDescription>{settings.error.message}</AlertDescription>
+              <Button
+                onClick={() => settings.refetch()}
+                size="sm"
+                type="button"
+                variant="outline"
               >
-                <option value="local">Local</option>
-                <option value="container">Container</option>
-              </select>
-            </Field>
-            {environment === "container" && (
+                Try again
+              </Button>
+            </Alert>
+          </DialogPanel>
+        )}
+        {settings.data && (
+          <form
+            className="contents"
+            key={settings.data.updatedAt}
+            onSubmit={submit}
+          >
+            <DialogPanel className="grid gap-5">
+              {!challenge && (
+                <Field>
+                  <FieldLabel htmlFor="run-challenge">Challenge</FieldLabel>
+                  <select
+                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    defaultValue={available[0]?.id}
+                    id="run-challenge"
+                    name="challengeId"
+                    required
+                  >
+                    {available.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <Field>
-                <FieldLabel htmlFor="run-image">Container image</FieldLabel>
+                <FieldLabel htmlFor="run-provider">Provider</FieldLabel>
                 <Input
-                  defaultValue="alpine:3.22"
-                  id="run-image"
-                  name="image"
+                  defaultValue={settings.data.provider}
+                  id="run-provider"
+                  name="provider"
                   required
                 />
               </Field>
-            )}
-            {environment === "local" ? (
-              <Alert className="rounded-lg" variant="warning">
-                <Monitor />
-                <AlertTitle>Local execution is not sandboxed</AlertTitle>
-                <AlertDescription>
-                  The agent can access the local runtime and challenge
-                  workspace. Review the challenge before starting.
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <Alert className="rounded-lg">
-                <Box />
-                <AlertTitle>Isolated container</AlertTitle>
-                <AlertDescription>
-                  The agent runs in an isolated container with its workspace at
-                  /workspace.
-                </AlertDescription>
-              </Alert>
-            )}
-            {mutation.error && (
-              <p className="text-destructive-foreground text-sm" role="alert">
-                {mutation.error.message}
-              </p>
-            )}
-          </DialogPanel>
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
-            </DialogClose>
-            <Button loading={mutation.isPending} type="submit">
-              <Play /> Start run
-            </Button>
-          </DialogFooter>
-        </form>
+              <Field>
+                <FieldLabel htmlFor="run-model">Model ID</FieldLabel>
+                <Input
+                  defaultValue={settings.data.modelId}
+                  id="run-model"
+                  name="modelId"
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="run-environment">Environment</FieldLabel>
+                <select
+                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  id="run-environment"
+                  name="environment"
+                  onChange={(event) =>
+                    setEnvironment(event.target.value as "local" | "container")
+                  }
+                  value={environment}
+                >
+                  <option value="local">Local</option>
+                  <option value="container">Container</option>
+                </select>
+              </Field>
+              {environment === "container" && (
+                <Field>
+                  <FieldLabel htmlFor="run-image">Container image</FieldLabel>
+                  <Input
+                    defaultValue={settings.data.containerImage}
+                    id="run-image"
+                    name="image"
+                    required
+                  />
+                </Field>
+              )}
+              {environment === "local" ? (
+                <Alert className="rounded-lg" variant="warning">
+                  <Monitor />
+                  <AlertTitle>Local execution is not sandboxed</AlertTitle>
+                  <AlertDescription>
+                    The agent can access the local runtime and challenge
+                    workspace. Review the challenge before starting.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert className="rounded-lg">
+                  <Box />
+                  <AlertTitle>Isolated container</AlertTitle>
+                  <AlertDescription>
+                    The agent runs in an isolated container with its workspace
+                    at /workspace.
+                  </AlertDescription>
+                </Alert>
+              )}
+              {mutation.error && (
+                <p className="text-destructive-foreground text-sm" role="alert">
+                  {mutation.error.message}
+                </p>
+              )}
+            </DialogPanel>
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="ghost" />}>
+                Cancel
+              </DialogClose>
+              <Button loading={mutation.isPending} type="submit">
+                <Play /> Start run
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogPopup>
     </Dialog>
   )
@@ -611,7 +652,7 @@ function RunTree({
   )
 }
 
-function RunOverview({ run }: { run: RunPublic }) {
+function RunOverview({ run, stats }: { run: RunPublic; stats: UsageSummary }) {
   return (
     <div className="space-y-5 py-4">
       {run.environment === "local" ? (
@@ -667,6 +708,34 @@ function RunOverview({ run }: { run: RunPublic }) {
           <dd className="mt-1">{formatTime(run.completedAt)}</dd>
         </div>
       </dl>
+      <section className="border-t pt-4">
+        <h3 className="font-medium text-sm">Token usage</h3>
+        <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
+          {[
+            ["Input", stats.input.toLocaleString()],
+            ["Output", stats.output.toLocaleString()],
+            ["Cache read", stats.cacheRead.toLocaleString()],
+            ["Cache write", stats.cacheWrite.toLocaleString()],
+            ["Total tokens", stats.totalTokens.toLocaleString()],
+            [
+              "Cost",
+              stats.cost === null
+                ? "Unknown"
+                : new Intl.NumberFormat(undefined, {
+                    style: "currency",
+                    currency: "USD",
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 6,
+                  }).format(stats.cost),
+            ],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <dt className="text-muted-foreground text-xs">{label}</dt>
+              <dd className="mt-1 font-medium tabular-nums">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
       {(run.summary || run.flag) && (
         <section className="border-t pt-4">
           <h3 className="font-medium text-sm">Result</h3>
@@ -974,7 +1043,11 @@ function RunWorkspace({
     enabled: Boolean(runId),
     queryKey: runKeys.detail(runId ?? ""),
     queryFn: () =>
-      apiRequest<{ run: RunPublic; history: SessionEntry[] }>(`/runs/${runId}`),
+      apiRequest<{
+        run: RunPublic
+        history: SessionEntry[]
+        stats: UsageSummary
+      }>(`/runs/${runId}`),
   })
   const control = useMutation({
     mutationFn: ({
@@ -1023,15 +1096,17 @@ function RunWorkspace({
           (isRecord(payload.run) ? payload.run.status : undefined)
       )
       if (statuses.includes(status as RunStatus)) {
-        queryClient.setQueryData<{ run: RunPublic; history: SessionEntry[] }>(
-          runKeys.detail(runId),
-          (current) =>
-            current
-              ? {
-                  ...current,
-                  run: { ...current.run, status: status as RunStatus },
-                }
-              : current
+        queryClient.setQueryData<{
+          run: RunPublic
+          history: SessionEntry[]
+          stats: UsageSummary
+        }>(runKeys.detail(runId), (current) =>
+          current
+            ? {
+                ...current,
+                run: { ...current.run, status: status as RunStatus },
+              }
+            : current
         )
       }
       if (
@@ -1072,7 +1147,7 @@ function RunWorkspace({
       </Alert>
     )
   if (!detail.data) return null
-  const { run, history } = detail.data
+  const { run, history, stats } = detail.data
   const active = run.status === "running" || run.status === "paused"
   const canMessage = run.status === "running"
   const requestedView = searchParams.get("view")
@@ -1122,7 +1197,7 @@ function RunWorkspace({
           <TabsTab value="files">Files</TabsTab>
         </TabsList>
         <TabsPanel value="overview">
-          <RunOverview run={run} />
+          <RunOverview run={run} stats={stats} />
         </TabsPanel>
         <TabsPanel className="min-h-0" value="conversation">
           <ScrollArea className="h-[min(52vh,34rem)]">

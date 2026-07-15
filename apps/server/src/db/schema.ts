@@ -81,3 +81,33 @@ export const runs = sqliteTable(
     ),
   ]
 )
+
+export const settings = sqliteTable(
+  "settings",
+  {
+    id: integer("id").primaryKey(),
+    providerType: text("provider_type").notNull().default("builtin"),
+    provider: text("provider").notNull().default("anthropic"),
+    modelId: text("model_id").notNull().default("claude-sonnet-4-5"),
+    baseUrl: text("base_url"),
+    apiKey: text("api_key"),
+    environment: text("environment").notNull().default("local"),
+    containerImage: text("container_image").notNull().default("alpine:3.22"),
+    cpuLimit: integer("cpu_limit").notNull().default(1000),
+    memoryMb: integer("memory_mb").notNull().default(512),
+    pidsLimit: integer("pids_limit").notNull().default(128),
+    maxConcurrency: integer("max_concurrency").notNull().default(2),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check("settings_singleton_check", sql`${table.id} = 1`),
+    check(
+      "settings_provider_type_check",
+      sql`${table.providerType} in ('builtin', 'openai-compatible')`
+    ),
+    check(
+      "settings_environment_check",
+      sql`${table.environment} in ('local', 'container')`
+    ),
+  ]
+)

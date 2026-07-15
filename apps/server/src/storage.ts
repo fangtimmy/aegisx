@@ -10,7 +10,7 @@ export function createStorage(dataDir: string) {
   mkdirSync(incomingDir, { recursive: true })
   mkdirSync(trashDir, { recursive: true })
   rmSync(trashDir, { recursive: true, force: true })
-  mkdirSync(trashDir)
+  mkdirSync(trashDir, { recursive: true })
 
   function attachmentPath(storageKey: string) {
     return join(attachmentsDir, ...storageKey.split("/"))

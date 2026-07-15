@@ -1,15 +1,16 @@
 import { existsSync } from "node:fs"
 import type { Api, Model } from "@earendil-works/pi-ai/compat"
-import type { AuthStorage } from "@earendil-works/pi-coding-agent"
+import { AuthStorage } from "@earendil-works/pi-coding-agent"
 import { tbValidator } from "@hono/typebox-validator"
 import { and, count, eq, getTableColumns, inArray } from "drizzle-orm"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 import { createDatabase } from "./db"
-import { attachments, challenges, events, runs } from "./db/schema"
+import { attachments, challenges, events, runs, settings } from "./db/schema"
 import { createRunManager, RunActionError } from "./runs"
 import { createStorage, isSafeFilename } from "./storage"
+import { sumUsage } from "./usage"
 import {
   readWorkspacePath,
   WorkspaceFileError,
@@ -40,8 +41,8 @@ const challengeInput = Type.Object({
 
 const runInput = Type.Object(
   {
-    provider: Type.String({ minLength: 1, maxLength: 100 }),
-    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+    provider: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+    modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
     environment: Type.Optional(
       Type.Union([Type.Literal("local"), Type.Literal("container")])
     ),
@@ -52,6 +53,35 @@ const runInput = Type.Object(
         pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
       })
     ),
+  },
+  { additionalProperties: false }
+)
+
+const settingsInput = Type.Object(
+  {
+    providerType: Type.Union([
+      Type.Literal("builtin"),
+      Type.Literal("openai-compatible"),
+    ]),
+    provider: Type.String({ minLength: 1, maxLength: 100 }),
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+    baseUrl: Type.Union([
+      Type.String({ minLength: 1, maxLength: 2_000 }),
+      Type.Null(),
+    ]),
+    apiKey: Type.Optional(
+      Type.Union([Type.String({ maxLength: 10_000 }), Type.Null()])
+    ),
+    environment: Type.Union([Type.Literal("local"), Type.Literal("container")]),
+    containerImage: Type.String({
+      minLength: 1,
+      maxLength: 300,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
+    }),
+    cpus: Type.Number({ minimum: 0.1, maximum: 16 }),
+    memoryMb: Type.Integer({ minimum: 128, maximum: 32_768 }),
+    pidsLimit: Type.Integer({ minimum: 16, maximum: 4_096 }),
+    maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
   },
   { additionalProperties: false }
 )
@@ -97,8 +127,41 @@ export function createApp(options: {
 }) {
   const { db, sqlite } = createDatabase(options.dataDir)
   const storage = createStorage(options.dataDir)
+  if (!db.select().from(settings).where(eq(settings.id, 1)).get()) {
+    db.insert(settings)
+      .values({ id: 1, updatedAt: new Date().toISOString() })
+      .run()
+  }
+  const getSettings = () => {
+    const value = db.select().from(settings).where(eq(settings.id, 1)).get()
+    if (!value) throw new Error("Settings are unavailable")
+    return value
+  }
+  const authStorage = options.authStorage ?? AuthStorage.create()
+  let credentialProvider: string | undefined
+  const applyCredential = (provider: string, apiKey: string | null) => {
+    if (credentialProvider && credentialProvider !== provider) {
+      authStorage.removeRuntimeApiKey(credentialProvider)
+    }
+    if (apiKey) {
+      authStorage.setRuntimeApiKey(provider, apiKey)
+      credentialProvider = provider
+    } else {
+      authStorage.removeRuntimeApiKey(provider)
+      credentialProvider = undefined
+    }
+  }
+  const initialSettings = getSettings()
+  if (initialSettings.apiKey) {
+    applyCredential(initialSettings.provider, initialSettings.apiKey)
+  }
+  const environmentConcurrency = process.env.AEGISX_MAX_CONCURRENCY
+    ? Number(process.env.AEGISX_MAX_CONCURRENCY)
+    : undefined
   const configuredConcurrency =
-    options.maxConcurrency ?? Number(process.env.AEGISX_MAX_CONCURRENCY ?? 2)
+    options.maxConcurrency ??
+    environmentConcurrency ??
+    initialSettings.maxConcurrency
   const runManager = createRunManager({
     db,
     dataDir: options.dataDir,
@@ -106,10 +169,29 @@ export function createApp(options: {
       Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
         ? configuredConcurrency
         : 2,
-    authStorage: options.authStorage,
+    authStorage,
     resolveModel: options.resolveModel,
   })
   const app = new Hono()
+
+  const publicSettings = () => {
+    const value = getSettings()
+    return {
+      providerType: value.providerType as "builtin" | "openai-compatible",
+      provider: value.provider,
+      modelId: value.modelId,
+      baseUrl: value.baseUrl,
+      hasApiKey: Boolean(value.apiKey),
+      apiKeyMask: value.apiKey ? `****${value.apiKey.slice(-4)}` : null,
+      environment: value.environment as "local" | "container",
+      containerImage: value.containerImage,
+      cpus: value.cpuLimit / 1000,
+      memoryMb: value.memoryMb,
+      pidsLimit: value.pidsLimit,
+      maxConcurrency: value.maxConcurrency,
+      updatedAt: value.updatedAt,
+    }
+  }
 
   const listEvents = () =>
     db
@@ -171,6 +253,67 @@ export function createApp(options: {
   })
 
   app.get("/", (c) => c.json({ name: "AegisX", status: "ok" }))
+
+  app.get("/api/settings", (c) => c.json(publicSettings()))
+
+  app.patch("/api/settings", validateJson(settingsInput), (c) => {
+    const input = c.req.valid("json")
+    const provider = input.provider.trim()
+    const modelId = input.modelId.trim()
+    const baseUrl = cleanText(input.baseUrl)
+    if (!provider || !modelId) {
+      return c.json(
+        {
+          error: {
+            code: "invalid_settings",
+            message: "Provider and model ID are required",
+          },
+        },
+        400
+      )
+    }
+    if (input.providerType === "openai-compatible") {
+      try {
+        const url = new URL(baseUrl ?? "")
+        if (url.protocol !== "http:" && url.protocol !== "https:") throw null
+      } catch {
+        return c.json(
+          {
+            error: {
+              code: "invalid_base_url",
+              message: "OpenAI-compatible endpoint must be an HTTP URL",
+            },
+          },
+          400
+        )
+      }
+    }
+    const existing = getSettings()
+    const apiKey =
+      input.apiKey === undefined ? existing.apiKey : cleanText(input.apiKey)
+    db.update(settings)
+      .set({
+        providerType: input.providerType,
+        provider,
+        modelId,
+        baseUrl: input.providerType === "openai-compatible" ? baseUrl : null,
+        apiKey,
+        environment: input.environment,
+        containerImage: input.containerImage.trim(),
+        cpuLimit: Math.round(input.cpus * 1000),
+        memoryMb: input.memoryMb,
+        pidsLimit: input.pidsLimit,
+        maxConcurrency: input.maxConcurrency,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(settings.id, 1))
+      .run()
+    applyCredential(provider, apiKey)
+    runManager.setMaxConcurrency(input.maxConcurrency)
+    return c.json(publicSettings())
+  })
+
+  app.get("/api/platform/status", (c) => c.json({ available: false }))
 
   app.get("/api/events", (c) => c.json({ items: listEvents() }))
 
@@ -467,18 +610,37 @@ export function createApp(options: {
     async (c) => {
       const input = c.req.valid("json")
       try {
+        const defaults = getSettings()
+        const provider = input.provider?.trim() || defaults.provider
+        const modelId = input.modelId?.trim() || defaults.modelId
+        const customModel =
+          defaults.providerType === "openai-compatible" &&
+          provider === defaults.provider &&
+          modelId === defaults.modelId
+        const environmentType = input.environment ?? defaults.environment
         const environment =
-          input.environment === "container"
+          environmentType === "container"
             ? {
                 type: "container" as const,
-                image: input.image?.trim() || "alpine:3.22",
+                image: input.image?.trim() || defaults.containerImage,
+                cpus: defaults.cpuLimit / 1000,
+                memoryMb: defaults.memoryMb,
+                pidsLimit: defaults.pidsLimit,
               }
             : ({ type: "local" } as const)
         return c.json(
           await runManager.create(
             c.req.param("challengeId"),
-            input.provider,
-            input.modelId,
+            {
+              provider,
+              modelId,
+              ...(customModel && defaults.baseUrl
+                ? {
+                    baseUrl: defaults.baseUrl,
+                    costKnown: false,
+                  }
+                : {}),
+            },
             environment
           ),
           202
@@ -497,7 +659,81 @@ export function createApp(options: {
         404
       )
     }
-    return c.json({ run, history: runManager.history(run.id) })
+    return c.json({
+      run,
+      history: runManager.history(run.id),
+      stats: runManager.usage(run.id),
+    })
+  })
+
+  app.get("/api/runs/:runId/stats", (c) => {
+    const run = runManager.get(c.req.param("runId"))
+    if (!run) {
+      return c.json(
+        { error: { code: "not_found", message: "Run not found" } },
+        404
+      )
+    }
+    return c.json({ runId: run.id, usage: runManager.usage(run.id) })
+  })
+
+  app.get("/api/challenges/:challengeId/stats", (c) => {
+    const challenge = getChallenge(c.req.param("challengeId"))
+    if (!challenge) {
+      return c.json(
+        { error: { code: "not_found", message: "Challenge not found" } },
+        404
+      )
+    }
+    const challengeRuns = runManager.listForChallenge(challenge.id)
+    const items = challengeRuns.map((run) => ({
+      run,
+      usage: runManager.usage(run.id),
+    }))
+    return c.json({
+      challengeId: challenge.id,
+      runCount: items.length,
+      usage: sumUsage(items.map((item) => item.usage)),
+      runs: items,
+    })
+  })
+
+  app.get("/api/events/:eventId/stats", (c) => {
+    const event = getEvent(c.req.param("eventId"))
+    if (!event) {
+      return c.json(
+        { error: { code: "not_found", message: "Event not found" } },
+        404
+      )
+    }
+    const eventRuns = runManager.listForEvent(event.id)
+    const items = eventRuns.map((run) => ({
+      run,
+      usage: runManager.usage(run.id),
+    }))
+    const challengeItems = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.eventId, event.id))
+      .all()
+      .map((challenge) => {
+        const challengeRuns = items.filter(
+          ({ run }) => run.challengeId === challenge.id
+        )
+        return {
+          challengeId: challenge.id,
+          challengeName: challenge.name,
+          runCount: challengeRuns.length,
+          usage: sumUsage(challengeRuns.map((item) => item.usage)),
+        }
+      })
+    return c.json({
+      eventId: event.id,
+      runCount: items.length,
+      usage: sumUsage(items.map((item) => item.usage)),
+      challenges: challengeItems,
+      runs: items,
+    })
   })
 
   app.get("/api/runs/:runId/files", (c) => {

@@ -81,8 +81,10 @@ import {
   type EventInput,
   type EventSummary,
   jsonRequest,
+  type SettingsPublic,
 } from "@/lib/api"
 import { CreateRunDialog, RunsView } from "@/runs"
+import { EventStatistics } from "@/statistics"
 
 const eventKeys = {
   all: ["events"] as const,
@@ -168,12 +170,11 @@ function ProductHeader() {
           </span>
           AegisX
         </Link>
-        <IconTooltip label="Settings will be available in a later phase">
+        <IconTooltip label="Settings">
           <Button
             aria-label="Settings"
-            disabled
+            render={<Link to="/settings" />}
             size="icon"
-            type="button"
             variant="ghost"
           >
             <Settings />
@@ -181,6 +182,301 @@ function ProductHeader() {
         </IconTooltip>
       </div>
     </header>
+  )
+}
+
+type SettingsInput = Pick<
+  SettingsPublic,
+  | "providerType"
+  | "provider"
+  | "modelId"
+  | "baseUrl"
+  | "environment"
+  | "containerImage"
+  | "cpus"
+  | "memoryMb"
+  | "pidsLimit"
+  | "maxConcurrency"
+> & { apiKey?: string | null }
+
+function SettingsForm({ settings }: { settings: SettingsPublic }) {
+  const queryClient = useQueryClient()
+  const [providerType, setProviderType] = useState(settings.providerType)
+  const [environment, setEnvironment] = useState(settings.environment)
+  const [clearApiKey, setClearApiKey] = useState(false)
+  const [apiKey, setApiKey] = useState("")
+  const mutation = useMutation({
+    mutationFn: (input: SettingsInput) =>
+      apiRequest<SettingsPublic>("/settings", jsonRequest("PATCH", input)),
+    onSuccess: (saved) => {
+      setClearApiKey(false)
+      setApiKey("")
+      queryClient.setQueryData(["settings"], saved)
+    },
+  })
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const data = new FormData(event.currentTarget)
+    mutation.mutate({
+      providerType,
+      provider: String(data.get("provider")).trim(),
+      modelId: String(data.get("modelId")).trim(),
+      baseUrl:
+        providerType === "openai-compatible"
+          ? String(data.get("baseUrl") ?? "").trim() || null
+          : null,
+      environment,
+      containerImage: String(data.get("containerImage")).trim(),
+      cpus: Number(data.get("cpus")),
+      memoryMb: Number(data.get("memoryMb")),
+      pidsLimit: Number(data.get("pidsLimit")),
+      maxConcurrency: Number(data.get("maxConcurrency")),
+      ...(clearApiKey
+        ? { apiKey: null }
+        : apiKey.trim()
+          ? { apiKey: apiKey.trim() }
+          : {}),
+    })
+  }
+
+  const selectClass =
+    "h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-8"
+
+  return (
+    <form className="space-y-8" onSubmit={submit}>
+      <section aria-labelledby="model-settings" className="border-t pt-6">
+        <h2 className="font-semibold text-base" id="model-settings">
+          Model provider
+        </h2>
+        <div className="mt-5 grid gap-5 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="provider-type">Provider type</FieldLabel>
+            <select
+              className={selectClass}
+              id="provider-type"
+              name="providerType"
+              onChange={(event) =>
+                setProviderType(
+                  event.target.value as SettingsPublic["providerType"]
+                )
+              }
+              value={providerType}
+            >
+              <option value="builtin">Built in</option>
+              <option value="openai-compatible">OpenAI compatible</option>
+            </select>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-provider">Provider</FieldLabel>
+            <Input
+              defaultValue={settings.provider}
+              id="settings-provider"
+              name="provider"
+              required
+              type="text"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-model">Model ID</FieldLabel>
+            <Input
+              defaultValue={settings.modelId}
+              id="settings-model"
+              name="modelId"
+              required
+              type="text"
+            />
+          </Field>
+          {providerType === "openai-compatible" && (
+            <Field>
+              <FieldLabel htmlFor="settings-base-url">Base URL</FieldLabel>
+              <Input
+                defaultValue={settings.baseUrl ?? ""}
+                id="settings-base-url"
+                name="baseUrl"
+                placeholder="https://api.example.com/v1"
+                type="url"
+              />
+            </Field>
+          )}
+          <Field className="sm:col-span-2">
+            <FieldLabel htmlFor="settings-api-key">API key</FieldLabel>
+            <div className="flex w-full flex-col gap-2 sm:flex-row">
+              <Input
+                autoComplete="new-password"
+                className="flex-1"
+                disabled={clearApiKey}
+                id="settings-api-key"
+                name="apiKey"
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder={
+                  settings.hasApiKey
+                    ? settings.apiKeyMask || "Configured"
+                    : "Not configured"
+                }
+                type="password"
+                value={apiKey}
+              />
+              {settings.hasApiKey && (
+                <Button
+                  onClick={() => setClearApiKey((value) => !value)}
+                  type="button"
+                  variant={clearApiKey ? "secondary" : "outline"}
+                >
+                  {clearApiKey ? "Keep saved key" : "Clear saved key"}
+                </Button>
+              )}
+            </div>
+            <FieldDescription>
+              {clearApiKey
+                ? "The saved key will be cleared when you save."
+                : "Leave blank to preserve the saved key."}
+            </FieldDescription>
+          </Field>
+        </div>
+      </section>
+
+      <section aria-labelledby="runtime-settings" className="border-t pt-6">
+        <h2 className="font-semibold text-base" id="runtime-settings">
+          Runtime defaults
+        </h2>
+        <div className="mt-5 grid gap-5 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="settings-environment">Environment</FieldLabel>
+            <select
+              className={selectClass}
+              id="settings-environment"
+              name="environment"
+              onChange={(event) =>
+                setEnvironment(
+                  event.target.value as SettingsPublic["environment"]
+                )
+              }
+              value={environment}
+            >
+              <option value="local">Local</option>
+              <option value="container">Container</option>
+            </select>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-image">Container image</FieldLabel>
+            <Input
+              defaultValue={settings.containerImage}
+              id="settings-image"
+              name="containerImage"
+              required
+              type="text"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-cpus">CPUs</FieldLabel>
+            <Input
+              defaultValue={settings.cpus}
+              id="settings-cpus"
+              max="16"
+              min="0.1"
+              name="cpus"
+              required
+              step="0.1"
+              type="number"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-memory">Memory (MB)</FieldLabel>
+            <Input
+              defaultValue={settings.memoryMb}
+              id="settings-memory"
+              max="32768"
+              min="128"
+              name="memoryMb"
+              required
+              step="1"
+              type="number"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-pids">PID limit</FieldLabel>
+            <Input
+              defaultValue={settings.pidsLimit}
+              id="settings-pids"
+              max="4096"
+              min="16"
+              name="pidsLimit"
+              required
+              step="1"
+              type="number"
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="settings-concurrency">
+              Max concurrency
+            </FieldLabel>
+            <Input
+              defaultValue={settings.maxConcurrency}
+              id="settings-concurrency"
+              max="32"
+              min="1"
+              name="maxConcurrency"
+              required
+              step="1"
+              type="number"
+            />
+          </Field>
+        </div>
+      </section>
+
+      {mutation.error && (
+        <p className="text-destructive-foreground text-sm" role="alert">
+          {mutation.error.message}
+        </p>
+      )}
+      {mutation.isSuccess && (
+        <p className="text-muted-foreground text-sm" role="status">
+          Settings saved.
+        </p>
+      )}
+      <div className="flex justify-end border-t pt-5">
+        <Button loading={mutation.isPending} type="submit">
+          Save settings
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+function SettingsPage() {
+  const settings = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => apiRequest<SettingsPublic>("/settings"),
+  })
+
+  return (
+    <div className="min-h-svh bg-muted/30">
+      <ProductHeader />
+      <main className="mx-auto w-full max-w-3xl px-4 py-7 sm:px-6 sm:py-9">
+        <Button
+          className="mb-5"
+          render={<Link aria-label="Back to events" to="/" />}
+          size="sm"
+          variant="ghost"
+        >
+          <ArrowLeft /> Events
+        </Button>
+        <h1 className="font-semibold text-2xl">Settings</h1>
+        <p className="mt-1 mb-7 text-muted-foreground text-sm">
+          Configure model and runtime defaults for new runs.
+        </p>
+        {settings.isPending && (
+          <p className="py-16 text-center text-muted-foreground text-sm">
+            Loading settings...
+          </p>
+        )}
+        {settings.error && (
+          <ErrorState error={settings.error} retry={() => settings.refetch()} />
+        )}
+        {settings.data && <SettingsForm settings={settings.data} />}
+      </main>
+    </div>
   )
 }
 
@@ -871,10 +1167,22 @@ function EventPage() {
                   <span>Ends {formatDate(eventQuery.data.event.endsAt)}</span>
                 </div>
               </div>
-              <ChallengeDialog
-                eventId={eventId}
-                onUploadError={setUploadError}
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                <IconTooltip label="Import unavailable: no platform adapter configured">
+                  <Button
+                    aria-label="Import unavailable: no platform adapter configured"
+                    disabled
+                    type="button"
+                    variant="outline"
+                  >
+                    <Download /> Import
+                  </Button>
+                </IconTooltip>
+                <ChallengeDialog
+                  eventId={eventId}
+                  onUploadError={setUploadError}
+                />
+              </div>
             </div>
 
             <Tabs
@@ -883,13 +1191,17 @@ function EventPage() {
                 navigate(
                   value === "run"
                     ? `/events/${eventId}/run`
-                    : `/events/${eventId}`
+                    : value === "statistics"
+                      ? `/events/${eventId}/statistics`
+                      : `/events/${eventId}`
                 )
               }
               value={
-                location.pathname.includes(`/events/${eventId}/run`)
-                  ? "run"
-                  : "overview"
+                location.pathname === `/events/${eventId}/statistics`
+                  ? "statistics"
+                  : location.pathname.includes(`/events/${eventId}/run`)
+                    ? "run"
+                    : "overview"
               }
             >
               <TabsList
@@ -898,9 +1210,7 @@ function EventPage() {
               >
                 <TabsTab value="overview">Overview</TabsTab>
                 <TabsTab value="run">Run</TabsTab>
-                <TabsTab disabled value="statistics">
-                  Statistics
-                </TabsTab>
+                <TabsTab value="statistics">Statistics</TabsTab>
               </TabsList>
               <TabsPanel className="pt-6" value="overview">
                 {uploadError && (
@@ -948,7 +1258,9 @@ function EventPage() {
                   runId={runId}
                 />
               </TabsPanel>
-              <TabsPanel value="statistics" />
+              <TabsPanel className="pt-6" value="statistics">
+                <EventStatistics eventId={eventId} />
+              </TabsPanel>
             </Tabs>
           </>
         )}
@@ -959,9 +1271,11 @@ function EventPage() {
 
 const router = createBrowserRouter([
   { path: "/", Component: HomePage },
+  { path: "/settings", Component: SettingsPage },
   { path: "/events/:eventId", Component: EventPage },
   { path: "/events/:eventId/run", Component: EventPage },
   { path: "/events/:eventId/runs/:runId", Component: EventPage },
+  { path: "/events/:eventId/statistics", Component: EventPage },
 ])
 
 export function App() {

@@ -33,7 +33,8 @@ export function removeContainer(name: string) {
 export function createContainer(
   name: string,
   workspacePath: string,
-  image: string
+  image: string,
+  limits: { cpus: number; memoryMb: number; pidsLimit: number }
 ) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image)) {
     throw new Error("Container image is invalid")
@@ -53,11 +54,11 @@ export function createContainer(
     "--security-opt",
     "no-new-privileges",
     "--pids-limit",
-    "128",
+    String(limits.pidsLimit),
     "--memory",
-    "512m",
+    `${limits.memoryMb}m`,
     "--cpus",
-    "1",
+    String(limits.cpus),
     "--tmpfs",
     "/tmp:rw,nosuid,nodev,noexec,size=64m",
     "--mount",

@@ -22,13 +22,26 @@ import {
 } from "./container"
 import type { createDatabase } from "./db"
 import { attachments, challenges, events, runs } from "./db/schema"
+import { summarizeUsage } from "./usage"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunStatus = "running" | "paused" | "completed" | "failed" | "stopped"
 type RunEvent = AgentSessionEvent | { type: "status"; run: RunPublic }
 type EnvironmentConfig =
   | { type: "local" }
-  | { type: "container"; image: string }
+  | {
+      type: "container"
+      image: string
+      cpus: number
+      memoryMb: number
+      pidsLimit: number
+    }
+type ModelConfig = {
+  provider: string
+  modelId: string
+  baseUrl?: string
+  costKnown?: boolean
+}
 
 export type RunPublic = {
   id: string
@@ -40,6 +53,9 @@ export type RunPublic = {
   modelId: string
   environment: "local" | "container"
   image?: string | null
+  cpus?: number
+  memoryMb?: number
+  pidsLimit?: number
   createdAt: string
   startedAt: string | null
   updatedAt: string
@@ -65,7 +81,8 @@ type CurrentSession = {
 const terminalStatuses: RunStatus[] = ["completed", "failed", "stopped"]
 
 export function createRunManager(options: Options) {
-  const { db, dataDir, maxConcurrency } = options
+  const { db, dataDir } = options
+  let maxConcurrency = options.maxConcurrency
   const authStorage = options.authStorage ?? AuthStorage.create()
   const modelRegistry = ModelRegistry.create(authStorage)
   const current = new Map<string, CurrentSession>()
@@ -105,10 +122,7 @@ export function createRunManager(options: Options) {
       .where(eq(runs.id, runId))
       .get()
     if (!row) return undefined
-    const config = JSON.parse(row.run.modelConfig) as {
-      provider: string
-      modelId: string
-    }
+    const config = parseModelConfig(row.run.modelConfig)
     const environment = parseEnvironment(row.run.environmentConfig)
     const value: RunPublic = {
       id: row.run.id,
@@ -126,7 +140,12 @@ export function createRunManager(options: Options) {
       error: row.run.error,
       summary: row.run.summary,
     }
-    if (environment.type === "container") value.image = environment.image
+    if (environment.type === "container") {
+      value.image = environment.image
+      value.cpus = environment.cpus
+      value.memoryMb = environment.memoryMb
+      value.pidsLimit = environment.pidsLimit
+    }
     if (includeFlag) value.flag = row.run.flag
     return value
   }
@@ -232,10 +251,23 @@ export function createRunManager(options: Options) {
     })
   }
 
-  async function resolveRequestedModel(provider: string, modelId: string) {
+  async function resolveRequestedModel(config: ModelConfig) {
     const model =
-      options.resolveModel?.(provider, modelId) ??
-      modelRegistry.find(provider, modelId)
+      options.resolveModel?.(config.provider, config.modelId) ??
+      (config.baseUrl
+        ? {
+            id: config.modelId,
+            name: config.modelId,
+            api: "openai-completions" as const,
+            provider: config.provider,
+            baseUrl: config.baseUrl,
+            reasoning: false,
+            input: ["text" as const],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          }
+        : modelRegistry.find(config.provider, config.modelId))
     if (!model) {
       throw new RunStartError("Requested model is unavailable")
     }
@@ -255,14 +287,8 @@ export function createRunManager(options: Options) {
     if (!run?.workspacePath || !run.sessionPath) {
       throw new RunStartError("Run session is unavailable")
     }
-    const modelConfig = JSON.parse(run.modelConfig) as {
-      provider: string
-      modelId: string
-    }
-    const model = await resolveRequestedModel(
-      modelConfig.provider,
-      modelConfig.modelId
-    )
+    const modelConfig = parseModelConfig(run.modelConfig)
+    const model = await resolveRequestedModel(modelConfig)
     const workspacePath = join(dataDir, run.workspacePath)
     const sessionFile = join(dataDir, run.sessionPath)
     const sessionManager = SessionManager.open(
@@ -290,7 +316,7 @@ export function createRunManager(options: Options) {
     if (environment.type === "container") {
       const name = containerName(runId)
       try {
-        createContainer(name, workspacePath, environment.image)
+        createContainer(name, workspacePath, environment.image, environment)
       } catch {
         throw new RunStartError("Container could not be started")
       }
@@ -330,6 +356,31 @@ export function createRunManager(options: Options) {
         }
       },
     })
+    const unavailable = (name: string) =>
+      defineTool({
+        name,
+        label: name.replaceAll("_", " "),
+        description: `${name.replaceAll("_", " ")} through the configured CTF platform`,
+        parameters:
+          name === "submit_flag"
+            ? Type.Object({ flag: Type.String({ minLength: 1 }) })
+            : Type.Object({}),
+        execute: async () => ({
+          content: [
+            {
+              type: "text" as const,
+              text: "CTF platform integration is unavailable",
+            },
+          ],
+          details: { available: false },
+        }),
+      })
+    const hostTools = [
+      finishRun,
+      unavailable("start_target"),
+      unavailable("stop_target"),
+      unavailable("submit_flag"),
+    ]
     let created: Awaited<ReturnType<typeof createAgentSession>>
     try {
       created = await createAgentSession({
@@ -340,7 +391,7 @@ export function createRunManager(options: Options) {
         ...(environmentTools
           ? {
               noTools: "builtin" as const,
-              customTools: [...environmentTools, finishRun],
+              customTools: [...environmentTools, ...hostTools],
             }
           : {
               tools: [
@@ -352,8 +403,11 @@ export function createRunManager(options: Options) {
                 "find",
                 "ls",
                 "finish_run",
+                "start_target",
+                "stop_target",
+                "submit_flag",
               ],
-              customTools: [finishRun],
+              customTools: hostTools,
             }),
         sessionManager,
         settingsManager: SettingsManager.inMemory(),
@@ -392,8 +446,7 @@ export function createRunManager(options: Options) {
 
   async function create(
     challengeId: string,
-    provider: string,
-    modelId: string,
+    modelConfig: ModelConfig,
     environment: EnvironmentConfig = { type: "local" }
   ) {
     const challenge = db
@@ -423,7 +476,7 @@ export function createRunManager(options: Options) {
         challengeId,
         status: "running",
         prompt,
-        modelConfig: JSON.stringify({ provider, modelId }),
+        modelConfig: JSON.stringify(modelConfig),
         environmentConfig: JSON.stringify(environment),
         sessionPath: relative(dataDir, sessionFile),
         workspacePath: relative(dataDir, workspacePath),
@@ -434,7 +487,7 @@ export function createRunManager(options: Options) {
       .run()
 
     try {
-      const model = await resolveRequestedModel(provider, modelId)
+      const model = await resolveRequestedModel(modelConfig)
       const session = await attachSession(
         id,
         workspacePath,
@@ -557,6 +610,14 @@ export function createRunManager(options: Options) {
         .orderBy(desc(runs.createdAt))
         .all()
         .map(({ id }) => getPublic(id) as RunPublic),
+    listForChallenge: (challengeId: string) =>
+      db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(eq(runs.challengeId, challengeId))
+        .orderBy(desc(runs.createdAt))
+        .all()
+        .map(({ id }) => getPublic(id) as RunPublic),
     pause,
     resume,
     message,
@@ -571,9 +632,23 @@ export function createRunManager(options: Options) {
       }
     },
     activeSessionCount: () => current.size,
+    setMaxConcurrency: (value: number) => {
+      maxConcurrency = value
+    },
     workspacePath: (runId: string) => {
       const path = getStored(runId)?.workspacePath
       return path ? join(dataDir, path) : undefined
+    },
+    usage: (runId: string) => {
+      const run = getStored(runId)
+      if (!run) throw new RunActionError("not_found", "Run not found")
+      const entries = run.sessionPath
+        ? SessionManager.open(join(dataDir, run.sessionPath)).getEntries()
+        : []
+      return summarizeUsage(
+        entries,
+        parseModelConfig(run.modelConfig).costKnown !== false
+      )
     },
     close: () => {
       if (closed) return
@@ -595,12 +670,41 @@ function parseEnvironment(value: string): EnvironmentConfig {
   try {
     const parsed = JSON.parse(value) as Partial<EnvironmentConfig>
     if (parsed.type === "container" && typeof parsed.image === "string") {
-      return { type: "container", image: parsed.image }
+      return {
+        type: "container",
+        image: parsed.image,
+        cpus:
+          "cpus" in parsed && typeof parsed.cpus === "number" ? parsed.cpus : 1,
+        memoryMb:
+          "memoryMb" in parsed && typeof parsed.memoryMb === "number"
+            ? parsed.memoryMb
+            : 512,
+        pidsLimit:
+          "pidsLimit" in parsed && typeof parsed.pidsLimit === "number"
+            ? parsed.pidsLimit
+            : 128,
+      }
     }
   } catch {
     // Existing and malformed rows remain local rather than gaining container access.
   }
   return { type: "local" }
+}
+
+function parseModelConfig(value: string): ModelConfig {
+  try {
+    const parsed = JSON.parse(value) as Partial<ModelConfig>
+    return {
+      provider: typeof parsed.provider === "string" ? parsed.provider : "",
+      modelId: typeof parsed.modelId === "string" ? parsed.modelId : "",
+      ...(typeof parsed.baseUrl === "string"
+        ? { baseUrl: parsed.baseUrl }
+        : {}),
+      ...(parsed.costKnown === false ? { costKnown: false } : {}),
+    }
+  } catch {
+    return { provider: "", modelId: "" }
+  }
 }
 
 export class RunActionError extends Error {

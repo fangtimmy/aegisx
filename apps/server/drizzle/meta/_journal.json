@@ -15,6 +15,13 @@
       "when": 1784102180488,
       "tag": "0001_nasty_ultimates",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784107918825,
+      "tag": "0002_ambitious_sally_floyd",
+      "breakpoints": true
     }
   ]
 }

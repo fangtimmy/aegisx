@@ -64,6 +64,9 @@ export type RunPublic = {
   modelId: string
   environment: "local" | "container"
   image?: string | null
+  cpus?: number
+  memoryMb?: number
+  pidsLimit?: number
   createdAt: string
   startedAt: string | null
   updatedAt: string
@@ -71,6 +74,44 @@ export type RunPublic = {
   error: string | null
   summary: string | null
   flag?: string | null
+}
+
+export type UsageSummary = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  cost: number | null
+}
+
+export type SettingsPublic = {
+  providerType: "builtin" | "openai-compatible"
+  provider: string
+  modelId: string
+  baseUrl: string | null
+  hasApiKey: boolean
+  apiKeyMask: string | null
+  environment: "local" | "container"
+  containerImage: string
+  cpus: number
+  memoryMb: number
+  pidsLimit: number
+  maxConcurrency: number
+  updatedAt: string
+}
+
+export type EventStats = {
+  eventId: string
+  runCount: number
+  usage: UsageSummary
+  challenges: Array<{
+    challengeId: string
+    challengeName: string
+    runCount: number
+    usage: UsageSummary
+  }>
+  runs: Array<{ run: RunPublic; usage: UsageSummary }>
 }
 
 export type RunFileEntry = {
