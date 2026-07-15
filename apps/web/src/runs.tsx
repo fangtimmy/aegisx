@@ -1,10 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Bot,
+  Box,
   Brain,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
   Clock3,
-  FileQuestion,
+  Download,
+  File,
+  Folder,
+  FolderOpen,
+  Info,
   ListTree,
   MessageSquare,
   Monitor,
@@ -52,12 +59,21 @@ import {
 } from "@/components/ui/sheet"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import type { Challenge, RunPublic, RunStatus, SessionEntry } from "@/lib/api"
+import type {
+  Challenge,
+  RunFile,
+  RunFileEntry,
+  RunPublic,
+  RunStatus,
+  SessionEntry,
+} from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
 
 const runKeys = {
   event: (eventId: string) => ["runs", "event", eventId] as const,
   detail: (runId: string) => ["runs", runId] as const,
+  files: (runId: string, path: string) =>
+    ["runs", runId, "files", path] as const,
 }
 
 const statuses: RunStatus[] = [
@@ -344,6 +360,7 @@ export function CreateRunDialog({
   onCreated?: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [environment, setEnvironment] = useState<"local" | "container">("local")
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const mutation = useMutation({
@@ -351,14 +368,18 @@ export function CreateRunDialog({
       challengeId,
       provider,
       modelId,
+      environment,
+      image,
     }: {
       challengeId: string
       provider: string
       modelId: string
+      environment: "local" | "container"
+      image?: string
     }) =>
       apiRequest<RunPublic>(
         `/challenges/${challengeId}/runs`,
-        jsonRequest("POST", { provider, modelId })
+        jsonRequest("POST", { provider, modelId, environment, image })
       ),
     onSuccess: async (run) => {
       await queryClient.invalidateQueries({
@@ -377,6 +398,11 @@ export function CreateRunDialog({
       challengeId: challenge?.id ?? String(data.get("challengeId")),
       provider: String(data.get("provider")).trim(),
       modelId: String(data.get("modelId")).trim(),
+      environment,
+      image:
+        environment === "container"
+          ? String(data.get("image")).trim()
+          : undefined,
     })
   }
 
@@ -386,7 +412,10 @@ export function CreateRunDialog({
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (next) mutation.reset()
+        if (next) {
+          mutation.reset()
+          setEnvironment("local")
+        }
       }}
     >
       <DialogTrigger
@@ -409,7 +438,7 @@ export function CreateRunDialog({
       </DialogTrigger>
       <DialogPopup className="sm:rounded-lg">
         <DialogHeader>
-          <DialogTitle>Start local run</DialogTitle>
+          <DialogTitle>Start run</DialogTitle>
           <DialogDescription>
             {challenge
               ? `Configure a run for ${challenge.name}.`
@@ -437,21 +466,68 @@ export function CreateRunDialog({
               </Field>
             )}
             <Field>
-              <FieldLabel>Provider</FieldLabel>
-              <Input defaultValue="anthropic" name="provider" required />
+              <FieldLabel htmlFor="run-provider">Provider</FieldLabel>
+              <Input
+                defaultValue="anthropic"
+                id="run-provider"
+                name="provider"
+                required
+              />
             </Field>
             <Field>
-              <FieldLabel>Model ID</FieldLabel>
-              <Input defaultValue="claude-sonnet-4-5" name="modelId" required />
+              <FieldLabel htmlFor="run-model">Model ID</FieldLabel>
+              <Input
+                defaultValue="claude-sonnet-4-5"
+                id="run-model"
+                name="modelId"
+                required
+              />
             </Field>
-            <Alert className="rounded-lg" variant="warning">
-              <Monitor />
-              <AlertTitle>Local execution is not sandboxed</AlertTitle>
-              <AlertDescription>
-                The agent can access the local runtime and challenge workspace.
-                Review the challenge before starting.
-              </AlertDescription>
-            </Alert>
+            <Field>
+              <FieldLabel htmlFor="run-environment">Environment</FieldLabel>
+              <select
+                className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                id="run-environment"
+                name="environment"
+                onChange={(event) =>
+                  setEnvironment(event.target.value as "local" | "container")
+                }
+                value={environment}
+              >
+                <option value="local">Local</option>
+                <option value="container">Container</option>
+              </select>
+            </Field>
+            {environment === "container" && (
+              <Field>
+                <FieldLabel htmlFor="run-image">Container image</FieldLabel>
+                <Input
+                  defaultValue="alpine:3.22"
+                  id="run-image"
+                  name="image"
+                  required
+                />
+              </Field>
+            )}
+            {environment === "local" ? (
+              <Alert className="rounded-lg" variant="warning">
+                <Monitor />
+                <AlertTitle>Local execution is not sandboxed</AlertTitle>
+                <AlertDescription>
+                  The agent can access the local runtime and challenge
+                  workspace. Review the challenge before starting.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert className="rounded-lg">
+                <Box />
+                <AlertTitle>Isolated container</AlertTitle>
+                <AlertDescription>
+                  The agent runs in an isolated container with its workspace at
+                  /workspace.
+                </AlertDescription>
+              </Alert>
+            )}
             {mutation.error && (
               <p className="text-destructive-foreground text-sm" role="alert">
                 {mutation.error.message}
@@ -522,7 +598,7 @@ function RunTree({
                       {run.modelId}
                     </span>
                     <span className="block capitalize text-[11px] text-muted-foreground">
-                      {run.status}
+                      {run.status} · {run.environment}
                     </span>
                   </span>
                 </Button>
@@ -538,14 +614,25 @@ function RunTree({
 function RunOverview({ run }: { run: RunPublic }) {
   return (
     <div className="space-y-5 py-4">
-      <Alert className="rounded-lg" variant="warning">
-        <Monitor />
-        <AlertTitle>Local environment</AlertTitle>
-        <AlertDescription>
-          This run is executing without a sandbox. Local files and processes may
-          be accessible to the agent.
-        </AlertDescription>
-      </Alert>
+      {run.environment === "local" ? (
+        <Alert className="rounded-lg" variant="warning">
+          <Monitor />
+          <AlertTitle>Local environment</AlertTitle>
+          <AlertDescription>
+            This run is executing without a sandbox. Local files and processes
+            may be accessible to the agent.
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <Alert className="rounded-lg">
+          <Box />
+          <AlertTitle>Container environment</AlertTitle>
+          <AlertDescription>
+            This run is isolated in a container with its workspace at
+            /workspace.
+          </AlertDescription>
+        </Alert>
+      )}
       <dl className="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2">
         <div>
           <dt className="text-muted-foreground text-xs">Status</dt>
@@ -559,6 +646,18 @@ function RunOverview({ run }: { run: RunPublic }) {
             {run.provider} / {run.modelId}
           </dd>
         </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Environment</dt>
+          <dd className="mt-1 capitalize">{run.environment}</dd>
+        </div>
+        {run.environment === "container" && (
+          <div>
+            <dt className="text-muted-foreground text-xs">Image</dt>
+            <dd className="mt-1 break-all font-mono text-xs">
+              {run.image || "Not available"}
+            </dd>
+          </div>
+        )}
         <div>
           <dt className="text-muted-foreground text-xs">Started</dt>
           <dd className="mt-1">{formatTime(run.startedAt)}</dd>
@@ -590,6 +689,227 @@ function RunOverview({ run }: { run: RunPublic }) {
           </AlertDescription>
         </Alert>
       )}
+    </div>
+  )
+}
+
+function formatSize(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function DirectoryEntry({
+  entry,
+  runId,
+  onSelect,
+  depth = 0,
+}: {
+  entry: RunFileEntry
+  runId: string
+  onSelect: (path: string) => void
+  depth?: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const directory = useQuery({
+    enabled: entry.type === "directory" && expanded,
+    queryKey: runKeys.files(runId, entry.path),
+    queryFn: () =>
+      apiRequest<RunFile>(
+        `/runs/${runId}/files?path=${encodeURIComponent(entry.path)}`
+      ),
+  })
+  const isDirectory = entry.type === "directory"
+  const FolderIcon = expanded ? FolderOpen : Folder
+
+  return (
+    <div>
+      <button
+        aria-expanded={isDirectory ? expanded : undefined}
+        aria-label={`${isDirectory ? (expanded ? "Collapse" : "Expand") : "Preview"} ${entry.name}`}
+        className="flex h-8 w-full items-center gap-1.5 rounded px-2 text-left text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() =>
+          isDirectory ? setExpanded(!expanded) : onSelect(entry.path)
+        }
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        type="button"
+      >
+        {isDirectory ? (
+          expanded ? (
+            <ChevronDown className="size-3.5" />
+          ) : (
+            <ChevronRight className="size-3.5" />
+          )
+        ) : (
+          <span className="size-3.5" />
+        )}
+        {isDirectory ? (
+          <FolderIcon className="size-4 text-muted-foreground" />
+        ) : (
+          <File className="size-4 text-muted-foreground" />
+        )}
+        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+        {!isDirectory && (
+          <span className="text-muted-foreground">
+            {formatSize(entry.size)}
+          </span>
+        )}
+      </button>
+      {expanded && directory.isPending && (
+        <p
+          className="py-1 text-muted-foreground text-xs"
+          role="status"
+          style={{ paddingLeft: `${depth * 16 + 40}px` }}
+        >
+          Loading directory...
+        </p>
+      )}
+      {expanded && directory.error && (
+        <p
+          className="py-1 text-destructive-foreground text-xs"
+          role="alert"
+          style={{ paddingLeft: `${depth * 16 + 40}px` }}
+        >
+          {directory.error.message}
+        </p>
+      )}
+      {expanded &&
+        directory.data?.type === "directory" &&
+        directory.data.entries.map((child) => (
+          <DirectoryEntry
+            depth={depth + 1}
+            entry={child}
+            key={child.path}
+            onSelect={onSelect}
+            runId={runId}
+          />
+        ))}
+    </div>
+  )
+}
+
+function FilesWorkspace({
+  runId,
+  enabled,
+}: {
+  runId: string
+  enabled: boolean
+}) {
+  const [selectedPath, setSelectedPath] = useState<string>()
+  const root = useQuery({
+    enabled,
+    queryKey: runKeys.files(runId, ""),
+    queryFn: () => apiRequest<RunFile>(`/runs/${runId}/files?path=`),
+  })
+  const selected = useQuery({
+    enabled: enabled && Boolean(selectedPath),
+    queryKey: runKeys.files(runId, selectedPath ?? ""),
+    queryFn: () =>
+      apiRequest<RunFile>(
+        `/runs/${runId}/files?path=${encodeURIComponent(selectedPath ?? "")}`
+      ),
+  })
+
+  return (
+    <div className="grid min-h-[28rem] gap-4 py-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <section className="min-w-0 border-b pb-4 lg:border-r lg:border-b-0 lg:pr-4">
+        <h3 className="mb-2 font-medium text-sm">Workspace files</h3>
+        <ScrollArea className="h-64 lg:h-[30rem]">
+          {root.isPending && (
+            <p className="text-muted-foreground text-xs" role="status">
+              Loading files...
+            </p>
+          )}
+          {root.error && (
+            <p className="text-destructive-foreground text-xs" role="alert">
+              {root.error.message}
+            </p>
+          )}
+          {root.data?.type === "directory" &&
+            root.data.entries.length === 0 && (
+              <p className="text-muted-foreground text-xs">
+                Workspace is empty.
+              </p>
+            )}
+          {root.data?.type === "directory" &&
+            root.data.entries.map((entry) => (
+              <DirectoryEntry
+                entry={entry}
+                key={entry.path}
+                onSelect={setSelectedPath}
+                runId={runId}
+              />
+            ))}
+        </ScrollArea>
+      </section>
+      <section className="min-w-0">
+        <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
+          <h3 className="min-w-0 truncate font-medium text-sm">
+            {selectedPath || "Preview"}
+          </h3>
+          {selectedPath && (
+            <Button
+              aria-label={`Download ${selectedPath}`}
+              render={
+                <a
+                  download
+                  href={`/api/runs/${runId}/files/download?path=${encodeURIComponent(selectedPath)}`}
+                />
+              }
+              size="sm"
+              variant="outline"
+            >
+              <Download /> Download
+            </Button>
+          )}
+        </div>
+        {!selectedPath && (
+          <Empty className="min-h-64 border">
+            <EmptyHeader>
+              <EmptyTitle>Select a file</EmptyTitle>
+              <EmptyDescription>
+                Choose a file from the workspace tree to preview it.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
+        {selected.isPending && selectedPath && (
+          <p className="text-muted-foreground text-sm" role="status">
+            Loading preview...
+          </p>
+        )}
+        {selected.error && (
+          <Alert className="rounded-lg" variant="error">
+            <CircleAlert />
+            <AlertTitle>Unable to load file</AlertTitle>
+            <AlertDescription>{selected.error.message}</AlertDescription>
+          </Alert>
+        )}
+        {selected.data?.type === "text" && (
+          <div className="overflow-hidden rounded-md border">
+            <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-muted/30 px-3 py-2 text-muted-foreground text-xs">
+              <span>{formatSize(selected.data.size)}</span>
+              <span>Modified {formatTime(selected.data.modifiedAt)}</span>
+              {selected.data.truncated && <span>Preview truncated</span>}
+            </div>
+            <ScrollArea className="h-[26rem]">
+              <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
+                {selected.data.content}
+              </pre>
+            </ScrollArea>
+          </div>
+        )}
+        {selected.data?.type === "binary" && (
+          <Alert className="rounded-lg">
+            <Info />
+            <AlertTitle>Binary file</AlertTitle>
+            <AlertDescription>
+              Preview is unavailable. Size: {formatSize(selected.data.size)}.
+              Modified: {formatTime(selected.data.modifiedAt)}.
+            </AlertDescription>
+          </Alert>
+        )}
+      </section>
     </div>
   )
 }
@@ -733,7 +1053,7 @@ function RunWorkspace({
           <EmptyHeader>
             <EmptyTitle>Select a run</EmptyTitle>
             <EmptyDescription>
-              Open an existing run or start a new local run.
+              Open an existing run or start a new run.
             </EmptyDescription>
           </EmptyHeader>
           <CreateRunDialog challenges={challenges} />
@@ -755,6 +1075,13 @@ function RunWorkspace({
   const { run, history } = detail.data
   const active = run.status === "running" || run.status === "paused"
   const canMessage = run.status === "running"
+  const requestedView = searchParams.get("view")
+  const view =
+    requestedView === "overview" ||
+    requestedView === "conversation" ||
+    requestedView === "files"
+      ? requestedView
+      : "conversation"
 
   function send(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -787,16 +1114,12 @@ function RunWorkspace({
           next.set("view", value)
           setSearchParams(next, { replace: true })
         }}
-        value={
-          searchParams.get("view") === "overview" ? "overview" : "conversation"
-        }
+        value={view}
       >
         <TabsList className="w-full justify-start border-b" variant="underline">
           <TabsTab value="overview">Overview</TabsTab>
           <TabsTab value="conversation">Conversation</TabsTab>
-          <TabsTab disabled value="files">
-            Files
-          </TabsTab>
+          <TabsTab value="files">Files</TabsTab>
         </TabsList>
         <TabsPanel value="overview">
           <RunOverview run={run} />
@@ -807,7 +1130,11 @@ function RunWorkspace({
           </ScrollArea>
         </TabsPanel>
         <TabsPanel value="files">
-          <FileQuestion />
+          <FilesWorkspace
+            enabled={view === "files"}
+            key={runId}
+            runId={runId}
+          />
         </TabsPanel>
       </Tabs>
       <div className="border-t bg-muted/20 p-3">

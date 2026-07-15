@@ -10,6 +10,11 @@ import { createDatabase } from "./db"
 import { attachments, challenges, events, runs } from "./db/schema"
 import { createRunManager, RunActionError } from "./runs"
 import { createStorage, isSafeFilename } from "./storage"
+import {
+  readWorkspacePath,
+  WorkspaceFileError,
+  workspaceDownload,
+} from "./workspace-files"
 
 const eventInput = Type.Object({
   name: Type.String({ minLength: 1, maxLength: 160 }),
@@ -37,6 +42,16 @@ const runInput = Type.Object(
   {
     provider: Type.String({ minLength: 1, maxLength: 100 }),
     modelId: Type.String({ minLength: 1, maxLength: 200 }),
+    environment: Type.Optional(
+      Type.Union([Type.Literal("local"), Type.Literal("container")])
+    ),
+    image: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 300,
+        pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
+      })
+    ),
   },
   { additionalProperties: false }
 )
@@ -452,11 +467,19 @@ export function createApp(options: {
     async (c) => {
       const input = c.req.valid("json")
       try {
+        const environment =
+          input.environment === "container"
+            ? {
+                type: "container" as const,
+                image: input.image?.trim() || "alpine:3.22",
+              }
+            : ({ type: "local" } as const)
         return c.json(
           await runManager.create(
             c.req.param("challengeId"),
             input.provider,
-            input.modelId
+            input.modelId,
+            environment
           ),
           202
         )
@@ -475,6 +498,42 @@ export function createApp(options: {
       )
     }
     return c.json({ run, history: runManager.history(run.id) })
+  })
+
+  app.get("/api/runs/:runId/files", (c) => {
+    const workspacePath = runManager.workspacePath(c.req.param("runId"))
+    if (!workspacePath) {
+      return c.json(
+        { error: { code: "not_found", message: "Run not found" } },
+        404
+      )
+    }
+    try {
+      return c.json(readWorkspacePath(workspacePath, c.req.query("path") ?? ""))
+    } catch (error) {
+      return workspaceFileError(c, error)
+    }
+  })
+
+  app.get("/api/runs/:runId/files/download", (c) => {
+    const workspacePath = runManager.workspacePath(c.req.param("runId"))
+    if (!workspacePath) {
+      return c.json(
+        { error: { code: "not_found", message: "Run not found" } },
+        404
+      )
+    }
+    try {
+      const file = workspaceDownload(workspacePath, c.req.query("path") ?? "")
+      return new Response(file.stream as unknown as ReadableStream, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+        },
+      })
+    } catch (error) {
+      return workspaceFileError(c, error)
+    }
   })
 
   app.get("/api/runs/:runId/events", (c) => {
@@ -672,5 +731,14 @@ function runError(
 ) {
   if (!(error instanceof RunActionError)) throw error
   const status = error.code === "not_found" ? 404 : 409
+  return c.json({ error: { code: error.code, message: error.message } }, status)
+}
+
+function workspaceFileError(
+  c: Parameters<Parameters<Hono["onError"]>[0]>[1],
+  error: unknown
+) {
+  if (!(error instanceof WorkspaceFileError)) throw error
+  const status = error.code === "not_found" ? 404 : 400
   return c.json({ error: { code: error.code, message: error.message } }, status)
 }

@@ -14,12 +14,21 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { count, desc, eq } from "drizzle-orm"
 import { Type } from "typebox"
+import {
+  containerName,
+  createContainer,
+  createContainerTools,
+  removeContainer,
+} from "./container"
 import type { createDatabase } from "./db"
 import { attachments, challenges, events, runs } from "./db/schema"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunStatus = "running" | "paused" | "completed" | "failed" | "stopped"
 type RunEvent = AgentSessionEvent | { type: "status"; run: RunPublic }
+type EnvironmentConfig =
+  | { type: "local" }
+  | { type: "container"; image: string }
 
 export type RunPublic = {
   id: string
@@ -29,7 +38,8 @@ export type RunPublic = {
   status: RunStatus
   provider: string
   modelId: string
-  environment: "local"
+  environment: "local" | "container"
+  image?: string | null
   createdAt: string
   startedAt: string | null
   updatedAt: string
@@ -59,14 +69,25 @@ export function createRunManager(options: Options) {
   const authStorage = options.authStorage ?? AuthStorage.create()
   const modelRegistry = ModelRegistry.create(authStorage)
   const current = new Map<string, CurrentSession>()
+  const activeContainers = new Map<string, string>()
   const listeners = new Map<string, Set<(event: RunEvent) => void>>()
   const aborting = new Map<string, "paused" | "stopped">()
   let closed = false
 
+  const interruptedContainers = db
+    .select({ id: runs.id, environmentConfig: runs.environmentConfig })
+    .from(runs)
+    .where(eq(runs.status, "running"))
+    .all()
+    .filter(
+      ({ environmentConfig }) =>
+        parseEnvironment(environmentConfig).type === "container"
+    )
   db.update(runs)
     .set({ status: "paused", updatedAt: new Date().toISOString() })
     .where(eq(runs.status, "running"))
     .run()
+  for (const { id } of interruptedContainers) removeContainer(containerName(id))
 
   function getStored(runId: string) {
     return db.select().from(runs).where(eq(runs.id, runId)).get()
@@ -88,6 +109,7 @@ export function createRunManager(options: Options) {
       provider: string
       modelId: string
     }
+    const environment = parseEnvironment(row.run.environmentConfig)
     const value: RunPublic = {
       id: row.run.id,
       challengeId: row.run.challengeId,
@@ -96,7 +118,7 @@ export function createRunManager(options: Options) {
       status: row.run.status as RunStatus,
       provider: config.provider ?? "",
       modelId: config.modelId ?? "",
-      environment: "local",
+      environment: environment.type,
       createdAt: row.run.createdAt,
       startedAt: row.run.startedAt,
       updatedAt: row.run.updatedAt,
@@ -104,6 +126,7 @@ export function createRunManager(options: Options) {
       error: row.run.error,
       summary: row.run.summary,
     }
+    if (environment.type === "container") value.image = environment.image
     if (includeFlag) value.flag = row.run.flag
     return value
   }
@@ -115,10 +138,16 @@ export function createRunManager(options: Options) {
 
   function releaseSession(runId: string) {
     const active = current.get(runId)
-    if (!active) return
-    active.unsubscribe()
-    active.session.dispose()
-    current.delete(runId)
+    if (active) {
+      active.unsubscribe()
+      active.session.dispose()
+      current.delete(runId)
+    }
+    const name = activeContainers.get(runId)
+    if (name) {
+      removeContainer(name)
+      activeContainers.delete(runId)
+    }
   }
 
   function update(
@@ -153,7 +182,8 @@ export function createRunManager(options: Options) {
 
   function buildPrompt(
     challenge: typeof challenges.$inferSelect,
-    filenames: string[]
+    filenames: string[],
+    environment: EnvironmentConfig
   ) {
     const optional = [
       challenge.category ? `Category: ${challenge.category}` : null,
@@ -166,7 +196,9 @@ export function createRunManager(options: Options) {
       challenge.description,
       "",
       `Attachments: ${filenames.length ? filenames.join(", ") : "none"}`,
-      "The current working directory is this run's private workspace. Keep all generated files here.",
+      environment.type === "container"
+        ? "The current working directory is /workspace inside an isolated container. Keep all generated files there."
+        : "The current working directory is this run's private workspace. Keep all generated files here.",
       "No external platform target or flag submission integration is available.",
       "When the challenge is solved, call finish_run with a concise summary and the optional flag. Do not continue working after that call.",
     ].join("\n")
@@ -238,15 +270,33 @@ export function createRunManager(options: Options) {
       join(dataDir, "sessions", runId),
       workspacePath
     )
-    return attachSession(runId, workspacePath, sessionManager, model)
+    return attachSession(
+      runId,
+      workspacePath,
+      sessionManager,
+      model,
+      parseEnvironment(run.environmentConfig)
+    )
   }
 
   async function attachSession(
     runId: string,
     workspacePath: string,
     sessionManager: SessionManager,
-    model: Model<Api>
+    model: Model<Api>,
+    environment: EnvironmentConfig
   ) {
+    let environmentTools: ReturnType<typeof createContainerTools> | undefined
+    if (environment.type === "container") {
+      const name = containerName(runId)
+      try {
+        createContainer(name, workspacePath, environment.image)
+      } catch {
+        throw new RunStartError("Container could not be started")
+      }
+      activeContainers.set(runId, name)
+      environmentTools = createContainerTools(name)
+    }
     let session: AgentSession
     const finishRun = defineTool({
       name: "finish_run",
@@ -280,25 +330,38 @@ export function createRunManager(options: Options) {
         }
       },
     })
-    const created = await createAgentSession({
-      cwd: workspacePath,
-      authStorage,
-      modelRegistry,
-      model,
-      tools: [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        "grep",
-        "find",
-        "ls",
-        "finish_run",
-      ],
-      customTools: [finishRun],
-      sessionManager,
-      settingsManager: SettingsManager.inMemory(),
-    })
+    let created: Awaited<ReturnType<typeof createAgentSession>>
+    try {
+      created = await createAgentSession({
+        cwd: environment.type === "container" ? "/workspace" : workspacePath,
+        authStorage,
+        modelRegistry,
+        model,
+        ...(environmentTools
+          ? {
+              noTools: "builtin" as const,
+              customTools: [...environmentTools, finishRun],
+            }
+          : {
+              tools: [
+                "read",
+                "bash",
+                "edit",
+                "write",
+                "grep",
+                "find",
+                "ls",
+                "finish_run",
+              ],
+              customTools: [finishRun],
+            }),
+        sessionManager,
+        settingsManager: SettingsManager.inMemory(),
+      })
+    } catch (error) {
+      releaseSession(runId)
+      throw error
+    }
     session = created.session
     const unsubscribe = session.subscribe((event) => emit(runId, event))
     current.set(runId, { session, unsubscribe })
@@ -330,7 +393,8 @@ export function createRunManager(options: Options) {
   async function create(
     challengeId: string,
     provider: string,
-    modelId: string
+    modelId: string,
+    environment: EnvironmentConfig = { type: "local" }
   ) {
     const challenge = db
       .select()
@@ -347,7 +411,7 @@ export function createRunManager(options: Options) {
     mkdirSync(workspacePath, { recursive: true })
     mkdirSync(sessionDir, { recursive: true })
     const filenames = copyAttachments(challengeId, workspacePath)
-    const prompt = buildPrompt(challenge, filenames)
+    const prompt = buildPrompt(challenge, filenames, environment)
     const sessionManager = SessionManager.create(workspacePath, sessionDir, {
       id,
     })
@@ -360,7 +424,7 @@ export function createRunManager(options: Options) {
         status: "running",
         prompt,
         modelConfig: JSON.stringify({ provider, modelId }),
-        environmentConfig: JSON.stringify({ type: "local" }),
+        environmentConfig: JSON.stringify(environment),
         sessionPath: relative(dataDir, sessionFile),
         workspacePath: relative(dataDir, workspacePath),
         createdAt: now,
@@ -375,7 +439,8 @@ export function createRunManager(options: Options) {
         id,
         workspacePath,
         sessionManager,
-        model
+        model,
+        environment
       )
       startPrompt(id, session, prompt)
     } catch (error) {
@@ -398,7 +463,9 @@ export function createRunManager(options: Options) {
       await current.get(run.id)?.session.abort()
       const latest = getPublic(runId) as RunPublic
       if (terminalStatuses.includes(latest.status)) return latest
-      return update(runId, { status: "paused" })
+      const paused = update(runId, { status: "paused" })
+      releaseSession(runId)
+      return paused
     } finally {
       aborting.delete(runId)
     }
@@ -504,6 +571,10 @@ export function createRunManager(options: Options) {
       }
     },
     activeSessionCount: () => current.size,
+    workspacePath: (runId: string) => {
+      const path = getStored(runId)?.workspacePath
+      return path ? join(dataDir, path) : undefined
+    },
     close: () => {
       if (closed) return
       closed = true
@@ -513,9 +584,23 @@ export function createRunManager(options: Options) {
         session.dispose()
       }
       current.clear()
+      for (const name of activeContainers.values()) removeContainer(name)
+      activeContainers.clear()
       listeners.clear()
     },
   }
+}
+
+function parseEnvironment(value: string): EnvironmentConfig {
+  try {
+    const parsed = JSON.parse(value) as Partial<EnvironmentConfig>
+    if (parsed.type === "container" && typeof parsed.image === "string") {
+      return { type: "container", image: parsed.image }
+    }
+  } catch {
+    // Existing and malformed rows remain local rather than gaining container access.
+  }
+  return { type: "local" }
 }
 
 export class RunActionError extends Error {

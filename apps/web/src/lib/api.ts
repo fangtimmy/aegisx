@@ -62,7 +62,8 @@ export type RunPublic = {
   status: RunStatus
   provider: string
   modelId: string
-  environment: "local"
+  environment: "local" | "container"
+  image?: string | null
   createdAt: string
   startedAt: string | null
   updatedAt: string
@@ -71,6 +72,35 @@ export type RunPublic = {
   summary: string | null
   flag?: string | null
 }
+
+export type RunFileEntry = {
+  name: string
+  path: string
+  type: "file" | "directory"
+  size: number
+  modifiedAt: string
+}
+
+export type RunFile =
+  | {
+      path: string
+      type: "directory"
+      entries: RunFileEntry[]
+    }
+  | {
+      path: string
+      type: "text"
+      size: number
+      modifiedAt: string
+      content: string
+      truncated: boolean
+    }
+  | {
+      path: string
+      type: "binary"
+      size: number
+      modifiedAt: string
+    }
 
 export type SessionEntry = {
   type: string
