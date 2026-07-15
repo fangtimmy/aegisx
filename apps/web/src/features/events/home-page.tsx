@@ -248,7 +248,7 @@ export function HomePage() {
   return (
     <div className="min-h-svh bg-muted/30">
       <ProductHeader />
-      <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+      <main className="mx-auto w-full max-w-6xl px-4 py-7 sm:px-6 sm:py-9">
         <div className="mb-7 flex items-start justify-between gap-4">
           <div>
             <h1 className="font-semibold text-2xl">Events</h1>

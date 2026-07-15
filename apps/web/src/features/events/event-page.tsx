@@ -1,5 +1,11 @@
 import { useQuery } from "@tanstack/react-query"
-import { Flag, TriangleAlert } from "lucide-react"
+import {
+  BarChart3,
+  Flag,
+  LayoutPanelTop,
+  Play,
+  TriangleAlert,
+} from "lucide-react"
 import { useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
 import { ProductHeader } from "@/components/product-header"
@@ -42,7 +48,7 @@ export function EventPage() {
   return (
     <div className="min-h-svh bg-muted/30">
       <ProductHeader eventName={eventQuery.data?.event.name} />
-      <main className="mx-auto w-full max-w-6xl px-4 py-7 sm:px-6 sm:py-9">
+      <main className="mx-auto w-full max-w-6xl px-3 py-5 sm:px-5 sm:py-6">
         {eventQuery.isPending && (
           <div
             className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
@@ -61,7 +67,7 @@ export function EventPage() {
         {eventQuery.data && (
           <Tabs
             className={
-              wideTabs ? "items-start gap-6" : "min-w-0 items-stretch gap-4"
+              wideTabs ? "items-start gap-4" : "min-w-0 items-stretch gap-4"
             }
             onValueChange={(value) =>
               navigate(
@@ -84,14 +90,20 @@ export function EventPage() {
             <TabsList
               className={
                 wideTabs
-                  ? "w-36 shrink-0 items-stretch border-r pr-3"
+                  ? "w-40 shrink-0 items-stretch border-r pr-3"
                   : "w-full justify-start overflow-x-auto border-b"
               }
               variant="underline"
             >
-              <TabsTab value="overview">Overview</TabsTab>
-              <TabsTab value="run">Run</TabsTab>
-              <TabsTab value="statistics">Statistics</TabsTab>
+              <TabsTab className="justify-start gap-2" value="overview">
+                <LayoutPanelTop /> Overview
+              </TabsTab>
+              <TabsTab className="justify-start gap-2" value="run">
+                <Play /> Run
+              </TabsTab>
+              <TabsTab className="justify-start gap-2" value="statistics">
+                <BarChart3 /> Statistics
+              </TabsTab>
             </TabsList>
             <div className="min-w-0 flex-1">
               <TabsPanel value="overview">

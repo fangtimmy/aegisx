@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CircleAlert, Pause, Play, Send, Square } from "lucide-react"
+import {
+  BotMessageSquare,
+  CircleAlert,
+  Files,
+  Info,
+  Pause,
+  Play,
+  Send,
+  Square,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { Link, useSearchParams } from "react-router"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -204,6 +213,7 @@ export function RunWorkspace({
     requestedView === "files"
       ? requestedView
       : "conversation"
+  const showComposer = view === "conversation" && active
 
   function send(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -212,8 +222,8 @@ export function RunWorkspace({
   }
 
   return (
-    <div className="flex min-h-[36rem] min-w-0 flex-col">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      <header className="flex flex-wrap items-start justify-between gap-3 px-6 pt-6 pb-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate font-semibold text-base">
@@ -230,7 +240,7 @@ export function RunWorkspace({
         />
       </header>
       <Tabs
-        className="min-h-0 flex-1 px-4 pt-2"
+        className="flex min-h-0 flex-1 flex-col px-6"
         onValueChange={(value) => {
           const next = new URLSearchParams(searchParams)
           next.set("view", value)
@@ -238,20 +248,31 @@ export function RunWorkspace({
         }}
         value={view}
       >
-        <TabsList className="w-full justify-start border-b" variant="underline">
-          <TabsTab value="overview">Overview</TabsTab>
-          <TabsTab value="conversation">Conversation</TabsTab>
-          <TabsTab value="files">Files</TabsTab>
+        <TabsList
+          className="w-full shrink-0 justify-start border-b"
+          variant="underline"
+        >
+          <TabsTab className="gap-2" value="overview">
+            <Info /> Overview
+          </TabsTab>
+          <TabsTab className="gap-2" value="conversation">
+            <BotMessageSquare /> Conversation
+          </TabsTab>
+          <TabsTab className="gap-2" value="files">
+            <Files /> Files
+          </TabsTab>
         </TabsList>
-        <TabsPanel value="overview">
-          <RunOverview run={run} stats={stats} />
+        <TabsPanel className="min-h-0 overflow-hidden" value="overview">
+          <ScrollArea className="h-full" scrollFade>
+            <RunOverview run={run} stats={stats} />
+          </ScrollArea>
         </TabsPanel>
-        <TabsPanel className="min-h-0" value="conversation">
-          <ScrollArea className="h-[min(52vh,34rem)]">
+        <TabsPanel className="min-h-0 overflow-hidden" value="conversation">
+          <ScrollArea className="h-full pr-1" scrollFade>
             <Conversation history={history} live={live} />
           </ScrollArea>
         </TabsPanel>
-        <TabsPanel value="files">
+        <TabsPanel className="min-h-0 overflow-hidden" value="files">
           <FilesWorkspace
             enabled={view === "files"}
             key={runId}
@@ -259,118 +280,135 @@ export function RunWorkspace({
           />
         </TabsPanel>
       </Tabs>
-      <div className="border-t bg-muted/20 p-3">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          {run.status === "running" && (
-            <Button
-              loading={
-                control.isPending && control.variables?.action === "pause"
-              }
-              onClick={() => control.mutate({ action: "pause", body: {} })}
-              size="sm"
-              variant="outline"
-            >
-              <Pause /> Pause
-            </Button>
-          )}
-          {run.status === "paused" && (
-            <Button
-              loading={
-                control.isPending && control.variables?.action === "resume"
-              }
-              onClick={() =>
-                control.mutate({
-                  action: "resume",
-                  body: { message: draft.trim() || undefined },
-                })
-              }
-              size="sm"
-              variant="outline"
-            >
-              <Play /> Resume
-            </Button>
-          )}
-          {active && (
-            <AlertDialog>
-              <AlertDialogTrigger
-                render={<Button size="sm" variant="destructive-outline" />}
+      {(showComposer || active || control.error) && (
+        <div className="mt-4 border-t px-6 py-4">
+          <div className="mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2">
+            {run.status === "running" && (
+              <Button
+                loading={
+                  control.isPending && control.variables?.action === "pause"
+                }
+                onClick={() => control.mutate({ action: "pause", body: {} })}
+                size="sm"
+                variant="outline"
               >
-                <Square /> Stop
-              </AlertDialogTrigger>
-              <AlertDialogPopup>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Stop this run?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    The active agent process will be terminated and cannot be
-                    resumed.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogClose
-                    render={<Button type="button" variant="ghost" />}
-                  >
-                    Cancel
-                  </AlertDialogClose>
-                  <Button
-                    loading={
-                      control.isPending && control.variables?.action === "stop"
-                    }
-                    onClick={() => control.mutate({ action: "stop", body: {} })}
-                    type="button"
-                    variant="destructive"
-                  >
-                    Stop run
-                  </Button>
-                </AlertDialogFooter>
-              </AlertDialogPopup>
-            </AlertDialog>
+                <Pause /> Pause
+              </Button>
+            )}
+            {run.status === "paused" && (
+              <Button
+                loading={
+                  control.isPending && control.variables?.action === "resume"
+                }
+                onClick={() =>
+                  control.mutate({
+                    action: "resume",
+                    body: { message: draft.trim() || undefined },
+                  })
+                }
+                size="sm"
+                variant="outline"
+              >
+                <Play /> Resume
+              </Button>
+            )}
+            {active && (
+              <AlertDialog>
+                <AlertDialogTrigger
+                  render={<Button size="sm" variant="destructive-outline" />}
+                >
+                  <Square /> Stop
+                </AlertDialogTrigger>
+                <AlertDialogPopup>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Stop this run?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      The active agent process will be terminated and cannot be
+                      resumed.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogClose
+                      render={<Button type="button" variant="ghost" />}
+                    >
+                      Cancel
+                    </AlertDialogClose>
+                    <Button
+                      loading={
+                        control.isPending &&
+                        control.variables?.action === "stop"
+                      }
+                      onClick={() =>
+                        control.mutate({ action: "stop", body: {} })
+                      }
+                      type="button"
+                      variant="destructive"
+                    >
+                      Stop run
+                    </Button>
+                  </AlertDialogFooter>
+                </AlertDialogPopup>
+              </AlertDialog>
+            )}
+            {(active || control.isPending) && (
+              <span
+                className="ml-auto text-muted-foreground text-xs"
+                role="status"
+              >
+                Run is {run.status}
+                {control.isPending
+                  ? ` · ${control.variables?.action} pending`
+                  : ""}
+              </span>
+            )}
+          </div>
+          {showComposer && (
+            <form
+              className="mx-auto flex max-w-3xl items-end gap-2"
+              onSubmit={send}
+            >
+              <Field className="min-w-0 flex-1">
+                <FieldLabel className="sr-only" htmlFor="run-message">
+                  Message to agent
+                </FieldLabel>
+                <Textarea
+                  className="min-h-0 resize-none bg-muted/30"
+                  disabled={!active || control.isPending}
+                  id="run-message"
+                  onChange={(event) => setDraft(event.target.value)}
+                  placeholder={
+                    run.status === "paused"
+                      ? "Optional guidance when resuming"
+                      : active
+                        ? "Send guidance to the agent"
+                        : `Messaging unavailable while ${run.status}`
+                  }
+                  rows={2}
+                  size="sm"
+                  value={draft}
+                />
+              </Field>
+              <Button
+                aria-label="Send message"
+                disabled={!canMessage || !draft.trim()}
+                loading={
+                  control.isPending && control.variables?.action === "message"
+                }
+                size="icon"
+                type="submit"
+              >
+                <Send />
+              </Button>
+            </form>
           )}
-          <span className="ml-auto text-muted-foreground text-xs" role="status">
-            Run is {run.status}
-            {control.isPending ? ` · ${control.variables?.action} pending` : ""}
-          </span>
+          {control.error && (
+            <Alert className="mx-auto mt-2 max-w-3xl" variant="error">
+              <CircleAlert />
+              <AlertDescription>{control.error.message}</AlertDescription>
+            </Alert>
+          )}
         </div>
-        <form className="flex items-end gap-2" onSubmit={send}>
-          <Field className="min-w-0 flex-1">
-            <FieldLabel className="sr-only" htmlFor="run-message">
-              Message to agent
-            </FieldLabel>
-            <Textarea
-              className="min-h-0"
-              disabled={!active || control.isPending}
-              id="run-message"
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder={
-                run.status === "paused"
-                  ? "Optional guidance when resuming"
-                  : active
-                    ? "Send guidance to the agent"
-                    : `Messaging unavailable while ${run.status}`
-              }
-              rows={2}
-              size="sm"
-              value={draft}
-            />
-          </Field>
-          <Button
-            aria-label="Send message"
-            disabled={!canMessage || !draft.trim()}
-            loading={
-              control.isPending && control.variables?.action === "message"
-            }
-            size="icon"
-            type="submit"
-          >
-            <Send />
-          </Button>
-        </form>
-        {control.error && (
-          <Alert className="mt-2" variant="error">
-            <CircleAlert />
-            <AlertDescription>{control.error.message}</AlertDescription>
-          </Alert>
-        )}
-      </div>
+      )}
     </div>
   )
 }

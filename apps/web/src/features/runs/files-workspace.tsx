@@ -151,10 +151,10 @@ export function FilesWorkspace({
   })
 
   return (
-    <div className="grid min-h-[28rem] gap-4 py-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-      <section className="min-w-0 border-b pb-4 lg:border-r lg:border-b-0 lg:pr-4">
+    <div className="grid h-full min-h-0 gap-4 py-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <section className="flex min-h-0 min-w-0 flex-col border-b pb-4 lg:border-r lg:border-b-0 lg:pr-4">
         <h3 className="mb-2 font-medium text-sm">Workspace files</h3>
-        <ScrollArea className="h-64 lg:h-[30rem]">
+        <ScrollArea className="h-64 flex-1 lg:h-auto" scrollFade>
           {root.isPending && (
             <div
               className="flex items-center gap-2 text-muted-foreground text-xs"
@@ -186,7 +186,7 @@ export function FilesWorkspace({
             ))}
         </ScrollArea>
       </section>
-      <section className="min-w-0">
+      <section className="flex min-h-0 min-w-0 flex-col">
         <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
           <h3 className="min-w-0 truncate font-medium text-sm">
             {selectedPath || "Preview"}
@@ -234,13 +234,13 @@ export function FilesWorkspace({
           </Alert>
         )}
         {selected.data?.type === "text" && (
-          <div className="overflow-hidden rounded-md border">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border">
             <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-muted/30 px-3 py-2 text-muted-foreground text-xs">
               <span>{formatSize(selected.data.size)}</span>
               <span>Modified {formatTime(selected.data.modifiedAt)}</span>
               {selected.data.truncated && <span>Preview truncated</span>}
             </div>
-            <ScrollArea className="h-[26rem]">
+            <ScrollArea className="flex-1" scrollFade>
               <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
                 {selected.data.content}
               </pre>

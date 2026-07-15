@@ -43,6 +43,13 @@ export function formatTime(value: string | number | null | undefined) {
   }).format(new Date(value))
 }
 
+function formatConversationTime(value: string | number) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value))
+}
+
 function messageKey(message: unknown) {
   if (!isRecord(message)) return null
   const role = text(message.role)
@@ -250,20 +257,88 @@ function TimelineRow({ item }: { item: TimelineItem }) {
               : item.kind === "assistant"
                 ? Bot
                 : Clock3
+  const time = item.timestamp ? formatConversationTime(item.timestamp) : null
+
+  if (item.kind === "user") {
+    return (
+      <article className="flex justify-end py-3">
+        <div className="max-w-[88%] rounded-lg border bg-muted/45 px-3 py-2.5 sm:max-w-[46rem]">
+          <div className="mb-1 flex items-center justify-between gap-4 text-muted-foreground text-xs">
+            <span className="font-medium">You</span>
+            {time && <time>{time}</time>}
+          </div>
+          <p className="whitespace-pre-wrap break-words text-sm leading-6">
+            {item.body}
+          </p>
+        </div>
+      </article>
+    )
+  }
+
+  if (item.kind === "assistant") {
+    return (
+      <article className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2.5 py-4">
+        <div className="flex size-7 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground">
+          <Bot className="size-4" />
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="font-medium text-sm">Assistant</h4>
+            {time && (
+              <time className="shrink-0 text-muted-foreground text-xs">
+                {time}
+              </time>
+            )}
+          </div>
+          <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">
+            {item.body}
+          </p>
+        </div>
+      </article>
+    )
+  }
+
+  if (item.kind === "thinking") {
+    return (
+      <article className="border-l-2 border-muted px-3 py-2.5">
+        <details>
+          <summary className="flex cursor-pointer list-none items-center gap-2 text-muted-foreground text-xs">
+            <Brain className="size-3.5" />
+            <span className="font-medium">Thinking</span>
+            {time && <time className="ml-auto">{time}</time>}
+          </summary>
+          <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-muted-foreground text-xs leading-5">
+            {item.body}
+          </pre>
+        </details>
+      </article>
+    )
+  }
+
   return (
-    <article className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2.5 border-b py-3 last:border-b-0">
-      <Icon className="mt-0.5 size-4 text-muted-foreground" />
+    <article
+      className={
+        item.kind === "error"
+          ? "grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2.5 border-l-2 border-destructive bg-destructive/5 px-3 py-3"
+          : "grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2.5 border-l-2 border-muted px-3 py-3"
+      }
+    >
+      <Icon
+        className={
+          item.kind === "error"
+            ? "mt-0.5 size-4 text-destructive"
+            : "mt-0.5 size-4 text-muted-foreground"
+        }
+      />
       <div className="min-w-0">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h4 className="font-medium text-xs capitalize">{item.label}</h4>
-          {item.timestamp && (
-            <time className="text-[11px] text-muted-foreground">
-              {formatTime(item.timestamp)}
-            </time>
+          <h4 className="font-medium text-xs">{item.label}</h4>
+          {time && (
+            <time className="text-[11px] text-muted-foreground">{time}</time>
           )}
         </div>
         {item.body && (
-          <pre className="mt-1.5 whitespace-pre-wrap break-words font-sans text-xs leading-5">
+          <pre className="mt-1.5 whitespace-pre-wrap break-words font-mono text-xs leading-5">
             {item.body}
           </pre>
         )}
@@ -305,7 +380,7 @@ export function Conversation({
     )
   }
   return (
-    <div>
+    <div className="mx-auto w-full max-w-3xl px-1">
       {historyItems.map((item) => (
         <TimelineRow item={item} key={item.key} />
       ))}
