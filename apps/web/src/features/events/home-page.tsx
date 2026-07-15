@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CalendarDays, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router"
-import { IconTooltip, ProductHeader } from "@/components/product-header"
+import { AppLayout } from "@/components/app-layout"
+import { IconTooltip } from "@/components/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -246,55 +247,52 @@ export function HomePage() {
   })
 
   return (
-    <div className="min-h-svh bg-muted/30">
-      <ProductHeader />
-      <main className="mx-auto w-full max-w-6xl px-4 py-7 sm:px-6 sm:py-9">
-        <div className="mb-7 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="font-semibold text-2xl">Events</h1>
-            <p className="mt-1 text-muted-foreground text-sm">
-              Manage CTF workspaces, challenges, and run preparation.
-            </p>
-          </div>
-          <EventDialog />
+    <AppLayout>
+      <div className="mb-7 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-semibold text-2xl">Events</h1>
+          <p className="mt-1 text-muted-foreground text-sm">
+            Manage CTF workspaces, challenges, and run preparation.
+          </p>
         </div>
+        <EventDialog />
+      </div>
 
-        {events.isPending && (
-          <div
-            className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
-            role="status"
-          >
-            <Spinner aria-hidden="true" />
-            Loading events...
-          </div>
-        )}
-        {events.error && (
-          <ErrorState error={events.error} retry={() => events.refetch()} />
-        )}
-        {events.data?.items.length === 0 && (
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <CalendarDays />
-              </EmptyMedia>
-              <EmptyTitle>No events yet</EmptyTitle>
-              <EmptyDescription>
-                Create an event to begin organizing challenges.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <EventDialog />
-            </EmptyContent>
-          </Empty>
-        )}
-        {events.data && events.data.items.length > 0 && (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {events.data.items.map((event) => (
-              <EventCard event={event} key={event.id} />
-            ))}
-          </div>
-        )}
-      </main>
-    </div>
+      {events.isPending && (
+        <div
+          className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
+          role="status"
+        >
+          <Spinner aria-hidden="true" />
+          Loading events...
+        </div>
+      )}
+      {events.error && (
+        <ErrorState error={events.error} retry={() => events.refetch()} />
+      )}
+      {events.data?.items.length === 0 && (
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <CalendarDays />
+            </EmptyMedia>
+            <EmptyTitle>No events yet</EmptyTitle>
+            <EmptyDescription>
+              Create an event to begin organizing challenges.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <EventDialog />
+          </EmptyContent>
+        </Empty>
+      )}
+      {events.data && events.data.items.length > 0 && (
+        <div className="grid grid-cols-3 gap-4">
+          {events.data.items.map((event) => (
+            <EventCard event={event} key={event.id} />
+          ))}
+        </div>
+      )}
+    </AppLayout>
   )
 }

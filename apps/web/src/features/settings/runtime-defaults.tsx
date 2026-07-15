@@ -61,7 +61,7 @@ export function RuntimeDefaults({
     : ""
   return (
     <form
-      className="grid gap-5 sm:grid-cols-2"
+      className="grid grid-cols-2 gap-5"
       key={settings.updatedAt}
       onSubmit={(event) => {
         event.preventDefault()
@@ -77,7 +77,7 @@ export function RuntimeDefaults({
         })
       }}
     >
-      <Field className="sm:col-span-2" name="defaultModelId">
+      <Field className="col-span-2" name="defaultModelId">
         <FieldLabel>Default model</FieldLabel>
         <Select
           defaultValue={defaultModelId}
@@ -199,7 +199,7 @@ export function RuntimeDefaults({
           </NumberFieldGroup>
         </NumberField>
       </Field>
-      <div className="flex items-center gap-3 sm:col-span-2">
+      <div className="col-span-2 flex items-center gap-3">
         <Button loading={mutation.isPending} type="submit">
           Save defaults
         </Button>

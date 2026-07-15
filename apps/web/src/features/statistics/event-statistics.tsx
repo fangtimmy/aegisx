@@ -39,7 +39,7 @@ function cost(value: number | null) {
 
 function UsageMetrics({ usage }: { usage: UsageSummary }) {
   return (
-    <dl className="grid grid-cols-2 gap-x-6 gap-y-4 border-y py-5 sm:grid-cols-3 lg:grid-cols-6">
+    <dl className="grid grid-cols-6 gap-x-6 gap-y-4 border-y py-5">
       {[
         ["Input", number(usage.input)],
         ["Output", number(usage.output)],

@@ -23,7 +23,7 @@ export function IconTooltip({
 export function ProductHeader({ eventName }: { eventName?: string }) {
   return (
     <header className="border-b bg-card">
-      <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
+      <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-6">
         <div className="flex min-w-0 items-center gap-2.5">
           <Button
             aria-label="AegisX events"
@@ -39,7 +39,7 @@ export function ProductHeader({ eventName }: { eventName?: string }) {
               <span aria-hidden="true" className="text-muted-foreground">
                 /
               </span>
-              <span className="truncate font-medium text-sm sm:text-base">
+              <span className="truncate font-medium text-base">
                 {eventName}
               </span>
             </>

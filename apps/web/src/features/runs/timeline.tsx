@@ -262,7 +262,7 @@ function TimelineRow({ item }: { item: TimelineItem }) {
   if (item.kind === "user") {
     return (
       <article className="flex justify-end py-3">
-        <div className="max-w-[88%] rounded-lg border bg-muted/45 px-3 py-2.5 sm:max-w-[46rem]">
+        <div className="max-w-[46rem] rounded-lg border bg-muted/45 px-3 py-2.5">
           <div className="mb-1 flex items-center justify-between gap-4 text-muted-foreground text-xs">
             <span className="font-medium">You</span>
             {time && <time>{time}</time>}

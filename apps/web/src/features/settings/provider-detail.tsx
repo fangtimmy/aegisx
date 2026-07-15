@@ -54,6 +54,8 @@ import {
 import { type ProviderInput, providerTypeLabels } from "./provider-config"
 import { ProviderTypeField } from "./provider-dialog"
 
+type ProviderUpdate = Omit<ProviderInput, "apiKey"> & { apiKey?: string }
+
 export function ProviderDetail({
   provider,
   settings,
@@ -76,7 +78,7 @@ export function ProviderDetail({
   const [discovered, setDiscovered] = useState<string[] | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const save = useMutation({
-    mutationFn: (input: ProviderInput) =>
+    mutationFn: (input: ProviderUpdate) =>
       apiRequest<ProviderConnection>(
         `/providers/${provider.id}`,
         jsonRequest("PATCH", input)
@@ -159,7 +161,7 @@ export function ProviderDetail({
                   label,
                   type,
                   baseUrl,
-                  apiKey,
+                  apiKey: apiKey.trim() || undefined,
                   enabled: enabled === true,
                 })
               }
@@ -175,14 +177,14 @@ export function ProviderDetail({
                   label: label.trim(),
                   type,
                   baseUrl: baseUrl.trim(),
-                  apiKey,
+                  apiKey: apiKey.trim() || undefined,
                   enabled: provider.enabled,
                 })
               }}
             />
           }
         >
-          <CardPanel className="grid gap-4 sm:grid-cols-2">
+          <CardPanel className="grid grid-cols-2 gap-4">
             <Field>
               <FieldLabel htmlFor="selected-provider-name">Name</FieldLabel>
               <Input
@@ -216,6 +218,7 @@ export function ProviderDetail({
                   id="selected-provider-api-key"
                   onChange={(event) => setApiKey(event.target.value)}
                   type={showKey ? "text" : "password"}
+                  placeholder="Leave blank to keep the current key"
                   value={apiKey}
                 />
                 <InputGroupAddon align="inline-end">
@@ -233,13 +236,13 @@ export function ProviderDetail({
               </InputGroup>
             </Field>
             {save.error && (
-              <Alert className="sm:col-span-2" variant="error">
+              <Alert className="col-span-2" variant="error">
                 <CircleAlert />
                 <AlertDescription>{save.error.message}</AlertDescription>
               </Alert>
             )}
             {deleteError && (
-              <Alert className="sm:col-span-2" variant="error">
+              <Alert className="col-span-2" variant="error">
                 <CircleAlert />
                 <AlertDescription>{deleteError.message}</AlertDescription>
               </Alert>
@@ -341,7 +344,7 @@ export function ProviderDetail({
               </div>
               <CheckboxGroup
                 aria-label="Models to add"
-                className="grid gap-2 sm:grid-cols-2"
+                className="grid grid-cols-2 gap-2"
                 onValueChange={setSelected}
                 value={selected}
               >

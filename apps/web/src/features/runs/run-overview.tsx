@@ -39,7 +39,7 @@ export function RunOverview({
           </AlertDescription>
         </Alert>
       )}
-      <dl className="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2">
+      <dl className="grid grid-cols-2 gap-x-8 gap-y-4 text-sm">
         <div>
           <dt className="text-muted-foreground text-xs">Status</dt>
           <dd className="mt-1">
@@ -75,7 +75,7 @@ export function RunOverview({
       </dl>
       <section className="border-t pt-4">
         <h3 className="font-medium text-sm">Token usage</h3>
-        <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-4 text-sm sm:grid-cols-3">
+        <dl className="mt-3 grid grid-cols-3 gap-x-8 gap-y-4 text-sm">
           {[
             ["Input", stats.input.toLocaleString()],
             ["Output", stats.output.toLocaleString()],

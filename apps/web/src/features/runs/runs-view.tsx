@@ -24,15 +24,6 @@ import {
   CollapsiblePanel,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import {
-  Sheet,
-  SheetDescription,
-  SheetHeader,
-  SheetPanel,
-  SheetPopup,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
 import type { Challenge, RunPublic } from "@/lib/api"
 import { apiRequest } from "@/lib/api"
@@ -159,7 +150,6 @@ export function RunsView({
   challenges: Challenge[]
   runId?: string
 }) {
-  const [treeOpen, setTreeOpen] = useState(false)
   const runs = useQuery({
     queryKey: ["runs", "event", eventId],
     queryFn: () =>
@@ -184,9 +174,9 @@ export function RunsView({
       </Alert>
     )
   return (
-    <section className="min-w-0">
-      <div className="grid min-w-0 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <CardFrame className="hidden h-auto max-h-[calc(100svh-8rem)] lg:sticky lg:top-4 lg:flex">
+    <section className="h-full min-h-0 min-w-0">
+      <div className="grid h-full min-h-0 min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">
+        <CardFrame className="flex h-full min-h-0">
           <CardFrameHeader>
             <CardFrameTitle>
               <span className="flex items-center gap-2">
@@ -195,7 +185,7 @@ export function RunsView({
             </CardFrameTitle>
           </CardFrameHeader>
           <Card>
-            <CardPanel className="max-h-[calc(100svh-12rem)] overflow-y-auto p-2">
+            <CardPanel className="min-h-0 flex-1 overflow-y-auto p-2">
               <RunTree
                 challenges={challenges}
                 eventId={eventId}
@@ -205,30 +195,8 @@ export function RunsView({
             </CardPanel>
           </Card>
         </CardFrame>
-        <div className="pb-3 lg:hidden">
-          <Sheet onOpenChange={setTreeOpen} open={treeOpen}>
-            <SheetTrigger render={<Button type="button" variant="outline" />}>
-              <ListTree /> Browse runs
-            </SheetTrigger>
-            <SheetPopup className="max-w-xs" side="left">
-              <SheetHeader>
-                <SheetTitle>Runs</SheetTitle>
-                <SheetDescription>Runs grouped by challenge</SheetDescription>
-              </SheetHeader>
-              <SheetPanel>
-                <RunTree
-                  challenges={challenges}
-                  eventId={eventId}
-                  onSelect={() => setTreeOpen(false)}
-                  runId={runId}
-                  runs={runs.data.items}
-                />
-              </SheetPanel>
-            </SheetPopup>
-          </Sheet>
-        </div>
-        <Card className="min-w-0 lg:sticky lg:top-4 lg:h-[calc(100svh-6rem)] lg:min-h-0">
-          <CardPanel className="min-h-0 p-0">
+        <Card className="h-full min-h-0 min-w-0">
+          <CardPanel className="h-full min-h-0 p-0">
             <RunWorkspace
               challenges={challenges}
               eventId={eventId}

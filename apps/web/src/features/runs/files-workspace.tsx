@@ -151,10 +151,10 @@ export function FilesWorkspace({
   })
 
   return (
-    <div className="grid h-full min-h-0 gap-4 py-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-      <section className="flex min-h-0 min-w-0 flex-col border-b pb-4 lg:border-r lg:border-b-0 lg:pr-4">
+    <div className="grid h-full min-h-0 grid-cols-[18rem_minmax(0,1fr)] gap-4 py-4">
+      <section className="flex min-h-0 min-w-0 flex-col border-r pr-4">
         <h3 className="mb-2 font-medium text-sm">Workspace files</h3>
-        <ScrollArea className="h-64 flex-1 lg:h-auto" scrollFade>
+        <ScrollArea className="flex-1" scrollFade>
           {root.isPending && (
             <div
               className="flex items-center gap-2 text-muted-foreground text-xs"

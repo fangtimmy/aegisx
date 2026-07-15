@@ -28,7 +28,6 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { useMediaQuery } from "@/hooks/use-media-query"
 import {
   apiRequest,
   jsonRequest,
@@ -41,7 +40,6 @@ import { RuntimeDefaults } from "./runtime-defaults"
 
 export function SettingsScreen() {
   const queryClient = useQueryClient()
-  const wideTabs = useMediaQuery("lg")
   const [section, setSection] = useState<"models" | "runtime">("models")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const providers = useQuery({
@@ -104,24 +102,13 @@ export function SettingsScreen() {
   const selected = items.find((provider) => provider.id === selectedId)
   return (
     <Tabs
-      className={
-        wideTabs
-          ? "w-full flex-row items-start gap-6"
-          : "min-w-0 items-stretch gap-4"
-      }
+      className="w-full flex-row items-start gap-6"
       onValueChange={(value) => setSection(value as "models" | "runtime")}
-      orientation={wideTabs ? "vertical" : "horizontal"}
+      orientation="vertical"
       value={section}
     >
-      <div className={wideTabs ? "w-48 shrink-0 border-s" : "border-b"}>
-        <TabsList
-          className={
-            wideTabs
-              ? "w-full items-stretch"
-              : "w-full justify-start overflow-x-auto"
-          }
-          variant="underline"
-        >
+      <div className="w-48 shrink-0 border-s">
+        <TabsList className="w-full items-stretch" variant="underline">
           <TabsTab value="models">
             <Boxes aria-hidden="true" /> Model providers
           </TabsTab>
@@ -146,7 +133,7 @@ export function SettingsScreen() {
           </Frame>
         </TabsPanel>
         <TabsPanel value="models">
-          <div className="grid min-w-0 gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
+          <div className="grid min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-6">
             <CardFrame className="h-min">
               <CardFrameHeader>
                 <CardFrameTitle>Providers</CardFrameTitle>
