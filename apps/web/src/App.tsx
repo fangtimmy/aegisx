@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  ArrowLeft,
   CalendarDays,
   Download,
   FileArchive,
@@ -34,14 +33,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -73,6 +64,13 @@ import {
 } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -81,6 +79,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useMediaQuery } from "@/hooks/use-media-query"
 import {
   type Attachment,
   apiRequest,
@@ -139,20 +138,32 @@ function IconTooltip({
   )
 }
 
-function ProductHeader() {
+function ProductHeader({ eventName }: { eventName?: string }) {
   return (
     <header className="border-b bg-card">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
-        <Link
-          aria-label="AegisX events"
-          className="flex items-center gap-3 font-semibold text-lg"
-          to="/"
-        >
-          <span className="flex size-9 items-center justify-center rounded-lg bg-foreground text-background">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Button
+            aria-label="AegisX events"
+            // className="shrink-0 px-2 text-lg"
+            size="xl"
+            render={<Link to="/" />}
+            variant="ghost"
+          >
             <ShieldCheck className="size-5" />
-          </span>
-          AegisX
-        </Link>
+            AegisX
+          </Button>
+          {eventName && (
+            <>
+              <span aria-hidden="true" className="text-muted-foreground">
+                /
+              </span>
+              <span className="truncate font-medium text-sm sm:text-base">
+                {eventName}
+              </span>
+            </>
+          )}
+        </div>
         <IconTooltip label="Settings">
           <Button
             aria-label="Settings"
@@ -173,14 +184,6 @@ function SettingsPage() {
     <div className="min-h-svh bg-muted/30">
       <ProductHeader />
       <main className="mx-auto w-full max-w-7xl px-4 py-7 sm:px-6 sm:py-9">
-        <Button
-          className="mb-5"
-          render={<Link aria-label="Back to events" to="/" />}
-          size="sm"
-          variant="ghost"
-        >
-          <ArrowLeft /> Events
-        </Button>
         <h1 className="font-semibold text-2xl">Settings</h1>
         <p className="mt-1 mb-7 text-muted-foreground text-sm">
           Configure model and runtime defaults for new runs.
@@ -584,15 +587,20 @@ function ChallengeDialog({
                   type="text"
                 />
               </Field>
-              <Field>
+              <Field name="points">
                 <FieldLabel>Points</FieldLabel>
-                <Input
-                  defaultValue={challenge?.points ?? ""}
-                  min="0"
+                <NumberField
+                  defaultValue={challenge?.points ?? undefined}
+                  min={0}
                   name="points"
-                  step="1"
-                  type="number"
-                />
+                  step={1}
+                >
+                  <NumberFieldGroup>
+                    <NumberFieldDecrement />
+                    <NumberFieldInput />
+                    <NumberFieldIncrement />
+                  </NumberFieldGroup>
+                </NumberField>
               </Field>
             </div>
             <Field>
@@ -783,6 +791,7 @@ function EventPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const wideTabs = useMediaQuery("sm")
   const eventQuery = useQuery({
     enabled: Boolean(eventId),
     queryKey: eventKeys.detail(eventId ?? ""),
@@ -798,7 +807,7 @@ function EventPage() {
 
   return (
     <div className="min-h-svh bg-muted/30">
-      <ProductHeader />
+      <ProductHeader eventName={eventQuery.data?.event.name} />
       <main className="mx-auto w-full max-w-6xl px-4 py-7 sm:px-6 sm:py-9">
         {eventQuery.isPending && (
           <p className="py-16 text-center text-muted-foreground text-sm">
@@ -812,61 +821,52 @@ function EventPage() {
           />
         )}
         {eventQuery.data && (
-          <>
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem>
-                  <BreadcrumbLink render={<Link to="/" />}>
-                    Events
-                  </BreadcrumbLink>
-                </BreadcrumbItem>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem className="min-w-0">
-                  <BreadcrumbPage className="truncate">
-                    {eventQuery.data.event.name}
-                  </BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
-            <div className="mt-4 flex items-center gap-3">
-              <h1 className="truncate font-semibold text-2xl">
-                {eventQuery.data.event.name}
-              </h1>
-              <Badge variant="secondary">
-                {eventQuery.data.challenges.length} challenges
-              </Badge>
-            </div>
-            <Tabs
-              className="mt-7 items-start gap-6"
-              onValueChange={(value) =>
-                navigate(
-                  value === "run"
-                    ? `/events/${eventId}/run`
-                    : value === "statistics"
-                      ? `/events/${eventId}/statistics`
-                      : `/events/${eventId}`
-                )
+          <Tabs
+            className={
+              wideTabs ? "items-start gap-6" : "min-w-0 items-stretch gap-4"
+            }
+            onValueChange={(value) =>
+              navigate(
+                value === "run"
+                  ? `/events/${eventId}/run`
+                  : value === "statistics"
+                    ? `/events/${eventId}/statistics`
+                    : `/events/${eventId}`
+              )
+            }
+            orientation={wideTabs ? "vertical" : "horizontal"}
+            value={
+              location.pathname === `/events/${eventId}/statistics`
+                ? "statistics"
+                : location.pathname.includes(`/events/${eventId}/run`)
+                  ? "run"
+                  : "overview"
+            }
+          >
+            <TabsList
+              className={
+                wideTabs
+                  ? "w-36 shrink-0 items-stretch border-r pr-3"
+                  : "w-full justify-start overflow-x-auto border-b"
               }
-              orientation="vertical"
-              value={
-                location.pathname === `/events/${eventId}/statistics`
-                  ? "statistics"
-                  : location.pathname.includes(`/events/${eventId}/run`)
-                    ? "run"
-                    : "overview"
-              }
+              variant="underline"
             >
-              <TabsList
-                className="w-28 shrink-0 items-stretch border-r pr-3 sm:w-36"
-                variant="underline"
-              >
-                <TabsTab value="overview">Overview</TabsTab>
-                <TabsTab value="run">Run</TabsTab>
-                <TabsTab value="statistics">Statistics</TabsTab>
-              </TabsList>
-              <div className="min-w-0 flex-1">
-                <TabsPanel value="overview">
-                  <div className="mb-6 flex flex-wrap justify-end gap-2">
+              <TabsTab value="overview">Overview</TabsTab>
+              <TabsTab value="run">Run</TabsTab>
+              <TabsTab value="statistics">Statistics</TabsTab>
+            </TabsList>
+            <div className="min-w-0 flex-1">
+              <TabsPanel value="overview">
+                <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <h1 className="truncate font-semibold text-2xl">
+                      {eventQuery.data.event.name}
+                    </h1>
+                    <Badge variant="secondary">
+                      {eventQuery.data.challenges.length} challenges
+                    </Badge>
+                  </div>
+                  <div className="flex gap-2">
                     <IconTooltip label="Import unavailable: no platform adapter configured">
                       <Button
                         aria-label="Import unavailable: no platform adapter configured"
@@ -882,57 +882,57 @@ function EventPage() {
                       onUploadError={setUploadError}
                     />
                   </div>
-                  {uploadError && (
-                    <Alert className="mb-5 rounded-lg" variant="warning">
-                      <TriangleAlert />
-                      <AlertTitle>Attachment upload failed</AlertTitle>
-                      <AlertDescription>{uploadError}</AlertDescription>
-                    </Alert>
-                  )}
-                  {eventQuery.data.challenges.length === 0 ? (
-                    <Empty className="rounded-lg border bg-card">
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <Flag />
-                        </EmptyMedia>
-                        <EmptyTitle>No challenges</EmptyTitle>
-                        <EmptyDescription>
-                          Add the first challenge for this event.
-                        </EmptyDescription>
-                      </EmptyHeader>
-                      <EmptyContent>
-                        <ChallengeDialog
-                          eventId={eventId}
-                          onUploadError={setUploadError}
-                        />
-                      </EmptyContent>
-                    </Empty>
-                  ) : (
-                    <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      {eventQuery.data.challenges.map((challenge) => (
-                        <ChallengeCard
-                          challenge={challenge}
-                          eventId={eventId}
-                          key={challenge.id}
-                          onUploadError={setUploadError}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </TabsPanel>
-                <TabsPanel value="run">
-                  <RunsView
-                    challenges={eventQuery.data.challenges}
-                    eventId={eventId}
-                    runId={runId}
-                  />
-                </TabsPanel>
-                <TabsPanel className="pt-0" value="statistics">
-                  <EventStatistics eventId={eventId} />
-                </TabsPanel>
-              </div>
-            </Tabs>
-          </>
+                </div>
+                {uploadError && (
+                  <Alert className="mb-5 rounded-lg" variant="warning">
+                    <TriangleAlert />
+                    <AlertTitle>Attachment upload failed</AlertTitle>
+                    <AlertDescription>{uploadError}</AlertDescription>
+                  </Alert>
+                )}
+                {eventQuery.data.challenges.length === 0 ? (
+                  <Empty className="rounded-lg border bg-card">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <Flag />
+                      </EmptyMedia>
+                      <EmptyTitle>No challenges</EmptyTitle>
+                      <EmptyDescription>
+                        Add the first challenge for this event.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                    <EmptyContent>
+                      <ChallengeDialog
+                        eventId={eventId}
+                        onUploadError={setUploadError}
+                      />
+                    </EmptyContent>
+                  </Empty>
+                ) : (
+                  <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {eventQuery.data.challenges.map((challenge) => (
+                      <ChallengeCard
+                        challenge={challenge}
+                        eventId={eventId}
+                        key={challenge.id}
+                        onUploadError={setUploadError}
+                      />
+                    ))}
+                  </div>
+                )}
+              </TabsPanel>
+              <TabsPanel value="run">
+                <RunsView
+                  challenges={eventQuery.data.challenges}
+                  eventId={eventId}
+                  runId={runId}
+                />
+              </TabsPanel>
+              <TabsPanel className="pt-0" value="statistics">
+                <EventStatistics eventId={eventId} />
+              </TabsPanel>
+            </div>
+          </Tabs>
         )}
       </main>
     </div>

@@ -49,6 +49,15 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   Sheet,
   SheetDescription,
   SheetHeader,
@@ -438,6 +447,15 @@ export function CreateRunDialog({
   }
 
   const available = challenge ? [challenge] : (challenges ?? [])
+  const challengeItems = Object.fromEntries(
+    available.map((item) => [item.id, item.name])
+  )
+  const modelItems = Object.fromEntries(
+    availableModels.map((model) => [
+      model.id,
+      `${model.provider.label} / ${model.label}`,
+    ])
+  )
   return (
     <Dialog
       open={open}
@@ -509,58 +527,77 @@ export function CreateRunDialog({
           >
             <DialogPanel className="grid gap-5">
               {!challenge && (
-                <Field>
-                  <FieldLabel htmlFor="run-challenge">Challenge</FieldLabel>
-                  <select
-                    className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                <Field name="challengeId">
+                  <FieldLabel>Challenge</FieldLabel>
+                  <Select
                     defaultValue={available[0]?.id}
-                    id="run-challenge"
+                    items={challengeItems}
                     name="challengeId"
                     required
                   >
-                    {available.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a challenge" />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {available.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
                 </Field>
               )}
-              <Field>
-                <FieldLabel htmlFor="run-model">Model</FieldLabel>
-                <select
-                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  id="run-model"
+              <Field name="modelId">
+                <FieldLabel>Model</FieldLabel>
+                <Select
+                  items={modelItems}
                   name="modelId"
                   required
-                  onChange={(event) => setModelId(event.target.value)}
+                  onValueChange={(value) => setModelId(value ?? "")}
                   value={modelId}
                 >
-                  {availableModels.length === 0 ? (
-                    <option value="">No enabled models</option>
-                  ) : (
-                    availableModels.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.provider.label} / {model.label}
-                      </option>
-                    ))
-                  )}
-                </select>
+                  <SelectTrigger>
+                    <SelectValue placeholder="No enabled models" />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {(providers.data?.items ?? []).map((provider) => {
+                      const models = availableModels.filter(
+                        (model) => model.provider.id === provider.id
+                      )
+                      if (models.length === 0) return null
+                      return (
+                        <SelectGroup key={provider.id}>
+                          <SelectGroupLabel>{provider.label}</SelectGroupLabel>
+                          {models.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      )
+                    })}
+                  </SelectPopup>
+                </Select>
               </Field>
-              <Field>
-                <FieldLabel htmlFor="run-environment">Environment</FieldLabel>
-                <select
-                  className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  id="run-environment"
+              <Field name="environment">
+                <FieldLabel>Environment</FieldLabel>
+                <Select
+                  items={{ container: "Container", local: "Local" }}
                   name="environment"
-                  onChange={(event) =>
-                    setEnvironment(event.target.value as "local" | "container")
+                  onValueChange={(value) =>
+                    setEnvironment(value as "local" | "container")
                   }
                   value={environment}
                 >
-                  <option value="local">Local</option>
-                  <option value="container">Container</option>
-                </select>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value="local">Local</SelectItem>
+                    <SelectItem value="container">Container</SelectItem>
+                  </SelectPopup>
+                </Select>
               </Field>
               {environment === "container" && (
                 <Field>
@@ -821,15 +858,16 @@ function DirectoryEntry({
 
   return (
     <div>
-      <button
+      <Button
         aria-expanded={isDirectory ? expanded : undefined}
         aria-label={`${isDirectory ? (expanded ? "Collapse" : "Expand") : "Preview"} ${entry.name}`}
-        className="flex h-8 w-full items-center gap-1.5 rounded px-2 text-left text-xs hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="h-8 w-full justify-start gap-1.5 px-2 text-left text-xs"
         onClick={() =>
           isDirectory ? setExpanded(!expanded) : onSelect(entry.path)
         }
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         type="button"
+        variant="ghost"
       >
         {isDirectory ? (
           expanded ? (
@@ -851,7 +889,7 @@ function DirectoryEntry({
             {formatSize(entry.size)}
           </span>
         )}
-      </button>
+      </Button>
       {expanded && directory.isPending && (
         <p
           className="py-1 text-muted-foreground text-xs"

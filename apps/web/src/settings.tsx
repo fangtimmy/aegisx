@@ -10,7 +10,19 @@ import {
   Trash2,
 } from "lucide-react"
 import { useEffect, useState } from "react"
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { CheckboxGroup } from "@/components/ui/checkbox-group"
 import {
   Dialog,
   DialogFooter,
@@ -22,6 +34,28 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import { Label } from "@/components/ui/label"
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field"
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import {
   apiRequest,
@@ -43,6 +77,8 @@ const providerTypeDefaults: Record<ProviderType, string> = {
   "openai-responses": "https://api.openai.com/v1",
   "anthropic-messages": "https://api.anthropic.com/v1",
 }
+
+const providerTypes = Object.keys(providerTypeLabels) as ProviderType[]
 
 type ProviderInput = Omit<
   ProviderConnection,
@@ -147,20 +183,25 @@ function ProviderTypeField({
   onChange: (value: ProviderType) => void
 }) {
   return (
-    <Field>
-      <FieldLabel htmlFor="provider-type">Provider type</FieldLabel>
-      <select
-        className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-8"
-        id="provider-type"
-        onChange={(event) => onChange(event.target.value as ProviderType)}
+    <Field name="type">
+      <FieldLabel>Provider type</FieldLabel>
+      <Select
+        items={providerTypeLabels}
+        name="type"
+        onValueChange={(next) => onChange(next as ProviderType)}
         value={value}
       >
-        {Object.entries(providerTypeLabels).map(([key, name]) => (
-          <option key={key} value={key}>
-            {name}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectPopup>
+          {providerTypes.map((type) => (
+            <SelectItem key={type} value={type}>
+              {providerTypeLabels[type]}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
     </Field>
   )
 }
@@ -309,32 +350,60 @@ function ProviderDetail({
           </Field>
           <Field>
             <FieldLabel htmlFor="selected-provider-api-key">API key</FieldLabel>
-            <div className="flex gap-2">
-              <Input
+            <InputGroup>
+              <InputGroupInput
                 id="selected-provider-api-key"
                 onChange={(event) => setApiKey(event.target.value)}
                 type={showKey ? "text" : "password"}
                 value={apiKey}
               />
-              <Button
-                aria-label={showKey ? "Hide API key" : "Show API key"}
-                onClick={() => setShowKey((value) => !value)}
-                size="icon"
-                title={showKey ? "Hide API key" : "Show API key"}
-                type="button"
-                variant="outline"
-              >
-                {showKey ? <EyeOff /> : <Eye />}
-              </Button>
-            </div>
+              <InputGroupAddon align="inline-end">
+                <Button
+                  aria-label={showKey ? "Hide API key" : "Show API key"}
+                  onClick={() => setShowKey((value) => !value)}
+                  size="icon-sm"
+                  title={showKey ? "Hide API key" : "Show API key"}
+                  type="button"
+                  variant="ghost"
+                >
+                  {showKey ? <EyeOff /> : <Eye />}
+                </Button>
+              </InputGroupAddon>
+            </InputGroup>
           </Field>
           <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
             <Button loading={save.isPending} type="submit">
               Save provider
             </Button>
-            <Button onClick={onDelete} type="button" variant="outline">
-              <Trash2 /> Delete provider
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={<Button type="button" variant="outline" />}
+              >
+                <Trash2 /> Delete provider
+              </AlertDialogTrigger>
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete {provider.label}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This permanently deletes the provider and its models.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose
+                    render={<Button type="button" variant="ghost" />}
+                  >
+                    Cancel
+                  </AlertDialogClose>
+                  <Button
+                    onClick={onDelete}
+                    type="button"
+                    variant="destructive"
+                  >
+                    Delete provider
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
           </div>
           {save.error && (
             <p className="text-destructive text-sm sm:col-span-2" role="alert">
@@ -386,27 +455,19 @@ function ProviderDetail({
                 </Button>
               )}
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <CheckboxGroup
+              aria-label="Models to add"
+              className="grid gap-2 sm:grid-cols-2"
+              onValueChange={setSelected}
+              value={selected}
+            >
               {discovered.map((modelId) => (
-                <label
-                  className="flex items-center gap-2 text-sm"
-                  key={modelId}
-                >
-                  <input
-                    checked={selected.includes(modelId)}
-                    onChange={(event) =>
-                      setSelected((current) =>
-                        event.target.checked
-                          ? [...current, modelId]
-                          : current.filter((item) => item !== modelId)
-                      )
-                    }
-                    type="checkbox"
-                  />
+                <Label key={modelId}>
+                  <Checkbox value={modelId} />
                   <span className="font-mono text-xs">{modelId}</span>
-                </label>
+                </Label>
               ))}
-            </div>
+            </CheckboxGroup>
           </div>
         )}
         <div className="divide-y border">
@@ -484,6 +545,18 @@ function RuntimeDefaults({
           .map((model) => ({ ...model, provider }))
       : []
   )
+  const modelItems = Object.fromEntries([
+    ["", "No default model"],
+    ...models.map((model) => [
+      model.id,
+      `${model.provider.label} / ${model.label}`,
+    ]),
+  ])
+  const defaultModelId = models.some(
+    (model) => model.id === settings.defaultModelId
+  )
+    ? settings.defaultModelId
+    : ""
   return (
     <section>
       <h2 className="font-semibold text-base">Runtime defaults</h2>
@@ -509,33 +582,52 @@ function RuntimeDefaults({
           })
         }}
       >
-        <Field className="sm:col-span-2">
-          <FieldLabel htmlFor="default-model">Default model</FieldLabel>
-          <select
-            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-8"
-            defaultValue={settings.defaultModelId ?? ""}
-            id="default-model"
+        <Field className="sm:col-span-2" name="defaultModelId">
+          <FieldLabel>Default model</FieldLabel>
+          <Select
+            defaultValue={defaultModelId}
+            items={modelItems}
             name="defaultModelId"
           >
-            <option value="">No default model</option>
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.provider.label} / {model.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger>
+              <SelectValue placeholder="No default model" />
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="">No default model</SelectItem>
+              {providers.map((provider) => {
+                const providerModels = models.filter(
+                  (model) => model.provider.id === provider.id
+                )
+                if (providerModels.length === 0) return null
+                return (
+                  <SelectGroup key={provider.id}>
+                    <SelectGroupLabel>{provider.label}</SelectGroupLabel>
+                    {providerModels.map((model) => (
+                      <SelectItem key={model.id} value={model.id}>
+                        {model.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )
+              })}
+            </SelectPopup>
+          </Select>
         </Field>
-        <Field>
-          <FieldLabel htmlFor="runtime-environment">Environment</FieldLabel>
-          <select
-            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-8"
+        <Field name="environment">
+          <FieldLabel>Environment</FieldLabel>
+          <Select
             defaultValue={settings.environment}
-            id="runtime-environment"
+            items={{ container: "Container", local: "Local" }}
             name="environment"
           >
-            <option value="local">Local</option>
-            <option value="container">Container</option>
-          </select>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="local">Local</SelectItem>
+              <SelectItem value="container">Container</SelectItem>
+            </SelectPopup>
+          </Select>
         </Field>
         <Field>
           <FieldLabel htmlFor="runtime-image">Container image</FieldLabel>
@@ -546,54 +638,70 @@ function RuntimeDefaults({
             required
           />
         </Field>
-        <Field>
-          <FieldLabel htmlFor="runtime-cpus">CPUs</FieldLabel>
-          <Input
+        <Field name="cpus">
+          <FieldLabel>CPUs</FieldLabel>
+          <NumberField
             defaultValue={settings.cpus}
-            id="runtime-cpus"
-            max="16"
-            min="0.1"
+            max={16}
+            min={0.1}
             name="cpus"
             required
-            step="0.1"
-            type="number"
-          />
+            step={0.1}
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement />
+              <NumberFieldInput />
+              <NumberFieldIncrement />
+            </NumberFieldGroup>
+          </NumberField>
         </Field>
-        <Field>
-          <FieldLabel htmlFor="runtime-memory">Memory (MB)</FieldLabel>
-          <Input
+        <Field name="memoryMb">
+          <FieldLabel>Memory (MB)</FieldLabel>
+          <NumberField
             defaultValue={settings.memoryMb}
-            id="runtime-memory"
-            max="32768"
-            min="128"
+            max={32768}
+            min={128}
             name="memoryMb"
             required
-            type="number"
-          />
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement />
+              <NumberFieldInput />
+              <NumberFieldIncrement />
+            </NumberFieldGroup>
+          </NumberField>
         </Field>
-        <Field>
-          <FieldLabel htmlFor="runtime-pids">PID limit</FieldLabel>
-          <Input
+        <Field name="pidsLimit">
+          <FieldLabel>PID limit</FieldLabel>
+          <NumberField
             defaultValue={settings.pidsLimit}
-            id="runtime-pids"
-            max="4096"
-            min="16"
+            max={4096}
+            min={16}
             name="pidsLimit"
             required
-            type="number"
-          />
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement />
+              <NumberFieldInput />
+              <NumberFieldIncrement />
+            </NumberFieldGroup>
+          </NumberField>
         </Field>
-        <Field>
-          <FieldLabel htmlFor="runtime-concurrency">Max concurrency</FieldLabel>
-          <Input
+        <Field name="maxConcurrency">
+          <FieldLabel>Max concurrency</FieldLabel>
+          <NumberField
             defaultValue={settings.maxConcurrency}
-            id="runtime-concurrency"
-            max="32"
-            min="1"
+            max={32}
+            min={1}
             name="maxConcurrency"
             required
-            type="number"
-          />
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement />
+              <NumberFieldInput />
+              <NumberFieldIncrement />
+            </NumberFieldGroup>
+          </NumberField>
         </Field>
         <div className="flex items-center gap-3 sm:col-span-2">
           <Button loading={mutation.isPending} type="submit">
@@ -658,20 +766,24 @@ export function SettingsScreen() {
           <h2 className="font-semibold text-sm">Settings</h2>
         </div>
         <nav className="space-y-1 p-2" aria-label="Settings sections">
-          <button
-            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${section === "models" ? "bg-secondary" : "hover:bg-accent"}`}
+          <Button
+            className="w-full justify-start"
             onClick={() => setSection("models")}
+            size="sm"
             type="button"
+            variant={section === "models" ? "secondary" : "ghost"}
           >
             <Boxes /> Model providers
-          </button>
-          <button
-            className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm ${section === "runtime" ? "bg-secondary" : "hover:bg-accent"}`}
+          </Button>
+          <Button
+            className="w-full justify-start"
             onClick={() => setSection("runtime")}
+            size="sm"
             type="button"
+            variant={section === "runtime" ? "secondary" : "ghost"}
           >
             <Settings2 /> Runtime defaults
-          </button>
+          </Button>
         </nav>
       </aside>
       {section === "runtime" ? (
@@ -700,14 +812,12 @@ export function SettingsScreen() {
             </div>
             <nav className="p-2" aria-label="Provider connections">
               {items.map((provider) => (
-                <div
-                  className={`mb-1 flex items-center rounded-md ${selectedId === provider.id ? "bg-secondary" : "hover:bg-accent"}`}
-                  key={provider.id}
-                >
-                  <button
-                    className="min-w-0 flex-1 px-3 py-2 text-left"
+                <div className="mb-1 flex items-center" key={provider.id}>
+                  <Button
+                    className="h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left"
                     onClick={() => setSelectedId(provider.id)}
                     type="button"
+                    variant={selectedId === provider.id ? "secondary" : "ghost"}
                   >
                     <span className="block truncate font-medium text-sm">
                       {provider.label}
@@ -716,7 +826,7 @@ export function SettingsScreen() {
                       {provider.models.length} models
                       {provider.apiKey ? "" : " · No key"}
                     </span>
-                  </button>
+                  </Button>
                   <Switch
                     aria-label={
                       provider.enabled

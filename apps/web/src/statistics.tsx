@@ -3,6 +3,7 @@ import { CircleAlert } from "lucide-react"
 import { Link } from "react-router"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Meter } from "@/components/ui/meter"
 import {
   Table,
   TableBody,
@@ -109,18 +110,11 @@ export function EventStatistics({ eventId }: { eventId: string }) {
                   {number(item.usage.totalTokens)} tokens / {item.runCount} runs
                 </span>
               </div>
-              <div
+              <Meter
                 aria-label={`${item.challengeName}: ${number(item.usage.totalTokens)} tokens`}
-                className="h-2 overflow-hidden rounded-sm bg-muted"
-                role="img"
-              >
-                <div
-                  className="h-full bg-foreground/70"
-                  style={{
-                    width: `${(item.usage.totalTokens / largest) * 100}%`,
-                  }}
-                />
-              </div>
+                max={largest}
+                value={item.usage.totalTokens}
+              />
             </div>
           ))}
         </div>
