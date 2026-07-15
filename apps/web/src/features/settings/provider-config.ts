@@ -1,0 +1,20 @@
+import type { ProviderConnection, ProviderType } from "@/lib/api"
+
+export const providerTypeLabels: Record<ProviderType, string> = {
+  "openai-compatible": "OpenAI compatible",
+  "openai-responses": "OpenAI Responses",
+  "anthropic-messages": "Anthropic Messages",
+}
+
+export const providerTypeDefaults: Record<ProviderType, string> = {
+  "openai-compatible": "https://api.openai.com/v1",
+  "openai-responses": "https://api.openai.com/v1",
+  "anthropic-messages": "https://api.anthropic.com/v1",
+}
+
+export const providerTypes = Object.keys(providerTypeLabels) as ProviderType[]
+
+export type ProviderInput = Omit<
+  ProviderConnection,
+  "id" | "models" | "createdAt" | "updatedAt"
+>

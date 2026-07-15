@@ -1,9 +1,17 @@
 import { useQuery } from "@tanstack/react-query"
-import { CircleAlert } from "lucide-react"
+import { ChartNoAxesColumn, CircleAlert } from "lucide-react"
 import { Link } from "react-router"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Meter } from "@/components/ui/meter"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
@@ -57,14 +65,18 @@ export function EventStatistics({ eventId }: { eventId: string }) {
 
   if (query.isPending) {
     return (
-      <p className="py-16 text-center text-muted-foreground text-sm">
+      <div
+        className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
+        role="status"
+      >
+        <Spinner aria-hidden="true" />
         Loading statistics...
-      </p>
+      </div>
     )
   }
   if (query.error) {
     return (
-      <Alert className="rounded-lg" variant="error">
+      <Alert variant="error">
         <CircleAlert />
         <AlertTitle>Unable to load statistics</AlertTitle>
         <AlertDescription>{query.error.message}</AlertDescription>
@@ -79,7 +91,7 @@ export function EventStatistics({ eventId }: { eventId: string }) {
   )
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       <section aria-labelledby="usage-summary">
         <div className="mb-4 flex items-baseline justify-between gap-4">
           <h2 className="font-semibold text-base" id="usage-summary">
@@ -96,9 +108,19 @@ export function EventStatistics({ eventId }: { eventId: string }) {
         <h2 className="font-semibold text-base" id="challenge-usage">
           Usage by challenge
         </h2>
-        <div className="mt-4 space-y-4">
+        <div className="mt-4 flex flex-col gap-4">
           {stats.challenges.length === 0 && (
-            <p className="text-muted-foreground text-sm">No usage recorded.</p>
+            <Empty className="py-12">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <ChartNoAxesColumn />
+                </EmptyMedia>
+                <EmptyTitle>No usage recorded</EmptyTitle>
+                <EmptyDescription>
+                  Usage appears after the first run starts.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           )}
           {stats.challenges.map((item) => (
             <div key={item.challengeId}>
@@ -124,59 +146,70 @@ export function EventStatistics({ eventId }: { eventId: string }) {
         <h2 className="font-semibold text-base" id="run-usage">
           Run details
         </h2>
-        <Table className="mt-3 min-w-[920px]">
-          <TableHeader>
-            <TableRow>
-              <TableHead>Challenge</TableHead>
-              <TableHead>Model</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Input</TableHead>
-              <TableHead className="text-right">Output</TableHead>
-              <TableHead className="text-right">Cache read</TableHead>
-              <TableHead className="text-right">Cache write</TableHead>
-              <TableHead className="text-right">Total</TableHead>
-              <TableHead className="text-right">Cost</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {stats.runs.map(({ run, usage }) => (
-              <TableRow key={run.id}>
-                <TableCell>
-                  <Link
-                    className="font-medium underline-offset-4 hover:underline"
-                    to={`/events/${eventId}/runs/${run.id}?view=overview`}
-                  >
-                    {run.challengeName}
-                  </Link>
-                </TableCell>
-                <TableCell className="font-mono text-xs">
-                  {run.provider} / {run.modelId}
-                </TableCell>
-                <TableCell>
-                  <Badge variant="secondary">{run.status}</Badge>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {number(usage.input)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {number(usage.output)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {number(usage.cacheRead)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {number(usage.cacheWrite)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {number(usage.totalTokens)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {cost(usage.cost)}
-                </TableCell>
+        {stats.runs.length === 0 ? (
+          <Empty className="py-12">
+            <EmptyHeader>
+              <EmptyTitle>No run details</EmptyTitle>
+              <EmptyDescription>
+                Completed and active runs will appear here.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <Table className="mt-3 min-w-[920px]" variant="card">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Challenge</TableHead>
+                <TableHead>Model</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Input</TableHead>
+                <TableHead className="text-right">Output</TableHead>
+                <TableHead className="text-right">Cache read</TableHead>
+                <TableHead className="text-right">Cache write</TableHead>
+                <TableHead className="text-right">Total</TableHead>
+                <TableHead className="text-right">Cost</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {stats.runs.map(({ run, usage }) => (
+                <TableRow key={run.id}>
+                  <TableCell>
+                    <Link
+                      className="font-medium underline-offset-4 hover:underline"
+                      to={`/events/${eventId}/runs/${run.id}?view=overview`}
+                    >
+                      {run.challengeName}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {run.provider} / {run.modelId}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">{run.status}</Badge>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {number(usage.input)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {number(usage.output)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {number(usage.cacheRead)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {number(usage.cacheWrite)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {number(usage.totalTokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {cost(usage.cost)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </section>
     </div>
   )
