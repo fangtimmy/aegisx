@@ -1,4 +1,5 @@
 import type { Hono } from "hono"
+import { streamText } from "hono/streaming"
 import { Type } from "typebox"
 import type { createPlatformService } from "./platform-service"
 import { PlatformActionError } from "./platform-service"
@@ -44,7 +45,7 @@ const importInput = Type.Object(
 
 export function registerPlatformRoutes(app: Hono, service: PlatformService) {
   app.post(
-    "/api/events/:eventId/platform/events",
+    "/api/platform/events/discover",
     validateJson(connectionInput),
     async (c) => {
       try {
@@ -57,8 +58,8 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
     }
   )
 
-  app.post(
-    "/api/events/:eventId/platform/bind",
+  app.put(
+    "/api/events/:eventId/platform",
     validateJson(bindingInput),
     async (c) => {
       try {
@@ -82,23 +83,21 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
     }
   })
 
-  app.get("/api/events/:eventId/platform/challenges", async (c) => {
+  app.post("/api/events/:eventId/platform/challenges/discover", async (c) => {
     try {
-      return c.json({
-        items: await service.listRemoteChallenges(c.req.param("eventId")),
-      })
+      return c.json(await service.discoverChallenges(c.req.param("eventId")))
     } catch (error) {
       return platformError(c, error)
     }
   })
 
   app.post(
-    "/api/events/:eventId/platform/import",
+    "/api/events/:eventId/platform/challenges/sync",
     validateJson(importInput),
     async (c) => {
       try {
         return c.json(
-          await service.importChallenges(
+          await service.syncChallenges(
             c.req.param("eventId"),
             c.req.valid("json").remoteIds
           )
@@ -107,6 +106,42 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
         return platformError(c, error)
       }
     }
+  )
+
+  app.post(
+    "/api/events/:eventId/platform/challenges/sync/stream",
+    validateJson(importInput),
+    (c) =>
+      streamText(c, async (stream) => {
+        try {
+          const result = await service.syncChallenges(
+            c.req.param("eventId"),
+            c.req.valid("json").remoteIds,
+            async (item, completed, total) => {
+              await stream.writeln(
+                JSON.stringify({ type: "item", item, completed, total })
+              )
+            }
+          )
+          await stream.writeln(
+            JSON.stringify({
+              type: "complete",
+              syncedAt: result.syncedAt,
+              total: result.results.length,
+            })
+          )
+        } catch (error) {
+          await stream.writeln(
+            JSON.stringify({
+              type: "error",
+              message:
+                error instanceof PlatformActionError
+                  ? error.message
+                  : "Challenge sync failed",
+            })
+          )
+        }
+      })
   )
 
   app.get("/api/challenges/:challengeId/target", async (c) => {

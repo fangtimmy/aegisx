@@ -1,7 +1,7 @@
 import { basename } from "node:path"
 import { and, eq } from "drizzle-orm"
 import type { createDatabase } from "./db"
-import { attachments, challenges, events } from "./db/schema"
+import { attachments, challenges, eventPlatforms, events } from "./db/schema"
 import {
   type CtfPlatformAdapter,
   createPlatformAdapter,
@@ -10,6 +10,7 @@ import {
   type PlatformType,
   type RemoteAttachment,
   type RemoteChallenge,
+  type RemoteChallengeSummary,
   type SubmissionResult,
   type TargetState,
 } from "./platform"
@@ -32,40 +33,44 @@ export class PlatformActionError extends Error {
 }
 
 export function createPlatformService(db: Database, storage: Storage) {
-  function storedEvent(eventId: string) {
-    return db.select().from(events).where(eq(events.id, eventId)).get()
-  }
+  const storedEvent = (eventId: string) =>
+    db.select().from(events).where(eq(events.id, eventId)).get()
+
+  const storedPlatform = (eventId: string) =>
+    db
+      .select()
+      .from(eventPlatforms)
+      .where(eq(eventPlatforms.eventId, eventId))
+      .get()
 
   function configForEvent(eventId: string): PlatformConfig | undefined {
-    const event = storedEvent(eventId)
-    if (
-      !event?.platformType ||
-      !event.platformBaseUrl ||
-      !event.platformCredential ||
-      !event.remoteEventId
-    ) {
-      return undefined
-    }
-    return {
-      type: event.platformType as PlatformType,
-      baseUrl: event.platformBaseUrl,
-      credential: event.platformCredential,
-      remoteEventId: event.remoteEventId,
-    }
+    const platform = storedPlatform(eventId)
+    return platform
+      ? {
+          type: platform.type as PlatformType,
+          baseUrl: platform.baseUrl,
+          credential: platform.credential,
+          remoteEventId: platform.remoteEventId,
+        }
+      : undefined
   }
 
   function adapterForEvent(eventId: string) {
     const config = configForEvent(eventId)
     if (!config) return undefined
     return createPlatformAdapter(config, (credential) => {
-      db.update(events)
-        .set({
-          platformCredential: credential,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(events.id, eventId))
+      db.update(eventPlatforms)
+        .set({ credential, updatedAt: new Date().toISOString() })
+        .where(eq(eventPlatforms.eventId, eventId))
         .run()
     })
+  }
+
+  function publicPlatform(eventId: string) {
+    const platform = storedPlatform(eventId)
+    if (!platform) return null
+    const { credential: _, sourceKey: __, ...value } = platform
+    return { ...value, credentialConfigured: Boolean(platform.credential) }
   }
 
   async function syncAttachment(
@@ -117,6 +122,7 @@ export function createPlatformService(db: Database, storage: Storage) {
 
   async function syncRemoteChallenge(
     eventId: string,
+    sourceKey: string,
     remote: RemoteChallenge,
     adapter: CtfPlatformAdapter
   ) {
@@ -124,7 +130,11 @@ export function createPlatformService(db: Database, storage: Storage) {
       .select()
       .from(challenges)
       .where(
-        and(eq(challenges.eventId, eventId), eq(challenges.remoteId, remote.id))
+        and(
+          eq(challenges.eventId, eventId),
+          eq(challenges.remoteSourceKey, sourceKey),
+          eq(challenges.remoteId, remote.id)
+        )
       )
       .get()
     const id = existing?.id ?? crypto.randomUUID()
@@ -135,9 +145,13 @@ export function createPlatformService(db: Database, storage: Storage) {
       description: remote.description || "No challenge description provided.",
       category: remote.category,
       points: remote.points,
+      remoteSourceKey: sourceKey,
       remoteId: remote.id,
-      remoteSolved: remote.solved,
+      remoteAvailable: true,
+      remoteSolved: existing?.remoteSolved === true || remote.solved,
       remoteTarget: remote.targetSupported,
+      remoteTargetCount: remote.targetCount,
+      remoteTargetInfo: JSON.stringify(remote.targets),
       remoteUpdatedAt: now,
       updatedAt: now,
     }
@@ -149,75 +163,170 @@ export function createPlatformService(db: Database, storage: Storage) {
         .run()
     }
 
-    for (const attachment of remote.attachments) {
-      await syncAttachment(eventId, id, attachment, adapter)
-    }
-    const liveIds = new Set(
-      remote.attachments.map((attachment) => attachment.id)
-    )
-    const stale = db
-      .select()
-      .from(attachments)
-      .where(eq(attachments.challengeId, id))
-      .all()
-      .filter(
-        (attachment) =>
-          attachment.remoteId !== null && !liveIds.has(attachment.remoteId)
-      )
-    for (const attachment of stale) {
-      db.delete(attachments).where(eq(attachments.id, attachment.id)).run()
-      storage.remove(attachment.storageKey)
-    }
-    return { id, remote }
-  }
-
-  async function listRemoteChallenges(eventId: string) {
-    const adapter = adapterForEvent(eventId)
-    if (!adapter) {
-      throw new PlatformActionError(
-        "not_bound",
-        "Event is not bound to a platform"
-      )
-    }
     try {
-      return (await adapter.listChallenges()).map((challenge) => ({
-        id: challenge.id,
-        name: challenge.name,
-        category: challenge.category,
-        points: challenge.points,
-        solved: challenge.solved,
-      }))
-    } catch (error) {
-      throw platformError(error)
-    }
-  }
-
-  async function importChallenges(eventId: string, remoteIds: string[]) {
-    const adapter = adapterForEvent(eventId)
-    if (!adapter) {
-      throw new PlatformActionError(
-        "not_bound",
-        "Event is not bound to a platform"
-      )
-    }
-    try {
-      const remoteChallenges = await Promise.all(
-        [...new Set(remoteIds)].map((remoteId) =>
-          adapter.getChallenge(remoteId)
-        )
-      )
-      for (const challenge of remoteChallenges) {
-        await syncRemoteChallenge(eventId, challenge, adapter)
+      for (const attachment of remote.attachments) {
+        await syncAttachment(eventId, id, attachment, adapter)
       }
-      const now = new Date().toISOString()
-      db.update(events)
-        .set({ lastSyncedAt: now, updatedAt: now })
-        .where(eq(events.id, eventId))
-        .run()
-      return { syncedAt: now, challengeCount: remoteChallenges.length }
+      const liveIds = new Set(
+        remote.attachments.map((attachment) => attachment.id)
+      )
+      const stale = db
+        .select()
+        .from(attachments)
+        .where(eq(attachments.challengeId, id))
+        .all()
+        .filter(
+          (attachment) =>
+            attachment.remoteId !== null && !liveIds.has(attachment.remoteId)
+        )
+      for (const attachment of stale) {
+        db.delete(attachments).where(eq(attachments.id, attachment.id)).run()
+        storage.remove(attachment.storageKey)
+      }
+    } catch (error) {
+      if (!existing) {
+        db.delete(challenges).where(eq(challenges.id, id)).run()
+        storage.purge(storage.challengePath(eventId, id))
+      }
+      throw error
+    }
+    return { id, created: !existing }
+  }
+
+  async function discoverInventory(eventId: string) {
+    const platform = storedPlatform(eventId)
+    const adapter = adapterForEvent(eventId)
+    if (!platform || !adapter) {
+      throw new PlatformActionError(
+        "not_bound",
+        "Event is not connected to a platform"
+      )
+    }
+    let remote: RemoteChallengeSummary[]
+    try {
+      remote = await adapter.listChallenges()
     } catch (error) {
       throw platformError(error)
     }
+    const now = new Date().toISOString()
+    db.transaction((tx) => {
+      tx.update(challenges)
+        .set({ remoteAvailable: false })
+        .where(
+          and(
+            eq(challenges.eventId, eventId),
+            eq(challenges.remoteSourceKey, platform.sourceKey)
+          )
+        )
+        .run()
+      for (const item of remote) {
+        tx.update(challenges)
+          .set({
+            remoteAvailable: true,
+            ...(item.solved ? { remoteSolved: true } : {}),
+          })
+          .where(
+            and(
+              eq(challenges.eventId, eventId),
+              eq(challenges.remoteSourceKey, platform.sourceKey),
+              eq(challenges.remoteId, item.id)
+            )
+          )
+          .run()
+      }
+      tx.update(eventPlatforms)
+        .set({ lastSyncedAt: now, updatedAt: now })
+        .where(eq(eventPlatforms.eventId, eventId))
+        .run()
+    })
+    return { adapter, platform, remote, syncedAt: now }
+  }
+
+  async function discoverChallenges(eventId: string) {
+    const inventory = await discoverInventory(eventId)
+    const imported = new Map(
+      db
+        .select()
+        .from(challenges)
+        .where(
+          and(
+            eq(challenges.eventId, eventId),
+            eq(challenges.remoteSourceKey, inventory.platform.sourceKey)
+          )
+        )
+        .all()
+        .flatMap((challenge) =>
+          challenge.remoteId ? [[challenge.remoteId, challenge] as const] : []
+        )
+    )
+    return {
+      syncedAt: inventory.syncedAt,
+      items: inventory.remote.map((remote) => ({
+        ...remote,
+        imported: imported.has(remote.id),
+        localChallengeId: imported.get(remote.id)?.id ?? null,
+      })),
+    }
+  }
+
+  async function syncChallenges(
+    eventId: string,
+    remoteIds: string[],
+    onResult?: (
+      result: {
+        remoteId: string
+        status: "created" | "updated" | "failed"
+        challengeId?: string
+        error?: string
+      },
+      completed: number,
+      total: number
+    ) => void | Promise<void>
+  ) {
+    const inventory = await discoverInventory(eventId)
+    const available = new Map(inventory.remote.map((item) => [item.id, item]))
+    const results: Array<{
+      remoteId: string
+      status: "created" | "updated" | "failed"
+      challengeId?: string
+      error?: string
+    }> = []
+    const ids = [...new Set(remoteIds)]
+    for (const remoteId of ids) {
+      const summary = available.get(remoteId)
+      let result: (typeof results)[number]
+      if (!summary) {
+        result = {
+          remoteId,
+          status: "failed",
+          error: "Remote challenge is unavailable",
+        }
+      } else {
+        try {
+          const remote = await inventory.adapter.getChallenge(remoteId)
+          const synced = await syncRemoteChallenge(
+            eventId,
+            inventory.platform.sourceKey,
+            { ...remote, solved: remote.solved || summary.solved },
+            inventory.adapter
+          )
+          result = {
+            remoteId,
+            challengeId: synced.id,
+            status: synced.created ? "created" : "updated",
+          }
+        } catch (error) {
+          result = {
+            remoteId,
+            status: "failed",
+            error: syncFailureMessage(error),
+          }
+        }
+      }
+      results.push(result)
+      await onResult?.(result, results.length, ids.length)
+    }
+    return { syncedAt: inventory.syncedAt, results }
   }
 
   async function bind(
@@ -229,78 +338,84 @@ export function createPlatformService(db: Database, storage: Storage) {
       remoteEventId: string
     }
   ) {
-    const event = storedEvent(eventId)
-    if (!event) throw new PlatformActionError("not_found", "Event not found")
-    if (!event.platformType) {
-      const localChallenge = db
-        .select({ id: challenges.id })
-        .from(challenges)
-        .where(eq(challenges.eventId, eventId))
-        .get()
-      if (localChallenge) {
-        throw new PlatformActionError(
-          "invalid_state",
-          "Only an empty event can be bound to a platform"
-        )
-      }
+    if (!storedEvent(eventId)) {
+      throw new PlatformActionError("not_found", "Event not found")
     }
     const config: PlatformConfig = {
-      ...input,
+      type: input.type,
+      baseUrl: normalizeBaseUrl(input.baseUrl),
+      credential: input.credential,
       remoteEventId: input.type === "ctfd" ? "site" : input.remoteEventId,
     }
+    const sourceKey = platformSourceKey(config)
+    const eventChallenges = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.eventId, eventId))
+      .all()
+    if (
+      eventChallenges.some(
+        (challenge) =>
+          challenge.remoteSourceKey !== sourceKey || !challenge.remoteId
+      )
+    ) {
+      throw new PlatformActionError(
+        "invalid_state",
+        "This event contains challenges from another source"
+      )
+    }
     try {
-      const remoteEvents = await createPlatformAdapter(config).listEvents()
+      const remoteEvents = await createPlatformAdapter(config, (credential) => {
+        config.credential = credential
+      }).listEvents()
       if (!remoteEvents.some((remote) => remote.id === config.remoteEventId)) {
         throw new PlatformActionError("not_found", "Remote event not found")
       }
     } catch (error) {
       throw platformError(error)
     }
+    const existing = storedPlatform(eventId)
     const now = new Date().toISOString()
-    db.update(events)
-      .set({
-        platformType: config.type,
-        platformBaseUrl: normalizeBaseUrl(config.baseUrl),
-        platformCredential: config.credential,
-        remoteEventId: config.remoteEventId,
-        lastSyncedAt: null,
-        updatedAt: now,
-      })
-      .where(eq(events.id, eventId))
-      .run()
-    return { bound: true }
+    const values = {
+      eventId,
+      type: config.type,
+      baseUrl: config.baseUrl,
+      credential: config.credential,
+      remoteEventId: config.remoteEventId,
+      sourceKey,
+      lastSyncedAt:
+        existing?.sourceKey === sourceKey ? existing.lastSyncedAt : null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+    if (existing) {
+      db.update(eventPlatforms)
+        .set(values)
+        .where(eq(eventPlatforms.eventId, eventId))
+        .run()
+    } else {
+      db.insert(eventPlatforms).values(values).run()
+    }
+    return publicPlatform(eventId)
   }
 
   function detach(eventId: string) {
-    const event = storedEvent(eventId)
-    if (!event) throw new PlatformActionError("not_found", "Event not found")
+    if (!storedEvent(eventId)) {
+      throw new PlatformActionError("not_found", "Event not found")
+    }
+    const platform = storedPlatform(eventId)
+    if (!platform) return
     db.transaction((tx) => {
-      const eventChallenges = tx
-        .select({ id: challenges.id })
-        .from(challenges)
-        .where(eq(challenges.eventId, eventId))
-        .all()
-      for (const challenge of eventChallenges) {
-        tx.update(attachments)
-          .set({ remoteId: null })
-          .where(eq(attachments.challengeId, challenge.id))
-          .run()
-      }
       tx.update(challenges)
-        .set({ remoteId: null, remoteTarget: false, remoteUpdatedAt: null })
-        .where(eq(challenges.eventId, eventId))
+        .set({ remoteAvailable: false })
+        .where(
+          and(
+            eq(challenges.eventId, eventId),
+            eq(challenges.remoteSourceKey, platform.sourceKey)
+          )
+        )
         .run()
-      tx.update(events)
-        .set({
-          platformType: null,
-          platformBaseUrl: null,
-          platformCredential: null,
-          remoteEventId: null,
-          lastSyncedAt: null,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(events.id, eventId))
-        .run()
+      tx.delete(eventPlatforms).where(eq(eventPlatforms.eventId, eventId)).run()
     })
   }
 
@@ -312,6 +427,7 @@ export function createPlatformService(db: Database, storage: Storage) {
     try {
       return await createPlatformAdapter({
         ...input,
+        baseUrl: normalizeBaseUrl(input.baseUrl),
         remoteEventId: input.type === "ctfd" ? "site" : "",
       }).listEvents()
     } catch (error) {
@@ -319,48 +435,30 @@ export function createPlatformService(db: Database, storage: Storage) {
     }
   }
 
-  async function prepareChallenge(challengeId: string) {
-    const row = db
-      .select({ challenge: challenges, event: events })
-      .from(challenges)
-      .innerJoin(events, eq(challenges.eventId, events.id))
-      .where(eq(challenges.id, challengeId))
-      .get()
-    if (!row?.challenge.remoteId || !row.event.platformType) return undefined
-    const adapter = adapterForEvent(row.event.id)
-    if (!adapter) return undefined
-    try {
-      const remote = await adapter.getChallenge(row.challenge.remoteId)
-      await syncRemoteChallenge(row.event.id, remote, adapter)
-      if (!remote.targetSupported || !adapter.getTarget) return undefined
-      let target = await adapter.getTarget(remote.id)
-      if (target.status === "absent" && adapter.startTarget) {
-        target = await adapter.startTarget(remote.id)
-      }
-      return waitForTarget(adapter, remote.id, target)
-    } catch (error) {
-      throw platformError(error)
-    }
-  }
-
   async function submitFlag(challengeId: string, flag?: string) {
-    const row = db
-      .select({ challenge: challenges, eventId: events.id })
+    const challenge = db
+      .select()
       .from(challenges)
-      .innerJoin(events, eq(challenges.eventId, events.id))
       .where(eq(challenges.id, challengeId))
       .get()
-    if (!row?.challenge.remoteId || !configForEvent(row.eventId))
+    const platform = challenge ? storedPlatform(challenge.eventId) : undefined
+    if (
+      !challenge?.remoteId ||
+      !challenge.remoteAvailable ||
+      !platform ||
+      challenge.remoteSourceKey !== platform.sourceKey
+    ) {
       return undefined
+    }
     if (!flag?.trim()) {
       throw new PlatformActionError(
         "invalid_state",
         "A flag is required for a platform challenge"
       )
     }
-    const adapter = adapterForEvent(row.eventId) as CtfPlatformAdapter
+    const adapter = adapterForEvent(challenge.eventId) as CtfPlatformAdapter
     try {
-      let result = await adapter.submitFlag(row.challenge.remoteId, flag.trim())
+      let result = await adapter.submitFlag(challenge.remoteId, flag.trim())
       for (
         let attempt = 0;
         result.status === "pending" && attempt < 60;
@@ -369,7 +467,7 @@ export function createPlatformService(db: Database, storage: Storage) {
         if (!result.remoteId || !adapter.getSubmission) break
         await Bun.sleep(1000)
         result = await adapter.getSubmission(
-          row.challenge.remoteId,
+          challenge.remoteId,
           result.remoteId
         )
       }
@@ -393,27 +491,38 @@ export function createPlatformService(db: Database, storage: Storage) {
     challengeId: string,
     action: "get" | "start" | "extend" | "stop"
   ) {
-    const row = db
-      .select({ remoteId: challenges.remoteId, eventId: events.id })
+    const challenge = db
+      .select()
       .from(challenges)
-      .innerJoin(events, eq(challenges.eventId, events.id))
       .where(eq(challenges.id, challengeId))
       .get()
-    if (!row?.remoteId) {
+    const platform = challenge ? storedPlatform(challenge.eventId) : undefined
+    if (
+      !challenge?.remoteId ||
+      !challenge.remoteAvailable ||
+      !platform ||
+      challenge.remoteSourceKey !== platform.sourceKey
+    ) {
       throw new PlatformActionError(
         "not_bound",
-        "Challenge is not platform managed"
+        "Challenge is not managed by the connected platform"
       )
     }
-    const adapter = adapterForEvent(row.eventId)
+    const adapter = adapterForEvent(challenge.eventId)
+    if (!adapter) {
+      throw new PlatformActionError(
+        "not_bound",
+        "Event is not connected to a platform"
+      )
+    }
     const method =
       action === "get"
-        ? adapter?.getTarget
+        ? adapter.getTarget
         : action === "start"
-          ? adapter?.startTarget
+          ? adapter.startTarget
           : action === "extend"
-            ? adapter?.extendTarget
-            : adapter?.stopTarget
+            ? adapter.extendTarget
+            : adapter.stopTarget
     if (!method) {
       throw new PlatformActionError(
         "invalid_state",
@@ -421,7 +530,10 @@ export function createPlatformService(db: Database, storage: Storage) {
       )
     }
     try {
-      return await method.call(adapter, row.remoteId)
+      const target = await method.call(adapter, challenge.remoteId)
+      return action === "start"
+        ? await waitForTarget(adapter, challenge.remoteId, target)
+        : target
     } catch (error) {
       throw platformError(error)
     }
@@ -430,13 +542,13 @@ export function createPlatformService(db: Database, storage: Storage) {
   return {
     bind,
     detach,
-    importChallenges,
-    listRemoteChallenges,
+    discoverChallenges,
+    getPublic: publicPlatform,
+    isBoundEvent: (eventId: string) => Boolean(storedPlatform(eventId)),
     listRemoteEvents,
-    prepareChallenge,
     submitFlag,
+    syncChallenges,
     targetAction,
-    isBoundEvent: (eventId: string) => Boolean(configForEvent(eventId)),
   }
 }
 
@@ -464,7 +576,22 @@ async function waitForTarget(
 }
 
 function normalizeBaseUrl(value: string) {
-  return new URL(value.trim()).toString().replace(/\/$/, "")
+  const url = new URL(value.trim())
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new PlatformActionError(
+      "invalid_state",
+      "Platform URL must use HTTP or HTTPS"
+    )
+  }
+  return url.toString().replace(/\/$/, "")
+}
+
+function platformSourceKey(config: PlatformConfig) {
+  return JSON.stringify([
+    config.type,
+    normalizeBaseUrl(config.baseUrl),
+    config.remoteEventId,
+  ])
 }
 
 function platformError(error: unknown): PlatformActionError {
@@ -473,6 +600,12 @@ function platformError(error: unknown): PlatformActionError {
     return new PlatformActionError("platform_error", error.message)
   }
   return new PlatformActionError("platform_error", "Platform request failed")
+}
+
+function syncFailureMessage(error: unknown) {
+  return error instanceof PlatformActionError || error instanceof PlatformError
+    ? platformError(error).message
+    : "Challenge could not be stored"
 }
 
 function submissionMessage(result: SubmissionResult) {

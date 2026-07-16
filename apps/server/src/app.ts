@@ -15,6 +15,7 @@ import {
   settings,
 } from "./db/schema"
 import { createModelService } from "./models"
+import type { RemoteTargetInfo } from "./platform"
 import { registerPlatformRoutes } from "./platform-routes"
 import { createPlatformService } from "./platform-service"
 import { providerName, registerProviderRoutes } from "./provider-routes"
@@ -175,8 +176,8 @@ export function createApp(options: {
         : 2,
     getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
     modelService,
-    prepareChallenge: platformService.prepareChallenge,
     submitFlag: platformService.submitFlag,
+    targetAction: platformService.targetAction,
   })
   const app = new Hono()
 
@@ -191,9 +192,9 @@ export function createApp(options: {
       .groupBy(events.id)
       .orderBy(events.createdAt)
       .all()
-      .map(({ platformCredential, ...event }) => ({
+      .map((event) => ({
         ...event,
-        platformCredentialConfigured: Boolean(platformCredential),
+        platform: platformService.getPublic(event.id),
       }))
 
   const getEvent = (eventId: string) =>
@@ -227,8 +228,14 @@ export function createApp(options: {
       .from(runs)
       .where(eq(runs.challengeId, challengeId))
       .get()?.value
+    const {
+      remoteSourceKey: _,
+      remoteTargetInfo,
+      ...publicChallenge
+    } = challenge
     return {
-      ...challenge,
+      ...publicChallenge,
+      targets: parseTargetInfo(remoteTargetInfo),
       attachments: challengeAttachments,
       runCount: Number(runCount ?? 0),
       status: challenge.remoteSolved
@@ -686,17 +693,6 @@ export function createApp(options: {
         404
       )
     }
-    if (platformService.isBoundEvent(challenge.eventId)) {
-      return c.json(
-        {
-          error: {
-            code: "platform_managed",
-            message: "Platform-managed attachments must be synchronized",
-          },
-        },
-        409
-      )
-    }
     const challengeRuns = runManager.listForChallenge(challenge.id)
     const items = challengeRuns.map((run) => ({
       run,
@@ -1036,4 +1032,31 @@ function workspaceFileError(
   if (!(error instanceof WorkspaceFileError)) throw error
   const status = error.code === "not_found" ? 404 : 400
   return c.json({ error: { code: error.code, message: error.message } }, status)
+}
+
+function parseTargetInfo(value: string): RemoteTargetInfo[] {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((target) =>
+      typeof target === "object" &&
+      target !== null &&
+      "name" in target &&
+      typeof target.name === "string" &&
+      "services" in target &&
+      Array.isArray(target.services)
+        ? [
+            {
+              name: target.name,
+              services: target.services.filter(
+                (service: unknown): service is string =>
+                  typeof service === "string"
+              ),
+            },
+          ]
+        : []
+    )
+  } catch {
+    return []
+  }
 }

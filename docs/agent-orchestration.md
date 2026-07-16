@@ -35,6 +35,14 @@ Every agent in a run uses the same workspace root and the same path namespace. T
 
 The workspace is collaborative rather than isolated. Delegated tasks should avoid conflicting writes; AegisX does not lock files or merge per-agent copies. Local execution inherits API process permissions, while container execution uses the run's shared restricted container.
 
+## Challenge targets
+
+- AegisX does not start or extend a remote challenge target when a run begins or resumes.
+- The main agent alone receives `get_target`, `start_target`, `extend_target`, and `stop_target` for supported challenges. Children receive no target tools.
+- `start_target` waits for the platform target to become ready and returns its live endpoints.
+- Pause and service restart do not change target state.
+- Completion, stop, and failure attempt to close the target. Cleanup failure does not replace the run outcome.
+
 ## Events and usage
 
 SSE events identify the run or agent they belong to:

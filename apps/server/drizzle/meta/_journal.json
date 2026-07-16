@@ -57,6 +57,27 @@
       "when": 1784202000000,
       "tag": "0007_event_platform",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1784203000000,
+      "tag": "0008_platform_bindings",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1784204000000,
+      "tag": "0009_challenge_target_count",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1784205000000,
+      "tag": "0010_challenge_target_info",
+      "breakpoints": true
     }
   ]
 }

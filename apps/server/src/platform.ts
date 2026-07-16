@@ -16,14 +16,24 @@ export type RemoteAttachment = {
   authenticated?: boolean
 }
 
-export type RemoteChallenge = {
+export type RemoteChallengeSummary = {
   id: string
   name: string
-  description: string
   category: string | null
   points: number | null
   solved: boolean
+}
+
+export type RemoteTargetInfo = {
+  name: string
+  services: string[]
+}
+
+export type RemoteChallenge = RemoteChallengeSummary & {
+  description: string
   targetSupported: boolean
+  targetCount: number
+  targets: RemoteTargetInfo[]
   attachments: RemoteAttachment[]
 }
 
@@ -53,7 +63,7 @@ export type SubmissionResult = {
 
 export interface CtfPlatformAdapter {
   listEvents(): Promise<RemoteEvent[]>
-  listChallenges(): Promise<RemoteChallenge[]>
+  listChallenges(): Promise<RemoteChallengeSummary[]>
   getChallenge(remoteId: string): Promise<RemoteChallenge>
   downloadAttachment(attachment: RemoteAttachment): Promise<Response>
   submitFlag(remoteId: string, flag: string): Promise<SubmissionResult>
@@ -145,7 +155,7 @@ abstract class BaseAdapter implements CtfPlatformAdapter {
   }
 
   abstract listEvents(): Promise<RemoteEvent[]>
-  abstract listChallenges(): Promise<RemoteChallenge[]>
+  abstract listChallenges(): Promise<RemoteChallengeSummary[]>
   abstract getChallenge(remoteId: string): Promise<RemoteChallenge>
   abstract submitFlag(remoteId: string, flag: string): Promise<SubmissionResult>
 
@@ -175,11 +185,13 @@ class CtfdAdapter extends BaseAdapter {
     const body = await this.http.json<{ data?: JsonRecord[] }>(
       "/api/v1/challenges"
     )
-    return Promise.all(
-      (body.data ?? []).map((challenge) =>
-        this.getChallenge(String(challenge.id))
-      )
-    )
+    return (body.data ?? []).map((challenge) => ({
+      id: String(challenge.id),
+      name: String(challenge.name ?? `Challenge ${challenge.id}`),
+      category: nullableString(challenge.category),
+      points: nullableNumber(challenge.value),
+      solved: challenge.solved_by_me === true,
+    }))
   }
 
   async getChallenge(remoteId: string) {
@@ -196,6 +208,8 @@ class CtfdAdapter extends BaseAdapter {
       points: nullableNumber(value.value),
       solved: value.solved_by_me === true,
       targetSupported: false,
+      targetCount: 0,
+      targets: [],
       attachments: files.flatMap((file) => {
         if (typeof file !== "string") return []
         const path = new URL(file, `${this.config.baseUrl}/`)
@@ -267,9 +281,13 @@ class Ret2ShellAdapter extends BaseAdapter {
     const body = await this.http.json<[JsonRecord[], number]>(
       `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge?page=1&page_size=1000`
     )
-    return Promise.all(
-      body[0].map((challenge) => this.getChallenge(String(challenge.id)))
-    )
+    return body[0].map((challenge) => ({
+      id: String(challenge.id),
+      name: String(challenge.name ?? `Challenge ${challenge.id}`),
+      category: challengeCategory(challenge),
+      points: nullableNumber(challenge.score),
+      solved: challenge.solved === true,
+    }))
   }
 
   async getChallenge(remoteId: string) {
@@ -280,22 +298,17 @@ class Ret2ShellAdapter extends BaseAdapter {
       this.http.json<JsonRecord | null>(`${root}/env`),
       this.http.json<JsonRecord>(`${root}/submit`),
     ])
-    const tags = Array.isArray(value.tag) ? value.tag : []
-    const primary = tags.find((tag) => isRecord(tag) && tag.primary === true) as
-      | JsonRecord
-      | undefined
-    const first = tags.find(isRecord)
+    const targets = targetDefinitions(environment?.images)
     return {
       id: String(value.id),
       name: String(value.name ?? "Untitled challenge"),
       description: String(value.content ?? ""),
-      category: nullableString(primary?.name ?? first?.name),
+      category: challengeCategory(value),
       points: nullableNumber(value.score),
       solved: solve.solved === true,
-      targetSupported:
-        environment !== null &&
-        Array.isArray(environment.images) &&
-        environment.images.length > 0,
+      targetSupported: targets.length > 0,
+      targetCount: targets.length,
+      targets,
       attachments: files.map(({ folder, file }) => ({
         id: `${folder}:${file}`,
         filename: file,
@@ -397,15 +410,18 @@ class A1CtfAdapter extends BaseAdapter {
         String(challenge.challenge_id)
       )
     )
-    const details = await Promise.all(
-      (body.data?.challenges ?? []).map((challenge) =>
-        this.getChallenge(String(challenge.challenge_id))
-      )
-    )
-    return details.map((challenge) => ({
-      ...challenge,
-      solved: solved.has(challenge.id),
-    }))
+    return (body.data?.challenges ?? []).map((challenge) => {
+      const id = String(challenge.challenge_id)
+      return {
+        id,
+        name: String(
+          challenge.challenge_name ?? challenge.name ?? `Challenge ${id}`
+        ),
+        category: nullableString(challenge.category),
+        points: nullableNumber(challenge.cur_score ?? challenge.score),
+        solved: solved.has(id),
+      }
+    })
   }
 
   async getChallenge(remoteId: string) {
@@ -416,6 +432,14 @@ class A1CtfAdapter extends BaseAdapter {
     const attachments = Array.isArray(value.attachments)
       ? value.attachments.filter(isRecord)
       : []
+    const targets = targetDefinitions(value.containers)
+    const containerType = String(value.container_type ?? "")
+    const hasTarget =
+      targets.length > 0 ||
+      !["", "NO_CONTAINER", "NoContainer"].includes(containerType)
+    if (hasTarget && targets.length === 0) {
+      targets.push({ name: "Challenge target", services: [] })
+    }
     return {
       id: String(value.challenge_id),
       name: String(value.challenge_name ?? "Untitled challenge"),
@@ -423,8 +447,9 @@ class A1CtfAdapter extends BaseAdapter {
       category: nullableString(value.category),
       points: nullableNumber(value.cur_score),
       solved: false,
-      targetSupported:
-        String(value.container_type ?? "NO_CONTAINER") !== "NO_CONTAINER",
+      targetSupported: hasTarget,
+      targetCount: targets.length,
+      targets,
       attachments: attachments.flatMap((attachment) => {
         const type = String(attachment.attach_type ?? "")
         const hash = nullableString(attachment.attach_hash)
@@ -593,6 +618,46 @@ function targetEndpoint(name: string, address: string) {
       ? ("http" as const)
       : ("tcp" as const)
   return { name, address, protocol }
+}
+
+function challengeCategory(value: JsonRecord) {
+  const tags = Array.isArray(value.tag) ? value.tag : []
+  const primary = tags.find((tag) => isRecord(tag) && tag.primary === true) as
+    | JsonRecord
+    | undefined
+  return nullableString(primary?.name ?? tags.find(isRecord)?.name)
+}
+
+function targetDefinitions(value: unknown): RemoteTargetInfo[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item, index) => {
+    if (!isRecord(item)) {
+      return { name: String(item || `Target ${index + 1}`), services: [] }
+    }
+    const rawServices = item.container_ports ?? item.exposed_ports ?? item.ports
+    const services = Array.isArray(rawServices)
+      ? rawServices.map((service) => {
+          if (!isRecord(service)) return String(service)
+          return String(
+            service.port_name ??
+              service.name ??
+              service.port ??
+              service.container_port ??
+              "service"
+          )
+        })
+      : []
+    return {
+      name: String(
+        item.container_name ??
+          item.name ??
+          item.image ??
+          item.service ??
+          `Target ${index + 1}`
+      ),
+      services,
+    }
+  })
 }
 
 function nullableString(value: unknown) {

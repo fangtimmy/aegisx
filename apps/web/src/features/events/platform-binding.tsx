@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CircleAlert, Link2, RefreshCw, Unlink } from "lucide-react"
+import { CircleAlert, Link2, RefreshCw, Settings2, Unlink } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -31,6 +31,12 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
+  Progress,
+  ProgressIndicator,
+  ProgressLabel,
+  ProgressTrack,
+} from "@/components/ui/progress"
+import {
   Select,
   SelectItem,
   SelectPopup,
@@ -40,9 +46,12 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import {
   apiRequest,
+  type ChallengeSyncResult,
+  type EventPlatform,
   type EventSummary,
   jsonRequest,
   type PlatformType,
+  type RemoteChallengeSummary,
   type RemoteEvent,
 } from "@/lib/api"
 import { eventKeys } from "./shared"
@@ -67,18 +76,26 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
     onSuccess: () => refreshEvent(queryClient, event.id),
   })
 
-  if (!event.platformType) return <ConnectPlatformDialog eventId={event.id} />
+  if (!event.platform) return <ConnectPlatformDialog eventId={event.id} />
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Badge variant="outline">{platformLabels[event.platformType]}</Badge>
+      <Badge variant="outline">{platformLabels[event.platform.type]}</Badge>
       <span className="max-w-56 truncate text-muted-foreground text-xs">
-        {event.platformBaseUrl}
+        {event.platform.baseUrl}
       </span>
-      <ImportChallengesDialog event={event} />
+      <SyncChallengesDialog eventId={event.id} />
+      <ConnectPlatformDialog eventId={event.id} platform={event.platform} />
       <AlertDialog>
         <AlertDialogTrigger
-          render={<Button size="icon-sm" type="button" variant="ghost" />}
+          render={
+            <Button
+              aria-label="Disconnect platform"
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            />
+          }
         >
           <Unlink />
         </AlertDialogTrigger>
@@ -86,8 +103,8 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Disconnect platform?</AlertDialogTitle>
             <AlertDialogDescription>
-              Current challenge snapshots and attachments will be kept as manual
-              event data.
+              Current challenge snapshots and attachments will be kept. A later
+              connection to the same competition will update those challenges.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -112,62 +129,85 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
   )
 }
 
-type RemoteChallengeSummary = {
-  id: string
-  name: string
-  category: string | null
-  points: number | null
-  solved: boolean
-}
-
-function ImportChallengesDialog({ event }: { event: EventSummary }) {
+function SyncChallengesDialog({ eventId }: { eventId: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  const [progress, setProgress] = useState({ completed: 0, total: 0 })
+  const [log, setLog] = useState<ChallengeSyncResult["results"]>([])
+  const challengeKey = ["events", eventId, "platform", "challenges"] as const
   const challenges = useQuery({
     enabled: open,
-    queryKey: ["events", event.id, "platform", "challenges"],
+    queryKey: challengeKey,
     queryFn: () =>
-      apiRequest<{ items: RemoteChallengeSummary[] }>(
-        `/events/${event.id}/platform/challenges`
+      apiRequest<{ syncedAt: string; items: RemoteChallengeSummary[] }>(
+        `/events/${eventId}/platform/challenges/discover`,
+        { method: "POST" }
       ),
   })
   useEffect(() => {
     if (open && challenges.data) {
-      setSelected(challenges.data.items.map((challenge) => challenge.id))
+      setSelected(
+        challenges.data.items
+          .filter((challenge) => !challenge.imported)
+          .map((challenge) => challenge.id)
+      )
     }
   }, [challenges.data, open])
-  const importChallenges = useMutation({
-    mutationFn: () =>
-      apiRequest(
-        `/events/${event.id}/platform/import`,
-        jsonRequest("POST", { remoteIds: selected })
-      ),
-    onSuccess: async () => {
-      await refreshEvent(queryClient, event.id)
-      setOpen(false)
+  const sync = useMutation({
+    mutationFn: () => {
+      setProgress({ completed: 0, total: selected.length })
+      setLog([])
+      return syncChallengeStream(
+        eventId,
+        selected,
+        (item, completed, total) => {
+          setProgress({ completed, total })
+          setLog((current) => [...current, item])
+        }
+      )
+    },
+    onSuccess: async (result) => {
+      await refreshEvent(queryClient, eventId)
+      const failed = result.results
+        .filter((item) => item.status === "failed")
+        .map((item) => item.remoteId)
+      if (failed.length === 0) {
+        setOpen(false)
+        return
+      }
+      setSelected(failed)
     },
   })
   const items = challenges.data?.items ?? []
+  const failures = sync.data?.results.filter(
+    (result) => result.status === "failed"
+  )
 
   return (
     <Dialog
       onOpenChange={(next) => {
+        if (!next && sync.isPending) return
         setOpen(next)
-        if (next) importChallenges.reset()
+        if (next) {
+          sync.reset()
+          setProgress({ completed: 0, total: 0 })
+          setLog([])
+        }
       }}
       open={open}
     >
       <DialogTrigger
         render={<Button size="sm" type="button" variant="outline" />}
       >
-        <RefreshCw /> Import challenges
+        <RefreshCw /> Sync challenges
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Import challenges</DialogTitle>
+          <DialogTitle>Sync challenges</DialogTitle>
           <DialogDescription>
-            Select remote challenges to add or refresh in this event.
+            New challenges are selected automatically. Select imported entries
+            to refresh their details and attachments.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -187,6 +227,7 @@ function ImportChallengesDialog({ event }: { event: EventSummary }) {
                   {selected.length} of {items.length} selected
                 </span>
                 <Button
+                  disabled={sync.isPending}
                   onClick={() =>
                     setSelected(
                       selected.length === items.length
@@ -206,6 +247,7 @@ function ImportChallengesDialog({ event }: { event: EventSummary }) {
               <CheckboxGroup
                 aria-label="Remote challenges"
                 className="max-h-80 w-full gap-0 overflow-y-auto border-y"
+                disabled={sync.isPending}
                 onValueChange={setSelected}
                 value={selected}
               >
@@ -216,15 +258,26 @@ function ImportChallengesDialog({ event }: { event: EventSummary }) {
                   >
                     <Checkbox value={challenge.id} />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium text-sm">
-                        {challenge.name}
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-medium text-sm">
+                          {challenge.name}
+                        </span>
+                        {challenge.imported && (
+                          <Badge size="sm" variant="secondary">
+                            Imported
+                          </Badge>
+                        )}
+                        {challenge.solved && (
+                          <Badge size="sm" variant="success">
+                            Solved
+                          </Badge>
+                        )}
                       </span>
                       <span className="block text-muted-foreground text-xs">
                         {challenge.category ?? "Uncategorized"}
                         {challenge.points === null
                           ? ""
                           : ` · ${challenge.points} pts`}
-                        {challenge.solved ? " · Solved" : ""}
                       </span>
                     </span>
                   </Label>
@@ -235,11 +288,43 @@ function ImportChallengesDialog({ event }: { event: EventSummary }) {
                   No challenges are currently available.
                 </p>
               )}
-              {importChallenges.error && (
+              {progress.total > 0 && (
+                <div className="mt-4 grid gap-3" aria-live="polite">
+                  <Progress value={(progress.completed / progress.total) * 100}>
+                    <div className="flex items-center justify-between gap-3">
+                      <ProgressLabel>Sync progress</ProgressLabel>
+                      <span className="text-muted-foreground text-xs tabular-nums">
+                        {progress.completed} / {progress.total}
+                      </span>
+                    </div>
+                    <ProgressTrack>
+                      <ProgressIndicator />
+                    </ProgressTrack>
+                  </Progress>
+                  <div
+                    className="max-h-32 overflow-y-auto border bg-muted/30 p-2 font-mono text-xs"
+                    role="log"
+                  >
+                    {log.map((entry) => (
+                      <p className="py-0.5" key={entry.remoteId}>
+                        [{entry.status.toUpperCase()}] {entry.remoteId}
+                        {entry.error ? `: ${entry.error}` : ""}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(sync.error || failures?.length) && (
                 <Alert className="mt-3" variant="error">
                   <CircleAlert />
                   <AlertDescription>
-                    {importChallenges.error.message}
+                    {sync.error?.message ??
+                      failures
+                        ?.map(
+                          (failure) =>
+                            `${failure.remoteId}: ${failure.error ?? "Sync failed"}`
+                        )
+                        .join("; ")}
                   </AlertDescription>
                 </Alert>
               )}
@@ -247,16 +332,20 @@ function ImportChallengesDialog({ event }: { event: EventSummary }) {
           )}
         </DialogPanel>
         <DialogFooter>
-          <DialogClose render={<Button type="button" variant="ghost" />}>
+          <DialogClose
+            render={
+              <Button disabled={sync.isPending} type="button" variant="ghost" />
+            }
+          >
             Cancel
           </DialogClose>
           <Button
             disabled={selected.length === 0}
-            loading={importChallenges.isPending}
-            onClick={() => importChallenges.mutate()}
+            loading={sync.isPending}
+            onClick={() => sync.mutate()}
             type="button"
           >
-            Import {selected.length || ""}
+            Sync {selected.length || ""}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -264,40 +353,50 @@ function ImportChallengesDialog({ event }: { event: EventSummary }) {
   )
 }
 
-function ConnectPlatformDialog({ eventId }: { eventId: string }) {
+function ConnectPlatformDialog({
+  eventId,
+  platform,
+}: {
+  eventId: string
+  platform?: EventPlatform
+}) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const [type, setType] = useState<PlatformType>("ctfd")
-  const [baseUrl, setBaseUrl] = useState("")
+  const [type, setType] = useState<PlatformType>(platform?.type ?? "ctfd")
+  const [baseUrl, setBaseUrl] = useState(platform?.baseUrl ?? "")
   const [credential, setCredential] = useState("")
-  const [remoteEventId, setRemoteEventId] = useState("")
+  const [remoteEventId, setRemoteEventId] = useState(
+    platform?.remoteEventId ?? ""
+  )
   const discover = useMutation({
     mutationFn: () =>
       apiRequest<{ items: RemoteEvent[] }>(
-        `/events/${eventId}/platform/events`,
+        "/platform/events/discover",
         jsonRequest("POST", { type, baseUrl: baseUrl.trim(), credential })
       ),
     onSuccess: ({ items }) => setRemoteEventId(items[0]?.id ?? ""),
   })
   const bind = useMutation({
     mutationFn: () =>
-      apiRequest(
-        `/events/${eventId}/platform/bind`,
-        jsonRequest("POST", {
+      apiRequest<EventPlatform>(
+        `/events/${eventId}/platform`,
+        jsonRequest("PUT", {
           type,
           baseUrl: baseUrl.trim(),
           credential,
-          remoteEventId,
+          remoteEventId: type === "ctfd" ? "site" : remoteEventId,
         })
       ),
     onSuccess: async () => {
       await refreshEvent(queryClient, eventId)
       setOpen(false)
+      setCredential("")
     },
   })
   const eventItems = Object.fromEntries(
     (discover.data?.items ?? []).map((event) => [event.id, event.name])
   )
+  const needsDiscovery = !platform && type !== "ctfd" && !discover.data
 
   return (
     <Dialog
@@ -306,35 +405,50 @@ function ConnectPlatformDialog({ eventId }: { eventId: string }) {
         if (next) {
           discover.reset()
           bind.reset()
-          setRemoteEventId("")
+          setType(platform?.type ?? "ctfd")
+          setBaseUrl(platform?.baseUrl ?? "")
+          setCredential("")
+          setRemoteEventId(platform?.remoteEventId ?? "")
         }
       }}
       open={open}
     >
       <DialogTrigger
-        render={<Button size="sm" type="button" variant="outline" />}
+        render={
+          <Button
+            aria-label={platform ? "Update platform connection" : undefined}
+            size={platform ? "icon-sm" : "sm"}
+            type="button"
+            variant="outline"
+          />
+        }
       >
-        <Link2 /> Connect platform
+        {platform ? <Settings2 /> : <Link2 />}
+        {!platform && "Connect platform"}
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Connect CTF platform</DialogTitle>
+          <DialogTitle>
+            {platform ? "Update platform connection" : "Connect CTF platform"}
+          </DialogTitle>
           <DialogDescription>
-            This event will mirror one remote competition.
+            Credentials are stored only for this event and are never exposed to
+            agents.
           </DialogDescription>
         </DialogHeader>
         <form
           className="contents"
           onSubmit={(formEvent) => {
             formEvent.preventDefault()
-            if (remoteEventId) bind.mutate()
-            else discover.mutate()
+            if (needsDiscovery) discover.mutate()
+            else bind.mutate()
           }}
         >
           <DialogPanel className="grid gap-4">
             <Field>
               <FieldLabel>Platform</FieldLabel>
               <Select
+                disabled={Boolean(platform)}
                 items={platformLabels}
                 onValueChange={(value) => {
                   setType(value as PlatformType)
@@ -360,10 +474,10 @@ function ConnectPlatformDialog({ eventId }: { eventId: string }) {
             <Field>
               <FieldLabel htmlFor="platform-url">Platform URL</FieldLabel>
               <Input
+                disabled={Boolean(platform)}
                 id="platform-url"
                 onChange={(input) => {
                   setBaseUrl(input.target.value)
-                  setRemoteEventId("")
                   discover.reset()
                 }}
                 required
@@ -380,18 +494,19 @@ function ConnectPlatformDialog({ eventId }: { eventId: string }) {
                 id="platform-credential"
                 onChange={(input) => {
                   setCredential(input.target.value)
-                  setRemoteEventId("")
                   discover.reset()
                 }}
                 required
                 type="password"
                 value={credential}
               />
-              <FieldDescription>
-                Stored only for this event and never exposed to agents.
-              </FieldDescription>
+              {platform && (
+                <FieldDescription>
+                  Enter the credential again to verify this update.
+                </FieldDescription>
+              )}
             </Field>
-            {discover.data && (
+            {discover.data && type !== "ctfd" && (
               <Field>
                 <FieldLabel>Competition</FieldLabel>
                 <Select
@@ -429,12 +544,16 @@ function ConnectPlatformDialog({ eventId }: { eventId: string }) {
               disabled={
                 !baseUrl.trim() ||
                 !credential ||
-                Boolean(discover.data && !remoteEventId)
+                Boolean(discover.data && type !== "ctfd" && !remoteEventId)
               }
               loading={discover.isPending || bind.isPending}
               type="submit"
             >
-              {remoteEventId ? "Connect" : "Load competitions"}
+              {needsDiscovery
+                ? "Load competitions"
+                : platform
+                  ? "Update connection"
+                  : "Connect"}
             </Button>
           </DialogFooter>
         </form>
@@ -452,4 +571,58 @@ async function refreshEvent(
     queryClient.invalidateQueries({ queryKey: eventKeys.all }),
     queryClient.invalidateQueries({ queryKey: ["runs", "event", eventId] }),
   ])
+}
+
+async function syncChallengeStream(
+  eventId: string,
+  remoteIds: string[],
+  onItem: (
+    item: ChallengeSyncResult["results"][number],
+    completed: number,
+    total: number
+  ) => void
+) {
+  const response = await fetch(
+    `/api/events/${eventId}/platform/challenges/sync/stream`,
+    jsonRequest("POST", { remoteIds })
+  )
+  if (!response.ok) throw new Error(`Sync failed (${response.status})`)
+  if (!response.body) throw new Error("Sync stream is unavailable")
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const results: ChallengeSyncResult["results"] = []
+  let buffer = ""
+  let syncedAt = ""
+  const consume = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as
+      | {
+          type: "item"
+          item: ChallengeSyncResult["results"][number]
+          completed: number
+          total: number
+        }
+      | { type: "complete"; syncedAt: string }
+      | { type: "error"; message: string }
+    if (event.type === "error") throw new Error(event.message)
+    if (event.type === "complete") {
+      syncedAt = event.syncedAt
+      return
+    }
+    results.push(event.item)
+    onItem(event.item, event.completed, event.total)
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+    for (const line of lines) consume(line)
+    if (done) break
+  }
+  consume(buffer)
+  if (!syncedAt) throw new Error("Sync stream ended unexpectedly")
+  return { syncedAt, results }
 }

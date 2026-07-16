@@ -134,8 +134,11 @@ type Options = {
   maxConcurrency: number
   modelService: ModelService
   getApiKeys?: (provider: string) => Iterable<string>
-  prepareChallenge?(challengeId: string): Promise<TargetState | undefined>
   submitFlag?(challengeId: string, flag?: string): Promise<unknown>
+  targetAction?(
+    challengeId: string,
+    action: "get" | "start" | "extend" | "stop"
+  ): Promise<TargetState>
 }
 
 type CurrentSession = {
@@ -228,6 +231,7 @@ export function createRunManager(options: Options) {
         challengeName: challenges.name,
         eventId: events.id,
         targetSupported: challenges.remoteTarget,
+        targetAvailable: challenges.remoteAvailable,
       })
       .from(runs)
       .innerJoin(challenges, eq(runs.challengeId, challenges.id))
@@ -246,7 +250,7 @@ export function createRunManager(options: Options) {
       provider: config.providerLabel ?? config.provider ?? "",
       modelId: config.modelId ?? "",
       environment: environment.type,
-      targetSupported: row.targetSupported,
+      targetSupported: row.targetSupported && row.targetAvailable,
       createdAt: row.run.createdAt,
       startedAt: row.run.startedAt,
       updatedAt: row.run.updatedAt,
@@ -335,8 +339,7 @@ export function createRunManager(options: Options) {
   function buildPrompt(
     challenge: typeof challenges.$inferSelect,
     filenames: string[],
-    environment: EnvironmentConfig,
-    target?: TargetState
+    environment: EnvironmentConfig
   ) {
     const optional = [
       challenge.category ? `Category: ${challenge.category}` : null,
@@ -349,18 +352,15 @@ export function createRunManager(options: Options) {
       challenge.description,
       "",
       `Attachments: ${filenames.length ? filenames.join(", ") : "none"}`,
-      ...(target
-        ? [
-            `Challenge target: ${target.endpoints
-              .map((endpoint) => `${endpoint.name}=${endpoint.address}`)
-              .join(", ")}`,
-            target.expiresAt ? `Target expires at: ${target.expiresAt}` : null,
-          ]
-        : []),
       environment.type === "container"
         ? "The current working directory is /workspace inside an isolated container. Keep all generated files there."
         : "The current working directory is this run's private workspace. Keep all generated files here.",
-      "No external platform target or flag submission integration is available.",
+      challenge.remoteId && challenge.remoteAvailable
+        ? "Remote platform integration is active. Include the flag in finish_run so AegisX can submit it."
+        : "No external platform target or flag submission integration is available.",
+      challenge.remoteTarget && challenge.remoteAvailable
+        ? "This challenge has a remote target. Use get_target to inspect it and start_target, extend_target, or stop_target when needed. You control its active lifecycle."
+        : null,
       "When the challenge is solved, call finish_run with a concise summary and the optional flag. Do not continue working after that call.",
     ]
       .filter((line) => line !== null)
@@ -513,6 +513,7 @@ export function createRunManager(options: Options) {
           }
         }
         await abortRun(runId, agentId)
+        await cleanupTarget(runId)
         return {
           content: [{ type: "text" as const, text: "Run completed" }],
           details: {},
@@ -588,9 +589,72 @@ export function createRunManager(options: Options) {
         }
       },
     })
+    const challenge = db
+      .select({
+        remoteAvailable: challenges.remoteAvailable,
+        remoteTarget: challenges.remoteTarget,
+      })
+      .from(challenges)
+      .where(eq(challenges.id, run.challengeId))
+      .get()
+    const targetTool = (
+      name: "get_target" | "start_target" | "extend_target" | "stop_target",
+      label: string,
+      description: string,
+      action: "get" | "start" | "extend" | "stop"
+    ) =>
+      defineAgentTool({
+        name,
+        label,
+        description,
+        parameters: Type.Object({}, { additionalProperties: false }),
+        executionMode: "sequential",
+        execute: async () => {
+          if (!options.targetAction) {
+            throw new Error("Target management is unavailable")
+          }
+          const target = await options.targetAction(run.challengeId, action)
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(target) }],
+            details: target,
+          }
+        },
+      })
+    const targetTools =
+      isMain &&
+      challenge?.remoteTarget &&
+      challenge.remoteAvailable &&
+      options.targetAction
+        ? [
+            targetTool(
+              "get_target",
+              "Get target",
+              "Get the current remote challenge target status and endpoints",
+              "get"
+            ),
+            targetTool(
+              "start_target",
+              "Start target",
+              "Start the remote challenge target and wait until it is ready",
+              "start"
+            ),
+            targetTool(
+              "extend_target",
+              "Extend target",
+              "Extend the remote challenge target lifetime",
+              "extend"
+            ),
+            targetTool(
+              "stop_target",
+              "Stop target",
+              "Stop the remote challenge target",
+              "stop"
+            ),
+          ]
+        : []
     const tools = [
       ...createWorkspaceTools(backend),
-      ...(isMain ? [finishRun, spawnAgent, inspectAgent] : []),
+      ...(isMain ? [finishRun, spawnAgent, inspectAgent, ...targetTools] : []),
     ]
     const secrets = new Set(options.getApiKeys?.(provider))
     const logicalCwd =
@@ -690,6 +754,7 @@ export function createRunManager(options: Options) {
       }
     }
     await abortRun(runId, agentId)
+    await cleanupTarget(runId)
     releaseRun(runId)
   }
 
@@ -727,6 +792,16 @@ export function createRunManager(options: Options) {
         )
         .map((active) => active.runtime.abort())
     )
+  }
+
+  async function cleanupTarget(runId: string) {
+    const run = getStored(runId)
+    if (!run || !options.targetAction) return
+    try {
+      await options.targetAction(run.challengeId, "stop")
+    } catch {
+      // Target cleanup is best-effort and must not replace the Run outcome.
+    }
   }
 
   function messageRowsForAgent(agentId: string) {
@@ -975,35 +1050,20 @@ export function createRunManager(options: Options) {
     modelConfig: ModelConfig,
     environment: EnvironmentConfig = { type: "local" }
   ) {
-    let challenge = db
+    const challenge = db
       .select()
       .from(challenges)
       .where(eq(challenges.id, challengeId))
       .get()
     if (!challenge) throw new RunActionError("not_found", "Challenge not found")
     requireCapacity()
-    let target: TargetState | undefined
-    try {
-      target = await options.prepareChallenge?.(challengeId)
-    } catch (error) {
-      throw new RunActionError(
-        "invalid_state",
-        error instanceof Error ? error.message : "Platform preparation failed"
-      )
-    }
-    challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()
-    if (!challenge) throw new RunActionError("not_found", "Challenge not found")
 
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
     const workspacePath = join(dataDir, "workspaces", id)
     mkdirSync(workspacePath, { recursive: true })
     const filenames = copyAttachments(challengeId, workspacePath)
-    const prompt = buildPrompt(challenge, filenames, environment, target)
+    const prompt = buildPrompt(challenge, filenames, environment)
     db.insert(runs)
       .values({
         id,
@@ -1062,6 +1122,7 @@ export function createRunManager(options: Options) {
             ? error.message
             : "Agent session failed",
       })
+      await cleanupTarget(id)
       releaseRun(id)
     }
     return getPublic(id) as RunPublic
@@ -1156,6 +1217,7 @@ export function createRunManager(options: Options) {
         }
       }
       await abortRun(runId)
+      await cleanupTarget(runId)
       releaseRun(runId)
       return failed
     }
@@ -1198,6 +1260,7 @@ export function createRunManager(options: Options) {
           })
         }
       }
+      await cleanupTarget(runId)
       releaseRun(runId)
       return stopped
     } finally {

@@ -1,4 +1,4 @@
-export function json(method: "POST" | "PATCH", body: unknown) {
+export function json(method: "POST" | "PUT" | "PATCH", body: unknown) {
   return {
     method,
     headers: { "content-type": "application/json" },

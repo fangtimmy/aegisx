@@ -283,6 +283,12 @@ describe("run API", () => {
   test("runs a background child agent and returns its result to main", async () => {
     const instance = setup(2)
     const { challenge } = await createChallenge(instance.app)
+    const targetDb = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    targetDb.run(
+      "update challenges set remote_id = 'remote-1', remote_target = true, remote_available = true where id = ?",
+      [challenge.id]
+    )
+    targetDb.close()
     instance.faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall("spawn_agent", {
@@ -374,6 +380,16 @@ describe("run API", () => {
     expect(
       childInspector.runtime.tools.map((tool: { name: string }) => tool.name)
     ).not.toContain("finish_run")
+    expect(
+      childInspector.runtime.tools.map((tool: { name: string }) => tool.name)
+    ).not.toEqual(
+      expect.arrayContaining([
+        "get_target",
+        "start_target",
+        "extend_target",
+        "stop_target",
+      ])
+    )
     expect(childInspector.runtime.systemPrompt).toContain(
       "You are a background child agent."
     )
@@ -394,7 +410,16 @@ describe("run API", () => {
     ).json()
     expect(
       mainInspector.runtime.tools.map((tool: { name: string }) => tool.name)
-    ).toEqual(expect.arrayContaining(["finish_run", "spawn_agent"]))
+    ).toEqual(
+      expect.arrayContaining([
+        "finish_run",
+        "spawn_agent",
+        "get_target",
+        "start_target",
+        "extend_target",
+        "stop_target",
+      ])
+    )
     expect(mainInspector.runtime.systemPrompt).toContain(
       "You are the main agent"
     )

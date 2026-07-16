@@ -120,7 +120,7 @@ export function EventPage() {
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <PlatformBinding event={eventQuery.data.event} />
-                  {!eventQuery.data.event.platformType && (
+                  {!eventQuery.data.event.platform && (
                     <ChallengeDialog
                       eventId={eventId}
                       onUploadError={setUploadError}
@@ -146,7 +146,7 @@ export function EventPage() {
                       Add the first challenge for this event.
                     </EmptyDescription>
                   </EmptyHeader>
-                  {!eventQuery.data.event.platformType && (
+                  {!eventQuery.data.event.platform && (
                     <EmptyContent>
                       <ChallengeDialog
                         eventId={eventId}
@@ -162,7 +162,9 @@ export function EventPage() {
                       challenge={challenge}
                       eventId={eventId}
                       key={challenge.id}
-                      managed={Boolean(eventQuery.data.event.platformType)}
+                      managed={Boolean(
+                        eventQuery.data.event.platform && challenge.remoteId
+                      )}
                       onUploadError={setUploadError}
                     />
                   ))}

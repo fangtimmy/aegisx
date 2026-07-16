@@ -1,10 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Download,
+  Eye,
   FileArchive,
+  Paperclip,
   Pencil,
   Play,
   Plus,
+  Server,
   Trash2,
   TriangleAlert,
 } from "lucide-react"
@@ -366,6 +369,106 @@ function AttachmentRow({ attachment }: { attachment: Attachment }) {
   )
 }
 
+function ChallengeDetailsDialog({ challenge }: { challenge: Challenge }) {
+  return (
+    <Dialog>
+      <DialogTrigger
+        render={
+          <Button
+            aria-label={`View ${challenge.name}`}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          />
+        }
+      >
+        <Eye />
+      </DialogTrigger>
+      <DialogPopup>
+        <DialogHeader>
+          <DialogTitle>{challenge.name}</DialogTitle>
+          <DialogDescription>
+            {challenge.category || "Uncategorized"}
+            {challenge.points === null ? "" : ` · ${challenge.points} pts`}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="grid gap-5">
+          <p className="whitespace-pre-wrap text-sm leading-6">
+            {challenge.description || "No description"}
+          </p>
+          <dl className="grid grid-cols-2 gap-4 border-y py-4 text-sm">
+            <div>
+              <dt className="text-muted-foreground text-xs">Status</dt>
+              <dd className="mt-1 font-medium">
+                {challenge.status === "solved" ? "Solved" : "Not started"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground text-xs">Runs</dt>
+              <dd className="mt-1 font-medium">{challenge.runCount}</dd>
+            </div>
+          </dl>
+          {(challenge.remoteTargetCount ?? 0) > 0 && (
+            <section aria-label="Targets">
+              <h3 className="font-medium text-sm">
+                Targets ({challenge.remoteTargetCount})
+              </h3>
+              {challenge.targets.length > 0 ? (
+                <div className="mt-2 border-y">
+                  {challenge.targets.map((target) => (
+                    <div
+                      className="flex items-center justify-between gap-4 border-b py-3 last:border-b-0"
+                      key={`${target.name}:${target.services.join(",")}`}
+                    >
+                      <span className="min-w-0 truncate font-medium text-sm">
+                        {target.name}
+                      </span>
+                      {target.services.length > 0 && (
+                        <span className="flex flex-wrap justify-end gap-1">
+                          {target.services.map((service) => (
+                            <Badge key={service} size="sm" variant="outline">
+                              {service}
+                            </Badge>
+                          ))}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-muted-foreground text-sm">
+                  {challenge.remoteTargetCount} configured
+                </p>
+              )}
+            </section>
+          )}
+          <section aria-label="Attachments">
+            <h3 className="font-medium text-sm">
+              Attachments ({challenge.attachments.length})
+            </h3>
+            {challenge.attachments.length > 0 ? (
+              <div className="mt-2">
+                {challenge.attachments.map((attachment) => (
+                  <AttachmentRow attachment={attachment} key={attachment.id} />
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-muted-foreground text-sm">
+                No attachments
+              </p>
+            )}
+          </section>
+        </DialogPanel>
+        <DialogFooter>
+          <DialogClose render={<Button type="button" variant="outline" />}>
+            Close
+          </DialogClose>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  )
+}
+
 export function ChallengeCard({
   eventId,
   challenge,
@@ -384,6 +487,25 @@ export function ChallengeCard({
           <Badge variant="outline">
             {challenge.category || "Uncategorized"}
           </Badge>
+          {challenge.attachments.length > 0 && (
+            <Badge
+              aria-label={`${challenge.attachments.length} attachments`}
+              variant="secondary"
+            >
+              <Paperclip aria-hidden="true" /> {challenge.attachments.length}
+            </Badge>
+          )}
+          {(challenge.remoteTargetCount ?? 0) > 0 && (
+            <Badge
+              aria-label={`${challenge.remoteTargetCount} targets`}
+              variant="secondary"
+            >
+              <Server aria-hidden="true" /> {challenge.remoteTargetCount}
+            </Badge>
+          )}
+          {challenge.remoteId && !challenge.remoteAvailable && (
+            <Badge variant="warning">Remote unavailable</Badge>
+          )}
           <span className="text-muted-foreground text-xs">
             {challenge.points === null
               ? "No points"
@@ -397,6 +519,9 @@ export function ChallengeCard({
           {challenge.description || "No description"}
         </CardDescription>
         <CardAction className="gap-1">
+          <IconTooltip label={`View ${challenge.name}`}>
+            <ChallengeDetailsDialog challenge={challenge} />
+          </IconTooltip>
           <IconTooltip label={`Start run for ${challenge.name}`}>
             <CreateRunDialog challenge={challenge} trigger={<Play />} />
           </IconTooltip>
@@ -432,13 +557,6 @@ export function ChallengeCard({
             <p className="mt-1 font-medium">{challenge.runCount}</p>
           </div>
         </div>
-        {challenge.attachments.length > 0 && (
-          <section aria-label="Attachments">
-            {challenge.attachments.map((attachment) => (
-              <AttachmentRow attachment={attachment} key={attachment.id} />
-            ))}
-          </section>
-        )}
       </CardPanel>
     </Card>
   )

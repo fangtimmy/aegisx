@@ -1,11 +1,7 @@
 export type EventSummary = {
   id: string
   name: string
-  platformType: PlatformType | null
-  platformBaseUrl: string | null
-  platformCredentialConfigured: boolean
-  remoteEventId: string | null
-  lastSyncedAt: string | null
+  platform: EventPlatform | null
   createdAt: string
   updatedAt: string
   challengeCount: number
@@ -33,7 +29,10 @@ export type Challenge = {
   attachments: Attachment[]
   runCount: number
   remoteId: string | null
+  remoteAvailable: boolean
   remoteSolved: boolean
+  remoteTargetCount: number
+  targets: Array<{ name: string; services: string[] }>
   remoteUpdatedAt: string | null
   status: "not_started" | "solved"
 }
@@ -41,6 +40,37 @@ export type Challenge = {
 export type PlatformType = "ctfd" | "ret2shell" | "a1ctf"
 
 export type RemoteEvent = { id: string; name: string }
+
+export type EventPlatform = {
+  eventId: string
+  type: PlatformType
+  baseUrl: string
+  remoteEventId: string
+  lastSyncedAt: string | null
+  createdAt: string
+  updatedAt: string
+  credentialConfigured: boolean
+}
+
+export type RemoteChallengeSummary = {
+  id: string
+  name: string
+  category: string | null
+  points: number | null
+  solved: boolean
+  imported: boolean
+  localChallengeId: string | null
+}
+
+export type ChallengeSyncResult = {
+  syncedAt: string
+  results: Array<{
+    remoteId: string
+    status: "created" | "updated" | "failed"
+    challengeId?: string
+    error?: string
+  }>
+}
 
 export type TargetState = {
   status: "absent" | "starting" | "running" | "stopping" | "failed"
@@ -259,7 +289,7 @@ export async function apiRequest<T>(
   return response.json() as Promise<T>
 }
 
-export function jsonRequest(method: "POST" | "PATCH", body: object) {
+export function jsonRequest(method: "POST" | "PUT" | "PATCH", body: object) {
   return {
     method,
     headers: { "Content-Type": "application/json" },
