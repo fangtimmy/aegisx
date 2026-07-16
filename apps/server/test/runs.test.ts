@@ -11,6 +11,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai"
 import { createApp } from "../src/app"
+import { json, waitFor } from "./support"
 
 const tempDirs: string[] = []
 const closeApps: Array<() => void> = []
@@ -24,7 +25,7 @@ afterEach(() => {
 })
 
 function setup(maxConcurrency = 2, dataDir?: string, contextWindow = 128_000) {
-  const root = dataDir ?? mkdtempSync(join(tmpdir(), "aegisx-phase-two-"))
+  const root = dataDir ?? mkdtempSync(join(tmpdir(), "aegisx-runs-"))
   if (!dataDir) tempDirs.push(root)
   const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow }] })
   const models = createModels()
@@ -40,18 +41,10 @@ function setup(maxConcurrency = 2, dataDir?: string, contextWindow = 128_000) {
   return { ...instance, dataDir: root, faux }
 }
 
-function json(method: string, body: unknown) {
-  return {
-    method,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  }
-}
-
 async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
   const eventResponse = await app.request(
     "/api/events",
-    json("POST", { name: "Phase 2" })
+    json("POST", { name: "Run tests" })
   )
   const event = await eventResponse.json()
   const challengeResponse = await app.request(
@@ -105,20 +98,7 @@ function configureFaux(app: ReturnType<typeof createApp>["app"]) {
   return configured
 }
 
-async function waitFor<T>(
-  read: () => Promise<T>,
-  accept: (value: T) => boolean
-) {
-  const deadline = Date.now() + 3_000
-  while (true) {
-    const value = await read()
-    if (accept(value)) return value
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for state")
-    await Bun.sleep(20)
-  }
-}
-
-describe("phase two run API", () => {
+describe("run API", () => {
   test("isolates files, copies attachments, completes, and reloads messages", async () => {
     const first = setup()
     const { event, challenge } = await createChallenge(first.app)
@@ -137,7 +117,7 @@ describe("phase two run API", () => {
       fauxAssistantMessage(
         fauxToolCall("finish_run", {
           summary: "Verified the evidence",
-          flag: "flag{phase_two}",
+          flag: "flag{run_test}",
         }),
         { stopReason: "toolUse" }
       ),
@@ -165,14 +145,14 @@ describe("phase two run API", () => {
     )
     expect(detail.run).toMatchObject({
       summary: "Verified the evidence",
-      flag: "flag{phase_two}",
+      flag: "flag{run_test}",
     })
     await waitFor(
       async () => first.activeSessionCount(),
       (count) => count === 0
     )
     expect(first.faux.state.callCount).toBe(2)
-    expect(JSON.stringify(detail.history)).not.toContain("flag{phase_two}")
+    expect(JSON.stringify(detail.history)).not.toContain("flag{run_test}")
 
     const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
     const stored = sqlite

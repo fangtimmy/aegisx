@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createApp } from "../src/app"
+import { json } from "./support"
 
 const tempDirs: string[] = []
 const closeDatabases: Array<() => void> = []
@@ -17,19 +18,11 @@ afterEach(() => {
 })
 
 function createTestApp(dataDir?: string) {
-  const path = dataDir ?? mkdtempSync(join(tmpdir(), "aegisx-phase-one-"))
+  const path = dataDir ?? mkdtempSync(join(tmpdir(), "aegisx-events-"))
   if (!dataDir) tempDirs.push(path)
   const instance = createApp({ dataDir: path })
   closeDatabases.push(instance.close)
   return { ...instance, dataDir: path }
-}
-
-function json(method: string, body: unknown) {
-  return {
-    method,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  }
 }
 
 async function createEvent(app: ReturnType<typeof createApp>["app"]) {
@@ -60,7 +53,7 @@ async function createChallenge(
   return response.json()
 }
 
-describe("phase one API", () => {
+describe("event, challenge, and attachment API", () => {
   test("persists events and challenges across restart", async () => {
     const first = createTestApp()
     const event = await createEvent(first.app)

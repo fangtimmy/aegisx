@@ -17,6 +17,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai"
 import { createApp } from "../src/app"
+import { waitFor } from "./support"
 
 const roots: string[] = []
 const closeApps: Array<() => void> = []
@@ -29,7 +30,7 @@ afterEach(() => {
 })
 
 function setup() {
-  const dataDir = mkdtempSync(join(tmpdir(), "aegisx-phase-three-"))
+  const dataDir = mkdtempSync(join(tmpdir(), "aegisx-container-"))
   roots.push(dataDir)
   const faux = fauxProvider({ models: [{ id: "faux-1" }] })
   const models = createModels()
@@ -54,7 +55,7 @@ function json(body: object) {
 
 async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
   const event = await (
-    await app.request("/api/events", json({ name: "Phase 3" }))
+    await app.request("/api/events", json({ name: "Container tests" }))
   ).json()
   return (
     await app.request(
@@ -62,19 +63,6 @@ async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
       json({ name: "Sandbox", description: "Inspect the workspace" })
     )
   ).json()
-}
-
-async function waitFor<T>(
-  read: () => Promise<T>,
-  accept: (value: T) => boolean
-) {
-  const deadline = Date.now() + 8_000
-  while (true) {
-    const value = await read()
-    if (accept(value)) return value
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for state")
-    await Bun.sleep(25)
-  }
 }
 
 function docker(...args: string[]) {
@@ -113,7 +101,7 @@ function configureFaux(app: ReturnType<typeof createApp>["app"]) {
   return configured
 }
 
-describe("phase three", () => {
+describe("container execution and workspace files", () => {
   test("browses and downloads workspace files without crossing its real path", async () => {
     const instance = setup()
     const challenge = await createChallenge(instance.app)

@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-ai"
 import { createApp } from "../src/app"
 import { summarizeUsage } from "../src/usage"
+import { json, waitFor } from "./support"
 
 const roots: string[] = []
 const closeApps: Array<() => void> = []
@@ -22,7 +23,7 @@ afterEach(() => {
 })
 
 function setup() {
-  const dataDir = mkdtempSync(join(tmpdir(), "aegisx-phase-four-"))
+  const dataDir = mkdtempSync(join(tmpdir(), "aegisx-providers-"))
   roots.push(dataDir)
   const faux = fauxProvider({ models: [{ id: "faux-1" }] })
   const models = createModels()
@@ -37,17 +38,9 @@ function setup() {
   return { ...instance, dataDir, faux }
 }
 
-function json(method: "POST" | "PATCH", body: object) {
-  return {
-    method,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  }
-}
-
 async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
   const event = await (
-    await app.request("/api/events", json("POST", { name: "Phase 4" }))
+    await app.request("/api/events", json("POST", { name: "Provider tests" }))
   ).json()
   const challenge = await (
     await app.request(
@@ -56,19 +49,6 @@ async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
     )
   ).json()
   return { event, challenge }
-}
-
-async function waitFor<T>(
-  read: () => Promise<T>,
-  accept: (value: T) => boolean
-) {
-  const deadline = Date.now() + 8_000
-  while (true) {
-    const value = await read()
-    if (accept(value)) return value
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for state")
-    await Bun.sleep(25)
-  }
 }
 
 const runtimeSettings = {
@@ -109,7 +89,7 @@ function usageMessage(usage: {
   }
 }
 
-describe("phase four", () => {
+describe("providers, models, and usage", () => {
   test("discovers models through the configured provider endpoint", async () => {
     const instance = setup()
     let authorization = ""
@@ -336,13 +316,13 @@ describe("phase four", () => {
         label: "Faux",
         type: "openai-compatible",
         baseUrl: "http://localhost:4012/v1",
-        apiKey: "phase-four-secret",
+        apiKey: "provider-test-secret",
         enabled: true,
       })
     )
     expect(providerResponse.status).toBe(201)
     const provider = await providerResponse.json()
-    expect(provider.apiKey).toBe("phase-four-secret")
+    expect(provider.apiKey).toBe("provider-test-secret")
     const modelResponse = await instance.app.request(
       `/api/providers/${provider.id}/models`,
       json("POST", { modelId: "faux-1", label: "Faux 1" })
@@ -361,7 +341,7 @@ describe("phase four", () => {
     expect(
       providers.items.find((item: { id: string }) => item.id === provider.id)
     ).toMatchObject({
-      apiKey: "phase-four-secret",
+      apiKey: "provider-test-secret",
       models: [{ id: model.id, modelId: "faux-1" }],
     })
 
@@ -412,7 +392,7 @@ describe("phase four", () => {
       "Tool start_target not found"
     )
     expect(JSON.stringify(detail)).not.toContain("flag{hidden}")
-    expect(JSON.stringify(detail)).not.toContain("phase-four-secret")
+    expect(JSON.stringify(detail)).not.toContain("provider-test-secret")
     expect(
       await (await instance.app.request("/api/platform/status")).json()
     ).toEqual({ available: false })
@@ -438,7 +418,7 @@ describe("phase four", () => {
       sqlite
         .query("select api_key from provider_connections where id = ?")
         .get(provider.id)
-    ).toEqual({ api_key: "phase-four-secret" })
+    ).toEqual({ api_key: "provider-test-secret" })
     sqlite.close()
 
     const invalid = await instance.app.request(
