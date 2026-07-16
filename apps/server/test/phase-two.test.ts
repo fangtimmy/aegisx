@@ -276,6 +276,8 @@ describe("phase two run API", () => {
         )
     )
     expect(idle.run.status).toBe("running")
+    const rejectedWhileIdle = await createRun(instance.app, challenge.id)
+    expect(rejectedWhileIdle.status).toBe(409)
 
     instance.faux.setResponses([fauxAssistantMessage("Acknowledged.")])
     const messaged = await instance.app.request(
@@ -371,6 +373,9 @@ describe("phase two run API", () => {
     ).json()
     expect(JSON.stringify(childDetail.history)).toContain("delegated-result")
     expect(JSON.stringify(childDetail.history)).not.toContain("call finish_run")
+    expect(JSON.stringify(childDetail.history)).not.toContain(
+      "Inspect the supplied bytes and finish the run."
+    )
     expect(JSON.stringify(childDetail.history)).toContain(`agents/${child.id}/`)
 
     const childInspector = await (
@@ -385,6 +390,15 @@ describe("phase two run API", () => {
     expect(
       childInspector.runtime.tools.map((tool: { name: string }) => tool.name)
     ).not.toContain("finish_run")
+    expect(childInspector.runtime.systemPrompt).toContain(
+      "You are a background child agent."
+    )
+    expect(childInspector.runtime.systemPrompt).not.toContain(
+      "expert coding assistant operating inside pi"
+    )
+    expect(childInspector.runtime.systemPrompt).not.toContain(
+      "<available_skills>"
+    )
     expect(JSON.stringify(childInspector)).not.toContain(instance.dataDir)
     expect(JSON.stringify(childInspector)).not.toContain(homedir())
     expect(JSON.stringify(childInspector)).not.toContain("test-only")
@@ -397,6 +411,12 @@ describe("phase two run API", () => {
     expect(
       mainInspector.runtime.tools.map((tool: { name: string }) => tool.name)
     ).toEqual(expect.arrayContaining(["finish_run", "spawn_agent"]))
+    expect(mainInspector.runtime.systemPrompt).toContain(
+      "You are the main agent"
+    )
+    expect(mainInspector.runtime.systemPrompt).not.toContain(
+      "<available_skills>"
+    )
     expect(instance.activeSessionCount()).toBe(1)
 
     await instance.app.request(`/api/runs/${run.id}/stop`, json("POST", {}))
