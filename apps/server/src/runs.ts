@@ -134,7 +134,12 @@ type Options = {
   maxConcurrency: number
   modelService: ModelService
   getApiKeys?: (provider: string) => Iterable<string>
-  submitFlag?(challengeId: string, flag?: string): Promise<unknown>
+  submitFlag?(
+    runId: string,
+    challengeId: string,
+    flag?: string
+  ): Promise<unknown>
+  canFinishRun?(runId: string, challengeId: string): boolean
   targetAction?(
     challengeId: string,
     action: "get" | "start" | "extend" | "stop"
@@ -269,8 +274,7 @@ export function createRunManager(options: Options) {
   }
 
   function emit(runId: string, event: RunEvent) {
-    const safeEvent = redactFlags(event)
-    for (const listener of listeners.get(runId) ?? []) listener(safeEvent)
+    for (const listener of listeners.get(runId) ?? []) listener(event)
   }
 
   function releaseAgent(agentId: string) {
@@ -356,12 +360,12 @@ export function createRunManager(options: Options) {
         ? "The current working directory is /workspace inside an isolated container. Keep all generated files there."
         : "The current working directory is this run's private workspace. Keep all generated files here.",
       challenge.remoteId && challenge.remoteAvailable
-        ? "Remote platform integration is active. Include the flag in finish_run so AegisX can submit it."
+        ? "Remote platform integration is active. Use submit_flag to submit candidate flags. finish_run is available after the platform accepts a flag."
         : "No external platform target or flag submission integration is available.",
       challenge.remoteTarget && challenge.remoteAvailable
-        ? "This challenge has a remote target. Use get_target to inspect it and start_target, extend_target, or stop_target when needed. You control its active lifecycle."
+        ? "This challenge has a remote target. Use get_target to inspect it and start_target, extend_target, or stop_target when needed. You control its active lifecycle and must stop it before finish_run."
         : null,
-      "When the challenge is solved, call finish_run with a concise summary and the optional flag. Do not continue working after that call.",
+      "When the challenge is solved, call finish_run with a concise summary. Do not continue working after that call.",
     ]
       .filter((line) => line !== null)
       .join("\n")
@@ -471,13 +475,21 @@ export function createRunManager(options: Options) {
     } else {
       backend = createLocalBackend(runWorkspacePath)
     }
+    const challenge = db
+      .select({
+        remoteAvailable: challenges.remoteAvailable,
+        remoteId: challenges.remoteId,
+        remoteTarget: challenges.remoteTarget,
+      })
+      .from(challenges)
+      .where(eq(challenges.id, run.challengeId))
+      .get()
     const finishRun = defineAgentTool({
       name: "finish_run",
       label: "Finish run",
       description: "Mark this challenge run complete and stop further work",
       parameters: Type.Object({
         summary: Type.String({ minLength: 1 }),
-        flag: Type.Optional(Type.String()),
       }),
       execute: async (_id, params) => {
         const stored = getStored(runId)
@@ -487,12 +499,23 @@ export function createRunManager(options: Options) {
         ) {
           throw new Error("Run is already finished")
         }
-        await options.submitFlag?.(run.challengeId, params.flag)
+        if (!options.canFinishRun?.(runId, run.challengeId)) {
+          throw new Error("Submit an accepted flag before finishing this Run")
+        }
+        if (
+          challenge?.remoteTarget &&
+          challenge.remoteAvailable &&
+          options.targetAction
+        ) {
+          const target = await options.targetAction(run.challengeId, "get")
+          if (["starting", "running", "stopping"].includes(target.status)) {
+            throw new Error("Stop the remote target before finishing this Run")
+          }
+        }
         update(runId, {
           status: "completed",
           completedAt: new Date().toISOString(),
           summary: params.summary,
-          flag: params.flag ?? null,
           error: null,
         })
         updateAgent(agentId, {
@@ -513,7 +536,6 @@ export function createRunManager(options: Options) {
           }
         }
         await abortRun(runId, agentId)
-        await cleanupTarget(runId)
         return {
           content: [{ type: "text" as const, text: "Run completed" }],
           details: {},
@@ -521,6 +543,28 @@ export function createRunManager(options: Options) {
         }
       },
       executionMode: "sequential",
+    })
+    const submitFlag = defineAgentTool({
+      name: "submit_flag",
+      label: "Submit flag",
+      description: "Submit a candidate flag to the connected CTF platform",
+      parameters: Type.Object({ flag: Type.String({ minLength: 1 }) }),
+      executionMode: "sequential",
+      execute: async (_id, params) => {
+        if (!options.submitFlag) {
+          throw new Error("Flag submission is unavailable")
+        }
+        const result = await options.submitFlag(
+          runId,
+          run.challengeId,
+          params.flag
+        )
+        if (!result) throw new Error("Flag submission is unavailable")
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result) }],
+          details: result,
+        }
+      },
     })
     const spawnAgent = defineAgentTool({
       name: "spawn_agent",
@@ -589,14 +633,6 @@ export function createRunManager(options: Options) {
         }
       },
     })
-    const challenge = db
-      .select({
-        remoteAvailable: challenges.remoteAvailable,
-        remoteTarget: challenges.remoteTarget,
-      })
-      .from(challenges)
-      .where(eq(challenges.id, run.challengeId))
-      .get()
     const targetTool = (
       name: "get_target" | "start_target" | "extend_target" | "stop_target",
       label: string,
@@ -654,7 +690,17 @@ export function createRunManager(options: Options) {
         : []
     const tools = [
       ...createWorkspaceTools(backend),
-      ...(isMain ? [finishRun, spawnAgent, inspectAgent, ...targetTools] : []),
+      ...(isMain
+        ? [
+            finishRun,
+            ...(challenge?.remoteId && challenge.remoteAvailable
+              ? [submitFlag]
+              : []),
+            spawnAgent,
+            inspectAgent,
+            ...targetTools,
+          ]
+        : []),
     ]
     const secrets = new Set(options.getApiKeys?.(provider))
     const logicalCwd =
@@ -754,7 +800,6 @@ export function createRunManager(options: Options) {
       }
     }
     await abortRun(runId, agentId)
-    await cleanupTarget(runId)
     releaseRun(runId)
   }
 
@@ -794,16 +839,6 @@ export function createRunManager(options: Options) {
     )
   }
 
-  async function cleanupTarget(runId: string) {
-    const run = getStored(runId)
-    if (!run || !options.targetAction) return
-    try {
-      await options.targetAction(run.challengeId, "stop")
-    } catch {
-      // Target cleanup is best-effort and must not replace the Run outcome.
-    }
-  }
-
   function messageRowsForAgent(agentId: string) {
     const agent = getStoredAgent(agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
@@ -816,10 +851,8 @@ export function createRunManager(options: Options) {
   }
 
   function messagesForAgent(agentId: string): AgentMessage[] {
-    return redactFlags(
-      messageRowsForAgent(agentId).map(
-        ({ message }) => JSON.parse(message) as AgentMessage
-      )
+    return messageRowsForAgent(agentId).map(
+      ({ message }) => JSON.parse(message) as AgentMessage
     )
   }
 
@@ -831,9 +864,7 @@ export function createRunManager(options: Options) {
         id: row.id,
         parentId,
         timestamp: row.createdAt,
-        message: redactFlags(
-          publicAgentMessage(JSON.parse(row.message) as AgentMessage)
-        ),
+        message: publicAgentMessage(JSON.parse(row.message) as AgentMessage),
       }
       parentId = row.id
       return entry
@@ -1122,7 +1153,6 @@ export function createRunManager(options: Options) {
             ? error.message
             : "Agent session failed",
       })
-      await cleanupTarget(id)
       releaseRun(id)
     }
     return getPublic(id) as RunPublic
@@ -1217,7 +1247,6 @@ export function createRunManager(options: Options) {
         }
       }
       await abortRun(runId)
-      await cleanupTarget(runId)
       releaseRun(runId)
       return failed
     }
@@ -1260,7 +1289,6 @@ export function createRunManager(options: Options) {
           })
         }
       }
-      await cleanupTarget(runId)
       releaseRun(runId)
       return stopped
     } finally {
@@ -1455,9 +1483,3 @@ export class RunActionError extends Error {
 }
 
 class RunStartError extends Error {}
-
-function redactFlags<T>(value: T): T {
-  return JSON.parse(
-    JSON.stringify(value, (key, item) => (key === "flag" ? undefined : item))
-  ) as T
-}

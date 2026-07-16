@@ -119,6 +119,33 @@ export const runs = sqliteTable(
   ]
 )
 
+export const submissions = sqliteTable(
+  "submissions",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    challengeId: text("challenge_id")
+      .notNull()
+      .references(() => challenges.id, { onDelete: "cascade" }),
+    flag: text("flag").notNull(),
+    status: text("status").notNull(),
+    remoteId: text("remote_id"),
+    message: text("message"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("submissions_run_id_idx").on(table.runId),
+    index("submissions_challenge_id_idx").on(table.challengeId),
+    check(
+      "submissions_status_check",
+      sql`${table.status} in ('pending', 'accepted', 'rejected', 'partial', 'already_solved', 'rate_limited', 'error')`
+    ),
+  ]
+)
+
 export const runAgents = sqliteTable(
   "run_agents",
   {

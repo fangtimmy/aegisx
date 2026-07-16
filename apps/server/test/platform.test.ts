@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -24,13 +25,43 @@ afterEach(() => {
 })
 
 describe("CTF platform integration", () => {
+  test("loads every CTFd challenge page", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const page = Number(new URL(request.url).searchParams.get("page"))
+        return Response.json({
+          data: [{ id: page, name: `Page ${page}` }],
+          meta: {
+            pagination: {
+              pages: 2,
+              next: page < 2 ? page + 1 : null,
+            },
+          },
+        })
+      },
+    })
+    servers.push(server)
+    const adapter = createPlatformAdapter({
+      type: "ctfd",
+      baseUrl: `http://127.0.0.1:${server.port}`,
+      credential: "ctfd-secret",
+      remoteEventId: "site",
+    })
+
+    expect(await adapter.listChallenges()).toEqual([
+      expect.objectContaining({ id: "1", name: "Page 1" }),
+      expect.objectContaining({ id: "2", name: "Page 2" }),
+    ])
+  })
+
   test("discovers, syncs, preserves identity, and reconnects CTFd challenges", async () => {
     let authorization = ""
     let detailRequests = 0
     let challengeVisible = true
     const server = Bun.serve({
       port: 0,
-      fetch(request) {
+      async fetch(request) {
         authorization = request.headers.get("authorization") ?? ""
         const url = new URL(request.url)
         if (url.pathname === "/api/v1/challenges") {
@@ -264,14 +295,14 @@ describe("CTF platform integration", () => {
     })
   })
 
-  test("lets the main agent manage targets and cleans up terminal runs", async () => {
+  test("lets the main agent explicitly manage targets and submit flags", async () => {
     let targetState: "absent" | "starting" | "running" = "absent"
     let startPolls = 0
     let targetReads = 0
     const actions: string[] = []
     const server = Bun.serve({
       port: 0,
-      fetch(request) {
+      async fetch(request) {
         const url = new URL(request.url)
         if (url.pathname === "/api/game") {
           return Response.json([[{ id: 3, name: "Target event" }], 1])
@@ -298,9 +329,16 @@ describe("CTF platform integration", () => {
           return Response.json({ images: [{ name: "service" }] })
         }
         if (url.pathname === "/api/game/3/challenge/9/submit") {
-          return request.method === "POST"
-            ? Response.json({ id: 1, solved: true, result: "accepted" })
-            : Response.json({ solved: false })
+          if (request.method !== "POST") {
+            return Response.json({ solved: false })
+          }
+          const body = (await request.json()) as { content?: string }
+          const solved = body.content === "flag{target}"
+          return Response.json({
+            id: 1,
+            solved,
+            result: solved ? "accepted" : "rejected",
+          })
         }
         if (url.pathname === "/api/game/3/instance") {
           targetReads += 1
@@ -329,9 +367,6 @@ describe("CTF platform integration", () => {
             actions.push("extend")
           } else if (request.method === "DELETE") {
             actions.push("stop")
-            if (actions.filter((action) => action === "stop").length === 2) {
-              return new Response("cleanup failed", { status: 500 })
-            }
             targetState = "absent"
           }
           return new Response(null, { status: 204 })
@@ -427,6 +462,7 @@ describe("CTF platform integration", () => {
         "start_target",
         "extend_target",
         "stop_target",
+        "submit_flag",
       ])
     )
     expect(inspector.runtime.systemPrompt).not.toContain("target.test:31337")
@@ -448,9 +484,19 @@ describe("CTF platform integration", () => {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage(
+        fauxToolCall("submit_flag", { flag: "flag{wrong}" }),
+        { stopReason: "toolUse" }
+      ),
+      fauxAssistantMessage(
+        fauxToolCall("submit_flag", { flag: "flag{target}" }),
+        { stopReason: "toolUse" }
+      ),
+      fauxAssistantMessage(fauxToolCall("stop_target", {}), {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage(
         fauxToolCall("finish_run", {
           summary: "Target lifecycle verified",
-          flag: "flag{target}",
         }),
         { stopReason: "toolUse" }
       ),
@@ -465,8 +511,19 @@ describe("CTF platform integration", () => {
       (detail) => detail.run.status === "completed" && actions.length === 5
     )
     expect(actions).toEqual(["start", "extend", "stop", "start", "stop"])
-    expect(String(targetState)).toBe("running")
-    targetState = "absent"
+    expect(String(targetState)).toBe("absent")
+    const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
+    expect(
+      sqlite
+        .query(
+          "select flag, status from submissions where run_id = ? order by created_at"
+        )
+        .all(firstRun.id)
+    ).toEqual([
+      { flag: "flag{wrong}", status: "rejected" },
+      { flag: "flag{target}", status: "accepted" },
+    ])
+    sqlite.close()
 
     faux.setResponses([
       fauxAssistantMessage(fauxToolCall("start_target", {}), {
@@ -495,8 +552,9 @@ describe("CTF platform integration", () => {
       `/api/runs/${secondRun.id}/stop`,
       json("POST", {})
     )
-    expect(actions.at(-1)).toBe("stop")
-    expect(String(targetState)).toBe("absent")
+    expect(actions).toHaveLength(actionCount)
+    expect(String(targetState)).toBe("running")
+    targetState = "absent"
 
     faux.setResponses([
       fauxAssistantMessage(fauxToolCall("start_target", {}), {
@@ -511,9 +569,9 @@ describe("CTF platform integration", () => {
     await waitFor(
       async () =>
         (await instance.app.request(`/api/runs/${failedRun.id}`)).json(),
-      (detail) => detail.run.status === "failed" && targetState === "absent"
+      (detail) => detail.run.status === "failed"
     )
-    expect(actions.at(-1)).toBe("stop")
+    expect(String(targetState)).toBe("running")
   })
 
   test("maps ret2shell asynchronous submissions and target endpoints", async () => {
@@ -555,7 +613,9 @@ describe("CTF platform integration", () => {
             {
               challenge_id: 9,
               state: "Running",
-              exposed_ports: [{ name: "web", address: "https://target.test" }],
+              traffic: "traffic-token",
+              ports: [5000],
+              exposed_ports: null,
             },
           ])
         }
@@ -576,7 +636,17 @@ describe("CTF platform integration", () => {
     })
     expect(await adapter.getTarget?.("9")).toMatchObject({
       status: "running",
-      endpoints: [{ protocol: "https", address: "https://target.test" }],
+      endpoints: [
+        {
+          name: "port 5000",
+          protocol: "ws",
+          address: `ws://127.0.0.1:${server.port}/api/traffic/traffic-token?port=5000`,
+          guidance: expect.arrayContaining([
+            expect.stringContaining("wsrx connect"),
+            expect.stringContaining("127.0.0.1:<local-port>"),
+          ]),
+        },
+      ],
     })
     expect(await adapter.getChallenge("9")).toMatchObject({
       targetCount: 1,

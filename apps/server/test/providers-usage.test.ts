@@ -391,7 +391,7 @@ describe("providers, models, and usage", () => {
     expect(JSON.stringify(detail.history)).toContain(
       "Tool start_target not found"
     )
-    expect(JSON.stringify(detail)).not.toContain("flag{hidden}")
+    expect(JSON.stringify(detail)).toContain("flag{hidden}")
     expect(JSON.stringify(detail)).not.toContain("provider-test-secret")
     expect(
       await (await instance.app.request("/api/platform/status")).json()

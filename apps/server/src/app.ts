@@ -176,6 +176,7 @@ export function createApp(options: {
         : 2,
     getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
     modelService,
+    canFinishRun: platformService.canFinishRun,
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,
   })

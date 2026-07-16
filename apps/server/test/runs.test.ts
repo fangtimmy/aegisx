@@ -117,7 +117,6 @@ describe("run API", () => {
       fauxAssistantMessage(
         fauxToolCall("finish_run", {
           summary: "Verified the evidence",
-          flag: "flag{run_test}",
         }),
         { stopReason: "toolUse" }
       ),
@@ -145,14 +144,13 @@ describe("run API", () => {
     )
     expect(detail.run).toMatchObject({
       summary: "Verified the evidence",
-      flag: "flag{run_test}",
+      flag: null,
     })
     await waitFor(
       async () => first.activeSessionCount(),
       (count) => count === 0
     )
     expect(first.faux.state.callCount).toBe(2)
-    expect(JSON.stringify(detail.history)).not.toContain("flag{run_test}")
 
     const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
     const stored = sqlite

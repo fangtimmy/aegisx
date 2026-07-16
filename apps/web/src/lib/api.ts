@@ -77,7 +77,8 @@ export type TargetState = {
   endpoints: Array<{
     name: string
     address: string
-    protocol: "http" | "https" | "tcp" | "udp"
+    protocol: "http" | "https" | "ws" | "wss" | "tcp" | "udp"
+    guidance?: string[]
   }>
   expiresAt: string | null
   message?: string

@@ -1,7 +1,14 @@
 import { basename } from "node:path"
-import { and, eq } from "drizzle-orm"
+import { and, desc, eq, inArray } from "drizzle-orm"
 import type { createDatabase } from "./db"
-import { attachments, challenges, eventPlatforms, events } from "./db/schema"
+import {
+  attachments,
+  challenges,
+  eventPlatforms,
+  events,
+  runs,
+  submissions,
+} from "./db/schema"
 import {
   type CtfPlatformAdapter,
   createPlatformAdapter,
@@ -435,7 +442,7 @@ export function createPlatformService(db: Database, storage: Storage) {
     }
   }
 
-  async function submitFlag(challengeId: string, flag?: string) {
+  async function submitFlag(runId: string, challengeId: string, flag?: string) {
     const challenge = db
       .select()
       .from(challenges)
@@ -457,8 +464,61 @@ export function createPlatformService(db: Database, storage: Storage) {
       )
     }
     const adapter = adapterForEvent(challenge.eventId) as CtfPlatformAdapter
+    const value = flag.trim()
+    let submission = db
+      .select()
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.runId, runId),
+          eq(submissions.challengeId, challengeId),
+          eq(submissions.flag, value)
+        )
+      )
+      .orderBy(desc(submissions.updatedAt))
+      .get()
+    if (
+      submission &&
+      ["accepted", "already_solved", "rejected", "partial"].includes(
+        submission.status
+      )
+    ) {
+      return storedSubmissionResult(submission)
+    }
+    const now = new Date().toISOString()
+    if (!submission) {
+      submission = {
+        id: crypto.randomUUID(),
+        runId,
+        challengeId,
+        flag: value,
+        status: "pending",
+        remoteId: null,
+        message: null,
+        createdAt: now,
+        updatedAt: now,
+      }
+      db.insert(submissions).values(submission).run()
+    }
+    const persist = (result: SubmissionResult) => {
+      db.update(submissions)
+        .set({
+          status: result.status,
+          remoteId: result.remoteId ?? submission.remoteId,
+          message: result.message ?? null,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(submissions.id, submission.id))
+        .run()
+    }
     try {
-      let result = await adapter.submitFlag(challenge.remoteId, flag.trim())
+      let result =
+        submission.status === "pending" &&
+        submission.remoteId &&
+        adapter.getSubmission
+          ? await adapter.getSubmission(challenge.remoteId, submission.remoteId)
+          : await adapter.submitFlag(challenge.remoteId, value)
+      persist(result)
       for (
         let attempt = 0;
         result.status === "pending" && attempt < 60;
@@ -470,21 +530,50 @@ export function createPlatformService(db: Database, storage: Storage) {
           challenge.remoteId,
           result.remoteId
         )
+        persist(result)
       }
       if (result.status === "accepted" || result.status === "already_solved") {
-        db.update(challenges)
-          .set({ remoteSolved: true, updatedAt: new Date().toISOString() })
-          .where(eq(challenges.id, challengeId))
-          .run()
-        return result
+        db.transaction((tx) => {
+          tx.update(challenges)
+            .set({ remoteSolved: true, updatedAt: new Date().toISOString() })
+            .where(eq(challenges.id, challengeId))
+            .run()
+          tx.update(runs).set({ flag: value }).where(eq(runs.id, runId)).run()
+        })
       }
-      throw new PlatformActionError(
-        "platform_error",
-        result.message ?? submissionMessage(result)
-      )
+      return result
     } catch (error) {
+      persist({ status: "error", message: submissionErrorMessage(error) })
       throw platformError(error)
     }
+  }
+
+  function canFinishRun(runId: string, challengeId: string) {
+    const challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+    if (
+      !challenge?.remoteId ||
+      !challenge.remoteAvailable ||
+      challenge.remoteSolved
+    ) {
+      return true
+    }
+    return Boolean(
+      db
+        .select({ id: submissions.id })
+        .from(submissions)
+        .where(
+          and(
+            eq(submissions.runId, runId),
+            eq(submissions.challengeId, challengeId),
+            inArray(submissions.status, ["accepted", "already_solved"])
+          )
+        )
+        .get()
+    )
   }
 
   async function targetAction(
@@ -541,6 +630,7 @@ export function createPlatformService(db: Database, storage: Storage) {
 
   return {
     bind,
+    canFinishRun,
     detach,
     discoverChallenges,
     getPublic: publicPlatform,
@@ -608,12 +698,18 @@ function syncFailureMessage(error: unknown) {
     : "Challenge could not be stored"
 }
 
-function submissionMessage(result: SubmissionResult) {
-  if (result.status === "rejected") return "The platform rejected the flag"
-  if (result.status === "partial")
-    return "The platform accepted only a partial solve"
-  if (result.status === "rate_limited")
-    return "The platform rate limited submissions"
-  if (result.status === "pending") return "Platform judging timed out"
-  return "Platform submission failed"
+function storedSubmissionResult(
+  submission: typeof submissions.$inferSelect
+): SubmissionResult {
+  return {
+    status: submission.status as SubmissionResult["status"],
+    ...(submission.remoteId ? { remoteId: submission.remoteId } : {}),
+    ...(submission.message ? { message: submission.message } : {}),
+  }
+}
+
+function submissionErrorMessage(error: unknown) {
+  return error instanceof PlatformActionError || error instanceof PlatformError
+    ? error.message
+    : "Platform request failed"
 }
