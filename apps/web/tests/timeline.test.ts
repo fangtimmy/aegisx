@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { buildConversation, type LiveEntry } from "@/features/runs/timeline"
+import {
+  buildConversation,
+  type LiveEntry,
+} from "@/features/runs/timeline-model"
 import type { SessionEntry } from "@/lib/api"
 
 test("builds an agent turn and pairs tool results", () => {

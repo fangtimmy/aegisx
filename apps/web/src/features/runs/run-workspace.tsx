@@ -58,13 +58,8 @@ import { AgentInspectorButton } from "./agent-inspector"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
-import {
-  Conversation,
-  isRecord,
-  type LiveEntry,
-  liveEntries,
-  text,
-} from "./timeline"
+import { Conversation } from "./timeline"
+import { isRecord, type LiveEntry, liveEntries, text } from "./timeline-model"
 
 const statuses: RunStatus[] = [
   "running",
