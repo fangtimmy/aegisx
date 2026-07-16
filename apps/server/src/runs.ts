@@ -36,6 +36,7 @@ import {
   runs,
 } from "./db/schema"
 import type { ModelService } from "./models"
+import type { TargetState } from "./platform"
 import { redactSecrets, replaceText } from "./redaction"
 import {
   summarizeUsage,
@@ -77,6 +78,7 @@ export type RunPublic = {
   provider: string
   modelId: string
   environment: "local" | "container"
+  targetSupported: boolean
   image?: string | null
   cpus?: number
   memoryMb?: number
@@ -132,6 +134,8 @@ type Options = {
   maxConcurrency: number
   modelService: ModelService
   getApiKeys?: (provider: string) => Iterable<string>
+  prepareChallenge?(challengeId: string): Promise<TargetState | undefined>
+  submitFlag?(challengeId: string, flag?: string): Promise<unknown>
 }
 
 type CurrentSession = {
@@ -219,7 +223,12 @@ export function createRunManager(options: Options) {
     includeFlag = false
   ): RunPublic | undefined {
     const row = db
-      .select({ run: runs, challengeName: challenges.name, eventId: events.id })
+      .select({
+        run: runs,
+        challengeName: challenges.name,
+        eventId: events.id,
+        targetSupported: challenges.remoteTarget,
+      })
       .from(runs)
       .innerJoin(challenges, eq(runs.challengeId, challenges.id))
       .innerJoin(events, eq(challenges.eventId, events.id))
@@ -237,6 +246,7 @@ export function createRunManager(options: Options) {
       provider: config.providerLabel ?? config.provider ?? "",
       modelId: config.modelId ?? "",
       environment: environment.type,
+      targetSupported: row.targetSupported,
       createdAt: row.run.createdAt,
       startedAt: row.run.startedAt,
       updatedAt: row.run.updatedAt,
@@ -325,7 +335,8 @@ export function createRunManager(options: Options) {
   function buildPrompt(
     challenge: typeof challenges.$inferSelect,
     filenames: string[],
-    environment: EnvironmentConfig
+    environment: EnvironmentConfig,
+    target?: TargetState
   ) {
     const optional = [
       challenge.category ? `Category: ${challenge.category}` : null,
@@ -338,12 +349,22 @@ export function createRunManager(options: Options) {
       challenge.description,
       "",
       `Attachments: ${filenames.length ? filenames.join(", ") : "none"}`,
+      ...(target
+        ? [
+            `Challenge target: ${target.endpoints
+              .map((endpoint) => `${endpoint.name}=${endpoint.address}`)
+              .join(", ")}`,
+            target.expiresAt ? `Target expires at: ${target.expiresAt}` : null,
+          ]
+        : []),
       environment.type === "container"
         ? "The current working directory is /workspace inside an isolated container. Keep all generated files there."
         : "The current working directory is this run's private workspace. Keep all generated files here.",
       "No external platform target or flag submission integration is available.",
       "When the challenge is solved, call finish_run with a concise summary and the optional flag. Do not continue working after that call.",
-    ].join("\n")
+    ]
+      .filter((line) => line !== null)
+      .join("\n")
   }
 
   function copyAttachments(
@@ -466,6 +487,7 @@ export function createRunManager(options: Options) {
         ) {
           throw new Error("Run is already finished")
         }
+        await options.submitFlag?.(run.challengeId, params.flag)
         update(runId, {
           status: "completed",
           completedAt: new Date().toISOString(),
@@ -953,20 +975,35 @@ export function createRunManager(options: Options) {
     modelConfig: ModelConfig,
     environment: EnvironmentConfig = { type: "local" }
   ) {
-    const challenge = db
+    let challenge = db
       .select()
       .from(challenges)
       .where(eq(challenges.id, challengeId))
       .get()
     if (!challenge) throw new RunActionError("not_found", "Challenge not found")
     requireCapacity()
+    let target: TargetState | undefined
+    try {
+      target = await options.prepareChallenge?.(challengeId)
+    } catch (error) {
+      throw new RunActionError(
+        "invalid_state",
+        error instanceof Error ? error.message : "Platform preparation failed"
+      )
+    }
+    challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+    if (!challenge) throw new RunActionError("not_found", "Challenge not found")
 
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
     const workspacePath = join(dataDir, "workspaces", id)
     mkdirSync(workspacePath, { recursive: true })
     const filenames = copyAttachments(challengeId, workspacePath)
-    const prompt = buildPrompt(challenge, filenames, environment)
+    const prompt = buildPrompt(challenge, filenames, environment, target)
     db.insert(runs)
       .values({
         id,

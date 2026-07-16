@@ -12,6 +12,11 @@ import {
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  platformType: text("platform_type"),
+  platformBaseUrl: text("platform_base_url"),
+  platformCredential: text("platform_credential"),
+  remoteEventId: text("remote_event_id"),
+  lastSyncedAt: text("last_synced_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 })
@@ -27,10 +32,23 @@ export const challenges = sqliteTable(
     description: text("description").notNull(),
     category: text("category"),
     points: integer("points"),
+    remoteId: text("remote_id"),
+    remoteSolved: integer("remote_solved", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    remoteTarget: integer("remote_target", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    remoteUpdatedAt: text("remote_updated_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [index("challenges_event_id_idx").on(table.eventId)]
+  (table) => [
+    index("challenges_event_id_idx").on(table.eventId),
+    uniqueIndex("challenges_event_remote_unique")
+      .on(table.eventId, table.remoteId)
+      .where(sql`${table.remoteId} is not null`),
+  ]
 )
 
 export const attachments = sqliteTable(
@@ -44,9 +62,15 @@ export const attachments = sqliteTable(
     storageKey: text("storage_key").notNull().unique(),
     size: integer("size").notNull(),
     sha256: text("sha256").notNull(),
+    remoteId: text("remote_id"),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("attachments_challenge_id_idx").on(table.challengeId)]
+  (table) => [
+    index("attachments_challenge_id_idx").on(table.challengeId),
+    uniqueIndex("attachments_challenge_remote_unique")
+      .on(table.challengeId, table.remoteId)
+      .where(sql`${table.remoteId} is not null`),
+  ]
 )
 
 export const runs = sqliteTable(

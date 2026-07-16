@@ -15,6 +15,8 @@ import {
   settings,
 } from "./db/schema"
 import { createModelService } from "./models"
+import { registerPlatformRoutes } from "./platform-routes"
+import { createPlatformService } from "./platform-service"
 import { providerName, registerProviderRoutes } from "./provider-routes"
 import { redactSecrets } from "./redaction"
 import { createRunManager, RunActionError } from "./runs"
@@ -87,6 +89,7 @@ export function createApp(options: {
 }) {
   const { db, sqlite } = createDatabase(options.dataDir)
   const storage = createStorage(options.dataDir)
+  const platformService = createPlatformService(db, storage)
   const modelService = createModelService(
     db,
     options.models,
@@ -172,6 +175,8 @@ export function createApp(options: {
         : 2,
     getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
     modelService,
+    prepareChallenge: platformService.prepareChallenge,
+    submitFlag: platformService.submitFlag,
   })
   const app = new Hono()
 
@@ -186,6 +191,10 @@ export function createApp(options: {
       .groupBy(events.id)
       .orderBy(events.createdAt)
       .all()
+      .map(({ platformCredential, ...event }) => ({
+        ...event,
+        platformCredentialConfigured: Boolean(platformCredential),
+      }))
 
   const getEvent = (eventId: string) =>
     listEvents().find((event) => event.id === eventId)
@@ -222,7 +231,9 @@ export function createApp(options: {
       ...challenge,
       attachments: challengeAttachments,
       runCount: Number(runCount ?? 0),
-      status: "not_started" as const,
+      status: challenge.remoteSolved
+        ? ("solved" as const)
+        : ("not_started" as const),
     }
   }
 
@@ -253,8 +264,9 @@ export function createApp(options: {
     syncModels,
     setMaxConcurrency: runManager.setMaxConcurrency,
   })
+  registerPlatformRoutes(app, platformService)
 
-  app.get("/api/platform/status", (c) => c.json({ available: false }))
+  app.get("/api/platform/status", (c) => c.json({ available: true }))
 
   app.get("/api/events", (c) => c.json({ items: listEvents() }))
 
@@ -385,6 +397,17 @@ export function createApp(options: {
           404
         )
       }
+      if (platformService.isBoundEvent(eventId)) {
+        return c.json(
+          {
+            error: {
+              code: "platform_managed",
+              message: "Platform-managed challenges must be synchronized",
+            },
+          },
+          409
+        )
+      }
       const input = c.req.valid("json")
       const name = input.name.trim()
       if (!name || !input.description.trim()) {
@@ -433,6 +456,21 @@ export function createApp(options: {
           404
         )
       }
+      const storedChallenge = getChallenge(challengeId)
+      if (
+        storedChallenge &&
+        platformService.isBoundEvent(storedChallenge.eventId)
+      ) {
+        return c.json(
+          {
+            error: {
+              code: "platform_managed",
+              message: "Platform-managed challenges must be synchronized",
+            },
+          },
+          409
+        )
+      }
       const input = c.req.valid("json")
       const name = input.name.trim()
       if (!name || !input.description.trim()) {
@@ -466,6 +504,17 @@ export function createApp(options: {
       return c.json(
         { error: { code: "not_found", message: "Challenge not found" } },
         404
+      )
+    }
+    if (platformService.isBoundEvent(challenge.eventId)) {
+      return c.json(
+        {
+          error: {
+            code: "platform_managed",
+            message: "Platform-managed challenges must be synchronized",
+          },
+        },
+        409
       )
     }
     const activeRun = db
@@ -635,6 +684,17 @@ export function createApp(options: {
       return c.json(
         { error: { code: "not_found", message: "Challenge not found" } },
         404
+      )
+    }
+    if (platformService.isBoundEvent(challenge.eventId)) {
+      return c.json(
+        {
+          error: {
+            code: "platform_managed",
+            message: "Platform-managed attachments must be synchronized",
+          },
+        },
+        409
       )
     }
     const challengeRuns = runManager.listForChallenge(challenge.id)
@@ -840,6 +900,17 @@ export function createApp(options: {
         404
       )
     }
+    if (platformService.isBoundEvent(challenge.eventId)) {
+      return c.json(
+        {
+          error: {
+            code: "platform_managed",
+            message: "Platform-managed attachments must be synchronized",
+          },
+        },
+        409
+      )
+    }
     const filename = c.req.query("filename") ?? ""
     if (!isSafeFilename(filename)) {
       return c.json(
@@ -910,6 +981,21 @@ export function createApp(options: {
       return c.json(
         { error: { code: "not_found", message: "Attachment not found" } },
         404
+      )
+    }
+    const attachmentChallenge = getChallenge(attachment.challengeId)
+    if (
+      attachmentChallenge &&
+      platformService.isBoundEvent(attachmentChallenge.eventId)
+    ) {
+      return c.json(
+        {
+          error: {
+            code: "platform_managed",
+            message: "Platform-managed attachments must be synchronized",
+          },
+        },
+        409
       )
     }
     const path = storage.attachmentPath(attachment.storageKey)

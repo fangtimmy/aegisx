@@ -395,7 +395,7 @@ describe("providers, models, and usage", () => {
     expect(JSON.stringify(detail)).not.toContain("provider-test-secret")
     expect(
       await (await instance.app.request("/api/platform/status")).json()
-    ).toEqual({ available: false })
+    ).toEqual({ available: true })
 
     const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
     const stored = sqlite

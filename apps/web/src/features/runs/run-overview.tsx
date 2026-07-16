@@ -1,6 +1,16 @@
-import { Box, CircleAlert, Monitor } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Box,
+  CircleAlert,
+  Clock3,
+  Monitor,
+  Play,
+  RefreshCw,
+  Square,
+} from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Table,
   TableBody,
@@ -14,8 +24,10 @@ import type {
   AgentStatus,
   AgentSummary,
   RunPublic,
+  TargetState,
   UsageSummary,
 } from "@/lib/api"
+import { apiRequest, jsonRequest } from "@/lib/api"
 import { formatTime } from "./timeline"
 
 export function statusVariant(status: AgentStatus) {
@@ -55,6 +67,7 @@ export function RunOverview({
           </AlertDescription>
         </Alert>
       )}
+      {run.targetSupported && <TargetPanel run={run} />}
       <dl className="grid grid-cols-2 gap-x-8 gap-y-4 text-sm">
         <div>
           <dt className="text-muted-foreground text-xs">Status</dt>
@@ -153,6 +166,102 @@ export function RunOverview({
         </Alert>
       )}
     </div>
+  )
+}
+
+function TargetPanel({ run }: { run: RunPublic }) {
+  const queryClient = useQueryClient()
+  const key = ["challenges", run.challengeId, "target"]
+  const target = useQuery({
+    queryKey: key,
+    queryFn: () =>
+      apiRequest<TargetState>(`/challenges/${run.challengeId}/target`),
+  })
+  const action = useMutation({
+    mutationFn: (value: "start" | "extend" | "stop") =>
+      apiRequest<TargetState>(
+        `/challenges/${run.challengeId}/target/${value}`,
+        jsonRequest("POST", {})
+      ),
+    onSuccess: (value) => queryClient.setQueryData(key, value),
+  })
+  const value = target.data
+
+  return (
+    <section className="border-t pt-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="mr-auto font-medium text-sm">Challenge target</h3>
+        <Badge variant={value?.status === "running" ? "success" : "secondary"}>
+          {value?.status ?? "loading"}
+        </Badge>
+        <Button
+          aria-label="Refresh target"
+          loading={target.isFetching}
+          onClick={() => target.refetch()}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <RefreshCw />
+        </Button>
+        {value?.status === "absent" && (
+          <Button
+            loading={action.isPending}
+            onClick={() => action.mutate("start")}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <Play /> Start
+          </Button>
+        )}
+        {value?.status === "running" && (
+          <>
+            <Button
+              loading={action.isPending && action.variables === "extend"}
+              onClick={() => action.mutate("extend")}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Clock3 /> Extend
+            </Button>
+            <Button
+              loading={action.isPending && action.variables === "stop"}
+              onClick={() => action.mutate("stop")}
+              size="sm"
+              type="button"
+              variant="destructive-outline"
+            >
+              <Square /> Stop
+            </Button>
+          </>
+        )}
+      </div>
+      {value && value.endpoints.length > 0 && (
+        <div className="mt-3 grid gap-2">
+          {value.endpoints.map((endpoint) => (
+            <div
+              className="flex min-w-0 items-center justify-between gap-3 text-sm"
+              key={`${endpoint.name}:${endpoint.address}`}
+            >
+              <span className="text-muted-foreground">{endpoint.name}</span>
+              <code className="truncate text-xs">{endpoint.address}</code>
+            </div>
+          ))}
+        </div>
+      )}
+      {value?.expiresAt && (
+        <p className="mt-2 text-muted-foreground text-xs">
+          Expires {formatTime(value.expiresAt)}
+        </p>
+      )}
+      {(target.error || action.error) && (
+        <p className="mt-2 text-destructive text-xs">
+          {(target.error ?? action.error)?.message}
+        </p>
+      )}
+    </section>
   )
 }
 

@@ -25,6 +25,7 @@ import { RunsView } from "@/features/runs"
 import { EventStatistics } from "@/features/statistics/event-statistics"
 import { apiRequest, type Challenge, type EventSummary } from "@/lib/api"
 import { ChallengeCard, ChallengeDialog } from "./challenge-card"
+import { PlatformBinding } from "./platform-binding"
 import { ErrorState, eventKeys } from "./shared"
 
 export function EventPage() {
@@ -117,10 +118,15 @@ export function EventPage() {
                     {eventQuery.data.challenges.length} challenges
                   </Badge>
                 </div>
-                <ChallengeDialog
-                  eventId={eventId}
-                  onUploadError={setUploadError}
-                />
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <PlatformBinding event={eventQuery.data.event} />
+                  {!eventQuery.data.event.platformType && (
+                    <ChallengeDialog
+                      eventId={eventId}
+                      onUploadError={setUploadError}
+                    />
+                  )}
+                </div>
               </div>
               {uploadError && (
                 <Alert className="mb-4" variant="warning">
@@ -140,12 +146,14 @@ export function EventPage() {
                       Add the first challenge for this event.
                     </EmptyDescription>
                   </EmptyHeader>
-                  <EmptyContent>
-                    <ChallengeDialog
-                      eventId={eventId}
-                      onUploadError={setUploadError}
-                    />
-                  </EmptyContent>
+                  {!eventQuery.data.event.platformType && (
+                    <EmptyContent>
+                      <ChallengeDialog
+                        eventId={eventId}
+                        onUploadError={setUploadError}
+                      />
+                    </EmptyContent>
+                  )}
                 </Empty>
               ) : (
                 <div className="grid grid-cols-3 items-start gap-4">
@@ -154,6 +162,7 @@ export function EventPage() {
                       challenge={challenge}
                       eventId={eventId}
                       key={challenge.id}
+                      managed={Boolean(eventQuery.data.event.platformType)}
                       onUploadError={setUploadError}
                     />
                   ))}

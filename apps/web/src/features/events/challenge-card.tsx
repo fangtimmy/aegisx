@@ -369,10 +369,12 @@ function AttachmentRow({ attachment }: { attachment: Attachment }) {
 export function ChallengeCard({
   eventId,
   challenge,
+  managed = false,
   onUploadError,
 }: {
   eventId: string
   challenge: Challenge
+  managed?: boolean
   onUploadError: (message: string | null) => void
 }) {
   return (
@@ -398,23 +400,32 @@ export function ChallengeCard({
           <IconTooltip label={`Start run for ${challenge.name}`}>
             <CreateRunDialog challenge={challenge} trigger={<Play />} />
           </IconTooltip>
-          <IconTooltip label={`Edit ${challenge.name}`}>
-            <ChallengeDialog
-              challenge={challenge}
-              eventId={eventId}
-              onUploadError={onUploadError}
-            />
-          </IconTooltip>
-          <IconTooltip label={`Delete ${challenge.name}`}>
-            <DeleteChallengeDialog challenge={challenge} eventId={eventId} />
-          </IconTooltip>
+          {!managed && (
+            <>
+              <IconTooltip label={`Edit ${challenge.name}`}>
+                <ChallengeDialog
+                  challenge={challenge}
+                  eventId={eventId}
+                  onUploadError={onUploadError}
+                />
+              </IconTooltip>
+              <IconTooltip label={`Delete ${challenge.name}`}>
+                <DeleteChallengeDialog
+                  challenge={challenge}
+                  eventId={eventId}
+                />
+              </IconTooltip>
+            </>
+          )}
         </CardAction>
       </CardHeader>
       <CardPanel>
         <div className="grid grid-cols-2 gap-4 border-t py-4 text-sm">
           <div>
             <p className="text-muted-foreground text-xs">Run state</p>
-            <p className="mt-1 font-medium">Not started</p>
+            <p className="mt-1 font-medium">
+              {challenge.status === "solved" ? "Solved" : "Not started"}
+            </p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">Runs</p>

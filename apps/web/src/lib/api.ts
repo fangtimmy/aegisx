@@ -1,6 +1,11 @@
 export type EventSummary = {
   id: string
   name: string
+  platformType: PlatformType | null
+  platformBaseUrl: string | null
+  platformCredentialConfigured: boolean
+  remoteEventId: string | null
+  lastSyncedAt: string | null
   createdAt: string
   updatedAt: string
   challengeCount: number
@@ -27,7 +32,25 @@ export type Challenge = {
   updatedAt: string
   attachments: Attachment[]
   runCount: number
-  status: "not_started"
+  remoteId: string | null
+  remoteSolved: boolean
+  remoteUpdatedAt: string | null
+  status: "not_started" | "solved"
+}
+
+export type PlatformType = "ctfd" | "ret2shell" | "a1ctf"
+
+export type RemoteEvent = { id: string; name: string }
+
+export type TargetState = {
+  status: "absent" | "starting" | "running" | "stopping" | "failed"
+  endpoints: Array<{
+    name: string
+    address: string
+    protocol: "http" | "https" | "tcp" | "udp"
+  }>
+  expiresAt: string | null
+  message?: string
 }
 
 export type EventInput = {
@@ -59,6 +82,7 @@ export type RunPublic = {
   provider: string
   modelId: string
   environment: "local" | "container"
+  targetSupported: boolean
   image?: string | null
   cpus?: number
   memoryMb?: number
