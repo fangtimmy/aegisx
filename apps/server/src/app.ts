@@ -1025,10 +1025,29 @@ export function createApp(options: {
         404
       )
     }
+    const agents = runManager.agents(run.id)
+    const main = agents.find((agent) => agent.parentAgentId === null)
     return c.json({
       run,
-      history: runManager.history(run.id),
+      agents,
+      history: main ? runManager.history(main.id) : [],
       stats: runManager.usage(run.id),
+    })
+  })
+
+  app.get("/api/runs/:runId/agents/:agentId", (c) => {
+    const run = runManager.get(c.req.param("runId"))
+    const agent = runManager.agent(c.req.param("agentId"))
+    if (!run || !agent || agent.runId !== run.id) {
+      return c.json(
+        { error: { code: "not_found", message: "Agent not found" } },
+        404
+      )
+    }
+    return c.json({
+      agent,
+      history: runManager.history(agent.id),
+      stats: runManager.agentUsage(agent.id),
     })
   })
 
@@ -1148,20 +1167,41 @@ export function createApp(options: {
       )
     }
     return streamSSE(c, async (stream) => {
-      await stream.writeSSE({
-        data: JSON.stringify({ type: "status", run }),
-      })
-      await new Promise<void>((resolve) => {
-        let unsubscribe = () => {}
-        const finish = () => {
+      const pending: unknown[] = []
+      let ready = false
+      let finished = false
+      let unsubscribe = () => {}
+      let finish = () => {}
+      const done = new Promise<void>((resolve) => {
+        finish = () => {
+          if (finished) return
+          finished = true
           unsubscribe()
           resolve()
         }
-        unsubscribe = runManager.subscribe(runId, (event) => {
-          void stream.writeSSE({ data: JSON.stringify(event) }).catch(finish)
-        })
-        c.req.raw.signal.addEventListener("abort", finish, { once: true })
       })
+      unsubscribe = runManager.subscribe(runId, (event) => {
+        if (!ready) pending.push(event)
+        else void stream.writeSSE({ data: JSON.stringify(event) }).catch(finish)
+      })
+      c.req.raw.signal.addEventListener("abort", finish, { once: true })
+      try {
+        await stream.writeSSE({
+          data: JSON.stringify({ type: "status", run: runManager.get(runId) }),
+        })
+        for (const agent of runManager.agents(runId)) {
+          await stream.writeSSE({
+            data: JSON.stringify({ type: "agent_status", agent }),
+          })
+        }
+        while (pending.length > 0) {
+          await stream.writeSSE({ data: JSON.stringify(pending.shift()) })
+        }
+        ready = true
+        await done
+      } catch {
+        finish()
+      }
     })
   })
 

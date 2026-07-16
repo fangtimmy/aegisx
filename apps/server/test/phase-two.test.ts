@@ -179,7 +179,7 @@ describe("phase two run API", () => {
     const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
     const stored = sqlite
       .query(
-        "select id, prompt, model_config, environment_config, workspace_path, session_path from runs order by created_at"
+        "select runs.id, runs.prompt, runs.model_config, runs.environment_config, runs.workspace_path, run_agents.session_path from runs inner join run_agents on run_agents.run_id = runs.id and run_agents.parent_agent_id is null order by runs.created_at"
       )
       .all() as Array<Record<string, string>>
     sqlite.close()
@@ -288,6 +288,54 @@ describe("phase two run API", () => {
     ).toBe(409)
   })
 
+  test("runs a background child agent and returns its result to main", async () => {
+    const instance = setup(2)
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("spawn_agent", {
+          name: "Recon",
+          task: "Inspect the challenge files and report one useful finding.",
+        }),
+        { stopReason: "toolUse" }
+      ),
+      fauxAssistantMessage("delegated-result"),
+      fauxAssistantMessage("delegated-result"),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+
+    const detail = await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          agents: Array<{
+            id: string
+            parentAgentId: string | null
+            status: string
+            summary: string | null
+          }>
+          history: unknown[]
+        }>,
+      (value) =>
+        value.agents.some(
+          (agent) =>
+            agent.parentAgentId !== null && agent.status === "completed"
+        ) && JSON.stringify(value.history).includes("Background agent Recon")
+    )
+    const child = detail.agents.find(
+      (agent) => agent.parentAgentId !== null
+    ) as (typeof detail.agents)[number]
+    expect(child.summary).toContain("delegated-result")
+
+    const childDetail = await (
+      await instance.app.request(`/api/runs/${run.id}/agents/${child.id}`)
+    ).json()
+    expect(JSON.stringify(childDetail.history)).toContain("delegated-result")
+    expect(instance.activeSessionCount()).toBe(1)
+
+    await instance.app.request(`/api/runs/${run.id}/stop`, json("POST", {}))
+    expect(instance.activeSessionCount()).toBe(0)
+  })
+
   test("changes persisted running runs to paused on startup", async () => {
     const first = setup()
     const { challenge } = await createChallenge(first.app)
@@ -304,6 +352,15 @@ describe("phase two run API", () => {
     const second = setup(2, first.dataDir)
     const detail = await second.app.request("/api/runs/interrupted")
     expect(detail.status).toBe(200)
-    expect((await detail.json()).run.status).toBe("paused")
+    expect(await detail.json()).toMatchObject({
+      run: { status: "paused" },
+      agents: [
+        {
+          id: "interrupted",
+          parentAgentId: null,
+          status: "paused",
+        },
+      ],
+    })
   })
 })

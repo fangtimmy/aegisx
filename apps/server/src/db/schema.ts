@@ -1,10 +1,12 @@
 import { sql } from "drizzle-orm"
 import {
+  type AnySQLiteColumn,
   check,
   index,
   integer,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core"
 
 export const events = sqliteTable("events", {
@@ -74,6 +76,41 @@ export const runs = sqliteTable(
     index("runs_challenge_id_idx").on(table.challengeId),
     check(
       "runs_status_check",
+      sql`${table.status} in ('running', 'paused', 'completed', 'failed', 'stopped')`
+    ),
+  ]
+)
+
+export const runAgents = sqliteTable(
+  "run_agents",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    parentAgentId: text("parent_agent_id").references(
+      (): AnySQLiteColumn => runAgents.id,
+      { onDelete: "cascade" }
+    ),
+    name: text("name").notNull(),
+    task: text("task"),
+    status: text("status").notNull(),
+    sessionPath: text("session_path"),
+    summary: text("summary"),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    startedAt: text("started_at"),
+    updatedAt: text("updated_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    index("run_agents_run_id_idx").on(table.runId),
+    index("run_agents_parent_agent_id_idx").on(table.parentAgentId),
+    uniqueIndex("run_agents_main_unique")
+      .on(table.runId)
+      .where(sql`${table.parentAgentId} is null`),
+    check(
+      "run_agents_status_check",
       sql`${table.status} in ('running', 'paused', 'completed', 'failed', 'stopped')`
     ),
   ]

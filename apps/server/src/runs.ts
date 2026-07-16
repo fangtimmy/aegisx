@@ -1,5 +1,5 @@
 import { copyFileSync, mkdirSync } from "node:fs"
-import { basename, extname, join, relative } from "node:path"
+import { basename, dirname, extname, join, relative } from "node:path"
 import type { Api, Model } from "@earendil-works/pi-ai/compat"
 import {
   type AgentSession,
@@ -12,7 +12,7 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent"
-import { count, desc, eq } from "drizzle-orm"
+import { and, count, desc, eq, isNull } from "drizzle-orm"
 import { Type } from "typebox"
 import {
   containerName,
@@ -21,12 +21,16 @@ import {
   removeContainer,
 } from "./container"
 import type { createDatabase } from "./db"
-import { attachments, challenges, events, runs } from "./db/schema"
-import { summarizeUsage } from "./usage"
+import { attachments, challenges, events, runAgents, runs } from "./db/schema"
+import { summarizeUsage, sumUsage } from "./usage"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunStatus = "running" | "paused" | "completed" | "failed" | "stopped"
-type RunEvent = AgentSessionEvent | { type: "status"; run: RunPublic }
+export type AgentStatus = RunStatus
+type RunEvent =
+  | { type: "status"; run: RunPublic }
+  | { type: "agent_status"; agent: AgentPublic }
+  | { type: "agent_event"; agentId: string; event: AgentSessionEvent }
 type EnvironmentConfig =
   | { type: "local" }
   | {
@@ -66,6 +70,20 @@ export type RunPublic = {
   flag?: string | null
 }
 
+export type AgentPublic = {
+  id: string
+  runId: string
+  parentAgentId: string | null
+  name: string
+  status: AgentStatus
+  summary: string | null
+  error: string | null
+  createdAt: string
+  startedAt: string | null
+  updatedAt: string
+  completedAt: string | null
+}
+
 type Options = {
   db: Database
   dataDir: string
@@ -77,6 +95,8 @@ type Options = {
 }
 
 type CurrentSession = {
+  runId: string
+  agentId: string
   session: AgentSession
   unsubscribe: () => void
 }
@@ -108,10 +128,80 @@ export function createRunManager(options: Options) {
     .set({ status: "paused", updatedAt: new Date().toISOString() })
     .where(eq(runs.status, "running"))
     .run()
+  db.update(runAgents)
+    .set({ status: "paused", updatedAt: new Date().toISOString() })
+    .where(eq(runAgents.status, "running"))
+    .run()
+  const runsWithAgents = new Set(
+    db
+      .select({ runId: runAgents.runId })
+      .from(runAgents)
+      .all()
+      .map(({ runId }) => runId)
+  )
+  for (const run of db.select().from(runs).all()) {
+    if (runsWithAgents.has(run.id)) continue
+    db.insert(runAgents)
+      .values({
+        id: run.id,
+        runId: run.id,
+        parentAgentId: null,
+        name: "Main agent",
+        task: null,
+        status: run.status,
+        sessionPath: run.sessionPath,
+        summary: run.summary,
+        error: run.error,
+        createdAt: run.createdAt,
+        startedAt: run.startedAt,
+        updatedAt: run.updatedAt,
+        completedAt: run.completedAt,
+      })
+      .run()
+  }
   for (const { id } of interruptedContainers) removeContainer(containerName(id))
 
   function getStored(runId: string) {
     return db.select().from(runs).where(eq(runs.id, runId)).get()
+  }
+
+  function getStoredAgent(agentId: string) {
+    return db.select().from(runAgents).where(eq(runAgents.id, agentId)).get()
+  }
+
+  function getMainAgent(runId: string) {
+    return db
+      .select()
+      .from(runAgents)
+      .where(and(eq(runAgents.runId, runId), isNull(runAgents.parentAgentId)))
+      .get()
+  }
+
+  function listStoredAgents(runId: string) {
+    return db
+      .select()
+      .from(runAgents)
+      .where(eq(runAgents.runId, runId))
+      .orderBy(runAgents.createdAt, runAgents.id)
+      .all()
+  }
+
+  function getAgentPublic(agentId: string): AgentPublic | undefined {
+    const agent = getStoredAgent(agentId)
+    if (!agent) return undefined
+    return {
+      id: agent.id,
+      runId: agent.runId,
+      parentAgentId: agent.parentAgentId,
+      name: agent.name,
+      status: agent.status as AgentStatus,
+      summary: agent.summary,
+      error: agent.error,
+      createdAt: agent.createdAt,
+      startedAt: agent.startedAt,
+      updatedAt: agent.updatedAt,
+      completedAt: agent.completedAt,
+    }
   }
 
   function getPublic(
@@ -159,12 +249,18 @@ export function createRunManager(options: Options) {
     for (const listener of listeners.get(runId) ?? []) listener(safeEvent)
   }
 
-  function releaseSession(runId: string) {
-    const active = current.get(runId)
+  function releaseAgent(agentId: string) {
+    const active = current.get(agentId)
     if (active) {
       active.unsubscribe()
       active.session.dispose()
-      current.delete(runId)
+      current.delete(agentId)
+    }
+  }
+
+  function releaseRun(runId: string) {
+    for (const active of [...current.values()]) {
+      if (active.runId === runId) releaseAgent(active.agentId)
     }
     const name = activeContainers.get(runId)
     if (name) {
@@ -187,18 +283,32 @@ export function createRunManager(options: Options) {
     return run
   }
 
+  function updateAgent(
+    agentId: string,
+    values: Partial<typeof runAgents.$inferInsert>
+  ): AgentPublic {
+    db.update(runAgents)
+      .set({ ...values, updatedAt: new Date().toISOString() })
+      .where(eq(runAgents.id, agentId))
+      .run()
+    const agent = getAgentPublic(agentId)
+    if (!agent) throw new Error("Agent not found")
+    emit(agent.runId, { type: "agent_status", agent })
+    return agent
+  }
+
   function runningCount() {
     return (
       db
         .select({ value: count() })
-        .from(runs)
-        .where(eq(runs.status, "running"))
+        .from(runAgents)
+        .where(eq(runAgents.status, "running"))
         .get()?.value ?? 0
     )
   }
 
-  function requireCapacity() {
-    if (runningCount() >= maxConcurrency) {
+  function requireCapacity(count = 1) {
+    if (runningCount() + count > maxConcurrency) {
       throw new RunActionError("capacity", "Run capacity reached")
     }
   }
@@ -284,27 +394,43 @@ export function createRunManager(options: Options) {
     return model
   }
 
-  async function ensureSession(runId: string) {
-    const existing = current.get(runId)
+  function agentWorkspacePath(
+    run: typeof runs.$inferSelect,
+    agent: typeof runAgents.$inferSelect
+  ) {
+    if (!run.workspacePath)
+      throw new RunStartError("Run workspace is unavailable")
+    const root = join(dataDir, run.workspacePath)
+    return agent.parentAgentId ? join(root, "agents", agent.id) : root
+  }
+
+  function agentContainerPath(agent: typeof runAgents.$inferSelect) {
+    return agent.parentAgentId ? `/workspace/agents/${agent.id}` : "/workspace"
+  }
+
+  async function ensureSession(agentId: string) {
+    const existing = current.get(agentId)
     if (existing) return existing.session
-    const run = getStored(runId)
-    if (!run?.workspacePath || !run.sessionPath) {
-      throw new RunStartError("Run session is unavailable")
+    const agent = getStoredAgent(agentId)
+    const run = agent ? getStored(agent.runId) : undefined
+    if (!agent || !run || !agent.sessionPath) {
+      throw new RunStartError("Agent session is unavailable")
     }
     const modelConfig = parseModelConfig(run.modelConfig)
     const model = await resolveRequestedModel(modelConfig)
     const apiKey = await authStorage.getApiKey(modelConfig.provider, {
       includeFallback: false,
     })
-    const workspacePath = join(dataDir, run.workspacePath)
-    const sessionFile = join(dataDir, run.sessionPath)
+    const workspacePath = agentWorkspacePath(run, agent)
+    const sessionFile = join(dataDir, agent.sessionPath)
     const sessionManager = SessionManager.open(
       sessionFile,
-      join(dataDir, "sessions", runId),
+      dirname(sessionFile),
       workspacePath
     )
     return attachSession(
-      runId,
+      agent,
+      run,
       workspacePath,
       sessionManager,
       model,
@@ -315,7 +441,8 @@ export function createRunManager(options: Options) {
   }
 
   async function attachSession(
-    runId: string,
+    agent: typeof runAgents.$inferSelect,
+    run: typeof runs.$inferSelect,
     workspacePath: string,
     sessionManager: SessionManager,
     model: Model<Api>,
@@ -323,18 +450,31 @@ export function createRunManager(options: Options) {
     apiKey: string | undefined,
     provider: string
   ) {
+    const runId = run.id
+    const agentId = agent.id
+    const isMain = agent.parentAgentId === null
     let environmentTools: ReturnType<typeof createContainerTools> | undefined
     if (environment.type === "container") {
-      const name = containerName(runId)
-      try {
-        createContainer(name, workspacePath, environment.image, environment)
-      } catch {
-        throw new RunStartError("Container could not be started")
+      let name = activeContainers.get(runId)
+      if (!name) {
+        name = containerName(runId)
+        if (!run.workspacePath) {
+          throw new RunStartError("Run workspace is unavailable")
+        }
+        try {
+          createContainer(
+            name,
+            join(dataDir, run.workspacePath),
+            environment.image,
+            environment
+          )
+        } catch {
+          throw new RunStartError("Container could not be started")
+        }
+        activeContainers.set(runId, name)
       }
-      activeContainers.set(runId, name)
-      environmentTools = createContainerTools(name)
+      environmentTools = createContainerTools(name, agentContainerPath(agent))
     }
-    let session: AgentSession
     const finishRun = defineTool({
       name: "finish_run",
       label: "Finish run",
@@ -360,10 +500,95 @@ export function createRunManager(options: Options) {
           flag: params.flag ?? null,
           error: null,
         })
-        void session.abort().finally(() => releaseSession(runId))
+        updateAgent(agentId, {
+          status: "completed",
+          completedAt: new Date().toISOString(),
+          summary: params.summary,
+          error: null,
+        })
+        for (const child of listStoredAgents(runId)) {
+          if (
+            child.id !== agentId &&
+            !terminalStatuses.includes(child.status as AgentStatus)
+          ) {
+            updateAgent(child.id, {
+              status: "stopped",
+              completedAt: new Date().toISOString(),
+            })
+          }
+        }
+        void abortRun(runId).finally(() => releaseRun(runId))
         return {
           content: [{ type: "text" as const, text: "Run completed" }],
           details: {},
+        }
+      },
+    })
+    const spawnAgent = defineTool({
+      name: "spawn_agent",
+      label: "Spawn agent",
+      description:
+        "Start a background child agent for a focused task with an isolated context",
+      parameters: Type.Object({
+        name: Type.String({ minLength: 1, maxLength: 80 }),
+        task: Type.String({ minLength: 1, maxLength: 100_000 }),
+      }),
+      executionMode: "parallel",
+      execute: async (_id, params, signal) => {
+        if (signal?.aborted) throw new Error("Sub-agent creation was aborted")
+        const child = await createChildAgent(
+          runId,
+          agentId,
+          params.name.trim(),
+          params.task.trim(),
+          signal
+        )
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Started ${child.name} in the background with agent ID ${child.id}`,
+            },
+          ],
+          details: { agentId: child.id, status: child.status },
+        }
+      },
+    })
+    const inspectAgent = defineTool({
+      name: "inspect_agent",
+      label: "Inspect agent",
+      description:
+        "Read the current status and latest output summary of a child agent",
+      parameters: Type.Object({
+        agent_id: Type.String({ minLength: 1 }),
+      }),
+      execute: async (_id, params) => {
+        const child = getStoredAgent(params.agent_id)
+        if (child?.runId !== runId || child.parentAgentId !== agentId) {
+          return {
+            content: [
+              { type: "text" as const, text: "Child agent was not found" },
+            ],
+            details: { found: false },
+          }
+        }
+        const value = getAgentPublic(child.id) as AgentPublic
+        const summary =
+          value.summary ?? lastAssistantText(historyForAgent(child.id))
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                id: value.id,
+                name: value.name,
+                status: value.status,
+                summary,
+                error: value.error,
+              }),
+            },
+          ],
+          details: { found: true },
         }
       },
     })
@@ -386,16 +611,23 @@ export function createRunManager(options: Options) {
           details: { available: false },
         }),
       })
-    const hostTools = [
-      finishRun,
-      unavailable("start_target"),
-      unavailable("stop_target"),
-      unavailable("submit_flag"),
-    ]
+    const hostTools = isMain
+      ? [
+          finishRun,
+          spawnAgent,
+          inspectAgent,
+          unavailable("start_target"),
+          unavailable("stop_target"),
+          unavailable("submit_flag"),
+        ]
+      : []
     let created: Awaited<ReturnType<typeof createAgentSession>>
     try {
       created = await createAgentSession({
-        cwd: environment.type === "container" ? "/workspace" : workspacePath,
+        cwd:
+          environment.type === "container"
+            ? agentContainerPath(agent)
+            : workspacePath,
         authStorage,
         modelRegistry,
         model,
@@ -413,10 +645,16 @@ export function createRunManager(options: Options) {
                 "grep",
                 "find",
                 "ls",
-                "finish_run",
-                "start_target",
-                "stop_target",
-                "submit_flag",
+                ...(isMain
+                  ? [
+                      "finish_run",
+                      "spawn_agent",
+                      "inspect_agent",
+                      "start_target",
+                      "stop_target",
+                      "submit_flag",
+                    ]
+                  : []),
               ],
               customTools: hostTools,
             }),
@@ -424,10 +662,10 @@ export function createRunManager(options: Options) {
         settingsManager: SettingsManager.inMemory(),
       })
     } catch (error) {
-      releaseSession(runId)
+      releaseAgent(agentId)
       throw error
     }
-    session = created.session
+    const session = created.session
     const secrets = new Set(options.getApiKeys?.(provider))
     if (apiKey) secrets.add(apiKey)
     const unsubscribe = session.subscribe((event) => {
@@ -437,13 +675,18 @@ export function createRunManager(options: Options) {
         }
         for (const secret of secrets) redactSecret(event.message, secret)
       }
-      emit(runId, event)
+      emit(runId, { type: "agent_event", agentId, event })
     })
-    current.set(runId, { session, unsubscribe })
+    current.set(agentId, { runId, agentId, session, unsubscribe })
     return session
   }
 
-  function startPrompt(runId: string, session: AgentSession, message: string) {
+  function startMainPrompt(
+    runId: string,
+    agentId: string,
+    session: AgentSession,
+    message: string
+  ) {
     void session
       .prompt(message)
       .catch(() => {
@@ -455,14 +698,243 @@ export function createRunManager(options: Options) {
             completedAt: new Date().toISOString(),
             error: "Agent session failed",
           })
+          updateAgent(agentId, {
+            status: "failed",
+            completedAt: new Date().toISOString(),
+            error: "Agent session failed",
+          })
+          for (const child of listStoredAgents(runId)) {
+            if (
+              child.id !== agentId &&
+              !terminalStatuses.includes(child.status as AgentStatus)
+            ) {
+              updateAgent(child.id, {
+                status: "stopped",
+                completedAt: new Date().toISOString(),
+              })
+            }
+          }
+          void abortRun(runId)
         }
       })
       .finally(() => {
+        if (closed) return
         const run = getStored(runId)
         if (run && terminalStatuses.includes(run.status as RunStatus)) {
-          releaseSession(runId)
+          releaseRun(runId)
         }
       })
+  }
+
+  function startChildPrompt(
+    runId: string,
+    agentId: string,
+    session: AgentSession,
+    message: string
+  ) {
+    void session
+      .prompt(message)
+      .then(async () => {
+        if (closed) return
+        const agent = getStoredAgent(agentId)
+        if (agent?.status !== "running") return
+        const summary = lastAssistantText(historyForAgent(agentId))
+        const completed = updateAgent(agentId, {
+          status: "completed",
+          completedAt: new Date().toISOString(),
+          summary,
+          error: null,
+        })
+        await notifyMain(completed)
+      })
+      .catch(async () => {
+        if (closed || aborting.has(runId)) return
+        const agent = getStoredAgent(agentId)
+        if (agent?.status !== "running") return
+        const failed = updateAgent(agentId, {
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          error: "Agent session failed",
+        })
+        await notifyMain(failed)
+      })
+      .finally(() => releaseAgent(agentId))
+  }
+
+  async function abortRun(runId: string) {
+    await Promise.allSettled(
+      [...current.values()]
+        .filter((active) => active.runId === runId)
+        .map((active) => active.session.abort())
+    )
+  }
+
+  function historyForAgent(agentId: string): SessionEntry[] {
+    const agent = getStoredAgent(agentId)
+    if (!agent) throw new RunActionError("not_found", "Agent not found")
+    if (!agent.sessionPath) return []
+    return redactFlags(
+      SessionManager.open(join(dataDir, agent.sessionPath)).getEntries()
+    )
+  }
+
+  function lastAssistantText(entries: SessionEntry[]) {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]
+      if (entry.type !== "message" || entry.message.role !== "assistant") {
+        continue
+      }
+      const content = entry.message.content
+      const text = (Array.isArray(content) ? content : [content])
+        .flatMap((part) => {
+          if (typeof part === "string") return [part]
+          return part.type === "text" ? [part.text] : []
+        })
+        .join("\n")
+        .trim()
+      if (text) return text.slice(0, 50_000)
+    }
+    return null
+  }
+
+  async function notifyMain(agent: AgentPublic) {
+    if (closed) return
+    const run = getStored(agent.runId)
+    const main = getMainAgent(agent.runId)
+    if (run?.status !== "running" || !main || main.status !== "running") return
+    const session = current.get(main.id)?.session
+    if (!session) return
+    const result =
+      agent.summary ?? agent.error ?? "No final output was produced."
+    const message = [
+      `Background agent ${agent.name} (${agent.id}) ${agent.status}.`,
+      "Final output:",
+      result,
+    ].join("\n\n")
+    if (session.isStreaming) await session.steer(message)
+    else startMainPrompt(run.id, main.id, session, message)
+  }
+
+  async function createChildAgent(
+    runId: string,
+    parentAgentId: string,
+    name: string,
+    task: string,
+    signal?: AbortSignal
+  ) {
+    const run = getStored(runId)
+    const parent = getStoredAgent(parentAgentId)
+    if (
+      run?.status !== "running" ||
+      !parent ||
+      parent.runId !== runId ||
+      parent.parentAgentId !== null
+    ) {
+      throw new RunActionError(
+        "invalid_state",
+        "Run state does not allow a child agent"
+      )
+    }
+    if (!run.workspacePath) {
+      throw new RunActionError("invalid_state", "Run workspace is unavailable")
+    }
+    requireCapacity()
+    const id = crypto.randomUUID()
+    const now = new Date().toISOString()
+    const workspacePath = join(dataDir, run.workspacePath, "agents", id)
+    const sessionDir = join(dataDir, "sessions", runId, id)
+    mkdirSync(workspacePath, { recursive: true })
+    mkdirSync(sessionDir, { recursive: true })
+    const sessionManager = SessionManager.create(workspacePath, sessionDir, {
+      id,
+    })
+    const sessionFile = sessionManager.getSessionFile()
+    if (!sessionFile) throw new Error("Persistent session was not created")
+    db.insert(runAgents)
+      .values({
+        id,
+        runId,
+        parentAgentId,
+        name,
+        task,
+        status: "running",
+        sessionPath: relative(dataDir, sessionFile),
+        createdAt: now,
+        startedAt: now,
+        updatedAt: now,
+      })
+      .run()
+    emit(runId, {
+      type: "agent_status",
+      agent: getAgentPublic(id) as AgentPublic,
+    })
+
+    const requireRunning = () => {
+      if (
+        signal?.aborted ||
+        getStored(runId)?.status !== "running" ||
+        getStoredAgent(id)?.status !== "running"
+      ) {
+        throw new RunStartError("Child agent start was interrupted")
+      }
+    }
+
+    try {
+      const modelConfig = parseModelConfig(run.modelConfig)
+      const model = await resolveRequestedModel(modelConfig)
+      requireRunning()
+      const apiKey = await authStorage.getApiKey(modelConfig.provider, {
+        includeFallback: false,
+      })
+      requireRunning()
+      const agent = getStoredAgent(id) as typeof runAgents.$inferSelect
+      const session = await attachSession(
+        agent,
+        run,
+        workspacePath,
+        sessionManager,
+        model,
+        parseEnvironment(run.environmentConfig),
+        apiKey,
+        modelConfig.provider
+      )
+      if (
+        signal?.aborted ||
+        getStored(runId)?.status !== "running" ||
+        getStoredAgent(id)?.status !== "running"
+      ) {
+        await session.abort()
+        releaseAgent(id)
+        throw new RunStartError("Child agent start was interrupted")
+      }
+      const prompt = [
+        "You are a background child agent working on one delegated CTF task.",
+        `Delegated task: ${task}`,
+        "You may inspect the whole Run workspace, but write your artifacts only in your current working directory.",
+        "You cannot finish the Run or create more agents. Return a concise, evidence-based final answer for the main agent.",
+        "Run context:",
+        run.prompt,
+      ].join("\n\n")
+      startChildPrompt(runId, id, session, prompt)
+      return getAgentPublic(id) as AgentPublic
+    } catch (error) {
+      if (
+        !aborting.has(runId) &&
+        getStored(runId)?.status === "running" &&
+        getStoredAgent(id)?.status === "running"
+      ) {
+        updateAgent(id, {
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          error:
+            error instanceof RunStartError
+              ? error.message
+              : "Agent session failed",
+        })
+      }
+      releaseAgent(id)
+      throw error
+    }
   }
 
   async function create(
@@ -499,8 +971,21 @@ export function createRunManager(options: Options) {
         prompt,
         modelConfig: JSON.stringify(modelConfig),
         environmentConfig: JSON.stringify(environment),
-        sessionPath: relative(dataDir, sessionFile),
         workspacePath: relative(dataDir, workspacePath),
+        createdAt: now,
+        startedAt: now,
+        updatedAt: now,
+      })
+      .run()
+    db.insert(runAgents)
+      .values({
+        id,
+        runId: id,
+        parentAgentId: null,
+        name: "Main agent",
+        task: null,
+        status: "running",
+        sessionPath: relative(dataDir, sessionFile),
         createdAt: now,
         startedAt: now,
         updatedAt: now,
@@ -512,8 +997,11 @@ export function createRunManager(options: Options) {
       const apiKey = await authStorage.getApiKey(modelConfig.provider, {
         includeFallback: false,
       })
+      const agent = getStoredAgent(id) as typeof runAgents.$inferSelect
+      const run = getStored(id) as typeof runs.$inferSelect
       const session = await attachSession(
-        id,
+        agent,
+        run,
         workspacePath,
         sessionManager,
         model,
@@ -521,7 +1009,7 @@ export function createRunManager(options: Options) {
         apiKey,
         modelConfig.provider
       )
-      startPrompt(id, session, prompt)
+      startMainPrompt(id, id, session, prompt)
     } catch (error) {
       update(id, {
         status: "failed",
@@ -531,19 +1019,33 @@ export function createRunManager(options: Options) {
             ? error.message
             : "Agent session failed",
       })
+      updateAgent(id, {
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        error:
+          error instanceof RunStartError
+            ? error.message
+            : "Agent session failed",
+      })
+      releaseRun(id)
     }
     return getPublic(id) as RunPublic
   }
 
   async function pause(runId: string) {
-    const run = requireMutable(runId, ["running"])
+    requireMutable(runId, ["running"])
     aborting.set(runId, "paused")
     try {
-      await current.get(run.id)?.session.abort()
+      await abortRun(runId)
       const latest = getPublic(runId) as RunPublic
       if (terminalStatuses.includes(latest.status)) return latest
       const paused = update(runId, { status: "paused" })
-      releaseSession(runId)
+      for (const agent of listStoredAgents(runId)) {
+        if (agent.status === "running") {
+          updateAgent(agent.id, { status: "paused" })
+        }
+      }
+      releaseRun(runId)
       return paused
     } finally {
       aborting.delete(runId)
@@ -552,19 +1054,55 @@ export function createRunManager(options: Options) {
 
   async function resume(runId: string, message?: string) {
     requireMutable(runId, ["paused"])
-    requireCapacity()
+    const pausedAgents = listStoredAgents(runId).filter(
+      (agent) => agent.status === "paused"
+    )
+    const main = pausedAgents.find((agent) => agent.parentAgentId === null)
+    if (!main)
+      throw new RunActionError("invalid_state", "Main agent is unavailable")
+    requireCapacity(pausedAgents.length)
     update(runId, { status: "running", error: null, completedAt: null })
+    for (const agent of pausedAgents) {
+      updateAgent(agent.id, {
+        status: "running",
+        error: null,
+        completedAt: null,
+      })
+    }
     try {
-      const session = await ensureSession(runId)
-      startPrompt(
+      const session = await ensureSession(main.id)
+      startMainPrompt(
         runId,
+        main.id,
         session,
         message?.trim() ||
           "Continue solving the challenge from the current state."
       )
+      for (const child of pausedAgents) {
+        if (child.id === main.id) continue
+        try {
+          const childSession = await ensureSession(child.id)
+          startChildPrompt(
+            runId,
+            child.id,
+            childSession,
+            "Continue the delegated task from the current state and report your final findings."
+          )
+        } catch (error) {
+          const failed = updateAgent(child.id, {
+            status: "failed",
+            completedAt: new Date().toISOString(),
+            error:
+              error instanceof RunStartError
+                ? error.message
+                : "Agent session failed",
+          })
+          await notifyMain(failed)
+        }
+      }
       return getPublic(runId) as RunPublic
     } catch (error) {
-      return update(runId, {
+      const failed = update(runId, {
         status: "failed",
         completedAt: new Date().toISOString(),
         error:
@@ -572,30 +1110,57 @@ export function createRunManager(options: Options) {
             ? error.message
             : "Agent session failed",
       })
+      updateAgent(main.id, {
+        status: "failed",
+        completedAt: new Date().toISOString(),
+        error: failed.error,
+      })
+      for (const child of listStoredAgents(runId)) {
+        if (!terminalStatuses.includes(child.status as AgentStatus)) {
+          updateAgent(child.id, {
+            status: "stopped",
+            completedAt: new Date().toISOString(),
+          })
+        }
+      }
+      await abortRun(runId)
+      releaseRun(runId)
+      return failed
     }
   }
 
   async function message(runId: string, messageText: string) {
     const run = requireMutable(runId, ["running", "paused"])
     if (run.status === "paused") return resume(runId, messageText)
-    const session = await ensureSession(runId)
+    const main = getMainAgent(runId)
+    if (!main)
+      throw new RunActionError("invalid_state", "Main agent is unavailable")
+    const session = await ensureSession(main.id)
     if (session.isStreaming) await session.steer(messageText)
-    else startPrompt(runId, session, messageText)
+    else startMainPrompt(runId, main.id, session, messageText)
     return getPublic(runId) as RunPublic
   }
 
   async function stop(runId: string) {
-    const run = requireMutable(runId, ["running", "paused"])
+    requireMutable(runId, ["running", "paused"])
     aborting.set(runId, "stopped")
     try {
-      await current.get(run.id)?.session.abort()
+      await abortRun(runId)
       const latest = getPublic(runId) as RunPublic
       if (terminalStatuses.includes(latest.status)) return latest
       const stopped = update(runId, {
         status: "stopped",
         completedAt: new Date().toISOString(),
       })
-      releaseSession(runId)
+      for (const agent of listStoredAgents(runId)) {
+        if (!terminalStatuses.includes(agent.status as AgentStatus)) {
+          updateAgent(agent.id, {
+            status: "stopped",
+            completedAt: new Date().toISOString(),
+          })
+        }
+      }
+      releaseRun(runId)
       return stopped
     } finally {
       aborting.delete(runId)
@@ -614,19 +1179,19 @@ export function createRunManager(options: Options) {
     return run
   }
 
-  function history(runId: string): SessionEntry[] {
-    const run = getStored(runId)
-    if (!run) throw new RunActionError("not_found", "Run not found")
-    if (!run.sessionPath) return []
-    return redactFlags(
-      SessionManager.open(join(dataDir, run.sessionPath)).getEntries()
-    )
-  }
-
   return {
     create,
     get: getPublic,
-    history,
+    agents: (runId: string) => {
+      if (!getStored(runId)) {
+        throw new RunActionError("not_found", "Run not found")
+      }
+      return listStoredAgents(runId).map(
+        (agent) => getAgentPublic(agent.id) as AgentPublic
+      )
+    },
+    agent: getAgentPublic,
+    history: historyForAgent,
     listForEvent: (eventId: string) =>
       db
         .select({ id: runs.id })
@@ -665,15 +1230,24 @@ export function createRunManager(options: Options) {
       const path = getStored(runId)?.workspacePath
       return path ? join(dataDir, path) : undefined
     },
+    agentUsage: (agentId: string) => {
+      const agent = getStoredAgent(agentId)
+      if (!agent) throw new RunActionError("not_found", "Agent not found")
+      const run = getStored(agent.runId)
+      if (!run) throw new RunActionError("not_found", "Run not found")
+      return summarizeUsage(
+        historyForAgent(agentId),
+        parseModelConfig(run.modelConfig).costKnown !== false
+      )
+    },
     usage: (runId: string) => {
       const run = getStored(runId)
       if (!run) throw new RunActionError("not_found", "Run not found")
-      const entries = run.sessionPath
-        ? SessionManager.open(join(dataDir, run.sessionPath)).getEntries()
-        : []
-      return summarizeUsage(
-        entries,
-        parseModelConfig(run.modelConfig).costKnown !== false
+      const costKnown = parseModelConfig(run.modelConfig).costKnown !== false
+      return sumUsage(
+        listStoredAgents(runId).map((agent) =>
+          summarizeUsage(historyForAgent(agent.id), costKnown)
+        )
       )
     },
     close: () => {

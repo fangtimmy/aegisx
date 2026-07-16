@@ -325,7 +325,9 @@ describe("phase four", () => {
       )
       const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
       const session = sqlite
-        .query("select session_path from runs where id = ?")
+        .query(
+          "select session_path from run_agents where run_id = ? and parent_agent_id is null"
+        )
         .get(run.id) as { session_path: string }
       sqlite.close()
       expect(authorization).toBe("Bearer initial-secret")
@@ -542,6 +544,25 @@ describe("phase four", () => {
         modelId: "custom-1",
         costKnown: false,
       }),
+      "sessions/stats/unknown.jsonl",
+      now,
+      now,
+      now
+    )
+    const insertAgent = sqlite.prepare(
+      "insert into run_agents (id, run_id, name, status, session_path, created_at, updated_at, completed_at) values (?, ?, 'Main agent', 'completed', ?, ?, ?, ?)"
+    )
+    insertAgent.run(
+      "known-cost",
+      "known-cost",
+      "sessions/stats/known.jsonl",
+      now,
+      now,
+      now
+    )
+    insertAgent.run(
+      "unknown-cost",
+      "unknown-cost",
       "sessions/stats/unknown.jsonl",
       now,
       now,

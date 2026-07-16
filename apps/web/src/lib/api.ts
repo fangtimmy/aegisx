@@ -70,6 +70,20 @@ export type RunPublic = {
   flag?: string | null
 }
 
+export type AgentPublic = {
+  id: string
+  runId: string
+  parentAgentId: string | null
+  name: string
+  status: RunStatus
+  summary: string | null
+  error: string | null
+  createdAt: string
+  startedAt: string | null
+  updatedAt: string
+  completedAt: string | null
+}
+
 export type UsageSummary = {
   input: number
   output: number

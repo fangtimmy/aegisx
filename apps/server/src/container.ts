@@ -132,8 +132,8 @@ async function dockerExec(
   }
 }
 
-function containerPath(value: string) {
-  const resolved = posix.resolve(workspace, value)
+function containerPath(value: string, cwd = workspace) {
+  const resolved = posix.resolve(cwd, value)
   if (resolved !== workspace && !resolved.startsWith(`${workspace}/`)) {
     throw new Error("Path is outside the run workspace")
   }
@@ -146,28 +146,29 @@ async function requireExec(name: string, args: string[], input?: string) {
   return result.stdout
 }
 
-export function createContainerTools(name: string) {
+export function createContainerTools(name: string, cwd = workspace) {
+  const resolvePath = (path: string) => containerPath(path, cwd)
   const readFile = (path: string) =>
-    requireExec(name, ["cat", containerPath(path)])
+    requireExec(name, ["cat", resolvePath(path)])
   const access = async (path: string) => {
-    await requireExec(name, ["test", "-r", containerPath(path)])
+    await requireExec(name, ["test", "-r", resolvePath(path)])
   }
   const writeFile = async (path: string, content: string) => {
     await requireExec(
       name,
-      ["sh", "-c", 'cat > "$1"', "aegisx-write", containerPath(path)],
+      ["sh", "-c", 'cat > "$1"', "aegisx-write", resolvePath(path)],
       content
     )
   }
   const mkdir = async (path: string) => {
-    await requireExec(name, ["mkdir", "-p", containerPath(path)])
+    await requireExec(name, ["mkdir", "-p", resolvePath(path)])
   }
   const findOperations: FindOperations = {
     exists: async (path) =>
-      (await dockerExec(name, [name, "test", "-e", containerPath(path)]))
+      (await dockerExec(name, [name, "test", "-e", resolvePath(path)]))
         .exitCode === 0,
     glob: async (pattern, cwd, options) => {
-      const root = containerPath(cwd)
+      const root = resolvePath(cwd)
       const result = await requireExec(name, ["find", root, "-print0"])
       return decoder
         .decode(result)
@@ -203,7 +204,7 @@ export function createContainerTools(name: string) {
       limit: Type.Optional(Type.Number({ minimum: 1 })),
     }),
     execute: async (_id, params, signal) => {
-      const root = containerPath(params.path ?? ".")
+      const root = resolvePath(params.path ?? ".")
       const limit = Math.floor(params.limit ?? 100)
       const grepArgs = ["grep", "-H", "-n", params.literal ? "-F" : "-E"]
       if (params.ignoreCase) grepArgs.push("-i")
@@ -232,16 +233,16 @@ export function createContainerTools(name: string) {
   })
 
   return [
-    createReadTool(workspace, {
+    createReadTool(cwd, {
       autoResizeImages: false,
       operations: { readFile, access, detectImageMimeType: async () => null },
     }),
-    createBashTool(workspace, {
+    createBashTool(cwd, {
       operations: {
         exec: async (command, _cwd, { onData, signal, timeout }) => {
           const result = await dockerExec(
             name,
-            ["--workdir", workspace, name, "sh", "-lc", command],
+            ["--workdir", cwd, name, "sh", "-lc", command],
             { signal, timeout }
           )
           onData(result.stdout)
@@ -250,21 +251,21 @@ export function createContainerTools(name: string) {
         },
       },
     }),
-    createEditTool(workspace, { operations: { readFile, writeFile, access } }),
-    createWriteTool(workspace, { operations: { writeFile, mkdir } }),
+    createEditTool(cwd, { operations: { readFile, writeFile, access } }),
+    createWriteTool(cwd, { operations: { writeFile, mkdir } }),
     grep,
-    createFindTool(workspace, { operations: findOperations }),
-    createLsTool(workspace, {
+    createFindTool(cwd, { operations: findOperations }),
+    createLsTool(cwd, {
       operations: {
         exists: findOperations.exists,
         stat: async (path) => ({
           isDirectory: () =>
-            runDockerSync(["exec", name, "test", "-d", containerPath(path)]) ===
+            runDockerSync(["exec", name, "test", "-d", resolvePath(path)]) ===
             0,
         }),
         readdir: async (path) =>
           decoder
-            .decode(await requireExec(name, ["ls", "-1A", containerPath(path)]))
+            .decode(await requireExec(name, ["ls", "-1A", resolvePath(path)]))
             .split("\n")
             .filter(Boolean),
       },

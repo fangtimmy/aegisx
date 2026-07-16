@@ -184,7 +184,7 @@ export function RuntimeDefaults({
         </NumberField>
       </Field>
       <Field name="maxConcurrency">
-        <FieldLabel>Max concurrency</FieldLabel>
+        <FieldLabel>Max active agents</FieldLabel>
         <NumberField
           defaultValue={settings.maxConcurrency}
           max={32}

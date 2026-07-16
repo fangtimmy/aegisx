@@ -45,6 +45,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import type {
+  AgentPublic,
   Challenge,
   RunPublic,
   RunStatus,
@@ -83,16 +84,33 @@ export function RunWorkspace({
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState("")
-  const [live, setLive] = useState<LiveEntry[]>([])
+  const [liveByAgent, setLiveByAgent] = useState<Record<string, LiveEntry[]>>(
+    {}
+  )
   const detail = useQuery({
     enabled: Boolean(runId),
     queryKey: ["runs", runId ?? ""],
     queryFn: () =>
       apiRequest<{
         run: RunPublic
-        history: SessionEntry[]
+        agents: AgentPublic[]
         stats: UsageSummary
       }>(`/runs/${runId}`),
+  })
+  const requestedAgentId = searchParams.get("agent")
+  const selectedAgent =
+    detail.data?.agents.find((agent) => agent.id === requestedAgentId) ??
+    detail.data?.agents.find((agent) => agent.parentAgentId === null) ??
+    detail.data?.agents[0]
+  const agentDetail = useQuery({
+    enabled: Boolean(runId && selectedAgent),
+    queryKey: ["runs", runId ?? "", "agents", selectedAgent?.id ?? ""],
+    queryFn: () =>
+      apiRequest<{
+        agent: AgentPublic
+        history: SessionEntry[]
+        stats: UsageSummary
+      }>(`/runs/${runId}/agents/${selectedAgent?.id}`),
   })
   const control = useMutation({
     mutationFn: ({
@@ -114,12 +132,15 @@ export function RunWorkspace({
         queryClient.invalidateQueries({
           queryKey: ["runs", "event", eventId],
         }),
+        queryClient.invalidateQueries({
+          queryKey: ["runs", runId ?? "", "agents", selectedAgent?.id ?? ""],
+        }),
       ])
     },
   })
 
   useEffect(() => {
-    setLive([])
+    setLiveByAgent({})
     if (!runId) return
     const source = new EventSource(`/api/runs/${runId}/events`)
     source.onmessage = (event) => {
@@ -130,16 +151,18 @@ export function RunWorkspace({
         payload = { type: "error", error: event.data }
       }
       if (!isRecord(payload)) return
-      const entries = liveEntries(payload)
-      if (entries.length > 0) {
-        setLive((current) => {
-          const next = [...current]
+      const agentEvent = isRecord(payload.event) ? payload.event : null
+      const agentId = text(payload.agentId)
+      const entries = agentEvent ? liveEntries(agentEvent) : []
+      if (agentId && entries.length > 0) {
+        setLiveByAgent((current) => {
+          const next = [...(current[agentId] ?? [])]
           for (const entry of entries) {
             const index = next.findIndex((value) => value.key === entry.key)
             if (index === -1) next.push(entry)
             else next[index] = entry
           }
-          return next
+          return { ...current, [agentId]: next }
         })
       }
       const status = text(
@@ -149,7 +172,7 @@ export function RunWorkspace({
       if (statuses.includes(status as RunStatus)) {
         queryClient.setQueryData<{
           run: RunPublic
-          history: SessionEntry[]
+          agents: AgentPublic[]
           stats: UsageSummary
         }>(["runs", runId], (current) =>
           current
@@ -161,11 +184,17 @@ export function RunWorkspace({
         )
       }
       if (
-        payload.type === "entry_appended" ||
-        payload.type === "message_end" ||
+        payload.type === "agent_status" ||
+        agentEvent?.type === "entry_appended" ||
+        agentEvent?.type === "message_end" ||
         statuses.includes(status as RunStatus)
       ) {
         queryClient.invalidateQueries({ queryKey: ["runs", runId] })
+        if (agentId) {
+          queryClient.invalidateQueries({
+            queryKey: ["runs", runId, "agents", agentId],
+          })
+        }
         queryClient.invalidateQueries({
           queryKey: ["runs", "event", eventId],
         })
@@ -216,9 +245,10 @@ export function RunWorkspace({
       </Alert>
     )
   if (!detail.data) return null
-  const { run, history, stats } = detail.data
+  const { run, agents, stats } = detail.data
   const active = run.status === "running" || run.status === "paused"
-  const canMessage = run.status === "running"
+  const mainSelected = selectedAgent?.parentAgentId === null
+  const canMessage = run.status === "running" && mainSelected
   const requestedView = searchParams.get("view")
   const view =
     requestedView === "overview" ||
@@ -226,7 +256,7 @@ export function RunWorkspace({
     requestedView === "files"
       ? requestedView
       : "conversation"
-  const showComposer = view === "conversation" && active
+  const showComposer = view === "conversation" && active && mainSelected
 
   function send(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -287,9 +317,61 @@ export function RunWorkspace({
                 className="min-h-0 overflow-hidden"
                 value="conversation"
               >
-                <ScrollArea className="h-full pr-1" scrollFade>
-                  <Conversation history={history} live={live} />
-                </ScrollArea>
+                {selectedAgent && (
+                  <Tabs
+                    className="h-full min-h-0 gap-0"
+                    onValueChange={(value) => {
+                      const next = new URLSearchParams(searchParams)
+                      next.set("agent", value)
+                      setSearchParams(next, { replace: true })
+                    }}
+                    value={selectedAgent.id}
+                  >
+                    <TabsList
+                      className="mx-6 max-w-[calc(100%-3rem)] shrink-0 justify-start overflow-x-auto border-b"
+                      variant="underline"
+                    >
+                      {agents.map((agent) => (
+                        <TabsTab key={agent.id} value={agent.id}>
+                          <span className="max-w-40 truncate">
+                            {agent.name}
+                          </span>
+                          <span className="text-muted-foreground text-xs">
+                            {agent.status}
+                          </span>
+                        </TabsTab>
+                      ))}
+                    </TabsList>
+                    <TabsPanel
+                      className="min-h-0 overflow-hidden"
+                      value={selectedAgent.id}
+                    >
+                      {agentDetail.isPending ? (
+                        <div
+                          className="flex items-center gap-2 p-6 text-muted-foreground text-sm"
+                          role="status"
+                        >
+                          <Spinner aria-hidden="true" />
+                          Loading conversation...
+                        </div>
+                      ) : agentDetail.error ? (
+                        <Alert className="m-4 w-auto" variant="error">
+                          <CircleAlert />
+                          <AlertDescription>
+                            {agentDetail.error.message}
+                          </AlertDescription>
+                        </Alert>
+                      ) : (
+                        <ScrollArea className="h-full pr-1" scrollFade>
+                          <Conversation
+                            history={agentDetail.data?.history ?? []}
+                            live={liveByAgent[selectedAgent.id] ?? []}
+                          />
+                        </ScrollArea>
+                      )}
+                    </TabsPanel>
+                  </Tabs>
+                )}
               </TabsPanel>
               <TabsPanel className="min-h-0 overflow-hidden" value="files">
                 <FilesWorkspace
