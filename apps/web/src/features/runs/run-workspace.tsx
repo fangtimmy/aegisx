@@ -411,7 +411,7 @@ export function RunWorkspace({
                           </AlertDescription>
                         </Alert>
                       ) : (
-                        <ScrollArea className="h-full pr-1" scrollFade>
+                        <ScrollArea className="relative h-full pr-1" scrollFade>
                           <Conversation
                             history={agentDetail.data?.history ?? []}
                             key={selectedAgent.id}

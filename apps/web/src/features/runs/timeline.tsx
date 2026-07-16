@@ -15,7 +15,8 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react"
-import { useDeferredValue, useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Button } from "@/components/ui/button"
@@ -25,8 +26,8 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
 import type { AgentStatus, SessionEntry } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { AgentStatusIcon } from "./agent-status-icon"
 import {
   buildConversation,
@@ -108,7 +109,13 @@ function toolIcon(name: string) {
   return Wrench
 }
 
-function ToolActivity({ tool }: { tool: ToolBlock }) {
+function ToolActivity({
+  tool,
+  separated = false,
+}: {
+  tool: ToolBlock
+  separated?: boolean
+}) {
   const StatusIcon =
     tool.status === "running"
       ? LoaderCircle
@@ -116,10 +123,7 @@ function ToolActivity({ tool }: { tool: ToolBlock }) {
         ? CircleAlert
         : toolIcon(tool.name)
   return (
-    <details
-      className="group"
-      open={tool.status === "running" || tool.status === "error" || undefined}
-    >
+    <details className={cn("group", separated && "mt-3")}>
       <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-1 text-muted-foreground text-sm hover:text-foreground">
         <StatusIcon
           className={
@@ -214,13 +218,23 @@ function ConversationRow({ item }: { item: ConversationItem }) {
   return (
     <article className="py-4">
       <div className="flex min-w-0 flex-col gap-0">
-        {item.blocks.map((block) => {
+        {item.blocks.map((block, index) => {
+          const previous = item.blocks[index - 1]
+          const separated =
+            index > 0 && !(block.type === "tool" && previous?.type === "tool")
           if (block.type === "text") {
-            return <Markdown key={block.key}>{block.body}</Markdown>
+            return (
+              <div className={separated ? "mt-3" : undefined} key={block.key}>
+                <Markdown>{block.body}</Markdown>
+              </div>
+            )
           }
           if (block.type === "reasoning") {
             return (
-              <details className="group py-0.5" key={block.key}>
+              <details
+                className={cn("group py-0.5", separated && "mt-3")}
+                key={block.key}
+              >
                 <summary className="flex cursor-pointer list-none items-center gap-2 py-1.5 text-muted-foreground text-sm">
                   <Brain className="size-3.5" />
                   <span>
@@ -240,7 +254,10 @@ function ConversationRow({ item }: { item: ConversationItem }) {
           if (block.type === "error") {
             return (
               <div
-                className="flex gap-2 border-l-2 border-destructive bg-destructive/5 px-3 py-2 text-destructive-foreground text-sm"
+                className={cn(
+                  "flex gap-2 border-l-2 border-destructive bg-destructive/5 px-3 py-2 text-destructive-foreground text-sm",
+                  separated && "mt-3"
+                )}
                 key={block.key}
                 role="alert"
               >
@@ -249,7 +266,9 @@ function ConversationRow({ item }: { item: ConversationItem }) {
               </div>
             )
           }
-          return <ToolActivity key={block.key} tool={block} />
+          return (
+            <ToolActivity key={block.key} separated={separated} tool={block} />
+          )
         })}
       </div>
     </article>
@@ -266,10 +285,15 @@ export function Conversation({
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
   const followsLatest = useRef(true)
+  const lastScrollTop = useRef(0)
   const [atBottom, setAtBottom] = useState(true)
-  const deferredLive = useDeferredValue(live)
-  const items = buildConversation(history, deferredLive)
+  const [hasOverflow, setHasOverflow] = useState(false)
+  const [scrollContainer, setScrollContainer] = useState<HTMLElement | null>(
+    null
+  )
+  const items = buildConversation(history, live)
   const latestItem = items.at(-1)
+  const showJumpToLatest = hasOverflow && !atBottom
 
   const scrollToBottom = (behavior: ScrollBehavior) => {
     const viewport = viewportRef.current
@@ -285,11 +309,24 @@ export function Conversation({
     )
     if (!viewport) return
     viewportRef.current = viewport
+    setScrollContainer(viewport.parentElement)
+    lastScrollTop.current = viewport.scrollTop
     const updateFollowState = () => {
-      const next =
-        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 80
-      followsLatest.current = next
-      setAtBottom(next)
+      const bottomDistance =
+        viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+      const isAtBottom = bottomDistance <= 4
+      const movedUp = viewport.scrollTop < lastScrollTop.current - 1
+      lastScrollTop.current = viewport.scrollTop
+      setHasOverflow(viewport.scrollHeight > viewport.clientHeight + 1)
+      if (isAtBottom) {
+        followsLatest.current = true
+        setAtBottom(true)
+      } else if (movedUp) {
+        followsLatest.current = false
+        setAtBottom(false)
+      } else if (!followsLatest.current) {
+        setAtBottom(false)
+      }
     }
     updateFollowState()
     viewport.addEventListener("scroll", updateFollowState, { passive: true })
@@ -300,6 +337,7 @@ export function Conversation({
     if (latestItem && followsLatest.current) {
       const viewport = viewportRef.current
       if (viewport) {
+        setHasOverflow(viewport.scrollHeight > viewport.clientHeight + 1)
         setAtBottom(true)
         viewport.scrollTo({ top: viewport.scrollHeight })
       }
@@ -323,27 +361,30 @@ export function Conversation({
       className="relative mx-auto min-h-full w-full max-w-3xl px-6 pb-6"
       ref={rootRef}
     >
-      {!atBottom && (
-        <div className="pointer-events-none sticky top-[calc(100%-3.25rem)] z-10 flex h-0 justify-center">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  aria-label="Jump to latest activity"
-                  className="pointer-events-auto rounded-full bg-background shadow-md"
-                  onClick={() => scrollToBottom("smooth")}
-                  size="icon-sm"
-                  type="button"
-                  variant="outline"
-                />
-              }
+      {scrollContainer &&
+        createPortal(
+          <div
+            aria-hidden={!showJumpToLatest}
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center transition-opacity duration-200",
+              showJumpToLatest ? "opacity-100" : "opacity-0"
+            )}
+          >
+            <Button
+              className={cn(
+                showJumpToLatest ? "pointer-events-auto" : "pointer-events-none"
+              )}
+              onClick={() => scrollToBottom("smooth")}
+              size="sm"
+              tabIndex={showJumpToLatest ? 0 : -1}
+              type="button"
             >
               <ArrowDown aria-hidden="true" />
-            </TooltipTrigger>
-            <TooltipPopup>Jump to latest activity</TooltipPopup>
-          </Tooltip>
-        </div>
-      )}
+              Latest
+            </Button>
+          </div>,
+          scrollContainer
+        )}
       {items.map((item) => (
         <ConversationRow item={item} key={item.key} />
       ))}
