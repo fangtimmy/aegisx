@@ -387,18 +387,10 @@ export function createRunManager(options: Options) {
     return model
   }
 
-  function agentWorkspacePath(
-    run: typeof runs.$inferSelect,
-    agent: typeof runAgents.$inferSelect
-  ) {
+  function runWorkspacePath(run: typeof runs.$inferSelect) {
     if (!run.workspacePath)
       throw new RunStartError("Run workspace is unavailable")
-    const root = join(dataDir, run.workspacePath)
-    return agent.parentAgentId ? join(root, "agents", agent.id) : root
-  }
-
-  function agentContainerPath(agent: typeof runAgents.$inferSelect) {
-    return agent.parentAgentId ? `/workspace/agents/${agent.id}` : "/workspace"
+    return join(dataDir, run.workspacePath)
   }
 
   async function ensureSession(agentId: string) {
@@ -411,7 +403,7 @@ export function createRunManager(options: Options) {
     }
     const modelConfig = parseModelConfig(run.modelConfig)
     const model = await resolveRequestedModel(modelConfig)
-    const workspacePath = agentWorkspacePath(run, agent)
+    const workspacePath = runWorkspacePath(run)
     return attachSession(
       agent,
       run,
@@ -454,9 +446,9 @@ export function createRunManager(options: Options) {
         }
         activeContainers.set(runId, name)
       }
-      backend = createContainerBackend(name, agentContainerPath(agent))
+      backend = createContainerBackend(name)
     } else {
-      backend = createLocalBackend(runWorkspacePath, workspacePath)
+      backend = createLocalBackend(runWorkspacePath)
     }
     const finishRun = defineAgentTool({
       name: "finish_run",
@@ -530,13 +522,13 @@ export function createRunManager(options: Options) {
           content: [
             {
               type: "text" as const,
-              text: `Started ${child.name} in the background with agent ID ${child.id}. Its artifacts are under agents/${child.id}/. Completion will be delivered automatically.`,
+              text: `Started ${child.name} in the background with agent ID ${child.id}. It shares the Run workspace. Completion will be delivered automatically.`,
             },
           ],
           details: {
             agentId: child.id,
             status: child.status,
-            workspace: `agents/${child.id}`,
+            workspace: ".",
           },
         }
       },
@@ -580,11 +572,7 @@ export function createRunManager(options: Options) {
     ]
     const secrets = new Set(options.getApiKeys?.(provider))
     const logicalCwd =
-      environment.type === "container"
-        ? agentContainerPath(agent)
-        : agent.parentAgentId
-          ? `$WORKSPACE/agents/${agent.id}`
-          : "$WORKSPACE"
+      environment.type === "container" ? "/workspace" : "$WORKSPACE"
     const snapshot: AgentRuntimeSnapshot = {
       capturedAt: new Date().toISOString(),
       systemPrompt: buildAgentSystemPrompt(isMain),
@@ -873,8 +861,7 @@ export function createRunManager(options: Options) {
     requireCapacity()
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
-    const workspacePath = join(dataDir, run.workspacePath, "agents", id)
-    mkdirSync(workspacePath, { recursive: true })
+    const workspacePath = runWorkspacePath(run)
     db.insert(runAgents)
       .values({
         id,
@@ -932,9 +919,9 @@ export function createRunManager(options: Options) {
         challenge.points === null ? null : `Points: ${challenge.points}`,
         "",
         `Delegated task: ${task}`,
-        `Your working directory relative to the Run workspace is agents/${id}/.`,
-        "You may inspect the Run workspace through ../.., but write artifacts only in your current working directory.",
-        `Report every artifact using its path relative to the Run workspace, prefixed with agents/${id}/.`,
+        "You share the Run workspace root with the main agent and other child agents.",
+        "Use and report paths relative to the Run workspace root.",
+        "Avoid modifying files unrelated to your delegated task.",
         "Return a concise, evidence-based final answer for the main agent. You cannot finish the Run or create more agents.",
       ]
         .filter((line) => line !== null)
@@ -1286,7 +1273,7 @@ function buildAgentSystemPrompt(isMain: boolean) {
       ]
     : [
         "You are a background child agent. Work only on the delegated task and return a concise, evidence-based result to the main agent.",
-        "You cannot finish the Run or create other agents. Write artifacts only in your assigned working directory.",
+        "You cannot finish the Run or create other agents. Use the shared Run workspace and avoid modifying files unrelated to your delegated task.",
       ]
   return [...shared, ...role].join("\n")
 }

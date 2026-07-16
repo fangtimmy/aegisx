@@ -355,7 +355,12 @@ describe("run API", () => {
     expect(JSON.stringify(childDetail.history)).not.toContain(
       "Inspect the supplied bytes and finish the run."
     )
-    expect(JSON.stringify(childDetail.history)).toContain(`agents/${child.id}/`)
+    expect(JSON.stringify(childDetail.history)).toContain(
+      "share the Run workspace root"
+    )
+    expect(JSON.stringify(childDetail.history)).toContain(
+      "Use and report paths relative to the Run workspace root"
+    )
 
     const childInspector = await (
       await instance.app.request(
@@ -364,7 +369,7 @@ describe("run API", () => {
     ).json()
     expect(childInspector).toMatchObject({
       task: "Inspect the challenge files and report one useful finding.",
-      runtime: { cwd: `$WORKSPACE/agents/${child.id}` },
+      runtime: { cwd: "$WORKSPACE" },
     })
     expect(
       childInspector.runtime.tools.map((tool: { name: string }) => tool.name)
@@ -396,6 +401,10 @@ describe("run API", () => {
     expect(mainInspector.runtime.systemPrompt).not.toContain(
       "<available_skills>"
     )
+    expect(mainInspector.runtime.cwd).toBe(childInspector.runtime.cwd)
+    expect(
+      existsSync(join(instance.dataDir, "workspaces", run.id, "agents"))
+    ).toBe(false)
     expect(instance.activeSessionCount()).toBe(1)
     const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
     expect(

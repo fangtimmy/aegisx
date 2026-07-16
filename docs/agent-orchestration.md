@@ -31,9 +31,9 @@ Runtime snapshots expose the effective system prompt, logical working directory,
 
 ## Workspaces
 
-The main agent works at the run workspace root. Child workspaces are located at `agents/<agent-id>/` under that root.
+Every agent in a run uses the same workspace root and the same path namespace. Tool arguments, shell commands, runtime snapshots, and reported artifact paths are all relative to that root.
 
-Children may read the shared run workspace but can write only inside their assigned directory through AegisX file tools. This is a collaboration boundary, not a security boundary. Local execution inherits API process permissions; container execution uses the run's shared restricted container.
+The workspace is collaborative rather than isolated. Delegated tasks should avoid conflicting writes; AegisX does not lock files or merge per-agent copies. Local execution inherits API process permissions, while container execution uses the run's shared restricted container.
 
 ## Events and usage
 
