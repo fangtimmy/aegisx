@@ -43,6 +43,13 @@
       "when": 1784200000000,
       "tag": "0005_core_agent_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1784201000000,
+      "tag": "0006_agent_usage",
+      "breakpoints": true
     }
   ]
 }
