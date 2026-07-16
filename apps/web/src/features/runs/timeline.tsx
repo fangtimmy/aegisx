@@ -21,11 +21,17 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Button } from "@/components/ui/button"
 import {
+  Collapsible,
+  CollapsiblePanel,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import type { AgentStatus, SessionEntry } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { AgentStatusIcon } from "./agent-status-icon"
@@ -79,10 +85,18 @@ function Markdown({ children }: { children: string }) {
 
 function toolSummary(tool: ToolBlock) {
   const args = isRecord(tool.args) ? tool.args : null
+  const fixed: Record<string, string> = {
+    extend_target: "Extended target lifetime",
+    get_target: "Checked target",
+    start_target: "Started target",
+    stop_target: "Stopped target",
+    submit_flag: "Submitted flag",
+  }
+  if (fixed[tool.name]) return fixed[tool.name]
   const subject =
     tool.name === "bash"
       ? text(args?.command).split("\n", 1)[0]
-      : text(args?.path ?? args?.pattern ?? args?.summary)
+      : text(args?.path ?? args?.pattern ?? args?.summary ?? args?.name)
   const verb =
     tool.name === "bash"
       ? "Ran"
@@ -90,11 +104,80 @@ function toolSummary(tool: ToolBlock) {
         ? "Read"
         : tool.name === "grep"
           ? "Searched"
-          : tool.name === "edit" || tool.name === "write"
-            ? "Updated"
-            : tool.name
+          : tool.name === "find"
+            ? "Found"
+            : tool.name === "ls"
+              ? "Listed"
+              : tool.name === "edit" || tool.name === "write"
+                ? "Updated"
+                : tool.name === "finish_run"
+                  ? "Completed run"
+                  : tool.name === "spawn_agent"
+                    ? "Started agent"
+                    : tool.name === "inspect_agent"
+                      ? "Inspected agent"
+                      : tool.name
   const label = subject ? `${verb} ${subject}` : verb
   return label.length > 100 ? `${label.slice(0, 99)}…` : label
+}
+
+function parseToolValue(value: unknown) {
+  if (typeof value !== "string") return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+function formatToolCell(value: unknown) {
+  if (typeof value === "string") return value
+  if (value === null) return "null"
+  if (typeof value === "object") return JSON.stringify(value, null, 2)
+  return String(value)
+}
+
+function ToolData({ value }: { value: unknown }) {
+  const parsed = parseToolValue(value)
+  const rows = Array.isArray(parsed)
+    ? parsed.map((item, index) => [String(index), item] as const)
+    : isRecord(parsed)
+      ? Object.entries(parsed)
+      : []
+  if (rows.length === 0) {
+    return (
+      <ScrollArea className="h-auto max-h-80" scrollFade scrollbarGutter>
+        <pre className="whitespace-pre-wrap break-words p-2.5 font-mono text-xs leading-5">
+          {formatToolCell(parsed)}
+        </pre>
+      </ScrollArea>
+    )
+  }
+  return (
+    <ScrollArea className="h-auto max-h-80" scrollFade scrollbarGutter>
+      <div className="py-1.5">
+        <table className="w-full table-fixed border-collapse text-xs">
+          <tbody>
+            {rows.map(([key, item]) => (
+              <tr key={key}>
+                <th
+                  className="w-24 px-2.5 py-0.5 text-left align-top font-mono font-medium text-muted-foreground leading-5"
+                  scope="row"
+                >
+                  {key}
+                </th>
+                <td className="min-w-0 px-2.5 py-0.5 align-top">
+                  <pre className="whitespace-pre-wrap break-words font-mono leading-5">
+                    {formatToolCell(item)}
+                  </pre>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </ScrollArea>
+  )
 }
 
 function toolIcon(name: string) {
@@ -123,8 +206,8 @@ function ToolActivity({
         ? CircleAlert
         : toolIcon(tool.name)
   return (
-    <details className={cn("group", separated && "mt-3")}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-1 text-muted-foreground text-sm hover:text-foreground">
+    <Collapsible className={separated ? "mt-3" : undefined}>
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-start gap-2 rounded-sm py-1 text-left text-muted-foreground text-sm hover:text-foreground data-panel-open:[&>svg:last-child]:rotate-90">
         <StatusIcon
           className={
             tool.status === "error"
@@ -135,27 +218,48 @@ function ToolActivity({
           }
         />
         <span className="min-w-0 flex-1 truncate">{toolSummary(tool)}</span>
-        <ChevronRight className="size-3.5 shrink-0 transition-transform group-open:rotate-90" />
-      </summary>
-      <div className="mt-0.5 ml-5 flex min-w-0 flex-col gap-1 pb-1">
-        {tool.args !== null && tool.args !== undefined && (
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-2 font-mono text-xs leading-5">
-            {text(tool.args)}
-          </pre>
+        {tool.status === "running" && (
+          <span className="shrink-0 text-xs">Running</span>
         )}
-        {tool.output && (
-          <pre
-            className={
-              tool.status === "error"
-                ? "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-xs leading-5"
-                : "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-2 font-mono text-xs leading-5"
-            }
+        {tool.status === "error" && (
+          <span className="shrink-0 text-destructive text-xs">Failed</span>
+        )}
+        <ChevronRight className="size-3.5 shrink-0 transition-transform" />
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <div className="mt-1 ml-5 min-w-0 pb-2">
+          <div
+            className={cn(
+              "overflow-hidden rounded-md border bg-muted/30",
+              tool.status === "error" &&
+                "border-destructive/30 bg-destructive/5"
+            )}
           >
-            {tool.output}
-          </pre>
-        )}
-      </div>
-    </details>
+            {tool.args !== null && tool.args !== undefined && (
+              <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)]">
+                <div className="flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs">
+                  I
+                </div>
+                <ToolData value={tool.args} />
+              </div>
+            )}
+            {tool.output && (
+              <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] border-t">
+                <div
+                  className={cn(
+                    "flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs",
+                    tool.status === "error" && "text-destructive"
+                  )}
+                >
+                  O
+                </div>
+                <ToolData value={tool.output} />
+              </div>
+            )}
+          </div>
+        </div>
+      </CollapsiblePanel>
+    </Collapsible>
   )
 }
 

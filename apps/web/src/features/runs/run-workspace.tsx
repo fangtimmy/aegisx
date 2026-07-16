@@ -282,7 +282,6 @@ export function RunWorkspace({
   const { run, agents, stats } = detail.data
   const active = run.status === "running" || run.status === "paused"
   const mainSelected = selectedAgent?.parentAgentId === null
-  const canMessage = run.status === "running" && mainSelected
   const requestedView = searchParams.get("view")
   const view =
     requestedView === "overview" ||
@@ -291,11 +290,22 @@ export function RunWorkspace({
       ? requestedView
       : "conversation"
   const showComposer = view === "conversation" && active && mainSelected
+  const canSubmit =
+    showComposer &&
+    !control.isPending &&
+    (run.status === "paused" || Boolean(draft.trim()))
 
   function send(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const message = draft.trim()
-    if (message) control.mutate({ action: "message", body: { message } })
+    if (run.status === "paused") {
+      control.mutate({
+        action: "resume",
+        body: { message: message || undefined },
+      })
+    } else if (message) {
+      control.mutate({ action: "message", body: { message } })
+    }
   }
 
   return (
@@ -432,10 +442,68 @@ export function RunWorkspace({
               </TabsPanel>
             </Tabs>
             {(showComposer || active || control.error) && (
-              <div className="mt-4 border-t px-6 py-4">
-                <div className="mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2">
+              <div className="border-t bg-background/95 px-6 py-3">
+                {showComposer && (
+                  <form
+                    className="mx-auto flex max-w-3xl items-end gap-2"
+                    onSubmit={send}
+                  >
+                    <Field className="min-w-0 flex-1">
+                      <FieldLabel className="sr-only" htmlFor="run-message">
+                        Message to agent
+                      </FieldLabel>
+                      <Textarea
+                        className="min-h-0 resize-none bg-muted/30"
+                        disabled={control.isPending}
+                        id="run-message"
+                        onChange={(event) => setDraft(event.target.value)}
+                        placeholder={
+                          run.status === "paused"
+                            ? "Optional guidance when resuming"
+                            : "Send guidance to the agent"
+                        }
+                        rows={20}
+                        size="sm"
+                        value={draft}
+                      />
+                    </Field>
+                    <Button
+                      aria-label={
+                        run.status === "paused" ? "Resume run" : "Send message"
+                      }
+                      disabled={!canSubmit}
+                      loading={
+                        control.isPending &&
+                        (control.variables?.action === "message" ||
+                          control.variables?.action === "resume")
+                      }
+                      size="icon"
+                      title={
+                        run.status === "paused" ? "Resume run" : "Send message"
+                      }
+                      type="submit"
+                    >
+                      {run.status === "paused" ? <Play /> : <Send />}
+                    </Button>
+                  </form>
+                )}
+                <div
+                  className={`mx-auto flex max-w-3xl flex-wrap items-center gap-2 ${showComposer ? "mt-3" : ""}`}
+                >
+                  {(active || control.isPending) && (
+                    <span
+                      className="text-muted-foreground text-xs"
+                      role="status"
+                    >
+                      Run is {run.status}
+                      {control.isPending
+                        ? ` · ${control.variables?.action} pending`
+                        : ""}
+                    </span>
+                  )}
                   {run.status === "running" && (
                     <Button
+                      className="ml-auto"
                       loading={
                         control.isPending &&
                         control.variables?.action === "pause"
@@ -449,29 +517,15 @@ export function RunWorkspace({
                       <Pause /> Pause
                     </Button>
                   )}
-                  {run.status === "paused" && (
-                    <Button
-                      loading={
-                        control.isPending &&
-                        control.variables?.action === "resume"
-                      }
-                      onClick={() =>
-                        control.mutate({
-                          action: "resume",
-                          body: { message: draft.trim() || undefined },
-                        })
-                      }
-                      size="sm"
-                      variant="outline"
-                    >
-                      <Play /> Resume
-                    </Button>
-                  )}
                   {active && (
                     <AlertDialog>
                       <AlertDialogTrigger
                         render={
-                          <Button size="sm" variant="destructive-outline" />
+                          <Button
+                            className={run.status === "paused" ? "ml-auto" : ""}
+                            size="sm"
+                            variant="destructive-outline"
+                          />
                         }
                       >
                         <Square /> Stop
@@ -507,58 +561,7 @@ export function RunWorkspace({
                       </AlertDialogPopup>
                     </AlertDialog>
                   )}
-                  {(active || control.isPending) && (
-                    <span
-                      className="ml-auto text-muted-foreground text-xs"
-                      role="status"
-                    >
-                      Run is {run.status}
-                      {control.isPending
-                        ? ` · ${control.variables?.action} pending`
-                        : ""}
-                    </span>
-                  )}
                 </div>
-                {showComposer && (
-                  <form
-                    className="mx-auto flex max-w-3xl items-end gap-2"
-                    onSubmit={send}
-                  >
-                    <Field className="min-w-0 flex-1">
-                      <FieldLabel className="sr-only" htmlFor="run-message">
-                        Message to agent
-                      </FieldLabel>
-                      <Textarea
-                        className="min-h-0 resize-none bg-muted/30"
-                        disabled={!active || control.isPending}
-                        id="run-message"
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder={
-                          run.status === "paused"
-                            ? "Optional guidance when resuming"
-                            : active
-                              ? "Send guidance to the agent"
-                              : `Messaging unavailable while ${run.status}`
-                        }
-                        rows={2}
-                        size="sm"
-                        value={draft}
-                      />
-                    </Field>
-                    <Button
-                      aria-label="Send message"
-                      disabled={!canMessage || !draft.trim()}
-                      loading={
-                        control.isPending &&
-                        control.variables?.action === "message"
-                      }
-                      size="icon"
-                      type="submit"
-                    >
-                      <Send />
-                    </Button>
-                  </form>
-                )}
                 {control.error && (
                   <Alert className="mx-auto mt-2 max-w-3xl" variant="error">
                     <CircleAlert />
