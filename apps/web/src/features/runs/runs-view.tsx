@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query"
 import {
+  ArrowUpDown,
   ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleDot,
-  FolderTree,
   ListTree,
   Plus,
 } from "lucide-react"
@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardFrame,
+  CardFrameAction,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -24,6 +25,14 @@ import {
   CollapsiblePanel,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import {
+  Menu,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuTrigger,
+} from "@/components/ui/menu"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import type { Challenge, RunPublic } from "@/lib/api"
 import { apiRequest } from "@/lib/api"
@@ -49,30 +58,32 @@ function RunBranch({
 
   return (
     <Collapsible onOpenChange={setOpen} open={open || hasSelectedRun}>
-      <div className="group flex items-center gap-1">
+      <div className="group relative flex items-center rounded-md hover:bg-accent/50 focus-within:bg-accent/50">
         <CollapsibleTrigger
           render={
             <Button
-              className="h-9 min-w-0 flex-1 justify-start gap-2 px-2 text-left text-sm"
+              className="h-9 min-w-0 flex-1 justify-start gap-2 bg-transparent px-2 pr-10 text-left text-sm hover:bg-transparent data-pressed:bg-transparent"
               type="button"
               variant="ghost"
             />
           }
         >
           {open || hasSelectedRun ? <ChevronDown /> : <ChevronRight />}
-          <FolderTree className="text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-medium">
             {challenge.name}
           </span>
-          <span className="tabular-nums text-muted-foreground">
+          <span className="tabular-nums text-muted-foreground transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
             {challengeRuns.length}
           </span>
         </CollapsibleTrigger>
-        <CreateRunDialog
-          challenge={challenge}
-          onCreated={onSelect}
-          trigger={<Plus />}
-        />
+        <div className="pointer-events-none absolute right-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [&_[data-slot=button]]:hover:bg-accent">
+          <CreateRunDialog
+            challenge={challenge}
+            onCreated={onSelect}
+            trigger={<Plus />}
+            triggerVariant="ghost"
+          />
+        </div>
       </div>
       <CollapsiblePanel className="mt-1 ml-4 space-y-1 border-l pb-1 pl-3">
         {challengeRuns.length === 0 ? (
@@ -150,6 +161,7 @@ export function RunsView({
   challenges: Challenge[]
   runId?: string
 }) {
+  const [sort, setSort] = useState<"event" | "name" | "recent">("event")
   const runs = useQuery({
     queryKey: ["runs", "event", eventId],
     queryFn: () =>
@@ -173,6 +185,28 @@ export function RunsView({
         <AlertDescription>{runs.error.message}</AlertDescription>
       </Alert>
     )
+  const latestActivity = new Map<string, string>()
+  for (const run of runs.data.items) {
+    const current = latestActivity.get(run.challengeId)
+    if (!current || run.updatedAt > current) {
+      latestActivity.set(run.challengeId, run.updatedAt)
+    }
+  }
+  const sortedChallenges = [...challenges]
+  if (sort === "name") {
+    sortedChallenges.sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      })
+    )
+  } else if (sort === "recent") {
+    sortedChallenges.sort((left, right) =>
+      (latestActivity.get(right.id) ?? "").localeCompare(
+        latestActivity.get(left.id) ?? ""
+      )
+    )
+  }
   return (
     <section className="h-full min-h-0 w-full min-w-0">
       <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-[20rem_minmax(0,1fr)] gap-4">
@@ -183,15 +217,56 @@ export function RunsView({
                 <ListTree className="size-4" /> Runs
               </span>
             </CardFrameTitle>
+            <CardFrameAction className="gap-1">
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      aria-label="Sort challenges"
+                      size="icon-sm"
+                      title="Sort challenges"
+                      variant="ghost"
+                    />
+                  }
+                >
+                  <ArrowUpDown />
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <MenuRadioGroup
+                    onValueChange={(value) =>
+                      setSort(value as "event" | "name" | "recent")
+                    }
+                    value={sort}
+                  >
+                    <MenuRadioItem value="event">Event order</MenuRadioItem>
+                    <MenuRadioItem value="name">Name</MenuRadioItem>
+                    <MenuRadioItem value="recent">
+                      Recent activity
+                    </MenuRadioItem>
+                  </MenuRadioGroup>
+                </MenuPopup>
+              </Menu>
+              <CreateRunDialog
+                challenges={challenges}
+                trigger={<Plus />}
+                triggerLabel="Start run"
+                triggerSize="icon-sm"
+                triggerVariant="ghost"
+              />
+            </CardFrameAction>
           </CardFrameHeader>
           <Card className="min-h-0 flex-1">
-            <CardPanel className="min-h-0 flex-1 overflow-y-auto p-3">
-              <RunTree
-                challenges={challenges}
-                eventId={eventId}
-                runId={runId}
-                runs={runs.data.items}
-              />
+            <CardPanel className="min-h-0 flex-1 overflow-hidden p-0">
+              <ScrollArea className="h-full" scrollFade scrollbarGutter>
+                <div className="p-3">
+                  <RunTree
+                    challenges={sortedChallenges}
+                    eventId={eventId}
+                    runId={runId}
+                    runs={runs.data.items}
+                  />
+                </div>
+              </ScrollArea>
             </CardPanel>
           </Card>
         </CardFrame>

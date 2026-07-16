@@ -3,7 +3,7 @@ import { Box, CircleAlert, Monitor, Play, Plus } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { useNavigate } from "react-router"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
+import { Button, type ButtonProps } from "@/components/ui/button"
 import {
   Dialog,
   DialogClose,
@@ -39,11 +39,17 @@ export function CreateRunDialog({
   challenges,
   challenge,
   trigger,
+  triggerLabel,
+  triggerSize,
+  triggerVariant,
   onCreated,
 }: {
   challenges?: Challenge[]
   challenge?: Pick<Challenge, "id" | "name">
   trigger?: ReactNode
+  triggerLabel?: string
+  triggerSize?: ButtonProps["size"]
+  triggerVariant?: ButtonProps["variant"]
   onCreated?: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -145,13 +151,17 @@ export function CreateRunDialog({
     >
       <DialogTrigger
         aria-label={
-          trigger && challenge ? `Start run for ${challenge.name}` : undefined
+          trigger
+            ? (triggerLabel ??
+              (challenge ? `Start run for ${challenge.name}` : "Start run"))
+            : undefined
         }
         render={
           <Button
             disabled={available.length === 0}
-            size={trigger ? "icon-xs" : undefined}
+            size={trigger ? (triggerSize ?? "icon-xs") : undefined}
             type="button"
+            variant={trigger ? triggerVariant : undefined}
           />
         }
       >
