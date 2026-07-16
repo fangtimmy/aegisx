@@ -91,3 +91,38 @@ test("builds an agent turn and pairs tool results", () => {
   assert.equal(tool.status, "done")
   assert.equal(tool.output, "file.txt")
 })
+
+test("renders child completion as an agent handoff", () => {
+  const items = buildConversation(
+    [
+      {
+        type: "message",
+        id: "handoff-1",
+        parentId: null,
+        timestamp: "2026-07-16T00:00:00.000Z",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Background agent Recon (agent-1) completed.\n\nFinal output:\n\nFound the target file.",
+            },
+          ],
+          timestamp: 1,
+        },
+      },
+    ],
+    []
+  )
+
+  assert.equal(items.length, 1)
+  assert.deepEqual(items[0], {
+    key: "message:user:1",
+    type: "handoff",
+    agentName: "Recon",
+    agentId: "agent-1",
+    status: "completed",
+    body: "Found the target file.",
+    timestamp: 1,
+  })
+})

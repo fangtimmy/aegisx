@@ -1051,6 +1051,18 @@ export function createApp(options: {
     })
   })
 
+  app.get("/api/runs/:runId/agents/:agentId/inspector", (c) => {
+    const run = runManager.get(c.req.param("runId"))
+    const agent = runManager.agent(c.req.param("agentId"))
+    if (!run || !agent || agent.runId !== run.id) {
+      return c.json(
+        { error: { code: "not_found", message: "Agent not found" } },
+        404
+      )
+    }
+    return c.json(runManager.inspector(agent.id))
+  })
+
   app.get("/api/runs/:runId/stats", (c) => {
     const run = runManager.get(c.req.param("runId"))
     if (!run) {

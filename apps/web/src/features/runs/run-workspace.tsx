@@ -46,6 +46,7 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import type {
   AgentPublic,
+  AgentSummary,
   Challenge,
   RunPublic,
   RunStatus,
@@ -53,6 +54,7 @@ import type {
   UsageSummary,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
+import { AgentInspectorButton } from "./agent-inspector"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
@@ -93,7 +95,7 @@ export function RunWorkspace({
     queryFn: () =>
       apiRequest<{
         run: RunPublic
-        agents: AgentPublic[]
+        agents: AgentSummary[]
         stats: UsageSummary
       }>(`/runs/${runId}`),
   })
@@ -143,6 +145,12 @@ export function RunWorkspace({
     setLiveByAgent({})
     if (!runId) return
     const source = new EventSource(`/api/runs/${runId}/events`)
+    source.onopen = () => {
+      queryClient.invalidateQueries({ queryKey: ["runs", runId] })
+      queryClient.invalidateQueries({
+        queryKey: ["runs", runId, "agents"],
+      })
+    }
     source.onmessage = (event) => {
       let payload: unknown
       try {
@@ -153,6 +161,8 @@ export function RunWorkspace({
       if (!isRecord(payload)) return
       const agentEvent = isRecord(payload.event) ? payload.event : null
       const agentId = text(payload.agentId)
+      const affectedAgentId =
+        agentId || (isRecord(payload.agent) ? text(payload.agent.id) : "")
       const entries = agentEvent ? liveEntries(agentEvent) : []
       if (agentId && entries.length > 0) {
         setLiveByAgent((current) => {
@@ -172,7 +182,7 @@ export function RunWorkspace({
       if (statuses.includes(status as RunStatus)) {
         queryClient.setQueryData<{
           run: RunPublic
-          agents: AgentPublic[]
+          agents: AgentSummary[]
           stats: UsageSummary
         }>(["runs", runId], (current) =>
           current
@@ -190,9 +200,12 @@ export function RunWorkspace({
         statuses.includes(status as RunStatus)
       ) {
         queryClient.invalidateQueries({ queryKey: ["runs", runId] })
-        if (agentId) {
+        if (affectedAgentId) {
           queryClient.invalidateQueries({
-            queryKey: ["runs", runId, "agents", agentId],
+            queryKey: ["runs", runId, "agents", affectedAgentId],
+          })
+          queryClient.invalidateQueries({
+            queryKey: ["runs", runId, "agents", affectedAgentId, "inspector"],
           })
         }
         queryClient.invalidateQueries({
@@ -310,7 +323,7 @@ export function RunWorkspace({
               </TabsList>
               <TabsPanel className="min-h-0 overflow-hidden" value="overview">
                 <ScrollArea className="h-full" scrollFade>
-                  <RunOverview run={run} stats={stats} />
+                  <RunOverview agents={agents} run={run} stats={stats} />
                 </ScrollArea>
               </TabsPanel>
               <TabsPanel
@@ -327,21 +340,27 @@ export function RunWorkspace({
                     }}
                     value={selectedAgent.id}
                   >
-                    <TabsList
-                      className="mx-6 max-w-[calc(100%-3rem)] shrink-0 justify-start overflow-x-auto border-b"
-                      variant="underline"
-                    >
-                      {agents.map((agent) => (
-                        <TabsTab key={agent.id} value={agent.id}>
-                          <span className="max-w-40 truncate">
-                            {agent.name}
-                          </span>
-                          <span className="text-muted-foreground text-xs">
-                            {agent.status}
-                          </span>
-                        </TabsTab>
-                      ))}
-                    </TabsList>
+                    <div className="mx-6 flex min-w-0 shrink-0 items-center gap-2 border-b">
+                      <TabsList
+                        className="min-w-0 flex-1 justify-start overflow-x-auto"
+                        variant="underline"
+                      >
+                        {agents.map((agent) => (
+                          <TabsTab key={agent.id} value={agent.id}>
+                            <span className="max-w-40 truncate">
+                              {agent.name}
+                            </span>
+                            <span className="text-muted-foreground text-xs">
+                              {agent.status}
+                            </span>
+                          </TabsTab>
+                        ))}
+                      </TabsList>
+                      <AgentInspectorButton
+                        agent={selectedAgent}
+                        runId={runId}
+                      />
+                    </div>
                     <TabsPanel
                       className="min-h-0 overflow-hidden"
                       value={selectedAgent.id}

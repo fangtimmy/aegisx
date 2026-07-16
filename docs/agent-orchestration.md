@@ -23,7 +23,7 @@
 容器：/workspace/agents/<agent-id>
 ```
 
-子目录是协作式隔离，不是安全边界。子 Agent 可以读取整个 Run 工作区，但提示词要求只把产物写入自己的目录。本机模式仍继承应用进程权限；容器模式仍以 Run 的单个受限容器作为安全边界。
+子目录是协作式隔离，不是安全边界。子 Agent 可以读取整个 Run 工作区，但提示词要求只把产物写入自己的目录，并以 `agents/<agent-id>/...` 形式报告相对 Run 根目录的产物路径。本机模式仍继承应用进程权限；容器模式仍以 Run 的单个受限容器作为安全边界。
 
 ## 创建与通信
 
@@ -32,7 +32,7 @@
 - `spawn_agent(name, task)`：创建子 Agent，Session 启动后立即返回 Agent ID，不等待任务完成。
 - `inspect_agent(agent_id)`：查询子 Agent 状态、错误和最后一条输出摘要。
 
-子 Agent 完成后，服务端保存其最后一条 assistant 文本。如果主 Agent 正在生成，使用 `steer()` 注入结果；如果主 Agent 空闲，使用 `prompt()` 启动新一轮。完整历史保留在子 Agent 的 Pi JSONL 中，自动回传内容限制长度。
+子 Agent 完成后，服务端保存其最后一条 assistant 文本。如果主 Agent 正在生成，使用 `steer()` 注入结果；如果主 Agent 空闲，使用 `prompt()` 启动新一轮。完整历史保留在子 Agent 的 Pi JSONL 中，自动回传内容限制长度。完成结果会自动送达，主 Agent 不应频繁轮询 `inspect_agent`。
 
 ## 持久化
 
@@ -41,6 +41,7 @@
 - Agent ID、Run ID、父 Agent ID和名称。
 - 委派任务、状态和错误。
 - 独立 Pi JSONL 会话路径。
+- 脱敏后的 effective system prompt、逻辑 cwd 和启用工具定义快照。
 - 最后一条输出摘要和时间戳。
 
 迁移时，现有 Run 的会话路径回填为主 Agent 记录。Run usage 是所有 Agent usage 之和。
@@ -49,6 +50,8 @@
 
 - 创建 Run 时同步创建主 Agent 数据行。
 - 创建子 Agent 时先占用并发槽，再异步启动 Session。
+- 主 Agent 自然结束一次 turn 后进入 `idle`，Run 继续保持 `running`。
+- 只有主 Agent 调用 `finish_run(summary, flag?)` 才会把 Run 标记为 `completed`。
 - 子 Agent 正常结束只结束自身，并把结果交给主 Agent。
 - 子 Agent 失败只标记自身失败，不直接令 Run 失败。
 - 暂停会中断所有运行中的 Agent 并标记为暂停。
@@ -58,7 +61,7 @@
 
 ## API 与事件
 
-Run 详情返回 Run、Agent 元数据和聚合 usage。单个 Agent 详情接口返回该 Agent 的历史与 usage。
+Run 详情返回 Run、Agent 元数据、逐 Agent usage 和聚合 usage。单个 Agent 详情接口返回该 Agent 的历史与 usage；Inspector 接口按需返回脱敏 runtime snapshot、任务和 usage。
 
 SSE 使用带 Agent ID 的事件 envelope：
 
@@ -77,10 +80,12 @@ Conversation 内增加 Agent Tabs：
 
 - 默认选择主 Agent，选择写入 `?agent=<agent-id>`。
 - Tab 显示 Agent 名称和状态。
+- Agent Tabs 提供 Inspector Dialog，展示 system prompt、工具定义、模型、逻辑 cwd、任务和 usage。
 - 历史按选中的 Agent 按需读取。
 - 新子 Agent 出现时增加 Tab，但不强制切换。
 - 消息输入框只在主 Agent Tab 显示。
 - Run 级暂停、恢复和停止控制所有 Agent。
+- Overview 显示逐 Agent token 用量和 Run 合计。
 
 ## 首版不做
 
@@ -89,3 +94,4 @@ Conversation 内增加 Agent Tabs：
 - Agent 独立暂停、停止和人工消息。
 - 强制文件写隔离、完整工作区副本或每 Agent 独立容器。
 - 黑板、共享聊天、平等 Agent 或固定专家角色系统。
+- 子 Agent token、turn、时间预算或其他预算限制。

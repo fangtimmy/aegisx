@@ -96,6 +96,7 @@ export const runAgents = sqliteTable(
     task: text("task"),
     status: text("status").notNull(),
     sessionPath: text("session_path"),
+    runtimeSnapshot: text("runtime_snapshot"),
     summary: text("summary"),
     error: text("error"),
     createdAt: text("created_at").notNull(),
@@ -111,7 +112,7 @@ export const runAgents = sqliteTable(
       .where(sql`${table.parentAgentId} is null`),
     check(
       "run_agents_status_check",
-      sql`${table.status} in ('running', 'paused', 'completed', 'failed', 'stopped')`
+      sql`${table.status} in ('running', 'idle', 'paused', 'completed', 'failed', 'stopped')`
     ),
   ]
 )

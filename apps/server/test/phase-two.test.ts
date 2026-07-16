@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import {
   fauxAssistantMessage,
@@ -264,6 +264,18 @@ describe("phase two run API", () => {
           entry.type === "message" && entry.message?.role === "assistant"
       )
     }, Boolean)
+    const idle = await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string }
+          agents: Array<{ parentAgentId: string | null; status: string }>
+        }>,
+      (detail) =>
+        detail.agents.some(
+          (agent) => agent.parentAgentId === null && agent.status === "idle"
+        )
+    )
+    expect(idle.run.status).toBe("running")
 
     instance.faux.setResponses([fauxAssistantMessage("Acknowledged.")])
     const messaged = await instance.app.request(
@@ -312,8 +324,22 @@ describe("phase two run API", () => {
             parentAgentId: string | null
             status: string
             summary: string | null
+            usage: {
+              input: number
+              output: number
+              cacheRead: number
+              cacheWrite: number
+              totalTokens: number
+            }
           }>
           history: unknown[]
+          stats: {
+            input: number
+            output: number
+            cacheRead: number
+            cacheWrite: number
+            totalTokens: number
+          }
         }>,
       (value) =>
         value.agents.some(
@@ -324,12 +350,53 @@ describe("phase two run API", () => {
     const child = detail.agents.find(
       (agent) => agent.parentAgentId !== null
     ) as (typeof detail.agents)[number]
+    const main = detail.agents.find(
+      (agent) => agent.parentAgentId === null
+    ) as (typeof detail.agents)[number]
     expect(child.summary).toContain("delegated-result")
+    for (const key of [
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "totalTokens",
+    ] as const) {
+      expect(detail.stats[key]).toBe(
+        detail.agents.reduce((total, agent) => total + agent.usage[key], 0)
+      )
+    }
 
     const childDetail = await (
       await instance.app.request(`/api/runs/${run.id}/agents/${child.id}`)
     ).json()
     expect(JSON.stringify(childDetail.history)).toContain("delegated-result")
+    expect(JSON.stringify(childDetail.history)).not.toContain("call finish_run")
+    expect(JSON.stringify(childDetail.history)).toContain(`agents/${child.id}/`)
+
+    const childInspector = await (
+      await instance.app.request(
+        `/api/runs/${run.id}/agents/${child.id}/inspector`
+      )
+    ).json()
+    expect(childInspector).toMatchObject({
+      task: "Inspect the challenge files and report one useful finding.",
+      runtime: { cwd: `$WORKSPACE/agents/${child.id}` },
+    })
+    expect(
+      childInspector.runtime.tools.map((tool: { name: string }) => tool.name)
+    ).not.toContain("finish_run")
+    expect(JSON.stringify(childInspector)).not.toContain(instance.dataDir)
+    expect(JSON.stringify(childInspector)).not.toContain(homedir())
+    expect(JSON.stringify(childInspector)).not.toContain("test-only")
+
+    const mainInspector = await (
+      await instance.app.request(
+        `/api/runs/${run.id}/agents/${main.id}/inspector`
+      )
+    ).json()
+    expect(
+      mainInspector.runtime.tools.map((tool: { name: string }) => tool.name)
+    ).toEqual(expect.arrayContaining(["finish_run", "spawn_agent"]))
     expect(instance.activeSessionCount()).toBe(1)
 
     await instance.app.request(`/api/runs/${run.id}/stop`, json("POST", {}))

@@ -48,6 +48,8 @@ export type RunStatus =
   | "failed"
   | "stopped"
 
+export type AgentStatus = RunStatus | "idle"
+
 export type RunPublic = {
   id: string
   challengeId: string
@@ -75,13 +77,35 @@ export type AgentPublic = {
   runId: string
   parentAgentId: string | null
   name: string
-  status: RunStatus
+  status: AgentStatus
   summary: string | null
   error: string | null
   createdAt: string
   startedAt: string | null
   updatedAt: string
   completedAt: string | null
+}
+
+export type AgentSummary = AgentPublic & { usage: UsageSummary }
+
+export type AgentRuntimeSnapshot = {
+  capturedAt: string
+  systemPrompt: string
+  cwd: string
+  model: { provider: string; modelId: string }
+  tools: Array<{
+    name: string
+    description: string
+    parameters: unknown
+    promptGuidelines?: string[]
+  }>
+}
+
+export type AgentInspector = {
+  agent: AgentPublic
+  task: string | null
+  runtime: AgentRuntimeSnapshot | null
+  usage: UsageSummary
 }
 
 export type UsageSummary = {

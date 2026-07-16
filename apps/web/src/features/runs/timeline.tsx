@@ -1,4 +1,5 @@
 import {
+  BotMessageSquare,
   Brain,
   ChevronRight,
   CircleAlert,
@@ -104,6 +105,15 @@ type AgentBlock =
   | ToolBlock
 
 export type ConversationItem =
+  | {
+      key: string
+      type: "handoff"
+      agentId: string
+      agentName: string
+      status: string
+      body: string
+      timestamp?: string | number
+    }
   | {
       key: string
       type: "user"
@@ -253,12 +263,27 @@ export function buildConversation(
     if (role === "user") {
       const body = contentText(message.content)
       if (body) {
-        items.push({
-          key: messageKey(message) ?? `user:${items.length}`,
-          type: "user",
-          body,
-          timestamp,
-        })
+        const handoff = body.match(
+          /^Background agent (.+) \(([^)]+)\) (completed|failed|stopped)\.\n\nFinal output:\n\n([\s\S]*)$/
+        )
+        items.push(
+          handoff
+            ? {
+                key: messageKey(message) ?? `handoff:${items.length}`,
+                type: "handoff",
+                agentName: handoff[1],
+                agentId: handoff[2],
+                status: handoff[3],
+                body: handoff[4],
+                timestamp,
+              }
+            : {
+                key: messageKey(message) ?? `user:${items.length}`,
+                type: "user",
+                body,
+                timestamp,
+              }
+        )
       }
       agent = null
       return
@@ -539,6 +564,23 @@ function ConversationRow({ item }: { item: ConversationItem }) {
         {time && <time>{time}</time>}
         <div className="h-px flex-1 bg-border" />
       </div>
+    )
+  }
+  if (item.type === "handoff") {
+    return (
+      <article className="py-5">
+        <div className="border-l-2 border-primary bg-muted/30 px-4 py-3">
+          <div className="mb-2 flex items-center gap-2 text-muted-foreground text-xs">
+            <BotMessageSquare className="size-4" />
+            <span className="font-medium text-foreground">
+              Agent handoff · {item.agentName}
+            </span>
+            <span>{item.status}</span>
+            {time && <time className="ml-auto">{time}</time>}
+          </div>
+          <Markdown>{item.body}</Markdown>
+        </div>
+      </article>
     )
   }
   return (

@@ -1,10 +1,24 @@
 import { Box, CircleAlert, Monitor } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import type { RunPublic, RunStatus, UsageSummary } from "@/lib/api"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import type {
+  AgentStatus,
+  AgentSummary,
+  RunPublic,
+  UsageSummary,
+} from "@/lib/api"
 import { formatTime } from "./timeline"
 
-export function statusVariant(status: RunStatus) {
+export function statusVariant(status: AgentStatus) {
   if (status === "completed") return "success" as const
   if (status === "failed") return "error" as const
   if (status === "paused") return "warning" as const
@@ -12,9 +26,11 @@ export function statusVariant(status: RunStatus) {
 }
 
 export function RunOverview({
+  agents,
   run,
   stats,
 }: {
+  agents: AgentSummary[]
   run: RunPublic
   stats: UsageSummary
 }) {
@@ -74,32 +90,45 @@ export function RunOverview({
         </div>
       </dl>
       <section className="border-t pt-4">
-        <h3 className="font-medium text-sm">Token usage</h3>
-        <dl className="mt-3 grid grid-cols-3 gap-x-8 gap-y-4 text-sm">
-          {[
-            ["Input", stats.input.toLocaleString()],
-            ["Output", stats.output.toLocaleString()],
-            ["Cache read", stats.cacheRead.toLocaleString()],
-            ["Cache write", stats.cacheWrite.toLocaleString()],
-            ["Total tokens", stats.totalTokens.toLocaleString()],
-            [
-              "Cost",
-              stats.cost === null
-                ? "Unknown"
-                : new Intl.NumberFormat(undefined, {
-                    style: "currency",
-                    currency: "USD",
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 6,
-                  }).format(stats.cost),
-            ],
-          ].map(([label, value]) => (
-            <div key={label}>
-              <dt className="text-muted-foreground text-xs">{label}</dt>
-              <dd className="mt-1 font-medium tabular-nums">{value}</dd>
-            </div>
-          ))}
-        </dl>
+        <h3 className="mb-3 font-medium text-sm">Agent token usage</h3>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Agent</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Input</TableHead>
+              <TableHead className="text-right">Output</TableHead>
+              <TableHead className="text-right">Cache read</TableHead>
+              <TableHead className="text-right">Cache write</TableHead>
+              <TableHead className="text-right">Total</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {agents.map((agent) => (
+              <TableRow key={agent.id}>
+                <TableCell className="font-medium">{agent.name}</TableCell>
+                <TableCell>
+                  {agent.parentAgentId === null ? "Main" : "Child"}
+                </TableCell>
+                <TableCell>
+                  <Badge variant={statusVariant(agent.status)}>
+                    {agent.status}
+                  </Badge>
+                </TableCell>
+                <UsageCells usage={agent.usage} />
+              </TableRow>
+            ))}
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell className="font-medium" colSpan={3}>
+                Run total
+              </TableCell>
+              <UsageCells usage={stats} />
+            </TableRow>
+          </TableFooter>
+        </Table>
       </section>
       {(run.summary || run.flag) && (
         <section className="border-t pt-4">
@@ -124,5 +153,26 @@ export function RunOverview({
         </Alert>
       )}
     </div>
+  )
+}
+
+function UsageCells({ usage }: { usage: UsageSummary }) {
+  return (
+    <>
+      {[
+        ["input", usage.input],
+        ["output", usage.output],
+        ["cache-read", usage.cacheRead],
+        ["cache-write", usage.cacheWrite],
+        ["total", usage.totalTokens],
+      ].map(([key, value]) => (
+        <TableCell
+          className="text-right font-mono text-xs tabular-nums"
+          key={key}
+        >
+          {value.toLocaleString()}
+        </TableCell>
+      ))}
+    </>
   )
 }
