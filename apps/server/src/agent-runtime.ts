@@ -8,6 +8,7 @@ import type { Api, Message, Model, Models } from "@earendil-works/pi-ai"
 import { and, asc, eq, isNull, max } from "drizzle-orm"
 import type { createDatabase } from "./db"
 import { agentInbox, agentMessages, agentUsage, runAgents } from "./db/schema"
+import { redactSecrets } from "./redaction"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 export type InboxKind = "user" | "child_result" | "resume"
@@ -110,28 +111,6 @@ function textMessage(text: string): Message {
 
 function contextSize(messages: AgentMessage[]) {
   return JSON.stringify(messages).length
-}
-
-function redact<T>(value: T, secrets: Iterable<string>): T {
-  for (const secret of secrets) {
-    if (secret) redactOne(value, secret)
-  }
-  return value
-}
-
-function redactOne(value: unknown, secret: string): unknown {
-  if (typeof value === "string") return value.replaceAll(secret, "[redacted]")
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      value[index] = redactOne(value[index], secret)
-    }
-  } else if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>
-    for (const key of Object.keys(record)) {
-      record[key] = redactOne(record[key], secret)
-    }
-  }
-  return value
 }
 
 export function createAgentRuntime(options: RuntimeOptions) {
@@ -261,7 +240,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
   })
 
   const unsubscribe = agent.subscribe(async (event) => {
-    redact(event, secrets)
+    redactSecrets(event, secrets)
     if (event.type === "message_end") {
       sequence += 1
       options.db.transaction((tx) => {

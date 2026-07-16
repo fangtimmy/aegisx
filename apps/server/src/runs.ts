@@ -36,6 +36,7 @@ import {
   runs,
 } from "./db/schema"
 import type { ModelService } from "./models"
+import { redactSecrets, replaceText } from "./redaction"
 import {
   summarizeUsage,
   summarizeUsageRecords,
@@ -598,7 +599,7 @@ export function createRunManager(options: Options) {
         parameters: tool.parameters,
       })),
     }
-    for (const secret of secrets) redactSecret(snapshot, secret)
+    redactSecrets(snapshot, secrets)
     replaceText(snapshot, workspacePath, logicalCwd)
     if (run.workspacePath) {
       replaceText(snapshot, join(dataDir, run.workspacePath), "$WORKSPACE")
@@ -1372,44 +1373,4 @@ function redactFlags<T>(value: T): T {
   return JSON.parse(
     JSON.stringify(value, (key, item) => (key === "flag" ? undefined : item))
   ) as T
-}
-
-function redactSecret<T>(value: T, secret: string | undefined): T {
-  if (!secret) return value
-  if (typeof value === "string") {
-    return value.replaceAll(secret, "[redacted]") as T
-  }
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      value[index] = redactSecret(value[index], secret)
-    }
-    return value
-  }
-  if (typeof value === "object" && value !== null) {
-    for (const key of Object.keys(value)) {
-      const record = value as Record<string, unknown>
-      record[key] = redactSecret(record[key], secret)
-    }
-  }
-  return value
-}
-
-function replaceText<T>(value: T, search: string, replacement: string): T {
-  if (!search) return value
-  if (typeof value === "string") {
-    return value.replaceAll(search, replacement) as T
-  }
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      value[index] = replaceText(value[index], search, replacement)
-    }
-    return value
-  }
-  if (typeof value === "object" && value !== null) {
-    for (const key of Object.keys(value)) {
-      const record = value as Record<string, unknown>
-      record[key] = replaceText(record[key], search, replacement)
-    }
-  }
-  return value
 }
