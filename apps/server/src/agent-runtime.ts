@@ -1,0 +1,421 @@
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentTool,
+} from "@earendil-works/pi-agent-core"
+import type { Api, Message, Model, Models } from "@earendil-works/pi-ai"
+import { and, asc, eq, isNull, max } from "drizzle-orm"
+import type { createDatabase } from "./db"
+import { agentInbox, agentMessages, agentUsage, runAgents } from "./db/schema"
+
+type Database = ReturnType<typeof createDatabase>["db"]
+export type InboxKind = "user" | "child_result" | "resume"
+
+export type AegisXMessage = {
+  role: "aegisx"
+  id: string
+  kind: InboxKind
+  text: string
+  timestamp: number
+}
+
+declare module "@earendil-works/pi-agent-core" {
+  interface CustomAgentMessages {
+    aegisx: AegisXMessage
+  }
+}
+
+export type RuntimeOutcome = {
+  status: "success" | "error" | "aborted"
+  summary: string | null
+  error: string | null
+}
+
+type RuntimeOptions = {
+  db: Database
+  agentId: string
+  systemPrompt: string
+  model: Model<Api>
+  models: Models
+  tools: AgentTool[]
+  secrets: Iterable<string>
+  canRunTool?(): boolean
+  onEvent(event: AgentEvent): void
+  onSettled(outcome: RuntimeOutcome): void | Promise<void>
+}
+
+function toLlm(messages: AgentMessage[]): Message[] {
+  return messages.flatMap((message) =>
+    message.role === "aegisx"
+      ? [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: message.text }],
+            timestamp: message.timestamp,
+          },
+        ]
+      : [message]
+  ) as Message[]
+}
+
+export function publicAgentMessage(message: AgentMessage): AgentMessage {
+  return message.role === "aegisx"
+    ? {
+        role: "user",
+        content: [{ type: "text", text: message.text }],
+        timestamp: message.timestamp,
+      }
+    : message
+}
+
+function publicEvent(event: AgentEvent): AgentEvent {
+  if (
+    event.type === "message_start" ||
+    event.type === "message_update" ||
+    event.type === "message_end"
+  ) {
+    return { ...event, message: publicAgentMessage(event.message) }
+  }
+  if (event.type === "agent_end") {
+    return { ...event, messages: event.messages.map(publicAgentMessage) }
+  }
+  return event
+}
+
+function lastAssistant(messages: AgentMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === "assistant") return message
+  }
+  return undefined
+}
+
+function assistantText(message: AgentMessage | undefined) {
+  if (message?.role !== "assistant") return null
+  const text = message.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+    .trim()
+  return text ? text.slice(0, 50_000) : null
+}
+
+function textMessage(text: string): Message {
+  return {
+    role: "user",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  }
+}
+
+function contextSize(messages: AgentMessage[]) {
+  return JSON.stringify(messages).length
+}
+
+function redact<T>(value: T, secrets: Iterable<string>): T {
+  for (const secret of secrets) {
+    if (secret) redactOne(value, secret)
+  }
+  return value
+}
+
+function redactOne(value: unknown, secret: string): unknown {
+  if (typeof value === "string") return value.replaceAll(secret, "[redacted]")
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      value[index] = redactOne(value[index], secret)
+    }
+  } else if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>
+    for (const key of Object.keys(record)) {
+      record[key] = redactOne(record[key], secret)
+    }
+  }
+  return value
+}
+
+export function createAgentRuntime(options: RuntimeOptions) {
+  const rows = options.db
+    .select()
+    .from(agentMessages)
+    .where(eq(agentMessages.agentId, options.agentId))
+    .orderBy(asc(agentMessages.sequence))
+    .all()
+  const messages = rows.map((row) => JSON.parse(row.message) as AgentMessage)
+  let sequence =
+    options.db
+      .select({ value: max(agentMessages.sequence) })
+      .from(agentMessages)
+      .where(eq(agentMessages.agentId, options.agentId))
+      .get()?.value ?? 0
+  let phase: "idle" | "prompting" | "aborting" | "disposed" = "idle"
+  const queued = new Set<string>()
+  const secrets = new Set(options.secrets)
+  let contextSummary = options.db
+    .select({
+      summary: runAgents.contextSummary,
+      through: runAgents.contextThroughSequence,
+    })
+    .from(runAgents)
+    .where(eq(runAgents.id, options.agentId))
+    .get()
+  const summaryMessage = (summary: string): AgentMessage =>
+    textMessage(`Previous conversation summary:\n\n${summary}`) as AgentMessage
+
+  async function transformContext(
+    allMessages: AgentMessage[],
+    signal?: AbortSignal
+  ) {
+    const through = Math.min(contextSummary?.through ?? 0, allMessages.length)
+    const tail = allMessages.slice(through)
+    const effective = contextSummary?.summary
+      ? [summaryMessage(contextSummary.summary), ...tail]
+      : tail
+    const threshold = options.model.contextWindow * 3
+    if (contextSize(effective) < threshold) return effective
+
+    let keptSize = 0
+    let keepAt = tail.length
+    const keepBudget = options.model.contextWindow
+    while (keepAt > 0 && keptSize < keepBudget) {
+      keepAt -= 1
+      keptSize += contextSize([tail[keepAt]])
+    }
+    while (
+      keepAt < tail.length &&
+      tail[keepAt]?.role !== "user" &&
+      tail[keepAt]?.role !== "aegisx"
+    ) {
+      keepAt += 1
+    }
+    if (keepAt === 0 || keepAt === tail.length) return effective
+
+    const compacted = [
+      ...(contextSummary?.summary
+        ? [summaryMessage(contextSummary.summary)]
+        : []),
+      ...tail.slice(0, keepAt),
+    ]
+    const response = await options.models.completeSimple(
+      options.model,
+      {
+        systemPrompt:
+          "Summarize the conversation for another agent. Preserve concrete findings, commands, files, failures, pending work, and constraints. Do not continue the task.",
+        messages: [textMessage(JSON.stringify(toLlm(compacted)))],
+      },
+      { signal, maxTokens: 4096 }
+    )
+    options.db
+      .insert(agentUsage)
+      .values({
+        id: crypto.randomUUID(),
+        agentId: options.agentId,
+        kind: "compaction",
+        usage: JSON.stringify(response.usage),
+        createdAt: new Date().toISOString(),
+      })
+      .run()
+    if (response.stopReason === "error" || response.stopReason === "aborted") {
+      return effective
+    }
+    const summary = response.content
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n")
+      .trim()
+    if (!summary) return effective
+
+    contextSummary = { summary, through: through + keepAt }
+    options.db
+      .update(runAgents)
+      .set({
+        contextSummary: summary,
+        contextThroughSequence: through + keepAt,
+      })
+      .where(eq(runAgents.id, options.agentId))
+      .run()
+    return [summaryMessage(summary), ...tail.slice(keepAt)]
+  }
+
+  const agent = new Agent({
+    initialState: {
+      systemPrompt: options.systemPrompt,
+      model: options.model,
+      tools: options.tools,
+      messages,
+      thinkingLevel: "off",
+    },
+    sessionId: options.agentId,
+    streamFn: (model, context, streamOptions) =>
+      options.models.streamSimple(model, context, streamOptions),
+    convertToLlm: toLlm,
+    transformContext,
+    beforeToolCall: async () =>
+      options.canRunTool?.() === false
+        ? { block: true, reason: "Run state no longer allows tool execution" }
+        : undefined,
+    afterToolCall: async () =>
+      options.canRunTool?.() === false ? { terminate: true } : undefined,
+    steeringMode: "all",
+    followUpMode: "all",
+    toolExecution: "parallel",
+  })
+
+  const unsubscribe = agent.subscribe(async (event) => {
+    redact(event, secrets)
+    if (event.type === "message_end") {
+      sequence += 1
+      options.db.transaction((tx) => {
+        tx.insert(agentMessages)
+          .values({
+            id: crypto.randomUUID(),
+            agentId: options.agentId,
+            sequence,
+            message: JSON.stringify(event.message),
+            createdAt: new Date().toISOString(),
+          })
+          .run()
+        if (event.message.role === "aegisx") {
+          tx.update(agentInbox)
+            .set({ deliveredAt: new Date().toISOString() })
+            .where(eq(agentInbox.id, event.message.id))
+            .run()
+          queued.delete(event.message.id)
+        }
+      })
+    }
+    options.onEvent(publicEvent(event))
+  })
+
+  function pending() {
+    return options.db
+      .select()
+      .from(agentInbox)
+      .where(
+        and(
+          eq(agentInbox.agentId, options.agentId),
+          isNull(agentInbox.deliveredAt)
+        )
+      )
+      .orderBy(asc(agentInbox.createdAt), asc(agentInbox.id))
+      .all()
+  }
+
+  function message(row: ReturnType<typeof pending>[number]): AegisXMessage {
+    return {
+      role: "aegisx",
+      id: row.id,
+      kind: row.kind as InboxKind,
+      text: row.content,
+      timestamp: Date.parse(row.createdAt),
+    }
+  }
+
+  function classify(): RuntimeOutcome {
+    const final = lastAssistant(agent.state.messages)
+    if (final?.role === "assistant" && final.stopReason === "error") {
+      return {
+        status: "error",
+        summary: assistantText(final),
+        error: final.errorMessage ?? "Agent request failed",
+      }
+    }
+    if (final?.role === "assistant" && final.stopReason === "aborted") {
+      return {
+        status: "aborted",
+        summary: assistantText(final),
+        error: final.errorMessage ?? null,
+      }
+    }
+    return { status: "success", summary: assistantText(final), error: null }
+  }
+
+  function start(first: AegisXMessage) {
+    if (phase !== "idle") {
+      agent.steer(first)
+      return
+    }
+    phase = "prompting"
+    const prompting = agent.prompt(first)
+    for (const row of pending()) {
+      if (row.id !== first.id && !queued.has(row.id)) {
+        queued.add(row.id)
+        agent.steer(message(row))
+      }
+    }
+    void prompting
+      .then(
+        () => classify(),
+        (error): RuntimeOutcome => ({
+          status: "error",
+          summary: null,
+          error:
+            error instanceof Error ? error.message : "Agent runtime failed",
+        })
+      )
+      .then(async (outcome) => {
+        if (phase === "disposed") return
+        queued.clear()
+        phase = "idle"
+        await options.onSettled(outcome)
+      })
+      .catch((error) => {
+        console.error("Agent settlement failed", error)
+      })
+  }
+
+  function replayPending() {
+    const rows = pending().filter((row) => !queued.has(row.id))
+    if (rows.length === 0) return
+    queued.add(rows[0].id)
+    start(message(rows[0]))
+  }
+
+  function dispatch(kind: InboxKind, content: string) {
+    if (phase === "disposed") throw new Error("Agent runtime is disposed")
+    const id = crypto.randomUUID()
+    const createdAt = new Date().toISOString()
+    options.db
+      .insert(agentInbox)
+      .values({ id, agentId: options.agentId, kind, content, createdAt })
+      .run()
+    queued.add(id)
+    start({
+      role: "aegisx",
+      id,
+      kind,
+      text: content,
+      timestamp: Date.parse(createdAt),
+    })
+    return id
+  }
+
+  return {
+    agent,
+    dispatch,
+    replayPending,
+    addSecrets: (values: Iterable<string>) => {
+      for (const value of values) secrets.add(value)
+    },
+    abort: async () => {
+      if (phase === "disposed") return
+      phase = "aborting"
+      agent.clearAllQueues()
+      agent.abort()
+      await agent.waitForIdle()
+      if (phase === "aborting") phase = "idle"
+    },
+    dispose: () => {
+      if (phase === "disposed") return
+      phase = "disposed"
+      unsubscribe()
+      agent.abort()
+      agent.clearAllQueues()
+    },
+    get phase() {
+      return phase
+    },
+  }
+}
+
+export type AgentRuntime = ReturnType<typeof createAgentRuntime>
+export type { AgentEvent }

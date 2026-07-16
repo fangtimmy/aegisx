@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs"
-import type { Api, Model } from "@earendil-works/pi-ai/compat"
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent"
+import type { Api, Model, MutableModels } from "@earendil-works/pi-ai"
 import { tbValidator } from "@hono/typebox-validator"
 import { and, count, eq, getTableColumns, inArray } from "drizzle-orm"
 import { Hono } from "hono"
@@ -16,6 +15,7 @@ import {
   runs,
   settings,
 } from "./db/schema"
+import { createModelService } from "./models"
 import { createRunManager, RunActionError } from "./runs"
 import { createStorage, isSafeFilename } from "./storage"
 import { sumUsage } from "./usage"
@@ -146,12 +146,6 @@ function cleanText(value: string | null | undefined) {
 
 const providerName = (id: string) => `aegisx-${id}`
 
-function providerApi(
-  type: "openai-compatible" | "openai-responses" | "anthropic-messages"
-): Api {
-  return type === "openai-compatible" ? "openai-completions" : type
-}
-
 function normalizeBaseUrl(value: string) {
   const url = new URL(value.trim())
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -163,14 +157,16 @@ function normalizeBaseUrl(value: string) {
 export function createApp(options: {
   dataDir: string
   maxConcurrency?: number
-  authStorage?: AuthStorage
+  models?: MutableModels
   resolveModel?: (provider: string, modelId: string) => Model<Api> | undefined
 }) {
   const { db, sqlite } = createDatabase(options.dataDir)
   const storage = createStorage(options.dataDir)
-  const authStorage = options.authStorage ?? AuthStorage.inMemory()
-  const modelRegistry = ModelRegistry.inMemory(authStorage)
-  const registeredProviders = new Set<string>()
+  const modelService = createModelService(
+    db,
+    options.models,
+    options.resolveModel
+  )
   const providerSecrets = new Map<string, Set<string>>()
   const listProviderModels = (providerId: string) =>
     db
@@ -184,7 +180,7 @@ export function createApp(options: {
       .from(providerConnections)
       .where(eq(providerConnections.id, providerId))
       .get()
-  const syncModelRegistry = () => {
+  const syncModels = () => {
     const activeProviders = db
       .select()
       .from(providerConnections)
@@ -199,43 +195,13 @@ export function createApp(options: {
         ({ provider, models }) =>
           provider.enabled && Boolean(provider.apiKey) && models.length > 0
       )
-    const activeNames = new Set(
-      activeProviders.map(({ provider }) => providerName(provider.id))
-    )
-    for (const name of registeredProviders) {
-      if (activeNames.has(name)) continue
-      authStorage.removeRuntimeApiKey(name)
-      modelRegistry.unregisterProvider(name)
-      registeredProviders.delete(name)
-    }
-    for (const { provider, models } of activeProviders) {
+    for (const { provider } of activeProviders) {
       const name = providerName(provider.id)
       const secrets = providerSecrets.get(name) ?? new Set<string>()
       secrets.add(provider.apiKey)
       providerSecrets.set(name, secrets)
-      authStorage.setRuntimeApiKey(name, provider.apiKey)
-      modelRegistry.registerProvider(name, {
-        name: provider.label,
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        api: providerApi(
-          provider.type as
-            | "openai-compatible"
-            | "openai-responses"
-            | "anthropic-messages"
-        ),
-        models: models.map((model) => ({
-          id: model.modelId,
-          name: model.label,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 16_384,
-        })),
-      })
-      registeredProviders.add(name)
     }
+    modelService.sync()
   }
   if (!db.select().from(settings).where(eq(settings.id, 1)).get()) {
     const now = new Date().toISOString()
@@ -269,7 +235,7 @@ export function createApp(options: {
     if (!value) throw new Error("Settings are unavailable")
     return value
   }
-  syncModelRegistry()
+  syncModels()
   const initialSettings = getSettings()
   const environmentConcurrency = process.env.AEGISX_MAX_CONCURRENCY
     ? Number(process.env.AEGISX_MAX_CONCURRENCY)
@@ -285,10 +251,8 @@ export function createApp(options: {
       Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
         ? configuredConcurrency
         : 2,
-    authStorage,
     getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
-    modelRegistry,
-    resolveModel: options.resolveModel,
+    modelService,
   })
   const app = new Hono()
 
@@ -444,7 +408,7 @@ export function createApp(options: {
         )
       }
       db.insert(providerConnections).values(provider).run()
-      syncModelRegistry()
+      syncModels()
       return c.json(publicProvider(provider), 201)
     } catch {
       return c.json(
@@ -499,7 +463,7 @@ export function createApp(options: {
           .set(next)
           .where(eq(providerConnections.id, existing.id))
           .run()
-        syncModelRegistry()
+        syncModels()
         return c.json(publicProvider({ ...existing, ...next }))
       } catch {
         return c.json(
@@ -538,7 +502,7 @@ export function createApp(options: {
     db.delete(providerConnections)
       .where(eq(providerConnections.id, provider.id))
       .run()
-    syncModelRegistry()
+    syncModels()
     return c.body(null, 204)
   })
 
@@ -589,7 +553,7 @@ export function createApp(options: {
         updatedAt: now,
       }
       db.insert(providerModels).values(model).run()
-      syncModelRegistry()
+      syncModels()
       return c.json(model, 201)
     }
   )
@@ -628,7 +592,7 @@ export function createApp(options: {
         .set(next)
         .where(eq(providerModels.id, model.id))
         .run()
-      syncModelRegistry()
+      syncModels()
       return c.json({ ...model, ...next })
     }
   )
@@ -652,7 +616,7 @@ export function createApp(options: {
         .run()
     }
     db.delete(providerModels).where(eq(providerModels.id, model.id)).run()
-    syncModelRegistry()
+    syncModels()
     return c.body(null, 204)
   })
 

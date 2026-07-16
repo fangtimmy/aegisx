@@ -10,8 +10,8 @@
 
 技术基线：
 
-- 单个 Hono API 进程管理 REST、SSE 和 Pi AgentSession。
-- SQLite 保存业务数据，Pi JSONL 保存会话和 usage。
+- 单个 Hono API 进程管理 REST、SSE 和 AegisX Agent Runtime。
+- SQLite 保存业务数据、Agent 消息、durable inbox 和 usage 来源。
 - 本机使用独立工作目录，容器使用 bind mount 到 `/workspace` 的专属目录。
 - REST 发送控制命令，SSE 直接转发当前 Pi 会话事件。
 - 同时运行数量由进程内计数限制，满载时拒绝新运行。
@@ -25,7 +25,7 @@
 任务：
 
 - 建立最小 Bun + TypeScript 工程和统一 `check` / `test` 命令。
-- 用 faux provider 创建 `AgentSession`，注册 `finish_run` 并读取 JSONL。
+- 用 faux provider 创建 core `Agent`，注册 `finish_run` 并读取 SQLite 消息。
 - 在独立本机目录执行一个工具命令并验证 abort 清理进程树。
 - 用一次性 Docker 容器验证 `read`、`write`、`bash` 只操作 `/workspace`。
 - 验证容器模式禁用了 Pi 默认宿主工具。
@@ -67,7 +67,7 @@
 任务：
 
 - 创建每次运行独立工作目录并保存实际提示词和配置。
-- 在 API 进程内集成 Pi `AgentSession`。
+- 在 API 进程内集成基于 Pi core `Agent` 的 Runtime。
 - 实现 `running`、`paused`、`completed`、`failed`、`stopped` 状态转换。
 - 实现 `finish_run`、人工消息、暂停、继续和停止。
 - 通过 SSE 直接转发当前 Pi 事件，刷新后从 JSONL 读取历史。
@@ -114,7 +114,7 @@
 任务：
 
 - 实现供应商、模型、API Key 和默认环境设置。
-- 从 Pi JSONL usage 计算运行、题目和赛事 Token 与费用。
+- 从 SQLite assistant message usage 计算运行、题目和赛事 Token 与费用。
 - 实现题目 Token 对比图和运行明细表。
 - 定义 `CtfPlatformAdapter` 类型。
 - 未接入适配器时，将导入、靶机和 Flag 工具显示为不可用。
@@ -122,7 +122,7 @@
 验收：
 
 - 设置变更只影响新运行。
-- Token 与费用汇总和 Pi JSONL 逐条计算一致。
+- Token 与费用汇总和 SQLite Agent 消息逐条计算一致。
 - 未知模型价格显示“未知”。
 - 没有适配器时，平台操作不会调用网络或导致 Agent 会话失败。
 
@@ -161,7 +161,7 @@ Pi + Docker spike
   -> 安全与 E2E
 ```
 
-关键路径是 Pi AgentSession -> 本机工具 -> SSE 对话 -> 容器工具。平台适配器、在线文件编辑和高级统计不阻塞 MVP。
+关键路径是 Pi core Agent -> AegisX Runtime -> 本机工具 -> SSE 对话 -> 容器工具。平台适配器、在线文件编辑和高级统计不阻塞 MVP。
 
 ## 4. 测试策略
 
@@ -186,7 +186,7 @@ Pi + Docker spike
 | 容器命令未随停止结束 | 终止 exec 进程树，必要时停止容器 |
 | 附件或路径破坏宿主文件 | 流式落盘、安全 basename 和 canonical path |
 | 恶意网页调用本机 API | loopback、Host/Origin 校验和严格 Content-Type |
-| 模型 usage 或价格缺失 | 保存 Pi JSONL，未知费用显示未知 |
+| 模型 usage 或价格缺失 | 保存原始 assistant message，未知费用显示未知 |
 
 ## 6. 完成定义
 

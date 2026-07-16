@@ -62,7 +62,6 @@ export const runs = sqliteTable(
     environmentConfig: text("environment_config")
       .notNull()
       .default('{"type":"local"}'),
-    sessionPath: text("session_path"),
     workspacePath: text("workspace_path"),
     createdAt: text("created_at").notNull(),
     startedAt: text("started_at"),
@@ -95,8 +94,9 @@ export const runAgents = sqliteTable(
     name: text("name").notNull(),
     task: text("task"),
     status: text("status").notNull(),
-    sessionPath: text("session_path"),
     runtimeSnapshot: text("runtime_snapshot"),
+    contextSummary: text("context_summary"),
+    contextThroughSequence: integer("context_through_sequence"),
     summary: text("summary"),
     error: text("error"),
     createdAt: text("created_at").notNull(),
@@ -115,6 +115,61 @@ export const runAgents = sqliteTable(
       sql`${table.status} in ('running', 'idle', 'paused', 'completed', 'failed', 'stopped')`
     ),
   ]
+)
+
+export const agentMessages = sqliteTable(
+  "agent_messages",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => runAgents.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    message: text("message").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_messages_agent_sequence_unique").on(
+      table.agentId,
+      table.sequence
+    ),
+    index("agent_messages_agent_id_idx").on(table.agentId),
+  ]
+)
+
+export const agentInbox = sqliteTable(
+  "agent_inbox",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => runAgents.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    content: text("content").notNull(),
+    createdAt: text("created_at").notNull(),
+    deliveredAt: text("delivered_at"),
+  },
+  (table) => [
+    index("agent_inbox_pending_idx").on(table.agentId, table.deliveredAt),
+    check(
+      "agent_inbox_kind_check",
+      sql`${table.kind} in ('user', 'child_result', 'resume')`
+    ),
+  ]
+)
+
+export const agentUsage = sqliteTable(
+  "agent_usage",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => runAgents.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    usage: text("usage").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("agent_usage_agent_id_idx").on(table.agentId)]
 )
 
 export const settings = sqliteTable(

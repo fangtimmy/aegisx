@@ -1,4 +1,5 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
+import type { AgentMessage } from "@earendil-works/pi-agent-core"
+import type { Usage } from "@earendil-works/pi-ai"
 
 export type UsageSummary = {
   input: number
@@ -25,13 +26,23 @@ function number(value: unknown) {
 }
 
 export function summarizeUsage(
-  entries: SessionEntry[],
+  messages: AgentMessage[],
+  costKnown = true
+): UsageSummary {
+  return summarizeUsageRecords(
+    messages.flatMap((message) =>
+      message.role === "assistant" ? [message.usage] : []
+    ),
+    costKnown
+  )
+}
+
+export function summarizeUsageRecords(
+  usages: Array<Partial<Usage>>,
   costKnown = true
 ): UsageSummary {
   const total = zeroUsage()
-  for (const entry of entries) {
-    if (entry.type !== "message" || entry.message.role !== "assistant") continue
-    const usage = entry.message.usage
+  for (const usage of usages) {
     total.input += number(usage.input)
     total.output += number(usage.output)
     total.cacheRead += number(usage.cacheRead)

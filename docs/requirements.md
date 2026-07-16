@@ -67,7 +67,7 @@ MVP 必须完成：
 | 附件处理 | 原始字节复制到工作区，不自动解包 |
 | 容器工作区 | 每次运行一个专属宿主目录，bind mount 到 `/workspace` |
 | 实时协议 | SSE 推送事件，REST 发送控制命令 |
-| 会话来源 | Pi JSONL 保存会话和 usage，SQLite 不复制完整事件流 |
+| 会话来源 | SQLite 保存 Agent 消息、inbox、上下文摘要和 usage 来源 |
 | 前端形态 | Vite SPA |
 | 默认容器网络 | `bridge`，MVP 不提供网络模式切换 |
 
@@ -85,7 +85,7 @@ MVP 必须完成：
 2. 用户选择模型和执行环境，默认继承全局配置。
 3. 系统创建独立工作目录，将附件原样复制进去。
 4. 容器模式将工作目录 bind mount 到 `/workspace`；本机模式直接使用该目录。
-5. 系统创建 Pi `AgentSession`，注入题目信息和可用 CTF 工具后发送初始提示词。
+5. 系统创建基于 Pi core `Agent` 的 AegisX Runtime，注入题目信息和可用 CTF 工具后发送初始提示词。
 6. 前端实时显示 Agent 消息、工具调用和状态。
 
 ### 5.3 人工接管
@@ -158,22 +158,23 @@ paused  -> stopped
 
 ### 6.5 Agent 与 Pi SDK 集成
 
-使用 `@earendil-works/pi-coding-agent` 的 `createAgentSession()`，不重写 agent loop。
+使用 `@earendil-works/pi-agent-core` 的 `Agent` 作为唯一 agent loop；模型请求使用 `@earendil-works/pi-ai`，会话与调度由 AegisX 实现。
 
 使用的能力：
 
-- `AgentSession.prompt()` 启动和继续对话。
+- `Agent.prompt()` 启动和继续对话。
 - `steer()` / `followUp()` 发送人工消息。
 - `abort()` 实现暂停和停止。
 - `subscribe()` 获取文本、thinking、工具调用、错误和生命周期事件。
-- `customTools` 注册 CTF 工具。
-- `SessionManager` 保存 JSONL 会话和 usage。
+- `AgentTool` 注册 AegisX 环境和 CTF 工具。
+- awaited `subscribe()` listener 在 SQLite 保存消息和 usage 后才允许 Agent 结算。
+- `transformContext()` 使用持久化摘要压缩长上下文。
 
 每次运行提供：
 
 - 环境工具：`read`、`bash`、`edit`、`write`、`grep`、`find`、`ls`。
 - `finish_run(summary, flag?)`：报告完成并结束运行。
-- `start_target()`、`stop_target()`、`submit_flag(flag)`：存在平台适配器时调用，否则返回不可用。
+- `start_target()`、`stop_target()`、`submit_flag(flag)`：只有存在平台适配器时才注册。
 
 工具执行边界：
 
@@ -216,7 +217,7 @@ paused  -> stopped
 - 运行详情显示 input、output、cache read、cache write、total tokens 和费用。
 - 题目和赛事统计对下属运行做求和，并显示运行次数。
 - 统计页提供题目 Token 对比图和运行明细表。
-- 数据直接读取 Pi JSONL 中的 assistant message usage；自定义模型无价格时显示“未知”。
+- 数据直接读取 `agent_messages` 中的 assistant message usage；自定义模型无价格时显示“未知”。
 - MVP 不实现时间序列、模型分布、复杂筛选和独立 usage 账本。
 
 ### 6.9 设置
@@ -263,14 +264,15 @@ React Web
    | REST + SSE
 Hono API on Bun
    |-- Event / Challenge / Run / Settings routes
-   |-- in-process Pi AgentSession manager
+   |-- in-process AegisX Agent Runtime
    |-- Local tools
    `-- Docker tools -> Docker Engine
 
 SQLite                 Local filesystem
    |-- business data      |-- attachments
-   `-- settings           |-- run workspaces
-                          `-- Pi JSONL sessions
+   |-- agent messages     `-- run workspaces
+   |-- durable inbox
+   `-- settings
 ```
 
 MVP 是单进程模块化单体。Agent 的模型流和工具调用使用异步 API 与子进程，不另设 Worker、数据库任务领取、心跳或 schema 协调。Docker 容器仍是容器模式的安全边界。
@@ -295,10 +297,14 @@ src/
 | events | id, name, timestamps |
 | challenges | id, event_id, name, description, category, points, timestamps |
 | attachments | id, challenge_id, original_name, storage_key, size, sha256, created_at |
-| runs | id, challenge_id, status, prompt, model_config, environment_config, session_path, workspace_path, timestamps, error |
+| runs | id, challenge_id, status, prompt, model_config, environment_config, workspace_path, timestamps, error |
+| run_agents | id, run_id, parent_agent_id, status, runtime_snapshot, context_summary, timestamps |
+| agent_messages | id, agent_id, sequence, message, created_at |
+| agent_inbox | id, agent_id, kind, content, created_at, delivered_at |
+| agent_usage | id, agent_id, kind, usage, created_at |
 | settings | id, provider, model, credential, environment_config, updated_at |
 
-Pi JSONL 是会话消息和 usage 的唯一事实来源。SQLite 不保存第二份完整 Agent 事件流；`runs` 只保存业务状态和会话路径。
+`agent_messages` 是已提交会话消息和 usage 的唯一事实来源。`agent_inbox` 保存已经由 API 接受但尚未出现 `message_end` 的外部消息。
 
 ## 10. API 与实时事件
 
@@ -313,7 +319,7 @@ REST 资源：
 - `/api/runs/:runId/stats`
 - `/api/settings`
 
-当前运行通过 `GET /api/runs/:runId/events` 建立 SSE。服务端直接转发 Pi subscription 事件；状态变更走 REST。MVP 不承诺进程退出期间无损补流，页面刷新或重连后重新读取 Pi JSONL 历史，再接收新事件。
+当前运行通过 `GET /api/runs/:runId/events` 建立 SSE。服务端在消息落库后转发 core Agent 事件；状态变更走 REST。页面刷新或重连后先读取 SQLite 历史，再接收新事件，未交付 inbox 消息在 Runtime 恢复后重放。
 
 ## 11. 安全基线
 
@@ -336,6 +342,6 @@ REST 资源：
 5. 用户可以发送人工消息、暂停、继续和停止。
 6. Agent 调用 `finish_run` 后进入 `completed`。
 7. 文件页可以安全浏览文本文件并下载文件，路径穿越请求被拒绝。
-8. 运行、题目和赛事 Token 汇总与 Pi JSONL usage 一致。
+8. 运行、题目和赛事 Token 汇总与 SQLite assistant message usage 一致。
 9. 应用重启后可以查看历史会话和文件；残留运行变为 `paused`。
 10. 没有平台适配器时，导入、靶机和提交 Flag 明确不可用。

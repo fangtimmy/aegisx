@@ -5,37 +5,34 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import {
+  createModels,
   fauxAssistantMessage,
+  fauxProvider,
   fauxToolCall,
-  registerFauxProvider,
-} from "@earendil-works/pi-ai/compat"
-import { AuthStorage } from "@earendil-works/pi-coding-agent"
+} from "@earendil-works/pi-ai"
 import { createApp } from "../src/app"
 
 const tempDirs: string[] = []
 const closeApps: Array<() => void> = []
-const fauxProviders: Array<{ unregister(): void }> = []
 const configuredModels = new WeakMap<object, Promise<string>>()
 
 afterEach(() => {
   for (const close of closeApps.splice(0)) close()
-  for (const provider of fauxProviders.splice(0)) provider.unregister()
   for (const path of tempDirs.splice(0)) {
     rmSync(path, { recursive: true, force: true })
   }
 })
 
-function setup(maxConcurrency = 2, dataDir?: string) {
+function setup(maxConcurrency = 2, dataDir?: string, contextWindow = 128_000) {
   const root = dataDir ?? mkdtempSync(join(tmpdir(), "aegisx-phase-two-"))
   if (!dataDir) tempDirs.push(root)
-  const faux = registerFauxProvider()
-  fauxProviders.push(faux)
-  const authStorage = AuthStorage.inMemory()
-  authStorage.setRuntimeApiKey("faux", "test-only")
+  const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow }] })
+  const models = createModels()
+  models.setProvider(faux.provider)
   const instance = createApp({
     dataDir: root,
     maxConcurrency,
-    authStorage,
+    models,
     resolveModel: (_provider, modelId) =>
       modelId === faux.getModel().id ? (faux.getModel() as never) : undefined,
   })
@@ -122,7 +119,7 @@ async function waitFor<T>(
 }
 
 describe("phase two run API", () => {
-  test("isolates files, copies attachments, completes, and reloads JSONL", async () => {
+  test("isolates files, copies attachments, completes, and reloads messages", async () => {
     const first = setup()
     const { event, challenge } = await createChallenge(first.app)
     const bytes = new Uint8Array([0, 255, 80, 75, 3, 4, 10])
@@ -174,20 +171,18 @@ describe("phase two run API", () => {
       async () => first.activeSessionCount(),
       (count) => count === 0
     )
+    expect(first.faux.state.callCount).toBe(2)
     expect(JSON.stringify(detail.history)).not.toContain("flag{phase_two}")
 
     const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
     const stored = sqlite
       .query(
-        "select runs.id, runs.prompt, runs.model_config, runs.environment_config, runs.workspace_path, run_agents.session_path from runs inner join run_agents on run_agents.run_id = runs.id and run_agents.parent_agent_id is null order by runs.created_at"
+        "select runs.id, runs.prompt, runs.model_config, runs.environment_config, runs.workspace_path from runs inner join run_agents on run_agents.run_id = runs.id and run_agents.parent_agent_id is null order by runs.created_at"
       )
       .all() as Array<Record<string, string>>
-    sqlite.close()
     expect(stored).toHaveLength(2)
     expect(stored[0].workspace_path).not.toBe(stored[1].workspace_path)
-    expect(stored[0].session_path).not.toBe(stored[1].session_path)
     expect(isAbsolute(stored[0].workspace_path)).toBe(false)
-    expect(isAbsolute(stored[0].session_path)).toBe(false)
     expect(stored[0].prompt).toContain("evidence.bin")
     expect(JSON.parse(stored[0].model_config)).toMatchObject({
       providerLabel: "Faux",
@@ -201,8 +196,11 @@ describe("phase two run API", () => {
       expect(
         createHash("sha256").update(readFileSync(copied)).digest("hex")
       ).toBe(createHash("sha256").update(bytes).digest("hex"))
-      expect(existsSync(join(first.dataDir, run.session_path))).toBe(true)
     }
+    expect(
+      sqlite.query("select count(*) as count from agent_messages").get()
+    ).toMatchObject({ count: expect.any(Number) })
+    sqlite.close()
 
     const listed = await (
       await first.app.request(`/api/events/${event.id}/runs`)
@@ -315,6 +313,7 @@ describe("phase two run API", () => {
       ),
       fauxAssistantMessage("delegated-result"),
       fauxAssistantMessage("delegated-result"),
+      fauxAssistantMessage("delegated-result"),
     ])
     const run = await (await createRun(instance.app, challenge.id)).json()
 
@@ -418,9 +417,94 @@ describe("phase two run API", () => {
       "<available_skills>"
     )
     expect(instance.activeSessionCount()).toBe(1)
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    expect(
+      sqlite
+        .query(
+          "select delivered_at from agent_inbox where agent_id = ? and kind = 'child_result'"
+        )
+        .get(main.id)
+    ).toMatchObject({ delivered_at: expect.any(String) })
+    sqlite.close()
 
     await instance.app.request(`/api/runs/${run.id}/stop`, json("POST", {}))
     expect(instance.activeSessionCount()).toBe(0)
+  })
+
+  test("marks the run failed when Pi returns an assistant error", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "provider rejected the request",
+      }),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+
+    const detail = await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string; error: string | null }
+          agents: Array<{ parentAgentId: string | null; status: string }>
+        }>,
+      (value) => value.run.status === "failed"
+    )
+    expect(detail.run.error).toBe("provider rejected the request")
+    expect(detail.agents).toContainEqual(
+      expect.objectContaining({ parentAgentId: null, status: "failed" })
+    )
+    expect(instance.activeSessionCount()).toBe(0)
+  })
+
+  test("summarizes oversized context before the next request", async () => {
+    const instance = setup(2, undefined, 200)
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([fauxAssistantMessage("x".repeat(1000))])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          agents: Array<{ parentAgentId: string | null; status: string }>
+        }>,
+      (value) =>
+        value.agents.some(
+          (agent) => agent.parentAgentId === null && agent.status === "idle"
+        )
+    )
+
+    instance.faux.setResponses([
+      fauxAssistantMessage("preserved findings"),
+      fauxAssistantMessage("continued after compaction"),
+    ])
+    await instance.app.request(
+      `/api/runs/${run.id}/message`,
+      json("POST", { message: "Continue." })
+    )
+    const detail = await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          history: unknown[]
+        }>,
+      (value) =>
+        JSON.stringify(value.history).includes("continued after compaction")
+    )
+    expect(JSON.stringify(detail.history)).toContain(
+      "continued after compaction"
+    )
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    expect(
+      sqlite
+        .query("select context_summary from run_agents where id = ?")
+        .get(run.id)
+    ).toEqual({ context_summary: "preserved findings" })
+    expect(
+      sqlite
+        .query("select count(*) as count from agent_usage where agent_id = ?")
+        .get(run.id)
+    ).toEqual({ count: 1 })
+    sqlite.close()
   })
 
   test("changes persisted running runs to paused on startup", async () => {
@@ -433,6 +517,10 @@ describe("phase two run API", () => {
     sqlite.run(
       "insert into runs (id, challenge_id, status, created_at, updated_at) values (?, ?, 'running', ?, ?)",
       ["interrupted", challenge.id, now, now]
+    )
+    sqlite.run(
+      "insert into run_agents (id, run_id, name, status, created_at, updated_at) values ('interrupted', 'interrupted', 'Main agent', 'running', ?, ?)",
+      [now, now]
     )
     sqlite.close()
 

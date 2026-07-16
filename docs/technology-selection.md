@@ -6,7 +6,7 @@
 
 ## 1. 结论
 
-AegisX 使用 Bun-first TypeScript 技术栈。Bun 负责依赖、脚本、API 运行时、SQLite 驱动和后端测试；Hono API 在单个 `Bun.serve` 进程内管理 Pi AgentSession。MVP 不设置独立 Worker，也不预设 Node.js 后端回退。
+AegisX 使用 Bun-first TypeScript 技术栈。Bun 负责依赖、脚本、API 运行时、SQLite 驱动和后端测试；Hono API 在单个 `Bun.serve` 进程内管理基于 Pi core `Agent` 的 AegisX Runtime。MVP 不设置独立 Worker，也不预设 Node.js 后端回退。
 
 Node LTS 只用于明确要求 Node 的 Playwright CLI，不属于应用运行架构。Pi SDK 是否满足本项目实际调用面由一个最小 smoke test 验证；若核心链路不兼容，应在编码前重新选择单一后端运行时，而不是长期维护条件回退。
 
@@ -24,7 +24,7 @@ Node LTS 只用于明确要求 Node 的 Playwright CLI，不属于应用运行�
 | HTTP | Hono on `Bun.serve` | REST、SSE、验证和错误处理 |
 | 数据库 | `bun:sqlite` + Drizzle | 业务数据、设置和迁移 |
 | 验证 | TypeBox + `@hono/typebox-validator` | HTTP 和 Agent 工具参数 |
-| Agent | `@earendil-works/pi-coding-agent` | 会话、模型、事件和自定义工具 |
+| Agent | `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` | Agent loop、模型流、事件和工具协议 |
 | Docker | Docker CLI + `Bun.spawn` | 容器生命周期和命令执行 |
 | 测试 | `bun:test` + Playwright | 逻辑、集成和浏览器主流程 |
 | 质量 | Biome + `tsc --noEmit` | 格式、lint 和类型检查 |
@@ -39,12 +39,12 @@ Node LTS 只用于明确要求 Node 的 Playwright CLI，不属于应用运行�
 - handler 负责 HTTP 映射，业务规则放在普通函数中。
 - 使用 Hono validator、统一错误响应和 request ID。
 - 当前运行的 Pi 事件直接通过 `streamSSE` 转发。
-- 页面刷新后从 Pi JSONL 读取历史，不建立 SQLite 事件副本和游标补流系统。
+- 页面刷新后从 SQLite `agent_messages` 读取已提交历史，再接收实时 core Agent 事件。
 
 ### 3.2 `bun:sqlite` + Drizzle
 
-- SQLite 保存赛事、题目、附件、运行元数据和设置。
-- Pi JSONL 保存 Agent 会话和 usage。
+- SQLite 保存赛事、题目、附件、运行元数据、Agent 消息、inbox、压缩请求 usage 和设置。
+- `agent_messages` 是会话消息的唯一事实来源，`agent_inbox` 保存尚未交付的外部消息。
 - 启用 `foreign_keys`；单进程 MVP 不围绕数据库并发设计队列和协调协议。
 - 事务保持短小，不在事务中等待网络或文件操作。
 - Drizzle 只负责 schema、普通查询和迁移；复杂查询可以直接使用 SQL。
@@ -68,8 +68,9 @@ TanStack Query 管理赛事、题目、运行、统计和当前 SSE 增量。赛
 
 ### 3.6 Pi SDK
 
-- 使用 `createAgentSession()`、Pi 会话持久化、usage 和事件订阅。
-- 本机模式使用独立 `cwd`；容器模式替换全部默认文件和 shell 工具。
+- 只使用 `pi-agent-core.Agent`，会话持久化、上下文压缩和调度由 AegisX 实现。
+- 使用 `pi-ai.Models` 和 Provider 负责模型流与请求认证，不使用 coding-agent ModelRegistry。
+- 本机与容器模式使用同一套 AegisX `AgentTool`，底层切换 WorkspaceBackend。
 - 平台凭据和模型密钥只留在宿主进程。
 - 只支持前台命令，abort/stop 必须终止当前进程树。
 
@@ -94,8 +95,8 @@ TanStack Query 管理赛事、题目、运行、统计和当前 SSE 增量。赛
 
 编码前只验证四项：
 
-1. Bun 可以创建 faux `AgentSession` 并接收流式事件。
-2. 一个自定义 `finish_run` 工具可以结束会话，JSONL 可以重新读取。
+1. Bun 可以创建 faux core `Agent` 并接收流式事件。
+2. 一个自定义 `finish_run` 工具可以结束会话，SQLite 消息可以重新读取。
 3. 本机工具在独立工作目录执行，abort 可以终止当前命令进程树。
 4. 容器工具只能操作 bind mount 的 `/workspace`，不能调用 Pi 默认宿主工具。
 

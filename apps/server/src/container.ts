@@ -1,15 +1,5 @@
 import { posix } from "node:path"
-import {
-  createBashTool,
-  createEditTool,
-  createFindTool,
-  createLsTool,
-  createReadTool,
-  createWriteTool,
-  defineTool,
-  type FindOperations,
-} from "@earendil-works/pi-coding-agent"
-import { Type } from "typebox"
+import type { WorkspaceBackend } from "./agent-tools"
 
 const workspace = "/workspace"
 const decoder = new TextDecoder()
@@ -132,143 +122,74 @@ async function dockerExec(
   }
 }
 
-function containerPath(value: string, cwd = workspace) {
+function containerPath(value: string, cwd = workspace, write = false) {
   const resolved = posix.resolve(cwd, value)
   if (resolved !== workspace && !resolved.startsWith(`${workspace}/`)) {
     throw new Error("Path is outside the run workspace")
   }
+  if (write && resolved !== cwd && !resolved.startsWith(`${cwd}/`)) {
+    throw new Error("Path is outside the agent workspace")
+  }
   return resolved
 }
 
-async function requireExec(name: string, args: string[], input?: string) {
-  const result = await dockerExec(name, [name, ...args], { input })
+async function requireExec(
+  name: string,
+  args: string[],
+  options: { input?: string; signal?: AbortSignal } = {}
+) {
+  const result = await dockerExec(name, [name, ...args], options)
   if (result.exitCode !== 0) throw new Error("Container operation failed")
   return result.stdout
 }
 
-export function createContainerTools(name: string, cwd = workspace) {
-  const resolvePath = (path: string) => containerPath(path, cwd)
-  const readFile = (path: string) =>
-    requireExec(name, ["cat", resolvePath(path)])
-  const access = async (path: string) => {
-    await requireExec(name, ["test", "-r", resolvePath(path)])
-  }
-  const writeFile = async (path: string, content: string) => {
-    await requireExec(
-      name,
-      ["sh", "-c", 'cat > "$1"', "aegisx-write", resolvePath(path)],
-      content
-    )
-  }
-  const mkdir = async (path: string) => {
-    await requireExec(name, ["mkdir", "-p", resolvePath(path)])
-  }
-  const findOperations: FindOperations = {
-    exists: async (path) =>
-      (await dockerExec(name, [name, "test", "-e", resolvePath(path)]))
-        .exitCode === 0,
-    glob: async (pattern, cwd, options) => {
-      const root = resolvePath(cwd)
-      const result = await requireExec(name, ["find", root, "-print0"])
-      return decoder
-        .decode(result)
-        .split("\0")
+export function createContainerBackend(
+  name: string,
+  cwd = workspace
+): WorkspaceBackend {
+  const resolvePath = (path: string, write = false) =>
+    containerPath(path, cwd, write)
+  return {
+    cwd,
+    resolvePath,
+    read: (path, signal) =>
+      requireExec(name, ["cat", resolvePath(path)], { signal }),
+    write: async (path, content, signal) => {
+      const target = resolvePath(path, true)
+      await requireExec(name, ["mkdir", "-p", posix.dirname(target)], {
+        signal,
+      })
+      await requireExec(
+        name,
+        ["sh", "-c", 'cat > "$1"', "aegisx-write", target],
+        { input: content, signal }
+      )
+    },
+    list: async (path, signal) => {
+      const target = resolvePath(path)
+      const output = decoder.decode(
+        await requireExec(name, ["ls", "-1Ap", target], { signal })
+      )
+      return output
+        .split("\n")
         .filter(Boolean)
-        .filter((path) => {
-          const relative = posix.relative(root, path)
-          return (
-            relative &&
-            !options.ignore.some((ignored) =>
-              posix.matchesGlob(relative, ignored)
-            ) &&
-            (posix.matchesGlob(relative, pattern) ||
-              posix.matchesGlob(posix.basename(relative), pattern))
-          )
-        })
-        .slice(0, options.limit)
+        .map((value) => ({
+          name: value.endsWith("/") ? value.slice(0, -1) : value,
+          path: posix.join(target, value.replace(/\/$/, "")),
+          directory: value.endsWith("/"),
+        }))
+    },
+    exec: async (command, options) => {
+      const result = await dockerExec(
+        name,
+        ["--workdir", cwd, name, "sh", "-lc", command],
+        options
+      )
+      return {
+        stdout: decoder.decode(result.stdout),
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      }
     },
   }
-
-  const grep = defineTool({
-    name: "grep",
-    label: "grep",
-    description:
-      "Search file contents for a pattern in the container workspace",
-    parameters: Type.Object({
-      pattern: Type.String(),
-      path: Type.Optional(Type.String()),
-      glob: Type.Optional(Type.String()),
-      ignoreCase: Type.Optional(Type.Boolean()),
-      literal: Type.Optional(Type.Boolean()),
-      context: Type.Optional(Type.Number({ minimum: 0 })),
-      limit: Type.Optional(Type.Number({ minimum: 1 })),
-    }),
-    execute: async (_id, params, signal) => {
-      const root = resolvePath(params.path ?? ".")
-      const limit = Math.floor(params.limit ?? 100)
-      const grepArgs = ["grep", "-H", "-n", params.literal ? "-F" : "-E"]
-      if (params.ignoreCase) grepArgs.push("-i")
-      if (params.context && params.context > 0) {
-        grepArgs.push("-C", String(Math.floor(params.context)))
-      }
-      grepArgs.push("-e", params.pattern, "{}", "+")
-      const findArgs = [name, "find", root, "-type", "f"]
-      if (params.glob) findArgs.push("-name", params.glob)
-      findArgs.push("-exec", ...grepArgs, ";")
-      const result = await dockerExec(name, findArgs, { signal })
-      if (result.exitCode !== 0) throw new Error("Container search failed")
-      const lines = decoder.decode(result.stdout).split("\n").filter(Boolean)
-      const truncated = lines.length > limit
-      const output = lines.slice(0, limit).join("\n").slice(0, 200_000)
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: output || "No matches found",
-          },
-        ],
-        details: truncated ? { matchLimitReached: limit } : undefined,
-      }
-    },
-  })
-
-  return [
-    createReadTool(cwd, {
-      autoResizeImages: false,
-      operations: { readFile, access, detectImageMimeType: async () => null },
-    }),
-    createBashTool(cwd, {
-      operations: {
-        exec: async (command, _cwd, { onData, signal, timeout }) => {
-          const result = await dockerExec(
-            name,
-            ["--workdir", cwd, name, "sh", "-lc", command],
-            { signal, timeout }
-          )
-          onData(result.stdout)
-          if (result.stderr) onData(Buffer.from(result.stderr))
-          return { exitCode: result.exitCode }
-        },
-      },
-    }),
-    createEditTool(cwd, { operations: { readFile, writeFile, access } }),
-    createWriteTool(cwd, { operations: { writeFile, mkdir } }),
-    grep,
-    createFindTool(cwd, { operations: findOperations }),
-    createLsTool(cwd, {
-      operations: {
-        exists: findOperations.exists,
-        stat: async (path) => ({
-          isDirectory: () =>
-            runDockerSync(["exec", name, "test", "-d", resolvePath(path)]) ===
-            0,
-        }),
-        readdir: async (path) =>
-          decoder
-            .decode(await requireExec(name, ["ls", "-1A", resolvePath(path)]))
-            .split("\n")
-            .filter(Boolean),
-      },
-    }),
-  ]
 }

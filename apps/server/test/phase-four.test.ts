@@ -1,30 +1,22 @@
 import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, test } from "bun:test"
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  createModels,
   fauxAssistantMessage,
+  fauxProvider,
   fauxToolCall,
-  registerFauxProvider,
-} from "@earendil-works/pi-ai/compat"
-import { AuthStorage } from "@earendil-works/pi-coding-agent"
+} from "@earendil-works/pi-ai"
 import { createApp } from "../src/app"
 import { summarizeUsage } from "../src/usage"
 
 const roots: string[] = []
 const closeApps: Array<() => void> = []
-const providers: Array<{ unregister(): void }> = []
 
 afterEach(() => {
   for (const close of closeApps.splice(0)) close()
-  for (const provider of providers.splice(0)) provider.unregister()
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true })
 })
@@ -32,13 +24,12 @@ afterEach(() => {
 function setup() {
   const dataDir = mkdtempSync(join(tmpdir(), "aegisx-phase-four-"))
   roots.push(dataDir)
-  const faux = registerFauxProvider()
-  providers.push(faux)
-  const authStorage = AuthStorage.inMemory()
-  authStorage.setRuntimeApiKey("faux", "test-only")
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] })
+  const models = createModels()
+  models.setProvider(faux.provider)
   const instance = createApp({
     dataDir,
-    authStorage,
+    models,
     resolveModel: (_provider, modelId) =>
       modelId === faux.getModel().id ? (faux.getModel() as never) : undefined,
   })
@@ -89,7 +80,7 @@ const runtimeSettings = {
   maxConcurrency: 3,
 }
 
-function sessionFile(usage: {
+function usageMessage(usage: {
   input: number
   output: number
   cacheRead: number
@@ -97,37 +88,25 @@ function sessionFile(usage: {
   totalTokens: number
   cost: number
 }) {
-  return `${JSON.stringify({
-    type: "session",
-    version: 3,
-    id: crypto.randomUUID(),
-    timestamp: new Date().toISOString(),
-    cwd: "/workspace",
-  })}\n${JSON.stringify({
-    type: "message",
-    id: crypto.randomUUID().slice(0, 8),
-    parentId: null,
-    timestamp: new Date().toISOString(),
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "usage" }],
-      api: "faux",
-      provider: "faux",
-      model: "faux-1",
-      usage: {
-        ...usage,
-        cost: {
-          input: usage.cost,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: usage.cost,
-        },
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "usage" }],
+    api: "faux",
+    provider: "faux",
+    model: "faux-1",
+    usage: {
+      ...usage,
+      cost: {
+        input: usage.cost,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: usage.cost,
       },
-      stopReason: "stop",
-      timestamp: Date.now(),
     },
-  })}\n`
+    stopReason: "stop",
+    timestamp: Date.now(),
+  }
 }
 
 describe("phase four", () => {
@@ -259,7 +238,7 @@ describe("phase four", () => {
     }
   })
 
-  test("redacts provider errors before JSONL persistence", async () => {
+  test("redacts provider errors before message persistence", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "aegisx-provider-error-"))
     roots.push(dataDir)
     let providerId = ""
@@ -324,31 +303,25 @@ describe("phase four", () => {
         (value) => JSON.stringify(value.history).includes("[redacted]")
       )
       const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
-      const session = sqlite
+      const messages = sqlite
         .query(
-          "select session_path from run_agents where run_id = ? and parent_agent_id is null"
+          "select message from agent_messages where agent_id = ? order by sequence"
         )
-        .get(run.id) as { session_path: string }
+        .all(run.id) as Array<{ message: string }>
       sqlite.close()
       expect(authorization).toBe("Bearer initial-secret")
       expect(JSON.stringify(detail)).not.toContain("initial-secret")
       expect(JSON.stringify(detail)).not.toContain("intermediate-secret")
       expect(JSON.stringify(detail)).not.toContain("rotated-secret")
-      expect(
-        readFileSync(join(dataDir, session.session_path), "utf8")
-      ).not.toContain("initial-secret")
-      expect(
-        readFileSync(join(dataDir, session.session_path), "utf8")
-      ).not.toContain("intermediate-secret")
-      expect(
-        readFileSync(join(dataDir, session.session_path), "utf8")
-      ).not.toContain("rotated-secret")
+      expect(JSON.stringify(messages)).not.toContain("initial-secret")
+      expect(JSON.stringify(messages)).not.toContain("intermediate-secret")
+      expect(JSON.stringify(messages)).not.toContain("rotated-secret")
     } finally {
       server.stop(true)
     }
   })
 
-  test("manages provider models, inherits defaults, and exposes unavailable platform tools", async () => {
+  test("manages provider models, inherits defaults, and rejects unavailable platform tools", async () => {
     const instance = setup()
     const { challenge } = await createChallenge(instance.app)
     const initial = await (await instance.app.request("/api/settings")).json()
@@ -436,7 +409,7 @@ describe("phase four", () => {
       pidsLimit: 64,
     })
     expect(JSON.stringify(detail.history)).toContain(
-      "CTF platform integration is unavailable"
+      "Tool start_target not found"
     )
     expect(JSON.stringify(detail)).not.toContain("flag{hidden}")
     expect(JSON.stringify(detail)).not.toContain("phase-four-secret")
@@ -492,46 +465,19 @@ describe("phase four", () => {
     ).toBeNull()
   }, 30_000)
 
-  test("aggregates fixed JSONL usage for runs, challenges, and events", async () => {
+  test("aggregates persisted usage for runs, challenges, and events", async () => {
     expect(summarizeUsage([], false).cost).toBeNull()
     const instance = setup()
     const { event, challenge } = await createChallenge(instance.app)
-    const sessionsDir = join(instance.dataDir, "sessions", "stats")
-    mkdirSync(sessionsDir, { recursive: true })
-    const firstPath = join(sessionsDir, "known.jsonl")
-    const secondPath = join(sessionsDir, "unknown.jsonl")
-    writeFileSync(
-      firstPath,
-      sessionFile({
-        input: 10,
-        output: 5,
-        cacheRead: 2,
-        cacheWrite: 1,
-        totalTokens: 18,
-        cost: 0.25,
-      })
-    )
-    writeFileSync(
-      secondPath,
-      sessionFile({
-        input: 4,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 6,
-        cost: 9,
-      })
-    )
     const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
     const now = new Date().toISOString()
     const insert = sqlite.prepare(
-      "insert into runs (id, challenge_id, status, model_config, session_path, created_at, updated_at, completed_at) values (?, ?, 'completed', ?, ?, ?, ?, ?)"
+      "insert into runs (id, challenge_id, status, model_config, created_at, updated_at, completed_at) values (?, ?, 'completed', ?, ?, ?, ?)"
     )
     insert.run(
       "known-cost",
       challenge.id,
       JSON.stringify({ provider: "faux", modelId: "faux-1" }),
-      "sessions/stats/known.jsonl",
       now,
       now,
       now
@@ -544,28 +490,46 @@ describe("phase four", () => {
         modelId: "custom-1",
         costKnown: false,
       }),
-      "sessions/stats/unknown.jsonl",
       now,
       now,
       now
     )
     const insertAgent = sqlite.prepare(
-      "insert into run_agents (id, run_id, name, status, session_path, created_at, updated_at, completed_at) values (?, ?, 'Main agent', 'completed', ?, ?, ?, ?)"
+      "insert into run_agents (id, run_id, name, status, created_at, updated_at, completed_at) values (?, ?, 'Main agent', 'completed', ?, ?, ?)"
     )
-    insertAgent.run(
+    insertAgent.run("known-cost", "known-cost", now, now, now)
+    insertAgent.run("unknown-cost", "unknown-cost", now, now, now)
+    const insertMessage = sqlite.prepare(
+      "insert into agent_messages (id, agent_id, sequence, message, created_at) values (?, ?, 1, ?, ?)"
+    )
+    insertMessage.run(
+      crypto.randomUUID(),
       "known-cost",
-      "known-cost",
-      "sessions/stats/known.jsonl",
-      now,
-      now,
+      JSON.stringify(
+        usageMessage({
+          input: 10,
+          output: 5,
+          cacheRead: 2,
+          cacheWrite: 1,
+          totalTokens: 18,
+          cost: 0.25,
+        })
+      ),
       now
     )
-    insertAgent.run(
+    insertMessage.run(
+      crypto.randomUUID(),
       "unknown-cost",
-      "unknown-cost",
-      "sessions/stats/unknown.jsonl",
-      now,
-      now,
+      JSON.stringify(
+        usageMessage({
+          input: 4,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 6,
+          cost: 9,
+        })
+      ),
       now
     )
     sqlite.close()

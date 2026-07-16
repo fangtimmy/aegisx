@@ -11,21 +11,19 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  createModels,
   fauxAssistantMessage,
+  fauxProvider,
   fauxToolCall,
-  registerFauxProvider,
-} from "@earendil-works/pi-ai/compat"
-import { AuthStorage } from "@earendil-works/pi-coding-agent"
+} from "@earendil-works/pi-ai"
 import { createApp } from "../src/app"
 
 const roots: string[] = []
 const closeApps: Array<() => void> = []
-const providers: Array<{ unregister(): void }> = []
 const configuredModels = new WeakMap<object, Promise<string>>()
 
 afterEach(() => {
   for (const close of closeApps.splice(0)) close()
-  for (const provider of providers.splice(0)) provider.unregister()
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true })
 })
@@ -33,13 +31,12 @@ afterEach(() => {
 function setup() {
   const dataDir = mkdtempSync(join(tmpdir(), "aegisx-phase-three-"))
   roots.push(dataDir)
-  const faux = registerFauxProvider()
-  providers.push(faux)
-  const authStorage = AuthStorage.inMemory()
-  authStorage.setRuntimeApiKey("faux", "host-only-secret")
+  const faux = fauxProvider({ models: [{ id: "faux-1" }] })
+  const models = createModels()
+  models.setProvider(faux.provider)
   const instance = createApp({
     dataDir,
-    authStorage,
+    models,
     resolveModel: (_provider, modelId) =>
       modelId === faux.getModel().id ? (faux.getModel() as never) : undefined,
   })

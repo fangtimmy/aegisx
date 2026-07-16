@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.7",
-    "@earendil-works/pi-coding-agent": "^0.80.7",
+    "@earendil-works/pi-agent-core": "^0.80.7",
     "@hono/typebox-validator": "^1.1.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.30",

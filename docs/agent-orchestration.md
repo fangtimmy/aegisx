@@ -32,7 +32,7 @@
 - `spawn_agent(name, task)`：创建子 Agent，Session 启动后立即返回 Agent ID，不等待任务完成。
 - `inspect_agent(agent_id)`：查询子 Agent 状态、错误和最后一条输出摘要。
 
-子 Agent 完成后，服务端保存其最后一条 assistant 文本。如果主 Agent 正在生成，使用 `steer()` 注入结果；如果主 Agent 空闲，使用 `prompt()` 启动新一轮。完整历史保留在子 Agent 的 Pi JSONL 中，自动回传内容限制长度。完成结果会自动送达，主 Agent 不应频繁轮询 `inspect_agent`。
+子 Agent 完成后，服务端保存其最后一条 assistant 文本，并先把结果写入主 Agent 的 durable inbox。主 Agent Runtime 在执行中使用 `steer()`，空闲时使用 `prompt()`；消息在 core Agent 发出 `message_end` 后标记为已交付。完整历史保存在 SQLite `agent_messages` 中，完成结果可在重启后重放，主 Agent 不应频繁轮询 `inspect_agent`。
 
 ## 持久化
 
@@ -40,8 +40,8 @@
 
 - Agent ID、Run ID、父 Agent ID和名称。
 - 委派任务、状态和错误。
-- 独立 Pi JSONL 会话路径。
-- 脱敏后的 effective system prompt、逻辑 cwd 和启用工具定义快照。
+- 独立、按序的 SQLite Agent 消息。
+- 脱敏后的 effective system prompt、逻辑 cwd、上下文摘要和启用工具定义快照。
 - 最后一条输出摘要和时间戳。
 
 迁移时，现有 Run 的会话路径回填为主 Agent 记录。Run usage 是所有 Agent usage 之和。
@@ -69,7 +69,7 @@ SSE 使用带 Agent ID 的事件 envelope：
 type RunEvent =
   | { type: "status"; run: RunPublic }
   | { type: "agent_status"; agent: AgentPublic }
-  | { type: "agent_event"; agentId: string; event: AgentSessionEvent }
+  | { type: "agent_event"; agentId: string; event: AgentEvent }
 ```
 
 前端按 `agentId` 隔离 live entries，避免不同 Session 的消息和工具调用相互污染。
