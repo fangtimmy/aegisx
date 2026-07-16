@@ -35,6 +35,14 @@ Local runs execute commands with the API process permissions and are not sandbox
 
 Each run has one main agent and may have multiple background child agents. See [multi-agent orchestration](docs/agent-orchestration.md) for the stable runtime constraints.
 
+## Solve container image
+
+`Dockerfile.solve` defines the Kali-based `aegis/solve:kali` image used for container Runs. Build it manually from the repository root:
+
+```sh
+docker build -f Dockerfile.solve -t aegis/solve:kali .
+```
+
 ## Checks
 
 ```sh
