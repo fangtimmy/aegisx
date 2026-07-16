@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  Bot,
   BotMessageSquare,
   CircleAlert,
   Files,
+  GitFork,
   Info,
   Pause,
   Play,
@@ -55,6 +57,7 @@ import type {
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
 import { AgentInspectorButton } from "./agent-inspector"
+import { AgentStatusIcon } from "./agent-status-icon"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
@@ -68,6 +71,16 @@ const statuses: RunStatus[] = [
   "failed",
   "stopped",
 ]
+
+function mergeLiveEntries(current: LiveEntry[], updates: LiveEntry[]) {
+  const next = [...current]
+  for (const entry of updates) {
+    const index = next.findIndex((value) => value.key === entry.key)
+    if (index === -1) next.push(entry)
+    else next[index] = entry
+  }
+  return next
+}
 
 export function RunWorkspace({
   eventId,
@@ -139,6 +152,24 @@ export function RunWorkspace({
   useEffect(() => {
     setLiveByAgent({})
     if (!runId) return
+    let frame: number | undefined
+    let pending: Record<string, LiveEntry[]> = {}
+    const queueLiveEntries = (agentId: string, entries: LiveEntry[]) => {
+      pending[agentId] = mergeLiveEntries(pending[agentId] ?? [], entries)
+      if (frame !== undefined) return
+      frame = requestAnimationFrame(() => {
+        const updates = pending
+        pending = {}
+        frame = undefined
+        setLiveByAgent((current) => {
+          const next = { ...current }
+          for (const [id, values] of Object.entries(updates)) {
+            next[id] = mergeLiveEntries(next[id] ?? [], values)
+          }
+          return next
+        })
+      })
+    }
     const source = new EventSource(`/api/runs/${runId}/events`)
     source.onopen = () => {
       queryClient.invalidateQueries({ queryKey: ["runs", runId] })
@@ -160,15 +191,7 @@ export function RunWorkspace({
         agentId || (isRecord(payload.agent) ? text(payload.agent.id) : "")
       const entries = agentEvent ? liveEntries(agentEvent) : []
       if (agentId && entries.length > 0) {
-        setLiveByAgent((current) => {
-          const next = [...(current[agentId] ?? [])]
-          for (const entry of entries) {
-            const index = next.findIndex((value) => value.key === entry.key)
-            if (index === -1) next.push(entry)
-            else next[index] = entry
-          }
-          return { ...current, [agentId]: next }
-        })
+        queueLiveEntries(agentId, entries)
       }
       const status = text(
         payload.status ??
@@ -208,7 +231,10 @@ export function RunWorkspace({
         })
       }
     }
-    return () => source.close()
+    return () => {
+      source.close()
+      if (frame !== undefined) cancelAnimationFrame(frame)
+    }
   }, [eventId, queryClient, runId])
 
   if (!runId) {
@@ -337,24 +363,33 @@ export function RunWorkspace({
                   >
                     <div className="mx-6 flex min-w-0 shrink-0 items-center gap-2 border-b">
                       <TabsList
-                        className="min-w-0 flex-1 justify-start overflow-x-auto"
+                        className="min-w-0 max-w-[calc(100%-2.5rem)] justify-start overflow-x-auto"
                         variant="underline"
                       >
                         {agents.map((agent) => (
-                          <TabsTab key={agent.id} value={agent.id}>
+                          <TabsTab
+                            className="px-2"
+                            key={agent.id}
+                            value={agent.id}
+                          >
+                            {agent.parentAgentId === null ? (
+                              <Bot aria-hidden="true" />
+                            ) : (
+                              <GitFork aria-hidden="true" />
+                            )}
                             <span className="max-w-40 truncate">
                               {agent.name}
                             </span>
-                            <span className="text-muted-foreground text-xs">
-                              {agent.status}
-                            </span>
+                            <AgentStatusIcon status={agent.status} />
                           </TabsTab>
                         ))}
                       </TabsList>
-                      <AgentInspectorButton
-                        agent={selectedAgent}
-                        runId={runId}
-                      />
+                      <div className="ml-auto shrink-0">
+                        <AgentInspectorButton
+                          agent={selectedAgent}
+                          runId={runId}
+                        />
+                      </div>
                     </div>
                     <TabsPanel
                       className="min-h-0 overflow-hidden"
@@ -379,6 +414,7 @@ export function RunWorkspace({
                         <ScrollArea className="h-full pr-1" scrollFade>
                           <Conversation
                             history={agentDetail.data?.history ?? []}
+                            key={selectedAgent.id}
                             live={liveByAgent[selectedAgent.id] ?? []}
                           />
                         </ScrollArea>

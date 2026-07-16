@@ -1,11 +1,12 @@
 import {
-  BotMessageSquare,
+  ArrowDown,
   Brain,
   ChevronRight,
   CircleAlert,
   FileText,
   Flag,
   FolderOpen,
+  GitFork,
   LoaderCircle,
   Pencil,
   Play,
@@ -14,16 +15,19 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react"
-import { useEffect, useRef } from "react"
+import { useDeferredValue, useEffect, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { Button } from "@/components/ui/button"
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import type { SessionEntry } from "@/lib/api"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
+import type { AgentStatus, SessionEntry } from "@/lib/api"
+import { AgentStatusIcon } from "./agent-status-icon"
 import {
   buildConversation,
   type ConversationItem,
@@ -113,10 +117,10 @@ function ToolActivity({ tool }: { tool: ToolBlock }) {
         : toolIcon(tool.name)
   return (
     <details
-      className="group py-0.5"
+      className="group"
       open={tool.status === "running" || tool.status === "error" || undefined}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-1.5 text-muted-foreground text-sm hover:text-foreground">
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm py-1 text-muted-foreground text-sm hover:text-foreground">
         <StatusIcon
           className={
             tool.status === "error"
@@ -129,9 +133,9 @@ function ToolActivity({ tool }: { tool: ToolBlock }) {
         <span className="min-w-0 flex-1 truncate">{toolSummary(tool)}</span>
         <ChevronRight className="size-3.5 shrink-0 transition-transform group-open:rotate-90" />
       </summary>
-      <div className="mt-1 ml-5 flex min-w-0 flex-col gap-2 pb-2">
+      <div className="mt-0.5 ml-5 flex min-w-0 flex-col gap-1 pb-1">
         {tool.args !== null && tool.args !== undefined && (
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5">
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-2 font-mono text-xs leading-5">
             {text(tool.args)}
           </pre>
         )}
@@ -139,8 +143,8 @@ function ToolActivity({ tool }: { tool: ToolBlock }) {
           <pre
             className={
               tool.status === "error"
-                ? "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 font-mono text-xs leading-5"
-                : "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5"
+                ? "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-xs leading-5"
+                : "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-2 font-mono text-xs leading-5"
             }
           >
             {tool.output}
@@ -183,24 +187,33 @@ function ConversationRow({ item }: { item: ConversationItem }) {
   }
   if (item.type === "handoff") {
     return (
-      <article className="py-5">
-        <div className="border-l-2 border-primary bg-muted/30 px-4 py-3">
-          <div className="mb-2 flex items-center gap-2 text-muted-foreground text-xs">
-            <BotMessageSquare className="size-4" />
-            <span className="font-medium text-foreground">
-              Agent handoff · {item.agentName}
-            </span>
-            <span>{item.status}</span>
-            {time && <time className="ml-auto">{time}</time>}
+      <article className="py-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <GitFork
+            aria-hidden="true"
+            className="mt-1 size-4 shrink-0 text-muted-foreground"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex items-center gap-2 text-muted-foreground text-xs">
+              <span className="font-medium text-foreground">
+                {item.agentName}
+              </span>
+              <AgentStatusIcon
+                className="[&_svg]:size-3.5"
+                status={item.status as AgentStatus}
+              />
+              <span className="capitalize">{item.status}</span>
+              {time && <time className="ml-auto">{time}</time>}
+            </div>
+            <Markdown>{item.body}</Markdown>
           </div>
-          <Markdown>{item.body}</Markdown>
         </div>
       </article>
     )
   }
   return (
-    <article className="py-5">
-      <div className="flex min-w-0 flex-col gap-3">
+    <article className="py-4">
+      <div className="flex min-w-0 flex-col gap-0">
         {item.blocks.map((block) => {
           if (block.type === "text") {
             return <Markdown key={block.key}>{block.body}</Markdown>
@@ -253,8 +266,18 @@ export function Conversation({
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
   const followsLatest = useRef(true)
-  const items = buildConversation(history, live)
+  const [atBottom, setAtBottom] = useState(true)
+  const deferredLive = useDeferredValue(live)
+  const items = buildConversation(history, deferredLive)
   const latestItem = items.at(-1)
+
+  const scrollToBottom = (behavior: ScrollBehavior) => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    followsLatest.current = true
+    setAtBottom(true)
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior })
+  }
 
   useEffect(() => {
     const viewport = rootRef.current?.closest<HTMLElement>(
@@ -263,9 +286,12 @@ export function Conversation({
     if (!viewport) return
     viewportRef.current = viewport
     const updateFollowState = () => {
-      followsLatest.current =
+      const next =
         viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 80
+      followsLatest.current = next
+      setAtBottom(next)
     }
+    updateFollowState()
     viewport.addEventListener("scroll", updateFollowState, { passive: true })
     return () => viewport.removeEventListener("scroll", updateFollowState)
   }, [])
@@ -273,7 +299,10 @@ export function Conversation({
   useEffect(() => {
     if (latestItem && followsLatest.current) {
       const viewport = viewportRef.current
-      viewport?.scrollTo({ top: viewport.scrollHeight })
+      if (viewport) {
+        setAtBottom(true)
+        viewport.scrollTo({ top: viewport.scrollHeight })
+      }
     }
   }, [latestItem])
 
@@ -290,7 +319,31 @@ export function Conversation({
     )
   }
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 pb-6" ref={rootRef}>
+    <div
+      className="relative mx-auto min-h-full w-full max-w-3xl px-6 pb-6"
+      ref={rootRef}
+    >
+      {!atBottom && (
+        <div className="pointer-events-none sticky top-[calc(100%-3.25rem)] z-10 flex h-0 justify-center">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  aria-label="Jump to latest activity"
+                  className="pointer-events-auto rounded-full bg-background shadow-md"
+                  onClick={() => scrollToBottom("smooth")}
+                  size="icon-sm"
+                  type="button"
+                  variant="outline"
+                />
+              }
+            >
+              <ArrowDown aria-hidden="true" />
+            </TooltipTrigger>
+            <TooltipPopup>Jump to latest activity</TooltipPopup>
+          </Tooltip>
+        </div>
+      )}
       {items.map((item) => (
         <ConversationRow item={item} key={item.key} />
       ))}

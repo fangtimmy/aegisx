@@ -3,6 +3,7 @@ import test from "node:test"
 import {
   buildConversation,
   type LiveEntry,
+  liveEntries,
 } from "@/features/runs/timeline-model"
 import type { SessionEntry } from "@/lib/api"
 
@@ -128,4 +129,27 @@ test("renders child completion as an agent handoff", () => {
     body: "Found the target file.",
     timestamp: 1,
   })
+})
+
+test("keeps streaming message updates on one live entry", () => {
+  const started = liveEntries({
+    type: "message_start",
+    message: { role: "assistant", timestamp: 42, content: [] },
+  })
+  const updated = liveEntries({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      timestamp: 42,
+      content: [{ type: "text", text: "Streaming" }],
+    },
+  })
+
+  assert.equal(started[0]?.key, updated[0]?.key)
+  assert.equal(updated[0]?.type, "message")
+  if (updated[0]?.type !== "message") assert.fail("expected a message")
+  assert.equal(
+    (updated[0].message.content as Array<{ text: string }>)[0]?.text,
+    "Streaming"
+  )
 })
