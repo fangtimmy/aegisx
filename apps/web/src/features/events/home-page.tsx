@@ -33,7 +33,6 @@ import {
 } from "@/components/ui/dialog"
 import {
   Empty,
-  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -175,7 +174,7 @@ function EventCard({ event }: { event: EventSummary }) {
           )}
         </CardPanel>
       </Card>
-      <CardFrameFooter className="flex min-h-16 items-end justify-between gap-3">
+      <CardFrameFooter className="flex min-h-16 items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1 text-muted-foreground text-xs">
           <span className="flex items-center gap-1.5">
             <Clock3 className="size-3.5 shrink-0" />
@@ -195,11 +194,7 @@ function EventCard({ event }: { event: EventSummary }) {
             </span>
           )}
         </div>
-        <Button
-          render={<Link to={`/events/${event.id}`} />}
-          size="sm"
-          variant="ghost"
-        >
+        <Button render={<Link to={`/events/${event.id}`} />} variant="ghost">
           Open <ArrowRight />
         </Button>
       </CardFrameFooter>
@@ -248,9 +243,6 @@ export function HomePage() {
               Create an event to begin organizing challenges.
             </EmptyDescription>
           </EmptyHeader>
-          <EmptyContent>
-            <EventDialog />
-          </EmptyContent>
         </Empty>
       )}
       {events.data && events.data.items.length > 0 && (

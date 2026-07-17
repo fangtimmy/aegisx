@@ -290,9 +290,9 @@ export function EventPage() {
                             <h2 className="font-medium text-sm">
                               {challengeGroup.label}
                             </h2>
-                            <span className="text-muted-foreground text-xs tabular-nums">
+                            <Badge size="sm" variant="secondary">
                               {challengeGroup.items.length}
-                            </span>
+                            </Badge>
                           </div>
                         )}
                         <div className="grid grid-cols-3 items-stretch gap-4">

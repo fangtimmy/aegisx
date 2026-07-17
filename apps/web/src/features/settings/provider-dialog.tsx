@@ -57,8 +57,8 @@ export function ProviderDialog({
 
   return (
     <Dialog onOpenChange={setOpen} open={open}>
-      <DialogTrigger render={<Button size="sm" type="button" />}>
-        <Plus /> Add provider
+      <DialogTrigger render={<Button type="button" variant="outline" />}>
+        <Plus /> Add
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>

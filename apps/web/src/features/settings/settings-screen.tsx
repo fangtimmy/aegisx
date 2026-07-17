@@ -2,12 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Boxes, CircleAlert, Settings2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
   CardFrame,
   CardFrameAction,
-  CardFrameDescription,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -34,6 +34,7 @@ import {
   type ProviderConnection,
   type SettingsPublic,
 } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
 import { RuntimeDefaults } from "./runtime-defaults"
@@ -136,10 +137,14 @@ export function SettingsScreen() {
           <div className="grid min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">
             <CardFrame className="h-min">
               <CardFrameHeader>
-                <CardFrameTitle>Providers</CardFrameTitle>
-                <CardFrameDescription>
-                  {items.length} configured
-                </CardFrameDescription>
+                <CardFrameTitle>
+                  <span className="flex items-center gap-2">
+                    Providers
+                    <Badge size="sm" variant="secondary">
+                      {items.length}
+                    </Badge>
+                  </span>
+                </CardFrameTitle>
                 <CardFrameAction>
                   <ProviderDialog
                     onCreated={(id) => {
@@ -153,23 +158,34 @@ export function SettingsScreen() {
                 <CardPanel className="p-2">
                   <nav aria-label="Provider connections">
                     {items.map((provider) => (
-                      <div className="mb-1 flex items-center" key={provider.id}>
+                      <div
+                        className={cn(
+                          "mb-1 flex items-center rounded-lg hover:bg-accent/50 focus-within:bg-accent/50",
+                          selectedId === provider.id &&
+                            "bg-secondary hover:bg-secondary focus-within:bg-secondary"
+                        )}
+                        key={provider.id}
+                      >
                         <Button
-                          className="h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left"
+                          className="h-auto min-w-0 flex-1 justify-start bg-transparent px-3 py-2 text-left hover:bg-transparent data-pressed:bg-transparent"
                           aria-pressed={selectedId === provider.id}
                           onClick={() => setSelectedId(provider.id)}
                           type="button"
-                          variant={
-                            selectedId === provider.id ? "secondary" : "ghost"
-                          }
+                          variant="ghost"
                         >
-                          <span className="block truncate font-medium text-sm">
-                            {provider.label}
+                          <span className="flex min-w-0 flex-1 flex-col items-start">
+                            <span className="w-full truncate font-medium text-sm">
+                              {provider.label}
+                            </span>
+                            {!provider.apiKey && (
+                              <span className="text-muted-foreground text-xs">
+                                No key
+                              </span>
+                            )}
                           </span>
-                          <span className="block text-muted-foreground text-xs">
-                            {provider.models.length} models
-                            {provider.apiKey ? "" : " · No key"}
-                          </span>
+                          <Badge size="sm" variant="secondary">
+                            {provider.models.length}
+                          </Badge>
                         </Button>
                         <Switch
                           aria-label={

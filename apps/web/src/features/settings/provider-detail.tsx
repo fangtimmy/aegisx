@@ -20,6 +20,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -27,7 +28,6 @@ import {
   CardFrame,
   CardFrameAction,
   CardFrameDescription,
-  CardFrameFooter,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -314,10 +314,14 @@ export function ProviderDetail({
 
       <CardFrame>
         <CardFrameHeader>
-          <CardFrameTitle>Models</CardFrameTitle>
-          <CardFrameDescription>
-            Only enabled models can start a run.
-          </CardFrameDescription>
+          <CardFrameTitle>
+            <span className="flex items-center gap-2">
+              Models
+              <Badge size="sm" variant="secondary">
+                {provider.models.length}
+              </Badge>
+            </span>
+          </CardFrameTitle>
           <CardFrameAction className="flex gap-2">
             <Button
               loading={discover.isPending}
@@ -520,9 +524,6 @@ export function ProviderDetail({
             </div>
           </CardPanel>
         </Card>
-        <CardFrameFooter className="text-muted-foreground text-xs">
-          {provider.models.length} configured
-        </CardFrameFooter>
       </CardFrame>
       <Dialog
         onOpenChange={(open) => {
