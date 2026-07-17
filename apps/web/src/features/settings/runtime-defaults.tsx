@@ -27,6 +27,17 @@ import {
   type SettingsPublic,
 } from "@/lib/api"
 
+type RuntimeSettingsInput = Pick<
+  SettingsPublic,
+  | "defaultModelId"
+  | "environment"
+  | "containerImage"
+  | "cpus"
+  | "memoryMb"
+  | "pidsLimit"
+  | "maxConcurrency"
+>
+
 export function RuntimeDefaults({
   settings,
   providers,
@@ -36,7 +47,7 @@ export function RuntimeDefaults({
 }) {
   const queryClient = useQueryClient()
   const mutation = useMutation({
-    mutationFn: (input: Omit<SettingsPublic, "updatedAt">) =>
+    mutationFn: (input: RuntimeSettingsInput) =>
       apiRequest<SettingsPublic>("/settings", jsonRequest("PATCH", input)),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   })

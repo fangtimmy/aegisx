@@ -382,6 +382,7 @@ describe("providers, models, and usage", () => {
     expect(detail.run).toMatchObject({
       provider: "Faux",
       modelId: "faux-1",
+      modelName: "Faux 1",
       environment: "container",
       image: "alpine:3.22",
       cpus: 0.5,
@@ -405,6 +406,7 @@ describe("providers, models, and usage", () => {
       provider: `aegisx-${provider.id}`,
       providerLabel: "Faux",
       modelId: "faux-1",
+      modelLabel: "Faux 1",
       costKnown: false,
     })
     expect(JSON.parse(stored.environment_config)).toEqual({

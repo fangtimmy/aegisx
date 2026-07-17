@@ -3,6 +3,16 @@ import type { Hono } from "hono"
 import { Type } from "typebox"
 import type { createDatabase } from "./db"
 import { providerConnections, providerModels, settings } from "./db/schema"
+import {
+  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_INITIAL_PROMPT_TEMPLATE,
+  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  PROMPT_TEMPLATE_VARIABLES,
+  previewInitialPrompt,
+  previewSystemPrompt,
+  resolvePromptTemplates,
+  samplePromptContext,
+} from "./prompt-templates"
 import { validateJson } from "./validation"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -29,6 +39,27 @@ const providerType = Type.Union([
   Type.Literal("openai-responses"),
   Type.Literal("anthropic-messages"),
 ])
+
+const promptTemplatesInput = Type.Object(
+  {
+    mainSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
+    childSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
+    initialPromptTemplate: Type.String({ maxLength: 100_000 }),
+  },
+  { additionalProperties: false }
+)
+
+const promptPreviewInput = Type.Object(
+  {
+    kind: Type.Union([
+      Type.Literal("mainSystemPrompt"),
+      Type.Literal("childSystemPrompt"),
+      Type.Literal("initialPrompt"),
+    ]),
+    template: Type.String({ maxLength: 100_000 }),
+  },
+  { additionalProperties: false }
+)
 
 const providerInput = Type.Object(
   {
@@ -95,6 +126,7 @@ export function registerProviderRoutes(
       .get()
   const publicSettings = () => {
     const value = getSettings()
+    const promptTemplates = resolvePromptTemplates(value)
     return {
       defaultModelId: value.defaultModelId,
       environment: value.environment as "local" | "container",
@@ -103,8 +135,43 @@ export function registerProviderRoutes(
       memoryMb: value.memoryMb,
       pidsLimit: value.pidsLimit,
       maxConcurrency: value.maxConcurrency,
+      ...promptTemplates,
+      defaultMainSystemPromptTemplate: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+      defaultChildSystemPromptTemplate: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+      defaultInitialPromptTemplate: DEFAULT_INITIAL_PROMPT_TEMPLATE,
+      promptTemplateVariables: PROMPT_TEMPLATE_VARIABLES,
       updatedAt: value.updatedAt,
     }
+  }
+  const childSampleContext = {
+    ...samplePromptContext,
+    agent: {
+      role: "child" as const,
+      isMain: false,
+      name: "Recon agent",
+      task: "Inspect the application endpoints.",
+    },
+  }
+  const previewPrompt = (
+    kind: "mainSystemPrompt" | "childSystemPrompt" | "initialPrompt",
+    template: string
+  ) => {
+    if (kind === "mainSystemPrompt") {
+      return previewSystemPrompt(template, samplePromptContext)
+    }
+    if (kind === "childSystemPrompt") {
+      return previewSystemPrompt(template, childSampleContext)
+    }
+    return previewInitialPrompt(template, samplePromptContext)
+  }
+  const validatePrompts = (input: {
+    mainSystemPromptTemplate: string
+    childSystemPromptTemplate: string
+    initialPromptTemplate: string
+  }) => {
+    previewPrompt("mainSystemPrompt", input.mainSystemPromptTemplate)
+    previewPrompt("childSystemPrompt", input.childSystemPromptTemplate)
+    previewPrompt("initialPrompt", input.initialPromptTemplate)
   }
   const publicProvider = (
     provider: typeof providerConnections.$inferSelect
@@ -146,6 +213,59 @@ export function registerProviderRoutes(
     options.setMaxConcurrency(input.maxConcurrency)
     return c.json(publicSettings())
   })
+
+  app.post(
+    "/api/settings/prompts/preview",
+    validateJson(promptPreviewInput),
+    (c) => {
+      try {
+        const input = c.req.valid("json")
+        return c.json({ segments: previewPrompt(input.kind, input.template) })
+      } catch (error) {
+        return c.json(
+          {
+            error: {
+              code: "invalid_prompt_template",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Prompt template is invalid",
+            },
+          },
+          400
+        )
+      }
+    }
+  )
+
+  app.patch(
+    "/api/settings/prompts",
+    validateJson(promptTemplatesInput),
+    (c) => {
+      const input = c.req.valid("json")
+      try {
+        validatePrompts(input)
+      } catch (error) {
+        return c.json(
+          {
+            error: {
+              code: "invalid_prompt_template",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Prompt template is invalid",
+            },
+          },
+          400
+        )
+      }
+      db.update(settings)
+        .set({ ...input, updatedAt: new Date().toISOString() })
+        .where(eq(settings.id, 1))
+        .run()
+      return c.json(publicSettings())
+    }
+  )
 
   app.get("/api/providers", (c) =>
     c.json({

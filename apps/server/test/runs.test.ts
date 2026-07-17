@@ -99,6 +99,139 @@ function configureFaux(app: ReturnType<typeof createApp>["app"]) {
 }
 
 describe("run API", () => {
+  test("renders and freezes custom prompt templates", async () => {
+    const instance = setup()
+    const { event, challenge } = await createChallenge(instance.app)
+    await instance.app.request(
+      `/api/challenges/${challenge.id}/attachments?filename=artifact.bin`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: new Uint8Array([1, 2, 3]),
+      }
+    )
+    const invalid = await instance.app.request(
+      "/api/settings/prompts/preview",
+      json("POST", {
+        kind: "mainSystemPrompt",
+        template: "{{unknown.value}}",
+      })
+    )
+    expect(invalid.status).toBe(400)
+
+    const templates = {
+      mainSystemPromptTemplate:
+        "Custom {{agent.role}} for {{event.name}} with {{model.name}}; spawn={{capabilities.canSpawnAgent}} <system-tag>",
+      childSystemPromptTemplate:
+        "Custom child {{agent.name}} for {{challenge.name}}",
+      initialPromptTemplate:
+        "Start {{event.name}} / {{challenge.name}} in {{run.workspace}} with {{model.provider}} / {{model.name}}; {{#each challenge.attachments}}{{name}}|{{path}}|{{size}}{{/each}}",
+    }
+    const preview = await instance.app.request(
+      "/api/settings/prompts/preview",
+      json("POST", {
+        kind: "mainSystemPrompt",
+        template: templates.mainSystemPromptTemplate,
+      })
+    )
+    expect(preview.status).toBe(200)
+    const previewBody = await preview.json()
+    expect(
+      previewBody.segments
+        .map((segment: { text: string }) => segment.text)
+        .join("")
+    ).toContain("<system-tag>")
+    expect(
+      previewBody.segments.some(
+        (segment: { highlighted: boolean; text: string }) =>
+          segment.highlighted && segment.text === "main"
+      )
+    ).toBe(true)
+    expect(
+      previewBody.segments.some(
+        (segment: { highlighted: boolean; text: string }) =>
+          segment.highlighted && segment.text === "true"
+      )
+    ).toBe(true)
+    expect(
+      (
+        await instance.app.request(
+          "/api/settings/prompts",
+          json("PATCH", templates)
+        )
+      ).status
+    ).toBe(200)
+
+    instance.faux.setResponses([fauxAssistantMessage("Waiting for guidance.")])
+    const response = await createRun(instance.app, challenge.id)
+    expect(response.status).toBe(202)
+    const run = await response.json()
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    const stored = sqlite
+      .query("select prompt, prompt_config from runs where id = ?")
+      .get(run.id) as { prompt: string; prompt_config: string }
+    const agent = sqlite
+      .query("select runtime_snapshot from run_agents where id = ?")
+      .get(run.id) as { runtime_snapshot: string }
+    expect(stored.prompt).toBe(
+      "Start Run tests / Byte Copy in $WORKSPACE with Faux / Faux 1; artifact.bin|artifact.bin|3"
+    )
+    expect(JSON.parse(stored.prompt_config)).toMatchObject({
+      ...templates,
+      context: {
+        event: { id: event.id, name: "Run tests" },
+        challenge: {
+          id: challenge.id,
+          attachments: [
+            { name: "artifact.bin", path: "artifact.bin", size: 3 },
+          ],
+        },
+        model: { provider: "Faux", name: "Faux 1", id: "faux-1" },
+      },
+    })
+    expect(JSON.parse(agent.runtime_snapshot).systemPrompt).toBe(
+      "Custom main for Run tests with Faux 1; spawn=true <system-tag>"
+    )
+
+    await instance.app.request(
+      "/api/settings/prompts",
+      json("PATCH", {
+        mainSystemPromptTemplate: "Changed main system",
+        childSystemPromptTemplate: "Changed child system",
+        initialPromptTemplate: "Changed initial",
+      })
+    )
+    await instance.app.request(
+      `/api/events/${event.id}`,
+      json("PATCH", { name: "Changed event" })
+    )
+    expect(
+      (
+        await instance.app.request(
+          `/api/runs/${run.id}/pause`,
+          json("POST", {})
+        )
+      ).status
+    ).toBe(200)
+    instance.faux.setResponses([fauxAssistantMessage("Resumed.")])
+    expect(
+      (
+        await instance.app.request(
+          `/api/runs/${run.id}/resume`,
+          json("POST", {})
+        )
+      ).status
+    ).toBe(200)
+    const resumedAgent = sqlite
+      .query("select runtime_snapshot from run_agents where id = ?")
+      .get(run.id) as { runtime_snapshot: string }
+    expect(JSON.parse(resumedAgent.runtime_snapshot).systemPrompt).toBe(
+      "Custom main for Run tests with Faux 1; spawn=true <system-tag>"
+    )
+    sqlite.close()
+  })
+
   test("isolates files, copies attachments, completes, and reloads messages", async () => {
     const first = setup()
     const { event, challenge } = await createChallenge(first.app)
@@ -165,6 +298,7 @@ describe("run API", () => {
     expect(JSON.parse(stored[0].model_config)).toMatchObject({
       providerLabel: "Faux",
       modelId: "faux-1",
+      modelLabel: "Faux 1",
       costKnown: false,
     })
     expect(JSON.parse(stored[0].environment_config)).toEqual({ type: "local" })
@@ -354,16 +488,22 @@ describe("run API", () => {
     const childDetail = await (
       await instance.app.request(`/api/runs/${run.id}/agents/${child.id}`)
     ).json()
+    expect(childDetail.history[0].message).toMatchObject({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "Inspect the challenge files and report one useful finding.",
+        },
+      ],
+    })
     expect(JSON.stringify(childDetail.history)).toContain("delegated-result")
     expect(JSON.stringify(childDetail.history)).not.toContain("call finish_run")
     expect(JSON.stringify(childDetail.history)).not.toContain(
       "Inspect the supplied bytes and finish the run."
     )
-    expect(JSON.stringify(childDetail.history)).toContain(
+    expect(JSON.stringify(childDetail.history)).not.toContain(
       "share the Run workspace root"
-    )
-    expect(JSON.stringify(childDetail.history)).toContain(
-      "Use and report paths relative to the Run workspace root"
     )
 
     const childInspector = await (
@@ -389,7 +529,7 @@ describe("run API", () => {
       ])
     )
     expect(childInspector.runtime.systemPrompt).toContain(
-      "You are a background child agent."
+      "You are a background CTF-solving agent named Recon"
     )
     expect(childInspector.runtime.systemPrompt).not.toContain(
       "expert coding assistant operating inside pi"
@@ -419,7 +559,7 @@ describe("run API", () => {
       ])
     )
     expect(mainInspector.runtime.systemPrompt).toContain(
-      "You are the main agent"
+      "You are the main autonomous CTF-solving agent"
     )
     expect(mainInspector.runtime.systemPrompt).not.toContain(
       "<available_skills>"

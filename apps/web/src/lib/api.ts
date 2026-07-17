@@ -117,6 +117,7 @@ export type RunPublic = {
   status: RunStatus
   provider: string
   modelId: string
+  modelName: string
   environment: "local" | "container"
   targetSupported: boolean
   image?: string | null
@@ -185,6 +186,13 @@ export type SettingsPublic = {
   memoryMb: number
   pidsLimit: number
   maxConcurrency: number
+  mainSystemPromptTemplate: string
+  childSystemPromptTemplate: string
+  initialPromptTemplate: string
+  defaultMainSystemPromptTemplate: string
+  defaultChildSystemPromptTemplate: string
+  defaultInitialPromptTemplate: string
+  promptTemplateVariables: string[]
   updatedAt: string
 }
 

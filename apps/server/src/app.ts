@@ -18,6 +18,7 @@ import { createModelService } from "./models"
 import type { RemoteTargetInfo } from "./platform"
 import { registerPlatformRoutes } from "./platform-routes"
 import { createPlatformService } from "./platform-service"
+import { resolvePromptTemplates } from "./prompt-templates"
 import { providerName, registerProviderRoutes } from "./provider-routes"
 import { redactSecrets } from "./redaction"
 import { createRunManager, RunActionError } from "./runs"
@@ -175,6 +176,7 @@ export function createApp(options: {
         ? configuredConcurrency
         : 2,
     getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
+    getPromptTemplates: () => resolvePromptTemplates(getSettings()),
     modelService,
     canFinishRun: platformService.canFinishRun,
     submitFlag: platformService.submitFlag,
@@ -630,6 +632,7 @@ export function createApp(options: {
               provider: providerName(selected.provider.id),
               providerLabel: selected.provider.label,
               modelId: selected.model.modelId,
+              modelLabel: selected.model.label,
               costKnown: false,
             },
             environment

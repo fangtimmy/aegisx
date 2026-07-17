@@ -78,7 +78,7 @@ export function RunOverview({
         <div>
           <dt className="text-muted-foreground text-xs">Model</dt>
           <dd className="mt-1 break-all font-mono text-xs">
-            {run.provider} / {run.modelId}
+            {run.provider} / {run.modelName}
           </dd>
         </div>
         <div>

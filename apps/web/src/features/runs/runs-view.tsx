@@ -73,7 +73,7 @@ function RunItem({
         </span>
         <span className="mt-1.5 flex min-w-0 items-start gap-2 text-muted-foreground text-xs">
           <span className="min-w-0 flex-1 break-all font-mono">
-            {run.provider} / {run.modelId}
+            {run.provider} / {run.modelName}
           </span>
           <time
             className="shrink-0"

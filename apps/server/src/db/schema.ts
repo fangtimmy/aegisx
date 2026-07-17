@@ -100,6 +100,7 @@ export const runs = sqliteTable(
       .references(() => challenges.id, { onDelete: "cascade" }),
     status: text("status").notNull(),
     prompt: text("prompt").notNull().default(""),
+    promptConfig: text("prompt_config").notNull().default("{}"),
     modelConfig: text("model_config").notNull().default("{}"),
     environmentConfig: text("environment_config")
       .notNull()
@@ -254,6 +255,15 @@ export const settings = sqliteTable(
     memoryMb: integer("memory_mb").notNull().default(512),
     pidsLimit: integer("pids_limit").notNull().default(128),
     maxConcurrency: integer("max_concurrency").notNull().default(2),
+    mainSystemPromptTemplate: text("system_prompt_template")
+      .notNull()
+      .default(""),
+    childSystemPromptTemplate: text("child_system_prompt_template")
+      .notNull()
+      .default(""),
+    initialPromptTemplate: text("initial_prompt_template")
+      .notNull()
+      .default(""),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [

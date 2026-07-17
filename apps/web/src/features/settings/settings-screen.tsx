@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Boxes, CircleAlert, Settings2 } from "lucide-react"
+import { Boxes, Braces, CircleAlert, Settings2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -35,13 +35,16 @@ import {
   type SettingsPublic,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { PromptSettings } from "./prompt-settings"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
 import { RuntimeDefaults } from "./runtime-defaults"
 
+type SettingsSection = "models" | "prompts" | "runtime"
+
 export function SettingsScreen() {
   const queryClient = useQueryClient()
-  const [section, setSection] = useState<"models" | "runtime">("models")
+  const [section, setSection] = useState<SettingsSection>("models")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const providers = useQuery({
     queryKey: ["providers"],
@@ -104,7 +107,7 @@ export function SettingsScreen() {
   return (
     <Tabs
       className="w-full flex-row items-start gap-4"
-      onValueChange={(value) => setSection(value as "models" | "runtime")}
+      onValueChange={(value) => setSection(value as SettingsSection)}
       orientation="vertical"
       value={section}
     >
@@ -113,12 +116,31 @@ export function SettingsScreen() {
           <TabsTab value="models">
             <Boxes aria-hidden="true" /> Model providers
           </TabsTab>
+          <TabsTab value="prompts">
+            <Braces aria-hidden="true" /> Agent prompts
+          </TabsTab>
           <TabsTab value="runtime">
             <Settings2 aria-hidden="true" /> Runtime defaults
           </TabsTab>
         </TabsList>
       </div>
       <div className="min-w-0 flex-1">
+        <TabsPanel value="prompts">
+          <Frame className="min-w-0">
+            <FrameHeader>
+              <FrameTitle>Agent prompts</FrameTitle>
+              <FrameDescription>
+                Templates used when new Runs and Agents start.
+              </FrameDescription>
+            </FrameHeader>
+            <FramePanel>
+              <PromptSettings
+                key={settings.data?.updatedAt}
+                settings={settings.data as SettingsPublic}
+              />
+            </FramePanel>
+          </Frame>
+        </TabsPanel>
         <TabsPanel value="runtime">
           <Frame className="min-w-0">
             <FrameHeader>
