@@ -154,6 +154,15 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
     }
   })
 
+  app.delete("/api/challenges/:challengeId/target", async (c) => {
+    try {
+      await service.ignoreTarget(c.req.param("challengeId"))
+      return c.body(null, 204)
+    } catch (error) {
+      return platformError(c, error)
+    }
+  })
+
   for (const action of ["start", "extend", "stop"] as const) {
     app.post(
       `/api/challenges/:challengeId/target/${action}`,

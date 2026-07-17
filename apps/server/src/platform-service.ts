@@ -363,7 +363,8 @@ export function createPlatformService(db: Database, storage: Storage) {
     if (
       eventChallenges.some(
         (challenge) =>
-          challenge.remoteSourceKey !== sourceKey || !challenge.remoteId
+          challenge.remoteSourceKey !== null &&
+          challenge.remoteSourceKey !== sourceKey
       )
     ) {
       throw new PlatformActionError(
@@ -589,6 +590,7 @@ export function createPlatformService(db: Database, storage: Storage) {
     if (
       !challenge?.remoteId ||
       !challenge.remoteAvailable ||
+      challenge.remoteTargetIgnored ||
       !platform ||
       challenge.remoteSourceKey !== platform.sourceKey
     ) {
@@ -628,12 +630,58 @@ export function createPlatformService(db: Database, storage: Storage) {
     }
   }
 
+  async function ignoreTarget(challengeId: string) {
+    const challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+    const platform = challenge ? storedPlatform(challenge.eventId) : undefined
+    if (
+      !challenge?.remoteId ||
+      !challenge.remoteAvailable ||
+      !challenge.remoteTarget ||
+      !platform ||
+      challenge.remoteSourceKey !== platform.sourceKey
+    ) {
+      throw new PlatformActionError(
+        "not_bound",
+        "Challenge has no platform target"
+      )
+    }
+    if (challenge.remoteTargetIgnored) return
+    const adapter = adapterForEvent(challenge.eventId)
+    if (!adapter?.getTarget) {
+      throw new PlatformActionError(
+        "invalid_state",
+        "Platform does not support target management"
+      )
+    }
+    let target: TargetState
+    try {
+      target = await adapter.getTarget(challenge.remoteId)
+    } catch (error) {
+      throw platformError(error)
+    }
+    if (["starting", "running", "stopping"].includes(target.status)) {
+      throw new PlatformActionError(
+        "invalid_state",
+        "Stop the remote target before removing it from AegisX"
+      )
+    }
+    db.update(challenges)
+      .set({ remoteTargetIgnored: true, updatedAt: new Date().toISOString() })
+      .where(eq(challenges.id, challengeId))
+      .run()
+  }
+
   return {
     bind,
     canFinishRun,
     detach,
     discoverChallenges,
     getPublic: publicPlatform,
+    ignoreTarget,
     isBoundEvent: (eventId: string) => Boolean(storedPlatform(eventId)),
     listRemoteEvents,
     submitFlag,

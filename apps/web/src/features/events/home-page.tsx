@@ -1,24 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CalendarDays, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react"
+import { CalendarDays, Plus, TriangleAlert } from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router"
 import { AppLayout } from "@/components/app-layout"
-import { IconTooltip } from "@/components/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogPopup,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardFooter,
   CardHeader,
   CardPanel,
@@ -54,15 +42,12 @@ import {
 } from "@/lib/api"
 import { ErrorState, eventKeys } from "./shared"
 
-function EventDialog({ event }: { event?: EventSummary }) {
+function EventDialog() {
   const [open, setOpen] = useState(false)
   const queryClient = useQueryClient()
   const mutation = useMutation({
     mutationFn: (input: EventInput) =>
-      apiRequest<EventSummary>(
-        event ? `/events/${event.id}` : "/events",
-        jsonRequest(event ? "PATCH" : "POST", input)
-      ),
+      apiRequest<EventSummary>("/events", jsonRequest("POST", input)),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: eventKeys.all })
       setOpen(false)
@@ -86,47 +71,21 @@ function EventDialog({ event }: { event?: EventSummary }) {
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogTrigger
-        render={
-          event ? (
-            <Button
-              aria-label={`Edit ${event.name}`}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-            />
-          ) : (
-            <Button type="button" />
-          )
-        }
-      >
-        {event ? (
-          <Pencil />
-        ) : (
-          <>
-            <Plus /> Create event
-          </>
-        )}
+      <DialogTrigger render={<Button type="button" />}>
+        <Plus /> Create event
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>{event ? "Edit event" : "Create event"}</DialogTitle>
+          <DialogTitle>Create event</DialogTitle>
           <DialogDescription>
-            {event
-              ? "Rename this event."
-              : "Set up a workspace for challenges and runs."}
+            Set up a workspace for challenges and runs.
           </DialogDescription>
         </DialogHeader>
         <form className="contents" onSubmit={handleSubmit}>
           <DialogPanel className="grid gap-4">
             <Field>
               <FieldLabel>Name</FieldLabel>
-              <Input
-                defaultValue={event?.name}
-                name="name"
-                required
-                type="text"
-              />
+              <Input name="name" required type="text" />
             </Field>
             {mutation.error && (
               <Alert variant="error">
@@ -140,7 +99,7 @@ function EventDialog({ event }: { event?: EventSummary }) {
               Cancel
             </DialogClose>
             <Button loading={mutation.isPending} type="submit">
-              {event ? "Save changes" : "Create event"}
+              Create event
             </Button>
           </DialogFooter>
         </form>
@@ -149,78 +108,17 @@ function EventDialog({ event }: { event?: EventSummary }) {
   )
 }
 
-function DeleteEventDialog({ event }: { event: EventSummary }) {
-  const queryClient = useQueryClient()
-  const mutation = useMutation({
-    mutationFn: () =>
-      apiRequest<void>(`/events/${event.id}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: eventKeys.all }),
-  })
-
-  return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        render={
-          <Button
-            aria-label={`Delete ${event.name}`}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          />
-        }
-      >
-        <Trash2 />
-      </AlertDialogTrigger>
-      <AlertDialogPopup>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {event.name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This permanently deletes the event and its challenges.
-          </AlertDialogDescription>
-          {mutation.error && (
-            <Alert variant="error">
-              <TriangleAlert />
-              <AlertDescription>{mutation.error.message}</AlertDescription>
-            </Alert>
-          )}
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogClose render={<Button type="button" variant="ghost" />}>
-            Cancel
-          </AlertDialogClose>
-          <Button
-            loading={mutation.isPending}
-            onClick={() => mutation.mutate()}
-            type="button"
-            variant="destructive"
-          >
-            Delete event
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogPopup>
-    </AlertDialog>
-  )
-}
-
 function EventCard({ event }: { event: EventSummary }) {
   return (
     <Card className="min-w-0" render={<article />}>
       <CardHeader>
-        <CardTitle className="min-w-0 pr-16 text-base leading-5">
+        <CardTitle className="min-w-0 text-base leading-5">
           <h2>
             <Link className="hover:underline" to={`/events/${event.id}`}>
               {event.name}
             </Link>
           </h2>
         </CardTitle>
-        <CardAction className="gap-1">
-          <IconTooltip label={`Edit ${event.name}`}>
-            <EventDialog event={event} />
-          </IconTooltip>
-          <IconTooltip label={`Delete ${event.name}`}>
-            <DeleteEventDialog event={event} />
-          </IconTooltip>
-        </CardAction>
       </CardHeader>
       <CardPanel className="text-sm">
         <div>

@@ -11,6 +11,7 @@ const router = createBrowserRouter([
   { path: "/events/:eventId/run", Component: EventPage },
   { path: "/events/:eventId/runs/:runId", Component: EventPage },
   { path: "/events/:eventId/statistics", Component: EventPage },
+  { path: "/events/:eventId/settings", Component: EventPage },
 ])
 
 export function App() {

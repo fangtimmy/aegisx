@@ -218,6 +218,37 @@ describe("CTF platform integration", () => {
     )
     expect(await file.text()).toBe("binary-data")
     const challengeId = detail.challenges[0].id
+    const remoteAttachment = detail.challenges[0].attachments[0]
+    const edited = await instance.app.request(
+      `/api/challenges/${challengeId}`,
+      json("PATCH", {
+        name: "Local title",
+        description: "Local description",
+        category: "local",
+        points: 1,
+      })
+    )
+    expect(edited.status).toBe(200)
+    expect(await edited.json()).toMatchObject({
+      name: "Local title",
+      description: "Local description",
+    })
+    const localAttachment = await instance.app.request(
+      `/api/challenges/${challengeId}/attachments?filename=notes.txt`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: "local-notes",
+      }
+    )
+    expect(localAttachment.status).toBe(201)
+    expect(
+      (
+        await instance.app.request(`/api/attachments/${remoteAttachment.id}`, {
+          method: "DELETE",
+        })
+      ).status
+    ).toBe(204)
     const refreshed = await instance.app.request(
       `/api/events/${event.id}/platform/challenges/sync`,
       json("POST", { remoteIds: ["7"] })
@@ -226,6 +257,20 @@ describe("CTF platform integration", () => {
       challengeId,
       status: "updated",
     })
+    const afterRefresh = await (
+      await instance.app.request(`/api/events/${event.id}`)
+    ).json()
+    expect(afterRefresh.challenges[0]).toMatchObject({
+      name: "Remote Pwn",
+      description: "Exploit it",
+      category: "pwn",
+      points: 500,
+    })
+    expect(
+      afterRefresh.challenges[0].attachments.map(
+        (attachment: { originalName: string }) => attachment.originalName
+      )
+    ).toEqual(["notes.txt", "challenge.bin"])
     const stream = await instance.app.request(
       `/api/events/${event.id}/platform/challenges/sync/stream`,
       json("POST", { remoteIds: ["7"] })
@@ -243,14 +288,11 @@ describe("CTF platform integration", () => {
       }),
       expect.objectContaining({ type: "complete", total: 1 }),
     ])
-    expect(
-      (
-        await instance.app.request(
-          `/api/events/${event.id}/challenges`,
-          json("POST", { name: "Local", description: "Blocked" })
-        )
-      ).status
-    ).toBe(409)
+    const localChallenge = await instance.app.request(
+      `/api/events/${event.id}/challenges`,
+      json("POST", { name: "Local", description: "Local challenge" })
+    )
+    expect(localChallenge.status).toBe(201)
 
     expect(
       (
@@ -267,6 +309,11 @@ describe("CTF platform integration", () => {
       id: challengeId,
       remoteId: "7",
       remoteAvailable: false,
+    })
+    expect(detached.challenges[1]).toMatchObject({
+      name: "Local",
+      remoteId: null,
+      remoteAvailable: true,
     })
 
     challengeVisible = false
@@ -572,6 +619,53 @@ describe("CTF platform integration", () => {
       (detail) => detail.run.status === "failed"
     )
     expect(String(targetState)).toBe("running")
+    expect(
+      (
+        await instance.app.request(`/api/challenges/${challenge.id}/target`, {
+          method: "DELETE",
+        })
+      ).status
+    ).toBe(409)
+    targetState = "absent"
+    expect(
+      (
+        await instance.app.request(`/api/challenges/${challenge.id}/target`, {
+          method: "DELETE",
+        })
+      ).status
+    ).toBe(204)
+    await instance.app.request(
+      `/api/events/${event.id}/platform/challenges/sync`,
+      json("POST", { remoteIds: ["9"] })
+    )
+    const ignored = await (
+      await instance.app.request(`/api/events/${event.id}`)
+    ).json()
+    expect(ignored.challenges[0]).toMatchObject({
+      remoteTargetIgnored: true,
+      remoteTargetCount: 0,
+      targets: [],
+    })
+    faux.setResponses([fauxAssistantMessage("No target available.")])
+    const ignoredRun = await (await createRun()).json()
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${ignoredRun.id}`)).json(),
+      (detail) =>
+        detail.agents.some(
+          (agent: { parentAgentId: string | null; status: string }) =>
+            agent.parentAgentId === null && agent.status === "idle"
+        )
+    )
+    const ignoredInspector = await (
+      await instance.app.request(
+        `/api/runs/${ignoredRun.id}/agents/${ignoredRun.id}/inspector`
+      )
+    ).json()
+    expect(ignoredRun.targetSupported).toBe(false)
+    expect(
+      ignoredInspector.runtime.tools.map((tool: { name: string }) => tool.name)
+    ).not.toContain("start_target")
   })
 
   test("maps ret2shell asynchronous submissions and target endpoints", async () => {

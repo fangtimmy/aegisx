@@ -52,6 +52,9 @@ export const challenges = sqliteTable(
     remoteTarget: integer("remote_target", { mode: "boolean" })
       .notNull()
       .default(false),
+    remoteTargetIgnored: integer("remote_target_ignored", { mode: "boolean" })
+      .notNull()
+      .default(false),
     remoteTargetCount: integer("remote_target_count").notNull().default(0),
     remoteTargetInfo: text("remote_target_info").notNull().default("[]"),
     remoteUpdatedAt: text("remote_updated_at"),

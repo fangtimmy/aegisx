@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Download,
-  Eye,
   FileArchive,
   Paperclip,
   Pencil,
@@ -10,8 +9,9 @@ import {
   Server,
   Trash2,
   TriangleAlert,
+  Upload,
 } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { IconTooltip } from "@/components/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -30,6 +30,8 @@ import {
   Card,
   CardAction,
   CardDescription,
+  CardFrame,
+  CardFrameFooter,
   CardHeader,
   CardPanel,
   CardTitle,
@@ -45,7 +47,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   NumberField,
@@ -77,7 +79,7 @@ function formatBytes(value: number) {
 
 type ChallengeMutationResult = {
   challenge: Challenge
-  uploadError: string | null
+  uploadErrors: string[]
 }
 
 async function uploadAttachment(challengeId: string, file: File) {
@@ -101,14 +103,30 @@ export function ChallengeDialog({
   onUploadError: (message: string | null) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const uploadInput = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
+  const removeAttachment = useMutation({
+    mutationFn: (attachmentId: string) =>
+      apiRequest<void>(`/attachments/${attachmentId}`, { method: "DELETE" }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
+  })
+  const removeTarget = useMutation({
+    mutationFn: () =>
+      apiRequest<void>(`/challenges/${challenge?.id}/target`, {
+        method: "DELETE",
+      }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
+  })
   const mutation = useMutation({
     mutationFn: async ({
       input,
-      file,
+      files,
     }: {
       input: ChallengeInput
-      file: File | null
+      files: File[]
     }): Promise<ChallengeMutationResult> => {
       const saved = await apiRequest<Challenge>(
         challenge
@@ -117,26 +135,28 @@ export function ChallengeDialog({
         jsonRequest(challenge ? "PATCH" : "POST", input)
       )
 
-      if (!file) {
-        return { challenge: saved, uploadError: null }
-      }
-
-      try {
-        await uploadAttachment(saved.id, file)
-        return { challenge: saved, uploadError: null }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Upload failed"
-        return { challenge: saved, uploadError: message }
+      const results = await Promise.allSettled(
+        files.map((file) => uploadAttachment(saved.id, file))
+      )
+      return {
+        challenge: saved,
+        uploadErrors: results.flatMap((result, index) =>
+          result.status === "rejected"
+            ? [
+                `${files[index].name}: ${result.reason instanceof Error ? result.reason.message : "Upload failed"}`,
+              ]
+            : []
+        ),
       }
     },
-    onSuccess: async ({ challenge: saved, uploadError }) => {
+    onSuccess: async ({ challenge: saved, uploadErrors }) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
         queryClient.invalidateQueries({ queryKey: eventKeys.all }),
       ])
       onUploadError(
-        uploadError
-          ? `${saved.name} was saved, but the attachment upload failed: ${uploadError}`
+        uploadErrors.length > 0
+          ? `${saved.name} was saved, but some attachments failed: ${uploadErrors.join("; ")}`
           : null
       )
       setOpen(false)
@@ -146,7 +166,10 @@ export function ChallengeDialog({
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen)
     if (nextOpen) {
+      setPendingFiles([])
       mutation.reset()
+      removeAttachment.reset()
+      removeTarget.reset()
     }
   }
 
@@ -154,7 +177,9 @@ export function ChallengeDialog({
     formEvent.preventDefault()
     const data = new FormData(formEvent.currentTarget)
     const points = String(data.get("points") ?? "").trim()
-    const attachment = data.get("attachment")
+    const files = data
+      .getAll("attachments")
+      .filter((value): value is File => value instanceof File && value.size > 0)
 
     mutation.mutate({
       input: {
@@ -163,8 +188,7 @@ export function ChallengeDialog({
         category: String(data.get("category") ?? "").trim() || null,
         points: points ? Number(points) : null,
       },
-      file:
-        attachment instanceof File && attachment.size > 0 ? attachment : null,
+      files,
     })
   }
 
@@ -174,7 +198,7 @@ export function ChallengeDialog({
         render={
           challenge ? (
             <Button
-              aria-label={`Edit ${challenge.name}`}
+              aria-label={`View and edit ${challenge.name}`}
               size="icon-sm"
               type="button"
               variant="ghost"
@@ -192,74 +216,210 @@ export function ChallengeDialog({
           </>
         )}
       </DialogTrigger>
-      <DialogPopup>
+      <DialogPopup className="max-w-2xl overflow-hidden">
         <DialogHeader>
-          <DialogTitle>
-            {challenge ? "Edit challenge" : "Create challenge"}
-          </DialogTitle>
+          <DialogTitle>{challenge?.name ?? "Create challenge"}</DialogTitle>
           <DialogDescription>
-            Define the task details and optionally attach one file.
+            {challenge
+              ? `${challenge.category || "Uncategorized"}${challenge.points === null ? "" : ` · ${challenge.points} pts`}`
+              : "Define the task details and add its attachments."}
           </DialogDescription>
         </DialogHeader>
         <form className="contents" onSubmit={handleSubmit}>
-          <DialogPanel className="grid gap-4">
-            <Field>
-              <FieldLabel>Name</FieldLabel>
-              <Input
-                defaultValue={challenge?.name}
-                name="name"
-                required
-                type="text"
-              />
-            </Field>
-            <Field>
-              <FieldLabel>Description</FieldLabel>
-              <Textarea
-                defaultValue={challenge?.description}
-                name="description"
-                required
-              />
-            </Field>
-            <div className="grid grid-cols-2 gap-4">
+          <DialogPanel className="min-w-0 overflow-x-hidden p-0">
+            <section
+              aria-labelledby="challenge-details"
+              className="grid gap-4 px-6 pb-6"
+            >
+              <h3 className="font-medium text-sm" id="challenge-details">
+                Details
+              </h3>
               <Field>
-                <FieldLabel>Category</FieldLabel>
+                <FieldLabel>Name</FieldLabel>
                 <Input
-                  defaultValue={challenge?.category ?? ""}
-                  name="category"
-                  placeholder="Web, Crypto, Pwn..."
+                  defaultValue={challenge?.name}
+                  name="name"
+                  required
                   type="text"
                 />
               </Field>
-              <Field name="points">
-                <FieldLabel>Points</FieldLabel>
-                <NumberField
-                  defaultValue={challenge?.points ?? undefined}
-                  min={0}
-                  name="points"
-                  step={1}
-                >
-                  <NumberFieldGroup>
-                    <NumberFieldDecrement />
-                    <NumberFieldInput />
-                    <NumberFieldIncrement />
-                  </NumberFieldGroup>
-                </NumberField>
+              <Field>
+                <FieldLabel>Description</FieldLabel>
+                <Textarea
+                  defaultValue={challenge?.description}
+                  name="description"
+                  required
+                  rows={6}
+                />
               </Field>
-            </div>
-            <Field name="attachment">
-              <FieldLabel>Attachment</FieldLabel>
-              <Input
-                aria-label="Attachment"
-                name="attachment"
-                nativeInput
-                type="file"
-              />
-              <FieldDescription>
-                The file uploads after the challenge is saved.
-              </FieldDescription>
-            </Field>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
+                <Field>
+                  <FieldLabel>Category</FieldLabel>
+                  <Input
+                    defaultValue={challenge?.category ?? ""}
+                    name="category"
+                    placeholder="Web, Crypto, Pwn..."
+                    type="text"
+                  />
+                </Field>
+                <Field name="points">
+                  <FieldLabel>Points</FieldLabel>
+                  <NumberField
+                    defaultValue={challenge?.points ?? undefined}
+                    min={0}
+                    name="points"
+                    step={1}
+                  >
+                    <NumberFieldGroup>
+                      <NumberFieldDecrement />
+                      <NumberFieldInput />
+                      <NumberFieldIncrement />
+                    </NumberFieldGroup>
+                  </NumberField>
+                </Field>
+              </div>
+            </section>
+            <section
+              aria-labelledby="challenge-attachments"
+              className="border-t px-6 py-5"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-medium text-sm" id="challenge-attachments">
+                  Attachments
+                </h3>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground text-xs tabular-nums">
+                    {challenge?.attachments.length ?? 0}
+                  </span>
+                  <Button
+                    aria-label="Upload attachments"
+                    onClick={() => uploadInput.current?.click()}
+                    size="icon-sm"
+                    title="Upload attachments"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Upload />
+                  </Button>
+                  <input
+                    className="sr-only"
+                    multiple
+                    name="attachments"
+                    onChange={(event) =>
+                      setPendingFiles(Array.from(event.target.files ?? []))
+                    }
+                    ref={uploadInput}
+                    tabIndex={-1}
+                    type="file"
+                  />
+                </div>
+              </div>
+              {challenge && challenge.attachments.length > 0 && (
+                <div className="mt-3 border-y">
+                  {challenge.attachments.map((attachment) => (
+                    <AttachmentRow
+                      attachment={attachment}
+                      deleting={
+                        removeAttachment.isPending &&
+                        removeAttachment.variables === attachment.id
+                      }
+                      key={attachment.id}
+                      onDelete={() => removeAttachment.mutate(attachment.id)}
+                    />
+                  ))}
+                </div>
+              )}
+              {pendingFiles.length > 0 && (
+                <p className="mt-3 truncate text-muted-foreground text-xs">
+                  {pendingFiles.length} selected:{" "}
+                  {pendingFiles.map((file) => file.name).join(", ")}
+                </p>
+              )}
+            </section>
+            {challenge?.remoteTarget && !challenge.remoteTargetIgnored && (
+              <section
+                aria-labelledby="challenge-target"
+                className="border-t px-6 py-5"
+              >
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <h3 className="font-medium text-sm" id="challenge-target">
+                      Platform target
+                    </h3>
+                    <p className="mt-1 text-muted-foreground text-xs">
+                      Imported targets cannot be edited. Removing this target
+                      disables platform target tools for future Runs.
+                    </p>
+                  </div>
+                  <AlertDialog>
+                    <AlertDialogTrigger
+                      render={
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="destructive-outline"
+                        />
+                      }
+                    >
+                      <Trash2 /> Remove target
+                    </AlertDialogTrigger>
+                    <AlertDialogPopup>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>
+                          Remove platform target?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                          The target must be stopped first. AegisX will keep it
+                          ignored after future platform syncs.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogClose
+                          render={<Button type="button" variant="ghost" />}
+                        >
+                          Cancel
+                        </AlertDialogClose>
+                        <Button
+                          loading={removeTarget.isPending}
+                          onClick={() => removeTarget.mutate()}
+                          type="button"
+                          variant="destructive"
+                        >
+                          Remove target
+                        </Button>
+                      </AlertDialogFooter>
+                    </AlertDialogPopup>
+                  </AlertDialog>
+                </div>
+                {challenge.targets.length > 0 && (
+                  <div className="mt-3 border-y">
+                    {challenge.targets.map((target) => (
+                      <div
+                        className="flex min-w-0 items-center justify-between gap-3 border-b py-2 last:border-b-0"
+                        key={`${target.name}:${target.services.join(",")}`}
+                      >
+                        <span className="min-w-0 truncate text-sm">
+                          {target.name}
+                        </span>
+                        <span className="min-w-0 break-all text-right text-muted-foreground text-xs">
+                          {target.services.join(", ") || "No exposed services"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+            {(removeAttachment.error || removeTarget.error) && (
+              <Alert className="mx-6 mb-4 w-auto" variant="error">
+                <TriangleAlert />
+                <AlertDescription className="break-words">
+                  {(removeAttachment.error ?? removeTarget.error)?.message}
+                </AlertDescription>
+              </Alert>
+            )}
             {mutation.error && (
-              <Alert variant="error">
+              <Alert className="mx-6 mb-4 w-auto" variant="error">
                 <TriangleAlert />
                 <AlertDescription>{mutation.error.message}</AlertDescription>
               </Alert>
@@ -343,7 +503,15 @@ function DeleteChallengeDialog({
   )
 }
 
-function AttachmentRow({ attachment }: { attachment: Attachment }) {
+function AttachmentRow({
+  attachment,
+  deleting = false,
+  onDelete,
+}: {
+  attachment: Attachment
+  deleting?: boolean
+  onDelete?: () => void
+}) {
   return (
     <div className="flex min-w-0 items-center gap-3 border-t py-3 first:border-t-0">
       <FileArchive className="size-4 shrink-0 text-muted-foreground" />
@@ -351,8 +519,8 @@ function AttachmentRow({ attachment }: { attachment: Attachment }) {
         <p className="truncate font-medium text-sm">
           {attachment.originalName}
         </p>
-        <p className="mt-0.5 truncate font-mono text-muted-foreground text-xs">
-          {formatBytes(attachment.size)} - SHA-256 {attachment.sha256}
+        <p className="mt-0.5 text-muted-foreground text-xs">
+          {formatBytes(attachment.size)}
         </p>
       </div>
       <IconTooltip label={`Download ${attachment.originalName}`}>
@@ -365,107 +533,49 @@ function AttachmentRow({ attachment }: { attachment: Attachment }) {
           <Download />
         </Button>
       </IconTooltip>
+      {onDelete && (
+        <AlertDialog>
+          <AlertDialogTrigger
+            render={
+              <Button
+                aria-label={`Delete ${attachment.originalName}`}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              />
+            }
+          >
+            <Trash2 />
+          </AlertDialogTrigger>
+          <AlertDialogPopup>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Delete {attachment.originalName}?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Platform attachments will return the next time this challenge is
+                synchronized.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogClose
+                render={<Button type="button" variant="ghost" />}
+              >
+                Cancel
+              </AlertDialogClose>
+              <Button
+                loading={deleting}
+                onClick={onDelete}
+                type="button"
+                variant="destructive"
+              >
+                Delete attachment
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        </AlertDialog>
+      )}
     </div>
-  )
-}
-
-function ChallengeDetailsDialog({ challenge }: { challenge: Challenge }) {
-  return (
-    <Dialog>
-      <DialogTrigger
-        render={
-          <Button
-            aria-label={`View ${challenge.name}`}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          />
-        }
-      >
-        <Eye />
-      </DialogTrigger>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>{challenge.name}</DialogTitle>
-          <DialogDescription>
-            {challenge.category || "Uncategorized"}
-            {challenge.points === null ? "" : ` · ${challenge.points} pts`}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="grid gap-5">
-          <p className="whitespace-pre-wrap text-sm leading-6">
-            {challenge.description || "No description"}
-          </p>
-          <dl className="grid grid-cols-2 gap-4 border-y py-4 text-sm">
-            <div>
-              <dt className="text-muted-foreground text-xs">Status</dt>
-              <dd className="mt-1 font-medium">
-                {challenge.status === "solved" ? "Solved" : "Not started"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground text-xs">Runs</dt>
-              <dd className="mt-1 font-medium">{challenge.runCount}</dd>
-            </div>
-          </dl>
-          {(challenge.remoteTargetCount ?? 0) > 0 && (
-            <section aria-label="Targets">
-              <h3 className="font-medium text-sm">
-                Targets ({challenge.remoteTargetCount})
-              </h3>
-              {challenge.targets.length > 0 ? (
-                <div className="mt-2 border-y">
-                  {challenge.targets.map((target) => (
-                    <div
-                      className="flex items-center justify-between gap-4 border-b py-3 last:border-b-0"
-                      key={`${target.name}:${target.services.join(",")}`}
-                    >
-                      <span className="min-w-0 truncate font-medium text-sm">
-                        {target.name}
-                      </span>
-                      {target.services.length > 0 && (
-                        <span className="flex flex-wrap justify-end gap-1">
-                          {target.services.map((service) => (
-                            <Badge key={service} size="sm" variant="outline">
-                              {service}
-                            </Badge>
-                          ))}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-2 text-muted-foreground text-sm">
-                  {challenge.remoteTargetCount} configured
-                </p>
-              )}
-            </section>
-          )}
-          <section aria-label="Attachments">
-            <h3 className="font-medium text-sm">
-              Attachments ({challenge.attachments.length})
-            </h3>
-            {challenge.attachments.length > 0 ? (
-              <div className="mt-2">
-                {challenge.attachments.map((attachment) => (
-                  <AttachmentRow attachment={attachment} key={attachment.id} />
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-muted-foreground text-sm">
-                No attachments
-              </p>
-            )}
-          </section>
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button type="button" variant="outline" />}>
-            Close
-          </DialogClose>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
   )
 }
 
@@ -481,83 +591,86 @@ export function ChallengeCard({
   onUploadError: (message: string | null) => void
 }) {
   return (
-    <Card className="min-w-0" render={<article />}>
-      <CardHeader>
-        <div className="mb-1 flex flex-wrap items-center gap-2">
-          <Badge variant="outline">
-            {challenge.category || "Uncategorized"}
-          </Badge>
-          {challenge.attachments.length > 0 && (
-            <Badge
-              aria-label={`${challenge.attachments.length} attachments`}
-              variant="secondary"
-            >
-              <Paperclip aria-hidden="true" /> {challenge.attachments.length}
-            </Badge>
-          )}
-          {(challenge.remoteTargetCount ?? 0) > 0 && (
-            <Badge
-              aria-label={`${challenge.remoteTargetCount} targets`}
-              variant="secondary"
-            >
-              <Server aria-hidden="true" /> {challenge.remoteTargetCount}
-            </Badge>
-          )}
-          {challenge.remoteId && !challenge.remoteAvailable && (
-            <Badge variant="warning">Remote unavailable</Badge>
-          )}
-          <span className="text-muted-foreground text-xs">
-            {challenge.points === null
-              ? "No points"
-              : `${challenge.points} pts`}
-          </span>
-        </div>
-        <CardTitle className="pr-16 text-base leading-5">
-          <h2>{challenge.name}</h2>
-        </CardTitle>
-        <CardDescription className="line-clamp-3 whitespace-pre-line">
-          {challenge.description || "No description"}
-        </CardDescription>
-        <CardAction className="gap-1">
-          <IconTooltip label={`View ${challenge.name}`}>
-            <ChallengeDetailsDialog challenge={challenge} />
-          </IconTooltip>
-          <IconTooltip label={`Start run for ${challenge.name}`}>
-            <CreateRunDialog challenge={challenge} trigger={<Play />} />
-          </IconTooltip>
-          {!managed && (
-            <>
-              <IconTooltip label={`Edit ${challenge.name}`}>
-                <ChallengeDialog
-                  challenge={challenge}
-                  eventId={eventId}
-                  onUploadError={onUploadError}
-                />
-              </IconTooltip>
+    <CardFrame className="h-full min-w-0" render={<article />}>
+      <Card className="min-h-0 flex-1">
+        <CardHeader className="grid-rows-[auto] gap-0 p-4 pb-1">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <Badge size="sm" variant="outline">
+                {challenge.category || "Uncategorized"}
+              </Badge>
+              <Badge
+                size="sm"
+                variant={
+                  challenge.status === "solved" ? "success" : "secondary"
+                }
+              >
+                {challenge.status === "solved" ? "Solved" : "Open"}
+              </Badge>
+              {challenge.remoteId && !challenge.remoteAvailable && (
+                <Badge size="sm" variant="warning">
+                  Remote unavailable
+                </Badge>
+              )}
+            </div>
+            <CardTitle className="min-w-0 text-base leading-5">
+              <h2 className="truncate">{challenge.name}</h2>
+            </CardTitle>
+          </div>
+          <CardAction className="row-span-1 row-start-1 gap-0.5">
+            <IconTooltip label={`View and edit ${challenge.name}`}>
+              <ChallengeDialog
+                challenge={challenge}
+                eventId={eventId}
+                onUploadError={onUploadError}
+              />
+            </IconTooltip>
+            <IconTooltip label={`Start run for ${challenge.name}`}>
+              <CreateRunDialog
+                challenge={challenge}
+                trigger={<Play />}
+                triggerSize="icon-sm"
+                triggerVariant="ghost"
+              />
+            </IconTooltip>
+            {!managed && (
               <IconTooltip label={`Delete ${challenge.name}`}>
                 <DeleteChallengeDialog
                   challenge={challenge}
                   eventId={eventId}
                 />
               </IconTooltip>
-            </>
-          )}
-        </CardAction>
-      </CardHeader>
-      <CardPanel>
-        <div className="grid grid-cols-2 gap-4 border-t py-4 text-sm">
-          <div>
-            <p className="text-muted-foreground text-xs">Run state</p>
-            <p className="mt-1 font-medium">
-              {challenge.status === "solved" ? "Solved" : "Not started"}
-            </p>
-          </div>
-          <div>
-            <p className="text-muted-foreground text-xs">Runs</p>
-            <p className="mt-1 font-medium">{challenge.runCount}</p>
-          </div>
-        </div>
-      </CardPanel>
-    </Card>
+            )}
+          </CardAction>
+        </CardHeader>
+        <CardPanel className="px-4 pb-4">
+          <CardDescription className="line-clamp-2 min-h-10 whitespace-pre-line leading-5">
+            {challenge.description || "No description"}
+          </CardDescription>
+        </CardPanel>
+      </Card>
+      <CardFrameFooter className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-muted-foreground text-xs">
+        <span className="font-medium text-foreground tabular-nums">
+          {challenge.points === null ? "No points" : `${challenge.points} pts`}
+        </span>
+        {challenge.attachments.length > 0 && (
+          <span className="inline-flex items-center gap-1 tabular-nums">
+            <Paperclip aria-hidden="true" className="size-3.5" />
+            <span className="sr-only">Attachments:</span>
+            {challenge.attachments.length}
+          </span>
+        )}
+        {(challenge.remoteTargetCount ?? 0) > 0 && (
+          <span className="inline-flex items-center gap-1 tabular-nums">
+            <Server aria-hidden="true" className="size-3.5" />
+            <span className="sr-only">Targets:</span>
+            {challenge.remoteTargetCount}
+          </span>
+        )}
+        <span className="ml-auto tabular-nums">
+          {challenge.runCount} {challenge.runCount === 1 ? "run" : "runs"}
+        </span>
+      </CardFrameFooter>
+    </CardFrame>
   )
 }

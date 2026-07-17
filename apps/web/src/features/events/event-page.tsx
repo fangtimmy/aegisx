@@ -1,9 +1,12 @@
 import { useQuery } from "@tanstack/react-query"
 import {
+  ArrowUpDown,
   BarChart3,
   Flag,
   LayoutPanelTop,
+  ListTree,
   Play,
+  Settings,
   TriangleAlert,
 } from "lucide-react"
 import { useState } from "react"
@@ -11,6 +14,7 @@ import { useLocation, useNavigate, useParams } from "react-router"
 import { AppLayout } from "@/components/app-layout"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Empty,
   EmptyContent,
@@ -19,20 +23,69 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import {
+  Menu,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuTrigger,
+} from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { RunsView } from "@/features/runs"
 import { EventStatistics } from "@/features/statistics/event-statistics"
 import { apiRequest, type Challenge, type EventSummary } from "@/lib/api"
 import { ChallengeCard, ChallengeDialog } from "./challenge-card"
-import { PlatformBinding } from "./platform-binding"
+import { EventSettings } from "./event-settings"
+import { ImportChallengesDialog } from "./platform-binding"
 import { ErrorState, eventKeys } from "./shared"
+
+type ChallengeSort = "event" | "name" | "points"
+type ChallengeGroup = "category" | "status" | "none"
+
+function challengeGroups(
+  challenges: Challenge[],
+  sort: ChallengeSort,
+  group: ChallengeGroup
+) {
+  const sorted = [...challenges]
+  if (sort === "name") {
+    sorted.sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      })
+    )
+  } else if (sort === "points") {
+    sorted.sort(
+      (left, right) =>
+        (right.points ?? Number.NEGATIVE_INFINITY) -
+        (left.points ?? Number.NEGATIVE_INFINITY)
+    )
+  }
+  if (group === "none") return [{ key: "all", label: null, items: sorted }]
+
+  const keyFor = (challenge: Challenge) =>
+    group === "category"
+      ? challenge.category || "Uncategorized"
+      : challenge.status === "solved"
+        ? "Solved"
+        : "Not started"
+  const keys = [...new Set(challenges.map(keyFor))]
+  return keys.map((key) => ({
+    key,
+    label: key,
+    items: sorted.filter((challenge) => keyFor(challenge) === key),
+  }))
+}
 
 export function EventPage() {
   const { eventId, runId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [sort, setSort] = useState<ChallengeSort>("event")
+  const [group, setGroup] = useState<ChallengeGroup>("category")
   const eventQuery = useQuery({
     enabled: Boolean(eventId),
     queryKey: eventKeys.detail(eventId ?? ""),
@@ -44,11 +97,13 @@ export function EventPage() {
 
   if (!eventId) return null
   const tab =
-    location.pathname === `/events/${eventId}/statistics`
-      ? "statistics"
-      : location.pathname.includes(`/events/${eventId}/run`)
-        ? "run"
-        : "overview"
+    location.pathname === `/events/${eventId}/settings`
+      ? "settings"
+      : location.pathname === `/events/${eventId}/statistics`
+        ? "statistics"
+        : location.pathname.includes(`/events/${eventId}/run`)
+          ? "run"
+          : "overview"
   const workspace = tab === "run"
 
   return (
@@ -81,7 +136,9 @@ export function EventPage() {
                 ? `/events/${eventId}/run`
                 : value === "statistics"
                   ? `/events/${eventId}/statistics`
-                  : `/events/${eventId}`
+                  : value === "settings"
+                    ? `/events/${eventId}/settings`
+                    : `/events/${eventId}`
             )
           }
           orientation="vertical"
@@ -99,6 +156,9 @@ export function EventPage() {
             </TabsTab>
             <TabsTab className="justify-start gap-2" value="statistics">
               <BarChart3 /> Statistics
+            </TabsTab>
+            <TabsTab className="justify-start gap-2" value="settings">
+              <Settings /> Settings
             </TabsTab>
           </TabsList>
           <div
@@ -119,13 +179,77 @@ export function EventPage() {
                   </Badge>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
-                  <PlatformBinding event={eventQuery.data.event} />
-                  {!eventQuery.data.event.platform && (
-                    <ChallengeDialog
-                      eventId={eventId}
-                      onUploadError={setUploadError}
-                    />
+                  {eventQuery.data.challenges.length > 0 && (
+                    <>
+                      <Menu>
+                        <MenuTrigger
+                          render={
+                            <Button size="sm" type="button" variant="outline" />
+                          }
+                        >
+                          <ListTree />
+                          {group === "category"
+                            ? "Category"
+                            : group === "status"
+                              ? "Status"
+                              : "No groups"}
+                        </MenuTrigger>
+                        <MenuPopup align="end">
+                          <MenuRadioGroup
+                            onValueChange={(value) =>
+                              setGroup(value as ChallengeGroup)
+                            }
+                            value={group}
+                          >
+                            <MenuRadioItem value="category">
+                              Category
+                            </MenuRadioItem>
+                            <MenuRadioItem value="status">Status</MenuRadioItem>
+                            <MenuRadioItem value="none">
+                              No groups
+                            </MenuRadioItem>
+                          </MenuRadioGroup>
+                        </MenuPopup>
+                      </Menu>
+                      <Menu>
+                        <MenuTrigger
+                          render={
+                            <Button size="sm" type="button" variant="outline" />
+                          }
+                        >
+                          <ArrowUpDown />
+                          {sort === "event"
+                            ? "Event order"
+                            : sort === "name"
+                              ? "Name"
+                              : "Points"}
+                        </MenuTrigger>
+                        <MenuPopup align="end">
+                          <MenuRadioGroup
+                            onValueChange={(value) =>
+                              setSort(value as ChallengeSort)
+                            }
+                            value={sort}
+                          >
+                            <MenuRadioItem value="event">
+                              Event order
+                            </MenuRadioItem>
+                            <MenuRadioItem value="name">Name</MenuRadioItem>
+                            <MenuRadioItem value="points">
+                              Points: high to low
+                            </MenuRadioItem>
+                          </MenuRadioGroup>
+                        </MenuPopup>
+                      </Menu>
+                    </>
                   )}
+                  {eventQuery.data.event.platform && (
+                    <ImportChallengesDialog eventId={eventId} />
+                  )}
+                  <ChallengeDialog
+                    eventId={eventId}
+                    onUploadError={setUploadError}
+                  />
                 </div>
               </div>
               {uploadError && (
@@ -146,28 +270,48 @@ export function EventPage() {
                       Add the first challenge for this event.
                     </EmptyDescription>
                   </EmptyHeader>
-                  {!eventQuery.data.event.platform && (
-                    <EmptyContent>
-                      <ChallengeDialog
-                        eventId={eventId}
-                        onUploadError={setUploadError}
-                      />
-                    </EmptyContent>
-                  )}
-                </Empty>
-              ) : (
-                <div className="grid grid-cols-3 items-start gap-4">
-                  {eventQuery.data.challenges.map((challenge) => (
-                    <ChallengeCard
-                      challenge={challenge}
+                  <EmptyContent>
+                    {eventQuery.data.event.platform && (
+                      <ImportChallengesDialog eventId={eventId} />
+                    )}
+                    <ChallengeDialog
                       eventId={eventId}
-                      key={challenge.id}
-                      managed={Boolean(
-                        eventQuery.data.event.platform && challenge.remoteId
-                      )}
                       onUploadError={setUploadError}
                     />
-                  ))}
+                  </EmptyContent>
+                </Empty>
+              ) : (
+                <div className="grid gap-6">
+                  {challengeGroups(eventQuery.data.challenges, sort, group).map(
+                    (challengeGroup) => (
+                      <section key={challengeGroup.key}>
+                        {challengeGroup.label && (
+                          <div className="mb-3 flex items-center gap-2 border-b pb-2">
+                            <h2 className="font-medium text-sm">
+                              {challengeGroup.label}
+                            </h2>
+                            <span className="text-muted-foreground text-xs tabular-nums">
+                              {challengeGroup.items.length}
+                            </span>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-3 items-stretch gap-4">
+                          {challengeGroup.items.map((challenge) => (
+                            <ChallengeCard
+                              challenge={challenge}
+                              eventId={eventId}
+                              key={challenge.id}
+                              managed={Boolean(
+                                eventQuery.data.event.platform &&
+                                  challenge.remoteId
+                              )}
+                              onUploadError={setUploadError}
+                            />
+                          ))}
+                        </div>
+                      </section>
+                    )
+                  )}
                 </div>
               )}
             </TabsPanel>
@@ -180,6 +324,9 @@ export function EventPage() {
             </TabsPanel>
             <TabsPanel className="pt-0" value="statistics">
               <EventStatistics eventId={eventId} />
+            </TabsPanel>
+            <TabsPanel className="pt-0" value="settings">
+              <EventSettings event={eventQuery.data.event} />
             </TabsPanel>
           </div>
         </Tabs>

@@ -84,7 +84,7 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
       <span className="max-w-56 truncate text-muted-foreground text-xs">
         {event.platform.baseUrl}
       </span>
-      <SyncChallengesDialog eventId={event.id} />
+      <ImportChallengesDialog eventId={event.id} />
       <ConnectPlatformDialog eventId={event.id} platform={event.platform} />
       <AlertDialog>
         <AlertDialogTrigger
@@ -129,7 +129,7 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
   )
 }
 
-function SyncChallengesDialog({ eventId }: { eventId: string }) {
+export function ImportChallengesDialog({ eventId }: { eventId: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
@@ -200,14 +200,14 @@ function SyncChallengesDialog({ eventId }: { eventId: string }) {
       <DialogTrigger
         render={<Button size="sm" type="button" variant="outline" />}
       >
-        <RefreshCw /> Sync challenges
+        <RefreshCw /> Import challenges
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Sync challenges</DialogTitle>
+          <DialogTitle>Import challenges</DialogTitle>
           <DialogDescription>
             New challenges are selected automatically. Select imported entries
-            to refresh their details and attachments.
+            to import them again; platform data overwrites local edits.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -292,7 +292,7 @@ function SyncChallengesDialog({ eventId }: { eventId: string }) {
                 <div className="mt-4 grid gap-3" aria-live="polite">
                   <Progress value={(progress.completed / progress.total) * 100}>
                     <div className="flex items-center justify-between gap-3">
-                      <ProgressLabel>Sync progress</ProgressLabel>
+                      <ProgressLabel>Import progress</ProgressLabel>
                       <span className="text-muted-foreground text-xs tabular-nums">
                         {progress.completed} / {progress.total}
                       </span>
@@ -345,7 +345,7 @@ function SyncChallengesDialog({ eventId }: { eventId: string }) {
             onClick={() => sync.mutate()}
             type="button"
           >
-            Sync {selected.length || ""}
+            Import {selected.length || ""}
           </Button>
         </DialogFooter>
       </DialogPopup>

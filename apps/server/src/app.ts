@@ -236,7 +236,12 @@ export function createApp(options: {
     } = challenge
     return {
       ...publicChallenge,
-      targets: parseTargetInfo(remoteTargetInfo),
+      remoteTargetCount: challenge.remoteTargetIgnored
+        ? 0
+        : challenge.remoteTargetCount,
+      targets: challenge.remoteTargetIgnored
+        ? []
+        : parseTargetInfo(remoteTargetInfo),
       attachments: challengeAttachments,
       runCount: Number(runCount ?? 0),
       status: challenge.remoteSolved
@@ -405,17 +410,6 @@ export function createApp(options: {
           404
         )
       }
-      if (platformService.isBoundEvent(eventId)) {
-        return c.json(
-          {
-            error: {
-              code: "platform_managed",
-              message: "Platform-managed challenges must be synchronized",
-            },
-          },
-          409
-        )
-      }
       const input = c.req.valid("json")
       const name = input.name.trim()
       if (!name || !input.description.trim()) {
@@ -462,21 +456,6 @@ export function createApp(options: {
         return c.json(
           { error: { code: "not_found", message: "Challenge not found" } },
           404
-        )
-      }
-      const storedChallenge = getChallenge(challengeId)
-      if (
-        storedChallenge &&
-        platformService.isBoundEvent(storedChallenge.eventId)
-      ) {
-        return c.json(
-          {
-            error: {
-              code: "platform_managed",
-              message: "Platform-managed challenges must be synchronized",
-            },
-          },
-          409
         )
       }
       const input = c.req.valid("json")
@@ -897,17 +876,6 @@ export function createApp(options: {
         404
       )
     }
-    if (platformService.isBoundEvent(challenge.eventId)) {
-      return c.json(
-        {
-          error: {
-            code: "platform_managed",
-            message: "Platform-managed attachments must be synchronized",
-          },
-        },
-        409
-      )
-    }
     const filename = c.req.query("filename") ?? ""
     if (!isSafeFilename(filename)) {
       return c.json(
@@ -978,21 +946,6 @@ export function createApp(options: {
       return c.json(
         { error: { code: "not_found", message: "Attachment not found" } },
         404
-      )
-    }
-    const attachmentChallenge = getChallenge(attachment.challengeId)
-    if (
-      attachmentChallenge &&
-      platformService.isBoundEvent(attachmentChallenge.eventId)
-    ) {
-      return c.json(
-        {
-          error: {
-            code: "platform_managed",
-            message: "Platform-managed attachments must be synchronized",
-          },
-        },
-        409
       )
     }
     const path = storage.attachmentPath(attachment.storageKey)

@@ -31,6 +31,8 @@ export type Challenge = {
   remoteId: string | null
   remoteAvailable: boolean
   remoteSolved: boolean
+  remoteTarget: boolean
+  remoteTargetIgnored: boolean
   remoteTargetCount: number
   targets: Array<{ name: string; services: string[] }>
   remoteUpdatedAt: string | null
