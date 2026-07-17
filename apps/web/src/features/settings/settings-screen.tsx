@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Boxes, Braces, CircleAlert, Settings2 } from "lucide-react"
+import {
+  Boxes,
+  Braces,
+  CircleAlert,
+  Settings2,
+  SlidersHorizontal,
+} from "lucide-react"
 import { useEffect, useState } from "react"
+import { useLocation, useNavigate } from "react-router"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -8,6 +15,7 @@ import {
   Card,
   CardFrame,
   CardFrameAction,
+  CardFrameDescription,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -18,13 +26,6 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import {
-  Frame,
-  FrameDescription,
-  FrameHeader,
-  FramePanel,
-  FrameTitle,
-} from "@/components/ui/frame"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
@@ -35,17 +36,30 @@ import {
   type SettingsPublic,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { GeneralSettings } from "./general-settings"
 import { PromptSettings } from "./prompt-settings"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
 import { RuntimeDefaults } from "./runtime-defaults"
 
-type SettingsSection = "models" | "prompts" | "runtime"
+type SettingsSection = "general" | "models" | "prompts" | "runtime"
+
+const sectionPaths: Record<SettingsSection, string> = {
+  general: "/settings/general",
+  models: "/settings/models",
+  prompts: "/settings/prompts",
+  runtime: "/settings/runtime",
+}
 
 export function SettingsScreen() {
   const queryClient = useQueryClient()
-  const [section, setSection] = useState<SettingsSection>("models")
+  const location = useLocation()
+  const navigate = useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const section =
+    (Object.entries(sectionPaths).find(
+      ([, path]) => path === location.pathname
+    )?.[0] as SettingsSection | undefined) ?? "general"
   const providers = useQuery({
     queryKey: ["providers"],
     queryFn: () => apiRequest<{ items: ProviderConnection[] }>("/providers"),
@@ -107,12 +121,17 @@ export function SettingsScreen() {
   return (
     <Tabs
       className="w-full flex-row items-start gap-4"
-      onValueChange={(value) => setSection(value as SettingsSection)}
+      onValueChange={(value) =>
+        navigate(sectionPaths[value as SettingsSection])
+      }
       orientation="vertical"
       value={section}
     >
       <div className="w-48 shrink-0 border-s">
         <TabsList className="w-full items-stretch" variant="underline">
+          <TabsTab value="general">
+            <SlidersHorizontal aria-hidden="true" /> General
+          </TabsTab>
           <TabsTab value="models">
             <Boxes aria-hidden="true" /> Model providers
           </TabsTab>
@@ -125,35 +144,44 @@ export function SettingsScreen() {
         </TabsList>
       </div>
       <div className="min-w-0 flex-1">
+        <TabsPanel value="general">
+          <GeneralSettings />
+        </TabsPanel>
         <TabsPanel value="prompts">
-          <Frame className="min-w-0">
-            <FrameHeader>
-              <FrameTitle>Agent prompts</FrameTitle>
-              <FrameDescription>
+          <CardFrame className="min-w-0">
+            <CardFrameHeader>
+              <CardFrameTitle>Agent prompts</CardFrameTitle>
+              <CardFrameDescription>
                 Templates used when new Runs and Agents start.
-              </FrameDescription>
-            </FrameHeader>
-            <FramePanel>
-              <PromptSettings
-                key={settings.data?.updatedAt}
-                settings={settings.data as SettingsPublic}
-              />
-            </FramePanel>
-          </Frame>
+              </CardFrameDescription>
+            </CardFrameHeader>
+            <Card>
+              <CardPanel>
+                <PromptSettings
+                  key={settings.data?.updatedAt}
+                  settings={settings.data as SettingsPublic}
+                />
+              </CardPanel>
+            </Card>
+          </CardFrame>
         </TabsPanel>
         <TabsPanel value="runtime">
-          <Frame className="min-w-0">
-            <FrameHeader>
-              <FrameTitle>Runtime defaults</FrameTitle>
-              <FrameDescription>Used for every new run.</FrameDescription>
-            </FrameHeader>
-            <FramePanel>
-              <RuntimeDefaults
-                providers={items}
-                settings={settings.data as SettingsPublic}
-              />
-            </FramePanel>
-          </Frame>
+          <CardFrame className="min-w-0">
+            <CardFrameHeader>
+              <CardFrameTitle>Runtime defaults</CardFrameTitle>
+              <CardFrameDescription>
+                Used for every new run.
+              </CardFrameDescription>
+            </CardFrameHeader>
+            <Card>
+              <CardPanel>
+                <RuntimeDefaults
+                  providers={items}
+                  settings={settings.data as SettingsPublic}
+                />
+              </CardPanel>
+            </Card>
+          </CardFrame>
         </TabsPanel>
         <TabsPanel value="models">
           <div className="grid min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">

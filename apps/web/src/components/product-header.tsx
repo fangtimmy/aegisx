@@ -1,18 +1,6 @@
 import { Settings, ShieldCheck } from "lucide-react"
 import { Link, useParams } from "react-router"
-import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
-import {
-  Menu,
-  MenuGroup,
-  MenuGroupLabel,
-  MenuItem,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "@/components/ui/menu"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
 
 export function IconTooltip({
@@ -34,7 +22,6 @@ export function IconTooltip({
 
 export function ProductHeader({ eventName }: { eventName?: string }) {
   const { eventId } = useParams()
-  const { theme, setTheme } = useTheme()
 
   return (
     <header className="border-b bg-card">
@@ -66,35 +53,14 @@ export function ProductHeader({ eventName }: { eventName?: string }) {
           )}
         </div>
         <IconTooltip label="Settings">
-          <Menu>
-            <MenuTrigger
-              render={
-                <Button aria-label="Settings" size="icon" variant="ghost" />
-              }
-            >
-              <Settings />
-            </MenuTrigger>
-            <MenuPopup align="end">
-              <MenuGroup>
-                <MenuGroupLabel>Theme</MenuGroupLabel>
-                <MenuRadioGroup
-                  onValueChange={(value) =>
-                    setTheme(value as "dark" | "light" | "system")
-                  }
-                  value={theme}
-                >
-                  <MenuRadioItem value="light">Light</MenuRadioItem>
-                  <MenuRadioItem value="dark">Dark</MenuRadioItem>
-                  <MenuRadioItem value="system">System</MenuRadioItem>
-                </MenuRadioGroup>
-              </MenuGroup>
-              <MenuSeparator />
-              <MenuItem render={<Link to="/settings" />}>
-                <Settings />
-                Settings
-              </MenuItem>
-            </MenuPopup>
-          </Menu>
+          <Button
+            aria-label="Settings"
+            render={<Link to="/settings" />}
+            size="icon"
+            variant="ghost"
+          >
+            <Settings />
+          </Button>
         </IconTooltip>
       </div>
     </header>

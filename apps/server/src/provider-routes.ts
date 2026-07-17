@@ -95,6 +95,62 @@ const modelUpdateInput = Type.Partial(
   { additionalProperties: false }
 )
 
+const settingsTransferInput = Type.Object(
+  {
+    version: Type.Literal(1),
+    settings: Type.Object(
+      {
+        defaultModelId: Type.Union([
+          Type.String({ minLength: 1 }),
+          Type.Null(),
+        ]),
+        environment: Type.Union([
+          Type.Literal("local"),
+          Type.Literal("container"),
+        ]),
+        containerImage: Type.String({
+          minLength: 1,
+          maxLength: 300,
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
+        }),
+        cpus: Type.Number({ minimum: 0.1, maximum: 16 }),
+        memoryMb: Type.Integer({ minimum: 128, maximum: 32_768 }),
+        pidsLimit: Type.Integer({ minimum: 16, maximum: 4_096 }),
+        maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
+        mainSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
+        childSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
+        initialPromptTemplate: Type.String({ maxLength: 100_000 }),
+      },
+      { additionalProperties: false }
+    ),
+    providers: Type.Array(
+      Type.Object(
+        {
+          id: Type.String({ minLength: 1, maxLength: 200 }),
+          label: Type.String({ minLength: 1, maxLength: 100 }),
+          type: providerType,
+          baseUrl: Type.String({ minLength: 1, maxLength: 2_000 }),
+          apiKey: Type.String({ maxLength: 10_000 }),
+          enabled: Type.Boolean(),
+          models: Type.Array(
+            Type.Object(
+              {
+                id: Type.String({ minLength: 1, maxLength: 200 }),
+                modelId: Type.String({ minLength: 1, maxLength: 200 }),
+                label: Type.String({ minLength: 1, maxLength: 200 }),
+                enabled: Type.Boolean(),
+              },
+              { additionalProperties: false }
+            )
+          ),
+        },
+        { additionalProperties: false }
+      )
+    ),
+  },
+  { additionalProperties: false }
+)
+
 export const providerName = (id: string) => `aegisx-${id}`
 
 function normalizeBaseUrl(value: string) {
@@ -180,7 +236,167 @@ export function registerProviderRoutes(
     models: listProviderModels(provider.id),
   })
 
+  const transferData = () => ({
+    version: 1 as const,
+    settings: (() => {
+      const value = getSettings()
+      const promptTemplates = resolvePromptTemplates(value)
+      return {
+        defaultModelId: value.defaultModelId,
+        environment: value.environment as "local" | "container",
+        containerImage: value.containerImage,
+        cpus: value.cpuLimit / 1000,
+        memoryMb: value.memoryMb,
+        pidsLimit: value.pidsLimit,
+        maxConcurrency: value.maxConcurrency,
+        ...promptTemplates,
+      }
+    })(),
+    providers: db
+      .select()
+      .from(providerConnections)
+      .all()
+      .map((provider) => ({
+        id: provider.id,
+        label: provider.label,
+        type: provider.type,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        enabled: provider.enabled,
+        models: listProviderModels(provider.id).map((model) => ({
+          id: model.id,
+          modelId: model.modelId,
+          label: model.label,
+          enabled: model.enabled,
+        })),
+      })),
+  })
+
   app.get("/api/settings", (c) => c.json(publicSettings()))
+
+  app.get("/api/settings/export", (_c) => {
+    const content = JSON.stringify(transferData(), null, 2)
+    return new Response(content, {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": "attachment; filename=aegisx-settings.json",
+      },
+    })
+  })
+
+  app.post("/api/settings/import", validateJson(settingsTransferInput), (c) => {
+    const input = c.req.valid("json")
+    const providerIds = new Set<string>()
+    const modelIds = new Set<string>()
+    const models = [] as Array<{
+      id: string
+      providerId: string
+      modelId: string
+      label: string
+      enabled: boolean
+      createdAt: string
+      updatedAt: string
+    }>
+    try {
+      for (const provider of input.providers) {
+        if (providerIds.has(provider.id)) {
+          throw new Error("Duplicate provider ID")
+        }
+        providerIds.add(provider.id)
+        const baseUrl = normalizeBaseUrl(provider.baseUrl)
+        const label = provider.label.trim()
+        if (!label) throw new Error("Provider name is required")
+        for (const model of provider.models) {
+          if (modelIds.has(model.id)) throw new Error("Duplicate model ID")
+          modelIds.add(model.id)
+          const modelId = model.modelId.trim()
+          const modelLabel = model.label.trim()
+          if (!modelId || !modelLabel) {
+            throw new Error("Model ID and name are required")
+          }
+          models.push({
+            id: model.id,
+            providerId: provider.id,
+            modelId,
+            label: modelLabel,
+            enabled: model.enabled,
+            createdAt: "",
+            updatedAt: "",
+          })
+        }
+        provider.baseUrl = baseUrl
+        provider.label = label
+      }
+      if (
+        input.settings.defaultModelId !== null &&
+        !modelIds.has(input.settings.defaultModelId)
+      ) {
+        throw new Error("Default model not found in imported configuration")
+      }
+      validatePrompts(input.settings)
+      const now = new Date().toISOString()
+      db.transaction((tx) => {
+        tx.update(settings)
+          .set({ defaultModelId: null, updatedAt: now })
+          .where(eq(settings.id, 1))
+          .run()
+        tx.delete(providerConnections).run()
+        tx.insert(providerConnections)
+          .values(
+            input.providers.map((provider) => ({
+              id: provider.id,
+              label: provider.label,
+              type: provider.type,
+              baseUrl: provider.baseUrl,
+              apiKey: provider.apiKey,
+              enabled: provider.enabled,
+              createdAt: now,
+              updatedAt: now,
+            }))
+          )
+          .run()
+        tx.insert(providerModels)
+          .values(
+            models.map((model) => ({
+              ...model,
+              createdAt: now,
+              updatedAt: now,
+            }))
+          )
+          .run()
+        tx.update(settings)
+          .set({
+            defaultModelId: input.settings.defaultModelId,
+            environment: input.settings.environment,
+            containerImage: input.settings.containerImage.trim(),
+            cpuLimit: Math.round(input.settings.cpus * 1000),
+            memoryMb: input.settings.memoryMb,
+            pidsLimit: input.settings.pidsLimit,
+            maxConcurrency: input.settings.maxConcurrency,
+            mainSystemPromptTemplate: input.settings.mainSystemPromptTemplate,
+            childSystemPromptTemplate: input.settings.childSystemPromptTemplate,
+            initialPromptTemplate: input.settings.initialPromptTemplate,
+            updatedAt: now,
+          })
+          .where(eq(settings.id, 1))
+          .run()
+      })
+      options.setMaxConcurrency(input.settings.maxConcurrency)
+      syncModels()
+      return c.json(transferData())
+    } catch (error) {
+      return c.json(
+        {
+          error: {
+            code: "invalid_settings_import",
+            message:
+              error instanceof Error ? error.message : "Settings import failed",
+          },
+        },
+        400
+      )
+    }
+  })
 
   app.patch("/api/settings", validateJson(runtimeSettingsInput), (c) => {
     const input = c.req.valid("json")

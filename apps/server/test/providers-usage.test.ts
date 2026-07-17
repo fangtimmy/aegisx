@@ -447,6 +447,63 @@ describe("providers, models, and usage", () => {
     ).toBeNull()
   }, 30_000)
 
+  test("exports and imports complete settings configuration", async () => {
+    const instance = setup()
+    const provider = await (
+      await instance.app.request(
+        "/api/providers",
+        json("POST", {
+          label: "Exported provider",
+          type: "openai-compatible",
+          baseUrl: "http://localhost:4012/v1",
+          apiKey: "export-secret",
+          enabled: true,
+        })
+      )
+    ).json()
+    const model = await (
+      await instance.app.request(
+        `/api/providers/${provider.id}/models`,
+        json("POST", { modelId: "export-model", label: "Export model" })
+      )
+    ).json()
+    await instance.app.request(
+      "/api/settings",
+      json("PATCH", { ...runtimeSettings, defaultModelId: model.id })
+    )
+
+    const exportedResponse = await instance.app.request("/api/settings/export")
+    expect(exportedResponse.status).toBe(200)
+    expect(exportedResponse.headers.get("content-disposition")).toContain(
+      "aegisx-settings.json"
+    )
+    const exported = await exportedResponse.json()
+    const exportedProvider = exported.providers.find(
+      (item: { id: string }) => item.id === provider.id
+    )
+    expect(exportedProvider.apiKey).toBe("export-secret")
+    expect(exported.settings.defaultModelId).toBe(model.id)
+
+    exported.settings.maxConcurrency = 7
+    exportedProvider.apiKey = "imported-secret"
+    const imported = await instance.app.request(
+      "/api/settings/import",
+      json("POST", exported)
+    )
+    expect(imported.status).toBe(200)
+    const settings = await (await instance.app.request("/api/settings")).json()
+    const providers = await (
+      await instance.app.request("/api/providers")
+    ).json()
+    expect(settings.maxConcurrency).toBe(7)
+    expect(settings.defaultModelId).toBe(model.id)
+    const importedProvider = providers.items.find(
+      (item: { id: string }) => item.id === provider.id
+    )
+    expect(importedProvider.apiKey).toBe("imported-secret")
+    expect(importedProvider.models[0].id).toBe(model.id)
+  })
+
   test("aggregates persisted usage for runs, challenges, and events", async () => {
     expect(summarizeUsage([], false).cost).toBeNull()
     const instance = setup()
