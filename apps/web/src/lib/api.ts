@@ -5,6 +5,9 @@ export type EventSummary = {
   createdAt: string
   updatedAt: string
   challengeCount: number
+  solvedCount: number
+  activeRunCount: number
+  lastActivityAt: string
 }
 
 export type Attachment = {

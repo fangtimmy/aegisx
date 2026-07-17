@@ -76,6 +76,38 @@ describe("event, challenge, and attachment API", () => {
     })
   })
 
+  test("summarizes event progress and active runs", async () => {
+    const { app, dataDir } = createTestApp()
+    const event = await createEvent(app)
+    const challenge = await createChallenge(app, event.id)
+    const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
+    sqlite.run(
+      "update challenges set remote_solved = 1, updated_at = ? where id = ?",
+      ["2099-01-01T00:00:00.000Z", challenge.id]
+    )
+    sqlite.run(
+      "insert into runs (id, challenge_id, status, created_at, updated_at) values (?, ?, ?, ?, ?)",
+      [
+        "paused-run",
+        challenge.id,
+        "paused",
+        "2100-01-01T00:00:00.000Z",
+        "2100-01-01T00:00:00.000Z",
+      ]
+    )
+    sqlite.close()
+
+    const response = await app.request("/api/events")
+    expect(response.status).toBe(200)
+    expect((await response.json()).items[0]).toMatchObject({
+      id: event.id,
+      challengeCount: 1,
+      solvedCount: 1,
+      activeRunCount: 1,
+      lastActivityAt: "2100-01-01T00:00:00.000Z",
+    })
+  })
+
   test("streams attachments, rejects path names, and cleans deleted events", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)

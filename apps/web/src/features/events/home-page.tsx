@@ -1,16 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CalendarDays, Plus, TriangleAlert } from "lucide-react"
+import {
+  Activity,
+  ArrowRight,
+  CalendarDays,
+  Clock3,
+  Plus,
+  RefreshCw,
+  TriangleAlert,
+} from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router"
 import { AppLayout } from "@/components/app-layout"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardFooter,
-  CardHeader,
+  CardFrame,
+  CardFrameFooter,
   CardPanel,
-  CardTitle,
 } from "@/components/ui/card"
 import {
   Dialog,
@@ -33,6 +41,7 @@ import {
 } from "@/components/ui/empty"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import {
   apiRequest,
@@ -41,6 +50,17 @@ import {
   jsonRequest,
 } from "@/lib/api"
 import { ErrorState, eventKeys } from "./shared"
+
+const platformLabels = {
+  ctfd: "CTFd",
+  ret2shell: "Ret2Shell",
+  a1ctf: "A1CTF",
+} as const
+
+const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+})
 
 function EventDialog() {
   const [open, setOpen] = useState(false)
@@ -109,32 +129,81 @@ function EventDialog() {
 }
 
 function EventCard({ event }: { event: EventSummary }) {
+  const platformLabel = event.platform
+    ? platformLabels[event.platform.type]
+    : "Local"
+
   return (
-    <Card className="min-w-0" render={<article />}>
-      <CardHeader>
-        <CardTitle className="min-w-0 text-base leading-5">
-          <h2>
-            <Link className="hover:underline" to={`/events/${event.id}`}>
-              {event.name}
-            </Link>
-          </h2>
-        </CardTitle>
-      </CardHeader>
-      <CardPanel className="text-sm">
-        <div>
-          <p className="text-muted-foreground text-xs">Challenges</p>
-          <p className="mt-1 font-medium">{event.challengeCount}</p>
+    <CardFrame className="h-full min-w-0" render={<article />}>
+      <Card className="flex-1">
+        <CardPanel className="flex min-h-32 flex-col justify-center gap-4">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <h2 className="min-w-0 truncate font-semibold text-base leading-5">
+              <Link className="hover:underline" to={`/events/${event.id}`}>
+                {event.name}
+              </Link>
+            </h2>
+            <Badge variant="outline">{platformLabel}</Badge>
+          </div>
+          {event.platform ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="text-muted-foreground">Progress</span>
+                <span className="font-medium tabular-nums">
+                  {event.solvedCount} / {event.challengeCount} solved
+                </span>
+              </div>
+              <Progress
+                aria-label={`${event.solvedCount} of ${event.challengeCount} challenges solved`}
+                max={Math.max(event.challengeCount, 1)}
+                value={event.solvedCount}
+              />
+            </div>
+          ) : (
+            <div>
+              <p className="text-muted-foreground text-xs">Challenges</p>
+              <p className="mt-1 font-semibold text-2xl tabular-nums">
+                {event.challengeCount}
+              </p>
+            </div>
+          )}
+          {event.activeRunCount > 0 && (
+            <Badge className="w-fit" variant="info">
+              <Activity /> {event.activeRunCount} active run
+              {event.activeRunCount === 1 ? "" : "s"}
+            </Badge>
+          )}
+        </CardPanel>
+      </Card>
+      <CardFrameFooter className="flex min-h-16 items-end justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1 text-muted-foreground text-xs">
+          <span className="flex items-center gap-1.5">
+            <Clock3 className="size-3.5 shrink-0" />
+            Updated
+            <time dateTime={event.lastActivityAt}>
+              {dateTimeFormatter.format(new Date(event.lastActivityAt))}
+            </time>
+          </span>
+          {event.platform && (
+            <span className="flex items-center gap-1.5">
+              <RefreshCw className="size-3.5 shrink-0" />
+              {event.platform.credentialConfigured
+                ? event.platform.lastSyncedAt
+                  ? `Synced ${dateTimeFormatter.format(new Date(event.platform.lastSyncedAt))}`
+                  : "Not synced"
+                : "Credentials required"}
+            </span>
+          )}
         </div>
-      </CardPanel>
-      <CardFooter>
-        <Link
-          className="font-medium text-sm underline-offset-4 hover:underline"
-          to={`/events/${event.id}`}
+        <Button
+          render={<Link to={`/events/${event.id}`} />}
+          size="sm"
+          variant="ghost"
         >
-          Open event
-        </Link>
-      </CardFooter>
-    </Card>
+          Open <ArrowRight />
+        </Button>
+      </CardFrameFooter>
+    </CardFrame>
   )
 }
 

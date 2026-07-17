@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import type { Api, Model, MutableModels } from "@earendil-works/pi-ai"
-import { and, count, eq, getTableColumns, inArray } from "drizzle-orm"
+import { and, count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
@@ -187,16 +187,40 @@ export function createApp(options: {
       .select({
         ...getTableColumns(events),
         challengeCount: count(challenges.id),
+        solvedCount: sql<number>`coalesce(sum(case when ${challenges.remoteSolved} = 1 then 1 else 0 end), 0)`,
+        lastChallengeAt: max(challenges.updatedAt),
       })
       .from(events)
       .leftJoin(challenges, eq(challenges.eventId, events.id))
       .groupBy(events.id)
       .orderBy(events.createdAt)
       .all()
-      .map((event) => ({
-        ...event,
-        platform: platformService.getPublic(event.id),
-      }))
+      .map(({ lastChallengeAt, ...event }) => {
+        const runSummary = db
+          .select({
+            activeRunCount: sql<number>`coalesce(sum(case when ${runs.status} in ('running', 'paused') then 1 else 0 end), 0)`,
+            lastRunAt: max(runs.updatedAt),
+          })
+          .from(runs)
+          .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+          .where(eq(challenges.eventId, event.id))
+          .get()
+        const lastActivityAt = [
+          lastChallengeAt,
+          runSummary?.lastRunAt,
+        ].reduce<string>(
+          (latest, value) => (value && value > latest ? value : latest),
+          event.updatedAt
+        )
+        return {
+          ...event,
+          challengeCount: Number(event.challengeCount),
+          solvedCount: Number(event.solvedCount),
+          activeRunCount: Number(runSummary?.activeRunCount ?? 0),
+          lastActivityAt,
+          platform: platformService.getPublic(event.id),
+        }
+      })
 
   const getEvent = (eventId: string) =>
     listEvents().find((event) => event.id === eventId)
@@ -299,7 +323,17 @@ export function createApp(options: {
       )
     }
     db.insert(events).values(event).run()
-    return c.json({ ...event, challengeCount: 0 }, 201)
+    return c.json(
+      {
+        ...event,
+        challengeCount: 0,
+        solvedCount: 0,
+        activeRunCount: 0,
+        lastActivityAt: now,
+        platform: null,
+      },
+      201
+    )
   })
 
   app.get("/api/events/:eventId", (c) => {
