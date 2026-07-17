@@ -62,7 +62,13 @@ import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
 import { Conversation } from "./timeline"
-import { isRecord, type LiveEntry, liveEntries, text } from "./timeline-model"
+import {
+  isRecord,
+  type LiveEntry,
+  liveEntries,
+  mergeLiveEntries,
+  text,
+} from "./timeline-model"
 
 const statuses: RunStatus[] = [
   "running",
@@ -71,16 +77,6 @@ const statuses: RunStatus[] = [
   "failed",
   "stopped",
 ]
-
-function mergeLiveEntries(current: LiveEntry[], updates: LiveEntry[]) {
-  const next = [...current]
-  for (const entry of updates) {
-    const index = next.findIndex((value) => value.key === entry.key)
-    if (index === -1) next.push(entry)
-    else next[index] = entry
-  }
-  return next
-}
 
 export function RunWorkspace({
   eventId,

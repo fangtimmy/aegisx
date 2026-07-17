@@ -4,6 +4,7 @@ import {
   buildConversation,
   type LiveEntry,
   liveEntries,
+  mergeLiveEntries,
 } from "@/features/runs/timeline-model"
 import type { SessionEntry } from "@/lib/api"
 
@@ -152,4 +153,32 @@ test("keeps streaming message updates on one live entry", () => {
     (updated[0].message.content as Array<{ text: string }>)[0]?.text,
     "Streaming"
   )
+})
+
+test("reuses an active assistant entry for a changed terminal timestamp", () => {
+  const active: LiveEntry = {
+    key: "message:assistant:1",
+    type: "message",
+    message: {
+      role: "assistant",
+      timestamp: 1,
+      content: [{ type: "text", text: "partial" }],
+    },
+  }
+  const ended: LiveEntry = {
+    key: "message:assistant:2",
+    type: "message",
+    message: {
+      role: "assistant",
+      timestamp: 2,
+      stopReason: "aborted",
+      content: [{ type: "text", text: "partial" }],
+    },
+    endedAt: 3,
+  }
+
+  const merged = mergeLiveEntries([active], [ended])
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0]?.key, active.key)
+  assert.equal(merged[0]?.type, "message")
 })

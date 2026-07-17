@@ -396,6 +396,7 @@ export function Conversation({
     null
   )
   const items = buildConversation(history, live)
+  const hasConversation = items.length > 0
   const latestItem = items.at(-1)
   const showJumpToLatest = hasOverflow && !atBottom
 
@@ -408,10 +409,19 @@ export function Conversation({
   }
 
   useEffect(() => {
+    if (!hasConversation) {
+      viewportRef.current = null
+      setScrollContainer(null)
+      return
+    }
     const viewport = rootRef.current?.closest<HTMLElement>(
       '[data-slot="scroll-area-viewport"]'
     )
-    if (!viewport) return
+    if (!viewport) {
+      viewportRef.current = null
+      setScrollContainer(null)
+      return
+    }
     viewportRef.current = viewport
     setScrollContainer(viewport.parentElement)
     lastScrollTop.current = viewport.scrollTop
@@ -435,7 +445,7 @@ export function Conversation({
     updateFollowState()
     viewport.addEventListener("scroll", updateFollowState, { passive: true })
     return () => viewport.removeEventListener("scroll", updateFollowState)
-  }, [])
+  }, [hasConversation])
 
   useEffect(() => {
     if (latestItem && followsLatest.current) {

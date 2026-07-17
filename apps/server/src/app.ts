@@ -812,6 +812,12 @@ export function createApp(options: {
       let finished = false
       let unsubscribe = () => {}
       let finish = () => {}
+      let writes = Promise.resolve()
+      const enqueue = (event: unknown) => {
+        writes = writes
+          .then(() => stream.writeSSE({ data: JSON.stringify(event) }))
+          .catch(finish)
+      }
       const done = new Promise<void>((resolve) => {
         finish = () => {
           if (finished) return
@@ -822,7 +828,7 @@ export function createApp(options: {
       })
       unsubscribe = runManager.subscribe(runId, (event) => {
         if (!ready) pending.push(event)
-        else void stream.writeSSE({ data: JSON.stringify(event) }).catch(finish)
+        else enqueue(event)
       })
       c.req.raw.signal.addEventListener("abort", finish, { once: true })
       try {

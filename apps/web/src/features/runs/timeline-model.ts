@@ -43,6 +43,28 @@ export type LiveEntry =
       body: string
     }
 
+export function mergeLiveEntries(current: LiveEntry[], updates: LiveEntry[]) {
+  const next = [...current]
+  for (const entry of updates) {
+    const index =
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.stopReason &&
+      entry.endedAt !== undefined &&
+      !next.some((value) => value.key === entry.key)
+        ? next.findLastIndex(
+            (value) =>
+              value.type === "message" &&
+              value.message.role === "assistant" &&
+              value.endedAt === undefined
+          )
+        : next.findIndex((value) => value.key === entry.key)
+    if (index === -1) next.push(entry)
+    else next[index] = { ...entry, key: next[index].key }
+  }
+  return next
+}
+
 export type ToolBlock = {
   key: string
   type: "tool"
