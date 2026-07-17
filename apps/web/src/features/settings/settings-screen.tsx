@@ -212,7 +212,6 @@ export function SettingsScreen() {
                   key={selected.id}
                   onDelete={() => remove.mutate(selected.id)}
                   provider={selected}
-                  settings={settings.data as SettingsPublic}
                 />
               ) : (
                 <Card>

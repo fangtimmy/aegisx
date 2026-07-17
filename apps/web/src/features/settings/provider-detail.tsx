@@ -1,5 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { CircleAlert, Eye, EyeOff, RefreshCw, Star, Trash2 } from "lucide-react"
+import {
+  CircleAlert,
+  Eye,
+  EyeOff,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from "lucide-react"
 import { useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -15,20 +23,28 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
-  CardDescription,
   CardFooter,
   CardFrame,
   CardFrameAction,
   CardFrameDescription,
+  CardFrameFooter,
   CardFrameHeader,
   CardFrameTitle,
-  CardHeader,
   CardPanel,
-  CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { CheckboxGroup } from "@/components/ui/checkbox-group"
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import {
   Empty,
   EmptyDescription,
@@ -49,7 +65,6 @@ import {
   jsonRequest,
   type ProviderConnection,
   type ProviderModel,
-  type SettingsPublic,
 } from "@/lib/api"
 import { type ProviderInput, providerTypeLabels } from "./provider-config"
 import { ProviderTypeField } from "./provider-dialog"
@@ -58,13 +73,11 @@ type ProviderUpdate = Omit<ProviderInput, "apiKey"> & { apiKey?: string }
 
 export function ProviderDetail({
   provider,
-  settings,
   onDelete,
   deleteError,
   deletePending,
 }: {
   provider: ProviderConnection
-  settings: SettingsPublic
   onDelete: () => void
   deleteError?: Error | null
   deletePending: boolean
@@ -77,6 +90,11 @@ export function ProviderDetail({
   const [showKey, setShowKey] = useState(false)
   const [discovered, setDiscovered] = useState<string[] | null>(null)
   const [selected, setSelected] = useState<string[]>([])
+  const [addOpen, setAddOpen] = useState(false)
+  const [modelId, setModelId] = useState("")
+  const [modelLabel, setModelLabel] = useState("")
+  const [editingModel, setEditingModel] = useState<ProviderModel | null>(null)
+  const [editingLabel, setEditingLabel] = useState("")
   const save = useMutation({
     mutationFn: (input: ProviderUpdate) =>
       apiRequest<ProviderConnection>(
@@ -101,18 +119,21 @@ export function ProviderDetail({
     },
   })
   const addModels = useMutation({
-    mutationFn: () =>
+    mutationFn: (models: Array<{ modelId: string; label: string }>) =>
       Promise.all(
-        selected.map((modelId) =>
+        models.map((model) =>
           apiRequest<ProviderModel>(
             `/providers/${provider.id}/models`,
-            jsonRequest("POST", { modelId, label: modelId })
+            jsonRequest("POST", model)
           )
         )
       ),
     onSuccess: () => {
       setDiscovered(null)
       setSelected([])
+      setAddOpen(false)
+      setModelId("")
+      setModelLabel("")
       queryClient.invalidateQueries({ queryKey: ["providers"] })
     },
   })
@@ -124,21 +145,25 @@ export function ProviderDetail({
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   })
-  const setDefault = useMutation({
-    mutationFn: (defaultModelId: string) =>
-      apiRequest<SettingsPublic>(
-        "/settings",
-        jsonRequest("PATCH", {
-          defaultModelId,
-          environment: settings.environment,
-          containerImage: settings.containerImage,
-          cpus: settings.cpus,
-          memoryMb: settings.memoryMb,
-          pidsLimit: settings.pidsLimit,
-          maxConcurrency: settings.maxConcurrency,
-        })
+  const editModel = useMutation({
+    mutationFn: ({ id, label }: { id: string; label: string }) =>
+      apiRequest<ProviderModel>(
+        `/provider-models/${id}`,
+        jsonRequest("PATCH", { label })
       ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => {
+      setEditingModel(null)
+      setEditingLabel("")
+      queryClient.invalidateQueries({ queryKey: ["providers"] })
+    },
+  })
+  const removeModel = useMutation({
+    mutationFn: (id: string) =>
+      apiRequest<void>(`/provider-models/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["providers"] })
+      queryClient.invalidateQueries({ queryKey: ["settings"] })
+    },
   })
 
   return (
@@ -287,147 +312,358 @@ export function ProviderDetail({
         </Card>
       </CardFrame>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Models</CardTitle>
-          <CardDescription>
+      <CardFrame>
+        <CardFrameHeader>
+          <CardFrameTitle>Models</CardFrameTitle>
+          <CardFrameDescription>
             Only enabled models can start a run.
-          </CardDescription>
-          <CardAction>
+          </CardFrameDescription>
+          <CardFrameAction className="flex gap-2">
             <Button
               loading={discover.isPending}
-              onClick={() => discover.mutate()}
+              onClick={() => {
+                addModels.reset()
+                discover.mutate()
+              }}
               type="button"
               variant="outline"
             >
               <RefreshCw /> Fetch models
             </Button>
-          </CardAction>
-        </CardHeader>
-        <CardPanel className="flex flex-col gap-4">
-          {discover.error && (
-            <Alert variant="error">
-              <CircleAlert />
-              <AlertDescription>{discover.error.message}</AlertDescription>
-            </Alert>
-          )}
-          {(addModels.error || modelMutation.error || setDefault.error) && (
-            <Alert variant="error">
-              <CircleAlert />
-              <AlertDescription>
-                {
-                  (addModels.error ?? modelMutation.error ?? setDefault.error)
-                    ?.message
-                }
-              </AlertDescription>
-            </Alert>
-          )}
-          {discovered && (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span>
-                  {discovered.length
-                    ? `${discovered.length} new models found`
-                    : "No new models found"}
-                </span>
-                {discovered.length > 0 && (
-                  <Button
-                    disabled={selected.length === 0}
-                    loading={addModels.isPending}
-                    onClick={() => addModels.mutate()}
-                    size="sm"
-                    type="button"
-                  >
-                    Add selected ({selected.length})
-                  </Button>
-                )}
-              </div>
+            <Dialog
+              onOpenChange={(open) => {
+                setAddOpen(open)
+                if (open) addModels.reset()
+              }}
+              open={addOpen}
+            >
+              <DialogTrigger render={<Button type="button" />}>
+                <Plus /> Add model
+              </DialogTrigger>
+              <DialogPopup className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Add model</DialogTitle>
+                  <DialogDescription>
+                    Enter the model identifier accepted by this provider.
+                  </DialogDescription>
+                </DialogHeader>
+                <form
+                  className="contents"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    const id = modelId.trim()
+                    addModels.mutate([
+                      { modelId: id, label: modelLabel.trim() || id },
+                    ])
+                  }}
+                >
+                  <DialogPanel className="grid gap-4">
+                    <Field>
+                      <FieldLabel htmlFor="provider-model-id">
+                        Model ID
+                      </FieldLabel>
+                      <Input
+                        autoFocus
+                        id="provider-model-id"
+                        onChange={(event) => setModelId(event.target.value)}
+                        required
+                        value={modelId}
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="provider-model-label">
+                        Display name
+                      </FieldLabel>
+                      <Input
+                        id="provider-model-label"
+                        onChange={(event) => setModelLabel(event.target.value)}
+                        placeholder="Defaults to the model ID"
+                        value={modelLabel}
+                      />
+                    </Field>
+                    {addModels.error && (
+                      <Alert variant="error">
+                        <CircleAlert />
+                        <AlertDescription>
+                          {addModels.error.message}
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </DialogPanel>
+                  <DialogFooter>
+                    <DialogClose
+                      render={<Button type="button" variant="ghost" />}
+                    >
+                      Cancel
+                    </DialogClose>
+                    <Button loading={addModels.isPending} type="submit">
+                      Add model
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogPopup>
+            </Dialog>
+          </CardFrameAction>
+        </CardFrameHeader>
+        <Card>
+          <CardPanel className="flex flex-col gap-4">
+            {discover.error && (
+              <Alert variant="error">
+                <CircleAlert />
+                <AlertDescription>{discover.error.message}</AlertDescription>
+              </Alert>
+            )}
+            {(modelMutation.error || removeModel.error) && (
+              <Alert variant="error">
+                <CircleAlert />
+                <AlertDescription>
+                  {(modelMutation.error ?? removeModel.error)?.message}
+                </AlertDescription>
+              </Alert>
+            )}
+            <div className="divide-y">
+              {provider.models.length === 0 ? (
+                <Empty className="py-10">
+                  <EmptyHeader>
+                    <EmptyTitle>No models configured</EmptyTitle>
+                    <EmptyDescription>
+                      Add a model manually or fetch models from this provider.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                provider.models.map((model) => (
+                  <div className="flex items-center gap-3 py-3" key={model.id}>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium text-sm">
+                        {model.label}
+                      </p>
+                      <p className="truncate font-mono text-muted-foreground text-xs">
+                        {model.modelId}
+                      </p>
+                    </div>
+                    <Button
+                      aria-label={`Edit ${model.label}`}
+                      onClick={() => {
+                        editModel.reset()
+                        setEditingModel(model)
+                        setEditingLabel(model.label)
+                      }}
+                      size="icon"
+                      title="Edit model"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <Pencil />
+                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger
+                        render={
+                          <Button
+                            aria-label={`Delete ${model.label}`}
+                            size="icon"
+                            title="Delete model"
+                            type="button"
+                            variant="ghost"
+                          />
+                        }
+                      >
+                        <Trash2 />
+                      </AlertDialogTrigger>
+                      <AlertDialogPopup>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            Delete {model.label}?
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This model will no longer be available for new runs.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogClose
+                            render={<Button type="button" variant="ghost" />}
+                          >
+                            Cancel
+                          </AlertDialogClose>
+                          <Button
+                            loading={
+                              removeModel.isPending &&
+                              removeModel.variables === model.id
+                            }
+                            onClick={() => removeModel.mutate(model.id)}
+                            type="button"
+                            variant="destructive"
+                          >
+                            Delete model
+                          </Button>
+                        </AlertDialogFooter>
+                      </AlertDialogPopup>
+                    </AlertDialog>
+                    <Switch
+                      aria-label={
+                        model.enabled
+                          ? `Disable ${model.label}`
+                          : `Enable ${model.label}`
+                      }
+                      checked={model.enabled}
+                      disabled={modelMutation.isPending}
+                      onCheckedChange={(enabled) =>
+                        modelMutation.mutate({
+                          modelId: model.id,
+                          body: { enabled: enabled === true },
+                        })
+                      }
+                    />
+                  </div>
+                ))
+              )}
+            </div>
+          </CardPanel>
+        </Card>
+        <CardFrameFooter className="text-muted-foreground text-xs">
+          {provider.models.length} configured
+        </CardFrameFooter>
+      </CardFrame>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingModel(null)
+            setEditingLabel("")
+          }
+        }}
+        open={editingModel !== null}
+      >
+        <DialogPopup className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Edit model</DialogTitle>
+            <DialogDescription>
+              Model IDs cannot be changed after they are added.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="contents"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (editingModel) {
+                editModel.mutate({
+                  id: editingModel.id,
+                  label: editingLabel.trim(),
+                })
+              }
+            }}
+          >
+            <DialogPanel className="grid gap-4">
+              <Field>
+                <FieldLabel htmlFor="editing-provider-model-id">
+                  Model ID
+                </FieldLabel>
+                <Input
+                  disabled
+                  id="editing-provider-model-id"
+                  value={editingModel?.modelId ?? ""}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="editing-provider-model-label">
+                  Display name
+                </FieldLabel>
+                <Input
+                  autoFocus
+                  id="editing-provider-model-label"
+                  onChange={(event) => setEditingLabel(event.target.value)}
+                  required
+                  value={editingLabel}
+                />
+              </Field>
+              {editModel.error && (
+                <Alert variant="error">
+                  <CircleAlert />
+                  <AlertDescription>{editModel.error.message}</AlertDescription>
+                </Alert>
+              )}
+            </DialogPanel>
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="ghost" />}>
+                Cancel
+              </DialogClose>
+              <Button loading={editModel.isPending} type="submit">
+                Save model
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogPopup>
+      </Dialog>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setDiscovered(null)
+            setSelected([])
+          }
+        }}
+        open={discovered !== null}
+      >
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>Add fetched models</DialogTitle>
+            <DialogDescription>
+              Select the new models to add to this provider.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            {discovered?.length ? (
               <CheckboxGroup
                 aria-label="Models to add"
                 className="grid grid-cols-2 gap-2"
                 onValueChange={setSelected}
                 value={selected}
               >
-                {discovered.map((modelId) => (
-                  <Label className="min-w-0" key={modelId}>
-                    <Checkbox value={modelId} />
+                {discovered.map((id) => (
+                  <Label className="min-w-0" key={id}>
+                    <Checkbox value={id} />
                     <span className="min-w-0 break-all font-mono text-xs">
-                      {modelId}
+                      {id}
                     </span>
                   </Label>
                 ))}
               </CheckboxGroup>
-            </div>
-          )}
-          <div className="divide-y">
-            {provider.models.length === 0 ? (
-              <Empty className="py-10">
+            ) : (
+              <Empty className="py-8">
                 <EmptyHeader>
-                  <EmptyTitle>No models configured</EmptyTitle>
+                  <EmptyTitle>No new models found</EmptyTitle>
                   <EmptyDescription>
-                    Fetch models from this provider to add them.
+                    All fetched models are already configured.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
-            ) : (
-              provider.models.map((model) => (
-                <div className="flex items-center gap-3 py-3" key={model.id}>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium text-sm">
-                      {model.label}
-                    </p>
-                    <p className="truncate font-mono text-muted-foreground text-xs">
-                      {model.modelId}
-                    </p>
-                  </div>
-                  <Button
-                    aria-label={`Set ${model.label} as default`}
-                    disabled={setDefault.isPending}
-                    loading={
-                      setDefault.isPending && setDefault.variables === model.id
-                    }
-                    onClick={() => setDefault.mutate(model.id)}
-                    size="icon"
-                    title="Set as default"
-                    type="button"
-                    variant={
-                      settings.defaultModelId === model.id
-                        ? "secondary"
-                        : "ghost"
-                    }
-                  >
-                    <Star
-                      className={
-                        settings.defaultModelId === model.id
-                          ? "fill-current"
-                          : undefined
-                      }
-                    />
-                  </Button>
-                  <Switch
-                    aria-label={
-                      model.enabled
-                        ? `Disable ${model.label}`
-                        : `Enable ${model.label}`
-                    }
-                    checked={model.enabled}
-                    disabled={modelMutation.isPending}
-                    onCheckedChange={(enabled) =>
-                      modelMutation.mutate({
-                        modelId: model.id,
-                        body: { enabled: enabled === true },
-                      })
-                    }
-                  />
-                </div>
-              ))
             )}
-          </div>
-        </CardPanel>
-        <CardFooter className="text-muted-foreground text-xs">
-          {provider.models.length} configured
-        </CardFooter>
-      </Card>
+            {addModels.error && (
+              <Alert className="mt-4" variant="error">
+                <CircleAlert />
+                <AlertDescription>{addModels.error.message}</AlertDescription>
+              </Alert>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" />}>
+              {discovered?.length ? "Cancel" : "Close"}
+            </DialogClose>
+            {Boolean(discovered?.length) && (
+              <Button
+                disabled={selected.length === 0}
+                loading={addModels.isPending}
+                onClick={() =>
+                  addModels.mutate(
+                    selected.map((id) => ({ modelId: id, label: id }))
+                  )
+                }
+                type="button"
+              >
+                Add selected ({selected.length})
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
     </div>
   )
 }
