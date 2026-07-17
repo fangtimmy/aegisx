@@ -204,7 +204,6 @@ export function CreateRunDialog({
                   settings.refetch()
                   providers.refetch()
                 }}
-                size="sm"
                 type="button"
                 variant="outline"
               >

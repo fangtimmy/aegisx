@@ -198,7 +198,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
       open={open}
     >
       <DialogTrigger
-        render={<Button size="sm" type="button" variant="outline" />}
+        render={<Button type="button" variant="outline" />}
       >
         <RefreshCw /> Import challenges
       </DialogTrigger>
@@ -235,7 +235,6 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                         : items.map((challenge) => challenge.id)
                     )
                   }
-                  size="sm"
                   type="button"
                   variant="ghost"
                 >
@@ -417,7 +416,6 @@ function ConnectPlatformDialog({
         render={
           <Button
             aria-label={platform ? "Update platform connection" : undefined}
-            size={platform ? "icon-sm" : "sm"}
             type="button"
             variant="outline"
           />

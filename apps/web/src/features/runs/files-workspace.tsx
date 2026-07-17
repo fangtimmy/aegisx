@@ -200,7 +200,6 @@ export function FilesWorkspace({
                   href={`/api/runs/${runId}/files/download?path=${encodeURIComponent(selectedPath)}`}
                 />
               }
-              size="sm"
               variant="outline"
             >
               <Download /> Download

@@ -404,7 +404,6 @@ function SettingsTransfer({
             setFile(null)
             setOpen(true)
           }}
-          size="sm"
           type="button"
           variant="outline"
         >
@@ -412,7 +411,6 @@ function SettingsTransfer({
         </Button>
         <Button
           onClick={() => inputRef.current?.click()}
-          size="sm"
           type="button"
           variant="outline"
         >

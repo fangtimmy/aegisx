@@ -208,7 +208,6 @@ function TargetPanel({ run }: { run: RunPublic }) {
           <Button
             loading={action.isPending}
             onClick={() => action.mutate("start")}
-            size="sm"
             type="button"
             variant="outline"
           >
@@ -220,7 +219,6 @@ function TargetPanel({ run }: { run: RunPublic }) {
             <Button
               loading={action.isPending && action.variables === "extend"}
               onClick={() => action.mutate("extend")}
-              size="sm"
               type="button"
               variant="outline"
             >
@@ -229,7 +227,6 @@ function TargetPanel({ run }: { run: RunPublic }) {
             <Button
               loading={action.isPending && action.variables === "stop"}
               onClick={() => action.mutate("stop")}
-              size="sm"
               type="button"
               variant="destructive-outline"
             >

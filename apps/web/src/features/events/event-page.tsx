@@ -184,7 +184,7 @@ export function EventPage() {
                       <Menu>
                         <MenuTrigger
                           render={
-                            <Button size="sm" type="button" variant="outline" />
+                            <Button type="button" variant="outline" />
                           }
                         >
                           <ListTree />
@@ -214,7 +214,7 @@ export function EventPage() {
                       <Menu>
                         <MenuTrigger
                           render={
-                            <Button size="sm" type="button" variant="outline" />
+                            <Button type="button" variant="outline" />
                           }
                         >
                           <ArrowUpDown />
@@ -270,15 +270,6 @@ export function EventPage() {
                       Add the first challenge for this event.
                     </EmptyDescription>
                   </EmptyHeader>
-                  <EmptyContent>
-                    {eventQuery.data.event.platform && (
-                      <ImportChallengesDialog eventId={eventId} />
-                    )}
-                    <ChallengeDialog
-                      eventId={eventId}
-                      onUploadError={setUploadError}
-                    />
-                  </EmptyContent>
                 </Empty>
               ) : (
                 <div className="grid gap-6">

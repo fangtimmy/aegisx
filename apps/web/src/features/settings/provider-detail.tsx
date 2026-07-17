@@ -317,7 +317,7 @@ export function ProviderDetail({
           <CardFrameTitle>
             <span className="flex items-center gap-2">
               Models
-              <Badge size="sm" variant="secondary">
+              <Badge variant="secondary">
                 {provider.models.length}
               </Badge>
             </span>

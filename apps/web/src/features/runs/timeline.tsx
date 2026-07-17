@@ -489,7 +489,6 @@ export function Conversation({
                 showJumpToLatest ? "pointer-events-auto" : "pointer-events-none"
               )}
               onClick={() => scrollToBottom("smooth")}
-              size="sm"
               tabIndex={showJumpToLatest ? 0 : -1}
               type="button"
             >

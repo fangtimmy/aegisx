@@ -71,7 +71,7 @@ function VariableMenu({
   return (
     <Menu>
       <MenuTrigger
-        render={<Button size="sm" type="button" variant="outline" />}
+        render={<Button type="button" variant="outline" />}
       >
         <Braces /> Variables
       </MenuTrigger>
@@ -121,7 +121,6 @@ function PromptEditor({
           <Button
             loading={loading}
             onClick={onPreview}
-            size="sm"
             type="button"
             variant="outline"
           >

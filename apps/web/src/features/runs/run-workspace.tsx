@@ -507,7 +507,6 @@ export function RunWorkspace({
                       onClick={() =>
                         control.mutate({ action: "pause", body: {} })
                       }
-                      size="sm"
                       variant="outline"
                     >
                       <Pause /> Pause
@@ -519,7 +518,6 @@ export function RunWorkspace({
                         render={
                           <Button
                             className={run.status === "paused" ? "ml-auto" : ""}
-                            size="sm"
                             variant="destructive-outline"
                           />
                         }

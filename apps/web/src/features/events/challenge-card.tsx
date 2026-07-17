@@ -355,7 +355,6 @@ export function ChallengeDialog({
                     <AlertDialogTrigger
                       render={
                         <Button
-                          size="sm"
                           type="button"
                           variant="destructive-outline"
                         />
