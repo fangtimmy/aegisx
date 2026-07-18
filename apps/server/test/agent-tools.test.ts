@@ -52,3 +52,43 @@ test("local bash abort terminates its process group", async () => {
     }
   })
 })
+
+test("bash limits visible output and saves the captured log", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aegisx-tools-"))
+  roots.push(root)
+  const bash = createWorkspaceTools(createLocalBackend(root)).find(
+    (tool) => tool.name === "bash"
+  )
+  if (!bash) throw new Error("bash tool is unavailable")
+
+  const result = await bash.execute("bash-output", {
+    command: "yes output | head -n 10000",
+  })
+  const details = result.details as {
+    outputBytes: number
+    outputPath?: string
+    truncated: boolean
+  }
+  const text = result.content.find((part) => part.type === "text")?.text
+
+  expect(details).toMatchObject({ outputBytes: 70_000, truncated: true })
+  expect(details.outputPath).toMatch(/^\.aegisx\/tool-output\/.*\.log$/)
+  expect(text).toContain("Output was limited to 12000 bytes")
+  expect(text?.length).toBeLessThan(13_000)
+  expect(
+    readFileSync(join(root, details.outputPath as string), "utf8")
+  ).toHaveLength(70_000)
+})
+
+test("bash preserves nonzero command failures", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aegisx-tools-"))
+  roots.push(root)
+  const bash = createWorkspaceTools(createLocalBackend(root)).find(
+    (tool) => tool.name === "bash"
+  )
+  if (!bash) throw new Error("bash tool is unavailable")
+
+  await expect(
+    bash.execute("bash-failure", { command: "printf failed >&2; exit 3" })
+  ).rejects.toThrow("Command exited with status 3")
+})

@@ -3,6 +3,7 @@ import type { WorkspaceBackend } from "./agent-tools"
 
 const workspace = "/workspace"
 const decoder = new TextDecoder()
+const maxCapturedShellOutput = 1_000_000
 
 export function containerName(runId: string) {
   return `aegisx-run-${runId}`
@@ -73,7 +74,12 @@ function stopContainer(name: string) {
 async function dockerExec(
   name: string,
   args: string[],
-  options: { input?: string; signal?: AbortSignal; timeout?: number } = {}
+  options: {
+    input?: string
+    signal?: AbortSignal
+    timeout?: number
+    maxOutputBytes?: number
+  } = {}
 ) {
   if (options.signal?.aborted) throw new Error("aborted")
   const process = Bun.spawn(
@@ -105,20 +111,53 @@ async function dockerExec(
   options.signal?.addEventListener("abort", abort, { once: true })
   try {
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(process.stdout).arrayBuffer(),
-      new Response(process.stderr).arrayBuffer(),
+      captureOutput(process.stdout, options.maxOutputBytes),
+      captureOutput(process.stderr, options.maxOutputBytes),
       process.exited,
     ])
     if (options.signal?.aborted) throw new Error("aborted")
     if (timedOut) throw new Error(`timeout:${options.timeout}`)
     return {
-      stdout: Buffer.from(stdout),
-      stderr: decoder.decode(stderr).trim(),
+      stdout: stdout.content,
+      stderr: decoder.decode(stderr.content).trim(),
       exitCode,
+      outputBytes: stdout.bytes + stderr.bytes,
+      truncated: stdout.truncated || stderr.truncated,
     }
   } finally {
     if (timer) clearTimeout(timer)
     options.signal?.removeEventListener("abort", abort)
+  }
+}
+
+async function captureOutput(
+  stream: ReadableStream<Uint8Array> | null,
+  limit?: number
+) {
+  if (!stream) return { content: Buffer.alloc(0), bytes: 0, truncated: false }
+  if (limit === undefined) {
+    const content = Buffer.from(await new Response(stream).arrayBuffer())
+    return { content, bytes: content.byteLength, truncated: false }
+  }
+  const chunks: Buffer[] = []
+  const reader = stream.getReader()
+  let bytes = 0
+  let captured = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    bytes += value.byteLength
+    const remaining = limit - captured
+    if (remaining > 0) {
+      const chunk = Buffer.from(value)
+      chunks.push(chunk.subarray(0, remaining))
+      captured += Math.min(chunk.byteLength, remaining)
+    }
+  }
+  return {
+    content: Buffer.concat(chunks),
+    bytes,
+    truncated: bytes > captured,
   }
 }
 
@@ -183,12 +222,14 @@ export function createContainerBackend(
       const result = await dockerExec(
         name,
         ["--workdir", cwd, name, "sh", "-lc", command],
-        options
+        { ...options, maxOutputBytes: maxCapturedShellOutput }
       )
       return {
         stdout: decoder.decode(result.stdout),
         stderr: result.stderr,
         exitCode: result.exitCode,
+        outputBytes: result.outputBytes,
+        truncated: result.truncated,
       }
     },
   }

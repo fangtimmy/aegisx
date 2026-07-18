@@ -12,6 +12,8 @@ import type { AgentTool } from "@earendil-works/pi-agent-core"
 import { type TSchema, Type } from "typebox"
 
 const maxOutput = 200_000
+const maxShellOutput = 12_000
+const maxCapturedShellOutput = 1_000_000
 
 export function defineAgentTool<T extends TSchema>(tool: AgentTool<T>) {
   return tool
@@ -32,7 +34,13 @@ export type WorkspaceBackend = {
   exec(
     command: string,
     options: { signal?: AbortSignal; timeout?: number }
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }>
+  ): Promise<{
+    stdout: string
+    stderr: string
+    exitCode: number
+    outputBytes: number
+    truncated: boolean
+  }>
 }
 
 function inside(root: string, path: string) {
@@ -77,14 +85,33 @@ export function createLocalBackend(root: string, cwd = root): WorkspaceBackend {
           detached: true,
           stdio: ["ignore", "pipe", "pipe"],
         })
-        let stdout = ""
-        let stderr = ""
+        const stdout: Buffer[] = []
+        const stderr: Buffer[] = []
+        let stdoutBytes = 0
+        let stderrBytes = 0
+        let capturedStdoutBytes = 0
+        let capturedStderrBytes = 0
         let timedOut = false
+        const capture = (
+          chunks: Buffer[],
+          chunk: Uint8Array,
+          capturedBytes: number
+        ) => {
+          const value = Buffer.from(chunk)
+          const remaining = maxCapturedShellOutput - capturedBytes
+          if (remaining > 0) chunks.push(value.subarray(0, remaining))
+          return Math.min(
+            maxCapturedShellOutput,
+            capturedBytes + value.byteLength
+          )
+        }
         child.stdout.on("data", (chunk) => {
-          if (stdout.length < maxOutput) stdout += String(chunk)
+          stdoutBytes += Buffer.byteLength(chunk)
+          capturedStdoutBytes = capture(stdout, chunk, capturedStdoutBytes)
         })
         child.stderr.on("data", (chunk) => {
-          if (stderr.length < maxOutput) stderr += String(chunk)
+          stderrBytes += Buffer.byteLength(chunk)
+          capturedStderrBytes = capture(stderr, chunk, capturedStderrBytes)
         })
         const stop = () => {
           if (child.pid) {
@@ -109,13 +136,22 @@ export function createLocalBackend(root: string, cwd = root): WorkspaceBackend {
           if (options.signal?.aborted) return reject(new Error("aborted"))
           if (timedOut) return reject(new Error("Command timed out"))
           resolvePromise({
-            stdout: stdout.slice(0, maxOutput),
-            stderr: stderr.slice(0, maxOutput),
+            stdout: Buffer.concat(stdout).toString(),
+            stderr: Buffer.concat(stderr).toString(),
             exitCode: code ?? 1,
+            outputBytes: stdoutBytes + stderrBytes,
+            truncated:
+              stdoutBytes > capturedStdoutBytes ||
+              stderrBytes > capturedStderrBytes,
           })
         })
       }),
   }
+}
+
+function truncateText(value: string, limit: number) {
+  const bytes = Buffer.from(value)
+  return bytes.byteLength > limit ? bytes.subarray(0, limit).toString() : value
 }
 
 async function walk(
@@ -176,12 +212,41 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
         timeout: params.timeout,
       })
       const text = [result.stdout, result.stderr].filter(Boolean).join("\n")
-      if (result.exitCode !== 0) {
-        throw new Error(text || `Command exited with status ${result.exitCode}`)
-      }
+      const outputPath =
+        result.outputBytes > maxShellOutput || result.truncated
+          ? `.aegisx/tool-output/${crypto.randomUUID()}.log`
+          : undefined
+      if (outputPath) await backend.write(outputPath, text, signal)
+      const notices = [
+        outputPath
+          ? `Output was limited to ${maxShellOutput} bytes. Captured output: ${outputPath}`
+          : null,
+        result.truncated
+          ? `Capture was limited to ${maxCapturedShellOutput} bytes.`
+          : null,
+        result.exitCode !== 0
+          ? `Command exited with status ${result.exitCode}.`
+          : null,
+      ].filter(Boolean)
+      const visible = outputPath ? truncateText(text, maxShellOutput) : text
+      const message =
+        [visible, ...notices].filter(Boolean).join("\n\n") ||
+        "Command completed with no output"
+      if (result.exitCode !== 0) throw new Error(message)
       return {
-        content: [{ type: "text", text: text.slice(0, maxOutput) }],
-        details: { exitCode: result.exitCode },
+        content: [
+          {
+            type: "text",
+            text: message,
+          },
+        ],
+        details: {
+          exitCode: result.exitCode,
+          outputBytes: result.outputBytes,
+          truncated: Boolean(outputPath),
+          captureTruncated: result.truncated,
+          ...(outputPath ? { outputPath } : {}),
+        },
       }
     },
   })

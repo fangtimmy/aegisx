@@ -609,6 +609,49 @@ describe("run API", () => {
     expect(instance.activeSessionCount()).toBe(0)
   })
 
+  test("persists tool-call metrics without storing tool arguments", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("bash", { command: "printf metrics" }),
+        {
+          stopReason: "toolUse",
+        }
+      ),
+      fauxAssistantMessage(
+        fauxToolCall("finish_run", { summary: "Metrics recorded" }),
+        { stopReason: "toolUse" }
+      ),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string }
+        }>,
+      (value) => value.run.status === "completed"
+    )
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    const calls = sqlite
+      .query(
+        "select tool_name, duration_ms, output_bytes, truncated, succeeded, exit_code from agent_tool_calls where agent_id = ? order by created_at"
+      )
+      .all(run.id)
+    expect(calls).toContainEqual({
+      tool_name: "bash",
+      duration_ms: expect.any(Number),
+      output_bytes: 7,
+      truncated: 0,
+      succeeded: 1,
+      exit_code: 0,
+    })
+    expect(JSON.stringify(calls)).not.toContain("printf metrics")
+    sqlite.close()
+  })
+
   test("summarizes oversized context before the next request", async () => {
     const instance = setup(2, undefined, 200)
     const { challenge } = await createChallenge(instance.app)

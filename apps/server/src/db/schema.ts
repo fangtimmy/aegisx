@@ -242,6 +242,33 @@ export const agentUsage = sqliteTable(
   (table) => [index("agent_usage_agent_id_idx").on(table.agentId)]
 )
 
+export const agentToolCalls = sqliteTable(
+  "agent_tool_calls",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => runAgents.id, { onDelete: "cascade" }),
+    toolCallId: text("tool_call_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    outputBytes: integer("output_bytes").notNull(),
+    truncated: integer("truncated", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    succeeded: integer("succeeded", { mode: "boolean" }).notNull(),
+    exitCode: integer("exit_code"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("agent_tool_calls_agent_id_idx").on(table.agentId),
+    index("agent_tool_calls_agent_created_at_idx").on(
+      table.agentId,
+      table.createdAt
+    ),
+  ]
+)
+
 export const settings = sqliteTable(
   "settings",
   {
