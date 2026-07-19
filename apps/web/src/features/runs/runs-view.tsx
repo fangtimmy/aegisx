@@ -264,7 +264,12 @@ export function RunsView({
             </CardPanel>
           </Card>
         </CardFrame>
-        <RunWorkspace challenges={challenges} eventId={eventId} runId={runId} />
+        <RunWorkspace
+          challenges={challenges}
+          eventId={eventId}
+          key={runId ?? "no-run"}
+          runId={runId}
+        />
       </div>
     </section>
   )

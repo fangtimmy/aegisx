@@ -15,7 +15,7 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -66,7 +66,7 @@ function formatDuration(durationMs: number) {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
 }
 
-function Markdown({ children }: { children: string }) {
+const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className="min-w-0 break-words text-sm leading-6 [&_a]:underline [&_a]:underline-offset-4 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_h1]:mb-3 [&_h1]:font-semibold [&_h1]:text-xl [&_h2]:mb-2 [&_h2]:font-semibold [&_h2]:text-lg [&_h3]:mb-2 [&_h3]:font-semibold [&_h3]:text-base [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:mb-3 [&_p:last-child]:mb-0 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:bg-muted/40 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:bg-muted/40 [&_th]:p-2 [&_ul]:my-3">
       <ReactMarkdown
@@ -81,7 +81,7 @@ function Markdown({ children }: { children: string }) {
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 function toolSummary(tool: ToolBlock) {
   const args = isRecord(tool.args) ? tool.args : null
@@ -139,11 +139,12 @@ function formatToolCell(value: unknown) {
 
 function ToolData({ value }: { value: unknown }) {
   const parsed = parseToolValue(value)
-  const rows = Array.isArray(parsed)
+  const allRows = Array.isArray(parsed)
     ? parsed.map((item, index) => [String(index), item] as const)
     : isRecord(parsed)
       ? Object.entries(parsed)
       : []
+  const rows = allRows.slice(0, 200)
   if (rows.length === 0) {
     return (
       <ScrollArea className="h-auto max-h-80" scrollFade scrollbarGutter>
@@ -175,6 +176,11 @@ function ToolData({ value }: { value: unknown }) {
             ))}
           </tbody>
         </table>
+        {allRows.length > rows.length && (
+          <p className="px-2.5 pt-1 text-muted-foreground">
+            Showing the first 200 entries.
+          </p>
+        )}
       </div>
     </ScrollArea>
   )
@@ -263,7 +269,11 @@ function ToolActivity({
   )
 }
 
-function ConversationRow({ item }: { item: ConversationItem }) {
+const ConversationRow = memo(function ConversationRow({
+  item,
+}: {
+  item: ConversationItem
+}) {
   const time = item.timestamp ? formatConversationTime(item.timestamp) : null
   if (item.type === "user") {
     return (
@@ -377,7 +387,7 @@ function ConversationRow({ item }: { item: ConversationItem }) {
       </div>
     </article>
   )
-}
+})
 
 export function Conversation({
   history,
@@ -395,7 +405,7 @@ export function Conversation({
   const [scrollContainer, setScrollContainer] = useState<HTMLElement | null>(
     null
   )
-  const items = buildConversation(history, live)
+  const items = useMemo(() => buildConversation(history, live), [history, live])
   const hasConversation = items.length > 0
   const latestItem = items.at(-1)
   const showJumpToLatest = hasOverflow && !atBottom
@@ -444,7 +454,17 @@ export function Conversation({
     }
     updateFollowState()
     viewport.addEventListener("scroll", updateFollowState, { passive: true })
-    return () => viewport.removeEventListener("scroll", updateFollowState)
+    const resizeObserver = new ResizeObserver(() => {
+      if (followsLatest.current) {
+        viewport.scrollTo({ top: viewport.scrollHeight })
+      }
+      updateFollowState()
+    })
+    resizeObserver.observe(rootRef.current ?? viewport)
+    return () => {
+      viewport.removeEventListener("scroll", updateFollowState)
+      resizeObserver.disconnect()
+    }
   }, [hasConversation])
 
   useEffect(() => {

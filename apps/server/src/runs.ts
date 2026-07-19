@@ -67,7 +67,17 @@ type Database = ReturnType<typeof createDatabase>["db"]
 type RunEvent =
   | { type: "status"; run: RunPublic }
   | { type: "agent_status"; agent: AgentPublic }
-  | { type: "agent_event"; agentId: string; event: AgentEvent }
+  | {
+      type: "agent_event"
+      agentId: string
+      event: AgentEvent
+      messageId?: string
+    }
+type RunEventListener = (
+  event: RunEvent,
+  sequence: number,
+  replay: boolean
+) => void
 type EnvironmentConfig =
   | { type: "local" }
   | {
@@ -123,7 +133,12 @@ export function createRunManager(options: Options) {
   let maxConcurrency = options.maxConcurrency
   const current = new Map<string, CurrentSession>()
   const activeContainers = new Map<string, string>()
-  const listeners = new Map<string, Set<(event: RunEvent) => void>>()
+  const listeners = new Map<string, Set<RunEventListener>>()
+  const eventSequences = new Map<string, number>()
+  const eventHistory = new Map<
+    string,
+    Array<{ sequence: number; event: RunEvent }>
+  >()
   const aborting = new Map<string, "paused" | "stopped">()
   let closed = false
 
@@ -242,7 +257,15 @@ export function createRunManager(options: Options) {
   }
 
   function emit(runId: string, event: RunEvent) {
-    for (const listener of listeners.get(runId) ?? []) listener(event)
+    const sequence = (eventSequences.get(runId) ?? 0) + 1
+    eventSequences.set(runId, sequence)
+    const history = eventHistory.get(runId) ?? []
+    history.push({ sequence, event })
+    if (history.length > 256) history.shift()
+    eventHistory.set(runId, history)
+    for (const listener of listeners.get(runId) ?? []) {
+      listener(event, sequence, false)
+    }
   }
 
   function releaseAgent(agentId: string) {
@@ -818,11 +841,16 @@ export function createRunManager(options: Options) {
       canRunTool: () =>
         getStored(runId)?.status === "running" &&
         getStoredAgent(agentId)?.status === "running",
-      onEvent: (event) => {
+      onEvent: (event, messageId) => {
         for (const secret of options.getApiKeys?.(provider) ?? []) {
           runtime.addSecrets([secret])
         }
-        emit(runId, { type: "agent_event", agentId, event })
+        emit(runId, {
+          type: "agent_event",
+          agentId,
+          event,
+          ...(messageId ? { messageId } : {}),
+        })
       },
       onSettled: (outcome) =>
         isMain
@@ -1050,6 +1078,13 @@ export function createRunManager(options: Options) {
         agentId: main.id,
         kind: "child_result",
         content: message,
+        metadata: JSON.stringify({
+          handoff: {
+            agentId: agent.id,
+            agentName: agent.name,
+            status: agent.status,
+          },
+        }),
         createdAt: new Date().toISOString(),
       })
       .run()
@@ -1465,13 +1500,29 @@ export function createRunManager(options: Options) {
     resume,
     message,
     stop,
-    subscribe: (runId: string, listener: (event: RunEvent) => void) => {
+    subscribe: (
+      runId: string,
+      listener: RunEventListener,
+      afterSequence = 0
+    ) => {
+      for (const entry of eventHistory.get(runId) ?? []) {
+        if (entry.sequence > afterSequence) {
+          listener(entry.event, entry.sequence, true)
+        }
+      }
       const runListeners = listeners.get(runId) ?? new Set()
       runListeners.add(listener)
       listeners.set(runId, runListeners)
       return () => {
         runListeners.delete(listener)
-        if (runListeners.size === 0) listeners.delete(runId)
+        if (runListeners.size === 0) {
+          listeners.delete(runId)
+          const status = getPublic(runId)?.status
+          if (status && terminalRunStatuses.includes(status)) {
+            eventSequences.delete(runId)
+            eventHistory.delete(runId)
+          }
+        }
       }
     },
     activeSessionCount: () => current.size,
@@ -1500,6 +1551,8 @@ export function createRunManager(options: Options) {
       for (const name of activeContainers.values()) removeContainer(name)
       activeContainers.clear()
       listeners.clear()
+      eventSequences.clear()
+      eventHistory.clear()
     },
   }
 }

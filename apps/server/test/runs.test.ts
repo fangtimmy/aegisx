@@ -534,6 +534,7 @@ describe("run API", () => {
       (agent) => agent.parentAgentId === null
     ) as (typeof detail.agents)[number]
     expect(child.summary).toContain("delegated-result")
+    expect(JSON.stringify(detail.history)).toContain(`"agentId":"${child.id}"`)
     for (const key of [
       "input",
       "output",

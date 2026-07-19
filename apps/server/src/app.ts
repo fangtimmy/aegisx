@@ -729,32 +729,105 @@ export function createApp(options: {
         404
       )
     }
+    const parsedLastEventId = Number(c.req.header("last-event-id"))
+    const lastEventId =
+      Number.isSafeInteger(parsedLastEventId) && parsedLastEventId >= 0
+        ? parsedLastEventId
+        : 0
     return streamSSE(c, async (stream) => {
-      const pending: unknown[] = []
+      const maxPendingEvents = 512
+      const pending: Array<{ sequence: number; event: unknown }> = []
+      const replayed: Array<{ sequence: number; event: unknown }> = []
       let ready = false
       let finished = false
       let unsubscribe = () => {}
       let finish = () => {}
-      let writes = Promise.resolve()
-      const enqueue = (event: unknown) => {
-        writes = writes
-          .then(() => stream.writeSSE({ data: JSON.stringify(event) }))
-          .catch(finish)
+      let writing = false
+      const isRecord = (value: unknown): value is Record<string, unknown> =>
+        typeof value === "object" && value !== null && !Array.isArray(value)
+      const coalesceKey = (value: { event: unknown }) => {
+        if (!isRecord(value.event) || value.event.type !== "agent_event") {
+          return null
+        }
+        const event = value.event.event
+        if (!isRecord(event)) return null
+        const agentId =
+          typeof value.event.agentId === "string" ? value.event.agentId : ""
+        if (event.type === "message_update") return `message:${agentId}`
+        if (event.type === "tool_execution_update") {
+          return `tool:${agentId}:${String(event.toolCallId ?? "")}`
+        }
+        return null
+      }
+      const writePending = async () => {
+        if (writing || finished) return
+        writing = true
+        try {
+          while (!finished && pending.length > 0) {
+            const item = pending.shift()
+            if (!item) continue
+            await stream.writeSSE({
+              id: String(item.sequence),
+              data: JSON.stringify(item.event),
+            })
+          }
+        } catch {
+          finish()
+        } finally {
+          writing = false
+        }
+      }
+      const queuePending = (event: { sequence: number; event: unknown }) => {
+        if (finished) return false
+        const key = coalesceKey(event)
+        if (key) {
+          const index = pending.findLastIndex(
+            (value) => coalesceKey(value) === key
+          )
+          if (index !== -1) {
+            pending[index] = event
+            return true
+          }
+        }
+        if (pending.length >= maxPendingEvents) {
+          finish()
+          return false
+        }
+        pending.push(event)
+        return true
+      }
+      const enqueue = (event: { sequence: number; event: unknown }) => {
+        if (finished || !queuePending(event)) return
+        void writePending()
       }
       const done = new Promise<void>((resolve) => {
         finish = () => {
           if (finished) return
           finished = true
+          pending.length = 0
           unsubscribe()
           resolve()
         }
       })
-      unsubscribe = runManager.subscribe(runId, (event) => {
-        if (!ready) pending.push(event)
-        else enqueue(event)
-      })
+      unsubscribe = runManager.subscribe(
+        runId,
+        (event, sequence, replay) => {
+          const item = { sequence, event }
+          if (!ready) {
+            if (replay) replayed.push(item)
+            else queuePending(item)
+          } else enqueue(item)
+        },
+        lastEventId
+      )
       c.req.raw.signal.addEventListener("abort", finish, { once: true })
       try {
+        for (const item of replayed) {
+          await stream.writeSSE({
+            id: String(item.sequence),
+            data: JSON.stringify(item.event),
+          })
+        }
         await stream.writeSSE({
           data: JSON.stringify({ type: "status", run: runManager.get(runId) }),
         })
@@ -764,7 +837,12 @@ export function createApp(options: {
           })
         }
         while (pending.length > 0) {
-          await stream.writeSSE({ data: JSON.stringify(pending.shift()) })
+          const item = pending.shift()
+          if (!item) continue
+          await stream.writeSSE({
+            id: String(item.sequence),
+            data: JSON.stringify(item.event),
+          })
         }
         ready = true
         await done

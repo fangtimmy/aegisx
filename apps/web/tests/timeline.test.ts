@@ -5,6 +5,7 @@ import {
   type LiveEntry,
   liveEntries,
   mergeLiveEntries,
+  pruneLiveEntries,
 } from "@/features/runs/timeline-model"
 import type { SessionEntry } from "@/lib/api"
 
@@ -114,6 +115,16 @@ test("renders child completion as an agent handoff", () => {
             },
           ],
           timestamp: 1,
+          aegisx: {
+            kind: "child_result",
+            metadata: {
+              handoff: {
+                agentId: "agent-1",
+                agentName: "Recon",
+                status: "completed",
+              },
+            },
+          },
         },
       },
     ],
@@ -122,7 +133,7 @@ test("renders child completion as an agent handoff", () => {
 
   assert.equal(items.length, 1)
   assert.deepEqual(items[0], {
-    key: "message:user:1",
+    key: "handoff-1",
     type: "handoff",
     agentName: "Recon",
     agentId: "agent-1",
@@ -155,6 +166,31 @@ test("keeps streaming message updates on one live entry", () => {
   )
 })
 
+test("uses the server message id across changing assistant timestamps", () => {
+  const started = liveEntries(
+    {
+      type: "message_start",
+      message: { role: "assistant", timestamp: 1, content: [] },
+    },
+    "message-1"
+  )
+  const ended = liveEntries(
+    {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        timestamp: 2,
+        stopReason: "stop",
+        content: [{ type: "text", text: "complete" }],
+      },
+    },
+    "message-1"
+  )
+
+  assert.equal(started[0]?.key, ended[0]?.key)
+  assert.equal(mergeLiveEntries(started, ended).length, 1)
+})
+
 test("reuses an active assistant entry for a changed terminal timestamp", () => {
   const active: LiveEntry = {
     key: "message:assistant:1",
@@ -181,4 +217,98 @@ test("reuses an active assistant entry for a changed terminal timestamp", () => 
   assert.equal(merged.length, 1)
   assert.equal(merged[0]?.key, active.key)
   assert.equal(merged[0]?.type, "message")
+})
+
+test("keeps tool-result messages distinct without timestamps", () => {
+  const first = liveEntries({
+    type: "message_end",
+    message: {
+      role: "toolResult",
+      toolCallId: "call-1",
+      content: [{ type: "text", text: "one" }],
+    },
+  })
+  const second = liveEntries({
+    type: "message_end",
+    message: {
+      role: "toolResult",
+      toolCallId: "call-2",
+      content: [{ type: "text", text: "two" }],
+    },
+  })
+
+  assert.notEqual(first[0]?.key, second[0]?.key)
+  assert.equal(mergeLiveEntries(first, second).length, 2)
+})
+
+test("uses persisted entry ids for duplicate-timestamp messages", () => {
+  const items = buildConversation(
+    [
+      {
+        type: "message",
+        id: "message-1",
+        parentId: null,
+        timestamp: "2026-07-16T00:00:00.000Z",
+        message: {
+          role: "user",
+          timestamp: 100,
+          content: [{ type: "text", text: "first" }],
+        },
+      },
+      {
+        type: "message",
+        id: "message-2",
+        parentId: "message-1",
+        timestamp: "2026-07-16T00:00:00.001Z",
+        message: {
+          role: "user",
+          timestamp: 100,
+          content: [{ type: "text", text: "second" }],
+        },
+      },
+    ],
+    []
+  )
+
+  assert.deepEqual(
+    items.map((item) => item.key),
+    ["message-1", "message-2"]
+  )
+})
+
+test("prunes live messages after they are persisted", () => {
+  const history: SessionEntry[] = [
+    {
+      type: "message",
+      id: "assistant-1",
+      parentId: null,
+      timestamp: "2026-07-16T00:00:00.000Z",
+      message: {
+        role: "assistant",
+        timestamp: 100,
+        content: [{ type: "text", text: "done" }],
+      },
+    },
+    {
+      type: "message",
+      id: "result-1",
+      parentId: "assistant-1",
+      timestamp: "2026-07-16T00:00:00.001Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "call-1",
+        content: [{ type: "text", text: "output" }],
+      },
+    },
+  ]
+  const live = liveEntries({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      timestamp: 100,
+      content: [{ type: "text", text: "done" }],
+    },
+  })
+
+  assert.deepEqual(pruneLiveEntries(history, live), [])
 })

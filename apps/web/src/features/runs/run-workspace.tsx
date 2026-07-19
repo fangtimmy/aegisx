@@ -68,6 +68,7 @@ import {
   type LiveEntry,
   liveEntries,
   mergeLiveEntries,
+  pruneLiveEntries,
   text,
 } from "./timeline-model"
 
@@ -78,6 +79,7 @@ const statuses: RunStatus[] = [
   "failed",
   "stopped",
 ]
+const terminalStatuses: RunStatus[] = ["completed", "failed", "stopped"]
 
 export function RunWorkspace({
   eventId,
@@ -94,6 +96,7 @@ export function RunWorkspace({
   const [liveByAgent, setLiveByAgent] = useState<Record<string, LiveEntry[]>>(
     {}
   )
+  const [streamDisconnected, setStreamDisconnected] = useState(false)
   const detail = useQuery({
     enabled: Boolean(runId),
     queryKey: ["runs", runId ?? ""],
@@ -122,6 +125,34 @@ export function RunWorkspace({
         stats: UsageSummary
       }>(`/runs/${runId}/agents/${selectedAgent?.id}`),
   })
+  const runIsTerminal = terminalStatuses.includes(
+    detail.data?.run.status as RunStatus
+  )
+  useEffect(() => {
+    const histories = new Map<string, SessionEntry[]>()
+    const main = detail.data?.agents.find(
+      (agent) => agent.parentAgentId === null
+    )
+    if (main && detail.data) histories.set(main.id, detail.data.history)
+    if (agentDetail.data) {
+      histories.set(agentDetail.data.agent.id, agentDetail.data.history)
+    }
+    if (histories.size === 0) return
+    setLiveByAgent((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const [agentId, history] of histories) {
+        const live = current[agentId]
+        if (!live) continue
+        const pruned = pruneLiveEntries(history, live)
+        if (pruned.length !== live.length) {
+          next[agentId] = pruned
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [agentDetail.data, detail.data])
   const control = useMutation({
     mutationFn: ({
       action,
@@ -153,16 +184,17 @@ export function RunWorkspace({
 
   useEffect(() => {
     setLiveByAgent({})
-    if (!runId) return
-    let frame: number | undefined
+    setStreamDisconnected(false)
+    if (!runId || runIsTerminal) return
+    let flushTimer: number | undefined
     let pending: Record<string, LiveEntry[]> = {}
     const queueLiveEntries = (agentId: string, entries: LiveEntry[]) => {
       pending[agentId] = mergeLiveEntries(pending[agentId] ?? [], entries)
-      if (frame !== undefined) return
-      frame = requestAnimationFrame(() => {
+      if (flushTimer !== undefined) return
+      flushTimer = window.setTimeout(() => {
         const updates = pending
         pending = {}
-        frame = undefined
+        flushTimer = undefined
         setLiveByAgent((current) => {
           const next = { ...current }
           for (const [id, values] of Object.entries(updates)) {
@@ -170,15 +202,17 @@ export function RunWorkspace({
           }
           return next
         })
-      })
+      }, 50)
     }
     const source = new EventSource(`/api/runs/${runId}/events`)
     source.onopen = () => {
+      setStreamDisconnected(false)
       queryClient.invalidateQueries({ queryKey: ["runs", runId] })
       queryClient.invalidateQueries({
         queryKey: ["runs", runId, "agents"],
       })
     }
+    source.onerror = () => setStreamDisconnected(true)
     source.onmessage = (event) => {
       let payload: unknown
       try {
@@ -191,7 +225,9 @@ export function RunWorkspace({
       const agentId = text(payload.agentId)
       const affectedAgentId =
         agentId || (isRecord(payload.agent) ? text(payload.agent.id) : "")
-      const entries = agentEvent ? liveEntries(agentEvent) : []
+      const entries = agentEvent
+        ? liveEntries(agentEvent, text(payload.messageId) || undefined)
+        : []
       if (agentId && entries.length > 0) {
         queueLiveEntries(agentId, entries)
       }
@@ -213,12 +249,11 @@ export function RunWorkspace({
             : current
         )
       }
-      if (
+      const shouldRefresh =
         payload.type === "agent_status" ||
-        agentEvent?.type === "entry_appended" ||
-        agentEvent?.type === "message_end" ||
+        agentEvent?.type === "turn_end" ||
         statuses.includes(status as RunStatus)
-      ) {
+      if (shouldRefresh) {
         queryClient.invalidateQueries({ queryKey: ["runs", runId] })
         if (affectedAgentId) {
           queryClient.invalidateQueries({
@@ -239,9 +274,9 @@ export function RunWorkspace({
     }
     return () => {
       source.close()
-      if (frame !== undefined) cancelAnimationFrame(frame)
+      if (flushTimer !== undefined) window.clearTimeout(flushTimer)
     }
-  }, [eventId, queryClient, runId])
+  }, [eventId, queryClient, runId, runIsTerminal])
 
   if (!runId) {
     return (
@@ -451,6 +486,14 @@ export function RunWorkspace({
                 />
               </TabsPanel>
             </Tabs>
+            {streamDisconnected && (
+              <Alert className="mx-6 mb-3 w-auto" variant="warning">
+                <CircleAlert />
+                <AlertDescription>
+                  Live updates are disconnected. Reconnecting...
+                </AlertDescription>
+              </Alert>
+            )}
             {(showComposer || active || control.error) && (
               <div className="border-t bg-background/95 px-6 py-3">
                 {showComposer && (

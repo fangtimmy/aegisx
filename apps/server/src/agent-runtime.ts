@@ -25,6 +25,13 @@ import { redactSecrets } from "./redaction"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 export type InboxKind = "user" | "child_result" | "resume"
+export type AegisXMetadata = {
+  handoff?: {
+    agentId: string
+    agentName: string
+    status: string
+  }
+}
 
 export type AegisXMessage = {
   role: "aegisx"
@@ -32,6 +39,7 @@ export type AegisXMessage = {
   kind: InboxKind
   text: string
   timestamp: number
+  metadata?: AegisXMetadata
 }
 
 declare module "@earendil-works/pi-agent-core" {
@@ -56,7 +64,7 @@ type RuntimeOptions = {
   secrets: Iterable<string>
   thinkingLevel: ModelThinkingLevel
   canRunTool?(): boolean
-  onEvent(event: AgentEvent): void
+  onEvent(event: AgentEvent, messageId?: string): void
   onSettled(outcome: RuntimeOutcome): void | Promise<void>
 }
 
@@ -76,11 +84,16 @@ function toLlm(messages: AgentMessage[]): Message[] {
 
 export function publicAgentMessage(message: AgentMessage): AgentMessage {
   return message.role === "aegisx"
-    ? {
+    ? ({
         role: "user",
         content: [{ type: "text", text: message.text }],
         timestamp: message.timestamp,
-      }
+        aegisx: {
+          id: message.id,
+          kind: message.kind,
+          ...(message.metadata ? { metadata: message.metadata } : {}),
+        },
+      } as AgentMessage)
     : message
 }
 
@@ -316,6 +329,30 @@ export function createAgentRuntime(options: RuntimeOptions) {
     toolExecution: "parallel",
   })
 
+  let activeMessageId: string | undefined
+  const messageIdForEvent = (event: AgentEvent) => {
+    if (event.type === "message_start") {
+      if (event.message.role === "aegisx") return event.message.id
+      if (event.message.role === "toolResult") {
+        return `tool:${event.message.toolCallId}`
+      }
+      activeMessageId = crypto.randomUUID()
+      return activeMessageId
+    }
+    if (event.type === "message_update") return activeMessageId
+    if (event.type === "message_end") {
+      const messageId =
+        event.message.role === "toolResult"
+          ? `tool:${event.message.toolCallId}`
+          : event.message.role === "aegisx"
+            ? event.message.id
+            : activeMessageId
+      if (event.message.role === "assistant") activeMessageId = undefined
+      return messageId
+    }
+    return undefined
+  }
+
   const unsubscribe = agent.subscribe(async (event) => {
     redactSecrets(event, secrets)
     if (event.type === "message_end") {
@@ -339,7 +376,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
         }
       })
     }
-    options.onEvent(publicEvent(event))
+    options.onEvent(publicEvent(event), messageIdForEvent(event))
   })
 
   function pending() {
@@ -357,12 +394,22 @@ export function createAgentRuntime(options: RuntimeOptions) {
   }
 
   function message(row: ReturnType<typeof pending>[number]): AegisXMessage {
+    let metadata: AegisXMetadata | undefined
+    if (row.metadata) {
+      try {
+        const parsed = JSON.parse(row.metadata) as AegisXMetadata
+        if (parsed && typeof parsed === "object") metadata = parsed
+      } catch {
+        metadata = undefined
+      }
+    }
     return {
       role: "aegisx",
       id: row.id,
       kind: row.kind as InboxKind,
       text: row.content,
       timestamp: Date.parse(row.createdAt),
+      ...(metadata ? { metadata } : {}),
     }
   }
 
@@ -426,13 +473,24 @@ export function createAgentRuntime(options: RuntimeOptions) {
     start(message(rows[0]))
   }
 
-  function dispatch(kind: InboxKind, content: string) {
+  function dispatch(
+    kind: InboxKind,
+    content: string,
+    metadata?: AegisXMetadata
+  ) {
     if (phase === "disposed") throw new Error("Agent runtime is disposed")
     const id = crypto.randomUUID()
     const createdAt = new Date().toISOString()
     options.db
       .insert(agentInbox)
-      .values({ id, agentId: options.agentId, kind, content, createdAt })
+      .values({
+        id,
+        agentId: options.agentId,
+        kind,
+        content,
+        metadata: metadata ? JSON.stringify(metadata) : null,
+        createdAt,
+      })
       .run()
     queued.add(id)
     start({
@@ -441,6 +499,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
       kind,
       text: content,
       timestamp: Date.parse(createdAt),
+      ...(metadata ? { metadata } : {}),
     })
     return id
   }

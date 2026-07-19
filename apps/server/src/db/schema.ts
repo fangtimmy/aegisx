@@ -213,6 +213,7 @@ export const agentInbox = sqliteTable(
       .references(() => runAgents.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     content: text("content").notNull(),
+    metadata: text("metadata"),
     createdAt: text("created_at").notNull(),
     deliveredAt: text("delivered_at"),
   },
