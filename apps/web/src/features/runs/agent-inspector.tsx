@@ -88,6 +88,7 @@ function InspectorContent({ inspector }: { inspector: AgentInspector }) {
         <TabsTab value="prompt">System prompt</TabsTab>
         <TabsTab value="tools">Tools</TabsTab>
         <TabsTab value="usage">Usage</TabsTab>
+        <TabsTab value="tool-calls">Tool calls</TabsTab>
         <TabsTab value="task">Task</TabsTab>
       </TabsList>
       <TabsPanel className="pt-4" value="runtime">
@@ -185,6 +186,30 @@ function InspectorContent({ inspector }: { inspector: AgentInspector }) {
             </div>
           ))}
         </dl>
+      </TabsPanel>
+      <TabsPanel className="pt-4" value="tool-calls">
+        {inspector.toolStats.length > 0 ? (
+          <div className="divide-y border-y text-sm">
+            {inspector.toolStats.map((tool) => (
+              <div
+                className="grid grid-cols-[minmax(0,1fr)_repeat(4,auto)] items-baseline gap-3 py-2"
+                key={tool.toolName}
+              >
+                <span className="min-w-0 truncate font-mono">
+                  {tool.toolName}
+                </span>
+                <span className="tabular-nums">{tool.callCount} calls</span>
+                <span className="tabular-nums">{tool.failedCount} failed</span>
+                <span className="tabular-nums">{tool.durationMs} ms</span>
+                <span className="tabular-nums">{tool.outputBytes} B</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            No tool calls recorded
+          </p>
+        )}
       </TabsPanel>
       <TabsPanel className="pt-4" value="task">
         <p className="whitespace-pre-wrap text-sm leading-6">

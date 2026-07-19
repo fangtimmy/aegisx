@@ -17,7 +17,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
-  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -70,7 +69,9 @@ function challengeGroups(
       ? challenge.category || "Uncategorized"
       : challenge.status === "solved"
         ? "Solved"
-        : "Not started"
+        : challenge.status === "in_progress"
+          ? "In progress"
+          : "Not started"
   const keys = [...new Set(challenges.map(keyFor))]
   return keys.map((key) => ({
     key,
@@ -183,9 +184,7 @@ export function EventPage() {
                     <>
                       <Menu>
                         <MenuTrigger
-                          render={
-                            <Button type="button" variant="outline" />
-                          }
+                          render={<Button type="button" variant="outline" />}
                         >
                           <ListTree />
                           {group === "category"
@@ -213,9 +212,7 @@ export function EventPage() {
                       </Menu>
                       <Menu>
                         <MenuTrigger
-                          render={
-                            <Button type="button" variant="outline" />
-                          }
+                          render={<Button type="button" variant="outline" />}
                         >
                           <ArrowUpDown />
                           {sort === "event"

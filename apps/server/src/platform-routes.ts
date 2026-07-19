@@ -74,9 +74,9 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
     }
   )
 
-  app.delete("/api/events/:eventId/platform", (c) => {
+  app.delete("/api/events/:eventId/platform", async (c) => {
     try {
-      service.detach(c.req.param("eventId"))
+      await service.detach(c.req.param("eventId"))
       return c.body(null, 204)
     } catch (error) {
       return platformError(c, error)

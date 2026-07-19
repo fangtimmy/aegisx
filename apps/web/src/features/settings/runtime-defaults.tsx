@@ -36,6 +36,7 @@ type RuntimeSettingsInput = Pick<
   | "memoryMb"
   | "pidsLimit"
   | "maxConcurrency"
+  | "maxAttachmentMb"
 >
 
 export function RuntimeDefaults({
@@ -85,6 +86,7 @@ export function RuntimeDefaults({
           memoryMb: Number(data.get("memoryMb")),
           pidsLimit: Number(data.get("pidsLimit")),
           maxConcurrency: Number(data.get("maxConcurrency")),
+          maxAttachmentMb: Number(data.get("maxAttachmentMb")),
         })
       }}
     >
@@ -201,6 +203,22 @@ export function RuntimeDefaults({
           max={32}
           min={1}
           name="maxConcurrency"
+          required
+        >
+          <NumberFieldGroup>
+            <NumberFieldDecrement />
+            <NumberFieldInput />
+            <NumberFieldIncrement />
+          </NumberFieldGroup>
+        </NumberField>
+      </Field>
+      <Field name="maxAttachmentMb">
+        <FieldLabel>Max attachment size (MiB)</FieldLabel>
+        <NumberField
+          defaultValue={settings.maxAttachmentMb}
+          max={10240}
+          min={1}
+          name="maxAttachmentMb"
           required
         >
           <NumberFieldGroup>

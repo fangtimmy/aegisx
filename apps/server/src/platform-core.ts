@@ -139,7 +139,20 @@ export class PlatformHttp {
   }
 
   async json<T>(path: string, init: RequestInit = {}) {
-    return (await this.request(path, init)).json() as Promise<T>
+    const response = await this.request(path, init)
+    const contentType = response.headers.get("content-type") ?? ""
+    if (contentType && !contentType.toLowerCase().includes("json")) {
+      throw new PlatformError(
+        `Platform returned ${contentType} instead of JSON; check the platform base URL`
+      )
+    }
+    try {
+      return (await response.json()) as T
+    } catch {
+      throw new PlatformError(
+        "Platform returned invalid JSON; check the platform base URL"
+      )
+    }
   }
 }
 

@@ -190,9 +190,7 @@ export function SettingsScreen() {
                 <CardFrameTitle>
                   <span className="flex items-center gap-2">
                     Providers
-                    <Badge variant="secondary">
-                      {items.length}
-                    </Badge>
+                    <Badge variant="secondary">{items.length}</Badge>
                   </span>
                 </CardFrameTitle>
                 <CardFrameAction>

@@ -1,5 +1,6 @@
 import { basename } from "node:path"
 import { and, desc, eq, inArray } from "drizzle-orm"
+import type { EventPlatform } from "../../shared/api"
 import type { createDatabase } from "./db"
 import {
   attachments,
@@ -39,7 +40,11 @@ export class PlatformActionError extends Error {
   }
 }
 
-export function createPlatformService(db: Database, storage: Storage) {
+export function createPlatformService(
+  db: Database,
+  storage: Storage,
+  maxAttachmentBytes: () => number
+) {
   const storedEvent = (eventId: string) =>
     db.select().from(events).where(eq(events.id, eventId)).get()
 
@@ -73,11 +78,48 @@ export function createPlatformService(db: Database, storage: Storage) {
     })
   }
 
-  function publicPlatform(eventId: string) {
+  function publicPlatform(eventId: string): EventPlatform | null {
     const platform = storedPlatform(eventId)
     if (!platform) return null
-    const { credential: _, sourceKey: __, ...value } = platform
-    return { ...value, credentialConfigured: Boolean(platform.credential) }
+    const { sourceKey: _, ...value } = platform
+    return {
+      ...value,
+      type: platform.type as EventPlatform["type"],
+      credentialConfigured: Boolean(platform.credential),
+    }
+  }
+
+  async function assertNoActiveTargets(eventId: string) {
+    const platform = storedPlatform(eventId)
+    const adapter = adapterForEvent(eventId)
+    if (!platform || !adapter?.getTarget) return
+    const targets = db
+      .select({ remoteId: challenges.remoteId })
+      .from(challenges)
+      .where(
+        and(
+          eq(challenges.eventId, eventId),
+          eq(challenges.remoteTarget, true),
+          eq(challenges.remoteAvailable, true),
+          eq(challenges.remoteTargetIgnored, false)
+        )
+      )
+      .all()
+    for (const target of targets) {
+      if (!target.remoteId) continue
+      let state: TargetState
+      try {
+        state = await adapter.getTarget(target.remoteId)
+      } catch (error) {
+        throw platformError(error)
+      }
+      if (["starting", "running", "stopping"].includes(state.status)) {
+        throw new PlatformActionError(
+          "invalid_state",
+          "Stop all remote targets before removing the platform binding"
+        )
+      }
+    }
   }
 
   async function syncAttachment(
@@ -105,7 +147,11 @@ export function createPlatformService(db: Database, storage: Storage) {
         `Attachment ${remote.filename} has no content`
       )
     }
-    const metadata = await storage.write(storageKey, response.body)
+    const metadata = await storage.write(
+      storageKey,
+      response.body,
+      maxAttachmentBytes()
+    )
     const now = new Date().toISOString()
     const values = {
       challengeId,
@@ -407,12 +453,30 @@ export function createPlatformService(db: Database, storage: Storage) {
     return publicPlatform(eventId)
   }
 
-  function detach(eventId: string) {
+  async function detach(eventId: string) {
     if (!storedEvent(eventId)) {
       throw new PlatformActionError("not_found", "Event not found")
     }
     const platform = storedPlatform(eventId)
     if (!platform) return
+    const activeRun = db
+      .select({ id: runs.id })
+      .from(runs)
+      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+      .where(
+        and(
+          eq(challenges.eventId, eventId),
+          inArray(runs.status, ["running", "paused"])
+        )
+      )
+      .get()
+    if (activeRun) {
+      throw new PlatformActionError(
+        "invalid_state",
+        "Stop active runs before removing the platform binding"
+      )
+    }
+    await assertNoActiveTargets(eventId)
     db.transaction((tx) => {
       tx.update(challenges)
         .set({ remoteAvailable: false })
@@ -469,13 +533,7 @@ export function createPlatformService(db: Database, storage: Storage) {
     let submission = db
       .select()
       .from(submissions)
-      .where(
-        and(
-          eq(submissions.runId, runId),
-          eq(submissions.challengeId, challengeId),
-          eq(submissions.flag, value)
-        )
-      )
+      .where(and(eq(submissions.runId, runId), eq(submissions.flag, value)))
       .orderBy(desc(submissions.updatedAt))
       .get()
     if (
@@ -491,7 +549,6 @@ export function createPlatformService(db: Database, storage: Storage) {
       submission = {
         id: crypto.randomUUID(),
         runId,
-        challengeId,
         flag: value,
         status: "pending",
         remoteId: null,
@@ -566,10 +623,11 @@ export function createPlatformService(db: Database, storage: Storage) {
       db
         .select({ id: submissions.id })
         .from(submissions)
+        .innerJoin(runs, eq(submissions.runId, runs.id))
         .where(
           and(
             eq(submissions.runId, runId),
-            eq(submissions.challengeId, challengeId),
+            eq(runs.challengeId, challengeId),
             inArray(submissions.status, ["accepted", "already_solved"])
           )
         )
@@ -684,6 +742,7 @@ export function createPlatformService(db: Database, storage: Storage) {
     ignoreTarget,
     isBoundEvent: (eventId: string) => Boolean(storedPlatform(eventId)),
     listRemoteEvents,
+    assertNoActiveTargets,
     submitFlag,
     syncChallenges,
     targetAction,

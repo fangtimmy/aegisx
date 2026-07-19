@@ -30,6 +30,7 @@ Open the URL printed by Vite. The web development server proxies `/api` to `http
 ## Data and execution
 
 The API stores its SQLite database, attachments, and run workspaces under `data/`. Set `AEGISX_DATA_DIR` to use another directory.
+Attachments default to a 512 MiB per-file limit; change it under Settings > Runtime.
 
 Local runs execute commands with the API process permissions and are not sandboxed. Container runs use a dedicated Docker container with the run workspace mounted at `/workspace` and configurable CPU, memory, and PID limits.
 

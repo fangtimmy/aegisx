@@ -2,6 +2,16 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs"
 import { dirname, join } from "node:path"
 
+export const defaultMaxAttachmentBytes = 512 * 1024 * 1024
+
+export class StorageLimitError extends Error {
+  constructor(readonly limitBytes: number) {
+    super(
+      `Attachment exceeds the ${Math.floor(limitBytes / 1024 / 1024)} MiB limit`
+    )
+  }
+}
+
 export function createStorage(dataDir: string) {
   const attachmentsDir = join(dataDir, "attachments")
   const incomingDir = join(dataDir, ".incoming")
@@ -18,7 +28,8 @@ export function createStorage(dataDir: string) {
 
   async function write(
     storageKey: string,
-    body: ReadableStream<Uint8Array> | null
+    body: ReadableStream<Uint8Array> | null,
+    maxBytes = defaultMaxAttachmentBytes
   ) {
     if (!body) throw new Error("Attachment body is empty")
     const temporaryPath = join(incomingDir, crypto.randomUUID())
@@ -34,6 +45,10 @@ export function createStorage(dataDir: string) {
         const { done, value } = await reader.read()
         if (done) break
         size += value.byteLength
+        if (size > maxBytes) {
+          await reader.cancel()
+          throw new StorageLimitError(maxBytes)
+        }
         hash.update(value)
         writer.write(value)
       }

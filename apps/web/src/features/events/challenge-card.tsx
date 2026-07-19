@@ -354,10 +354,7 @@ export function ChallengeDialog({
                   <AlertDialog>
                     <AlertDialogTrigger
                       render={
-                        <Button
-                          type="button"
-                          variant="destructive-outline"
-                        />
+                        <Button type="button" variant="destructive-outline" />
                       }
                     >
                       <Trash2 /> Remove target

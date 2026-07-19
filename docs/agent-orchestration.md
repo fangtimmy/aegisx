@@ -21,7 +21,7 @@ The main agent can call `spawn_agent` to start focused work in the background an
 - Pause, resume, stop, and completion apply to every non-terminal agent in the run.
 - Resume requires enough concurrency capacity for all paused agents.
 - On API startup, interrupted running agents and runs become `paused`; no model or tool is called automatically.
-- Only `finish_run(summary, flag?)` changes a run to `completed`.
+- Only `finish_run(summary)` changes a run to `completed`.
 
 ## Persistence
 
@@ -41,7 +41,7 @@ The workspace is collaborative rather than isolated. Delegated tasks should avoi
 - The main agent alone receives `get_target`, `start_target`, `extend_target`, and `stop_target` for supported challenges. Children receive no target tools.
 - `start_target` waits for the platform target to become ready and returns its live endpoints.
 - Pause and service restart do not change target state.
-- Completion, stop, and failure attempt to close the target. Cleanup failure does not replace the run outcome.
+- A Run does not automatically close a target on completion, stop, or failure because multiple Runs may share a challenge target. The main agent must stop it explicitly before completion. Platform detachment and event deletion are blocked while a target is active.
 
 ## Events and usage
 

@@ -167,10 +167,10 @@ describe("CTF platform integration", () => {
     ).json()
     expect(beforeImport.event.platform).toMatchObject({
       type: "ctfd",
+      credential: "ctfd_secret",
       credentialConfigured: true,
     })
     expect(beforeImport.challenges).toEqual([])
-    expect(JSON.stringify(beforeImport)).not.toContain("ctfd_secret")
     const available = await (
       await instance.app.request(
         `/api/events/${event.id}/platform/challenges/discover`,
@@ -601,6 +601,13 @@ describe("CTF platform integration", () => {
     )
     expect(actions).toHaveLength(actionCount)
     expect(String(targetState)).toBe("running")
+    expect(
+      (
+        await instance.app.request(`/api/events/${event.id}/platform`, {
+          method: "DELETE",
+        })
+      ).status
+    ).toBe(409)
     targetState = "absent"
 
     faux.setResponses([

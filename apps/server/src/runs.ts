@@ -7,8 +7,17 @@ import {
   type ModelThinkingLevel,
   type Usage,
 } from "@earendil-works/pi-ai"
-import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm"
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm"
 import { Type } from "typebox"
+import type {
+  AgentInspector,
+  AgentPublic,
+  AgentRuntimeSnapshot,
+  AgentStatus,
+  AgentSummary,
+  RunPublic,
+  RunStatus,
+} from "../../shared/api"
 import {
   type AgentEvent,
   type AgentRuntime,
@@ -32,6 +41,7 @@ import type { createDatabase } from "./db"
 import {
   agentInbox,
   agentMessages,
+  agentToolCalls,
   agentUsage,
   attachments,
   challenges,
@@ -51,16 +61,9 @@ import {
   resolvePromptTemplates,
 } from "./prompt-templates"
 import { redactSecrets, replaceText } from "./redaction"
-import {
-  summarizeUsage,
-  summarizeUsageRecords,
-  sumUsage,
-  type UsageSummary,
-} from "./usage"
+import { summarizeUsage, summarizeUsageRecords, sumUsage } from "./usage"
 
 type Database = ReturnType<typeof createDatabase>["db"]
-type RunStatus = "running" | "paused" | "completed" | "failed" | "stopped"
-export type AgentStatus = RunStatus | "idle"
 type RunEvent =
   | { type: "status"; run: RunPublic }
   | { type: "agent_status"; agent: AgentPublic }
@@ -85,71 +88,6 @@ type ModelConfig = {
 }
 type FrozenPromptConfig = PromptTemplates & {
   context?: PromptTemplateContext
-}
-
-export type RunPublic = {
-  id: string
-  challengeId: string
-  challengeName: string
-  eventId: string
-  status: RunStatus
-  provider: string
-  modelId: string
-  modelName: string
-  thinkingLevel: ModelThinkingLevel
-  environment: "local" | "container"
-  targetSupported: boolean
-  image?: string | null
-  cpus?: number
-  memoryMb?: number
-  pidsLimit?: number
-  createdAt: string
-  startedAt: string | null
-  updatedAt: string
-  completedAt: string | null
-  error: string | null
-  summary: string | null
-  flag?: string | null
-}
-
-export type AgentPublic = {
-  id: string
-  runId: string
-  parentAgentId: string | null
-  name: string
-  status: AgentStatus
-  summary: string | null
-  error: string | null
-  createdAt: string
-  startedAt: string | null
-  updatedAt: string
-  completedAt: string | null
-}
-
-export type AgentSummary = AgentPublic & { usage: UsageSummary }
-
-export type AgentRuntimeSnapshot = {
-  capturedAt: string
-  systemPrompt: string
-  cwd: string
-  model: {
-    provider: string
-    modelId: string
-    thinkingLevel: ModelThinkingLevel
-  }
-  tools: Array<{
-    name: string
-    description: string
-    parameters: unknown
-    promptGuidelines?: string[]
-  }>
-}
-
-export type AgentInspector = {
-  agent: AgentPublic
-  task: string | null
-  runtime: AgentRuntimeSnapshot | null
-  usage: UsageSummary
 }
 
 type Options = {
@@ -291,6 +229,7 @@ export function createRunManager(options: Options) {
       completedAt: row.run.completedAt,
       error: row.run.error,
       summary: row.run.summary,
+      hasFlag: Boolean(row.run.flag),
     }
     if (environment.type === "container") {
       value.image = environment.image
@@ -1029,6 +968,31 @@ export function createRunManager(options: Options) {
     ])
   }
 
+  function toolStatsForAgent(agentId: string) {
+    return db
+      .select({
+        toolName: agentToolCalls.toolName,
+        callCount: count(),
+        failedCount: sql<number>`coalesce(sum(case when ${agentToolCalls.succeeded} = 0 then 1 else 0 end), 0)`,
+        durationMs: sql<number>`coalesce(sum(${agentToolCalls.durationMs}), 0)`,
+        outputBytes: sql<number>`coalesce(sum(${agentToolCalls.outputBytes}), 0)`,
+        truncatedCount: sql<number>`coalesce(sum(case when ${agentToolCalls.truncated} = 1 then 1 else 0 end), 0)`,
+      })
+      .from(agentToolCalls)
+      .where(eq(agentToolCalls.agentId, agentId))
+      .groupBy(agentToolCalls.toolName)
+      .orderBy(agentToolCalls.toolName)
+      .all()
+      .map((value) => ({
+        ...value,
+        callCount: Number(value.callCount),
+        failedCount: Number(value.failedCount),
+        durationMs: Number(value.durationMs),
+        outputBytes: Number(value.outputBytes),
+        truncatedCount: Number(value.truncatedCount),
+      }))
+  }
+
   function inspectorForAgent(agentId: string): AgentInspector {
     const stored = getStoredAgent(agentId)
     const agent = getAgentPublic(agentId)
@@ -1045,6 +1009,7 @@ export function createRunManager(options: Options) {
       task: stored.task,
       runtime,
       usage: usageForAgent(agentId),
+      toolStats: toolStatsForAgent(agentId),
     }
   }
 

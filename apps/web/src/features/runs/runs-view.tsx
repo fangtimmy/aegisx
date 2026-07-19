@@ -58,7 +58,7 @@ function RunItem({
           <span className="min-w-0 flex-1 truncate font-medium text-sm">
             {run.challengeName}
           </span>
-          {run.flag && (
+          {run.hasFlag && (
             <Badge size="sm" variant="success">
               <Flag /> Flag found
             </Badge>

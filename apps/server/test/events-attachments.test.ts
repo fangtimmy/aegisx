@@ -108,6 +108,60 @@ describe("event, challenge, and attachment API", () => {
     })
   })
 
+  test("derives local challenge progress from completed runs", async () => {
+    const { app, dataDir } = createTestApp()
+    const event = await createEvent(app)
+    const challenge = await createChallenge(app, event.id)
+    const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
+    sqlite.run(
+      "insert into runs (id, challenge_id, status, created_at, updated_at) values (?, ?, 'completed', ?, ?)",
+      [
+        "completed-local-run",
+        challenge.id,
+        "2100-01-01T00:00:00.000Z",
+        "2100-01-01T00:00:00.000Z",
+      ]
+    )
+    sqlite.close()
+
+    const detail = await (await app.request(`/api/events/${event.id}`)).json()
+    expect(detail.event.solvedCount).toBe(1)
+    expect(detail.challenges[0]).toMatchObject({
+      runCount: 1,
+      status: "solved",
+    })
+  })
+
+  test("enforces the configured attachment size limit", async () => {
+    const { app } = createTestApp()
+    const event = await createEvent(app)
+    const challenge = await createChallenge(app, event.id)
+    const settings = await (await app.request("/api/settings")).json()
+    const updated = await app.request(
+      "/api/settings",
+      json("PATCH", {
+        defaultModelId: settings.defaultModelId,
+        environment: settings.environment,
+        containerImage: settings.containerImage,
+        cpus: settings.cpus,
+        memoryMb: settings.memoryMb,
+        pidsLimit: settings.pidsLimit,
+        maxConcurrency: settings.maxConcurrency,
+        maxAttachmentMb: 1,
+      })
+    )
+    expect(updated.status).toBe(200)
+    const response = await app.request(
+      `/api/challenges/${challenge.id}/attachments?filename=large.bin`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: new Uint8Array(1024 * 1024 + 1),
+      }
+    )
+    expect(response.status).toBe(413)
+  })
+
   test("streams attachments, rejects path names, and cleans deleted events", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)

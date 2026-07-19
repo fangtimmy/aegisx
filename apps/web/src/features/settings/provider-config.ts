@@ -1,4 +1,4 @@
-import type { ProviderConnection, ProviderType } from "@/lib/api"
+import type { ProviderType } from "@/lib/api"
 
 export const providerTypeLabels: Record<ProviderType, string> = {
   "openai-compatible": "OpenAI compatible",
@@ -14,7 +14,10 @@ export const providerTypeDefaults: Record<ProviderType, string> = {
 
 export const providerTypes = Object.keys(providerTypeLabels) as ProviderType[]
 
-export type ProviderInput = Omit<
-  ProviderConnection,
-  "id" | "models" | "createdAt" | "updatedAt"
->
+export type ProviderInput = {
+  label: string
+  type: ProviderType
+  baseUrl: string
+  apiKey: string
+  enabled: boolean
+}

@@ -56,6 +56,7 @@ import type {
   UsageSummary,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
+import { eventKeys } from "../events/shared"
 import { AgentInspectorButton } from "./agent-inspector"
 import { AgentStatusIcon } from "./agent-status-icon"
 import { CreateRunDialog } from "./create-run-dialog"
@@ -100,6 +101,7 @@ export function RunWorkspace({
       apiRequest<{
         run: RunPublic
         agents: AgentSummary[]
+        history: SessionEntry[]
         stats: UsageSummary
       }>(`/runs/${runId}`),
   })
@@ -109,7 +111,9 @@ export function RunWorkspace({
     detail.data?.agents.find((agent) => agent.parentAgentId === null) ??
     detail.data?.agents[0]
   const agentDetail = useQuery({
-    enabled: Boolean(runId && selectedAgent),
+    enabled: Boolean(
+      runId && selectedAgent && selectedAgent.parentAgentId !== null
+    ),
     queryKey: ["runs", runId ?? "", "agents", selectedAgent?.id ?? ""],
     queryFn: () =>
       apiRequest<{
@@ -141,6 +145,8 @@ export function RunWorkspace({
         queryClient.invalidateQueries({
           queryKey: ["runs", runId ?? "", "agents", selectedAgent?.id ?? ""],
         }),
+        queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
+        queryClient.invalidateQueries({ queryKey: eventKeys.all }),
       ])
     },
   })
@@ -225,6 +231,10 @@ export function RunWorkspace({
         queryClient.invalidateQueries({
           queryKey: ["runs", "event", eventId],
         })
+        if (statuses.includes(status as RunStatus)) {
+          queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) })
+          queryClient.invalidateQueries({ queryKey: eventKeys.all })
+        }
       }
     }
     return () => {
@@ -275,7 +285,7 @@ export function RunWorkspace({
       </Alert>
     )
   if (!detail.data) return null
-  const { run, agents, stats } = detail.data
+  const { run, agents, history, stats } = detail.data
   const active = run.status === "running" || run.status === "paused"
   const mainSelected = selectedAgent?.parentAgentId === null
   const requestedView = searchParams.get("view")
@@ -401,7 +411,7 @@ export function RunWorkspace({
                       className="min-h-0 overflow-hidden"
                       value={selectedAgent.id}
                     >
-                      {agentDetail.isPending ? (
+                      {!mainSelected && agentDetail.isPending ? (
                         <div
                           className="flex items-center gap-2 p-6 text-muted-foreground text-sm"
                           role="status"
@@ -409,7 +419,7 @@ export function RunWorkspace({
                           <Spinner aria-hidden="true" />
                           Loading conversation...
                         </div>
-                      ) : agentDetail.error ? (
+                      ) : !mainSelected && agentDetail.error ? (
                         <Alert className="m-4 w-auto" variant="error">
                           <CircleAlert />
                           <AlertDescription>
@@ -419,7 +429,11 @@ export function RunWorkspace({
                       ) : (
                         <ScrollArea className="relative h-full pr-1" scrollFade>
                           <Conversation
-                            history={agentDetail.data?.history ?? []}
+                            history={
+                              mainSelected
+                                ? history
+                                : (agentDetail.data?.history ?? [])
+                            }
                             key={selectedAgent.id}
                             live={liveByAgent[selectedAgent.id] ?? []}
                           />

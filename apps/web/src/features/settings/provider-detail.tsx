@@ -2,12 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Brain,
   CircleAlert,
-  DollarSign,
   Eye,
   EyeOff,
   Image,
   Link2,
-  Maximize2,
   Pencil,
   Plus,
   RefreshCw,
@@ -505,11 +503,7 @@ export function ProviderDetail({
                         <span className="min-w-0 truncate font-medium text-sm">
                           {model.label}
                         </span>
-                        <Badge
-                          variant="secondary"
-                        >
-                          {model.modelId}
-                        </Badge>
+                        <Badge variant="secondary">{model.modelId}</Badge>
                         {model.piBinding && (
                           <Badge variant="secondary">
                             <Link2 />

@@ -38,6 +38,9 @@ const runtimeSettingsInput = Type.Object(
     memoryMb: Type.Integer({ minimum: 128, maximum: 32_768 }),
     pidsLimit: Type.Integer({ minimum: 16, maximum: 4_096 }),
     maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
+    maxAttachmentMb: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 10_240 })
+    ),
   },
   { additionalProperties: false }
 )
@@ -136,6 +139,9 @@ const settingsTransferInput = Type.Object(
         memoryMb: Type.Integer({ minimum: 128, maximum: 32_768 }),
         pidsLimit: Type.Integer({ minimum: 16, maximum: 4_096 }),
         maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
+        maxAttachmentMb: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: 10_240 })
+        ),
         mainSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
         childSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
         initialPromptTemplate: Type.String({ maxLength: 100_000 }),
@@ -224,6 +230,7 @@ export function registerProviderRoutes(
       memoryMb: value.memoryMb,
       pidsLimit: value.pidsLimit,
       maxConcurrency: value.maxConcurrency,
+      maxAttachmentMb: value.maxAttachmentMb,
       ...promptTemplates,
       defaultMainSystemPromptTemplate: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       defaultChildSystemPromptTemplate: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
@@ -306,6 +313,7 @@ export function registerProviderRoutes(
         memoryMb: value.memoryMb,
         pidsLimit: value.pidsLimit,
         maxConcurrency: value.maxConcurrency,
+        maxAttachmentMb: value.maxAttachmentMb,
         ...promptTemplates,
       }
     })(),
@@ -340,6 +348,7 @@ export function registerProviderRoutes(
     const input = c.req.valid("json")
     const providerIds = new Set<string>()
     const modelIds = new Set<string>()
+    const providerModelIds = new Set<string>()
     const models = [] as Array<{
       id: string
       providerId: string
@@ -369,6 +378,11 @@ export function registerProviderRoutes(
           if (!modelId || !modelLabel) {
             throw new Error("Model ID and name are required")
           }
+          const providerModelKey = `${provider.id}\u0000${modelId}`
+          if (providerModelIds.has(providerModelKey)) {
+            throw new Error("Duplicate model ID for provider")
+          }
+          providerModelIds.add(providerModelKey)
           if (
             model.piBinding &&
             !builtinModelProfile(
@@ -448,6 +462,7 @@ export function registerProviderRoutes(
             memoryMb: input.settings.memoryMb,
             pidsLimit: input.settings.pidsLimit,
             maxConcurrency: input.settings.maxConcurrency,
+            maxAttachmentMb: input.settings.maxAttachmentMb ?? 512,
             mainSystemPromptTemplate: input.settings.mainSystemPromptTemplate,
             childSystemPromptTemplate: input.settings.childSystemPromptTemplate,
             initialPromptTemplate: input.settings.initialPromptTemplate,
@@ -497,6 +512,7 @@ export function registerProviderRoutes(
         memoryMb: input.memoryMb,
         pidsLimit: input.pidsLimit,
         maxConcurrency: input.maxConcurrency,
+        maxAttachmentMb: input.maxAttachmentMb ?? getSettings().maxAttachmentMb,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(settings.id, 1))
@@ -765,7 +781,25 @@ export function registerProviderRoutes(
           createdAt: now,
           updatedAt: now,
         }
-        db.insert(providerModels).values(model).run()
+        try {
+          db.insert(providerModels).values(model).run()
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message.includes("provider_models_provider_model_unique")
+          ) {
+            return c.json(
+              {
+                error: {
+                  code: "duplicate_model",
+                  message: "Model already exists",
+                },
+              },
+              409
+            )
+          }
+          throw error
+        }
         syncModels()
         return c.json(publicModel(model), 201)
       } catch (error) {

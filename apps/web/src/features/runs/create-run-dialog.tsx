@@ -35,6 +35,7 @@ import type {
   ThinkingLevel,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
+import { eventKeys } from "../events/shared"
 
 const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   off: "Off",
@@ -101,6 +102,12 @@ export function CreateRunDialog({
       await queryClient.invalidateQueries({
         queryKey: ["runs", "event", run.eventId],
       })
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: eventKeys.detail(run.eventId),
+        }),
+        queryClient.invalidateQueries({ queryKey: eventKeys.all }),
+      ])
       setOpen(false)
       onCreated?.()
       navigate(`/events/${run.eventId}/runs/${run.id}`)

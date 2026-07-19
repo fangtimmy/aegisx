@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `max_attachment_mb` integer DEFAULT 512 NOT NULL;

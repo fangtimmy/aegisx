@@ -27,7 +27,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -197,9 +197,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
       }}
       open={open}
     >
-      <DialogTrigger
-        render={<Button type="button" variant="outline" />}
-      >
+      <DialogTrigger render={<Button type="button" variant="outline" />}>
         <RefreshCw /> Import challenges
       </DialogTrigger>
       <DialogPopup>
@@ -363,7 +361,7 @@ function ConnectPlatformDialog({
   const [open, setOpen] = useState(false)
   const [type, setType] = useState<PlatformType>(platform?.type ?? "ctfd")
   const [baseUrl, setBaseUrl] = useState(platform?.baseUrl ?? "")
-  const [credential, setCredential] = useState("")
+  const [credential, setCredential] = useState(platform?.credential ?? "")
   const [remoteEventId, setRemoteEventId] = useState(
     platform?.remoteEventId ?? ""
   )
@@ -389,7 +387,7 @@ function ConnectPlatformDialog({
     onSuccess: async () => {
       await refreshEvent(queryClient, eventId)
       setOpen(false)
-      setCredential("")
+      setCredential(platform?.credential ?? "")
     },
   })
   const eventItems = Object.fromEntries(
@@ -406,7 +404,7 @@ function ConnectPlatformDialog({
           bind.reset()
           setType(platform?.type ?? "ctfd")
           setBaseUrl(platform?.baseUrl ?? "")
-          setCredential("")
+          setCredential(platform?.credential ?? "")
           setRemoteEventId(platform?.remoteEventId ?? "")
         }
       }}
@@ -488,21 +486,16 @@ function ConnectPlatformDialog({
                 {credentialLabels[type]}
               </FieldLabel>
               <Input
-                autoComplete="new-password"
+                autoComplete="off"
                 id="platform-credential"
                 onChange={(input) => {
                   setCredential(input.target.value)
                   discover.reset()
                 }}
                 required
-                type="password"
+                type="text"
                 value={credential}
               />
-              {platform && (
-                <FieldDescription>
-                  Enter the credential again to verify this update.
-                </FieldDescription>
-              )}
             </Field>
             {discover.data && type !== "ctfd" && (
               <Field>

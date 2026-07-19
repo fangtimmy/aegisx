@@ -70,9 +70,7 @@ function VariableMenu({
 }) {
   return (
     <Menu>
-      <MenuTrigger
-        render={<Button type="button" variant="outline" />}
-      >
+      <MenuTrigger render={<Button type="button" variant="outline" />}>
         <Braces /> Variables
       </MenuTrigger>
       <MenuPopup align="end" className="max-h-72">

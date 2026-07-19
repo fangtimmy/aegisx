@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs"
 import type { Api, Model, MutableModels } from "@earendil-works/pi-ai"
-import { and, count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
+import { createCatalogReader } from "./catalog"
 import { createDatabase } from "./db"
 import {
   attachments,
@@ -15,14 +16,13 @@ import {
   settings,
 } from "./db/schema"
 import { createModelService, parseModelMetadata } from "./models"
-import type { RemoteTargetInfo } from "./platform"
 import { registerPlatformRoutes } from "./platform-routes"
-import { createPlatformService } from "./platform-service"
+import { createPlatformService, PlatformActionError } from "./platform-service"
 import { resolvePromptTemplates } from "./prompt-templates"
 import { providerName, registerProviderRoutes } from "./provider-routes"
 import { redactSecrets } from "./redaction"
 import { createRunManager, RunActionError } from "./runs"
-import { createStorage, isSafeFilename } from "./storage"
+import { createStorage, isSafeFilename, StorageLimitError } from "./storage"
 import { sumUsage } from "./usage"
 import { validateJson } from "./validation"
 import {
@@ -102,7 +102,6 @@ export function createApp(options: {
 }) {
   const { db, sqlite } = createDatabase(options.dataDir)
   const storage = createStorage(options.dataDir)
-  const platformService = createPlatformService(db, storage)
   const modelService = createModelService(
     db,
     options.models,
@@ -170,6 +169,11 @@ export function createApp(options: {
     if (!value) throw new Error("Settings are unavailable")
     return value
   }
+  const platformService = createPlatformService(
+    db,
+    storage,
+    () => getSettings().maxAttachmentMb * 1024 * 1024
+  )
   syncModels()
   const initialSettings = getSettings()
   const environmentConcurrency = process.env.AEGISX_MAX_CONCURRENCY
@@ -195,97 +199,8 @@ export function createApp(options: {
   })
   const app = new Hono()
 
-  const listEvents = () =>
-    db
-      .select({
-        ...getTableColumns(events),
-        challengeCount: count(challenges.id),
-        solvedCount: sql<number>`coalesce(sum(case when ${challenges.remoteSolved} = 1 then 1 else 0 end), 0)`,
-        lastChallengeAt: max(challenges.updatedAt),
-      })
-      .from(events)
-      .leftJoin(challenges, eq(challenges.eventId, events.id))
-      .groupBy(events.id)
-      .orderBy(events.createdAt)
-      .all()
-      .map(({ lastChallengeAt, ...event }) => {
-        const runSummary = db
-          .select({
-            activeRunCount: sql<number>`coalesce(sum(case when ${runs.status} in ('running', 'paused') then 1 else 0 end), 0)`,
-            lastRunAt: max(runs.updatedAt),
-          })
-          .from(runs)
-          .innerJoin(challenges, eq(runs.challengeId, challenges.id))
-          .where(eq(challenges.eventId, event.id))
-          .get()
-        const lastActivityAt = [
-          lastChallengeAt,
-          runSummary?.lastRunAt,
-        ].reduce<string>(
-          (latest, value) => (value && value > latest ? value : latest),
-          event.updatedAt
-        )
-        return {
-          ...event,
-          challengeCount: Number(event.challengeCount),
-          solvedCount: Number(event.solvedCount),
-          activeRunCount: Number(runSummary?.activeRunCount ?? 0),
-          lastActivityAt,
-          platform: platformService.getPublic(event.id),
-        }
-      })
-
-  const getEvent = (eventId: string) =>
-    listEvents().find((event) => event.id === eventId)
-
-  const getChallenge = (challengeId: string) => {
-    const challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()
-    if (!challenge) return undefined
-    const challengeAttachments = db
-      .select({
-        id: attachments.id,
-        challengeId: attachments.challengeId,
-        originalName: attachments.originalName,
-        size: attachments.size,
-        sha256: attachments.sha256,
-        createdAt: attachments.createdAt,
-      })
-      .from(attachments)
-      .where(eq(attachments.challengeId, challengeId))
-      .all()
-      .map((attachment) => ({
-        ...attachment,
-        downloadUrl: `/api/attachments/${attachment.id}`,
-      }))
-    const runCount = db
-      .select({ value: count() })
-      .from(runs)
-      .where(eq(runs.challengeId, challengeId))
-      .get()?.value
-    const {
-      remoteSourceKey: _,
-      remoteTargetInfo,
-      ...publicChallenge
-    } = challenge
-    return {
-      ...publicChallenge,
-      remoteTargetCount: challenge.remoteTargetIgnored
-        ? 0
-        : challenge.remoteTargetCount,
-      targets: challenge.remoteTargetIgnored
-        ? []
-        : parseTargetInfo(remoteTargetInfo),
-      attachments: challengeAttachments,
-      runCount: Number(runCount ?? 0),
-      status: challenge.remoteSolved
-        ? ("solved" as const)
-        : ("not_started" as const),
-    }
-  }
+  const catalog = createCatalogReader(db, platformService)
+  const { getChallenge, getEvent, listChallengesForEvent, listEvents } = catalog
 
   app.onError((error, c) => {
     const secrets = [...providerSecrets.values()].flatMap((values) => [
@@ -357,13 +272,7 @@ export function createApp(options: {
         404
       )
     }
-    const eventChallenges = db
-      .select({ id: challenges.id })
-      .from(challenges)
-      .where(eq(challenges.eventId, event.id))
-      .all()
-      .map(({ id }) => getChallenge(id))
-      .filter((challenge) => challenge !== undefined)
+    const eventChallenges = listChallengesForEvent(event.id)
     return c.json({ event, challenges: eventChallenges })
   })
 
@@ -404,7 +313,7 @@ export function createApp(options: {
     return c.json(getEvent(eventId))
   })
 
-  app.delete("/api/events/:eventId", (c) => {
+  app.delete("/api/events/:eventId", async (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
       return c.json(
@@ -432,6 +341,16 @@ export function createApp(options: {
           },
         },
         409
+      )
+    }
+    try {
+      await platformService.assertNoActiveTargets(eventId)
+    } catch (error) {
+      if (!(error instanceof PlatformActionError)) throw error
+      const status = error.code === "platform_error" ? 502 : 409
+      return c.json(
+        { error: { code: error.code, message: error.message } },
+        status
       )
     }
     const path = storage.eventPath(eventId)
@@ -482,15 +401,7 @@ export function createApp(options: {
         updatedAt: now,
       }
       db.insert(challenges).values(challenge).run()
-      return c.json(
-        {
-          ...challenge,
-          attachments: [],
-          runCount: 0,
-          status: "not_started",
-        },
-        201
-      )
+      return c.json(getChallenge(challenge.id), 201)
     }
   )
 
@@ -540,7 +451,7 @@ export function createApp(options: {
         404
       )
     }
-    if (platformService.isBoundEvent(challenge.eventId)) {
+    if (challenge.remoteId && platformService.isBoundEvent(challenge.eventId)) {
       return c.json(
         {
           error: {
@@ -671,7 +582,7 @@ export function createApp(options: {
       run,
       agents,
       history: main ? runManager.history(main.id) : [],
-      stats: runManager.usage(run.id),
+      stats: sumUsage(agents.map((agent) => agent.usage)),
     })
   })
 
@@ -945,7 +856,22 @@ export function createApp(options: {
     }
     const id = crypto.randomUUID()
     const storageKey = `${challenge.eventId}/${challenge.id}/${id}`
-    const metadata = await storage.write(storageKey, c.req.raw.body)
+    let metadata: { size: number; sha256: string }
+    try {
+      metadata = await storage.write(
+        storageKey,
+        c.req.raw.body,
+        getSettings().maxAttachmentMb * 1024 * 1024
+      )
+    } catch (error) {
+      if (error instanceof StorageLimitError) {
+        return c.json(
+          { error: { code: "attachment_too_large", message: error.message } },
+          413
+        )
+      }
+      throw error
+    }
     const attachment = {
       id,
       challengeId: challenge.id,
@@ -1041,31 +967,4 @@ function workspaceFileError(
   if (!(error instanceof WorkspaceFileError)) throw error
   const status = error.code === "not_found" ? 404 : 400
   return c.json({ error: { code: error.code, message: error.message } }, status)
-}
-
-function parseTargetInfo(value: string): RemoteTargetInfo[] {
-  try {
-    const parsed = JSON.parse(value) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((target) =>
-      typeof target === "object" &&
-      target !== null &&
-      "name" in target &&
-      typeof target.name === "string" &&
-      "services" in target &&
-      Array.isArray(target.services)
-        ? [
-            {
-              name: target.name,
-              services: target.services.filter(
-                (service: unknown): service is string =>
-                  typeof service === "string"
-              ),
-            },
-          ]
-        : []
-    )
-  } catch {
-    return []
-  }
 }

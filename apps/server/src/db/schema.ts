@@ -130,9 +130,6 @@ export const submissions = sqliteTable(
     runId: text("run_id")
       .notNull()
       .references(() => runs.id, { onDelete: "cascade" }),
-    challengeId: text("challenge_id")
-      .notNull()
-      .references(() => challenges.id, { onDelete: "cascade" }),
     flag: text("flag").notNull(),
     status: text("status").notNull(),
     remoteId: text("remote_id"),
@@ -142,7 +139,7 @@ export const submissions = sqliteTable(
   },
   (table) => [
     index("submissions_run_id_idx").on(table.runId),
-    index("submissions_challenge_id_idx").on(table.challengeId),
+    uniqueIndex("submissions_run_flag_unique").on(table.runId, table.flag),
     check(
       "submissions_status_check",
       sql`${table.status} in ('pending', 'accepted', 'rejected', 'partial', 'already_solved', 'rate_limited', 'error')`
@@ -282,6 +279,7 @@ export const settings = sqliteTable(
     memoryMb: integer("memory_mb").notNull().default(512),
     pidsLimit: integer("pids_limit").notNull().default(128),
     maxConcurrency: integer("max_concurrency").notNull().default(2),
+    maxAttachmentMb: integer("max_attachment_mb").notNull().default(512),
     mainSystemPromptTemplate: text("system_prompt_template")
       .notNull()
       .default(""),
@@ -340,7 +338,7 @@ export const providerModels = sqliteTable(
   },
   (table) => [
     index("provider_models_provider_id_idx").on(table.providerId),
-    index("provider_models_provider_model_idx").on(
+    uniqueIndex("provider_models_provider_model_unique").on(
       table.providerId,
       table.modelId
     ),
