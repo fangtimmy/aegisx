@@ -2,7 +2,11 @@ import { copyFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, extname, join, relative } from "node:path"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
-import type { Usage } from "@earendil-works/pi-ai"
+import {
+  clampThinkingLevel,
+  type ModelThinkingLevel,
+  type Usage,
+} from "@earendil-works/pi-ai"
 import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm"
 import { Type } from "typebox"
 import {
@@ -77,6 +81,7 @@ type ModelConfig = {
   modelLabel?: string
   baseUrl?: string
   costKnown?: boolean
+  thinkingLevel: ModelThinkingLevel
 }
 type FrozenPromptConfig = PromptTemplates & {
   context?: PromptTemplateContext
@@ -91,6 +96,7 @@ export type RunPublic = {
   provider: string
   modelId: string
   modelName: string
+  thinkingLevel: ModelThinkingLevel
   environment: "local" | "container"
   targetSupported: boolean
   image?: string | null
@@ -126,7 +132,11 @@ export type AgentRuntimeSnapshot = {
   capturedAt: string
   systemPrompt: string
   cwd: string
-  model: { provider: string; modelId: string }
+  model: {
+    provider: string
+    modelId: string
+    thinkingLevel: ModelThinkingLevel
+  }
   tools: Array<{
     name: string
     description: string
@@ -271,6 +281,7 @@ export function createRunManager(options: Options) {
       provider: config.providerLabel ?? config.provider ?? "",
       modelId: config.modelId ?? "",
       modelName: config.modelLabel ?? config.modelId ?? "",
+      thinkingLevel: config.thinkingLevel,
       environment: environment.type,
       targetSupported:
         row.targetSupported && row.targetAvailable && !row.targetIgnored,
@@ -805,6 +816,7 @@ export function createRunManager(options: Options) {
       environment.type === "container" ? "/workspace" : "$WORKSPACE"
     if (!challenge) throw new RunStartError("Challenge is unavailable")
     const modelConfig = parseModelConfig(run.modelConfig)
+    const thinkingLevel = clampThinkingLevel(model, modelConfig.thinkingLevel)
     const promptConfig = parsePromptConfig(run.promptConfig)
     const agentContext = {
       name: agent.name,
@@ -836,6 +848,7 @@ export function createRunManager(options: Options) {
       model: {
         provider: modelConfig.providerLabel ?? provider,
         modelId: model.id,
+        thinkingLevel,
       },
       tools: tools.map((tool) => ({
         name: tool.name,
@@ -862,6 +875,7 @@ export function createRunManager(options: Options) {
       models: options.modelService.models,
       tools,
       secrets,
+      thinkingLevel,
       canRunTool: () =>
         getStored(runId)?.status === "running" &&
         getStoredAgent(agentId)?.status === "running",
@@ -1198,6 +1212,16 @@ export function createRunManager(options: Options) {
       .get()
     if (!challenge) throw new RunActionError("not_found", "Challenge not found")
     requireCapacity()
+    const configuredModel = options.modelService.find(
+      modelConfig.provider,
+      modelConfig.modelId
+    )
+    const frozenModelConfig = {
+      ...modelConfig,
+      thinkingLevel: configuredModel
+        ? clampThinkingLevel(configuredModel, modelConfig.thinkingLevel)
+        : "off",
+    }
 
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
@@ -1210,7 +1234,7 @@ export function createRunManager(options: Options) {
       challenge,
       challengeAttachments,
       environment,
-      modelConfig,
+      frozenModelConfig,
       {
         name: "Main agent",
         task: null,
@@ -1231,7 +1255,7 @@ export function createRunManager(options: Options) {
           ...promptTemplates,
           context: promptContext,
         }),
-        modelConfig: JSON.stringify(modelConfig),
+        modelConfig: JSON.stringify(frozenModelConfig),
         environmentConfig: JSON.stringify(environment),
         workspacePath: relative(dataDir, workspacePath),
         createdAt: now,
@@ -1254,7 +1278,7 @@ export function createRunManager(options: Options) {
       .run()
 
     try {
-      const model = await resolveRequestedModel(modelConfig)
+      const model = await resolveRequestedModel(frozenModelConfig)
       const agent = getStoredAgent(id) as typeof runAgents.$inferSelect
       const run = getStored(id) as typeof runs.$inferSelect
       const runtime = await attachSession(
@@ -1263,7 +1287,7 @@ export function createRunManager(options: Options) {
         workspacePath,
         model,
         environment,
-        modelConfig.provider
+        frozenModelConfig.provider
       )
       runtime.dispatch("user", prompt)
     } catch (error) {
@@ -1590,9 +1614,18 @@ function parseModelConfig(value: string): ModelConfig {
         ? { baseUrl: parsed.baseUrl }
         : {}),
       ...(parsed.costKnown === false ? { costKnown: false } : {}),
+      thinkingLevel:
+        parsed.thinkingLevel === "minimal" ||
+        parsed.thinkingLevel === "low" ||
+        parsed.thinkingLevel === "medium" ||
+        parsed.thinkingLevel === "high" ||
+        parsed.thinkingLevel === "xhigh" ||
+        parsed.thinkingLevel === "max"
+          ? parsed.thinkingLevel
+          : "off",
     }
   } catch {
-    return { provider: "", modelId: "" }
+    return { provider: "", modelId: "", thinkingLevel: "off" }
   }
 }
 
@@ -1613,7 +1646,19 @@ function parseRuntimeSnapshot(
     ) {
       return null
     }
-    return parsed as AgentRuntimeSnapshot
+    const thinkingLevel =
+      parsed.model.thinkingLevel === "minimal" ||
+      parsed.model.thinkingLevel === "low" ||
+      parsed.model.thinkingLevel === "medium" ||
+      parsed.model.thinkingLevel === "high" ||
+      parsed.model.thinkingLevel === "xhigh" ||
+      parsed.model.thinkingLevel === "max"
+        ? parsed.model.thinkingLevel
+        : "off"
+    return {
+      ...parsed,
+      model: { ...parsed.model, thinkingLevel },
+    } as AgentRuntimeSnapshot
   } catch {
     return null
   }

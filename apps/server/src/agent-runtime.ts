@@ -5,7 +5,13 @@ import {
   type AgentTool,
   type AgentToolResult,
 } from "@earendil-works/pi-agent-core"
-import type { Api, Message, Model, Models } from "@earendil-works/pi-ai"
+import type {
+  Api,
+  Message,
+  Model,
+  Models,
+  ModelThinkingLevel,
+} from "@earendil-works/pi-ai"
 import { and, asc, eq, isNull, max } from "drizzle-orm"
 import type { createDatabase } from "./db"
 import {
@@ -48,6 +54,7 @@ type RuntimeOptions = {
   models: Models
   tools: AgentTool[]
   secrets: Iterable<string>
+  thinkingLevel: ModelThinkingLevel
   canRunTool?(): boolean
   onEvent(event: AgentEvent): void
   onSettled(outcome: RuntimeOutcome): void | Promise<void>
@@ -258,7 +265,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
       model: options.model,
       tools: options.tools,
       messages,
-      thinkingLevel: "off",
+      thinkingLevel: options.thinkingLevel,
     },
     sessionId: options.agentId,
     streamFn: (model, context, streamOptions) =>

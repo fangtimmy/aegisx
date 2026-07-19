@@ -32,8 +32,19 @@ import type {
   ProviderConnection,
   RunPublic,
   SettingsPublic,
+  ThinkingLevel,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
+
+const thinkingLevelLabels: Record<ThinkingLevel, string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Maximum",
+}
 
 export function CreateRunDialog({
   challenges,
@@ -55,6 +66,7 @@ export function CreateRunDialog({
   const [open, setOpen] = useState(false)
   const [environment, setEnvironment] = useState<"local" | "container">("local")
   const [modelId, setModelId] = useState("")
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("off")
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const settings = useQuery({
@@ -73,15 +85,17 @@ export function CreateRunDialog({
       modelId,
       environment,
       image,
+      thinkingLevel,
     }: {
       challengeId: string
       modelId: string
       environment: "local" | "container"
       image?: string
+      thinkingLevel: ThinkingLevel
     }) =>
       apiRequest<RunPublic>(
         `/challenges/${challengeId}/runs`,
-        jsonRequest("POST", { modelId, environment, image })
+        jsonRequest("POST", { modelId, environment, image, thinkingLevel })
       ),
     onSuccess: async (run) => {
       await queryClient.invalidateQueries({
@@ -104,6 +118,8 @@ export function CreateRunDialog({
           .map((model) => ({ ...model, provider }))
       : []
   )
+  const selectedModel = availableModels.find((model) => model.id === modelId)
+  const supportedThinkingLevels = selectedModel?.thinkingLevels ?? ["off"]
 
   useEffect(() => {
     if (!open || !settings.data || modelId) return
@@ -113,6 +129,12 @@ export function CreateRunDialog({
     setModelId(defaultModel?.id ?? availableModels[0]?.id ?? "")
   }, [availableModels, modelId, open, settings.data])
 
+  useEffect(() => {
+    if (!supportedThinkingLevels.includes(thinkingLevel)) {
+      setThinkingLevel(supportedThinkingLevels[0] ?? "off")
+    }
+  }, [supportedThinkingLevels, thinkingLevel])
+
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
@@ -120,6 +142,7 @@ export function CreateRunDialog({
       challengeId: challenge?.id ?? String(data.get("challengeId")),
       modelId,
       environment,
+      thinkingLevel,
       image:
         environment === "container"
           ? String(data.get("image")).trim()
@@ -137,6 +160,9 @@ export function CreateRunDialog({
       `${model.provider.label} / ${model.label}`,
     ])
   )
+  const thinkingLevelItems = Object.fromEntries(
+    supportedThinkingLevels.map((level) => [level, thinkingLevelLabels[level]])
+  )
   return (
     <Dialog
       open={open}
@@ -146,6 +172,7 @@ export function CreateRunDialog({
           mutation.reset()
           if (settings.data) setEnvironment(settings.data.environment)
           setModelId("")
+          setThinkingLevel("off")
         }
       }}
     >
@@ -270,6 +297,28 @@ export function CreateRunDialog({
                         </SelectGroup>
                       )
                     })}
+                  </SelectPopup>
+                </Select>
+              </Field>
+              <Field name="thinkingLevel">
+                <FieldLabel>Reasoning</FieldLabel>
+                <Select
+                  items={thinkingLevelItems}
+                  name="thinkingLevel"
+                  onValueChange={(value) =>
+                    setThinkingLevel(value as ThinkingLevel)
+                  }
+                  value={thinkingLevel}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {supportedThinkingLevels.map((level) => (
+                      <SelectItem key={level} value={level}>
+                        {thinkingLevelLabels[level]}
+                      </SelectItem>
+                    ))}
                   </SelectPopup>
                 </Select>
               </Field>

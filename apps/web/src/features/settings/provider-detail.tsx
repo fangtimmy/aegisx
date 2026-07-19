@@ -1,12 +1,14 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   CircleAlert,
   Eye,
   EyeOff,
+  Link2,
   Pencil,
   Plus,
   RefreshCw,
   Trash2,
+  Unlink,
 } from "lucide-react"
 import { useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -35,6 +37,15 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { CheckboxGroup } from "@/components/ui/checkbox-group"
 import {
+  Combobox,
+  ComboboxCollection,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+} from "@/components/ui/combobox"
+import {
   Dialog,
   DialogClose,
   DialogDescription,
@@ -59,10 +70,13 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Label } from "@/components/ui/label"
+import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
 import {
   apiRequest,
   jsonRequest,
+  type PiModelProfile,
   type ProviderConnection,
   type ProviderModel,
 } from "@/lib/api"
@@ -95,6 +109,12 @@ export function ProviderDetail({
   const [modelLabel, setModelLabel] = useState("")
   const [editingModel, setEditingModel] = useState<ProviderModel | null>(null)
   const [editingLabel, setEditingLabel] = useState("")
+  const [editingMetadata, setEditingMetadata] = useState("{}")
+  const [metadataError, setMetadataError] = useState<string | null>(null)
+  const [bindingModel, setBindingModel] = useState<ProviderModel | null>(null)
+  const [selectedBuiltinProvider, setSelectedBuiltinProvider] = useState("")
+  const [selectedBuiltinModel, setSelectedBuiltinModel] =
+    useState<PiModelProfile | null>(null)
   const save = useMutation({
     mutationFn: (input: ProviderUpdate) =>
       apiRequest<ProviderConnection>(
@@ -146,14 +166,60 @@ export function ProviderDetail({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   })
   const editModel = useMutation({
-    mutationFn: ({ id, label }: { id: string; label: string }) =>
+    mutationFn: ({
+      id,
+      label,
+      metadata,
+    }: {
+      id: string
+      label: string
+      metadata: ProviderModel["metadata"]
+    }) =>
       apiRequest<ProviderModel>(
         `/provider-models/${id}`,
-        jsonRequest("PATCH", { label })
+        jsonRequest("PATCH", { label, metadata })
       ),
     onSuccess: () => {
       setEditingModel(null)
       setEditingLabel("")
+      setEditingMetadata("{}")
+      queryClient.invalidateQueries({ queryKey: ["providers"] })
+    },
+  })
+  const builtins = useQuery({
+    enabled: Boolean(bindingModel),
+    queryKey: ["providers", provider.id, "builtins"],
+    queryFn: () =>
+      apiRequest<{ items: PiModelProfile[] }>(
+        `/providers/${provider.id}/models/builtins`
+      ),
+  })
+  const bindModel = useMutation({
+    mutationFn: ({ id, profile }: { id: string; profile: PiModelProfile }) =>
+      apiRequest<ProviderModel>(
+        `/provider-models/${id}/binding`,
+        jsonRequest("POST", {
+          providerId: profile.providerId,
+          modelId: profile.modelId,
+        })
+      ),
+    onSuccess: (model) => {
+      setEditingModel(model)
+      setEditingMetadata(JSON.stringify(model.metadata, null, 2))
+      setBindingModel(null)
+      setSelectedBuiltinProvider("")
+      setSelectedBuiltinModel(null)
+      queryClient.invalidateQueries({ queryKey: ["providers"] })
+    },
+  })
+  const unbindModel = useMutation({
+    mutationFn: (id: string) =>
+      apiRequest<ProviderModel>(`/provider-models/${id}/binding`, {
+        method: "DELETE",
+      }),
+    onSuccess: (model) => {
+      setEditingModel(model)
+      setEditingMetadata(JSON.stringify(model.metadata, null, 2))
       queryClient.invalidateQueries({ queryKey: ["providers"] })
     },
   })
@@ -165,6 +231,14 @@ export function ProviderDetail({
       queryClient.invalidateQueries({ queryKey: ["settings"] })
     },
   })
+  const builtinProfiles = builtins.data?.items ?? []
+  const builtinProviderIds = [
+    ...new Set(builtinProfiles.map((model) => model.providerId)),
+  ]
+  const filteredBuiltinModels = builtinProfiles.filter(
+    (model) => model.providerId === selectedBuiltinProvider
+  )
+  const selectedProfile = selectedBuiltinModel
 
   return (
     <div className="flex flex-col gap-4">
@@ -317,9 +391,7 @@ export function ProviderDetail({
           <CardFrameTitle>
             <span className="flex items-center gap-2">
               Models
-              <Badge variant="secondary">
-                {provider.models.length}
-              </Badge>
+              <Badge variant="secondary">{provider.models.length}</Badge>
             </span>
           </CardFrameTitle>
           <CardFrameAction className="flex gap-2">
@@ -452,6 +524,10 @@ export function ProviderDetail({
                         editModel.reset()
                         setEditingModel(model)
                         setEditingLabel(model.label)
+                        setEditingMetadata(
+                          JSON.stringify(model.metadata, null, 2)
+                        )
+                        setMetadataError(null)
                       }}
                       size="icon"
                       title="Edit model"
@@ -530,6 +606,8 @@ export function ProviderDetail({
           if (!open) {
             setEditingModel(null)
             setEditingLabel("")
+            setEditingMetadata("{}")
+            setMetadataError(null)
           }
         }}
         open={editingModel !== null}
@@ -546,9 +624,25 @@ export function ProviderDetail({
             onSubmit={(event) => {
               event.preventDefault()
               if (editingModel) {
+                let metadata: ProviderModel["metadata"]
+                try {
+                  const parsed = JSON.parse(editingMetadata) as unknown
+                  if (
+                    !parsed ||
+                    typeof parsed !== "object" ||
+                    Array.isArray(parsed)
+                  ) {
+                    throw new Error()
+                  }
+                  metadata = parsed as ProviderModel["metadata"]
+                } catch {
+                  setMetadataError("Enter a JSON object")
+                  return
+                }
                 editModel.mutate({
                   id: editingModel.id,
                   label: editingLabel.trim(),
+                  metadata,
                 })
               }
             }}
@@ -576,6 +670,63 @@ export function ProviderDetail({
                   value={editingLabel}
                 />
               </Field>
+              <Field>
+                <FieldLabel htmlFor="editing-provider-model-metadata">
+                  {editingModel?.piBinding
+                    ? "Metadata JSON (managed by Pi binding)"
+                    : "Metadata JSON"}
+                </FieldLabel>
+                <Textarea
+                  className="font-mono text-xs"
+                  disabled={Boolean(editingModel?.piBinding)}
+                  id="editing-provider-model-metadata"
+                  onChange={(event) => {
+                    setEditingMetadata(event.target.value)
+                    setMetadataError(null)
+                  }}
+                  rows={14}
+                  value={editingMetadata}
+                />
+              </Field>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium text-sm">Pi built-in model</p>
+                  <p className="truncate font-mono text-muted-foreground text-xs">
+                    {editingModel?.piBinding
+                      ? `${editingModel.piBinding.providerId} / ${editingModel.piBinding.modelId}`
+                      : "Not bound"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    onClick={() => {
+                      setBindingModel(editingModel ?? null)
+                      setSelectedBuiltinProvider("")
+                      setSelectedBuiltinModel(null)
+                    }}
+                    type="button"
+                    variant="outline"
+                  >
+                    <Link2 /> {editingModel?.piBinding ? "Change" : "Bind"}
+                  </Button>
+                  {editingModel?.piBinding && (
+                    <Button
+                      loading={unbindModel.isPending}
+                      onClick={() => unbindModel.mutate(editingModel.id)}
+                      type="button"
+                      variant="outline"
+                    >
+                      <Unlink /> Unbind
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {metadataError && (
+                <Alert variant="error">
+                  <CircleAlert />
+                  <AlertDescription>{metadataError}</AlertDescription>
+                </Alert>
+              )}
               {editModel.error && (
                 <Alert variant="error">
                   <CircleAlert />
@@ -592,6 +743,130 @@ export function ProviderDetail({
               </Button>
             </DialogFooter>
           </form>
+        </DialogPopup>
+      </Dialog>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setBindingModel(null)
+            setSelectedBuiltinProvider("")
+            setSelectedBuiltinModel(null)
+          }
+        }}
+        open={bindingModel !== null}
+      >
+        <DialogPopup className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Bind Pi built-in model</DialogTitle>
+            <DialogDescription>
+              Apply a Pi profile to <code>{bindingModel?.modelId}</code>. This
+              replaces its metadata but keeps its configured model ID.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="grid gap-4">
+            {builtins.isPending ? (
+              <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                <Spinner aria-hidden="true" /> Loading Pi models...
+              </div>
+            ) : builtins.error ? (
+              <Alert variant="error">
+                <CircleAlert />
+                <AlertDescription>{builtins.error.message}</AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="pi-provider-binding">
+                    Pi provider
+                  </FieldLabel>
+                  <Combobox<string>
+                    items={builtinProviderIds}
+                    onValueChange={(value) => {
+                      setSelectedBuiltinProvider(value ?? "")
+                      setSelectedBuiltinModel(null)
+                    }}
+                    value={selectedBuiltinProvider || null}
+                  >
+                    <ComboboxInput
+                      id="pi-provider-binding"
+                      placeholder="Search Pi providers"
+                    />
+                    <ComboboxPopup>
+                      <ComboboxList>
+                        <ComboboxCollection>
+                          {(providerId) => (
+                            <ComboboxItem key={providerId} value={providerId}>
+                              {providerId}
+                            </ComboboxItem>
+                          )}
+                        </ComboboxCollection>
+                        <ComboboxEmpty>No providers found</ComboboxEmpty>
+                      </ComboboxList>
+                    </ComboboxPopup>
+                  </Combobox>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="pi-model-binding">Pi model</FieldLabel>
+                  <Combobox<PiModelProfile>
+                    disabled={!selectedBuiltinProvider}
+                    itemToStringLabel={(model) => model.name}
+                    itemToStringValue={(model) => model.modelId}
+                    items={filteredBuiltinModels}
+                    onValueChange={setSelectedBuiltinModel}
+                    value={selectedBuiltinModel}
+                  >
+                    <ComboboxInput
+                      id="pi-model-binding"
+                      placeholder="Search Pi models"
+                    />
+                    <ComboboxPopup>
+                      <ComboboxList>
+                        <ComboboxCollection>
+                          {(model: PiModelProfile) => (
+                            <ComboboxItem key={model.modelId} value={model}>
+                              <span className="block truncate">
+                                {model.name}
+                              </span>
+                              <span className="block truncate font-mono text-muted-foreground text-xs">
+                                {model.modelId}
+                              </span>
+                            </ComboboxItem>
+                          )}
+                        </ComboboxCollection>
+                        <ComboboxEmpty>No models found</ComboboxEmpty>
+                      </ComboboxList>
+                    </ComboboxPopup>
+                  </Combobox>
+                </Field>
+              </>
+            )}
+            {bindModel.error && (
+              <Alert variant="error">
+                <CircleAlert />
+                <AlertDescription>{bindModel.error.message}</AlertDescription>
+              </Alert>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" />}>
+              Cancel
+            </DialogClose>
+            <Button
+              disabled={!bindingModel || !selectedProfile}
+              loading={bindModel.isPending}
+              onClick={() => {
+                if (bindingModel && selectedProfile) {
+                  bindModel.mutate({
+                    id: bindingModel.id,
+                    profile: selectedProfile,
+                  })
+                }
+              }}
+              type="button"
+            >
+              <Link2 /> Bind model
+            </Button>
+          </DialogFooter>
         </DialogPopup>
       </Dialog>
       <Dialog

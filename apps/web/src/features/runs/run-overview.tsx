@@ -82,6 +82,10 @@ export function RunOverview({
           </dd>
         </div>
         <div>
+          <dt className="text-muted-foreground text-xs">Reasoning</dt>
+          <dd className="mt-1 capitalize">{run.thinkingLevel}</dd>
+        </div>
+        <div>
           <dt className="text-muted-foreground text-xs">Environment</dt>
           <dd className="mt-1 capitalize">{run.environment}</dd>
         </div>

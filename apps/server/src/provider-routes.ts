@@ -4,6 +4,14 @@ import { Type } from "typebox"
 import type { createDatabase } from "./db"
 import { providerConnections, providerModels, settings } from "./db/schema"
 import {
+  builtinModelProfile,
+  builtinModelProfiles,
+  normalizeModelMetadata,
+  parseModelMetadata,
+  providerApi,
+  supportedThinkingLevels,
+} from "./models"
+import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
@@ -80,6 +88,7 @@ const modelInput = Type.Object(
   {
     modelId: Type.String({ minLength: 1, maxLength: 200 }),
     label: Type.String({ minLength: 1, maxLength: 200 }),
+    metadata: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false }
 )
@@ -89,15 +98,24 @@ const modelUpdateInput = Type.Partial(
     {
       label: Type.String({ minLength: 1, maxLength: 200 }),
       enabled: Type.Boolean(),
+      metadata: Type.Unknown(),
     },
     { additionalProperties: false }
   ),
   { additionalProperties: false }
 )
 
+const bindingInput = Type.Object(
+  {
+    providerId: Type.String({ minLength: 1, maxLength: 200 }),
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+  },
+  { additionalProperties: false }
+)
+
 const settingsTransferInput = Type.Object(
   {
-    version: Type.Literal(1),
+    version: Type.Union([Type.Literal(1), Type.Literal(2)]),
     settings: Type.Object(
       {
         defaultModelId: Type.Union([
@@ -139,6 +157,18 @@ const settingsTransferInput = Type.Object(
                 modelId: Type.String({ minLength: 1, maxLength: 200 }),
                 label: Type.String({ minLength: 1, maxLength: 200 }),
                 enabled: Type.Boolean(),
+                metadata: Type.Optional(Type.Unknown()),
+                piBinding: Type.Optional(
+                  Type.Union([
+                    Type.Object({
+                      providerId: Type.String({ minLength: 1, maxLength: 200 }),
+                      modelId: Type.String({ minLength: 1, maxLength: 200 }),
+                    }),
+                    Type.Null(),
+                  ])
+                ),
+                reasoning: Type.Optional(Type.Boolean()),
+                thinkingLevelMap: Type.Optional(Type.Unknown()),
               },
               { additionalProperties: false }
             )
@@ -180,6 +210,8 @@ export function registerProviderRoutes(
       .from(providerConnections)
       .where(eq(providerConnections.id, providerId))
       .get()
+  const getModel = (modelId: string) =>
+    db.select().from(providerModels).where(eq(providerModels.id, modelId)).get()
   const publicSettings = () => {
     const value = getSettings()
     const promptTemplates = resolvePromptTemplates(value)
@@ -229,15 +261,39 @@ export function registerProviderRoutes(
     previewPrompt("childSystemPrompt", input.childSystemPromptTemplate)
     previewPrompt("initialPrompt", input.initialPromptTemplate)
   }
+  const publicModel = (model: typeof providerModels.$inferSelect) => {
+    const { metadata, piProviderId, piModelId, ...value } = model
+    const parsedMetadata = parseModelMetadata(metadata)
+    return {
+      ...value,
+      metadata: parsedMetadata,
+      piBinding:
+        piProviderId && piModelId
+          ? { providerId: piProviderId, modelId: piModelId }
+          : null,
+      thinkingLevels: supportedThinkingLevels(parsedMetadata),
+    }
+  }
   const publicProvider = (
     provider: typeof providerConnections.$inferSelect
   ) => ({
     ...provider,
-    models: listProviderModels(provider.id),
+    models: listProviderModels(provider.id).map(publicModel),
   })
+  const transferModel = (model: typeof providerModels.$inferSelect) => {
+    const value = publicModel(model)
+    return {
+      id: value.id,
+      modelId: value.modelId,
+      label: value.label,
+      enabled: value.enabled,
+      metadata: value.metadata,
+      piBinding: value.piBinding,
+    }
+  }
 
   const transferData = () => ({
-    version: 1 as const,
+    version: 2 as const,
     settings: (() => {
       const value = getSettings()
       const promptTemplates = resolvePromptTemplates(value)
@@ -263,12 +319,7 @@ export function registerProviderRoutes(
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         enabled: provider.enabled,
-        models: listProviderModels(provider.id).map((model) => ({
-          id: model.id,
-          modelId: model.modelId,
-          label: model.label,
-          enabled: model.enabled,
-        })),
+        models: listProviderModels(provider.id).map(transferModel),
       })),
   })
 
@@ -294,6 +345,9 @@ export function registerProviderRoutes(
       modelId: string
       label: string
       enabled: boolean
+      metadata: string
+      piProviderId: string | null
+      piModelId: string | null
       createdAt: string
       updatedAt: string
     }>
@@ -314,12 +368,32 @@ export function registerProviderRoutes(
           if (!modelId || !modelLabel) {
             throw new Error("Model ID and name are required")
           }
+          if (
+            model.piBinding &&
+            !builtinModelProfile(
+              model.piBinding.providerId,
+              model.piBinding.modelId,
+              providerApi(provider.type)
+            )
+          ) {
+            throw new Error("Pi model binding is unavailable for this provider")
+          }
           models.push({
             id: model.id,
             providerId: provider.id,
             modelId,
             label: modelLabel,
             enabled: model.enabled,
+            metadata: JSON.stringify(
+              normalizeModelMetadata(
+                model.metadata ?? {
+                  reasoning: model.reasoning ?? false,
+                  thinkingLevelMap: model.thinkingLevelMap ?? {},
+                }
+              )
+            ),
+            piProviderId: model.piBinding?.providerId ?? null,
+            piModelId: model.piBinding?.modelId ?? null,
             createdAt: "",
             updatedAt: "",
           })
@@ -494,6 +568,23 @@ export function registerProviderRoutes(
     })
   )
 
+  app.get("/api/providers/:providerId/models/builtins", (c) => {
+    const provider = getProvider(c.req.param("providerId"))
+    if (!provider) {
+      return c.json(
+        { error: { code: "not_found", message: "Provider not found" } },
+        404
+      )
+    }
+    return c.json({
+      items: builtinModelProfiles(providerApi(provider.type)).map((model) => ({
+        providerId: model.providerId,
+        modelId: model.modelId,
+        name: model.name,
+      })),
+    })
+  })
+
   app.post("/api/providers", validateJson(providerInput), (c) => {
     const input = c.req.valid("json")
     try {
@@ -630,43 +721,66 @@ export function registerProviderRoutes(
         )
       }
       const input = c.req.valid("json")
-      const modelId = input.modelId.trim()
-      const label = input.label.trim()
-      if (!modelId || !label) {
+      try {
+        const modelId = input.modelId.trim()
+        const label = input.label.trim()
+        if (!modelId || !label) {
+          return c.json(
+            {
+              error: {
+                code: "invalid_model",
+                message: "Model ID and name are required",
+              },
+            },
+            400
+          )
+        }
+        const duplicate = listProviderModels(provider.id).find(
+          (model) => model.modelId === modelId
+        )
+        if (duplicate) {
+          return c.json(
+            {
+              error: {
+                code: "duplicate_model",
+                message: "Model already exists",
+              },
+            },
+            409
+          )
+        }
+        const now = new Date().toISOString()
+        const model = {
+          id: crypto.randomUUID(),
+          providerId: provider.id,
+          modelId,
+          label,
+          enabled: true,
+          metadata: JSON.stringify(
+            normalizeModelMetadata(input.metadata ?? {})
+          ),
+          piProviderId: null,
+          piModelId: null,
+          createdAt: now,
+          updatedAt: now,
+        }
+        db.insert(providerModels).values(model).run()
+        syncModels()
+        return c.json(publicModel(model), 201)
+      } catch (error) {
         return c.json(
           {
             error: {
-              code: "invalid_model",
-              message: "Model ID and name are required",
+              code: "invalid_model_metadata",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Invalid model metadata",
             },
           },
           400
         )
       }
-      const duplicate = listProviderModels(provider.id).find(
-        (model) => model.modelId === modelId
-      )
-      if (duplicate) {
-        return c.json(
-          {
-            error: { code: "duplicate_model", message: "Model already exists" },
-          },
-          409
-        )
-      }
-      const now = new Date().toISOString()
-      const model = {
-        id: crypto.randomUUID(),
-        providerId: provider.id,
-        modelId,
-        label,
-        enabled: true,
-        createdAt: now,
-        updatedAt: now,
-      }
-      db.insert(providerModels).values(model).run()
-      syncModels()
-      return c.json(model, 201)
     }
   )
 
@@ -686,18 +800,85 @@ export function registerProviderRoutes(
         )
       }
       const input = c.req.valid("json")
-      const label = input.label === undefined ? model.label : input.label.trim()
-      if (!label) {
+      try {
+        const label =
+          input.label === undefined ? model.label : input.label.trim()
+        if (!label) {
+          return c.json(
+            {
+              error: {
+                code: "invalid_model",
+                message: "Model name is required",
+              },
+            },
+            400
+          )
+        }
+        const next = {
+          label,
+          enabled: input.enabled ?? model.enabled,
+          metadata:
+            input.metadata === undefined
+              ? model.metadata
+              : JSON.stringify(normalizeModelMetadata(input.metadata)),
+          updatedAt: new Date().toISOString(),
+        }
+        db.update(providerModels)
+          .set(next)
+          .where(eq(providerModels.id, model.id))
+          .run()
+        syncModels()
+        return c.json(publicModel({ ...model, ...next }))
+      } catch (error) {
         return c.json(
           {
-            error: { code: "invalid_model", message: "Model name is required" },
+            error: {
+              code: "invalid_model_metadata",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Invalid model metadata",
+            },
+          },
+          400
+        )
+      }
+    }
+  )
+
+  app.post(
+    "/api/provider-models/:modelId/binding",
+    validateJson(bindingInput),
+    (c) => {
+      const model = getModel(c.req.param("modelId"))
+      const provider = model ? getProvider(model.providerId) : undefined
+      if (!model || !provider) {
+        return c.json(
+          { error: { code: "not_found", message: "Model not found" } },
+          404
+        )
+      }
+      const binding = c.req.valid("json")
+      const profile = builtinModelProfile(
+        binding.providerId,
+        binding.modelId,
+        providerApi(provider.type)
+      )
+      if (!profile) {
+        return c.json(
+          {
+            error: {
+              code: "invalid_pi_model",
+              message: "Pi model is unavailable for this provider protocol",
+            },
           },
           400
         )
       }
       const next = {
-        label,
-        enabled: input.enabled ?? model.enabled,
+        metadata: JSON.stringify(profile.metadata),
+        piProviderId: profile.providerId,
+        piModelId: profile.modelId,
         updatedAt: new Date().toISOString(),
       }
       db.update(providerModels)
@@ -705,9 +886,30 @@ export function registerProviderRoutes(
         .where(eq(providerModels.id, model.id))
         .run()
       syncModels()
-      return c.json({ ...model, ...next })
+      return c.json(publicModel({ ...model, ...next }))
     }
   )
+
+  app.delete("/api/provider-models/:modelId/binding", (c) => {
+    const model = getModel(c.req.param("modelId"))
+    if (!model) {
+      return c.json(
+        { error: { code: "not_found", message: "Model not found" } },
+        404
+      )
+    }
+    const next = {
+      piProviderId: null,
+      piModelId: null,
+      updatedAt: new Date().toISOString(),
+    }
+    db.update(providerModels)
+      .set(next)
+      .where(eq(providerModels.id, model.id))
+      .run()
+    syncModels()
+    return c.json(publicModel({ ...model, ...next }))
+  })
 
   app.delete("/api/provider-models/:modelId", (c) => {
     const model = db

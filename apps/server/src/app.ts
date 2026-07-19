@@ -14,7 +14,7 @@ import {
   runs,
   settings,
 } from "./db/schema"
-import { createModelService } from "./models"
+import { createModelService, parseModelMetadata } from "./models"
 import type { RemoteTargetInfo } from "./platform"
 import { registerPlatformRoutes } from "./platform-routes"
 import { createPlatformService } from "./platform-service"
@@ -61,6 +61,17 @@ const runInput = Type.Object(
         maxLength: 300,
         pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
       })
+    ),
+    thinkingLevel: Type.Optional(
+      Type.Union([
+        Type.Literal("off"),
+        Type.Literal("minimal"),
+        Type.Literal("low"),
+        Type.Literal("medium"),
+        Type.Literal("high"),
+        Type.Literal("xhigh"),
+        Type.Literal("max"),
+      ])
     ),
   },
   { additionalProperties: false }
@@ -633,7 +644,8 @@ export function createApp(options: {
               providerLabel: selected.provider.label,
               modelId: selected.model.modelId,
               modelLabel: selected.model.label,
-              costKnown: false,
+              costKnown: parseModelMetadata(selected.model.metadata).costKnown,
+              thinkingLevel: input.thinkingLevel ?? "off",
             },
             environment
           ),

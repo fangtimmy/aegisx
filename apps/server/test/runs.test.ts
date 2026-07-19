@@ -24,18 +24,24 @@ afterEach(() => {
   }
 })
 
-function setup(maxConcurrency = 2, dataDir?: string, contextWindow = 128_000) {
+function setup(
+  maxConcurrency = 2,
+  dataDir?: string,
+  contextWindow = 128_000,
+  reasoning = false
+) {
   const root = dataDir ?? mkdtempSync(join(tmpdir(), "aegisx-runs-"))
   if (!dataDir) tempDirs.push(root)
   const faux = fauxProvider({ models: [{ id: "faux-1", contextWindow }] })
   const models = createModels()
   models.setProvider(faux.provider)
+  const model = { ...faux.getModel(), reasoning }
   const instance = createApp({
     dataDir: root,
     maxConcurrency,
     models,
     resolveModel: (_provider, modelId) =>
-      modelId === faux.getModel().id ? (faux.getModel() as never) : undefined,
+      modelId === model.id ? (model as never) : undefined,
   })
   closeApps.push(instance.close)
   return { ...instance, dataDir: root, faux }
@@ -229,6 +235,61 @@ describe("run API", () => {
     expect(JSON.parse(resumedAgent.runtime_snapshot).systemPrompt).toBe(
       "Custom main for Run tests with Faux 1; spawn=true <system-tag>"
     )
+    sqlite.close()
+  })
+
+  test("clamps and freezes the selected thinking level", async () => {
+    const instance = setup(2, undefined, 128_000, true)
+    const { challenge } = await createChallenge(instance.app)
+    const modelId = await configureFaux(instance.app)
+    const updated = await instance.app.request(
+      `/api/provider-models/${modelId}`,
+      json("PATCH", { metadata: { reasoning: true } })
+    )
+    expect(updated.status).toBe(200)
+    expect((await updated.json()).thinkingLevels).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ])
+
+    instance.faux.setResponses([fauxAssistantMessage("Waiting for guidance.")])
+    const response = await instance.app.request(
+      `/api/challenges/${challenge.id}/runs`,
+      json("POST", { modelId, thinkingLevel: "xhigh" })
+    )
+    expect(response.status).toBe(202)
+    expect((await response.clone().json()).thinkingLevel).toBe("high")
+    const run = await response.json()
+
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          agents: Array<{ parentAgentId: string | null; status: string }>
+        }>,
+      (value) =>
+        value.agents.some(
+          (agent) => agent.parentAgentId === null && agent.status === "idle"
+        )
+    )
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    expect(
+      sqlite.query("select model_config from runs where id = ?").get(run.id)
+    ).toEqual({
+      model_config: expect.stringContaining('"thinkingLevel":"high"'),
+    })
+    expect(
+      JSON.parse(
+        (
+          sqlite
+            .query("select runtime_snapshot from run_agents where id = ?")
+            .get(run.id) as { runtime_snapshot: string }
+        ).runtime_snapshot
+      ).model.thinkingLevel
+    ).toBe("high")
     sqlite.close()
   })
 

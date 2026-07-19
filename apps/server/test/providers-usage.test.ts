@@ -408,6 +408,7 @@ describe("providers, models, and usage", () => {
       modelId: "faux-1",
       modelLabel: "Faux 1",
       costKnown: false,
+      thinkingLevel: "off",
     })
     expect(JSON.parse(stored.environment_config)).toEqual({
       type: "container",
@@ -446,6 +447,75 @@ describe("providers, models, and usage", () => {
         .defaultModelId
     ).toBeNull()
   }, 30_000)
+
+  test("binds Pi metadata, preserves it on unbind, and rejects invalid metadata", async () => {
+    const instance = setup()
+    const provider = await (
+      await instance.app.request(
+        "/api/providers",
+        json("POST", {
+          label: "Metadata provider",
+          type: "openai-compatible",
+          baseUrl: "http://localhost:4012/v1",
+          apiKey: "metadata-secret",
+          enabled: true,
+        })
+      )
+    ).json()
+    const model = await (
+      await instance.app.request(
+        `/api/providers/${provider.id}/models`,
+        json("POST", {
+          modelId: "metadata-model",
+          label: "Metadata model",
+          metadata: { reasoning: true, contextWindow: 32_768 },
+        })
+      )
+    ).json()
+    expect(model.metadata).toMatchObject({
+      reasoning: true,
+      contextWindow: 32_768,
+      maxTokens: 16_384,
+      costKnown: false,
+    })
+    expect(model.thinkingLevels).toContain("high")
+
+    const invalid = await instance.app.request(
+      `/api/provider-models/${model.id}`,
+      json("PATCH", { metadata: { input: ["audio"] } })
+    )
+    expect(invalid.status).toBe(400)
+
+    const profiles = await (
+      await instance.app.request(
+        `/api/providers/${provider.id}/models/builtins`
+      )
+    ).json()
+    expect(profiles.items.length).toBeGreaterThan(0)
+    const profile = profiles.items[0]
+    const bound = await (
+      await instance.app.request(
+        `/api/provider-models/${model.id}/binding`,
+        json("POST", {
+          providerId: profile.providerId,
+          modelId: profile.modelId,
+        })
+      )
+    ).json()
+    expect(bound.piBinding).toEqual({
+      providerId: profile.providerId,
+      modelId: profile.modelId,
+    })
+    expect(bound.metadata.costKnown).toBe(true)
+
+    const unbound = await (
+      await instance.app.request(`/api/provider-models/${model.id}/binding`, {
+        method: "DELETE",
+      })
+    ).json()
+    expect(unbound.piBinding).toBeNull()
+    expect(unbound.metadata).toEqual(bound.metadata)
+  })
 
   test("exports and imports complete settings configuration", async () => {
     const instance = setup()

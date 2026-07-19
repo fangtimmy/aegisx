@@ -118,6 +118,7 @@ export type RunPublic = {
   provider: string
   modelId: string
   modelName: string
+  thinkingLevel: ThinkingLevel
   environment: "local" | "container"
   targetSupported: boolean
   image?: string | null
@@ -201,12 +202,54 @@ export type ProviderType =
   | "openai-responses"
   | "anthropic-messages"
 
+export type ThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+
+export type ModelMetadata = {
+  reasoning: boolean
+  thinkingLevelMap: Partial<Record<ThinkingLevel, string | null>>
+  input: Array<"text" | "image">
+  cost: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    tiers?: Array<{
+      input: number
+      output: number
+      cacheRead: number
+      cacheWrite: number
+      inputTokensAbove: number
+    }>
+  }
+  costKnown: boolean
+  contextWindow: number
+  maxTokens: number
+  headers?: Record<string, string>
+  compat?: Record<string, unknown>
+}
+
+export type PiModelProfile = {
+  providerId: string
+  modelId: string
+  name: string
+}
+
 export type ProviderModel = {
   id: string
   providerId: string
   modelId: string
   label: string
   enabled: boolean
+  metadata: ModelMetadata
+  piBinding: { providerId: string; modelId: string } | null
+  thinkingLevels: ThinkingLevel[]
   createdAt: string
   updatedAt: string
 }
