@@ -93,23 +93,24 @@ const modelInput = Type.Object(
   { additionalProperties: false }
 )
 
+const bindingInput = Type.Object(
+  {
+    providerId: Type.String({ minLength: 1, maxLength: 200 }),
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+  },
+  { additionalProperties: false }
+)
+
 const modelUpdateInput = Type.Partial(
   Type.Object(
     {
       label: Type.String({ minLength: 1, maxLength: 200 }),
       enabled: Type.Boolean(),
       metadata: Type.Unknown(),
+      binding: Type.Union([bindingInput, Type.Null()]),
     },
     { additionalProperties: false }
   ),
-  { additionalProperties: false }
-)
-
-const bindingInput = Type.Object(
-  {
-    providerId: Type.String({ minLength: 1, maxLength: 200 }),
-    modelId: Type.String({ minLength: 1, maxLength: 200 }),
-  },
   { additionalProperties: false }
 )
 
@@ -799,6 +800,7 @@ export function registerProviderRoutes(
           404
         )
       }
+      const provider = getProvider(model.providerId)
       const input = c.req.valid("json")
       try {
         const label =
@@ -814,13 +816,39 @@ export function registerProviderRoutes(
             400
           )
         }
+        const profile = input.binding
+          ? builtinModelProfile(
+              input.binding.providerId,
+              input.binding.modelId,
+              provider ? providerApi(provider.type) : ""
+            )
+          : undefined
+        if (input.binding && !profile) {
+          return c.json(
+            {
+              error: {
+                code: "invalid_pi_model",
+                message: "Pi model is unavailable for this provider protocol",
+              },
+            },
+            400
+          )
+        }
         const next = {
           label,
           enabled: input.enabled ?? model.enabled,
           metadata:
             input.metadata === undefined
               ? model.metadata
-              : JSON.stringify(normalizeModelMetadata(input.metadata)),
+              : JSON.stringify(
+                  profile?.metadata ?? normalizeModelMetadata(input.metadata)
+                ),
+          ...(input.binding === undefined
+            ? {}
+            : {
+                piProviderId: input.binding?.providerId ?? null,
+                piModelId: input.binding?.modelId ?? null,
+              }),
           updatedAt: new Date().toISOString(),
         }
         db.update(providerModels)

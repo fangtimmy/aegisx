@@ -1,13 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  Brain,
   CircleAlert,
+  DollarSign,
   Eye,
   EyeOff,
+  Image,
   Link2,
+  Maximize2,
   Pencil,
   Plus,
   RefreshCw,
   Trash2,
+  Type,
   Unlink,
 } from "lucide-react"
 import { useState } from "react"
@@ -85,6 +90,16 @@ import { ProviderTypeField } from "./provider-dialog"
 
 type ProviderUpdate = Omit<ProviderInput, "apiKey"> & { apiKey?: string }
 
+function formatContext(value: number) {
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(value % 1_000_000 ? 1 : 0)}M`
+    : `${Math.round(value / 1_000)}K`
+}
+
+function formatPrice(metadata: ProviderModel["metadata"]) {
+  return `$${metadata.cost.input}/M $${metadata.cost.output}/M`
+}
+
 export function ProviderDetail({
   provider,
   onDelete,
@@ -111,6 +126,8 @@ export function ProviderDetail({
   const [editingLabel, setEditingLabel] = useState("")
   const [editingMetadata, setEditingMetadata] = useState("{}")
   const [metadataError, setMetadataError] = useState<string | null>(null)
+  const [editingBinding, setEditingBinding] =
+    useState<ProviderModel["piBinding"]>(null)
   const [bindingModel, setBindingModel] = useState<ProviderModel | null>(null)
   const [selectedBuiltinProvider, setSelectedBuiltinProvider] = useState("")
   const [selectedBuiltinModel, setSelectedBuiltinModel] =
@@ -170,14 +187,16 @@ export function ProviderDetail({
       id,
       label,
       metadata,
+      binding,
     }: {
       id: string
       label: string
       metadata: ProviderModel["metadata"]
+      binding: ProviderModel["piBinding"]
     }) =>
       apiRequest<ProviderModel>(
         `/provider-models/${id}`,
-        jsonRequest("PATCH", { label, metadata })
+        jsonRequest("PATCH", { label, metadata, binding })
       ),
     onSuccess: () => {
       setEditingModel(null)
@@ -193,35 +212,6 @@ export function ProviderDetail({
       apiRequest<{ items: PiModelProfile[] }>(
         `/providers/${provider.id}/models/builtins`
       ),
-  })
-  const bindModel = useMutation({
-    mutationFn: ({ id, profile }: { id: string; profile: PiModelProfile }) =>
-      apiRequest<ProviderModel>(
-        `/provider-models/${id}/binding`,
-        jsonRequest("POST", {
-          providerId: profile.providerId,
-          modelId: profile.modelId,
-        })
-      ),
-    onSuccess: (model) => {
-      setEditingModel(model)
-      setEditingMetadata(JSON.stringify(model.metadata, null, 2))
-      setBindingModel(null)
-      setSelectedBuiltinProvider("")
-      setSelectedBuiltinModel(null)
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
-    },
-  })
-  const unbindModel = useMutation({
-    mutationFn: (id: string) =>
-      apiRequest<ProviderModel>(`/provider-models/${id}/binding`, {
-        method: "DELETE",
-      }),
-    onSuccess: (model) => {
-      setEditingModel(model)
-      setEditingMetadata(JSON.stringify(model.metadata, null, 2))
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
-    },
   })
   const removeModel = useMutation({
     mutationFn: (id: string) =>
@@ -511,12 +501,50 @@ export function ProviderDetail({
                 provider.models.map((model) => (
                   <div className="flex items-center gap-3 py-3" key={model.id}>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium text-sm">
-                        {model.label}
-                      </p>
-                      <p className="truncate font-mono text-muted-foreground text-xs">
-                        {model.modelId}
-                      </p>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="min-w-0 truncate font-medium text-sm">
+                          {model.label}
+                        </span>
+                        <Badge
+                          variant="secondary"
+                        >
+                          {model.modelId}
+                        </Badge>
+                        {model.piBinding && (
+                          <Badge variant="secondary">
+                            <Link2 />
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        <Badge size="sm" variant="secondary">
+                          {formatContext(model.metadata.contextWindow)}
+                        </Badge>
+                        {model.metadata.reasoning && (
+                          <Badge size="sm" variant="secondary">
+                            <Brain aria-hidden="true" />
+                          </Badge>
+                        )}
+                        <Badge size="sm" variant="secondary">
+                          {model.metadata.input.map((input) => (
+                            <span
+                              className="inline-flex items-center gap-1"
+                              key={input}
+                            >
+                              {input === "image" ? (
+                                <Image aria-hidden="true" />
+                              ) : (
+                                <Type aria-hidden="true" />
+                              )}
+                            </span>
+                          ))}
+                        </Badge>
+                        {model.metadata.costKnown && (
+                          <Badge size="sm" variant="secondary">
+                            {formatPrice(model.metadata)}
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                     <Button
                       aria-label={`Edit ${model.label}`}
@@ -527,6 +555,7 @@ export function ProviderDetail({
                         setEditingMetadata(
                           JSON.stringify(model.metadata, null, 2)
                         )
+                        setEditingBinding(model.piBinding)
                         setMetadataError(null)
                       }}
                       size="icon"
@@ -608,6 +637,7 @@ export function ProviderDetail({
             setEditingLabel("")
             setEditingMetadata("{}")
             setMetadataError(null)
+            setEditingBinding(null)
           }
         }}
         open={editingModel !== null}
@@ -643,6 +673,7 @@ export function ProviderDetail({
                   id: editingModel.id,
                   label: editingLabel.trim(),
                   metadata,
+                  binding: editingBinding,
                 })
               }
             }}
@@ -671,14 +702,48 @@ export function ProviderDetail({
                 />
               </Field>
               <Field>
-                <FieldLabel htmlFor="editing-provider-model-metadata">
-                  {editingModel?.piBinding
-                    ? "Metadata JSON (managed by Pi binding)"
-                    : "Metadata JSON"}
-                </FieldLabel>
+                <div className="flex w-full min-w-0 items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <FieldLabel htmlFor="editing-provider-model-metadata">
+                      Metadata JSON
+                    </FieldLabel>
+                    {editingBinding && (
+                      <p className="truncate font-mono text-muted-foreground text-xs">
+                        Bound to {editingBinding.providerId} /{" "}
+                        {editingBinding.modelId}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      onClick={() => {
+                        setBindingModel(editingModel ?? null)
+                        setSelectedBuiltinProvider("")
+                        setSelectedBuiltinModel(null)
+                      }}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      <Link2 /> {editingBinding ? "Change" : "Bind"}
+                    </Button>
+                    {editingBinding && (
+                      <Button
+                        aria-label="Unbind Pi model"
+                        onClick={() => setEditingBinding(null)}
+                        size="icon-sm"
+                        title="Unbind Pi model"
+                        type="button"
+                        variant="outline"
+                      >
+                        <Unlink />
+                      </Button>
+                    )}
+                  </div>
+                </div>
                 <Textarea
                   className="font-mono text-xs"
-                  disabled={Boolean(editingModel?.piBinding)}
+                  disabled={Boolean(editingBinding)}
                   id="editing-provider-model-metadata"
                   onChange={(event) => {
                     setEditingMetadata(event.target.value)
@@ -688,39 +753,6 @@ export function ProviderDetail({
                   value={editingMetadata}
                 />
               </Field>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-medium text-sm">Pi built-in model</p>
-                  <p className="truncate font-mono text-muted-foreground text-xs">
-                    {editingModel?.piBinding
-                      ? `${editingModel.piBinding.providerId} / ${editingModel.piBinding.modelId}`
-                      : "Not bound"}
-                  </p>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    onClick={() => {
-                      setBindingModel(editingModel ?? null)
-                      setSelectedBuiltinProvider("")
-                      setSelectedBuiltinModel(null)
-                    }}
-                    type="button"
-                    variant="outline"
-                  >
-                    <Link2 /> {editingModel?.piBinding ? "Change" : "Bind"}
-                  </Button>
-                  {editingModel?.piBinding && (
-                    <Button
-                      loading={unbindModel.isPending}
-                      onClick={() => unbindModel.mutate(editingModel.id)}
-                      type="button"
-                      variant="outline"
-                    >
-                      <Unlink /> Unbind
-                    </Button>
-                  )}
-                </div>
-              </div>
               {metadataError && (
                 <Alert variant="error">
                   <CircleAlert />
@@ -840,12 +872,6 @@ export function ProviderDetail({
                 </Field>
               </>
             )}
-            {bindModel.error && (
-              <Alert variant="error">
-                <CircleAlert />
-                <AlertDescription>{bindModel.error.message}</AlertDescription>
-              </Alert>
-            )}
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="ghost" />}>
@@ -853,13 +879,13 @@ export function ProviderDetail({
             </DialogClose>
             <Button
               disabled={!bindingModel || !selectedProfile}
-              loading={bindModel.isPending}
               onClick={() => {
                 if (bindingModel && selectedProfile) {
-                  bindModel.mutate({
-                    id: bindingModel.id,
-                    profile: selectedProfile,
+                  setEditingBinding({
+                    providerId: selectedProfile.providerId,
+                    modelId: selectedProfile.modelId,
                   })
+                  setBindingModel(null)
                 }
               }}
               type="button"
