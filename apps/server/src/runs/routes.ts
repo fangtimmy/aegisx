@@ -2,25 +2,25 @@ import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
-import type { createCatalogReader } from "./catalog"
-import type { createDatabase } from "./db"
+import { sumUsage } from "../agents/usage"
+import type { createCatalogReader } from "../catalog"
+import type { createDatabase } from "../db"
 import {
   challenges,
   providerConnections,
   providerModels,
   type settings,
-} from "./db/schema"
-import { jsonError, notFound } from "./http-errors"
-import { parseModelMetadata } from "./models"
-import { providerName } from "./provider-routes"
-import { type createRunManager, RunActionError } from "./runs"
-import { sumUsage } from "./usage"
-import { validateJson } from "./validation"
+} from "../db/schema"
+import { jsonError, notFound } from "../http-errors"
+import { parseModelMetadata } from "../models"
+import { providerName } from "../provider-routes"
+import { validateJson } from "../validation"
 import {
   readWorkspacePath,
   WorkspaceFileError,
   workspaceDownload,
-} from "./workspace-files"
+} from "../workspace-files"
+import { type createRunManager, RunActionError } from "./manager"
 
 const runInput = Type.Object(
   {

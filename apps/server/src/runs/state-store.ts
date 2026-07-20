@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm"
-import type { AgentPublic, RunPublic, UsageSummary } from "../../shared/api"
-import type { createDatabase } from "./db"
-import { runAgents, runEvents, runs } from "./db/schema"
+import type { AgentPublic, RunPublic, UsageSummary } from "../../../shared/api"
+import type { createDatabase } from "../db"
+import { runAgents, runEvents, runs } from "../db/schema"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 export type AgentChange = {

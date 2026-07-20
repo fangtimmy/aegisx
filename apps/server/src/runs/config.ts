@@ -1,10 +1,10 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai"
-import type { AgentRuntimeSnapshot, ThinkingLevel } from "../../shared/api"
+import type { AgentRuntimeSnapshot, ThinkingLevel } from "../../../shared/api"
 import {
   type PromptTemplateContext,
   type PromptTemplates,
   resolvePromptTemplates,
-} from "./prompt-templates"
+} from "../prompt-templates"
 
 export type EnvironmentConfig =
   | { type: "local" }

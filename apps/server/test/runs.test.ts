@@ -10,7 +10,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
-import { parseAgentMessage } from "../src/agent-messages"
+import { parseAgentMessage } from "../src/agents/messages"
 import { createApp } from "../src/app"
 import { json, waitFor } from "./support"
 

@@ -13,14 +13,7 @@ import type {
   ModelThinkingLevel,
 } from "@earendil-works/pi-ai"
 import { and, asc, eq, isNull, max } from "drizzle-orm"
-import {
-  type AegisXMessage,
-  type AegisXMetadata,
-  type InboxKind,
-  parseAgentMessage,
-  parseInboxMetadata,
-} from "./agent-messages"
-import type { createDatabase } from "./db"
+import type { createDatabase } from "../db"
 import {
   agentInbox,
   agentMessages,
@@ -28,12 +21,19 @@ import {
   agentUsage,
   runAgents,
   runEvents,
-} from "./db/schema"
-import { redactSecrets } from "./redaction"
+} from "../db/schema"
+import { redactSecrets } from "../redaction"
+import {
+  type AegisXMessage,
+  type AegisXMetadata,
+  type InboxKind,
+  parseAgentMessage,
+  parseInboxMetadata,
+} from "./messages"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
-export type { AegisXMessage, AegisXMetadata, InboxKind } from "./agent-messages"
+export type { AegisXMessage, AegisXMetadata, InboxKind } from "./messages"
 
 export type RuntimeOutcome = {
   status: "success" | "error" | "aborted"

@@ -4,7 +4,7 @@ import {
   parseModelConfig,
   parsePromptConfig,
   parseRuntimeSnapshot,
-} from "../src/run-config"
+} from "../src/runs/config"
 
 test("parses run configuration with conservative fallbacks", () => {
   expect(parseEnvironment("not-json")).toEqual({ type: "local" })

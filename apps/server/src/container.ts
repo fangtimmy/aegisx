@@ -1,5 +1,5 @@
 import { posix } from "node:path"
-import type { WorkspaceBackend } from "./agent-tools"
+import type { WorkspaceBackend } from "./agents/tools"
 
 const workspace = "/workspace"
 const decoder = new TextDecoder()

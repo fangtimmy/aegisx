@@ -1,13 +1,13 @@
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core"
 import { Type } from "typebox"
-import type { AgentPublic } from "../../shared/api"
+import type { AgentPublic } from "../../../shared/api"
 import {
   createWorkspaceTools,
   defineAgentTool,
   type WorkspaceBackend,
-} from "./agent-tools"
-import type { runAgents, runs } from "./db/schema"
-import { isActiveTarget, type TargetState } from "./platform"
+} from "../agents/tools"
+import type { runAgents, runs } from "../db/schema"
+import { isActiveTarget, type TargetState } from "../platform"
 
 type StoredRun = typeof runs.$inferSelect
 type StoredAgent = typeof runAgents.$inferSelect

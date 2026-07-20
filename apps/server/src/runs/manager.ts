@@ -22,13 +22,14 @@ import type {
   ConversationMessage,
   RunPublic,
   RunStatus,
-} from "../../shared/api"
+} from "../../../shared/api"
 import {
   type AgentRuntime,
   createAgentRuntime,
   type RuntimeOutcome,
-} from "./agent-runtime"
-import { createLocalBackend, type WorkspaceBackend } from "./agent-tools"
+} from "../agents/runtime"
+import { createLocalBackend, type WorkspaceBackend } from "../agents/tools"
+import { sumUsage } from "../agents/usage"
 import {
   containerName,
   containerRunningAsync,
@@ -36,8 +37,8 @@ import {
   createContainerBackend,
   removeContainer,
   removeContainerAsync,
-} from "./container"
-import type { createDatabase } from "./db"
+} from "../container"
+import type { createDatabase } from "../db"
 import {
   agentInbox,
   agentMessages,
@@ -48,17 +49,17 @@ import {
   runAgents,
   runEvents,
   runs,
-} from "./db/schema"
-import type { ModelService } from "./models"
-import type { TargetState } from "./platform"
+} from "../db/schema"
+import type { ModelService } from "../models"
+import type { TargetState } from "../platform"
 import {
   type PromptAttachment,
   type PromptTemplateContext,
   type PromptTemplates,
   renderInitialPrompt,
   renderSystemPrompt,
-} from "./prompt-templates"
-import { redactSecrets, replaceText } from "./redaction"
+} from "../prompt-templates"
+import { redactSecrets, replaceText } from "../redaction"
 import {
   type EnvironmentConfig,
   type ModelConfig,
@@ -66,12 +67,11 @@ import {
   parseModelConfig,
   parsePromptConfig,
   parseRuntimeSnapshot,
-} from "./run-config"
-import { RunActionError } from "./run-errors"
-import { createRunInspector } from "./run-inspector"
-import { type AgentChange, createRunStateStore } from "./run-state-store"
-import { createRunTools } from "./run-tools"
-import { sumUsage } from "./usage"
+} from "./config"
+import { RunActionError } from "./errors"
+import { createRunInspector } from "./inspector"
+import { type AgentChange, createRunStateStore } from "./state-store"
+import { createRunTools } from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunEvent =
