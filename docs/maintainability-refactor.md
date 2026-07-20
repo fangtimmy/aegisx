@@ -31,24 +31,24 @@ must remain stable while responsibilities become easier to locate and test.
 - [x] Reduced `apps/server/src/app.ts` to application initialization and route
   registration.
 - [x] Moved event, challenge, and attachment routes to
-  `apps/server/src/event-routes.ts`.
+  `apps/server/src/events/routes.ts`.
 - [x] Moved Run creation, detail, statistics, file, SSE, and control routes to
-  `apps/server/src/run-routes.ts`.
+  `apps/server/src/runs/routes.ts`.
 - [x] Moved Settings, Prompt, and settings import/export routes to
-  `apps/server/src/settings-routes.ts`.
+  `apps/server/src/settings/routes.ts`.
 - [x] Left Provider and Model management in
-  `apps/server/src/provider-routes.ts`.
+  `apps/server/src/providers/routes.ts`.
 
 ### Run Responsibilities
 
-- [x] Moved Agent-specific tools to `apps/server/src/run-tools.ts`.
+- [x] Moved Agent-specific tools to `apps/server/src/runs/tools.ts`.
 - [x] Moved conversation, Usage, tool statistics, and Inspector reads to
-  `apps/server/src/run-inspector.ts`.
+  `apps/server/src/runs/inspector.ts`.
 - [x] Moved Run persistence writes and event publication to
-  `apps/server/src/run-state-store.ts`.
-- [x] Moved `RunActionError` to `apps/server/src/run-errors.ts`.
+  `apps/server/src/runs/state-store.ts`.
+- [x] Moved `RunActionError` to `apps/server/src/runs/errors.ts`.
 - [x] Kept Run state transitions, session lifecycle, concurrency, and target
-  coordination in `apps/server/src/runs.ts`.
+  coordination in `apps/server/src/runs/manager.ts`.
 
 ### Frontend Responsibilities
 
@@ -68,16 +68,29 @@ must remain stable while responsibilities become easier to locate and test.
 ### Platform Responsibilities
 
 - [x] Moved platform-facing errors to
-  `apps/server/src/platform-errors.ts`.
+  `apps/server/src/platforms/errors.ts`.
 - [x] Moved inventory and attachment synchronization to
-  `apps/server/src/platform-sync.ts`.
+  `apps/server/src/platforms/sync.ts`.
 - [x] Moved submission persistence and completion checks to
-  `apps/server/src/platform-submissions.ts`.
+  `apps/server/src/platforms/submissions.ts`.
 - [x] Moved target lifecycle operations to
-  `apps/server/src/platform-targets.ts`.
+  `apps/server/src/platforms/targets.ts`.
 - [x] Centralized active target states used by detach and ignore checks.
 - [x] Detect a disappeared Docker container after failed workspace operations,
   then pause the Run and release its sessions.
+
+### Source Layout Grouping
+
+- [x] Grouped backend source into domain directories: `agents/`, `runs/`,
+  `platforms/` (with `adapters/`), `events/`, `providers/`, `settings/`,
+  and `infrastructure/`. Renamed `runs.ts` to `runs/manager.ts`.
+- [x] Merged the adapter factory from the `platform.ts` barrel into
+  `platforms/service.ts`; eliminated the barrel.
+- [x] Moved frontend shell components (`app-layout`, `product-header`,
+  `theme-provider`) into `components/shell/`; kept `components/ui` intact.
+- [x] Renamed `features/events/shared.tsx` to `event-shared.tsx`.
+- [x] Mirrored backend test layout to domain subdirectories.
+- [x] Updated path references in this document and the README.
 
 ### Verification
 
@@ -118,7 +131,7 @@ and the existing backend and frontend test suites remain green.
 
 ### P1: Simplify Platform Service
 
-- [x] Review `apps/server/src/platform-service.ts` and separate only the
+- [x] Review `apps/server/src/platforms/service.ts` and separate only the
   responsibilities that have stable boundaries: inventory sync, attachment
   sync, submission, and target lifecycle.
 - [x] Centralize target-state rules so Run completion, platform detachment, and

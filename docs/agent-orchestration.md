@@ -1,6 +1,6 @@
 # Multi-agent orchestration
 
-This document records runtime constraints that are not obvious from the UI. The implementation in `apps/server/src/runs.ts` and the database schema remain authoritative.
+This document records runtime constraints that are not obvious from the UI. The implementation in `apps/server/src/runs/manager.ts` and the database schema remain authoritative.
 
 ## Run model
 
