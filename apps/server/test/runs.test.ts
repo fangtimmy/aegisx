@@ -14,11 +14,11 @@ import { createApp } from "../src/app"
 import { json, waitFor } from "./support"
 
 const tempDirs: string[] = []
-const closeApps: Array<() => void> = []
+const closeApps: Array<() => void | Promise<void>> = []
 const configuredModels = new WeakMap<object, Promise<string>>()
 
-afterEach(() => {
-  for (const close of closeApps.splice(0)) close()
+afterEach(async () => {
+  for (const close of closeApps.splice(0)) await close()
   for (const path of tempDirs.splice(0)) {
     rmSync(path, { recursive: true, force: true })
   }
@@ -381,7 +381,7 @@ describe("run API", () => {
     expect(listed.items[0].flag).toBeUndefined()
     expect(JSON.stringify(listed)).not.toContain(first.dataDir)
 
-    first.close()
+    await first.close()
     closeApps.pop()
     const reopened = setup(2, first.dataDir)
     const reopenedDetail = await (
@@ -471,6 +471,53 @@ describe("run API", () => {
         )
       ).status
     ).toBe(409)
+  })
+
+  test("serializes concurrent resume and stop without reviving a session", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([fauxAssistantMessage("Waiting.")])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          agents: Array<{ parentAgentId: string | null; status: string }>
+        }>,
+      (value) =>
+        value.agents.some(
+          (agent) => agent.parentAgentId === null && agent.status === "idle"
+        )
+    )
+    await instance.app.request(`/api/runs/${run.id}/pause`, json("POST", {}))
+
+    instance.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("bash", { command: "sleep 30" }), {
+        stopReason: "toolUse",
+      }),
+    ])
+    const resumeRequest = instance.app.request(
+      `/api/runs/${run.id}/resume`,
+      json("POST", { message: "Resume once." })
+    )
+    const stopRequest = instance.app.request(
+      `/api/runs/${run.id}/stop`,
+      json("POST", {})
+    )
+    const [resumed, stopped] = await Promise.all([resumeRequest, stopRequest])
+
+    expect(resumed.status).toBe(200)
+    expect(stopped.status).toBe(200)
+    expect((await stopped.json()).status).toBe("stopped")
+    expect(instance.activeSessionCount()).toBe(0)
+    const detail = await (
+      await instance.app.request(`/api/runs/${run.id}`)
+    ).json()
+    expect(detail.run.status).toBe("stopped")
+    expect(
+      detail.agents.every((agent: { status: string }) =>
+        ["completed", "failed", "stopped"].includes(agent.status)
+      )
+    ).toBe(true)
   })
 
   test("runs a background child agent and returns its result to main", async () => {
@@ -949,7 +996,7 @@ describe("run API", () => {
   test("completes a validated pending completion on startup", async () => {
     const first = setup()
     const { challenge } = await createChallenge(first.app)
-    first.close()
+    await first.close()
     closeApps.pop()
     const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
     const now = new Date().toISOString()
@@ -992,7 +1039,7 @@ describe("run API", () => {
   test("changes persisted running runs to paused on startup", async () => {
     const first = setup()
     const { challenge } = await createChallenge(first.app)
-    first.close()
+    await first.close()
     closeApps.pop()
     const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
     const now = new Date().toISOString()
@@ -1018,6 +1065,53 @@ describe("run API", () => {
           status: "paused",
         },
       ],
+    })
+  })
+
+  test("repairs nonterminal agents that belong to a terminal run", async () => {
+    const first = setup()
+    const { challenge } = await createChallenge(first.app)
+    await first.close()
+    closeApps.pop()
+    const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
+    const now = new Date().toISOString()
+    sqlite.run(
+      "insert into runs (id, challenge_id, status, summary, created_at, updated_at) values (?, ?, 'completed', ?, ?, ?)",
+      ["inconsistent-terminal", challenge.id, "Recovered completion", now, now]
+    )
+    sqlite.run(
+      "insert into run_agents (id, run_id, name, status, created_at, updated_at) values (?, ?, 'Main agent', 'running', ?, ?)",
+      ["inconsistent-terminal", "inconsistent-terminal", now, now]
+    )
+    sqlite.run(
+      "insert into run_agents (id, run_id, parent_agent_id, name, status, created_at, updated_at) values (?, ?, ?, 'Child agent', 'paused', ?, ?)",
+      [
+        "inconsistent-child",
+        "inconsistent-terminal",
+        "inconsistent-terminal",
+        now,
+        now,
+      ]
+    )
+    sqlite.close()
+
+    const second = setup(2, first.dataDir)
+    const detail = await (
+      await second.app.request("/api/runs/inconsistent-terminal")
+    ).json()
+    expect(detail).toMatchObject({
+      run: { status: "completed", summary: "Recovered completion" },
+      agents: expect.arrayContaining([
+        expect.objectContaining({
+          id: "inconsistent-terminal",
+          status: "completed",
+          summary: "Recovered completion",
+        }),
+        expect.objectContaining({
+          id: "inconsistent-child",
+          status: "stopped",
+        }),
+      ]),
     })
   })
 })

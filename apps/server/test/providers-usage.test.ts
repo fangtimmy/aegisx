@@ -14,10 +14,10 @@ import { summarizeUsage } from "../src/usage"
 import { json, waitFor } from "./support"
 
 const roots: string[] = []
-const closeApps: Array<() => void> = []
+const closeApps: Array<() => void | Promise<void>> = []
 
-afterEach(() => {
-  for (const close of closeApps.splice(0)) close()
+afterEach(async () => {
+  for (const close of closeApps.splice(0)) await close()
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true })
 })

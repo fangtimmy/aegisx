@@ -17,21 +17,68 @@ function runDockerSync(args: string[]) {
   }).exitCode
 }
 
+async function runDocker(args: string[], timeoutMs = 30_000) {
+  const process = Bun.spawn(["docker", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    process.kill()
+  }, timeoutMs)
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      process.stdout
+        ? new Response(process.stdout).text()
+        : Promise.resolve(""),
+      process.stderr
+        ? new Response(process.stderr).text()
+        : Promise.resolve(""),
+      process.exited,
+    ])
+    if (timedOut) throw new Error("Docker command timed out")
+    return { stdout, stderr, exitCode }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export function removeContainer(name: string) {
   runDockerSync(["rm", "--force", name])
 }
 
-export function createContainer(
+export async function removeContainerAsync(name: string) {
+  const result = await runDocker(["rm", "--force", name])
+  if (
+    result.exitCode !== 0 &&
+    !/no such container|is not a container/i.test(result.stderr)
+  ) {
+    throw new Error("Container could not be removed")
+  }
+}
+
+export async function containerRunningAsync(name: string) {
+  try {
+    const result = await runDocker([
+      "inspect",
+      "--format",
+      "{{.State.Running}}",
+      name,
+    ])
+    return result.exitCode === 0 && result.stdout.trim() === "true"
+  } catch {
+    return false
+  }
+}
+
+function containerCreateArgs(
   name: string,
   workspacePath: string,
   image: string,
   limits: { cpus: number; memoryMb: number; pidsLimit: number }
 ) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image)) {
-    throw new Error("Container image is invalid")
-  }
-  removeContainer(name)
-  const exitCode = runDockerSync([
+  return [
     "create",
     "--name",
     name,
@@ -60,25 +107,41 @@ export function createContainer(
     "tail",
     "-f",
     "/dev/null",
-  ])
-  if (exitCode !== 0 || runDockerSync(["start", name]) !== 0) {
-    removeContainer(name)
+  ]
+}
+
+export async function createContainerAsync(
+  name: string,
+  workspacePath: string,
+  image: string,
+  limits: { cpus: number; memoryMb: number; pidsLimit: number }
+) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image)) {
+    throw new Error("Container image is invalid")
+  }
+  await removeContainerAsync(name)
+  const created = await runDocker(
+    containerCreateArgs(name, workspacePath, image, limits)
+  )
+  if (created.exitCode !== 0) {
+    await removeContainerAsync(name)
+    throw new Error("Container could not be created")
+  }
+  const started = await runDocker(["start", name])
+  if (started.exitCode !== 0) {
+    await removeContainerAsync(name)
     throw new Error("Container could not be started")
   }
 }
 
-function stopContainer(name: string) {
-  runDockerSync(["stop", "--time", "0", name])
-}
-
 async function dockerExec(
-  name: string,
   args: string[],
   options: {
     input?: string
     signal?: AbortSignal
     timeout?: number
     maxOutputBytes?: number
+    onFatal?: () => void
   } = {}
 ) {
   if (options.signal?.aborted) throw new Error("aborted")
@@ -99,13 +162,13 @@ async function dockerExec(
   let timedOut = false
   const abort = () => {
     process.kill()
-    stopContainer(name)
   }
   const timer =
     options.timeout && options.timeout > 0
       ? setTimeout(() => {
           timedOut = true
           abort()
+          options.onFatal?.()
         }, options.timeout * 1000)
       : undefined
   options.signal?.addEventListener("abort", abort, { once: true })
@@ -172,19 +235,24 @@ function containerPath(value: string, cwd = workspace, write = false) {
   return resolved
 }
 
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
 async function requireExec(
   name: string,
   args: string[],
   options: { input?: string; signal?: AbortSignal } = {}
 ) {
-  const result = await dockerExec(name, [name, ...args], options)
+  const result = await dockerExec([name, ...args], options)
   if (result.exitCode !== 0) throw new Error("Container operation failed")
   return result.stdout
 }
 
 export function createContainerBackend(
   name: string,
-  cwd = workspace
+  cwd = workspace,
+  onFatal?: () => void
 ): WorkspaceBackend {
   const resolvePath = (path: string, write = false) =>
     containerPath(path, cwd, write)
@@ -219,10 +287,19 @@ export function createContainerBackend(
         }))
     },
     exec: async (command, options) => {
+      const boundedCommand =
+        options.timeout && options.timeout > 0
+          ? `timeout -k 2s ${options.timeout}s sh -lc ${shellQuote(command)}`
+          : command
       const result = await dockerExec(
-        name,
-        ["--workdir", cwd, name, "sh", "-lc", command],
-        { ...options, maxOutputBytes: maxCapturedShellOutput }
+        ["--workdir", cwd, name, "sh", "-lc", boundedCommand],
+        {
+          ...options,
+          maxOutputBytes: maxCapturedShellOutput,
+          ...(options.timeout
+            ? { timeout: options.timeout + 5, onFatal }
+            : { onFatal }),
+        }
       )
       return {
         stdout: decoder.decode(result.stdout),

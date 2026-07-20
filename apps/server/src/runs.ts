@@ -44,9 +44,11 @@ import {
 } from "./agent-tools"
 import {
   containerName,
-  createContainer,
+  containerRunningAsync,
+  createContainerAsync,
   createContainerBackend,
   removeContainer,
+  removeContainerAsync,
 } from "./container"
 import type { createDatabase } from "./db"
 import {
@@ -153,6 +155,11 @@ type CurrentSession = {
   runId: string
   agentId: string
   runtime: AgentRuntime
+  generation: number
+}
+type AgentChange = {
+  agentId: string
+  values: Partial<typeof runAgents.$inferInsert>
 }
 
 const terminalRunStatuses: RunStatus[] = ["completed", "failed", "stopped"]
@@ -167,14 +174,28 @@ export function createRunManager(options: Options) {
   const activeContainers = new Map<string, string>()
   const listeners = new Map<string, Set<RunEventListener>>()
   const aborting = new Map<string, "paused" | "stopped">()
-  // ponytail: per-run lock; this process owns all active sessions.
-  const resumeLocks = new Map<string, Promise<unknown>>()
+  const containerFailures = new Map<string, string>()
+  const runLocks = new Map<string, Promise<unknown>>()
+  const sessionGenerations = new Map<string, number>()
   let closed = false
 
-  const interruptedContainers = db
+  function withRunLock<T>(runId: string, operation: () => T | Promise<T>) {
+    if (closed) {
+      return Promise.reject(
+        new RunActionError("invalid_state", "Run manager is closed")
+      )
+    }
+    const previous = runLocks.get(runId) ?? Promise.resolve()
+    const current = previous.catch(() => undefined).then(operation)
+    runLocks.set(runId, current)
+    return current.finally(() => {
+      if (runLocks.get(runId) === current) runLocks.delete(runId)
+    })
+  }
+
+  const staleContainers = db
     .select({ id: runs.id, environmentConfig: runs.environmentConfig })
     .from(runs)
-    .where(eq(runs.status, "running"))
     .all()
     .filter(
       ({ environmentConfig }) =>
@@ -247,7 +268,46 @@ export function createRunManager(options: Options) {
     .set({ status: "paused", updatedAt: new Date().toISOString() })
     .where(inArray(runAgents.status, ["running", "idle"]))
     .run()
-  for (const { id } of interruptedContainers) removeContainer(containerName(id))
+  for (const run of db
+    .select({ id: runs.id, status: runs.status, summary: runs.summary })
+    .from(runs)
+    .where(inArray(runs.status, terminalRunStatuses))
+    .all()) {
+    const completedAt = new Date().toISOString()
+    db.transaction((tx) => {
+      tx.update(runAgents)
+        .set({
+          status:
+            run.status === "completed"
+              ? "completed"
+              : run.status === "failed"
+                ? "failed"
+                : "stopped",
+          ...(run.status === "completed" ? { summary: run.summary } : {}),
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(
+            eq(runAgents.runId, run.id),
+            isNull(runAgents.parentAgentId),
+            inArray(runAgents.status, ["running", "idle", "paused"])
+          )
+        )
+        .run()
+      tx.update(runAgents)
+        .set({ status: "stopped", completedAt, updatedAt: completedAt })
+        .where(
+          and(
+            eq(runAgents.runId, run.id),
+            isNotNull(runAgents.parentAgentId),
+            inArray(runAgents.status, ["running", "idle", "paused"])
+          )
+        )
+        .run()
+    })
+  }
+  for (const { id } of staleContainers) removeContainer(containerName(id))
 
   function getStored(runId: string) {
     return db.select().from(runs).where(eq(runs.id, runId)).get()
@@ -401,13 +461,13 @@ export function createRunManager(options: Options) {
     }
   }
 
-  function releaseRun(runId: string) {
+  async function releaseRun(runId: string) {
     for (const active of [...current.values()]) {
       if (active.runId === runId) releaseAgent(active.agentId)
     }
     const name = activeContainers.get(runId)
     if (name) {
-      removeContainer(name)
+      await removeContainerAsync(name)
       activeContainers.delete(runId)
     }
   }
@@ -472,6 +532,60 @@ export function createRunManager(options: Options) {
       cursor: cursorValue,
     })
     return agent
+  }
+
+  function transitionRun(
+    runId: string,
+    runValues: Partial<typeof runs.$inferInsert>,
+    agentChanges: AgentChange[]
+  ) {
+    const updatedAt = new Date().toISOString()
+    const agentCursors = new Map<string, number>()
+    let runCursor: number | undefined
+    db.transaction((tx) => {
+      for (const change of agentChanges) {
+        tx.update(runAgents)
+          .set({ ...change.values, updatedAt })
+          .where(
+            and(eq(runAgents.id, change.agentId), eq(runAgents.runId, runId))
+          )
+          .run()
+        const value = tx
+          .insert(runEvents)
+          .values({
+            runId,
+            type: "agent_updated",
+            agentId: change.agentId,
+            entityId: change.agentId,
+            createdAt: updatedAt,
+          })
+          .returning({ id: runEvents.id })
+          .get()?.id
+        if (value !== undefined) agentCursors.set(change.agentId, value)
+      }
+      tx.update(runs)
+        .set({ ...runValues, updatedAt })
+        .where(eq(runs.id, runId))
+        .run()
+      runCursor = tx
+        .insert(runEvents)
+        .values({ runId, type: "run_updated", createdAt: updatedAt })
+        .returning({ id: runEvents.id })
+        .get()?.id
+    })
+    for (const change of agentChanges) {
+      const agent = getAgentPublic(change.agentId)
+      if (!agent) continue
+      emit(runId, {
+        type: "agent.updated",
+        agent: { ...agent, usage: usageForAgent(agent.id) },
+        cursor: agentCursors.get(agent.id),
+      })
+    }
+    const run = getPublic(runId)
+    if (!run) throw new Error("Run not found")
+    emit(runId, { type: "run.updated", run, cursor: runCursor })
+    return run
   }
 
   function runningCount() {
@@ -681,18 +795,24 @@ export function createRunManager(options: Options) {
   ) {
     const runId = run.id
     const agentId = agent.id
+    const generation = (sessionGenerations.get(agentId) ?? 0) + 1
+    sessionGenerations.set(agentId, generation)
     const isMain = agent.parentAgentId === null
     const runWorkspacePath = join(dataDir, run.workspacePath as string)
     let backend: WorkspaceBackend
     if (environment.type === "container") {
       let name = activeContainers.get(runId)
+      if (name && !(await containerRunningAsync(name))) {
+        activeContainers.delete(runId)
+        name = undefined
+      }
       if (!name) {
         name = containerName(runId)
         if (!run.workspacePath) {
           throw new RunStartError("Run workspace is unavailable")
         }
         try {
-          createContainer(
+          await createContainerAsync(
             name,
             join(dataDir, run.workspacePath),
             environment.image,
@@ -703,7 +823,16 @@ export function createRunManager(options: Options) {
         }
         activeContainers.set(runId, name)
       }
-      backend = createContainerBackend(name)
+      backend = createContainerBackend(name, undefined, () => {
+        if (activeContainers.get(runId) === name) {
+          activeContainers.delete(runId)
+          void removeContainerAsync(name)
+        }
+        if (!containerFailures.has(runId)) {
+          containerFailures.set(runId, "Container execution became unavailable")
+          void abortRun(runId)
+        }
+      })
     } else {
       backend = createLocalBackend(runWorkspacePath)
     }
@@ -983,9 +1112,11 @@ export function createRunManager(options: Options) {
       secrets,
       thinkingLevel,
       canRunTool: () =>
+        !containerFailures.has(runId) &&
         getStored(runId)?.status === "running" &&
         getStoredAgent(agentId)?.status === "running",
       onEvent: (event, messageId, cursor) => {
+        if (current.get(agentId)?.generation !== generation) return
         for (const secret of options.getApiKeys?.(provider) ?? []) {
           runtime.addSecrets([secret])
         }
@@ -1042,12 +1173,14 @@ export function createRunManager(options: Options) {
           })
         }
       },
-      onSettled: (outcome) =>
-        isMain
+      onSettled: (outcome) => {
+        if (current.get(agentId)?.generation !== generation) return
+        return isMain
           ? handleMainSettled(runId, agentId, outcome)
-          : handleChildSettled(runId, agentId, outcome),
+          : handleChildSettled(runId, agentId, outcome)
+      },
     })
-    current.set(agentId, { runId, agentId, runtime })
+    current.set(agentId, { runId, agentId, runtime, generation })
     return runtime
   }
 
@@ -1056,75 +1189,126 @@ export function createRunManager(options: Options) {
     agentId: string,
     outcome: RuntimeOutcome
   ) {
-    if (closed) return
-    const storedRun = getStored(runId)
-    if (
-      !storedRun ||
-      terminalRunStatuses.includes(storedRun.status as RunStatus)
-    ) {
-      releaseRun(runId)
-      return
-    }
-    if (aborting.has(runId) || getStoredAgent(agentId)?.status !== "running")
-      return
-    if (outcome.status === "success" && storedRun.pendingCompletionSummary) {
-      const completedAt = new Date().toISOString()
-      for (const child of listStoredAgents(runId)) {
-        if (
-          child.id !== agentId &&
-          !terminalAgentStatuses.includes(child.status as AgentStatus)
-        ) {
-          updateAgent(child.id, {
-            status: "stopped",
-            completedAt,
-          })
-        }
-      }
-      updateAgent(agentId, {
-        status: "completed",
-        completedAt,
-        summary: storedRun.pendingCompletionSummary,
-        error: null,
-      })
-      update(runId, {
-        status: "completed",
-        completedAt,
-        summary: storedRun.pendingCompletionSummary,
-        pendingCompletionSummary: null,
-        error: null,
-      })
-      releaseRun(runId)
-      return
-    }
-    if (outcome.status === "success") {
-      updateAgent(agentId, { status: "idle" })
-      return
-    }
-    const error = outcome.error ?? "Agent session failed"
-    update(runId, {
-      status: "failed",
-      completedAt: new Date().toISOString(),
-      error,
-    })
-    updateAgent(agentId, {
-      status: "failed",
-      completedAt: new Date().toISOString(),
-      summary: outcome.summary,
-      error,
-    })
-    for (const child of listStoredAgents(runId)) {
+    if (closed || aborting.has(runId)) return
+    return withRunLock(runId, async () => {
+      if (closed || aborting.has(runId)) return
+      const storedRun = getStored(runId)
       if (
-        child.id !== agentId &&
-        !terminalAgentStatuses.includes(child.status as AgentStatus)
+        !storedRun ||
+        terminalRunStatuses.includes(storedRun.status as RunStatus)
       ) {
-        updateAgent(child.id, {
-          status: "stopped",
-          completedAt: new Date().toISOString(),
-        })
+        await releaseRun(runId)
+        return
       }
-    }
-    await abortRun(runId, agentId)
-    releaseRun(runId)
+      if (getStoredAgent(agentId)?.status !== "running") return
+
+      const containerFailure = containerFailures.get(runId)
+      if (containerFailure) {
+        aborting.set(runId, "paused")
+        try {
+          await abortRun(runId, agentId)
+          const changes = listStoredAgents(runId)
+            .filter(
+              (agent) =>
+                !terminalAgentStatuses.includes(agent.status as AgentStatus)
+            )
+            .map((agent) => ({
+              agentId: agent.id,
+              values: { status: "paused" as const },
+            }))
+          await releaseRun(runId)
+          transitionRun(
+            runId,
+            { status: "paused", error: containerFailure },
+            changes
+          )
+        } finally {
+          containerFailures.delete(runId)
+          aborting.delete(runId)
+        }
+        return
+      }
+
+      if (outcome.status === "success" && storedRun.pendingCompletionSummary) {
+        const completedAt = new Date().toISOString()
+        aborting.set(runId, "stopped")
+        try {
+          await abortRun(runId, agentId)
+          const changes: AgentChange[] = []
+          for (const agent of listStoredAgents(runId)) {
+            if (agent.id === agentId) {
+              changes.push({
+                agentId,
+                values: {
+                  status: "completed",
+                  completedAt,
+                  summary: storedRun.pendingCompletionSummary,
+                  error: null,
+                },
+              })
+              continue
+            }
+            if (!terminalAgentStatuses.includes(agent.status as AgentStatus)) {
+              changes.push({
+                agentId: agent.id,
+                values: { status: "stopped", completedAt },
+              })
+            }
+          }
+          await releaseRun(runId)
+          transitionRun(
+            runId,
+            {
+              status: "completed",
+              completedAt,
+              summary: storedRun.pendingCompletionSummary,
+              pendingCompletionSummary: null,
+              error: null,
+            },
+            changes
+          )
+        } finally {
+          aborting.delete(runId)
+        }
+        return
+      }
+      if (outcome.status === "success") {
+        updateAgent(agentId, { status: "idle" })
+        return
+      }
+
+      const completedAt = new Date().toISOString()
+      const error = outcome.error ?? "Agent session failed"
+      aborting.set(runId, "stopped")
+      try {
+        await abortRun(runId, agentId)
+        const changes: AgentChange[] = []
+        for (const agent of listStoredAgents(runId)) {
+          if (agent.id === agentId) {
+            changes.push({
+              agentId,
+              values: {
+                status: "failed",
+                completedAt,
+                summary: outcome.summary,
+                error,
+              },
+            })
+            continue
+          }
+          if (!terminalAgentStatuses.includes(agent.status as AgentStatus)) {
+            changes.push({
+              agentId: agent.id,
+              values: { status: "stopped", completedAt },
+            })
+          }
+        }
+        await releaseRun(runId)
+        transitionRun(runId, { status: "failed", completedAt, error }, changes)
+      } finally {
+        aborting.delete(runId)
+      }
+    })
   }
 
   async function handleChildSettled(
@@ -1140,17 +1324,27 @@ export function createRunManager(options: Options) {
       releaseAgent(agentId)
       return
     }
-    const finished = updateAgent(agentId, {
-      status: outcome.status === "success" ? "completed" : "failed",
-      completedAt: new Date().toISOString(),
-      summary: outcome.summary,
-      error:
-        outcome.status === "success"
-          ? null
-          : (outcome.error ?? "Agent session failed"),
+    return withRunLock(runId, async () => {
+      if (
+        closed ||
+        aborting.has(runId) ||
+        getStoredAgent(agentId)?.status !== "running"
+      ) {
+        releaseAgent(agentId)
+        return
+      }
+      const finished = updateAgent(agentId, {
+        status: outcome.status === "success" ? "completed" : "failed",
+        completedAt: new Date().toISOString(),
+        summary: outcome.summary,
+        error:
+          outcome.status === "success"
+            ? null
+            : (outcome.error ?? "Agent session failed"),
+      })
+      await notifyMain(finished)
+      releaseAgent(agentId)
     })
-    await notifyMain(finished)
-    releaseAgent(agentId)
   }
 
   async function abortRun(runId: string, exceptAgentId?: string) {
@@ -1525,37 +1719,39 @@ export function createRunManager(options: Options) {
       promptTemplates.initialPromptTemplate,
       promptContext
     )
-    db.insert(runs)
-      .values({
-        id,
-        challengeId,
-        status: "running",
-        prompt,
-        promptConfig: JSON.stringify({
-          ...promptTemplates,
-          context: promptContext,
-        }),
-        modelConfig: JSON.stringify(frozenModelConfig),
-        environmentConfig: JSON.stringify(environment),
-        workspacePath: relative(dataDir, workspacePath),
-        createdAt: now,
-        startedAt: now,
-        updatedAt: now,
-      })
-      .run()
-    db.insert(runAgents)
-      .values({
-        id,
-        runId: id,
-        parentAgentId: null,
-        name: "Main agent",
-        task: null,
-        status: "running",
-        createdAt: now,
-        startedAt: now,
-        updatedAt: now,
-      })
-      .run()
+    db.transaction((tx) => {
+      tx.insert(runs)
+        .values({
+          id,
+          challengeId,
+          status: "running",
+          prompt,
+          promptConfig: JSON.stringify({
+            ...promptTemplates,
+            context: promptContext,
+          }),
+          modelConfig: JSON.stringify(frozenModelConfig),
+          environmentConfig: JSON.stringify(environment),
+          workspacePath: relative(dataDir, workspacePath),
+          createdAt: now,
+          startedAt: now,
+          updatedAt: now,
+        })
+        .run()
+      tx.insert(runAgents)
+        .values({
+          id,
+          runId: id,
+          parentAgentId: null,
+          name: "Main agent",
+          task: null,
+          status: "running",
+          createdAt: now,
+          startedAt: now,
+          updatedAt: now,
+        })
+        .run()
+    })
 
     try {
       const model = await resolveRequestedModel(frozenModelConfig)
@@ -1571,41 +1767,45 @@ export function createRunManager(options: Options) {
       )
       runtime.dispatch("user", prompt)
     } catch (error) {
-      update(id, {
-        status: "failed",
-        completedAt: new Date().toISOString(),
-        error:
-          error instanceof RunStartError
-            ? error.message
-            : "Agent session failed",
-      })
-      updateAgent(id, {
-        status: "failed",
-        completedAt: new Date().toISOString(),
-        error:
-          error instanceof RunStartError
-            ? error.message
-            : "Agent session failed",
-      })
-      releaseRun(id)
+      await releaseRun(id)
+      const completedAt = new Date().toISOString()
+      const failure =
+        error instanceof RunStartError ? error.message : "Agent session failed"
+      transitionRun(id, { status: "failed", completedAt, error: failure }, [
+        {
+          agentId: id,
+          values: { status: "failed", completedAt, error: failure },
+        },
+      ])
     }
     return getPublic(id) as RunPublic
   }
 
-  async function pause(runId: string) {
+  function pause(runId: string) {
+    return withRunLock(runId, () => pauseNow(runId))
+  }
+
+  async function pauseNow(runId: string) {
     requireMutable(runId, ["running"])
     aborting.set(runId, "paused")
     try {
       await abortRun(runId)
       const latest = getPublic(runId) as RunPublic
       if (terminalRunStatuses.includes(latest.status)) return latest
-      const paused = update(runId, { status: "paused" })
-      for (const agent of listStoredAgents(runId)) {
-        if (agent.status === "running" || agent.status === "idle") {
-          updateAgent(agent.id, { status: "paused" })
-        }
-      }
-      releaseRun(runId)
+      await releaseRun(runId)
+      containerFailures.delete(runId)
+      const paused = transitionRun(
+        runId,
+        { status: "paused" },
+        listStoredAgents(runId)
+          .filter(
+            (agent) => agent.status === "running" || agent.status === "idle"
+          )
+          .map((agent) => ({
+            agentId: agent.id,
+            values: { status: "paused" as const },
+          }))
+      )
       return paused
     } finally {
       aborting.delete(runId)
@@ -1617,14 +1817,9 @@ export function createRunManager(options: Options) {
     message?: string,
     requestedMessageId?: string
   ) {
-    const previous = resumeLocks.get(runId) ?? Promise.resolve()
-    const current = previous
-      .catch(() => undefined)
-      .then(() => resumeNow(runId, message, requestedMessageId))
-    resumeLocks.set(runId, current)
-    return current.finally(() => {
-      if (resumeLocks.get(runId) === current) resumeLocks.delete(runId)
-    })
+    return withRunLock(runId, () =>
+      resumeNow(runId, message, requestedMessageId)
+    )
   }
 
   async function resumeNow(
@@ -1648,14 +1843,19 @@ export function createRunManager(options: Options) {
     if (!main)
       throw new RunActionError("invalid_state", "Main agent is unavailable")
     requireCapacity(pausedAgents.length)
-    update(runId, { status: "running", error: null, completedAt: null })
-    for (const agent of pausedAgents) {
-      updateAgent(agent.id, {
-        status: "running",
-        error: null,
-        completedAt: null,
-      })
-    }
+    containerFailures.delete(runId)
+    transitionRun(
+      runId,
+      { status: "running", error: null, completedAt: null },
+      pausedAgents.map((agent) => ({
+        agentId: agent.id,
+        values: {
+          status: "running" as const,
+          error: null,
+          completedAt: null,
+        },
+      }))
+    )
     try {
       const runtime = await ensureSession(main.id)
       runtime.replayPending()
@@ -1687,34 +1887,47 @@ export function createRunManager(options: Options) {
       }
       return { ...(getPublic(runId) as RunPublic), messageId }
     } catch (error) {
-      const failed = update(runId, {
-        status: "failed",
-        completedAt: new Date().toISOString(),
-        error:
-          error instanceof RunStartError
-            ? error.message
-            : "Agent session failed",
-      })
-      updateAgent(main.id, {
-        status: "failed",
-        completedAt: new Date().toISOString(),
-        error: failed.error,
-      })
-      for (const child of listStoredAgents(runId)) {
-        if (!terminalAgentStatuses.includes(child.status as AgentStatus)) {
-          updateAgent(child.id, {
-            status: "stopped",
-            completedAt: new Date().toISOString(),
-          })
-        }
-      }
       await abortRun(runId)
-      releaseRun(runId)
+      await releaseRun(runId)
+      const completedAt = new Date().toISOString()
+      const failure =
+        error instanceof RunStartError ? error.message : "Agent session failed"
+      const failed = transitionRun(
+        runId,
+        { status: "failed", completedAt, error: failure },
+        listStoredAgents(runId).flatMap((agent) =>
+          terminalAgentStatuses.includes(agent.status as AgentStatus)
+            ? []
+            : [
+                {
+                  agentId: agent.id,
+                  values: {
+                    status:
+                      agent.id === main.id
+                        ? ("failed" as const)
+                        : ("stopped" as const),
+                    completedAt,
+                    ...(agent.id === main.id ? { error: failure } : {}),
+                  },
+                },
+              ]
+        )
+      )
       return failed
     }
   }
 
-  async function message(
+  function message(
+    runId: string,
+    messageText: string,
+    requestedMessageId?: string
+  ) {
+    return withRunLock(runId, () =>
+      messageNow(runId, messageText, requestedMessageId)
+    )
+  }
+
+  async function messageNow(
     runId: string,
     messageText: string,
     requestedMessageId?: string
@@ -1728,7 +1941,7 @@ export function createRunManager(options: Options) {
     if (replay) return replay
     const run = requireMutable(runId, ["running", "paused"])
     if (run.status === "paused")
-      return resume(runId, messageText, requestedMessageId)
+      return resumeNow(runId, messageText, requestedMessageId)
     const main = getMainAgent(runId)
     if (!main)
       throw new RunActionError("invalid_state", "Main agent is unavailable")
@@ -1749,26 +1962,33 @@ export function createRunManager(options: Options) {
     return { ...(getPublic(runId) as RunPublic), messageId }
   }
 
-  async function stop(runId: string) {
+  function stop(runId: string) {
+    return withRunLock(runId, () => stopNow(runId))
+  }
+
+  async function stopNow(runId: string) {
     requireMutable(runId, ["running", "paused"])
     aborting.set(runId, "stopped")
     try {
       await abortRun(runId)
       const latest = getPublic(runId) as RunPublic
       if (terminalRunStatuses.includes(latest.status)) return latest
-      const stopped = update(runId, {
-        status: "stopped",
-        completedAt: new Date().toISOString(),
-      })
-      for (const agent of listStoredAgents(runId)) {
-        if (!terminalAgentStatuses.includes(agent.status as AgentStatus)) {
-          updateAgent(agent.id, {
-            status: "stopped",
-            completedAt: new Date().toISOString(),
-          })
-        }
-      }
-      releaseRun(runId)
+      await releaseRun(runId)
+      const completedAt = new Date().toISOString()
+      const stopped = transitionRun(
+        runId,
+        { status: "stopped", completedAt },
+        listStoredAgents(runId)
+          .filter(
+            (agent) =>
+              !terminalAgentStatuses.includes(agent.status as AgentStatus)
+          )
+          .map((agent) => ({
+            agentId: agent.id,
+            values: { status: "stopped" as const, completedAt },
+          }))
+      )
+      containerFailures.delete(runId)
       return stopped
     } finally {
       aborting.delete(runId)
@@ -1829,6 +2049,49 @@ export function createRunManager(options: Options) {
       }
       if (event) listener(event, row.id, true)
     }
+  }
+
+  async function closeManager() {
+    if (closed) return
+    closed = true
+    await Promise.allSettled([...runLocks.values()])
+    const runningRuns = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.status, "running"))
+      .all()
+    for (const { id } of runningRuns) {
+      aborting.set(id, "paused")
+      try {
+        await abortRun(id)
+        await releaseRun(id)
+        const agents = listStoredAgents(id)
+          .filter(
+            (agent) => agent.status === "running" || agent.status === "idle"
+          )
+          .map((agent) => ({
+            agentId: agent.id,
+            values: { status: "paused" as const },
+          }))
+        transitionRun(id, { status: "paused" }, agents)
+      } catch (error) {
+        console.error("Run cleanup failed", {
+          runId: id,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      } finally {
+        aborting.delete(id)
+      }
+    }
+    for (const { runtime } of current.values()) runtime.dispose()
+    current.clear()
+    await Promise.allSettled(
+      [...activeContainers.values()].map((name) => removeContainerAsync(name))
+    )
+    activeContainers.clear()
+    containerFailures.clear()
+    listeners.clear()
+    runLocks.clear()
   }
 
   return {
@@ -1898,17 +2161,7 @@ export function createRunManager(options: Options) {
       )
     },
     cursor,
-    close: () => {
-      if (closed) return
-      closed = true
-      for (const { runtime } of current.values()) {
-        runtime.dispose()
-      }
-      current.clear()
-      for (const name of activeContainers.values()) removeContainer(name)
-      activeContainers.clear()
-      listeners.clear()
-    },
+    close: closeManager,
   }
 }
 

@@ -20,11 +20,11 @@ import { createApp } from "../src/app"
 import { waitFor } from "./support"
 
 const roots: string[] = []
-const closeApps: Array<() => void> = []
+const closeApps: Array<() => void | Promise<void>> = []
 const configuredModels = new WeakMap<object, Promise<string>>()
 
-afterEach(() => {
-  for (const close of closeApps.splice(0)) close()
+afterEach(async () => {
+  for (const close of closeApps.splice(0)) await close()
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true })
 })
@@ -263,6 +263,16 @@ describe("container execution and workspace files", () => {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage(
+        fauxToolCall("bash", { command: "sleep 5", timeout: 0.1 }),
+        { stopReason: "toolUse" }
+      ),
+      fauxAssistantMessage(
+        fauxToolCall("bash", {
+          command: "printf recovered > timeout-recovered",
+        }),
+        { stopReason: "toolUse" }
+      ),
+      fauxAssistantMessage(
         fauxToolCall("write", { path: "result.txt", content: "first" }),
         { stopReason: "toolUse" }
       ),
@@ -313,6 +323,9 @@ describe("container execution and workspace files", () => {
     expect(JSON.stringify(completed.messages)).not.toContain("host-only-secret")
     expect(readFileSync(join(workspace, "result.txt"), "utf8")).toBe(
       "container"
+    )
+    expect(readFileSync(join(workspace, "timeout-recovered"), "utf8")).toBe(
+      "recovered"
     )
     expect(docker("inspect", name).exitCode).not.toBe(0)
     expect(instance.activeSessionCount()).toBe(0)

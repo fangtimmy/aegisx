@@ -8,10 +8,10 @@ import { createApp } from "../src/app"
 import { json } from "./support"
 
 const tempDirs: string[] = []
-const closeDatabases: Array<() => void> = []
+const closeDatabases: Array<() => void | Promise<void>> = []
 
-afterEach(() => {
-  for (const close of closeDatabases.splice(0)) close()
+afterEach(async () => {
+  for (const close of closeDatabases.splice(0)) await close()
   for (const path of tempDirs.splice(0)) {
     rmSync(path, { recursive: true, force: true })
   }
@@ -58,7 +58,7 @@ describe("event, challenge, and attachment API", () => {
     const first = createTestApp()
     const event = await createEvent(first.app)
     await createChallenge(first.app, event.id)
-    first.close()
+    await first.close()
     closeDatabases.pop()
 
     const second = createTestApp(first.dataDir)

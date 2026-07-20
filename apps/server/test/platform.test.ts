@@ -15,10 +15,10 @@ import { json, waitFor } from "./support"
 
 const roots: string[] = []
 const servers: Bun.Server<unknown>[] = []
-const closeApps: Array<() => void> = []
+const closeApps: Array<() => void | Promise<void>> = []
 
-afterEach(() => {
-  for (const close of closeApps.splice(0)) close()
+afterEach(async () => {
+  for (const close of closeApps.splice(0)) await close()
   for (const server of servers.splice(0)) server.stop(true)
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true })

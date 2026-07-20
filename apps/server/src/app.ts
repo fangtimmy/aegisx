@@ -110,7 +110,7 @@ export function createApp(options: {
   models?: MutableModels
   resolveModel?: (provider: string, modelId: string) => Model<Api> | undefined
 }) {
-  const { db, sqlite } = createDatabase(options.dataDir)
+  const { db, sqlite, releaseLock } = createDatabase(options.dataDir)
   const storage = createStorage(options.dataDir)
   const modelService = createModelService(
     db,
@@ -1074,9 +1074,10 @@ export function createApp(options: {
   return {
     app,
     activeSessionCount: runManager.activeSessionCount,
-    close: () => {
-      runManager.close()
+    close: async () => {
+      await runManager.close()
       sqlite.close()
+      releaseLock()
     },
   }
 }
