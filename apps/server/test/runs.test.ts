@@ -332,7 +332,7 @@ describe("run API", () => {
           await first.app.request(`/api/runs/${firstRun.id}`)
         ).json() as Promise<{
           run: { status: string; flag?: string; summary: string | null }
-          history: unknown[]
+          messages: unknown[]
         }>,
       (value) => value.run.status === "completed"
     )
@@ -387,7 +387,7 @@ describe("run API", () => {
     const reopenedDetail = await (
       await reopened.app.request(`/api/runs/${firstRun.id}`)
     ).json()
-    expect(reopenedDetail.history.length).toBeGreaterThan(0)
+    expect(reopenedDetail.messages.length).toBeGreaterThan(0)
     expect(JSON.stringify(reopenedDetail)).not.toContain(first.dataDir)
   })
 
@@ -430,9 +430,9 @@ describe("run API", () => {
       const detail = await (
         await instance.app.request(`/api/runs/${run.id}`)
       ).json()
-      return detail.history.some(
-        (entry: { type: string; message?: { role: string } }) =>
-          entry.type === "message" && entry.message?.role === "assistant"
+      return detail.messages.some(
+        (entry: { message?: { role: string } }) =>
+          entry.message?.role === "assistant"
       )
     }, Boolean)
     const idle = await waitFor(
@@ -512,7 +512,7 @@ describe("run API", () => {
               totalTokens: number
             }
           }>
-          history: unknown[]
+          messages: unknown[]
           stats: {
             input: number
             output: number
@@ -525,7 +525,7 @@ describe("run API", () => {
         value.agents.some(
           (agent) =>
             agent.parentAgentId !== null && agent.status === "completed"
-        ) && JSON.stringify(value.history).includes("Background agent Recon")
+        ) && JSON.stringify(value.messages).includes("Background agent Recon")
     )
     const child = detail.agents.find(
       (agent) => agent.parentAgentId !== null
@@ -534,7 +534,7 @@ describe("run API", () => {
       (agent) => agent.parentAgentId === null
     ) as (typeof detail.agents)[number]
     expect(child.summary).toContain("delegated-result")
-    expect(JSON.stringify(detail.history)).toContain(`"agentId":"${child.id}"`)
+    expect(JSON.stringify(detail.messages)).toContain(`"agentId":"${child.id}"`)
     for (const key of [
       "input",
       "output",
@@ -550,7 +550,7 @@ describe("run API", () => {
     const childDetail = await (
       await instance.app.request(`/api/runs/${run.id}/agents/${child.id}`)
     ).json()
-    expect(childDetail.history[0].message).toMatchObject({
+    expect(childDetail.messages[0].message).toMatchObject({
       role: "user",
       content: [
         {
@@ -559,12 +559,14 @@ describe("run API", () => {
         },
       ],
     })
-    expect(JSON.stringify(childDetail.history)).toContain("delegated-result")
-    expect(JSON.stringify(childDetail.history)).not.toContain("call finish_run")
-    expect(JSON.stringify(childDetail.history)).not.toContain(
+    expect(JSON.stringify(childDetail.messages)).toContain("delegated-result")
+    expect(JSON.stringify(childDetail.messages)).not.toContain(
+      "call finish_run"
+    )
+    expect(JSON.stringify(childDetail.messages)).not.toContain(
       "Inspect the supplied bytes and finish the run."
     )
-    expect(JSON.stringify(childDetail.history)).not.toContain(
+    expect(JSON.stringify(childDetail.messages)).not.toContain(
       "share the Run workspace root"
     )
 
@@ -741,12 +743,12 @@ describe("run API", () => {
     const detail = await waitFor(
       async () =>
         (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
-          history: unknown[]
+          messages: unknown[]
         }>,
       (value) =>
-        JSON.stringify(value.history).includes("continued after compaction")
+        JSON.stringify(value.messages).includes("continued after compaction")
     )
-    expect(JSON.stringify(detail.history)).toContain(
+    expect(JSON.stringify(detail.messages)).toContain(
       "continued after compaction"
     )
 
@@ -778,18 +780,30 @@ describe("run API", () => {
       async () =>
         (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
           run: { status: string }
-          history: Array<{ id: string; runtimeId: string }>
+          messages: Array<{ id: string; agentId: string; sequence: number }>
         }>,
       (value) => value.run.status === "completed"
     )
 
-    expect(detail.history.length).toBeGreaterThan(0)
-    expect(new Set(detail.history.map(({ id }) => id)).size).toBe(
-      detail.history.length
+    expect(detail.messages.length).toBeGreaterThan(0)
+    expect(new Set(detail.messages.map(({ id }) => id)).size).toBe(
+      detail.messages.length
     )
-    expect(detail.history.every((entry) => entry.id === entry.runtimeId)).toBe(
+    expect(detail.messages.every((entry) => entry.agentId === run.id)).toBe(
       true
     )
+
+    const conversation = await (
+      await instance.app.request(
+        `/api/runs/${run.id}/conversation?agentId=${run.id}`
+      )
+    ).json()
+    expect(conversation).toMatchObject({
+      runId: run.id,
+      agentId: run.id,
+      messages: detail.messages,
+    })
+    expect(conversation.cursor).toBeGreaterThan(0)
 
     const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
     const events = sqlite
@@ -803,6 +817,54 @@ describe("run API", () => {
     )
     expect(lastMessage?.id).toBeLessThan(lastRunUpdate?.id as number)
     sqlite.close()
+  })
+
+  test("replays durable conversation events before the SSE ready marker", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("finish_run", { summary: "Replay complete" }),
+        { stopReason: "toolUse" }
+      ),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string }
+        }>,
+      (value) => value.run.status === "completed"
+    )
+
+    const controller = new AbortController()
+    const response = await instance.app.request(
+      `/api/runs/${run.id}/events?after=0`,
+      { signal: controller.signal }
+    )
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error("SSE response body is unavailable")
+    const decoder = new TextDecoder()
+    let streamed = ""
+    while (!streamed.includes('"type":"ready"')) {
+      const result = await Promise.race([
+        reader.read(),
+        Bun.sleep(2000).then(() => {
+          throw new Error("Timed out reading SSE replay")
+        }),
+      ])
+      if (result.done) break
+      streamed += decoder.decode(result.value, { stream: true })
+    }
+    controller.abort()
+    await reader.cancel().catch(() => undefined)
+
+    expect(streamed).toContain('"type":"message.committed"')
+    expect(streamed).toContain('"type":"run.updated"')
+    expect(streamed.indexOf('"type":"message.committed"')).toBeLessThan(
+      streamed.indexOf('"type":"ready"')
+    )
+    expect(streamed).toMatch(/id: \d+/)
   })
 
   test("deduplicates retried user messages by client message id", async () => {
@@ -875,14 +937,10 @@ describe("run API", () => {
     instance.faux.setResponses([fauxAssistantMessage("Resumed.")])
     const clientMessageId = crypto.randomUUID()
     const body = { message: "Resume safely", clientMessageId }
-    const first = await instance.app.request(
-      `/api/runs/${run.id}/resume`,
-      json("POST", body)
-    )
-    const second = await instance.app.request(
-      `/api/runs/${run.id}/resume`,
-      json("POST", body)
-    )
+    const [first, second] = await Promise.all([
+      instance.app.request(`/api/runs/${run.id}/resume`, json("POST", body)),
+      instance.app.request(`/api/runs/${run.id}/resume`, json("POST", body)),
+    ])
     expect(first.status).toBe(200)
     expect(second.status).toBe(200)
     expect((await second.json()).messageId).toBe(clientMessageId)

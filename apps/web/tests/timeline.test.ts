@@ -1,271 +1,233 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { RunStreamStore } from "@/features/runs/run-stream-store"
 import {
   buildConversation,
   type LiveEntry,
-  liveEntries,
-  mergeLiveEntries,
-  pruneLiveEntries,
 } from "@/features/runs/timeline-model"
-import type { SessionEntry } from "@/lib/api"
+import type { ConversationMessage } from "@/lib/api"
 
-test("builds an agent turn and pairs tool results", () => {
-  const startedAt = Date.parse("2026-07-16T00:00:01.000Z")
-  const assistant = {
-    role: "assistant",
-    content: [
-      { type: "thinking", thinking: "" },
-      { type: "thinking", thinking: "Planning the inspection." },
-      { type: "text", text: "Checking the workspace." },
-      {
-        type: "toolCall",
-        id: "call-1",
-        name: "bash",
-        arguments: { command: "ls -la" },
-      },
-    ],
-    timestamp: startedAt,
+const fakeWindow = {
+  requestAnimationFrame(callback: FrameRequestCallback) {
+    callback(0)
+    return 1
+  },
+  cancelAnimationFrame() {},
+}
+
+Object.defineProperty(globalThis, "window", {
+  configurable: true,
+  value: fakeWindow,
+})
+
+function message(
+  id: string,
+  sequence: number,
+  value: Record<string, unknown>
+): ConversationMessage {
+  return {
+    id,
+    agentId: "agent-1",
+    sequence,
+    message: value,
+    createdAt: new Date(sequence * 1000).toISOString(),
   }
-  const history: SessionEntry[] = [
-    {
-      type: "message",
-      id: "user-1",
-      parentId: null,
-      timestamp: "2026-07-16T00:00:00.000Z",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "Inspect the files." }],
-        timestamp: 1,
-      },
-    },
-    {
-      type: "message",
-      id: "assistant-1",
-      parentId: "user-1",
-      timestamp: "2026-07-16T00:00:02.500Z",
-      message: assistant,
-    },
-    {
-      type: "message",
-      id: "result-1",
-      parentId: "assistant-1",
-      timestamp: "2026-07-16T00:00:02.000Z",
-      message: {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "bash",
-        content: [{ type: "text", text: "file.txt" }],
-        isError: false,
-        timestamp: 3,
-      },
-    },
+}
+
+test("pairs live tool progress with the persisted assistant message", () => {
+  const history = [
+    message("assistant-1", 1, {
+      role: "assistant",
+      timestamp: 1,
+      content: [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "bash",
+          arguments: { command: "ls" },
+        },
+      ],
+    }),
   ]
   const live: LiveEntry[] = [
-    {
-      key: `message:assistant:${startedAt}`,
-      type: "message",
-      message: assistant,
-    },
     {
       key: "tool:call-1",
       type: "tool",
       toolCallId: "call-1",
       toolName: "bash",
-      args: { command: "ls -la" },
-      result: { content: [{ type: "text", text: "duplicate" }] },
+      args: { command: "ls" },
+      result: "file.txt",
       isError: false,
-      status: "done",
+      status: "running",
     },
   ]
 
   const items = buildConversation(history, live)
-  assert.deepEqual(
-    items.map((item) => item.type),
-    ["user", "agent"]
-  )
-  const agent = items[1]
-  if (agent.type !== "agent") assert.fail("expected an agent turn")
-  assert.deepEqual(
-    agent.blocks.map((block) => block.type),
-    ["reasoning", "text", "tool"]
-  )
-  const reasoning = agent.blocks[0]
-  if (reasoning.type !== "reasoning") assert.fail("expected reasoning")
-  assert.equal(reasoning.durationMs, 1500)
-  const tool = agent.blocks[2]
-  if (tool.type !== "tool") assert.fail("expected a tool block")
-  assert.equal(tool.status, "done")
-  assert.equal(tool.output, "file.txt")
-})
-
-test("renders child completion as an agent handoff", () => {
-  const items = buildConversation(
-    [
-      {
-        type: "message",
-        id: "handoff-1",
-        parentId: null,
-        timestamp: "2026-07-16T00:00:00.000Z",
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Background agent Recon (agent-1) completed.\n\nFinal output:\n\nFound the target file.",
-            },
-          ],
-          timestamp: 1,
-          aegisx: {
-            kind: "child_result",
-            metadata: {
-              handoff: {
-                agentId: "agent-1",
-                agentName: "Recon",
-                status: "completed",
-              },
-            },
-          },
-        },
-      },
-    ],
-    []
-  )
-
   assert.equal(items.length, 1)
-  assert.deepEqual(items[0], {
-    key: "handoff-1",
-    type: "handoff",
-    agentName: "Recon",
+  assert.equal(items[0]?.type, "agent")
+  if (items[0]?.type !== "agent") assert.fail("expected an agent turn")
+  assert.equal(items[0].blocks.length, 1)
+  assert.equal(items[0].blocks[0]?.type, "tool")
+  if (items[0].blocks[0]?.type !== "tool") assert.fail("expected a tool")
+  assert.equal(items[0].blocks[0].status, "running")
+  assert.equal(items[0].blocks[0].output, "file.txt")
+})
+
+test("committed messages replace progress with the same stable id", () => {
+  const store = new RunStreamStore()
+  store.applyEvent({
+    type: "message.progress",
     agentId: "agent-1",
-    status: "completed",
-    body: "Found the target file.",
-    timestamp: 1,
-  })
-})
-
-test("keeps streaming message updates on one live entry", () => {
-  const started = liveEntries({
-    type: "message_start",
-    message: { role: "assistant", timestamp: 42, content: [] },
-  })
-  const updated = liveEntries({
-    type: "message_update",
-    message: {
-      role: "assistant",
-      timestamp: 42,
-      content: [{ type: "text", text: "Streaming" }],
-    },
-  })
-
-  assert.equal(started[0]?.key, updated[0]?.key)
-  assert.equal(updated[0]?.type, "message")
-  if (updated[0]?.type !== "message") assert.fail("expected a message")
-  assert.equal(
-    (updated[0].message.content as Array<{ text: string }>)[0]?.text,
-    "Streaming"
-  )
-})
-
-test("uses the server message id across changing assistant timestamps", () => {
-  const started = liveEntries(
-    {
-      type: "message_start",
-      message: { role: "assistant", timestamp: 1, content: [] },
-    },
-    "message-1"
-  )
-  const ended = liveEntries(
-    {
-      type: "message_end",
-      message: {
-        role: "assistant",
-        timestamp: 2,
-        stopReason: "stop",
-        content: [{ type: "text", text: "complete" }],
-      },
-    },
-    "message-1"
-  )
-
-  assert.equal(started[0]?.key, ended[0]?.key)
-  assert.equal(mergeLiveEntries(started, ended).length, 1)
-})
-
-test("reuses an active assistant entry for a changed terminal timestamp", () => {
-  const active: LiveEntry = {
-    key: "message:assistant:1",
-    type: "message",
+    messageId: "message-1",
+    revision: 1,
     message: {
       role: "assistant",
       timestamp: 1,
       content: [{ type: "text", text: "partial" }],
     },
-  }
-  const ended: LiveEntry = {
-    key: "message:assistant:2",
-    type: "message",
+  })
+  store.applyEvent({
+    type: "message.committed",
+    agentId: "agent-1",
+    cursor: 2,
+    message: message("message-1", 1, {
+      role: "assistant",
+      timestamp: 1,
+      content: [{ type: "text", text: "complete" }],
+    }),
+  })
+
+  const items = store.get("agent-1")
+  assert.equal(items.length, 1)
+  assert.equal(items[0]?.type, "agent")
+  if (items[0]?.type !== "agent") assert.fail("expected an agent turn")
+  assert.equal(items[0].blocks[0]?.type, "text")
+  if (items[0].blocks[0]?.type !== "text") assert.fail("expected text")
+  assert.equal(items[0].blocks[0].body, "complete")
+})
+
+test("ignores out-of-order progress revisions", () => {
+  const store = new RunStreamStore()
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "message-1",
+    revision: 2,
     message: {
       role: "assistant",
-      timestamp: 2,
-      stopReason: "aborted",
-      content: [{ type: "text", text: "partial" }],
+      content: [{ type: "text", text: "new" }],
     },
-    endedAt: 3,
-  }
+  })
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "message-1",
+    revision: 1,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "old" }],
+    },
+  })
 
-  const merged = mergeLiveEntries([active], [ended])
-  assert.equal(merged.length, 1)
-  assert.equal(merged[0]?.key, active.key)
-  assert.equal(merged[0]?.type, "message")
+  const items = store.get("agent-1")
+  assert.equal(items[0]?.type, "agent")
+  if (items[0]?.type !== "agent") assert.fail("expected an agent turn")
+  assert.equal(items[0].blocks[0]?.type, "text")
+  if (items[0].blocks[0]?.type !== "text") assert.fail("expected text")
+  assert.equal(items[0].blocks[0].body, "new")
 })
 
-test("keeps tool-result messages distinct without timestamps", () => {
-  const first = liveEntries({
-    type: "message_end",
+test("ignores stale progress after a snapshot already committed the message", () => {
+  const store = new RunStreamStore()
+  store.applySnapshot("agent-1", [
+    message("message-1", 1, {
+      role: "assistant",
+      content: [{ type: "text", text: "complete" }],
+    }),
+  ])
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "message-1",
+    revision: 1,
     message: {
+      role: "assistant",
+      content: [{ type: "text", text: "stale" }],
+    },
+  })
+
+  const items = store.get("agent-1")
+  assert.equal(items[0]?.type, "agent")
+  if (items[0]?.type !== "agent") assert.fail("expected an agent turn")
+  assert.equal(items[0].blocks[0]?.type, "text")
+  if (items[0].blocks[0]?.type !== "text") assert.fail("expected text")
+  assert.equal(items[0].blocks[0].body, "complete")
+})
+
+test("snapshot and live tool completion stay in one conversation", () => {
+  const store = new RunStreamStore()
+  store.applySnapshot("agent-1", [
+    message("assistant-1", 1, {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "bash",
+          arguments: { command: "cat flag" },
+        },
+      ],
+    }),
+  ])
+  store.applyEvent({
+    type: "tool.progress",
+    agentId: "agent-1",
+    toolCallId: "call-1",
+    revision: 1,
+    toolName: "bash",
+    args: { command: "cat flag" },
+    result: "flag{ok}",
+    status: "done",
+  })
+  store.applyEvent({
+    type: "message.committed",
+    agentId: "agent-1",
+    cursor: 11,
+    message: message("tool:call-1", 2, {
       role: "toolResult",
       toolCallId: "call-1",
-      content: [{ type: "text", text: "one" }],
-    },
-  })
-  const second = liveEntries({
-    type: "message_end",
-    message: {
-      role: "toolResult",
-      toolCallId: "call-2",
-      content: [{ type: "text", text: "two" }],
-    },
+      toolName: "bash",
+      content: [{ type: "text", text: "flag{ok}" }],
+      isError: false,
+    }),
   })
 
-  assert.notEqual(first[0]?.key, second[0]?.key)
-  assert.equal(mergeLiveEntries(first, second).length, 2)
+  const items = store.get("agent-1")
+  assert.equal(items.length, 1)
+  assert.equal(items[0]?.type, "agent")
+  if (items[0]?.type !== "agent") assert.fail("expected an agent turn")
+  assert.deepEqual(
+    items[0].blocks.map((block) => block.type),
+    ["tool"]
+  )
+  if (items[0].blocks[0]?.type !== "tool") assert.fail("expected a tool")
+  assert.equal(items[0].blocks[0].status, "done")
+  assert.equal(items[0].blocks[0].output, "flag{ok}")
 })
 
-test("uses persisted entry ids for duplicate-timestamp messages", () => {
+test("stable message ids keep same-timestamp history distinct", () => {
   const items = buildConversation(
     [
-      {
-        type: "message",
-        id: "message-1",
-        parentId: null,
-        timestamp: "2026-07-16T00:00:00.000Z",
-        message: {
-          role: "user",
-          timestamp: 100,
-          content: [{ type: "text", text: "first" }],
-        },
-      },
-      {
-        type: "message",
-        id: "message-2",
-        parentId: "message-1",
-        timestamp: "2026-07-16T00:00:00.001Z",
-        message: {
-          role: "user",
-          timestamp: 100,
-          content: [{ type: "text", text: "second" }],
-        },
-      },
+      message("message-1", 1, {
+        role: "user",
+        timestamp: 100,
+        content: [{ type: "text", text: "first" }],
+      }),
+      message("message-2", 2, {
+        role: "user",
+        timestamp: 100,
+        content: [{ type: "text", text: "second" }],
+      }),
     ],
     []
   )
@@ -276,69 +238,38 @@ test("uses persisted entry ids for duplicate-timestamp messages", () => {
   )
 })
 
-test("prunes live messages after they are persisted", () => {
-  const history: SessionEntry[] = [
-    {
-      type: "message",
-      id: "assistant-1",
-      parentId: null,
-      timestamp: "2026-07-16T00:00:00.000Z",
-      message: {
-        role: "assistant",
-        timestamp: 100,
-        content: [{ type: "text", text: "done" }],
-      },
-    },
-    {
-      type: "message",
-      id: "result-1",
-      parentId: "assistant-1",
-      timestamp: "2026-07-16T00:00:00.001Z",
-      message: {
-        role: "toolResult",
-        toolCallId: "call-1",
-        content: [{ type: "text", text: "output" }],
-      },
-    },
-  ]
-  const live = liveEntries({
-    type: "message_update",
-    message: {
-      role: "assistant",
-      timestamp: 100,
-      content: [{ type: "text", text: "done" }],
-    },
+test("renders child completion as an agent handoff", () => {
+  const items = buildConversation(
+    [
+      message("handoff-1", 1, {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Background agent Recon (agent-1) completed.\n\nFinal output:\n\nFound the target file.",
+          },
+        ],
+        aegisx: {
+          metadata: {
+            handoff: {
+              agentId: "agent-1",
+              agentName: "Recon",
+              status: "completed",
+            },
+          },
+        },
+      }),
+    ],
+    []
+  )
+
+  assert.deepEqual(items[0], {
+    key: "handoff-1",
+    type: "handoff",
+    agentName: "Recon",
+    agentId: "agent-1",
+    status: "completed",
+    body: "Found the target file.",
+    timestamp: "1970-01-01T00:00:01.000Z",
   })
-
-  assert.deepEqual(pruneLiveEntries(history, live), [])
-})
-
-test("prunes persisted live messages by stable runtime id", () => {
-  const history: SessionEntry[] = [
-    {
-      type: "message",
-      id: "message-1",
-      runtimeId: "message-1",
-      parentId: null,
-      timestamp: "2026-07-16T00:00:01.000Z",
-      message: {
-        role: "assistant",
-        timestamp: 2,
-        content: [{ type: "text", text: "done" }],
-      },
-    },
-  ]
-  const live: LiveEntry[] = [
-    {
-      key: "message:assistant:message-1",
-      type: "message",
-      message: {
-        role: "assistant",
-        timestamp: 1,
-        content: [{ type: "text", text: "partial" }],
-      },
-    },
-  ]
-
-  assert.deepEqual(pruneLiveEntries(history, live), [])
 })

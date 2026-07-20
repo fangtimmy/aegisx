@@ -302,15 +302,15 @@ describe("container execution and workspace files", () => {
       async () =>
         (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
           run: { status: string; summary: string | null }
-          history: unknown[]
+          messages: unknown[]
         }>,
       (detail) => detail.run.status === "completed"
     )
     expect(completed.run.summary).toBe("Container tools verified")
-    expect(JSON.stringify(completed.history)).toContain(
+    expect(JSON.stringify(completed.messages)).toContain(
       "Path is outside the run workspace"
     )
-    expect(JSON.stringify(completed.history)).not.toContain("host-only-secret")
+    expect(JSON.stringify(completed.messages)).not.toContain("host-only-secret")
     expect(readFileSync(join(workspace, "result.txt"), "utf8")).toBe(
       "container"
     )

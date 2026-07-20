@@ -588,12 +588,34 @@ export function createApp(options: {
     }
     const agents = runManager.agents(run.id)
     const main = agents.find((agent) => agent.parentAgentId === null)
+    const snapshot = main
+      ? runManager.conversationSnapshot(main.id)
+      : { messages: [], cursor: runManager.cursor(run.id) }
     return c.json({
       run,
       agents,
-      history: main ? runManager.history(main.id) : [],
+      messages: snapshot.messages,
       stats: sumUsage(agents.map((agent) => agent.usage)),
-      eventCursor: runManager.eventCursor(run.id),
+      cursor: snapshot.cursor,
+    })
+  })
+
+  app.get("/api/runs/:runId/conversation", (c) => {
+    const run = runManager.get(c.req.param("runId"))
+    const agentId = c.req.query("agentId")
+    const agent = agentId ? runManager.agent(agentId) : undefined
+    if (!run || !agent || agent.runId !== run.id) {
+      return c.json(
+        { error: { code: "not_found", message: "Agent not found" } },
+        404
+      )
+    }
+    const snapshot = runManager.conversationSnapshot(agent.id)
+    return c.json({
+      runId: run.id,
+      agentId: agent.id,
+      messages: snapshot.messages,
+      cursor: snapshot.cursor,
     })
   })
 
@@ -606,9 +628,11 @@ export function createApp(options: {
         404
       )
     }
+    const snapshot = runManager.conversationSnapshot(agent.id)
     return c.json({
       agent,
-      history: runManager.history(agent.id),
+      messages: snapshot.messages,
+      cursor: snapshot.cursor,
       stats: runManager.agentUsage(agent.id),
     })
   })
@@ -760,16 +784,12 @@ export function createApp(options: {
       const isRecord = (value: unknown): value is Record<string, unknown> =>
         typeof value === "object" && value !== null && !Array.isArray(value)
       const coalesceKey = (value: { event: unknown }) => {
-        if (!isRecord(value.event) || value.event.type !== "agent_event") {
-          return null
+        if (!isRecord(value.event)) return null
+        if (value.event.type === "message.progress") {
+          return `message:${String(value.event.agentId ?? "")}:${String(value.event.messageId ?? "")}`
         }
-        const event = value.event.event
-        if (!isRecord(event)) return null
-        const agentId =
-          typeof value.event.agentId === "string" ? value.event.agentId : ""
-        if (event.type === "message_update") return `message:${agentId}`
-        if (event.type === "tool_execution_update") {
-          return `tool:${agentId}:${String(event.toolCallId ?? "")}`
+        if (value.event.type === "tool.progress") {
+          return `tool:${String(value.event.agentId ?? "")}:${String(value.event.toolCallId ?? "")}`
         }
         return null
       }
@@ -850,15 +870,18 @@ export function createApp(options: {
           data: JSON.stringify({
             type: "ready",
             runId,
-            eventCursor: runManager.eventCursor(runId),
+            cursor: runManager.cursor(runId),
           }),
         })
         await stream.writeSSE({
-          data: JSON.stringify({ type: "status", run: runManager.get(runId) }),
+          data: JSON.stringify({
+            type: "run.updated",
+            run: runManager.get(runId),
+          }),
         })
         for (const agent of runManager.agents(runId)) {
           await stream.writeSSE({
-            data: JSON.stringify({ type: "agent_status", agent }),
+            data: JSON.stringify({ type: "agent.updated", agent }),
           })
         }
         while (pending.length > 0) {

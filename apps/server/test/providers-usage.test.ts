@@ -278,9 +278,9 @@ describe("providers, models, and usage", () => {
           (
             await instance.app.request(`/api/runs/${run.id}`)
           ).json() as Promise<{
-            history: unknown[]
+            messages: unknown[]
           }>,
-        (value) => JSON.stringify(value.history).includes("[redacted]")
+        (value) => JSON.stringify(value.messages).includes("[redacted]")
       )
       const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
       const messages = sqlite
@@ -375,7 +375,7 @@ describe("providers, models, and usage", () => {
       async () =>
         (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
           run: Record<string, unknown> & { status: string }
-          history: unknown[]
+          messages: unknown[]
         }>,
       (value) => value.run.status === "completed"
     )
@@ -389,7 +389,7 @@ describe("providers, models, and usage", () => {
       memoryMb: 256,
       pidsLimit: 64,
     })
-    expect(JSON.stringify(detail.history)).toContain(
+    expect(JSON.stringify(detail.messages)).toContain(
       "Tool start_target not found"
     )
     expect(JSON.stringify(detail)).toContain("flag{hidden}")

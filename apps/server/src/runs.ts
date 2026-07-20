@@ -26,11 +26,11 @@ import type {
   AgentRuntimeSnapshot,
   AgentStatus,
   AgentSummary,
+  ConversationMessage,
   RunPublic,
   RunStatus,
 } from "../../shared/api"
 import {
-  type AgentEvent,
   type AgentRuntime,
   createAgentRuntime,
   publicAgentMessage,
@@ -77,14 +77,31 @@ import { summarizeUsage, summarizeUsageRecords, sumUsage } from "./usage"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunEvent =
-  | { type: "status"; run: RunPublic; eventCursor?: number }
-  | { type: "agent_status"; agent: AgentPublic; eventCursor?: number }
+  | { type: "run.updated"; run: RunPublic; cursor?: number }
+  | { type: "agent.updated"; agent: AgentSummary; cursor?: number }
   | {
-      type: "agent_event"
+      type: "message.progress"
       agentId: string
-      event: AgentEvent
-      messageId?: string
-      eventCursor?: number
+      messageId: string
+      revision: number
+      message: Record<string, unknown>
+    }
+  | {
+      type: "tool.progress"
+      agentId: string
+      toolCallId: string
+      revision: number
+      toolName: string
+      args: unknown
+      result?: unknown
+      status: "running" | "done" | "error"
+      isError?: boolean
+    }
+  | {
+      type: "message.committed"
+      agentId: string
+      cursor: number
+      message: ConversationMessage
     }
 type RunEventListener = (
   event: RunEvent,
@@ -150,6 +167,8 @@ export function createRunManager(options: Options) {
   const activeContainers = new Map<string, string>()
   const listeners = new Map<string, Set<RunEventListener>>()
   const aborting = new Map<string, "paused" | "stopped">()
+  // ponytail: per-run lock; this process owns all active sessions.
+  const resumeLocks = new Map<string, Promise<unknown>>()
   let closed = false
 
   const interruptedContainers = db
@@ -234,7 +253,7 @@ export function createRunManager(options: Options) {
     return db.select().from(runs).where(eq(runs.id, runId)).get()
   }
 
-  function eventCursor(runId: string) {
+  function cursor(runId: string) {
     return (
       db
         .select({ value: sql<number>`coalesce(max(${runEvents.id}), 0)` })
@@ -368,7 +387,7 @@ export function createRunManager(options: Options) {
   }
 
   function emit(runId: string, event: RunEvent) {
-    const sequence = event.eventCursor ?? 0
+    const sequence = "cursor" in event ? (event.cursor ?? 0) : 0
     for (const listener of listeners.get(runId) ?? []) {
       listener(event, sequence, false)
     }
@@ -398,13 +417,13 @@ export function createRunManager(options: Options) {
     values: Partial<typeof runs.$inferInsert>
   ): RunPublic {
     const updatedAt = new Date().toISOString()
-    let eventCursor: number | undefined
+    let cursorValue: number | undefined
     db.transaction((tx) => {
       tx.update(runs)
         .set({ ...values, updatedAt })
         .where(eq(runs.id, runId))
         .run()
-      eventCursor = tx
+      cursorValue = tx
         .insert(runEvents)
         .values({
           runId,
@@ -416,7 +435,7 @@ export function createRunManager(options: Options) {
     })
     const run = getPublic(runId)
     if (!run) throw new Error("Run not found")
-    emit(runId, { type: "status", run, eventCursor })
+    emit(runId, { type: "run.updated", run, cursor: cursorValue })
     return run
   }
 
@@ -425,7 +444,7 @@ export function createRunManager(options: Options) {
     values: Partial<typeof runAgents.$inferInsert>
   ): AgentPublic {
     const updatedAt = new Date().toISOString()
-    let eventCursor: number | undefined
+    let cursorValue: number | undefined
     const stored = getStoredAgent(agentId)
     if (!stored) throw new Error("Agent not found")
     db.transaction((tx) => {
@@ -433,7 +452,7 @@ export function createRunManager(options: Options) {
         .set({ ...values, updatedAt })
         .where(eq(runAgents.id, agentId))
         .run()
-      eventCursor = tx
+      cursorValue = tx
         .insert(runEvents)
         .values({
           runId: stored.runId,
@@ -447,7 +466,11 @@ export function createRunManager(options: Options) {
     })
     const agent = getAgentPublic(agentId)
     if (!agent) throw new Error("Agent not found")
-    emit(agent.runId, { type: "agent_status", agent, eventCursor })
+    emit(agent.runId, {
+      type: "agent.updated",
+      agent: { ...agent, usage: usageForAgent(agent.id) },
+      cursor: cursorValue,
+    })
     return agent
   }
 
@@ -942,6 +965,13 @@ export function createRunManager(options: Options) {
       .set({ runtimeSnapshot: JSON.stringify(snapshot) })
       .where(eq(runAgents.id, agentId))
       .run()
+    const messageRevisions = new Map<string, number>()
+    const toolRevisions = new Map<string, number>()
+    const nextRevision = (values: Map<string, number>, id: string) => {
+      const revision = (values.get(id) ?? -1) + 1
+      values.set(id, revision)
+      return revision
+    }
     const runtime = createAgentRuntime({
       db,
       runId,
@@ -955,17 +985,62 @@ export function createRunManager(options: Options) {
       canRunTool: () =>
         getStored(runId)?.status === "running" &&
         getStoredAgent(agentId)?.status === "running",
-      onEvent: (event, messageId, eventCursor) => {
+      onEvent: (event, messageId, cursor) => {
         for (const secret of options.getApiKeys?.(provider) ?? []) {
           runtime.addSecrets([secret])
         }
-        emit(runId, {
-          type: "agent_event",
-          agentId,
-          event,
-          ...(messageId ? { messageId } : {}),
-          ...(eventCursor !== undefined ? { eventCursor } : {}),
-        })
+        if (
+          messageId &&
+          (event.type === "message_start" ||
+            event.type === "message_update" ||
+            event.type === "message_end")
+        ) {
+          const revision = nextRevision(messageRevisions, messageId)
+          if (event.type === "message_end" && cursor !== undefined) {
+            const message = conversationMessageForRuntime(agentId, messageId)
+            if (message) {
+              emit(runId, {
+                type: "message.committed",
+                agentId,
+                cursor,
+                message,
+              })
+              return
+            }
+          }
+          emit(runId, {
+            type: "message.progress",
+            agentId,
+            messageId,
+            revision,
+            message: event.message as unknown as Record<string, unknown>,
+          })
+          return
+        }
+        if (
+          event.type === "tool_execution_start" ||
+          event.type === "tool_execution_update" ||
+          event.type === "tool_execution_end"
+        ) {
+          const revision = nextRevision(toolRevisions, event.toolCallId)
+          const ended = event.type === "tool_execution_end"
+          const args = "args" in event ? event.args : undefined
+          emit(runId, {
+            type: "tool.progress",
+            agentId,
+            toolCallId: event.toolCallId,
+            revision,
+            toolName: event.toolName,
+            args,
+            ...(event.type === "tool_execution_update"
+              ? { result: event.partialResult }
+              : event.type === "tool_execution_end"
+                ? { result: event.result }
+                : {}),
+            status: ended ? (event.isError ? "error" : "done") : "running",
+            ...(ended && event.isError ? { isError: true } : {}),
+          })
+        }
       },
       onSettled: (outcome) =>
         isMain
@@ -1105,23 +1180,62 @@ export function createRunManager(options: Options) {
     )
   }
 
-  function historyForAgent(agentId: string) {
-    let parentId: string | null = null
-    return messageRowsForAgent(agentId).map((row) => {
-      const runtimeId = row.runtimeId ?? row.id
-      const entry = {
-        type: "message" as const,
-        id: runtimeId,
-        runtimeId,
-        sequence: row.sequence,
-        messageId: row.id,
-        parentId,
-        timestamp: row.createdAt,
-        message: publicAgentMessage(JSON.parse(row.message) as AgentMessage),
+  function conversationMessage(
+    row: typeof agentMessages.$inferSelect
+  ): ConversationMessage {
+    return {
+      id: row.runtimeId ?? row.id,
+      agentId: row.agentId,
+      sequence: row.sequence,
+      message: publicAgentMessage(
+        JSON.parse(row.message) as AgentMessage
+      ) as unknown as Record<string, unknown>,
+      createdAt: row.createdAt,
+    }
+  }
+
+  function conversationSnapshot(agentId: string) {
+    const agent = getStoredAgent(agentId)
+    if (!agent) throw new RunActionError("not_found", "Agent not found")
+    let snapshot:
+      | {
+          messages: ConversationMessage[]
+          cursor: number
+        }
+      | undefined
+    db.transaction((tx) => {
+      const rows = tx
+        .select()
+        .from(agentMessages)
+        .where(eq(agentMessages.agentId, agentId))
+        .orderBy(asc(agentMessages.sequence))
+        .all()
+      const value = tx
+        .select({ value: sql<number>`coalesce(max(${runEvents.id}), 0)` })
+        .from(runEvents)
+        .where(eq(runEvents.runId, agent.runId))
+        .get()?.value
+      snapshot = {
+        messages: rows.map(conversationMessage),
+        cursor: value ?? 0,
       }
-      parentId = runtimeId
-      return entry
     })
+    if (!snapshot) throw new Error("Conversation snapshot is unavailable")
+    return snapshot
+  }
+
+  function conversationMessageForRuntime(agentId: string, runtimeId: string) {
+    const row = db
+      .select()
+      .from(agentMessages)
+      .where(
+        and(
+          eq(agentMessages.agentId, agentId),
+          eq(agentMessages.runtimeId, runtimeId)
+        )
+      )
+      .get()
+    return row ? conversationMessage(row) : undefined
   }
 
   function usageForAgent(agentId: string) {
@@ -1276,7 +1390,7 @@ export function createRunManager(options: Options) {
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
     const workspacePath = runWorkspacePath(run)
-    let eventCursor: number | undefined
+    let cursorValue: number | undefined
     db.transaction((tx) => {
       tx.insert(runAgents)
         .values({
@@ -1291,7 +1405,7 @@ export function createRunManager(options: Options) {
           updatedAt: now,
         })
         .run()
-      eventCursor = tx
+      cursorValue = tx
         .insert(runEvents)
         .values({
           runId,
@@ -1304,9 +1418,12 @@ export function createRunManager(options: Options) {
         .get()?.id
     })
     emit(runId, {
-      type: "agent_status",
-      agent: getAgentPublic(id) as AgentPublic,
-      eventCursor,
+      type: "agent.updated",
+      agent: {
+        ...(getAgentPublic(id) as AgentPublic),
+        usage: usageForAgent(id),
+      },
+      cursor: cursorValue,
     })
 
     const requireRunning = () => {
@@ -1495,7 +1612,22 @@ export function createRunManager(options: Options) {
     }
   }
 
-  async function resume(
+  function resume(
+    runId: string,
+    message?: string,
+    requestedMessageId?: string
+  ) {
+    const previous = resumeLocks.get(runId) ?? Promise.resolve()
+    const current = previous
+      .catch(() => undefined)
+      .then(() => resumeNow(runId, message, requestedMessageId))
+    resumeLocks.set(runId, current)
+    return current.finally(() => {
+      if (resumeLocks.get(runId) === current) resumeLocks.delete(runId)
+    })
+  }
+
+  async function resumeNow(
     runId: string,
     message?: string,
     requestedMessageId?: string
@@ -1670,11 +1802,15 @@ export function createRunManager(options: Options) {
       let event: RunEvent | undefined
       if (row.type === "run_updated") {
         const run = getPublic(runId)
-        if (run) event = { type: "status", run, eventCursor: row.id }
+        if (run) event = { type: "run.updated", run, cursor: row.id }
       } else if (row.type === "agent_updated" && row.agentId) {
         const agent = getAgentPublic(row.agentId)
         if (agent) {
-          event = { type: "agent_status", agent, eventCursor: row.id }
+          event = {
+            type: "agent.updated",
+            agent: { ...agent, usage: usageForAgent(agent.id) },
+            cursor: row.id,
+          }
         }
       } else if (row.type === "message_committed" && row.entityId) {
         const stored = db
@@ -1684,16 +1820,10 @@ export function createRunManager(options: Options) {
           .get()
         if (stored) {
           event = {
-            type: "agent_event",
+            type: "message.committed",
             agentId: stored.agentId,
-            event: {
-              type: "message_end",
-              message: publicAgentMessage(
-                JSON.parse(stored.message) as AgentMessage
-              ),
-            } as AgentEvent,
-            messageId: stored.runtimeId ?? stored.id,
-            eventCursor: row.id,
+            cursor: row.id,
+            message: conversationMessage(stored),
           }
         }
       }
@@ -1717,7 +1847,7 @@ export function createRunManager(options: Options) {
     },
     agent: getAgentPublic,
     inspector: inspectorForAgent,
-    history: historyForAgent,
+    conversationSnapshot,
     listForEvent: (eventId: string) =>
       db
         .select({ id: runs.id })
@@ -1767,7 +1897,7 @@ export function createRunManager(options: Options) {
         listStoredAgents(runId).map((agent) => usageForAgent(agent.id))
       )
     },
-    eventCursor,
+    cursor,
     close: () => {
       if (closed) return
       closed = true

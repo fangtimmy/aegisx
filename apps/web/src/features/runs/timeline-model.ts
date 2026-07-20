@@ -1,4 +1,4 @@
-import type { SessionEntry } from "@/lib/api"
+import type { ConversationMessage } from "@/lib/api"
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -12,17 +12,6 @@ export function text(value: unknown): string {
   } catch {
     return String(value)
   }
-}
-
-function messageKey(message: Record<string, unknown>, stableId?: string) {
-  const role = text(message.role)
-  if (role === "toolResult") {
-    const toolCallId = text(message.toolCallId)
-    return toolCallId ? `message:toolResult:${toolCallId}` : null
-  }
-  if (stableId) return `message:${role}:${stableId}`
-  const timestamp = text(message.timestamp)
-  return role && timestamp ? `message:${role}:${timestamp}` : null
 }
 
 function handoffFromMessage(message: Record<string, unknown>, body: string) {
@@ -64,7 +53,6 @@ export type LiveEntry =
       key: string
       type: "message"
       message: Record<string, unknown>
-      endedAt?: number
     }
   | {
       key: string
@@ -81,80 +69,6 @@ export type LiveEntry =
       type: "error"
       body: string
     }
-
-export function mergeLiveEntries(current: LiveEntry[], updates: LiveEntry[]) {
-  const next = [...current]
-  for (const entry of updates) {
-    let index =
-      entry.type === "message" &&
-      entry.message.role === "assistant" &&
-      entry.message.stopReason &&
-      entry.endedAt !== undefined &&
-      !next.some((value) => value.key === entry.key)
-        ? next.findLastIndex(
-            (value) =>
-              value.type === "message" &&
-              value.message.role === "assistant" &&
-              value.endedAt === undefined
-          )
-        : next.findIndex((value) => value.key === entry.key)
-    if (entry.type === "message" && entry.endedAt !== undefined) {
-      const open = next.findLastIndex(
-        (value) =>
-          value.type === "message" &&
-          value.endedAt === undefined &&
-          (messageKey(value.message) === entry.key || value.key === entry.key)
-      )
-      if (open !== -1) index = open
-    }
-    const existing = next[index]
-    if (index === -1) next.push(entry)
-    else if (
-      entry.type === "message" &&
-      existing?.type === "message" &&
-      existing.endedAt !== undefined &&
-      entry.endedAt === undefined
-    ) {
-      next.push({ ...entry, key: `${entry.key}:${next.length}` })
-    } else next[index] = { ...entry, key: existing?.key ?? entry.key }
-  }
-  return next
-}
-
-export function pruneLiveEntries(history: SessionEntry[], live: LiveEntry[]) {
-  const persistedMessages = new Set<string>()
-  const persistedTools = new Set<string>()
-  for (const entry of history) {
-    if (entry.type !== "message" || !isRecord(entry.message)) continue
-    const stableKey = messageKey(
-      entry.message,
-      text(entry.runtimeId) || text(entry.id) || undefined
-    )
-    const naturalKey = messageKey(entry.message)
-    if (stableKey) persistedMessages.add(stableKey)
-    if (naturalKey) persistedMessages.add(naturalKey)
-    if (entry.message.role === "toolResult") {
-      const id = text(entry.message.toolCallId)
-      if (id) persistedTools.add(`tool:${id}`)
-    }
-  }
-  return live.filter((entry) => {
-    if (entry.type === "message") {
-      const key = messageKey(entry.message)
-      const toolKey =
-        entry.message.role === "toolResult"
-          ? `tool:${text(entry.message.toolCallId)}`
-          : null
-      return !(
-        persistedMessages.has(entry.key) ||
-        (key && persistedMessages.has(key)) ||
-        (toolKey && persistedTools.has(toolKey))
-      )
-    }
-    if (entry.type === "tool") return !persistedTools.has(entry.key)
-    return true
-  })
-}
 
 export type ToolBlock = {
   key: string
@@ -199,13 +113,6 @@ export type ConversationItem =
       blocks: AgentBlock[]
       timestamp?: string | number
     }
-  | {
-      key: string
-      type: "notice"
-      label: string
-      body: string
-      timestamp?: string | number
-    }
 
 function contentText(content: unknown) {
   const values = Array.isArray(content) ? content : [content]
@@ -248,67 +155,12 @@ function messageDuration(
   return Number.isFinite(duration) && duration >= 0 ? duration : undefined
 }
 
-export function liveEntries(
-  payload: Record<string, unknown>,
-  messageId?: string
-): LiveEntry[] {
-  const type = text(payload.type)
-  const message = isRecord(payload.message) ? payload.message : null
-  if (
-    (type === "message_start" ||
-      type === "message_update" ||
-      type === "message_end") &&
-    message
-  ) {
-    const key = messageKey(message, messageId)
-    return key
-      ? [
-          {
-            key,
-            type: "message",
-            message,
-            endedAt: type === "message_end" ? Date.now() : undefined,
-          },
-        ]
-      : []
-  }
-  if (type.startsWith("tool_execution_")) {
-    const toolCallId = text(payload.toolCallId)
-    if (!toolCallId) return []
-    const ended = type === "tool_execution_end"
-    return [
-      {
-        key: `tool:${toolCallId}`,
-        type: "tool",
-        toolCallId,
-        toolName: text(payload.toolName) || "unknown",
-        args: payload.args,
-        result: ended ? payload.result : payload.partialResult,
-        isError: Boolean(payload.isError),
-        status: ended ? "done" : "running",
-      },
-    ]
-  }
-  if (type.includes("error") || payload.error) {
-    return [
-      {
-        key: `error:${type}`,
-        type: "error",
-        body: text(payload.error ?? payload.errorMessage ?? payload.message),
-      },
-    ]
-  }
-  return []
-}
-
 export function buildConversation(
-  history: SessionEntry[],
+  history: ConversationMessage[],
   live: LiveEntry[]
 ): ConversationItem[] {
   const items: ConversationItem[] = []
   const tools = new Map<string, ToolBlock>()
-  const persistedMessages = new Set<string>()
-  const persistedTools = new Set<string>()
   let agent: Extract<ConversationItem, { type: "agent" }> | null = null
 
   function currentAgent(timestamp?: string | number) {
@@ -330,7 +182,7 @@ export function buildConversation(
   ) {
     const role = text(message.role)
     const timestamp = messageTimestamp(message, fallback)
-    const identity = stableKey ?? messageKey(message)
+    const identity = stableKey
     if (role === "user") {
       const body = contentText(message.content)
       if (body) {
@@ -427,62 +279,13 @@ export function buildConversation(
   }
 
   for (const entry of history) {
-    if (entry.type === "message" && isRecord(entry.message)) {
-      const stableKey = messageKey(
-        entry.message,
-        text(entry.runtimeId) || text(entry.id) || undefined
-      )
-      const naturalKey = messageKey(entry.message)
-      if (stableKey) persistedMessages.add(stableKey)
-      if (naturalKey) persistedMessages.add(naturalKey)
-      if (entry.message.role === "toolResult") {
-        const id = text(entry.message.toolCallId)
-        if (id) persistedTools.add(`tool:${id}`)
-      }
-      applyMessage(
-        entry.message,
-        entry.timestamp,
-        text(entry.runtimeId) || text(entry.id) || undefined
-      )
-    } else if (entry.type === "model_change") {
-      items.push({
-        key: entry.id,
-        type: "notice",
-        label: `Model changed to ${text(entry.modelId)}`,
-        body: "",
-        timestamp: entry.timestamp,
-      })
-      agent = null
-    } else if (entry.type === "compaction" || entry.type === "branch_summary") {
-      items.push({
-        key: entry.id,
-        type: "notice",
-        label:
-          entry.type === "compaction" ? "Context compacted" : "Branch summary",
-        body: text(entry.summary),
-        timestamp: entry.timestamp,
-      })
-      agent = null
-    }
+    applyMessage(entry.message, entry.createdAt, entry.id)
   }
 
   for (const entry of live) {
     if (entry.type === "message") {
-      const key = messageKey(entry.message)
-      const toolKey =
-        entry.message.role === "toolResult"
-          ? `tool:${text(entry.message.toolCallId)}`
-          : null
-      if (
-        persistedMessages.has(entry.key) ||
-        (key && persistedMessages.has(key)) ||
-        (toolKey && persistedTools.has(toolKey))
-      ) {
-        continue
-      }
-      applyMessage(entry.message, entry.endedAt, entry.key)
+      applyMessage(entry.message, undefined, entry.key)
     } else if (entry.type === "tool") {
-      if (persistedTools.has(entry.key)) continue
       const existing = tools.get(entry.toolCallId)
       const block =
         existing ??

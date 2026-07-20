@@ -66,7 +66,7 @@ type RuntimeOptions = {
   secrets: Iterable<string>
   thinkingLevel: ModelThinkingLevel
   canRunTool?(): boolean
-  onEvent(event: AgentEvent, messageId?: string, eventCursor?: number): void
+  onEvent(event: AgentEvent, messageId?: string, cursor?: number): void
   onSettled(outcome: RuntimeOutcome): void | Promise<void>
 }
 
@@ -358,7 +358,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
   const unsubscribe = agent.subscribe((event) => {
     redactSecrets(event, secrets)
     const runtimeId = messageIdForEvent(event)
-    let eventCursor: number | undefined
+    let cursor: number | undefined
     if (event.type === "message_end") {
       sequence += 1
       options.db.transaction((tx) => {
@@ -374,7 +374,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
             createdAt,
           })
           .run()
-        eventCursor = tx
+        cursor = tx
           .insert(runEvents)
           .values({
             runId: options.runId,
@@ -394,7 +394,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
         }
       })
     }
-    options.onEvent(publicEvent(event), runtimeId, eventCursor)
+    options.onEvent(publicEvent(event), runtimeId, cursor)
   })
 
   function pending() {

@@ -148,23 +148,41 @@ export type RunStreamEvent =
   | {
       type: "ready"
       runId: string
-      eventCursor: number
+      cursor: number
     }
   | {
-      type: "status"
+      type: "run.updated"
       run: RunPublic
-      eventCursor?: number
+      cursor?: number
     }
   | {
-      type: "agent_status"
-      agent: AgentPublic
-      eventCursor?: number
+      type: "agent.updated"
+      agent: AgentSummary
+      cursor?: number
     }
   | {
-      type: "agent_event"
+      type: "message.progress"
       agentId: string
-      event: Record<string, unknown>
-      messageId?: string
+      messageId: string
+      revision: number
+      message: Record<string, unknown>
+    }
+  | {
+      type: "tool.progress"
+      agentId: string
+      toolCallId: string
+      revision: number
+      toolName: string
+      args: unknown
+      result?: unknown
+      status: "running" | "done" | "error"
+      isError?: boolean
+    }
+  | {
+      type: "message.committed"
+      agentId: string
+      cursor: number
+      message: ConversationMessage
     }
 
 export type AgentPublic = {
@@ -191,6 +209,14 @@ export type UsageSummary = {
 }
 
 export type AgentSummary = AgentPublic & { usage: UsageSummary }
+
+export type ConversationMessage = {
+  id: string
+  agentId: string
+  sequence: number
+  message: Record<string, unknown>
+  createdAt: string
+}
 
 export type AgentRuntimeSnapshot = {
   capturedAt: string
@@ -312,14 +338,6 @@ export type EventStats = {
     usage: UsageSummary
   }>
   runs: Array<{ run: RunPublic; usage: UsageSummary }>
-}
-
-export type SessionEntry = {
-  type: string
-  id: string
-  parentId: string | null
-  timestamp: string
-  [key: string]: unknown
 }
 
 export type RunFileEntry = {

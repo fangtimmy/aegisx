@@ -47,13 +47,12 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import type {
-  AgentPublic,
   AgentSummary,
   Challenge,
+  ConversationMessage,
   RunPublic,
   RunStatus,
   RunStreamEvent,
-  SessionEntry,
   UsageSummary,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
@@ -67,6 +66,23 @@ import { RunStreamStore } from "./run-stream-store"
 import { Conversation } from "./timeline"
 
 const terminalStatuses: RunStatus[] = ["completed", "failed", "stopped"]
+const defaultResumeMessage =
+  "Continue solving the challenge from the current state."
+
+type RunDetail = {
+  run: RunPublic
+  agents: AgentSummary[]
+  messages: ConversationMessage[]
+  stats: UsageSummary
+  cursor: number
+}
+
+type AgentConversation = {
+  runId: string
+  agentId: string
+  messages: ConversationMessage[]
+  cursor: number
+}
 
 export function RunWorkspace({
   eventId,
@@ -81,20 +97,14 @@ export function RunWorkspace({
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState("")
   const streamStore = useRef(new RunStreamStore()).current
+  const retryMessage = useRef<{ id: string; text: string } | null>(null)
   const [streamDisconnected, setStreamDisconnected] = useState(false)
   const [streamCursor, setStreamCursor] = useState<number | null>(null)
   const detail = useQuery({
     enabled: Boolean(runId),
     queryKey: ["runs", runId ?? ""],
     refetchOnWindowFocus: false,
-    queryFn: () =>
-      apiRequest<{
-        run: RunPublic
-        agents: AgentSummary[]
-        history: SessionEntry[]
-        stats: UsageSummary
-        eventCursor: number
-      }>(`/runs/${runId}`),
+    queryFn: () => apiRequest<RunDetail>(`/runs/${runId}`),
   })
   useEffect(() => {
     if (
@@ -102,7 +112,7 @@ export function RunWorkspace({
       detail.data &&
       !terminalStatuses.includes(detail.data.run.status)
     ) {
-      setStreamCursor(detail.data.eventCursor)
+      setStreamCursor(detail.data.cursor)
     }
   }, [detail.data, streamCursor])
   const requestedAgentId = searchParams.get("agent")
@@ -116,19 +126,22 @@ export function RunWorkspace({
     ),
     queryKey: ["runs", runId ?? "", "agents", selectedAgent?.id ?? ""],
     queryFn: () =>
-      apiRequest<{
-        agent: AgentPublic
-        history: SessionEntry[]
-        stats: UsageSummary
-      }>(`/runs/${runId}/agents/${selectedAgent?.id}`),
+      apiRequest<AgentConversation>(
+        `/runs/${runId}/conversation?agentId=${encodeURIComponent(selectedAgent?.id ?? "")}`
+      ),
   })
   useEffect(() => {
     const main = detail.data?.agents.find(
       (agent) => agent.parentAgentId === null
     )
-    if (main && detail.data) streamStore.prune(main.id, detail.data.history)
-    if (agentDetail.data)
-      streamStore.prune(agentDetail.data.agent.id, agentDetail.data.history)
+    if (main && detail.data)
+      streamStore.applySnapshot(main.id, detail.data.messages)
+    if (agentDetail.data) {
+      streamStore.applySnapshot(
+        agentDetail.data.agentId,
+        agentDetail.data.messages
+      )
+    }
   }, [agentDetail.data, detail.data, streamStore])
   const control = useMutation({
     mutationFn: ({
@@ -143,6 +156,9 @@ export function RunWorkspace({
     onSuccess: async (_, variables) => {
       if (variables.action === "message" || variables.action === "resume") {
         setDraft("")
+        if (retryMessage.current?.id === variables.body.clientMessageId) {
+          retryMessage.current = null
+        }
       }
       await Promise.all([
         queryClient.invalidateQueries({
@@ -160,9 +176,9 @@ export function RunWorkspace({
     },
     onError: (_error, variables) => {
       if (variables.agentId && variables.body.clientMessageId) {
-        streamStore.remove(
+        streamStore.removePendingMessage(
           variables.agentId,
-          `message:user:${variables.body.clientMessageId}`
+          variables.body.clientMessageId
         )
       }
     },
@@ -175,30 +191,18 @@ export function RunWorkspace({
       runId,
       streamCursor,
       (event: RunStreamEvent) => {
-        if (event.type === "status") {
-          const current = queryClient.getQueryData<{
-            run: RunPublic
-            agents: AgentSummary[]
-            history: SessionEntry[]
-            stats: UsageSummary
-            eventCursor: number
-          }>(["runs", runId])
+        if (event.type === "run.updated") {
+          const current = queryClient.getQueryData<RunDetail>(["runs", runId])
           const enteredTerminalState =
             terminalStatuses.includes(event.run.status) &&
             !terminalStatuses.includes(current?.run.status ?? "running")
-          queryClient.setQueryData<{
-            run: RunPublic
-            agents: AgentSummary[]
-            history: SessionEntry[]
-            stats: UsageSummary
-            eventCursor: number
-          }>(["runs", runId], (value) =>
+          queryClient.setQueryData<RunDetail>(["runs", runId], (value) =>
             value
               ? {
                   ...value,
                   run: event.run,
-                  ...(event.eventCursor !== undefined
-                    ? { eventCursor: event.eventCursor }
+                  ...(event.cursor !== undefined
+                    ? { cursor: event.cursor }
                     : {}),
                 }
               : value
@@ -224,39 +228,41 @@ export function RunWorkspace({
             void queryClient.invalidateQueries({
               queryKey: eventKeys.detail(eventId),
             })
-            void detailRefresh.then(() => streamStore.close())
+            void detailRefresh.then(() => {
+              streamStore.clearEphemeral()
+              streamStore.close()
+            })
           }
           return
         }
-        if (event.type === "agent_status") {
-          queryClient.setQueryData<{
-            run: RunPublic
-            agents: AgentSummary[]
-            history: SessionEntry[]
-            stats: UsageSummary
-            eventCursor: number
-          }>(["runs", runId], (value) =>
+        if (event.type === "agent.updated") {
+          queryClient.setQueryData<RunDetail>(["runs", runId], (value) =>
             value
               ? {
                   ...value,
-                  agents: value.agents.map((agent) =>
-                    agent.id === event.agent.id
-                      ? { ...agent, ...event.agent }
-                      : agent
-                  ),
-                  ...(event.eventCursor !== undefined
-                    ? { eventCursor: event.eventCursor }
+                  agents: value.agents.some(
+                    (agent) => agent.id === event.agent.id
+                  )
+                    ? value.agents.map((agent) =>
+                        agent.id === event.agent.id
+                          ? { ...agent, ...event.agent }
+                          : agent
+                      )
+                    : [...value.agents, event.agent],
+                  ...(event.cursor !== undefined
+                    ? { cursor: event.cursor }
                     : {}),
                 }
               : value
           )
           return
         }
-        if (event.type === "ready") {
-          return
-        }
       },
-      setStreamDisconnected
+      setStreamDisconnected,
+      () => {
+        streamStore.resetForReconnect()
+        void queryClient.invalidateQueries({ queryKey: ["runs", runId] })
+      }
     )
     return stop
   }, [eventId, queryClient, runId, streamCursor, streamStore])
@@ -303,7 +309,7 @@ export function RunWorkspace({
       </Alert>
     )
   if (!detail.data) return null
-  const { run, agents, history, stats } = detail.data
+  const { run, agents, stats } = detail.data
   const active = run.status === "running" || run.status === "paused"
   const mainSelected = selectedAgent?.parentAgentId === null
   const requestedView = searchParams.get("view")
@@ -322,26 +328,30 @@ export function RunWorkspace({
   function send(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const message = draft.trim()
-    const clientMessageId = crypto.randomUUID()
+    const outgoingMessage = message || defaultResumeMessage
+    const clientMessageId =
+      retryMessage.current?.text === outgoingMessage
+        ? retryMessage.current.id
+        : crypto.randomUUID()
+    retryMessage.current = { id: clientMessageId, text: outgoingMessage }
     if (selectedAgent && (message || run.status === "paused")) {
-      streamStore.add(selectedAgent.id, [
-        {
-          key: `message:user:${clientMessageId}`,
-          type: "message",
-          message: {
-            role: "user",
-            timestamp: Date.now(),
-            content: [
-              {
-                type: "text",
-                text:
-                  message ||
-                  "Continue solving the challenge from the current state.",
-              },
-            ],
-          },
+      const createdAt = new Date().toISOString()
+      streamStore.addPendingMessage({
+        id: clientMessageId,
+        agentId: selectedAgent.id,
+        sequence: Number.MAX_SAFE_INTEGER,
+        createdAt,
+        message: {
+          role: "user",
+          timestamp: Date.parse(createdAt),
+          content: [
+            {
+              type: "text",
+              text: outgoingMessage,
+            },
+          ],
         },
-      ])
+      })
     }
     if (run.status === "paused") {
       control.mutate({
@@ -474,11 +484,6 @@ export function RunWorkspace({
                         <ScrollArea className="relative h-full pr-1" scrollFade>
                           <Conversation
                             agentId={selectedAgent.id}
-                            history={
-                              mainSelected
-                                ? history
-                                : (agentDetail.data?.history ?? [])
-                            }
                             key={selectedAgent.id}
                             stream={streamStore}
                           />

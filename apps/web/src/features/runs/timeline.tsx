@@ -19,7 +19,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -40,15 +39,13 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import type { AgentStatus, SessionEntry } from "@/lib/api"
+import type { AgentStatus } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { AgentStatusIcon } from "./agent-status-icon"
 import type { RunStreamStore } from "./run-stream-store"
 import {
-  buildConversation,
   type ConversationItem,
   isRecord,
-  type LiveEntry,
   type ToolBlock,
   text,
 } from "./timeline-model"
@@ -67,8 +64,6 @@ function formatConversationTime(value: string | number) {
     minute: "2-digit",
   }).format(new Date(value))
 }
-
-const emptyLiveEntries: LiveEntry[] = []
 
 function formatDuration(durationMs: number) {
   const seconds = durationMs / 1000
@@ -304,25 +299,6 @@ const ConversationRow = memo(function ConversationRow({
       </article>
     )
   }
-  if (item.type === "notice") {
-    return (
-      <div className="flex items-center gap-3 py-3 text-muted-foreground text-xs">
-        <div className="h-px flex-1 bg-border" />
-        {item.body ? (
-          <details>
-            <summary className="cursor-pointer">{item.label}</summary>
-            <p className="mt-2 max-w-xl whitespace-pre-wrap text-center leading-5">
-              {item.body}
-            </p>
-          </details>
-        ) : (
-          <span>{item.label}</span>
-        )}
-        {time && <time>{time}</time>}
-        <div className="h-px flex-1 bg-border" />
-      </div>
-    )
-  }
   if (item.type === "handoff") {
     return (
       <article className="py-4">
@@ -411,14 +387,10 @@ const ConversationRow = memo(function ConversationRow({
 
 export function Conversation({
   agentId,
-  history,
-  live,
   stream,
 }: {
-  agentId?: string
-  history: SessionEntry[]
-  live?: LiveEntry[]
-  stream?: RunStreamStore
+  agentId: string
+  stream: RunStreamStore
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -429,27 +401,13 @@ export function Conversation({
   const [scrollContainer, setScrollContainer] = useState<HTMLElement | null>(
     null
   )
-  const streamed = useSyncExternalStore(
+  const items = useSyncExternalStore(
     useCallback(
-      (listener) =>
-        stream && agentId ? stream.subscribe(agentId, listener) : () => {},
+      (listener) => stream.subscribe(agentId, listener),
       [agentId, stream]
     ),
-    useCallback(
-      () =>
-        stream && agentId ? stream.get(agentId) : (live ?? emptyLiveEntries),
-      [agentId, live, stream]
-    ),
-    useCallback(() => live ?? emptyLiveEntries, [live])
-  )
-  const persistedItems = useMemo(
-    () => buildConversation(history, []),
-    [history]
-  )
-  const liveItems = useMemo(() => buildConversation([], streamed), [streamed])
-  const items = useMemo(
-    () => [...persistedItems, ...liveItems],
-    [liveItems, persistedItems]
+    useCallback(() => stream.get(agentId), [agentId, stream]),
+    useCallback(() => stream.get(agentId), [agentId, stream])
   )
   const hasConversation = items.length > 0
   const latestItem = items.at(-1)
@@ -567,7 +525,7 @@ export function Conversation({
         <ConversationRow item={item} key={item.key} />
       ))}
       <div aria-live="polite" className="sr-only">
-        {streamed.length > 0 ? "Agent activity updated" : ""}
+        {items.length > 0 ? "Agent activity updated" : ""}
       </div>
     </div>
   )
