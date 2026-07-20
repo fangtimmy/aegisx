@@ -213,6 +213,9 @@ function toolIcon(name: string) {
   return Wrench
 }
 
+const activityTriggerClass =
+  "flex w-full cursor-pointer items-center justify-start gap-2 rounded-sm py-1 text-left text-muted-foreground text-sm hover:text-foreground data-panel-open:[&>svg:last-child]:rotate-90"
+
 function ToolActivity({
   tool,
   separated = false,
@@ -228,7 +231,7 @@ function ToolActivity({
         : toolIcon(tool.name)
   return (
     <Collapsible className={separated ? "mt-3" : undefined}>
-      <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-start gap-2 rounded-sm py-1 text-left text-muted-foreground text-sm hover:text-foreground data-panel-open:[&>svg:last-child]:rotate-90">
+      <CollapsibleTrigger className={activityTriggerClass}>
         <StatusIcon
           className={
             tool.status === "error"
@@ -330,8 +333,10 @@ const ConversationRow = memo(function ConversationRow({
       <div className="flex min-w-0 flex-col gap-0">
         {item.blocks.map((block, index) => {
           const previous = item.blocks[index - 1]
-          const separated =
-            index > 0 && !(block.type === "tool" && previous?.type === "tool")
+          const activity = block.type === "tool" || block.type === "reasoning"
+          const previousActivity =
+            previous?.type === "tool" || previous?.type === "reasoning"
+          const separated = index > 0 && !(activity && previousActivity)
           if (block.type === "text") {
             return (
               <div className={separated ? "mt-3" : undefined} key={block.key}>
@@ -341,24 +346,26 @@ const ConversationRow = memo(function ConversationRow({
           }
           if (block.type === "reasoning") {
             return (
-              <details
-                className={cn("group py-0.5", separated && "mt-3")}
+              <Collapsible
+                className={separated ? "mt-3" : undefined}
                 key={block.key}
               >
-                <summary className="flex cursor-pointer list-none items-center gap-2 py-1.5 text-muted-foreground text-sm">
-                  <Brain className="size-3.5" />
-                  <span>
+                <CollapsibleTrigger className={activityTriggerClass}>
+                  <Brain className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">
                     Reasoning
                     {block.durationMs !== undefined
                       ? ` · ${formatDuration(block.durationMs)}`
                       : ""}
                   </span>
-                  <ChevronRight className="ml-auto size-3.5 transition-transform group-open:rotate-90" />
-                </summary>
-                <div className="mt-2 ml-5 text-muted-foreground">
-                  <Markdown>{block.body}</Markdown>
-                </div>
-              </details>
+                  <ChevronRight className="size-3.5 shrink-0 transition-transform" />
+                </CollapsibleTrigger>
+                <CollapsiblePanel>
+                  <div className="mt-1 ml-5 min-w-0 pb-2 text-muted-foreground">
+                    <Markdown>{block.body}</Markdown>
+                  </div>
+                </CollapsiblePanel>
+              </Collapsible>
             )
           }
           if (block.type === "error") {
