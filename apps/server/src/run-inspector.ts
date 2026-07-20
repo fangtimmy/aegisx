@@ -8,7 +8,8 @@ import type {
   AgentRuntimeSnapshot,
   ConversationMessage,
 } from "../../shared/api"
-import { parseAgentMessage, publicAgentMessage } from "./agent-runtime"
+import { parseAgentMessage } from "./agent-messages"
+import { publicAgentMessage } from "./agent-runtime"
 import type { createDatabase } from "./db"
 import {
   agentMessages,

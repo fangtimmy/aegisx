@@ -1,10 +1,7 @@
 import { copyFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, extname, join, relative } from "node:path"
-import {
-  clampThinkingLevel,
-  type ModelThinkingLevel,
-} from "@earendil-works/pi-ai"
+import { clampThinkingLevel } from "@earendil-works/pi-ai"
 import {
   and,
   asc,
@@ -60,9 +57,16 @@ import {
   type PromptTemplates,
   renderInitialPrompt,
   renderSystemPrompt,
-  resolvePromptTemplates,
 } from "./prompt-templates"
 import { redactSecrets, replaceText } from "./redaction"
+import {
+  type EnvironmentConfig,
+  type ModelConfig,
+  parseEnvironment,
+  parseModelConfig,
+  parsePromptConfig,
+  parseRuntimeSnapshot,
+} from "./run-config"
 import { RunActionError } from "./run-errors"
 import { createRunInspector } from "./run-inspector"
 import { type AgentChange, createRunStateStore } from "./run-state-store"
@@ -102,28 +106,6 @@ type RunEventListener = (
   sequence: number,
   replay: boolean
 ) => void
-type EnvironmentConfig =
-  | { type: "local" }
-  | {
-      type: "container"
-      image: string
-      cpus: number
-      memoryMb: number
-      pidsLimit: number
-    }
-type ModelConfig = {
-  provider: string
-  providerLabel?: string
-  modelId: string
-  modelLabel?: string
-  baseUrl?: string
-  costKnown?: boolean
-  thinkingLevel: ModelThinkingLevel
-}
-type FrozenPromptConfig = PromptTemplates & {
-  context?: PromptTemplateContext
-}
-
 type Options = {
   db: Database
   dataDir: string
@@ -1738,131 +1720,6 @@ export function createRunManager(options: Options) {
     },
     cursor,
     close: closeManager,
-  }
-}
-
-function parseEnvironment(value: string): EnvironmentConfig {
-  try {
-    const parsed = JSON.parse(value) as Partial<EnvironmentConfig>
-    if (parsed.type === "container" && typeof parsed.image === "string") {
-      return {
-        type: "container",
-        image: parsed.image,
-        cpus:
-          "cpus" in parsed && typeof parsed.cpus === "number" ? parsed.cpus : 1,
-        memoryMb:
-          "memoryMb" in parsed && typeof parsed.memoryMb === "number"
-            ? parsed.memoryMb
-            : 512,
-        pidsLimit:
-          "pidsLimit" in parsed && typeof parsed.pidsLimit === "number"
-            ? parsed.pidsLimit
-            : 128,
-      }
-    }
-  } catch {
-    // Existing and malformed rows remain local rather than gaining container access.
-  }
-  return { type: "local" }
-}
-
-function parsePromptConfig(value: string): FrozenPromptConfig {
-  try {
-    const parsed = JSON.parse(value) as Partial<FrozenPromptConfig> & {
-      systemPromptTemplate?: string
-    }
-    return {
-      ...resolvePromptTemplates({
-        mainSystemPromptTemplate:
-          typeof parsed.mainSystemPromptTemplate === "string"
-            ? parsed.mainSystemPromptTemplate
-            : "",
-        childSystemPromptTemplate:
-          typeof parsed.childSystemPromptTemplate === "string"
-            ? parsed.childSystemPromptTemplate
-            : "",
-        initialPromptTemplate:
-          typeof parsed.initialPromptTemplate === "string"
-            ? parsed.initialPromptTemplate
-            : "",
-        systemPromptTemplate: parsed.systemPromptTemplate,
-      }),
-      ...(parsed.context && typeof parsed.context === "object"
-        ? { context: parsed.context }
-        : {}),
-    }
-  } catch {
-    return resolvePromptTemplates({
-      mainSystemPromptTemplate: "",
-      childSystemPromptTemplate: "",
-      initialPromptTemplate: "",
-    })
-  }
-}
-
-function parseModelConfig(value: string): ModelConfig {
-  try {
-    const parsed = JSON.parse(value) as Partial<ModelConfig>
-    return {
-      provider: typeof parsed.provider === "string" ? parsed.provider : "",
-      ...(typeof parsed.providerLabel === "string"
-        ? { providerLabel: parsed.providerLabel }
-        : {}),
-      modelId: typeof parsed.modelId === "string" ? parsed.modelId : "",
-      ...(typeof parsed.modelLabel === "string"
-        ? { modelLabel: parsed.modelLabel }
-        : {}),
-      ...(typeof parsed.baseUrl === "string"
-        ? { baseUrl: parsed.baseUrl }
-        : {}),
-      ...(parsed.costKnown === false ? { costKnown: false } : {}),
-      thinkingLevel:
-        parsed.thinkingLevel === "minimal" ||
-        parsed.thinkingLevel === "low" ||
-        parsed.thinkingLevel === "medium" ||
-        parsed.thinkingLevel === "high" ||
-        parsed.thinkingLevel === "xhigh" ||
-        parsed.thinkingLevel === "max"
-          ? parsed.thinkingLevel
-          : "off",
-    }
-  } catch {
-    return { provider: "", modelId: "", thinkingLevel: "off" }
-  }
-}
-
-function parseRuntimeSnapshot(
-  value: string | null
-): AgentRuntimeSnapshot | null {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value) as Partial<AgentRuntimeSnapshot>
-    if (
-      typeof parsed.capturedAt !== "string" ||
-      typeof parsed.systemPrompt !== "string" ||
-      typeof parsed.cwd !== "string" ||
-      !parsed.model ||
-      typeof parsed.model.provider !== "string" ||
-      typeof parsed.model.modelId !== "string" ||
-      !Array.isArray(parsed.tools)
-    ) {
-      return null
-    }
-    const thinkingLevel =
-      parsed.model.thinkingLevel === "minimal" ||
-      parsed.model.thinkingLevel === "low" ||
-      parsed.model.thinkingLevel === "medium" ||
-      parsed.model.thinkingLevel === "high" ||
-      parsed.model.thinkingLevel === "xhigh" ||
-      parsed.model.thinkingLevel === "max"
-        ? parsed.model.thinkingLevel
-        : "off"
-    return {
-      ...parsed,
-      model: { ...parsed.model, thinkingLevel },
-    } as AgentRuntimeSnapshot
-  } catch {
-    return null
   }
 }
 

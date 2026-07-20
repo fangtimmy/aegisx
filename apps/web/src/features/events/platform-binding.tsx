@@ -54,6 +54,7 @@ import {
   type RemoteChallengeSummary,
   type RemoteEvent,
 } from "@/lib/api"
+import { syncChallengeStream } from "./platform-sync-stream"
 import { eventKeys } from "./shared"
 
 const platformLabels: Record<PlatformType, string> = {
@@ -562,58 +563,4 @@ async function refreshEvent(
     queryClient.invalidateQueries({ queryKey: eventKeys.all }),
     queryClient.invalidateQueries({ queryKey: ["runs", "event", eventId] }),
   ])
-}
-
-async function syncChallengeStream(
-  eventId: string,
-  remoteIds: string[],
-  onItem: (
-    item: ChallengeSyncResult["results"][number],
-    completed: number,
-    total: number
-  ) => void
-) {
-  const response = await fetch(
-    `/api/events/${eventId}/platform/challenges/sync/stream`,
-    jsonRequest("POST", { remoteIds })
-  )
-  if (!response.ok) throw new Error(`Sync failed (${response.status})`)
-  if (!response.body) throw new Error("Sync stream is unavailable")
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  const results: ChallengeSyncResult["results"] = []
-  let buffer = ""
-  let syncedAt = ""
-  const consume = (line: string) => {
-    if (!line.trim()) return
-    const event = JSON.parse(line) as
-      | {
-          type: "item"
-          item: ChallengeSyncResult["results"][number]
-          completed: number
-          total: number
-        }
-      | { type: "complete"; syncedAt: string }
-      | { type: "error"; message: string }
-    if (event.type === "error") throw new Error(event.message)
-    if (event.type === "complete") {
-      syncedAt = event.syncedAt
-      return
-    }
-    results.push(event.item)
-    onItem(event.item, event.completed, event.total)
-  }
-
-  while (true) {
-    const { done, value } = await reader.read()
-    buffer += decoder.decode(value, { stream: !done })
-    const lines = buffer.split("\n")
-    buffer = lines.pop() ?? ""
-    for (const line of lines) consume(line)
-    if (done) break
-  }
-  consume(buffer)
-  if (!syncedAt) throw new Error("Sync stream ended unexpectedly")
-  return { syncedAt, results }
 }

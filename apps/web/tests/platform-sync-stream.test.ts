@@ -1,0 +1,38 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+import { parseSyncStreamLine } from "@/features/events/platform-sync-stream"
+
+test("parses challenge sync progress and completion events", () => {
+  assert.deepEqual(
+    parseSyncStreamLine(
+      JSON.stringify({
+        type: "item",
+        item: { remoteId: "challenge-1", status: "created" },
+        completed: 1,
+        total: 2,
+      })
+    ),
+    {
+      type: "item",
+      item: { remoteId: "challenge-1", status: "created" },
+      completed: 1,
+      total: 2,
+    }
+  )
+  assert.deepEqual(
+    parseSyncStreamLine(JSON.stringify({ type: "complete", syncedAt: "now" })),
+    { type: "complete", syncedAt: "now" }
+  )
+  assert.equal(parseSyncStreamLine("\n"), undefined)
+})
+
+test("rejects malformed challenge sync events", () => {
+  assert.throws(
+    () => parseSyncStreamLine(JSON.stringify({ type: "item", item: {} })),
+    /Invalid challenge sync event/
+  )
+  assert.throws(
+    () => parseSyncStreamLine(JSON.stringify({ type: "unknown" })),
+    /Invalid challenge sync event/
+  )
+})

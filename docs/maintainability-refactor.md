@@ -62,6 +62,8 @@ must remain stable while responsibilities become easier to locate and test.
   `apps/web/src/features/settings/provider-detail.tsx`.
 - [x] Moved Provider model list, model dialogs, and Pi binding UI to
   `apps/web/src/features/settings/provider-models.tsx`.
+- [x] Kept the component library under `apps/web/src/components/ui` intact;
+  only feature-owned workflows were reorganized.
 
 ### Platform Responsibilities
 
@@ -80,11 +82,11 @@ must remain stable while responsibilities become easier to locate and test.
 ### Verification
 
 - [x] Backend `bun run check` passes.
-- [x] Backend `bun run test` passes: 45 tests. The script runs the suite
+- [x] Backend `bun run test` passes: 47 tests. The script runs the suite
   serially because Run and Docker integration tests share host resources.
 - [x] Frontend `bun run check` passes.
 - [x] Frontend `bun run typecheck` passes.
-- [x] Frontend `bun test` passes: 9 tests.
+- [x] Frontend `bun test` passes: 11 tests.
 - [x] Frontend `bun run build` passes.
 - [x] `git diff --check` passes.
 - [x] No new dependency was added.
@@ -92,10 +94,9 @@ must remain stable while responsibilities become easier to locate and test.
 The frontend build still reports the existing bundle-size warning for a chunk
 larger than 500 kB. It does not currently fail the build.
 
-Current checkpoint: P0 behavior protection, both P1 batches, and frontend
-cleanup are complete. The type/error boundary audit is mostly complete; deep
-validation of persisted Agent message contents remains. The other remaining
-work is conditional Vite bundle investigation and final cleanup review.
+Current checkpoint: P0 behavior protection, both P1 batches, frontend cleanup,
+and persisted data boundary validation are complete. Remaining work is limited
+to conditional Vite bundle investigation and final cleanup review.
 
 ## Next Work
 
@@ -157,9 +158,9 @@ server state and side effects; no new global state layer is added.
 - [x] Remove avoidable `as unknown as` casts at API and event boundaries. The
   remaining three casts are retained for the Node/web stream type mismatch and
   explicit AgentEvent-to-public-event shape conversions.
-- [ ] Deep-validate persisted Agent message roles and content parts. Top-level
-  message shape, Usage records, and inbox metadata are already checked at
-  their read boundaries.
+- [x] Deep-validate persisted Agent message roles and content parts. Run
+  configuration and runtime snapshot parsers now validate nested persisted
+  values before they enter lifecycle or inspector code.
 - [x] Unify repeated `not_found` and action-error response formatting in
   `http-errors.ts` across route modules.
 

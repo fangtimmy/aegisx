@@ -10,7 +10,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
-import { parseAgentMessage } from "../src/agent-runtime"
+import { parseAgentMessage } from "../src/agent-messages"
 import { createApp } from "../src/app"
 import { json, waitFor } from "./support"
 
@@ -135,14 +135,66 @@ describe("run API", () => {
   test("validates persisted agent messages", () => {
     expect(
       parseAgentMessage(
-        JSON.stringify({ role: "assistant", content: [], timestamp: 0 })
+        JSON.stringify({
+          role: "assistant",
+          content: [],
+          api: "openai-completions",
+          provider: "faux",
+          model: "faux-1",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        })
       )
     ).toMatchObject({ role: "assistant" })
+    expect(
+      parseAgentMessage(
+        JSON.stringify({
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 0,
+        })
+      )
+    ).toMatchObject({ role: "user" })
     expect(() => parseAgentMessage("null")).toThrow(
       "Persisted agent message is invalid"
     )
     expect(() =>
       parseAgentMessage(JSON.stringify({ role: "assistant", timestamp: 0 }))
+    ).toThrow("Persisted agent message is invalid")
+    expect(() =>
+      parseAgentMessage(
+        JSON.stringify({
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1" }],
+          timestamp: 0,
+        })
+      )
+    ).toThrow("Persisted agent message is invalid")
+    expect(() =>
+      parseAgentMessage(
+        JSON.stringify({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "bash",
+          content: [{ type: "text", text: "result" }],
+          isError: "false",
+          timestamp: 0,
+        })
+      )
     ).toThrow("Persisted agent message is invalid")
   })
 
