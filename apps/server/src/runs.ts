@@ -65,6 +65,7 @@ import {
 import { redactSecrets, replaceText } from "./redaction"
 import { RunActionError } from "./run-errors"
 import { createRunInspector } from "./run-inspector"
+import { type AgentChange, createRunStateStore } from "./run-state-store"
 import { createRunTools } from "./run-tools"
 import { sumUsage } from "./usage"
 
@@ -148,11 +149,6 @@ type CurrentSession = {
   runtime: AgentRuntime
   generation: number
 }
-type AgentChange = {
-  agentId: string
-  values: Partial<typeof runAgents.$inferInsert>
-}
-
 const terminalRunStatuses: RunStatus[] = ["completed", "failed", "stopped"]
 const terminalAgentStatuses: AgentStatus[] = ["completed", "failed", "stopped"]
 const defaultResumeMessage =
@@ -461,6 +457,26 @@ export function createRunManager(options: Options) {
     }
   }
 
+  const {
+    transition: transitionRun,
+    update,
+    updateAgent,
+  } = createRunStateStore({
+    db,
+    getRun: getPublic,
+    getAgent: getStoredAgent,
+    getPublicAgent: getAgentPublic,
+    getAgentUsage: usageForAgent,
+    emitRun: (runId, run, cursorValue) =>
+      emit(runId, { type: "run.updated", run, cursor: cursorValue }),
+    emitAgent: (runId, agent, usage, cursorValue) =>
+      emit(runId, {
+        type: "agent.updated",
+        agent: { ...agent, usage },
+        cursor: cursorValue,
+      }),
+  })
+
   function releaseAgent(agentId: string) {
     const active = current.get(agentId)
     if (active) {
@@ -478,122 +494,6 @@ export function createRunManager(options: Options) {
       await removeContainerAsync(name)
       activeContainers.delete(runId)
     }
-  }
-
-  function update(
-    runId: string,
-    values: Partial<typeof runs.$inferInsert>
-  ): RunPublic {
-    const updatedAt = new Date().toISOString()
-    let cursorValue: number | undefined
-    db.transaction((tx) => {
-      tx.update(runs)
-        .set({ ...values, updatedAt })
-        .where(eq(runs.id, runId))
-        .run()
-      cursorValue = tx
-        .insert(runEvents)
-        .values({
-          runId,
-          type: "run_updated",
-          createdAt: updatedAt,
-        })
-        .returning({ id: runEvents.id })
-        .get()?.id
-    })
-    const run = getPublic(runId)
-    if (!run) throw new Error("Run not found")
-    emit(runId, { type: "run.updated", run, cursor: cursorValue })
-    return run
-  }
-
-  function updateAgent(
-    agentId: string,
-    values: Partial<typeof runAgents.$inferInsert>
-  ): AgentPublic {
-    const updatedAt = new Date().toISOString()
-    let cursorValue: number | undefined
-    const stored = getStoredAgent(agentId)
-    if (!stored) throw new Error("Agent not found")
-    db.transaction((tx) => {
-      tx.update(runAgents)
-        .set({ ...values, updatedAt })
-        .where(eq(runAgents.id, agentId))
-        .run()
-      cursorValue = tx
-        .insert(runEvents)
-        .values({
-          runId: stored.runId,
-          type: "agent_updated",
-          agentId,
-          entityId: agentId,
-          createdAt: updatedAt,
-        })
-        .returning({ id: runEvents.id })
-        .get()?.id
-    })
-    const agent = getAgentPublic(agentId)
-    if (!agent) throw new Error("Agent not found")
-    emit(agent.runId, {
-      type: "agent.updated",
-      agent: { ...agent, usage: usageForAgent(agent.id) },
-      cursor: cursorValue,
-    })
-    return agent
-  }
-
-  function transitionRun(
-    runId: string,
-    runValues: Partial<typeof runs.$inferInsert>,
-    agentChanges: AgentChange[]
-  ) {
-    const updatedAt = new Date().toISOString()
-    const agentCursors = new Map<string, number>()
-    let runCursor: number | undefined
-    db.transaction((tx) => {
-      for (const change of agentChanges) {
-        tx.update(runAgents)
-          .set({ ...change.values, updatedAt })
-          .where(
-            and(eq(runAgents.id, change.agentId), eq(runAgents.runId, runId))
-          )
-          .run()
-        const value = tx
-          .insert(runEvents)
-          .values({
-            runId,
-            type: "agent_updated",
-            agentId: change.agentId,
-            entityId: change.agentId,
-            createdAt: updatedAt,
-          })
-          .returning({ id: runEvents.id })
-          .get()?.id
-        if (value !== undefined) agentCursors.set(change.agentId, value)
-      }
-      tx.update(runs)
-        .set({ ...runValues, updatedAt })
-        .where(eq(runs.id, runId))
-        .run()
-      runCursor = tx
-        .insert(runEvents)
-        .values({ runId, type: "run_updated", createdAt: updatedAt })
-        .returning({ id: runEvents.id })
-        .get()?.id
-    })
-    for (const change of agentChanges) {
-      const agent = getAgentPublic(change.agentId)
-      if (!agent) continue
-      emit(runId, {
-        type: "agent.updated",
-        agent: { ...agent, usage: usageForAgent(agent.id) },
-        cursor: agentCursors.get(agent.id),
-      })
-    }
-    const run = getPublic(runId)
-    if (!run) throw new Error("Run not found")
-    emit(runId, { type: "run.updated", run, cursor: runCursor })
-    return run
   }
 
   function runningCount() {

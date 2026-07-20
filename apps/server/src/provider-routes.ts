@@ -3,6 +3,7 @@ import type { Hono } from "hono"
 import { Type } from "typebox"
 import type { createDatabase } from "./db"
 import { providerConnections, providerModels, settings } from "./db/schema"
+import { notFound } from "./http-errors"
 import {
   builtinModelProfile,
   builtinModelProfiles,
@@ -129,10 +130,7 @@ export function registerProviderRoutes(
   app.get("/api/providers/:providerId/models/builtins", (c) => {
     const provider = getProvider(c.req.param("providerId"))
     if (!provider) {
-      return c.json(
-        { error: { code: "not_found", message: "Provider not found" } },
-        404
-      )
+      return notFound(c, "Provider not found")
     }
     return c.json({
       items: builtinModelProfiles(providerApi(provider.type)).map((model) => ({
@@ -190,10 +188,7 @@ export function registerProviderRoutes(
     (c) => {
       const existing = getProvider(c.req.param("providerId"))
       if (!existing) {
-        return c.json(
-          { error: { code: "not_found", message: "Provider not found" } },
-          404
-        )
+        return notFound(c, "Provider not found")
       }
       const input = c.req.valid("json")
       try {
@@ -243,10 +238,7 @@ export function registerProviderRoutes(
   app.delete("/api/providers/:providerId", (c) => {
     const provider = getProvider(c.req.param("providerId"))
     if (!provider) {
-      return c.json(
-        { error: { code: "not_found", message: "Provider not found" } },
-        404
-      )
+      return notFound(c, "Provider not found")
     }
     const defaultModelId = getSettings().defaultModelId
     if (
@@ -273,10 +265,7 @@ export function registerProviderRoutes(
     (c) => {
       const provider = getProvider(c.req.param("providerId"))
       if (!provider) {
-        return c.json(
-          { error: { code: "not_found", message: "Provider not found" } },
-          404
-        )
+        return notFound(c, "Provider not found")
       }
       const input = c.req.valid("json")
       try {
@@ -370,10 +359,7 @@ export function registerProviderRoutes(
         .where(eq(providerModels.id, c.req.param("modelId")))
         .get()
       if (!model) {
-        return c.json(
-          { error: { code: "not_found", message: "Model not found" } },
-          404
-        )
+        return notFound(c, "Model not found")
       }
       const provider = getProvider(model.providerId)
       const input = c.req.valid("json")
@@ -456,10 +442,7 @@ export function registerProviderRoutes(
       const model = getModel(c.req.param("modelId"))
       const provider = model ? getProvider(model.providerId) : undefined
       if (!model || !provider) {
-        return c.json(
-          { error: { code: "not_found", message: "Model not found" } },
-          404
-        )
+        return notFound(c, "Model not found")
       }
       const binding = c.req.valid("json")
       const profile = builtinModelProfile(
@@ -496,10 +479,7 @@ export function registerProviderRoutes(
   app.delete("/api/provider-models/:modelId/binding", (c) => {
     const model = getModel(c.req.param("modelId"))
     if (!model) {
-      return c.json(
-        { error: { code: "not_found", message: "Model not found" } },
-        404
-      )
+      return notFound(c, "Model not found")
     }
     const next = {
       piProviderId: null,
@@ -521,10 +501,7 @@ export function registerProviderRoutes(
       .where(eq(providerModels.id, c.req.param("modelId")))
       .get()
     if (!model) {
-      return c.json(
-        { error: { code: "not_found", message: "Model not found" } },
-        404
-      )
+      return notFound(c, "Model not found")
     }
     if (getSettings().defaultModelId === model.id) {
       db.update(settings)
@@ -540,10 +517,7 @@ export function registerProviderRoutes(
   app.post("/api/providers/:providerId/models/discover", async (c) => {
     const provider = getProvider(c.req.param("providerId"))
     if (!provider) {
-      return c.json(
-        { error: { code: "not_found", message: "Provider not found" } },
-        404
-      )
+      return notFound(c, "Provider not found")
     }
     try {
       const headers: Record<string, string> =

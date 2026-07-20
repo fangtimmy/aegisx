@@ -10,6 +10,7 @@ import {
   providerModels,
   type settings,
 } from "./db/schema"
+import { jsonError, notFound } from "./http-errors"
 import { parseModelMetadata } from "./models"
 import { providerName } from "./provider-routes"
 import { type createRunManager, RunActionError } from "./runs"
@@ -484,20 +485,14 @@ export function registerRunRoutes(
   })
 }
 
-function notFound(
-  c: Parameters<Parameters<Hono["onError"]>[0]>[1],
-  message: string
-) {
-  return c.json({ error: { code: "not_found", message } }, 404)
-}
-
 function runError(
   c: Parameters<Parameters<Hono["onError"]>[0]>[1],
   error: unknown
 ) {
   if (!(error instanceof RunActionError)) throw error
-  return c.json(
-    { error: { code: error.code, message: error.message } },
+  return jsonError(
+    c,
+    { code: error.code, message: error.message },
     error.code === "not_found" ? 404 : 409
   )
 }
@@ -507,8 +502,9 @@ function workspaceFileError(
   error: unknown
 ) {
   if (!(error instanceof WorkspaceFileError)) throw error
-  return c.json(
-    { error: { code: error.code, message: error.message } },
+  return jsonError(
+    c,
+    { code: error.code, message: error.message },
     error.code === "not_found" ? 404 : 400
   )
 }

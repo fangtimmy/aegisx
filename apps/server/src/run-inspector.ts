@@ -8,7 +8,7 @@ import type {
   AgentRuntimeSnapshot,
   ConversationMessage,
 } from "../../shared/api"
-import { publicAgentMessage } from "./agent-runtime"
+import { parseAgentMessage, publicAgentMessage } from "./agent-runtime"
 import type { createDatabase } from "./db"
 import {
   agentMessages,
@@ -26,6 +26,17 @@ type StoredAgent = typeof runAgents.$inferSelect
 type StoredRun = {
   id: string
   modelConfig: string
+}
+
+function parseUsage(value: string): Partial<Usage> {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Partial<Usage>)
+      : {}
+  } catch {
+    return {}
+  }
 }
 
 export function createRunInspector(options: {
@@ -60,8 +71,8 @@ export function createRunInspector(options: {
   }
 
   function messagesForAgent(agentId: string): AgentMessage[] {
-    return messageRowsForAgent(agentId).map(
-      ({ message }) => JSON.parse(message) as AgentMessage
+    return messageRowsForAgent(agentId).map(({ message }) =>
+      parseAgentMessage(message)
     )
   }
 
@@ -73,7 +84,7 @@ export function createRunInspector(options: {
       agentId: row.agentId,
       sequence: row.sequence,
       message: publicAgentMessage(
-        JSON.parse(row.message) as AgentMessage
+        parseAgentMessage(row.message)
       ) as unknown as Record<string, unknown>,
       createdAt: row.createdAt,
     }
@@ -137,7 +148,7 @@ export function createRunInspector(options: {
           .from(agentUsage)
           .where(eq(agentUsage.agentId, agentId))
           .all()
-          .map(({ usage }) => JSON.parse(usage) as Usage),
+          .map(({ usage }) => parseUsage(usage)),
         costKnown
       ),
     ])

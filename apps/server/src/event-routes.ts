@@ -5,6 +5,7 @@ import { Type } from "typebox"
 import type { createCatalogReader } from "./catalog"
 import type { createDatabase } from "./db"
 import { attachments, challenges, events, runs } from "./db/schema"
+import { jsonError, notFound } from "./http-errors"
 import type { createPlatformService } from "./platform-service"
 import { PlatformActionError } from "./platform-service"
 import type { createRunManager } from "./runs"
@@ -87,10 +88,7 @@ export function registerEventRoutes(
   app.get("/api/events/:eventId", (c) => {
     const event = getEvent(c.req.param("eventId"))
     if (!event) {
-      return c.json(
-        { error: { code: "not_found", message: "Event not found" } },
-        404
-      )
+      return notFound(c, "Event not found")
     }
     return c.json({ event, challenges: listChallengesForEvent(event.id) })
   })
@@ -98,10 +96,7 @@ export function registerEventRoutes(
   app.get("/api/events/:eventId/runs", (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
-      return c.json(
-        { error: { code: "not_found", message: "Event not found" } },
-        404
-      )
+      return notFound(c, "Event not found")
     }
     return c.json({ items: runManager.listForEvent(eventId) })
   })
@@ -109,10 +104,7 @@ export function registerEventRoutes(
   app.patch("/api/events/:eventId", validateJson(eventInput), (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
-      return c.json(
-        { error: { code: "not_found", message: "Event not found" } },
-        404
-      )
+      return notFound(c, "Event not found")
     }
     const name = c.req.valid("json").name.trim()
     if (!name) {
@@ -131,10 +123,7 @@ export function registerEventRoutes(
   app.delete("/api/events/:eventId", async (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
-      return c.json(
-        { error: { code: "not_found", message: "Event not found" } },
-        404
-      )
+      return notFound(c, "Event not found")
     }
     const activeRun = db
       .select({ id: runs.id })
@@ -162,8 +151,9 @@ export function registerEventRoutes(
       await platformService.assertNoActiveTargets(eventId)
     } catch (error) {
       if (!(error instanceof PlatformActionError)) throw error
-      return c.json(
-        { error: { code: error.code, message: error.message } },
+      return jsonError(
+        c,
+        { code: error.code, message: error.message },
         error.code === "platform_error" ? 502 : 409
       )
     }
@@ -185,10 +175,7 @@ export function registerEventRoutes(
     (c) => {
       const eventId = c.req.param("eventId")
       if (!getEvent(eventId)) {
-        return c.json(
-          { error: { code: "not_found", message: "Event not found" } },
-          404
-        )
+        return notFound(c, "Event not found")
       }
       const input = c.req.valid("json")
       const name = input.name.trim()
@@ -225,10 +212,7 @@ export function registerEventRoutes(
     (c) => {
       const challengeId = c.req.param("challengeId")
       if (!getChallenge(challengeId)) {
-        return c.json(
-          { error: { code: "not_found", message: "Challenge not found" } },
-          404
-        )
+        return notFound(c, "Challenge not found")
       }
       const input = c.req.valid("json")
       const name = input.name.trim()
@@ -260,10 +244,7 @@ export function registerEventRoutes(
   app.delete("/api/challenges/:challengeId", (c) => {
     const challenge = getChallenge(c.req.param("challengeId"))
     if (!challenge) {
-      return c.json(
-        { error: { code: "not_found", message: "Challenge not found" } },
-        404
-      )
+      return notFound(c, "Challenge not found")
     }
     if (challenge.remoteId && platformService.isBoundEvent(challenge.eventId)) {
       return c.json(
@@ -326,10 +307,7 @@ export function registerEventRoutes(
     }
     const challenge = getChallenge(c.req.param("challengeId"))
     if (!challenge) {
-      return c.json(
-        { error: { code: "not_found", message: "Challenge not found" } },
-        404
-      )
+      return notFound(c, "Challenge not found")
     }
     const filename = c.req.query("filename") ?? ""
     if (!isSafeFilename(filename)) {
@@ -386,17 +364,11 @@ export function registerEventRoutes(
       .where(eq(attachments.id, c.req.param("attachmentId")))
       .get()
     if (!attachment) {
-      return c.json(
-        { error: { code: "not_found", message: "Attachment not found" } },
-        404
-      )
+      return notFound(c, "Attachment not found")
     }
     const path = storage.attachmentPath(attachment.storageKey)
     if (!existsSync(path)) {
-      return c.json(
-        { error: { code: "not_found", message: "Attachment not found" } },
-        404
-      )
+      return notFound(c, "Attachment not found")
     }
     return new Response(Bun.file(path), {
       headers: {
@@ -413,10 +385,7 @@ export function registerEventRoutes(
       .where(eq(attachments.id, c.req.param("attachmentId")))
       .get()
     if (!attachment) {
-      return c.json(
-        { error: { code: "not_found", message: "Attachment not found" } },
-        404
-      )
+      return notFound(c, "Attachment not found")
     }
     const path = storage.attachmentPath(attachment.storageKey)
     const trashedPath = storage.moveToTrash(path)

@@ -3,6 +3,7 @@ import type { Hono } from "hono"
 import { Type } from "typebox"
 import type { createDatabase } from "./db"
 import { providerConnections, providerModels, settings } from "./db/schema"
+import { notFound } from "./http-errors"
 import {
   builtinModelProfile,
   normalizeModelMetadata,
@@ -270,10 +271,7 @@ export function registerSettingsRoutes(
           .get()
       : undefined
     if (input.defaultModelId && !defaultModel) {
-      return c.json(
-        { error: { code: "not_found", message: "Default model not found" } },
-        404
-      )
+      return notFound(c, "Default model not found")
     }
     db.update(settings)
       .set({

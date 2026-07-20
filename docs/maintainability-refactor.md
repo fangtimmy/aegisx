@@ -44,6 +44,8 @@ must remain stable while responsibilities become easier to locate and test.
 - [x] Moved Agent-specific tools to `apps/server/src/run-tools.ts`.
 - [x] Moved conversation, Usage, tool statistics, and Inspector reads to
   `apps/server/src/run-inspector.ts`.
+- [x] Moved Run persistence writes and event publication to
+  `apps/server/src/run-state-store.ts`.
 - [x] Moved `RunActionError` to `apps/server/src/run-errors.ts`.
 - [x] Kept Run state transitions, session lifecycle, concurrency, and target
   coordination in `apps/server/src/runs.ts`.
@@ -56,8 +58,10 @@ must remain stable while responsibilities become easier to locate and test.
   `apps/web/src/features/runs/run-workspace.tsx`.
 - [x] Moved Provider editor state and mutations to
   `apps/web/src/features/settings/use-provider-editor.ts`.
-- [x] Kept Provider tables, forms, dialogs, and visual states in
+- [x] Kept Provider configuration rendering in
   `apps/web/src/features/settings/provider-detail.tsx`.
+- [x] Moved Provider model list, model dialogs, and Pi binding UI to
+  `apps/web/src/features/settings/provider-models.tsx`.
 
 ### Platform Responsibilities
 
@@ -76,7 +80,7 @@ must remain stable while responsibilities become easier to locate and test.
 ### Verification
 
 - [x] Backend `bun run check` passes.
-- [x] Backend `bun run test` passes: 44 tests. The script runs the suite
+- [x] Backend `bun run test` passes: 45 tests. The script runs the suite
   serially because Run and Docker integration tests share host resources.
 - [x] Frontend `bun run check` passes.
 - [x] Frontend `bun run typecheck` passes.
@@ -88,8 +92,10 @@ must remain stable while responsibilities become easier to locate and test.
 The frontend build still reports the existing bundle-size warning for a chunk
 larger than 500 kB. It does not currently fail the build.
 
-Current checkpoint: P0 behavior protection and the platform-service P1 batch are
-complete. The next implementation batch is the remaining Run core cleanup.
+Current checkpoint: P0 behavior protection, both P1 batches, and frontend
+cleanup are complete. The type/error boundary audit is mostly complete; deep
+validation of persisted Agent message contents remains. The other remaining
+work is conditional Vite bundle investigation and final cleanup review.
 
 ## Next Work
 
@@ -124,36 +130,38 @@ unchanged; no generic repository or service hierarchy is introduced.
 
 ### P1: Finish Run Core Cleanup
 
-- [ ] Review the remaining `runs.ts` sections for persistence writes,
+- [x] Review the remaining `runs.ts` sections for persistence writes,
   lifecycle transitions, and session attachment boundaries.
-- [ ] Extract a small persistence boundary only where it removes real
+- [x] Extract a small persistence boundary only where it removes real
   duplication from Run state transitions.
-- [ ] Keep one clear owner for Run status transitions and Run locks.
+- [x] Keep one clear owner for Run status transitions and Run locks.
 
 Acceptance criteria: no status transition is implemented in more than one
 place, and lifecycle tests cover every public action.
 
 ### P2: Finish Frontend Cleanup
 
-- [ ] Review the remaining JSX size in `provider-detail.tsx` and split only
-  stable visual sections such as the provider form, model list, and binding
-  dialog.
-- [ ] Standardize query keys and mutation invalidation across Settings and Run
-  features.
-- [ ] Keep `components/ui` unchanged unless a concrete behavior or
-  accessibility issue is found.
+- [x] Split the stable Provider configuration and model-management sections
+  from `provider-detail.tsx`.
+- [x] Audit query keys and mutation invalidation across Settings and Run
+  features. Existing root keys (`providers`, `settings`, and `runs`) are
+  consistent, so no speculative renaming was added.
+- [x] Keep `components/ui` unchanged because no concrete behavior or
+  accessibility issue was found.
 
 Acceptance criteria: feature components own page composition while hooks own
 server state and side effects; no new global state layer is added.
 
 ### P2: Type And Error Boundary Audit
 
-- [ ] Remove remaining avoidable `as unknown as` casts at API and event
-  boundaries.
-- [ ] Validate persisted JSON at its read boundary and keep invalid data from
-  leaking into UI-facing types.
-- [ ] Unify repeated HTTP error response helpers where two or more route
-  modules genuinely share the same behavior.
+- [x] Remove avoidable `as unknown as` casts at API and event boundaries. The
+  remaining three casts are retained for the Node/web stream type mismatch and
+  explicit AgentEvent-to-public-event shape conversions.
+- [ ] Deep-validate persisted Agent message roles and content parts. Top-level
+  message shape, Usage records, and inbox metadata are already checked at
+  their read boundaries.
+- [x] Unify repeated `not_found` and action-error response formatting in
+  `http-errors.ts` across route modules.
 
 Acceptance criteria: typecheck remains strict and error responses retain their
 current status codes and public shape.

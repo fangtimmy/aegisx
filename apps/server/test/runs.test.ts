@@ -10,6 +10,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
+import { parseAgentMessage } from "../src/agent-runtime"
 import { createApp } from "../src/app"
 import { json, waitFor } from "./support"
 
@@ -131,6 +132,20 @@ function configureFaux(app: ReturnType<typeof createApp>["app"]) {
 }
 
 describe("run API", () => {
+  test("validates persisted agent messages", () => {
+    expect(
+      parseAgentMessage(
+        JSON.stringify({ role: "assistant", content: [], timestamp: 0 })
+      )
+    ).toMatchObject({ role: "assistant" })
+    expect(() => parseAgentMessage("null")).toThrow(
+      "Persisted agent message is invalid"
+    )
+    expect(() =>
+      parseAgentMessage(JSON.stringify({ role: "assistant", timestamp: 0 }))
+    ).toThrow("Persisted agent message is invalid")
+  })
+
   test("renders and freezes custom prompt templates", async () => {
     const instance = setup()
     const { event, challenge } = await createChallenge(instance.app)

@@ -179,3 +179,5 @@ export function useProviderEditor(provider: ProviderConnection) {
     selectedProfile,
   }
 }
+
+export type ProviderEditor = ReturnType<typeof useProviderEditor>

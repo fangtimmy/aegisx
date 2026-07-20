@@ -55,6 +55,75 @@ export type RuntimeOutcome = {
   error: string | null
 }
 
+export function parseAgentMessage(value: string): AgentMessage {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error("Persisted agent message is invalid")
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    typeof (parsed as { role?: unknown }).role !== "string" ||
+    typeof (parsed as { timestamp?: unknown }).timestamp !== "number"
+  ) {
+    throw new Error("Persisted agent message is invalid")
+  }
+  const message = parsed as {
+    role: string
+    content?: unknown
+    id?: unknown
+    kind?: unknown
+    text?: unknown
+  }
+  if (
+    message.role === "aegisx"
+      ? typeof message.id !== "string" ||
+        typeof message.kind !== "string" ||
+        typeof message.text !== "string"
+      : !Array.isArray(message.content)
+  ) {
+    throw new Error("Persisted agent message is invalid")
+  }
+  return parsed as AgentMessage
+}
+
+function parseInboxMetadata(value: string): AegisXMetadata | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined
+    }
+    const handoff = (parsed as { handoff?: unknown }).handoff
+    if (!handoff) return {}
+    const handoffValue = handoff as {
+      agentId?: unknown
+      agentName?: unknown
+      status?: unknown
+    }
+    if (
+      typeof handoff !== "object" ||
+      Array.isArray(handoff) ||
+      typeof handoffValue.agentId !== "string" ||
+      typeof handoffValue.agentName !== "string" ||
+      typeof handoffValue.status !== "string"
+    ) {
+      return undefined
+    }
+    return {
+      handoff: {
+        agentId: handoffValue.agentId,
+        agentName: handoffValue.agentName,
+        status: handoffValue.status,
+      },
+    }
+  } catch {
+    return undefined
+  }
+}
+
 type RuntimeOptions = {
   db: Database
   runId: string
@@ -178,7 +247,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
     .where(eq(agentMessages.agentId, options.agentId))
     .orderBy(asc(agentMessages.sequence))
     .all()
-  const messages = rows.map((row) => JSON.parse(row.message) as AgentMessage)
+  const messages = rows.map((row) => parseAgentMessage(row.message))
   let sequence =
     options.db
       .select({ value: max(agentMessages.sequence) })
@@ -412,15 +481,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
   }
 
   function message(row: ReturnType<typeof pending>[number]): AegisXMessage {
-    let metadata: AegisXMetadata | undefined
-    if (row.metadata) {
-      try {
-        const parsed = JSON.parse(row.metadata) as AegisXMetadata
-        if (parsed && typeof parsed === "object") metadata = parsed
-      } catch {
-        metadata = undefined
-      }
-    }
+    const metadata = row.metadata ? parseInboxMetadata(row.metadata) : undefined
     return {
       role: "aegisx",
       id: row.id,

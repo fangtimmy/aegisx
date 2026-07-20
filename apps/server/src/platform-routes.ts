@@ -1,6 +1,7 @@
 import type { Hono } from "hono"
 import { streamText } from "hono/streaming"
 import { Type } from "typebox"
+import { jsonError } from "./http-errors"
 import type { createPlatformService } from "./platform-service"
 import { PlatformActionError } from "./platform-service"
 import { validateJson } from "./validation"
@@ -193,5 +194,5 @@ function platformError(
         : error.code === "not_bound"
           ? 400
           : 502
-  return c.json({ error: { code: error.code, message: error.message } }, status)
+  return jsonError(c, { code: error.code, message: error.message }, status)
 }
