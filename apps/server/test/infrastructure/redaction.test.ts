@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { redactSecrets } from "../src/infrastructure/redaction"
+import { redactSecrets } from "../../src/infrastructure/redaction"
 
 test("redacts secrets from strings and nested values", () => {
   expect(redactSecrets("token=secret", ["secret"])).toBe("token=[redacted]")

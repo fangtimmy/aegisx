@@ -9,9 +9,9 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
-import { createApp } from "../src/app"
-import { createPlatformAdapter } from "../src/platforms/service"
-import { json, waitFor } from "./support"
+import { createApp } from "../../src/app"
+import { createPlatformAdapter } from "../../src/platforms/service"
+import { json, waitFor } from "../support"
 
 const roots: string[] = []
 const servers: Bun.Server<unknown>[] = []

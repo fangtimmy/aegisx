@@ -10,9 +10,9 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
-import { parseAgentMessage } from "../src/agents/messages"
-import { createApp } from "../src/app"
-import { json, waitFor } from "./support"
+import { parseAgentMessage } from "../../src/agents/messages"
+import { createApp } from "../../src/app"
+import { json, waitFor } from "../support"
 
 const tempDirs: string[] = []
 const closeApps: Array<() => void | Promise<void>> = []

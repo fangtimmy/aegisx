@@ -9,9 +9,9 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
-import { summarizeUsage } from "../src/agents/usage"
-import { createApp } from "../src/app"
-import { json, waitFor } from "./support"
+import { summarizeUsage } from "../../src/agents/usage"
+import { createApp } from "../../src/app"
+import { json, waitFor } from "../support"
 
 const roots: string[] = []
 const closeApps: Array<() => void | Promise<void>> = []

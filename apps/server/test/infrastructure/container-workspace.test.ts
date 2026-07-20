@@ -16,8 +16,8 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
-import { createApp } from "../src/app"
-import { waitFor } from "./support"
+import { createApp } from "../../src/app"
+import { waitFor } from "../support"
 
 const roots: string[] = []
 const closeApps: Array<() => void | Promise<void>> = []
