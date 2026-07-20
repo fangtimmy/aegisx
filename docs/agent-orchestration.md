@@ -21,11 +21,12 @@ The main agent can call `spawn_agent` to start focused work in the background an
 - Pause, resume, stop, and completion apply to every non-terminal agent in the run.
 - Resume requires enough concurrency capacity for all paused agents.
 - On API startup, interrupted running agents and runs become `paused`; no model or tool is called automatically.
+- A Run with a persisted, validated `finish_run` request is completed during API startup instead of being paused or invoking the model again.
 - Only `finish_run(summary)` changes a run to `completed`.
 
 ## Persistence
 
-SQLite stores run and agent state, ordered messages, pending inbox entries, context summaries, runtime snapshots, and compaction usage. Inbox entries are marked delivered only after the corresponding message is persisted.
+SQLite stores run and agent state, ordered messages, pending inbox entries, context summaries, runtime snapshots, compaction usage, and durable run event cursors. Messages keep a stable runtime ID so live and persisted views can be reconciled without timestamp matching. Inbox entries are marked delivered only after the corresponding message and its committed event are persisted.
 
 Runtime snapshots expose the effective system prompt, logical working directory, model, and tools. API keys, flags, home paths, and data paths are redacted before snapshots or events leave the runtime.
 
@@ -45,7 +46,7 @@ The workspace is collaborative rather than isolated. Delegated tasks should avoi
 
 ## Events and usage
 
-SSE events identify the run or agent they belong to:
+SSE events identify the run or agent they belong to. Durable events use the SQLite event cursor for replay; token and tool progress events are ephemeral and converge on the next committed message:
 
 ```ts
 type RunEvent =
@@ -53,5 +54,7 @@ type RunEvent =
   | { type: "agent_status"; agent: AgentPublic }
   | { type: "agent_event"; agentId: string; event: AgentEvent }
 ```
+
+Terminal run status is emitted only after the final agent message is committed. Clients refresh the final snapshot before closing the stream.
 
 Conversation history and live events are isolated by agent ID. Run usage is the sum of message and compaction usage for every agent in the run.

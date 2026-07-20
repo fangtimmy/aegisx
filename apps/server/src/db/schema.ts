@@ -112,6 +112,7 @@ export const runs = sqliteTable(
     completedAt: text("completed_at"),
     error: text("error"),
     summary: text("summary"),
+    pendingCompletionSummary: text("pending_completion_summary"),
     flag: text("flag"),
   },
   (table) => [
@@ -192,6 +193,7 @@ export const agentMessages = sqliteTable(
       .notNull()
       .references(() => runAgents.id, { onDelete: "cascade" }),
     sequence: integer("sequence").notNull(),
+    runtimeId: text("runtime_id").notNull(),
     message: text("message").notNull(),
     createdAt: text("created_at").notNull(),
   },
@@ -199,6 +201,10 @@ export const agentMessages = sqliteTable(
     uniqueIndex("agent_messages_agent_sequence_unique").on(
       table.agentId,
       table.sequence
+    ),
+    uniqueIndex("agent_messages_agent_runtime_unique").on(
+      table.agentId,
+      table.runtimeId
     ),
     index("agent_messages_agent_id_idx").on(table.agentId),
   ]
@@ -265,6 +271,23 @@ export const agentToolCalls = sqliteTable(
       table.createdAt
     ),
   ]
+)
+
+export const runEvents = sqliteTable(
+  "run_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    agentId: text("agent_id").references(() => runAgents.id, {
+      onDelete: "cascade",
+    }),
+    entityId: text("entity_id"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("run_events_run_id_idx").on(table.runId, table.id)]
 )
 
 export const settings = sqliteTable(

@@ -764,6 +764,173 @@ describe("run API", () => {
     sqlite.close()
   })
 
+  test("commits stable message ids before the terminal run event", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("finish_run", { summary: "Stable completion" }),
+        { stopReason: "toolUse" }
+      ),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    const detail = await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string }
+          history: Array<{ id: string; runtimeId: string }>
+        }>,
+      (value) => value.run.status === "completed"
+    )
+
+    expect(detail.history.length).toBeGreaterThan(0)
+    expect(new Set(detail.history.map(({ id }) => id)).size).toBe(
+      detail.history.length
+    )
+    expect(detail.history.every((entry) => entry.id === entry.runtimeId)).toBe(
+      true
+    )
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    const events = sqlite
+      .query("select id, type from run_events where run_id = ? order by id asc")
+      .all(run.id) as Array<{ id: number; type: string }>
+    const lastMessage = events.findLast(
+      (event) => event.type === "message_committed"
+    )
+    const lastRunUpdate = events.findLast(
+      (event) => event.type === "run_updated"
+    )
+    expect(lastMessage?.id).toBeLessThan(lastRunUpdate?.id as number)
+    sqlite.close()
+  })
+
+  test("deduplicates retried user messages by client message id", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([fauxAssistantMessage("Waiting.")])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          agents: Array<{ parentAgentId: string | null; status: string }>
+        }>,
+      (value) =>
+        value.agents.some(
+          (agent) => agent.parentAgentId === null && agent.status === "idle"
+        )
+    )
+
+    instance.faux.setResponses([fauxAssistantMessage("Acknowledged.")])
+    const clientMessageId = crypto.randomUUID()
+    const body = { message: "Retry-safe guidance", clientMessageId }
+    const first = await instance.app.request(
+      `/api/runs/${run.id}/message`,
+      json("POST", body)
+    )
+    const second = await instance.app.request(
+      `/api/runs/${run.id}/message`,
+      json("POST", body)
+    )
+    expect((await first.json()).messageId).toBe(clientMessageId)
+    expect((await second.json()).messageId).toBe(clientMessageId)
+    const conflict = await instance.app.request(
+      `/api/runs/${run.id}/message`,
+      json("POST", {
+        message: "Different guidance",
+        clientMessageId,
+      })
+    )
+    expect(conflict.status).toBe(409)
+    expect(await conflict.json()).toMatchObject({
+      error: { code: "message_id_conflict" },
+    })
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    expect(
+      sqlite
+        .query("select count(*) as count from agent_inbox where id = ?")
+        .get(clientMessageId)
+    ).toMatchObject({ count: 1 })
+    sqlite.close()
+  })
+
+  test("deduplicates a resumed message after the run is already running", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([fauxAssistantMessage("Waiting.")])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          agents: Array<{ parentAgentId: string | null; status: string }>
+        }>,
+      (value) =>
+        value.agents.some(
+          (agent) => agent.parentAgentId === null && agent.status === "idle"
+        )
+    )
+    await instance.app.request(`/api/runs/${run.id}/pause`, json("POST", {}))
+
+    instance.faux.setResponses([fauxAssistantMessage("Resumed.")])
+    const clientMessageId = crypto.randomUUID()
+    const body = { message: "Resume safely", clientMessageId }
+    const first = await instance.app.request(
+      `/api/runs/${run.id}/resume`,
+      json("POST", body)
+    )
+    const second = await instance.app.request(
+      `/api/runs/${run.id}/resume`,
+      json("POST", body)
+    )
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect((await second.json()).messageId).toBe(clientMessageId)
+  })
+
+  test("completes a validated pending completion on startup", async () => {
+    const first = setup()
+    const { challenge } = await createChallenge(first.app)
+    first.close()
+    closeApps.pop()
+    const sqlite = new Database(join(first.dataDir, "aegisx.sqlite"))
+    const now = new Date().toISOString()
+    sqlite.run(
+      "insert into runs (id, challenge_id, status, pending_completion_summary, created_at, updated_at) values (?, ?, 'running', ?, ?, ?)",
+      ["pending-completion", challenge.id, "Recovered summary", now, now]
+    )
+    sqlite.run(
+      "insert into run_agents (id, run_id, name, status, created_at, updated_at) values (?, ?, 'Main agent', 'running', ?, ?)",
+      ["pending-completion", "pending-completion", now, now]
+    )
+    sqlite.run(
+      "insert into run_agents (id, run_id, parent_agent_id, name, status, created_at, updated_at) values (?, ?, ?, 'Child agent', 'running', ?, ?)",
+      ["pending-child", "pending-completion", "pending-completion", now, now]
+    )
+    sqlite.close()
+
+    const second = setup(2, first.dataDir)
+    const response = await second.app.request("/api/runs/pending-completion")
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      run: {
+        status: "completed",
+        summary: "Recovered summary",
+      },
+      agents: expect.arrayContaining([
+        expect.objectContaining({
+          id: "pending-completion",
+          status: "completed",
+          summary: "Recovered summary",
+        }),
+        expect.objectContaining({
+          id: "pending-child",
+          status: "stopped",
+        }),
+      ]),
+    })
+  })
+
   test("changes persisted running runs to paused on startup", async () => {
     const first = setup()
     const { challenge } = await createChallenge(first.app)

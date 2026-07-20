@@ -15,7 +15,15 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react"
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { createPortal } from "react-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -35,6 +43,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import type { AgentStatus, SessionEntry } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { AgentStatusIcon } from "./agent-status-icon"
+import type { RunStreamStore } from "./run-stream-store"
 import {
   buildConversation,
   type ConversationItem,
@@ -59,6 +68,8 @@ function formatConversationTime(value: string | number) {
   }).format(new Date(value))
 }
 
+const emptyLiveEntries: LiveEntry[] = []
+
 function formatDuration(durationMs: number) {
   const seconds = durationMs / 1000
   if (seconds < 10) return `${Math.max(0.1, seconds).toFixed(1)}s`
@@ -77,7 +88,9 @@ const Markdown = memo(function Markdown({ children }: { children: string }) {
         }}
         remarkPlugins={[remarkGfm]}
       >
-        {children}
+        {children.length > 100_000
+          ? `${children.slice(0, 100_000)}\n\n[Message preview truncated]`
+          : children}
       </ReactMarkdown>
     </div>
   )
@@ -131,10 +144,17 @@ function parseToolValue(value: unknown) {
 }
 
 function formatToolCell(value: unknown) {
-  if (typeof value === "string") return value
-  if (value === null) return "null"
-  if (typeof value === "object") return JSON.stringify(value, null, 2)
-  return String(value)
+  const formatted =
+    typeof value === "string"
+      ? value
+      : value === null
+        ? "null"
+        : typeof value === "object"
+          ? (JSON.stringify(value, null, 2) ?? "undefined")
+          : String(value)
+  return formatted.length > 64_000
+    ? `${formatted.slice(0, 64_000)}\n\n[Output preview truncated]`
+    : formatted
 }
 
 function ToolData({ value }: { value: unknown }) {
@@ -390,11 +410,15 @@ const ConversationRow = memo(function ConversationRow({
 })
 
 export function Conversation({
+  agentId,
   history,
   live,
+  stream,
 }: {
+  agentId?: string
   history: SessionEntry[]
-  live: LiveEntry[]
+  live?: LiveEntry[]
+  stream?: RunStreamStore
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -405,7 +429,28 @@ export function Conversation({
   const [scrollContainer, setScrollContainer] = useState<HTMLElement | null>(
     null
   )
-  const items = useMemo(() => buildConversation(history, live), [history, live])
+  const streamed = useSyncExternalStore(
+    useCallback(
+      (listener) =>
+        stream && agentId ? stream.subscribe(agentId, listener) : () => {},
+      [agentId, stream]
+    ),
+    useCallback(
+      () =>
+        stream && agentId ? stream.get(agentId) : (live ?? emptyLiveEntries),
+      [agentId, live, stream]
+    ),
+    useCallback(() => live ?? emptyLiveEntries, [live])
+  )
+  const persistedItems = useMemo(
+    () => buildConversation(history, []),
+    [history]
+  )
+  const liveItems = useMemo(() => buildConversation([], streamed), [streamed])
+  const items = useMemo(
+    () => [...persistedItems, ...liveItems],
+    [liveItems, persistedItems]
+  )
   const hasConversation = items.length > 0
   const latestItem = items.at(-1)
   const showJumpToLatest = hasOverflow && !atBottom
@@ -522,7 +567,7 @@ export function Conversation({
         <ConversationRow item={item} key={item.key} />
       ))}
       <div aria-live="polite" className="sr-only">
-        {live.length > 0 ? "Agent activity updated" : ""}
+        {streamed.length > 0 ? "Agent activity updated" : ""}
       </div>
     </div>
   )

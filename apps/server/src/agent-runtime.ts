@@ -20,6 +20,7 @@ import {
   agentToolCalls,
   agentUsage,
   runAgents,
+  runEvents,
 } from "./db/schema"
 import { redactSecrets } from "./redaction"
 
@@ -56,6 +57,7 @@ export type RuntimeOutcome = {
 
 type RuntimeOptions = {
   db: Database
+  runId: string
   agentId: string
   systemPrompt: string
   model: Model<Api>
@@ -64,7 +66,7 @@ type RuntimeOptions = {
   secrets: Iterable<string>
   thinkingLevel: ModelThinkingLevel
   canRunTool?(): boolean
-  onEvent(event: AgentEvent, messageId?: string): void
+  onEvent(event: AgentEvent, messageId?: string, eventCursor?: number): void
   onSettled(outcome: RuntimeOutcome): void | Promise<void>
 }
 
@@ -353,20 +355,36 @@ export function createAgentRuntime(options: RuntimeOptions) {
     return undefined
   }
 
-  const unsubscribe = agent.subscribe(async (event) => {
+  const unsubscribe = agent.subscribe((event) => {
     redactSecrets(event, secrets)
+    const runtimeId = messageIdForEvent(event)
+    let eventCursor: number | undefined
     if (event.type === "message_end") {
       sequence += 1
       options.db.transaction((tx) => {
+        const messageId = crypto.randomUUID()
+        const createdAt = new Date().toISOString()
         tx.insert(agentMessages)
           .values({
-            id: crypto.randomUUID(),
+            id: messageId,
             agentId: options.agentId,
             sequence,
+            runtimeId: runtimeId ?? crypto.randomUUID(),
             message: JSON.stringify(event.message),
-            createdAt: new Date().toISOString(),
+            createdAt,
           })
           .run()
+        eventCursor = tx
+          .insert(runEvents)
+          .values({
+            runId: options.runId,
+            type: "message_committed",
+            agentId: options.agentId,
+            entityId: messageId,
+            createdAt,
+          })
+          .returning({ id: runEvents.id })
+          .get()?.id
         if (event.message.role === "aegisx") {
           tx.update(agentInbox)
             .set({ deliveredAt: new Date().toISOString() })
@@ -376,7 +394,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
         }
       })
     }
-    options.onEvent(publicEvent(event), messageIdForEvent(event))
+    options.onEvent(publicEvent(event), runtimeId, eventCursor)
   })
 
   function pending() {
@@ -476,10 +494,31 @@ export function createAgentRuntime(options: RuntimeOptions) {
   function dispatch(
     kind: InboxKind,
     content: string,
-    metadata?: AegisXMetadata
+    metadata?: AegisXMetadata,
+    requestedId?: string
   ) {
     if (phase === "disposed") throw new Error("Agent runtime is disposed")
-    const id = crypto.randomUUID()
+    const id = requestedId ?? crypto.randomUUID()
+    if (requestedId) {
+      const existing = options.db
+        .select()
+        .from(agentInbox)
+        .where(eq(agentInbox.id, requestedId))
+        .get()
+      if (existing) {
+        const storedMetadata = existing.metadata ?? null
+        const requestedMetadata = metadata ? JSON.stringify(metadata) : null
+        if (
+          existing.agentId !== options.agentId ||
+          existing.kind !== kind ||
+          existing.content !== content ||
+          storedMetadata !== requestedMetadata
+        ) {
+          throw new Error("Message ID conflicts with an existing message")
+        }
+        return requestedId
+      }
+    }
     const createdAt = new Date().toISOString()
     options.db
       .insert(agentInbox)

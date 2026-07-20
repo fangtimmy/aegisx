@@ -126,8 +126,13 @@ export function pruneLiveEntries(history: SessionEntry[], live: LiveEntry[]) {
   const persistedTools = new Set<string>()
   for (const entry of history) {
     if (entry.type !== "message" || !isRecord(entry.message)) continue
-    const key = messageKey(entry.message)
-    if (key) persistedMessages.add(key)
+    const stableKey = messageKey(
+      entry.message,
+      text(entry.runtimeId) || text(entry.id) || undefined
+    )
+    const naturalKey = messageKey(entry.message)
+    if (stableKey) persistedMessages.add(stableKey)
+    if (naturalKey) persistedMessages.add(naturalKey)
     if (entry.message.role === "toolResult") {
       const id = text(entry.message.toolCallId)
       if (id) persistedTools.add(`tool:${id}`)
@@ -141,6 +146,7 @@ export function pruneLiveEntries(history: SessionEntry[], live: LiveEntry[]) {
           ? `tool:${text(entry.message.toolCallId)}`
           : null
       return !(
+        persistedMessages.has(entry.key) ||
         (key && persistedMessages.has(key)) ||
         (toolKey && persistedTools.has(toolKey))
       )
@@ -422,13 +428,22 @@ export function buildConversation(
 
   for (const entry of history) {
     if (entry.type === "message" && isRecord(entry.message)) {
-      const key = messageKey(entry.message)
-      if (key) persistedMessages.add(key)
+      const stableKey = messageKey(
+        entry.message,
+        text(entry.runtimeId) || text(entry.id) || undefined
+      )
+      const naturalKey = messageKey(entry.message)
+      if (stableKey) persistedMessages.add(stableKey)
+      if (naturalKey) persistedMessages.add(naturalKey)
       if (entry.message.role === "toolResult") {
         const id = text(entry.message.toolCallId)
         if (id) persistedTools.add(`tool:${id}`)
       }
-      applyMessage(entry.message, entry.timestamp, entry.id)
+      applyMessage(
+        entry.message,
+        entry.timestamp,
+        text(entry.runtimeId) || text(entry.id) || undefined
+      )
     } else if (entry.type === "model_change") {
       items.push({
         key: entry.id,
@@ -459,6 +474,7 @@ export function buildConversation(
           ? `tool:${text(entry.message.toolCallId)}`
           : null
       if (
+        persistedMessages.has(entry.key) ||
         (key && persistedMessages.has(key)) ||
         (toolKey && persistedTools.has(toolKey))
       ) {

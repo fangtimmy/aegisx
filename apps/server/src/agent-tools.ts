@@ -11,7 +11,7 @@ import {
 import type { AgentTool } from "@earendil-works/pi-agent-core"
 import { type TSchema, Type } from "typebox"
 
-const maxOutput = 200_000
+const maxOutput = 64_000
 const maxShellOutput = 12_000
 const maxCapturedShellOutput = 1_000_000
 
@@ -154,6 +154,18 @@ function truncateText(value: string, limit: number) {
   return bytes.byteLength > limit ? bytes.subarray(0, limit).toString() : value
 }
 
+function boundedText(value: string) {
+  const outputBytes = Buffer.byteLength(value)
+  const truncated = outputBytes > maxOutput
+  return {
+    text: truncated
+      ? `${truncateText(value, maxOutput)}\n\nOutput truncated. Narrow the request or use pagination.`
+      : value,
+    outputBytes,
+    truncated,
+  }
+}
+
 async function walk(
   backend: WorkspaceBackend,
   path: string,
@@ -192,9 +204,16 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
       const lines = text
         .split("\n")
         .slice(offset - 1, params.limit ? offset - 1 + params.limit : undefined)
+      const output = boundedText(lines.join("\n"))
       return {
-        content: [{ type: "text", text: lines.join("\n").slice(0, maxOutput) }],
-        details: { path: params.path, offset, lines: lines.length },
+        content: [{ type: "text", text: output.text }],
+        details: {
+          path: params.path,
+          offset,
+          lines: lines.length,
+          outputBytes: output.outputBytes,
+          truncated: output.truncated,
+        },
       }
     },
   })
@@ -302,17 +321,23 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
     parameters: Type.Object({ path: Type.Optional(Type.String()) }),
     execute: async (_id, params, signal) => {
       const entries = await backend.list(params.path ?? ".", signal)
+      const output = boundedText(
+        entries
+          .map((entry) => `${entry.name}${entry.directory ? "/" : ""}`)
+          .join("\n")
+      )
       return {
         content: [
           {
             type: "text",
-            text: entries
-              .map((entry) => `${entry.name}${entry.directory ? "/" : ""}`)
-              .join("\n")
-              .slice(0, maxOutput),
+            text: output.text,
           },
         ],
-        details: { count: entries.length },
+        details: {
+          count: entries.length,
+          outputBytes: output.outputBytes,
+          truncated: output.truncated,
+        },
       }
     },
   })
@@ -335,17 +360,21 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
         )
       })
       const values = entries.slice(0, params.limit ?? 1000)
+      const output = boundedText(
+        values.map((entry) => relative(backend.cwd, entry.path)).join("\n")
+      )
       return {
         content: [
           {
             type: "text",
-            text: values
-              .map((entry) => relative(backend.cwd, entry.path))
-              .join("\n")
-              .slice(0, maxOutput),
+            text: output.text,
           },
         ],
-        details: { count: values.length },
+        details: {
+          count: values.length,
+          outputBytes: output.outputBytes,
+          truncated: output.truncated,
+        },
       }
     },
   })
@@ -402,17 +431,19 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
         }
         if (matches.length >= (params.limit ?? 100)) break
       }
+      const output = boundedText(matches.join("\n") || "No matches found")
       return {
         content: [
           {
             type: "text",
-            text: (matches.join("\n") || "No matches found").slice(
-              0,
-              maxOutput
-            ),
+            text: output.text,
           },
         ],
-        details: { count: matches.length },
+        details: {
+          count: matches.length,
+          outputBytes: output.outputBytes,
+          truncated: output.truncated,
+        },
       }
     },
   })

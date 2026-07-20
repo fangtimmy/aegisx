@@ -7,7 +7,18 @@ import {
   type ModelThinkingLevel,
   type Usage,
 } from "@earendil-works/pi-ai"
-import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm"
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from "drizzle-orm"
 import { Type } from "typebox"
 import type {
   AgentInspector,
@@ -48,6 +59,7 @@ import {
   eventPlatforms,
   events,
   runAgents,
+  runEvents,
   runs,
 } from "./db/schema"
 import type { ModelService } from "./models"
@@ -65,13 +77,14 @@ import { summarizeUsage, summarizeUsageRecords, sumUsage } from "./usage"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunEvent =
-  | { type: "status"; run: RunPublic }
-  | { type: "agent_status"; agent: AgentPublic }
+  | { type: "status"; run: RunPublic; eventCursor?: number }
+  | { type: "agent_status"; agent: AgentPublic; eventCursor?: number }
   | {
       type: "agent_event"
       agentId: string
       event: AgentEvent
       messageId?: string
+      eventCursor?: number
     }
 type RunEventListener = (
   event: RunEvent,
@@ -127,6 +140,8 @@ type CurrentSession = {
 
 const terminalRunStatuses: RunStatus[] = ["completed", "failed", "stopped"]
 const terminalAgentStatuses: AgentStatus[] = ["completed", "failed", "stopped"]
+const defaultResumeMessage =
+  "Continue solving the challenge from the current state."
 
 export function createRunManager(options: Options) {
   const { db, dataDir } = options
@@ -134,11 +149,6 @@ export function createRunManager(options: Options) {
   const current = new Map<string, CurrentSession>()
   const activeContainers = new Map<string, string>()
   const listeners = new Map<string, Set<RunEventListener>>()
-  const eventSequences = new Map<string, number>()
-  const eventHistory = new Map<
-    string,
-    Array<{ sequence: number; event: RunEvent }>
-  >()
   const aborting = new Map<string, "paused" | "stopped">()
   let closed = false
 
@@ -151,6 +161,65 @@ export function createRunManager(options: Options) {
       ({ environmentConfig }) =>
         parseEnvironment(environmentConfig).type === "container"
     )
+  const pendingCompletions = db
+    .select({
+      id: runs.id,
+      summary: runs.pendingCompletionSummary,
+    })
+    .from(runs)
+    .where(
+      and(eq(runs.status, "running"), isNotNull(runs.pendingCompletionSummary))
+    )
+    .all()
+  for (const pending of pendingCompletions) {
+    const completedAt = new Date().toISOString()
+    db.transaction((tx) => {
+      tx.update(runAgents)
+        .set({
+          status: "stopped",
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(
+            eq(runAgents.runId, pending.id),
+            isNotNull(runAgents.parentAgentId),
+            inArray(runAgents.status, ["running", "idle", "paused"])
+          )
+        )
+        .run()
+      tx.update(runAgents)
+        .set({
+          status: "completed",
+          summary: pending.summary,
+          error: null,
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(eq(runAgents.runId, pending.id), isNull(runAgents.parentAgentId))
+        )
+        .run()
+      tx.update(runs)
+        .set({
+          status: "completed",
+          summary: pending.summary,
+          pendingCompletionSummary: null,
+          error: null,
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(eq(runs.id, pending.id))
+        .run()
+      tx.insert(runEvents)
+        .values({
+          runId: pending.id,
+          type: "run_updated",
+          createdAt: completedAt,
+        })
+        .run()
+    })
+  }
   db.update(runs)
     .set({ status: "paused", updatedAt: new Date().toISOString() })
     .where(eq(runs.status, "running"))
@@ -165,6 +234,16 @@ export function createRunManager(options: Options) {
     return db.select().from(runs).where(eq(runs.id, runId)).get()
   }
 
+  function eventCursor(runId: string) {
+    return (
+      db
+        .select({ value: sql<number>`coalesce(max(${runEvents.id}), 0)` })
+        .from(runEvents)
+        .where(eq(runEvents.runId, runId))
+        .get()?.value ?? 0
+    )
+  }
+
   function getStoredAgent(agentId: string) {
     return db.select().from(runAgents).where(eq(runAgents.id, agentId)).get()
   }
@@ -175,6 +254,38 @@ export function createRunManager(options: Options) {
       .from(runAgents)
       .where(and(eq(runAgents.runId, runId), isNull(runAgents.parentAgentId)))
       .get()
+  }
+
+  function replayedMessage(
+    runId: string,
+    kind: "user" | "resume" | Array<"user" | "resume">,
+    content: string,
+    messageId?: string
+  ) {
+    if (!messageId) return undefined
+    const existing = db
+      .select()
+      .from(agentInbox)
+      .where(eq(agentInbox.id, messageId))
+      .get()
+    if (!existing) return undefined
+    const main = getMainAgent(runId)
+    const allowedKinds = Array.isArray(kind) ? kind : [kind]
+    if (
+      !main ||
+      existing.agentId !== main.id ||
+      !allowedKinds.includes(existing.kind as "user" | "resume") ||
+      existing.content !== content ||
+      existing.metadata !== null
+    ) {
+      throw new RunActionError(
+        "message_id_conflict",
+        "Message ID conflicts with an existing message"
+      )
+    }
+    const run = getPublic(runId)
+    if (!run) throw new RunActionError("not_found", "Run not found")
+    return { ...run, messageId }
   }
 
   function listStoredAgents(runId: string) {
@@ -257,12 +368,7 @@ export function createRunManager(options: Options) {
   }
 
   function emit(runId: string, event: RunEvent) {
-    const sequence = (eventSequences.get(runId) ?? 0) + 1
-    eventSequences.set(runId, sequence)
-    const history = eventHistory.get(runId) ?? []
-    history.push({ sequence, event })
-    if (history.length > 256) history.shift()
-    eventHistory.set(runId, history)
+    const sequence = event.eventCursor ?? 0
     for (const listener of listeners.get(runId) ?? []) {
       listener(event, sequence, false)
     }
@@ -291,13 +397,26 @@ export function createRunManager(options: Options) {
     runId: string,
     values: Partial<typeof runs.$inferInsert>
   ): RunPublic {
-    db.update(runs)
-      .set({ ...values, updatedAt: new Date().toISOString() })
-      .where(eq(runs.id, runId))
-      .run()
+    const updatedAt = new Date().toISOString()
+    let eventCursor: number | undefined
+    db.transaction((tx) => {
+      tx.update(runs)
+        .set({ ...values, updatedAt })
+        .where(eq(runs.id, runId))
+        .run()
+      eventCursor = tx
+        .insert(runEvents)
+        .values({
+          runId,
+          type: "run_updated",
+          createdAt: updatedAt,
+        })
+        .returning({ id: runEvents.id })
+        .get()?.id
+    })
     const run = getPublic(runId)
     if (!run) throw new Error("Run not found")
-    emit(runId, { type: "status", run })
+    emit(runId, { type: "status", run, eventCursor })
     return run
   }
 
@@ -305,13 +424,30 @@ export function createRunManager(options: Options) {
     agentId: string,
     values: Partial<typeof runAgents.$inferInsert>
   ): AgentPublic {
-    db.update(runAgents)
-      .set({ ...values, updatedAt: new Date().toISOString() })
-      .where(eq(runAgents.id, agentId))
-      .run()
+    const updatedAt = new Date().toISOString()
+    let eventCursor: number | undefined
+    const stored = getStoredAgent(agentId)
+    if (!stored) throw new Error("Agent not found")
+    db.transaction((tx) => {
+      tx.update(runAgents)
+        .set({ ...values, updatedAt })
+        .where(eq(runAgents.id, agentId))
+        .run()
+      eventCursor = tx
+        .insert(runEvents)
+        .values({
+          runId: stored.runId,
+          type: "agent_updated",
+          agentId,
+          entityId: agentId,
+          createdAt: updatedAt,
+        })
+        .returning({ id: runEvents.id })
+        .get()?.id
+    })
     const agent = getAgentPublic(agentId)
     if (!agent) throw new Error("Agent not found")
-    emit(agent.runId, { type: "agent_status", agent })
+    emit(agent.runId, { type: "agent_status", agent, eventCursor })
     return agent
   }
 
@@ -582,30 +718,7 @@ export function createRunManager(options: Options) {
             throw new Error("Stop the remote target before finishing this Run")
           }
         }
-        update(runId, {
-          status: "completed",
-          completedAt: new Date().toISOString(),
-          summary: params.summary,
-          error: null,
-        })
-        updateAgent(agentId, {
-          status: "completed",
-          completedAt: new Date().toISOString(),
-          summary: params.summary,
-          error: null,
-        })
-        for (const child of listStoredAgents(runId)) {
-          if (
-            child.id !== agentId &&
-            !terminalAgentStatuses.includes(child.status as AgentStatus)
-          ) {
-            updateAgent(child.id, {
-              status: "stopped",
-              completedAt: new Date().toISOString(),
-            })
-          }
-        }
-        await abortRun(runId, agentId)
+        update(runId, { pendingCompletionSummary: params.summary })
         return {
           content: [{ type: "text" as const, text: "Run completed" }],
           details: {},
@@ -831,6 +944,7 @@ export function createRunManager(options: Options) {
       .run()
     const runtime = createAgentRuntime({
       db,
+      runId,
       agentId,
       systemPrompt,
       model,
@@ -841,7 +955,7 @@ export function createRunManager(options: Options) {
       canRunTool: () =>
         getStored(runId)?.status === "running" &&
         getStoredAgent(agentId)?.status === "running",
-      onEvent: (event, messageId) => {
+      onEvent: (event, messageId, eventCursor) => {
         for (const secret of options.getApiKeys?.(provider) ?? []) {
           runtime.addSecrets([secret])
         }
@@ -850,6 +964,7 @@ export function createRunManager(options: Options) {
           agentId,
           event,
           ...(messageId ? { messageId } : {}),
+          ...(eventCursor !== undefined ? { eventCursor } : {}),
         })
       },
       onSettled: (outcome) =>
@@ -877,6 +992,35 @@ export function createRunManager(options: Options) {
     }
     if (aborting.has(runId) || getStoredAgent(agentId)?.status !== "running")
       return
+    if (outcome.status === "success" && storedRun.pendingCompletionSummary) {
+      const completedAt = new Date().toISOString()
+      for (const child of listStoredAgents(runId)) {
+        if (
+          child.id !== agentId &&
+          !terminalAgentStatuses.includes(child.status as AgentStatus)
+        ) {
+          updateAgent(child.id, {
+            status: "stopped",
+            completedAt,
+          })
+        }
+      }
+      updateAgent(agentId, {
+        status: "completed",
+        completedAt,
+        summary: storedRun.pendingCompletionSummary,
+        error: null,
+      })
+      update(runId, {
+        status: "completed",
+        completedAt,
+        summary: storedRun.pendingCompletionSummary,
+        pendingCompletionSummary: null,
+        error: null,
+      })
+      releaseRun(runId)
+      return
+    }
     if (outcome.status === "success") {
       updateAgent(agentId, { status: "idle" })
       return
@@ -964,14 +1108,18 @@ export function createRunManager(options: Options) {
   function historyForAgent(agentId: string) {
     let parentId: string | null = null
     return messageRowsForAgent(agentId).map((row) => {
+      const runtimeId = row.runtimeId ?? row.id
       const entry = {
         type: "message" as const,
-        id: row.id,
+        id: runtimeId,
+        runtimeId,
+        sequence: row.sequence,
+        messageId: row.id,
         parentId,
         timestamp: row.createdAt,
         message: publicAgentMessage(JSON.parse(row.message) as AgentMessage),
       }
-      parentId = row.id
+      parentId = runtimeId
       return entry
     })
   }
@@ -1128,22 +1276,37 @@ export function createRunManager(options: Options) {
     const id = crypto.randomUUID()
     const now = new Date().toISOString()
     const workspacePath = runWorkspacePath(run)
-    db.insert(runAgents)
-      .values({
-        id,
-        runId,
-        parentAgentId,
-        name,
-        task,
-        status: "running",
-        createdAt: now,
-        startedAt: now,
-        updatedAt: now,
-      })
-      .run()
+    let eventCursor: number | undefined
+    db.transaction((tx) => {
+      tx.insert(runAgents)
+        .values({
+          id,
+          runId,
+          parentAgentId,
+          name,
+          task,
+          status: "running",
+          createdAt: now,
+          startedAt: now,
+          updatedAt: now,
+        })
+        .run()
+      eventCursor = tx
+        .insert(runEvents)
+        .values({
+          runId,
+          type: "agent_updated",
+          agentId: id,
+          entityId: id,
+          createdAt: now,
+        })
+        .returning({ id: runEvents.id })
+        .get()?.id
+    })
     emit(runId, {
       type: "agent_status",
       agent: getAgentPublic(id) as AgentPublic,
+      eventCursor,
     })
 
     const requireRunning = () => {
@@ -1332,7 +1495,19 @@ export function createRunManager(options: Options) {
     }
   }
 
-  async function resume(runId: string, message?: string) {
+  async function resume(
+    runId: string,
+    message?: string,
+    requestedMessageId?: string
+  ) {
+    const resumeMessage = message?.trim() || defaultResumeMessage
+    const replay = replayedMessage(
+      runId,
+      "resume",
+      resumeMessage,
+      requestedMessageId
+    )
+    if (replay) return replay
     requireMutable(runId, ["paused"])
     const pausedAgents = listStoredAgents(runId).filter(
       (agent) => agent.status === "paused"
@@ -1352,10 +1527,11 @@ export function createRunManager(options: Options) {
     try {
       const runtime = await ensureSession(main.id)
       runtime.replayPending()
-      runtime.dispatch(
+      const messageId = runtime.dispatch(
         "resume",
-        message?.trim() ||
-          "Continue solving the challenge from the current state."
+        resumeMessage,
+        undefined,
+        requestedMessageId
       )
       for (const child of pausedAgents) {
         if (child.id === main.id) continue
@@ -1377,7 +1553,7 @@ export function createRunManager(options: Options) {
           await notifyMain(failed)
         }
       }
-      return getPublic(runId) as RunPublic
+      return { ...(getPublic(runId) as RunPublic), messageId }
     } catch (error) {
       const failed = update(runId, {
         status: "failed",
@@ -1406,9 +1582,21 @@ export function createRunManager(options: Options) {
     }
   }
 
-  async function message(runId: string, messageText: string) {
+  async function message(
+    runId: string,
+    messageText: string,
+    requestedMessageId?: string
+  ) {
+    const replay = replayedMessage(
+      runId,
+      ["user", "resume"],
+      messageText,
+      requestedMessageId
+    )
+    if (replay) return replay
     const run = requireMutable(runId, ["running", "paused"])
-    if (run.status === "paused") return resume(runId, messageText)
+    if (run.status === "paused")
+      return resume(runId, messageText, requestedMessageId)
     const main = getMainAgent(runId)
     if (!main)
       throw new RunActionError("invalid_state", "Main agent is unavailable")
@@ -1420,8 +1608,13 @@ export function createRunManager(options: Options) {
         error: null,
       })
     }
-    runtime.dispatch("user", messageText)
-    return getPublic(runId) as RunPublic
+    const messageId = runtime.dispatch(
+      "user",
+      messageText,
+      undefined,
+      requestedMessageId
+    )
+    return { ...(getPublic(runId) as RunPublic), messageId }
   }
 
   async function stop(runId: string) {
@@ -1462,6 +1655,52 @@ export function createRunManager(options: Options) {
     return run
   }
 
+  function replayEvents(
+    runId: string,
+    afterCursor: number,
+    listener: RunEventListener
+  ) {
+    const rows = db
+      .select()
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), gt(runEvents.id, afterCursor)))
+      .orderBy(asc(runEvents.id))
+      .all()
+    for (const row of rows) {
+      let event: RunEvent | undefined
+      if (row.type === "run_updated") {
+        const run = getPublic(runId)
+        if (run) event = { type: "status", run, eventCursor: row.id }
+      } else if (row.type === "agent_updated" && row.agentId) {
+        const agent = getAgentPublic(row.agentId)
+        if (agent) {
+          event = { type: "agent_status", agent, eventCursor: row.id }
+        }
+      } else if (row.type === "message_committed" && row.entityId) {
+        const stored = db
+          .select()
+          .from(agentMessages)
+          .where(eq(agentMessages.id, row.entityId))
+          .get()
+        if (stored) {
+          event = {
+            type: "agent_event",
+            agentId: stored.agentId,
+            event: {
+              type: "message_end",
+              message: publicAgentMessage(
+                JSON.parse(stored.message) as AgentMessage
+              ),
+            } as AgentEvent,
+            messageId: stored.runtimeId ?? stored.id,
+            eventCursor: row.id,
+          }
+        }
+      }
+      if (event) listener(event, row.id, true)
+    }
+  }
+
   return {
     create,
     get: getPublic,
@@ -1500,28 +1739,15 @@ export function createRunManager(options: Options) {
     resume,
     message,
     stop,
-    subscribe: (
-      runId: string,
-      listener: RunEventListener,
-      afterSequence = 0
-    ) => {
-      for (const entry of eventHistory.get(runId) ?? []) {
-        if (entry.sequence > afterSequence) {
-          listener(entry.event, entry.sequence, true)
-        }
-      }
+    subscribe: (runId: string, listener: RunEventListener, afterCursor = 0) => {
       const runListeners = listeners.get(runId) ?? new Set()
       runListeners.add(listener)
       listeners.set(runId, runListeners)
+      replayEvents(runId, afterCursor, listener)
       return () => {
         runListeners.delete(listener)
         if (runListeners.size === 0) {
           listeners.delete(runId)
-          const status = getPublic(runId)?.status
-          if (status && terminalRunStatuses.includes(status)) {
-            eventSequences.delete(runId)
-            eventHistory.delete(runId)
-          }
         }
       }
     },
@@ -1541,6 +1767,7 @@ export function createRunManager(options: Options) {
         listStoredAgents(runId).map((agent) => usageForAgent(agent.id))
       )
     },
+    eventCursor,
     close: () => {
       if (closed) return
       closed = true
@@ -1551,8 +1778,6 @@ export function createRunManager(options: Options) {
       for (const name of activeContainers.values()) removeContainer(name)
       activeContainers.clear()
       listeners.clear()
-      eventSequences.clear()
-      eventHistory.clear()
     },
   }
 }
@@ -1684,7 +1909,11 @@ function parseRuntimeSnapshot(
 
 export class RunActionError extends Error {
   constructor(
-    readonly code: "capacity" | "not_found" | "invalid_state",
+    readonly code:
+      | "capacity"
+      | "not_found"
+      | "invalid_state"
+      | "message_id_conflict",
     message: string
   ) {
     super(message)

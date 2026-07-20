@@ -11,7 +11,7 @@ import {
   Send,
   Square,
 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -52,6 +52,7 @@ import type {
   Challenge,
   RunPublic,
   RunStatus,
+  RunStreamEvent,
   SessionEntry,
   UsageSummary,
 } from "@/lib/api"
@@ -62,23 +63,9 @@ import { AgentStatusIcon } from "./agent-status-icon"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
+import { RunStreamStore } from "./run-stream-store"
 import { Conversation } from "./timeline"
-import {
-  isRecord,
-  type LiveEntry,
-  liveEntries,
-  mergeLiveEntries,
-  pruneLiveEntries,
-  text,
-} from "./timeline-model"
 
-const statuses: RunStatus[] = [
-  "running",
-  "paused",
-  "completed",
-  "failed",
-  "stopped",
-]
 const terminalStatuses: RunStatus[] = ["completed", "failed", "stopped"]
 
 export function RunWorkspace({
@@ -93,10 +80,9 @@ export function RunWorkspace({
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState("")
-  const [liveByAgent, setLiveByAgent] = useState<Record<string, LiveEntry[]>>(
-    {}
-  )
+  const streamStore = useRef(new RunStreamStore()).current
   const [streamDisconnected, setStreamDisconnected] = useState(false)
+  const [streamCursor, setStreamCursor] = useState<number | null>(null)
   const detail = useQuery({
     enabled: Boolean(runId),
     queryKey: ["runs", runId ?? ""],
@@ -106,8 +92,18 @@ export function RunWorkspace({
         agents: AgentSummary[]
         history: SessionEntry[]
         stats: UsageSummary
+        eventCursor: number
       }>(`/runs/${runId}`),
   })
+  useEffect(() => {
+    if (
+      streamCursor === null &&
+      detail.data &&
+      !terminalStatuses.includes(detail.data.run.status)
+    ) {
+      setStreamCursor(detail.data.eventCursor)
+    }
+  }, [detail.data, streamCursor])
   const requestedAgentId = searchParams.get("agent")
   const selectedAgent =
     detail.data?.agents.find((agent) => agent.id === requestedAgentId) ??
@@ -125,41 +121,22 @@ export function RunWorkspace({
         stats: UsageSummary
       }>(`/runs/${runId}/agents/${selectedAgent?.id}`),
   })
-  const runIsTerminal = terminalStatuses.includes(
-    detail.data?.run.status as RunStatus
-  )
   useEffect(() => {
-    const histories = new Map<string, SessionEntry[]>()
     const main = detail.data?.agents.find(
       (agent) => agent.parentAgentId === null
     )
-    if (main && detail.data) histories.set(main.id, detail.data.history)
-    if (agentDetail.data) {
-      histories.set(agentDetail.data.agent.id, agentDetail.data.history)
-    }
-    if (histories.size === 0) return
-    setLiveByAgent((current) => {
-      let changed = false
-      const next = { ...current }
-      for (const [agentId, history] of histories) {
-        const live = current[agentId]
-        if (!live) continue
-        const pruned = pruneLiveEntries(history, live)
-        if (pruned.length !== live.length) {
-          next[agentId] = pruned
-          changed = true
-        }
-      }
-      return changed ? next : current
-    })
-  }, [agentDetail.data, detail.data])
+    if (main && detail.data) streamStore.prune(main.id, detail.data.history)
+    if (agentDetail.data)
+      streamStore.prune(agentDetail.data.agent.id, agentDetail.data.history)
+  }, [agentDetail.data, detail.data, streamStore])
   const control = useMutation({
     mutationFn: ({
       action,
       body,
     }: {
       action: "message" | "pause" | "resume" | "stop"
-      body: object
+      body: { message?: string; clientMessageId?: string }
+      agentId?: string
     }) =>
       apiRequest<void>(`/runs/${runId}/${action}`, jsonRequest("POST", body)),
     onSuccess: async (_, variables) => {
@@ -180,103 +157,71 @@ export function RunWorkspace({
         queryClient.invalidateQueries({ queryKey: eventKeys.all }),
       ])
     },
+    onError: (_error, variables) => {
+      if (variables.agentId && variables.body.clientMessageId) {
+        streamStore.remove(
+          variables.agentId,
+          `message:user:${variables.body.clientMessageId}`
+        )
+      }
+    },
   })
 
   useEffect(() => {
-    setLiveByAgent({})
     setStreamDisconnected(false)
-    if (!runId || runIsTerminal) return
-    let flushTimer: number | undefined
-    let pending: Record<string, LiveEntry[]> = {}
-    const queueLiveEntries = (agentId: string, entries: LiveEntry[]) => {
-      pending[agentId] = mergeLiveEntries(pending[agentId] ?? [], entries)
-      if (flushTimer !== undefined) return
-      flushTimer = window.setTimeout(() => {
-        const updates = pending
-        pending = {}
-        flushTimer = undefined
-        setLiveByAgent((current) => {
-          const next = { ...current }
-          for (const [id, values] of Object.entries(updates)) {
-            next[id] = mergeLiveEntries(next[id] ?? [], values)
+    if (!runId || streamCursor === null) return
+    const stop = streamStore.connect(
+      runId,
+      streamCursor,
+      (event: RunStreamEvent) => {
+        if (event.type === "status") {
+          queryClient.setQueryData<{
+            run: RunPublic
+            agents: AgentSummary[]
+            history: SessionEntry[]
+            stats: UsageSummary
+            eventCursor: number
+          }>(["runs", runId], (current) =>
+            current ? { ...current, run: event.run } : current
+          )
+          const detailRefresh = queryClient.invalidateQueries({
+            queryKey: ["runs", runId],
+          })
+          void queryClient.invalidateQueries({
+            queryKey: ["runs", "event", eventId],
+          })
+          if (terminalStatuses.includes(event.run.status)) {
+            setStreamDisconnected(false)
+            void queryClient.invalidateQueries({ queryKey: eventKeys.all })
+            void queryClient.invalidateQueries({
+              queryKey: eventKeys.detail(eventId),
+            })
+            void detailRefresh.then(() => streamStore.close())
           }
-          return next
-        })
-      }, 50)
-    }
-    const source = new EventSource(`/api/runs/${runId}/events`)
-    source.onopen = () => {
-      setStreamDisconnected(false)
-      queryClient.invalidateQueries({ queryKey: ["runs", runId] })
-      queryClient.invalidateQueries({
-        queryKey: ["runs", runId, "agents"],
-      })
-    }
-    source.onerror = () => setStreamDisconnected(true)
-    source.onmessage = (event) => {
-      let payload: unknown
-      try {
-        payload = JSON.parse(event.data)
-      } catch {
-        payload = { type: "error", error: event.data }
-      }
-      if (!isRecord(payload)) return
-      const agentEvent = isRecord(payload.event) ? payload.event : null
-      const agentId = text(payload.agentId)
-      const affectedAgentId =
-        agentId || (isRecord(payload.agent) ? text(payload.agent.id) : "")
-      const entries = agentEvent
-        ? liveEntries(agentEvent, text(payload.messageId) || undefined)
-        : []
-      if (agentId && entries.length > 0) {
-        queueLiveEntries(agentId, entries)
-      }
-      const status = text(
-        payload.status ??
-          (isRecord(payload.run) ? payload.run.status : undefined)
-      )
-      if (statuses.includes(status as RunStatus)) {
-        queryClient.setQueryData<{
-          run: RunPublic
-          agents: AgentSummary[]
-          stats: UsageSummary
-        }>(["runs", runId], (current) =>
-          current
-            ? {
-                ...current,
-                run: { ...current.run, status: status as RunStatus },
-              }
-            : current
-        )
-      }
-      const shouldRefresh =
-        payload.type === "agent_status" ||
-        agentEvent?.type === "turn_end" ||
-        statuses.includes(status as RunStatus)
-      if (shouldRefresh) {
-        queryClient.invalidateQueries({ queryKey: ["runs", runId] })
-        if (affectedAgentId) {
-          queryClient.invalidateQueries({
-            queryKey: ["runs", runId, "agents", affectedAgentId],
-          })
-          queryClient.invalidateQueries({
-            queryKey: ["runs", runId, "agents", affectedAgentId, "inspector"],
-          })
+          return
         }
-        queryClient.invalidateQueries({
-          queryKey: ["runs", "event", eventId],
-        })
-        if (statuses.includes(status as RunStatus)) {
-          queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) })
-          queryClient.invalidateQueries({ queryKey: eventKeys.all })
+        if (event.type === "agent_status") {
+          void queryClient.invalidateQueries({ queryKey: ["runs", runId] })
+          void queryClient.invalidateQueries({
+            queryKey: ["runs", runId, "agents", event.agent.id],
+          })
+          void queryClient.invalidateQueries({
+            queryKey: ["runs", runId, "agents", event.agent.id, "inspector"],
+          })
+          return
         }
-      }
-    }
-    return () => {
-      source.close()
-      if (flushTimer !== undefined) window.clearTimeout(flushTimer)
-    }
-  }, [eventId, queryClient, runId, runIsTerminal])
+        if (event.type === "ready") {
+          void queryClient.invalidateQueries({ queryKey: ["runs", runId] })
+          return
+        }
+        if (event.type === "agent_event" && event.event.type === "turn_end") {
+          void queryClient.invalidateQueries({ queryKey: ["runs", runId] })
+        }
+      },
+      setStreamDisconnected
+    )
+    return stop
+  }, [eventId, queryClient, runId, streamCursor, streamStore])
 
   if (!runId) {
     return (
@@ -339,13 +284,39 @@ export function RunWorkspace({
   function send(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const message = draft.trim()
+    const clientMessageId = crypto.randomUUID()
+    if (selectedAgent && (message || run.status === "paused")) {
+      streamStore.add(selectedAgent.id, [
+        {
+          key: `message:user:${clientMessageId}`,
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: Date.now(),
+            content: [
+              {
+                type: "text",
+                text:
+                  message ||
+                  "Continue solving the challenge from the current state.",
+              },
+            ],
+          },
+        },
+      ])
+    }
     if (run.status === "paused") {
       control.mutate({
         action: "resume",
-        body: { message: message || undefined },
+        body: { message: message || undefined, clientMessageId },
+        agentId: selectedAgent?.id,
       })
     } else if (message) {
-      control.mutate({ action: "message", body: { message } })
+      control.mutate({
+        action: "message",
+        body: { message, clientMessageId },
+        agentId: selectedAgent?.id,
+      })
     }
   }
 
@@ -464,13 +435,14 @@ export function RunWorkspace({
                       ) : (
                         <ScrollArea className="relative h-full pr-1" scrollFade>
                           <Conversation
+                            agentId={selectedAgent.id}
                             history={
                               mainSelected
                                 ? history
                                 : (agentDetail.data?.history ?? [])
                             }
                             key={selectedAgent.id}
-                            live={liveByAgent[selectedAgent.id] ?? []}
+                            stream={streamStore}
                           />
                         </ScrollArea>
                       )}

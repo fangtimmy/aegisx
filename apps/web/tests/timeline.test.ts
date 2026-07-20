@@ -312,3 +312,33 @@ test("prunes live messages after they are persisted", () => {
 
   assert.deepEqual(pruneLiveEntries(history, live), [])
 })
+
+test("prunes persisted live messages by stable runtime id", () => {
+  const history: SessionEntry[] = [
+    {
+      type: "message",
+      id: "message-1",
+      runtimeId: "message-1",
+      parentId: null,
+      timestamp: "2026-07-16T00:00:01.000Z",
+      message: {
+        role: "assistant",
+        timestamp: 2,
+        content: [{ type: "text", text: "done" }],
+      },
+    },
+  ]
+  const live: LiveEntry[] = [
+    {
+      key: "message:assistant:message-1",
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: 1,
+        content: [{ type: "text", text: "partial" }],
+      },
+    },
+  ]
+
+  assert.deepEqual(pruneLiveEntries(history, live), [])
+})

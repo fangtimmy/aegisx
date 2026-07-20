@@ -148,6 +148,13 @@
       "when": 1784465000000,
       "tag": "0020_agent_inbox_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1784466000000,
+      "tag": "0021_reliable_agent_events",
+      "breakpoints": true
     }
   ]
 }

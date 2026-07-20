@@ -144,6 +144,29 @@ export type RunPublic = {
   flag?: string | null
 }
 
+export type RunStreamEvent =
+  | {
+      type: "ready"
+      runId: string
+      eventCursor: number
+    }
+  | {
+      type: "status"
+      run: RunPublic
+      eventCursor?: number
+    }
+  | {
+      type: "agent_status"
+      agent: AgentPublic
+      eventCursor?: number
+    }
+  | {
+      type: "agent_event"
+      agentId: string
+      event: Record<string, unknown>
+      messageId?: string
+    }
+
 export type AgentPublic = {
   id: string
   runId: string

@@ -25,6 +25,7 @@ export type {
   RunFileEntry,
   RunPublic,
   RunStatus,
+  RunStreamEvent,
   SessionEntry,
   SettingsPublic,
   TargetState,

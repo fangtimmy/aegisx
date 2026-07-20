@@ -78,12 +78,22 @@ const runInput = Type.Object(
 )
 
 const messageInput = Type.Object(
-  { message: Type.String({ minLength: 1, maxLength: 100_000 }) },
+  {
+    message: Type.String({ minLength: 1, maxLength: 100_000 }),
+    clientMessageId: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 100 })
+    ),
+  },
   { additionalProperties: false }
 )
 
 const resumeInput = Type.Object(
-  { message: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000 })) },
+  {
+    message: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000 })),
+    clientMessageId: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 100 })
+    ),
+  },
   { additionalProperties: false }
 )
 
@@ -583,6 +593,7 @@ export function createApp(options: {
       agents,
       history: main ? runManager.history(main.id) : [],
       stats: sumUsage(agents.map((agent) => agent.usage)),
+      eventCursor: runManager.eventCursor(run.id),
     })
   })
 
@@ -729,7 +740,9 @@ export function createApp(options: {
         404
       )
     }
-    const parsedLastEventId = Number(c.req.header("last-event-id"))
+    const parsedLastEventId = Number(
+      c.req.header("last-event-id") ?? c.req.query("after")
+    )
     const lastEventId =
       Number.isSafeInteger(parsedLastEventId) && parsedLastEventId >= 0
         ? parsedLastEventId
@@ -740,6 +753,7 @@ export function createApp(options: {
       const replayed: Array<{ sequence: number; event: unknown }> = []
       let ready = false
       let finished = false
+      let deliveredCursor = lastEventId
       let unsubscribe = () => {}
       let finish = () => {}
       let writing = false
@@ -766,10 +780,12 @@ export function createApp(options: {
           while (!finished && pending.length > 0) {
             const item = pending.shift()
             if (!item) continue
+            if (item.sequence > 0 && item.sequence <= deliveredCursor) continue
             await stream.writeSSE({
-              id: String(item.sequence),
+              ...(item.sequence > 0 ? { id: String(item.sequence) } : {}),
               data: JSON.stringify(item.event),
             })
+            if (item.sequence > 0) deliveredCursor = item.sequence
           }
         } catch {
           finish()
@@ -823,11 +839,20 @@ export function createApp(options: {
       c.req.raw.signal.addEventListener("abort", finish, { once: true })
       try {
         for (const item of replayed) {
+          if (item.sequence > 0 && item.sequence <= deliveredCursor) continue
           await stream.writeSSE({
-            id: String(item.sequence),
+            ...(item.sequence > 0 ? { id: String(item.sequence) } : {}),
             data: JSON.stringify(item.event),
           })
+          if (item.sequence > 0) deliveredCursor = item.sequence
         }
+        await stream.writeSSE({
+          data: JSON.stringify({
+            type: "ready",
+            runId,
+            eventCursor: runManager.eventCursor(runId),
+          }),
+        })
         await stream.writeSSE({
           data: JSON.stringify({ type: "status", run: runManager.get(runId) }),
         })
@@ -839,10 +864,12 @@ export function createApp(options: {
         while (pending.length > 0) {
           const item = pending.shift()
           if (!item) continue
+          if (item.sequence > 0 && item.sequence <= deliveredCursor) continue
           await stream.writeSSE({
-            id: String(item.sequence),
+            ...(item.sequence > 0 ? { id: String(item.sequence) } : {}),
             data: JSON.stringify(item.event),
           })
+          if (item.sequence > 0) deliveredCursor = item.sequence
         }
         ready = true
         await done
@@ -860,7 +887,8 @@ export function createApp(options: {
         return c.json(
           await runManager.message(
             c.req.param("runId"),
-            c.req.valid("json").message.trim()
+            c.req.valid("json").message.trim(),
+            c.req.valid("json").clientMessageId
           )
         )
       } catch (error) {
@@ -882,7 +910,8 @@ export function createApp(options: {
       return c.json(
         await runManager.resume(
           c.req.param("runId"),
-          c.req.valid("json").message
+          c.req.valid("json").message,
+          c.req.valid("json").clientMessageId
         )
       )
     } catch (error) {
