@@ -1,4 +1,3 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Brain,
   CircleAlert,
@@ -13,7 +12,6 @@ import {
   Type,
   Unlink,
 } from "lucide-react"
-import { useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -76,17 +74,14 @@ import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  apiRequest,
-  jsonRequest,
-  type PiModelProfile,
-  type ProviderConnection,
-  type ProviderModel,
+import type {
+  PiModelProfile,
+  ProviderConnection,
+  ProviderModel,
 } from "@/lib/api"
-import { type ProviderInput, providerTypeLabels } from "./provider-config"
+import { providerTypeLabels } from "./provider-config"
 import { ProviderTypeField } from "./provider-dialog"
-
-type ProviderUpdate = Omit<ProviderInput, "apiKey"> & { apiKey?: string }
+import { useProviderEditor } from "./use-provider-editor"
 
 function formatContext(value: number) {
   return value >= 1_000_000
@@ -109,124 +104,54 @@ export function ProviderDetail({
   deleteError?: Error | null
   deletePending: boolean
 }) {
-  const queryClient = useQueryClient()
-  const [label, setLabel] = useState(provider.label)
-  const [type, setType] = useState(provider.type)
-  const [baseUrl, setBaseUrl] = useState(provider.baseUrl)
-  const [apiKey, setApiKey] = useState(provider.apiKey)
-  const [showKey, setShowKey] = useState(false)
-  const [discovered, setDiscovered] = useState<string[] | null>(null)
-  const [selected, setSelected] = useState<string[]>([])
-  const [addOpen, setAddOpen] = useState(false)
-  const [modelId, setModelId] = useState("")
-  const [modelLabel, setModelLabel] = useState("")
-  const [editingModel, setEditingModel] = useState<ProviderModel | null>(null)
-  const [editingLabel, setEditingLabel] = useState("")
-  const [editingMetadata, setEditingMetadata] = useState("{}")
-  const [metadataError, setMetadataError] = useState<string | null>(null)
-  const [editingBinding, setEditingBinding] =
-    useState<ProviderModel["piBinding"]>(null)
-  const [bindingModel, setBindingModel] = useState<ProviderModel | null>(null)
-  const [selectedBuiltinProvider, setSelectedBuiltinProvider] = useState("")
-  const [selectedBuiltinModel, setSelectedBuiltinModel] =
-    useState<PiModelProfile | null>(null)
-  const save = useMutation({
-    mutationFn: (input: ProviderUpdate) =>
-      apiRequest<ProviderConnection>(
-        `/providers/${provider.id}`,
-        jsonRequest("PATCH", input)
-      ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
-  })
-  const discover = useMutation({
-    mutationFn: () =>
-      apiRequest<{ models: string[] }>(
-        `/providers/${provider.id}/models/discover`,
-        {
-          method: "POST",
-        }
-      ),
-    onSuccess: ({ models }) => {
-      const known = new Set(provider.models.map((model) => model.modelId))
-      const fresh = models.filter((model) => !known.has(model))
-      setDiscovered(fresh)
-      setSelected(fresh)
-    },
-  })
-  const addModels = useMutation({
-    mutationFn: (models: Array<{ modelId: string; label: string }>) =>
-      Promise.all(
-        models.map((model) =>
-          apiRequest<ProviderModel>(
-            `/providers/${provider.id}/models`,
-            jsonRequest("POST", model)
-          )
-        )
-      ),
-    onSuccess: () => {
-      setDiscovered(null)
-      setSelected([])
-      setAddOpen(false)
-      setModelId("")
-      setModelLabel("")
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
-    },
-  })
-  const modelMutation = useMutation({
-    mutationFn: ({ modelId, body }: { modelId: string; body: object }) =>
-      apiRequest<ProviderModel>(
-        `/provider-models/${modelId}`,
-        jsonRequest("PATCH", body)
-      ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
-  })
-  const editModel = useMutation({
-    mutationFn: ({
-      id,
-      label,
-      metadata,
-      binding,
-    }: {
-      id: string
-      label: string
-      metadata: ProviderModel["metadata"]
-      binding: ProviderModel["piBinding"]
-    }) =>
-      apiRequest<ProviderModel>(
-        `/provider-models/${id}`,
-        jsonRequest("PATCH", { label, metadata, binding })
-      ),
-    onSuccess: () => {
-      setEditingModel(null)
-      setEditingLabel("")
-      setEditingMetadata("{}")
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
-    },
-  })
-  const builtins = useQuery({
-    enabled: Boolean(bindingModel),
-    queryKey: ["providers", provider.id, "builtins"],
-    queryFn: () =>
-      apiRequest<{ items: PiModelProfile[] }>(
-        `/providers/${provider.id}/models/builtins`
-      ),
-  })
-  const removeModel = useMutation({
-    mutationFn: (id: string) =>
-      apiRequest<void>(`/provider-models/${id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
-      queryClient.invalidateQueries({ queryKey: ["settings"] })
-    },
-  })
-  const builtinProfiles = builtins.data?.items ?? []
-  const builtinProviderIds = [
-    ...new Set(builtinProfiles.map((model) => model.providerId)),
-  ]
-  const filteredBuiltinModels = builtinProfiles.filter(
-    (model) => model.providerId === selectedBuiltinProvider
-  )
-  const selectedProfile = selectedBuiltinModel
+  const {
+    addModels,
+    addOpen,
+    apiKey,
+    baseUrl,
+    bindingModel,
+    builtinProviderIds,
+    builtins,
+    discover,
+    discovered,
+    editModel,
+    editingBinding,
+    editingLabel,
+    editingMetadata,
+    editingModel,
+    filteredBuiltinModels,
+    label,
+    metadataError,
+    modelId,
+    modelLabel,
+    modelMutation,
+    removeModel,
+    save,
+    selected,
+    selectedBuiltinModel,
+    selectedBuiltinProvider,
+    selectedProfile,
+    setAddOpen,
+    setApiKey,
+    setBaseUrl,
+    setBindingModel,
+    setDiscovered,
+    setEditingBinding,
+    setEditingLabel,
+    setEditingMetadata,
+    setEditingModel,
+    setLabel,
+    setMetadataError,
+    setModelId,
+    setModelLabel,
+    setSelected,
+    setSelectedBuiltinModel,
+    setSelectedBuiltinProvider,
+    setShowKey,
+    setType,
+    showKey,
+    type,
+  } = useProviderEditor(provider)
 
   return (
     <div className="flex flex-col gap-4">

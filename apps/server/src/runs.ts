@@ -1,11 +1,9 @@
 import { copyFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, extname, join, relative } from "node:path"
-import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import {
   clampThinkingLevel,
   type ModelThinkingLevel,
-  type Usage,
 } from "@earendil-works/pi-ai"
 import {
   and,
@@ -19,9 +17,7 @@ import {
   isNull,
   sql,
 } from "drizzle-orm"
-import { Type } from "typebox"
 import type {
-  AgentInspector,
   AgentPublic,
   AgentRuntimeSnapshot,
   AgentStatus,
@@ -33,15 +29,9 @@ import type {
 import {
   type AgentRuntime,
   createAgentRuntime,
-  publicAgentMessage,
   type RuntimeOutcome,
 } from "./agent-runtime"
-import {
-  createLocalBackend,
-  createWorkspaceTools,
-  defineAgentTool,
-  type WorkspaceBackend,
-} from "./agent-tools"
+import { createLocalBackend, type WorkspaceBackend } from "./agent-tools"
 import {
   containerName,
   containerRunningAsync,
@@ -54,8 +44,6 @@ import type { createDatabase } from "./db"
 import {
   agentInbox,
   agentMessages,
-  agentToolCalls,
-  agentUsage,
   attachments,
   challenges,
   eventPlatforms,
@@ -75,7 +63,10 @@ import {
   resolvePromptTemplates,
 } from "./prompt-templates"
 import { redactSecrets, replaceText } from "./redaction"
-import { summarizeUsage, summarizeUsageRecords, sumUsage } from "./usage"
+import { RunActionError } from "./run-errors"
+import { createRunInspector } from "./run-inspector"
+import { createRunTools } from "./run-tools"
+import { sumUsage } from "./usage"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunEvent =
@@ -393,6 +384,23 @@ export function createRunManager(options: Options) {
       completedAt: agent.completedAt,
     }
   }
+
+  const {
+    messagesForAgent,
+    conversationMessage,
+    conversationSnapshot,
+    conversationMessageForRuntime,
+    usageForAgent,
+    inspectorForAgent,
+  } = createRunInspector({
+    db,
+    dataDir,
+    getStoredRun: getStored,
+    getStoredAgent,
+    getAgentPublic,
+    parseModelConfig,
+    parseRuntimeSnapshot,
+  })
 
   function getPublic(
     runId: string,
@@ -841,207 +849,28 @@ export function createRunManager(options: Options) {
       .from(challenges)
       .where(eq(challenges.id, run.challengeId))
       .get()
-    const finishRun = defineAgentTool({
-      name: "finish_run",
-      label: "Finish run",
-      description: "Mark this challenge run complete and stop further work",
-      parameters: Type.Object({
-        summary: Type.String({ minLength: 1 }),
-      }),
-      execute: async (_id, params) => {
-        const stored = getStored(runId)
-        if (
-          !stored ||
-          terminalRunStatuses.includes(stored.status as RunStatus)
-        ) {
-          throw new Error("Run is already finished")
-        }
-        if (!options.canFinishRun?.(runId, run.challengeId)) {
-          throw new Error("Submit an accepted flag before finishing this Run")
-        }
-        if (
-          challenge?.remoteTarget &&
-          challenge.remoteAvailable &&
-          !challenge.remoteTargetIgnored &&
-          options.targetAction
-        ) {
-          const target = await options.targetAction(run.challengeId, "get")
-          if (["starting", "running", "stopping"].includes(target.status)) {
-            throw new Error("Stop the remote target before finishing this Run")
-          }
-        }
-        update(runId, { pendingCompletionSummary: params.summary })
-        return {
-          content: [{ type: "text" as const, text: "Run completed" }],
-          details: {},
-          terminate: true,
-        }
-      },
-      executionMode: "sequential",
+    if (!challenge) throw new RunStartError("Challenge is unavailable")
+    const tools = createRunTools({
+      runId,
+      agentId,
+      isMain,
+      agent,
+      run,
+      challenge,
+      backend,
+      getStoredRun: () => getStored(runId),
+      updateRun: (values) => update(runId, values),
+      getStoredAgent,
+      getAgentPublic,
+      messagesForAgent,
+      createChildAgent,
+      canFinishRun: options.canFinishRun,
+      submitFlag: options.submitFlag,
+      targetAction: options.targetAction,
     })
-    const submitFlag = defineAgentTool({
-      name: "submit_flag",
-      label: "Submit flag",
-      description: "Submit a candidate flag to the connected CTF platform",
-      parameters: Type.Object({ flag: Type.String({ minLength: 1 }) }),
-      executionMode: "sequential",
-      execute: async (_id, params) => {
-        if (!options.submitFlag) {
-          throw new Error("Flag submission is unavailable")
-        }
-        const result = await options.submitFlag(
-          runId,
-          run.challengeId,
-          params.flag
-        )
-        if (!result) throw new Error("Flag submission is unavailable")
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result) }],
-          details: result,
-        }
-      },
-    })
-    const spawnAgent = defineAgentTool({
-      name: "spawn_agent",
-      label: "Spawn agent",
-      description:
-        "Start a background child agent for a focused task. Completion is delivered automatically; do not poll repeatedly.",
-      parameters: Type.Object({
-        name: Type.String({ minLength: 1, maxLength: 80 }),
-        task: Type.String({ minLength: 1, maxLength: 100_000 }),
-      }),
-      executionMode: "parallel",
-      execute: async (_id, params, signal) => {
-        if (signal?.aborted) throw new Error("Sub-agent creation was aborted")
-        const child = await createChildAgent(
-          runId,
-          agentId,
-          params.name.trim(),
-          params.task.trim(),
-          signal
-        )
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Started ${child.name} in the background with agent ID ${child.id}. It shares the Run workspace. Completion will be delivered automatically.`,
-            },
-          ],
-          details: {
-            agentId: child.id,
-            status: child.status,
-            workspace: ".",
-          },
-        }
-      },
-    })
-    const inspectAgent = defineAgentTool({
-      name: "inspect_agent",
-      label: "Inspect agent",
-      description:
-        "Read a child agent status and latest output when needed. Completion is delivered automatically.",
-      parameters: Type.Object({
-        agent_id: Type.String({ minLength: 1 }),
-      }),
-      execute: async (_id, params) => {
-        const child = getStoredAgent(params.agent_id)
-        if (child?.runId !== runId || child.parentAgentId !== agentId) {
-          throw new Error("Child agent was not found")
-        }
-        const value = getAgentPublic(child.id) as AgentPublic
-        const summary =
-          value.summary ?? lastAssistantText(messagesForAgent(child.id))
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                id: value.id,
-                name: value.name,
-                status: value.status,
-                summary,
-                error: value.error,
-              }),
-            },
-          ],
-          details: { found: true },
-        }
-      },
-    })
-    const targetTool = (
-      name: "get_target" | "start_target" | "extend_target" | "stop_target",
-      label: string,
-      description: string,
-      action: "get" | "start" | "extend" | "stop"
-    ) =>
-      defineAgentTool({
-        name,
-        label,
-        description,
-        parameters: Type.Object({}, { additionalProperties: false }),
-        executionMode: "sequential",
-        execute: async () => {
-          if (!options.targetAction) {
-            throw new Error("Target management is unavailable")
-          }
-          const target = await options.targetAction(run.challengeId, action)
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify(target) }],
-            details: target,
-          }
-        },
-      })
-    const targetTools =
-      isMain &&
-      challenge?.remoteTarget &&
-      challenge.remoteAvailable &&
-      !challenge.remoteTargetIgnored &&
-      options.targetAction
-        ? [
-            targetTool(
-              "get_target",
-              "Get target",
-              "Get the current remote challenge target status and endpoints",
-              "get"
-            ),
-            targetTool(
-              "start_target",
-              "Start target",
-              "Start the remote challenge target and wait until it is ready",
-              "start"
-            ),
-            targetTool(
-              "extend_target",
-              "Extend target",
-              "Extend the remote challenge target lifetime",
-              "extend"
-            ),
-            targetTool(
-              "stop_target",
-              "Stop target",
-              "Stop the remote challenge target",
-              "stop"
-            ),
-          ]
-        : []
-    const tools = [
-      ...createWorkspaceTools(backend),
-      ...(isMain
-        ? [
-            finishRun,
-            ...(challenge?.remoteId && challenge.remoteAvailable
-              ? [submitFlag]
-              : []),
-            spawnAgent,
-            inspectAgent,
-            ...targetTools,
-          ]
-        : []),
-    ]
     const secrets = new Set(options.getApiKeys?.(provider))
     const logicalCwd =
       environment.type === "container" ? "/workspace" : "$WORKSPACE"
-    if (!challenge) throw new RunStartError("Challenge is unavailable")
     const modelConfig = parseModelConfig(run.modelConfig)
     const thinkingLevel = clampThinkingLevel(model, modelConfig.thinkingLevel)
     const promptConfig = parsePromptConfig(run.promptConfig)
@@ -1355,159 +1184,6 @@ export function createRunManager(options: Options) {
         )
         .map((active) => active.runtime.abort())
     )
-  }
-
-  function messageRowsForAgent(agentId: string) {
-    const agent = getStoredAgent(agentId)
-    if (!agent) throw new RunActionError("not_found", "Agent not found")
-    return db
-      .select()
-      .from(agentMessages)
-      .where(eq(agentMessages.agentId, agentId))
-      .orderBy(asc(agentMessages.sequence))
-      .all()
-  }
-
-  function messagesForAgent(agentId: string): AgentMessage[] {
-    return messageRowsForAgent(agentId).map(
-      ({ message }) => JSON.parse(message) as AgentMessage
-    )
-  }
-
-  function conversationMessage(
-    row: typeof agentMessages.$inferSelect
-  ): ConversationMessage {
-    return {
-      id: row.runtimeId ?? row.id,
-      agentId: row.agentId,
-      sequence: row.sequence,
-      message: publicAgentMessage(
-        JSON.parse(row.message) as AgentMessage
-      ) as unknown as Record<string, unknown>,
-      createdAt: row.createdAt,
-    }
-  }
-
-  function conversationSnapshot(agentId: string) {
-    const agent = getStoredAgent(agentId)
-    if (!agent) throw new RunActionError("not_found", "Agent not found")
-    let snapshot:
-      | {
-          messages: ConversationMessage[]
-          cursor: number
-        }
-      | undefined
-    db.transaction((tx) => {
-      const rows = tx
-        .select()
-        .from(agentMessages)
-        .where(eq(agentMessages.agentId, agentId))
-        .orderBy(asc(agentMessages.sequence))
-        .all()
-      const value = tx
-        .select({ value: sql<number>`coalesce(max(${runEvents.id}), 0)` })
-        .from(runEvents)
-        .where(eq(runEvents.runId, agent.runId))
-        .get()?.value
-      snapshot = {
-        messages: rows.map(conversationMessage),
-        cursor: value ?? 0,
-      }
-    })
-    if (!snapshot) throw new Error("Conversation snapshot is unavailable")
-    return snapshot
-  }
-
-  function conversationMessageForRuntime(agentId: string, runtimeId: string) {
-    const row = db
-      .select()
-      .from(agentMessages)
-      .where(
-        and(
-          eq(agentMessages.agentId, agentId),
-          eq(agentMessages.runtimeId, runtimeId)
-        )
-      )
-      .get()
-    return row ? conversationMessage(row) : undefined
-  }
-
-  function usageForAgent(agentId: string) {
-    const agent = getStoredAgent(agentId)
-    if (!agent) throw new RunActionError("not_found", "Agent not found")
-    const run = getStored(agent.runId)
-    if (!run) throw new RunActionError("not_found", "Run not found")
-    const costKnown = parseModelConfig(run.modelConfig).costKnown !== false
-    return sumUsage([
-      summarizeUsage(messagesForAgent(agentId), costKnown),
-      summarizeUsageRecords(
-        db
-          .select({ usage: agentUsage.usage })
-          .from(agentUsage)
-          .where(eq(agentUsage.agentId, agentId))
-          .all()
-          .map(({ usage }) => JSON.parse(usage) as Usage),
-        costKnown
-      ),
-    ])
-  }
-
-  function toolStatsForAgent(agentId: string) {
-    return db
-      .select({
-        toolName: agentToolCalls.toolName,
-        callCount: count(),
-        failedCount: sql<number>`coalesce(sum(case when ${agentToolCalls.succeeded} = 0 then 1 else 0 end), 0)`,
-        durationMs: sql<number>`coalesce(sum(${agentToolCalls.durationMs}), 0)`,
-        outputBytes: sql<number>`coalesce(sum(${agentToolCalls.outputBytes}), 0)`,
-        truncatedCount: sql<number>`coalesce(sum(case when ${agentToolCalls.truncated} = 1 then 1 else 0 end), 0)`,
-      })
-      .from(agentToolCalls)
-      .where(eq(agentToolCalls.agentId, agentId))
-      .groupBy(agentToolCalls.toolName)
-      .orderBy(agentToolCalls.toolName)
-      .all()
-      .map((value) => ({
-        ...value,
-        callCount: Number(value.callCount),
-        failedCount: Number(value.failedCount),
-        durationMs: Number(value.durationMs),
-        outputBytes: Number(value.outputBytes),
-        truncatedCount: Number(value.truncatedCount),
-      }))
-  }
-
-  function inspectorForAgent(agentId: string): AgentInspector {
-    const stored = getStoredAgent(agentId)
-    const agent = getAgentPublic(agentId)
-    if (!stored || !agent) {
-      throw new RunActionError("not_found", "Agent not found")
-    }
-    const runtime = parseRuntimeSnapshot(stored.runtimeSnapshot)
-    if (runtime) {
-      replaceText(runtime, dataDir, "$DATA")
-      replaceText(runtime, homedir(), "$HOME")
-    }
-    return {
-      agent,
-      task: stored.task,
-      runtime,
-      usage: usageForAgent(agentId),
-      toolStats: toolStatsForAgent(agentId),
-    }
-  }
-
-  function lastAssistantText(entries: AgentMessage[]) {
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const message = entries[index]
-      if (message.role !== "assistant") continue
-      const text = message.content
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("\n")
-        .trim()
-      if (text) return text.slice(0, 50_000)
-    }
-    return null
   }
 
   async function notifyMain(agent: AgentPublic) {
@@ -2290,17 +1966,6 @@ function parseRuntimeSnapshot(
   }
 }
 
-export class RunActionError extends Error {
-  constructor(
-    readonly code:
-      | "capacity"
-      | "not_found"
-      | "invalid_state"
-      | "message_id_conflict",
-    message: string
-  ) {
-    super(message)
-  }
-}
+export { RunActionError }
 
 class RunStartError extends Error {}

@@ -330,4 +330,45 @@ describe("container execution and workspace files", () => {
     expect(docker("inspect", name).exitCode).not.toBe(0)
     expect(instance.activeSessionCount()).toBe(0)
   }, 30_000)
+
+  test("pauses and cleans up when its container disappears", async () => {
+    const instance = setup()
+    const challenge = await createChallenge(instance.app)
+    const modelId = await configureFaux(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("bash", {
+          command: "printf ready > container-ready && sleep 30",
+        }),
+        { stopReason: "toolUse" }
+      ),
+    ])
+    const run = await (
+      await instance.app.request(
+        `/api/challenges/${challenge.id}/runs`,
+        json({ modelId, environment: "container", image: "alpine:3.22" })
+      )
+    ).json()
+    const workspace = join(instance.dataDir, "workspaces", run.id)
+    await waitFor(
+      async () => existsSync(join(workspace, "container-ready")),
+      Boolean
+    )
+
+    const name = `aegisx-run-${run.id}`
+    expect(docker("rm", "--force", name).exitCode).toBe(0)
+    const detail = await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string; error: string | null }
+          agents: Array<{ status: string }>
+        }>,
+      (value) => value.run.status === "paused"
+    )
+
+    expect(detail.run.error).toBe("Container execution became unavailable")
+    expect(detail.agents.every((agent) => agent.status === "paused")).toBe(true)
+    expect(instance.activeSessionCount()).toBe(0)
+    expect(docker("inspect", name).exitCode).not.toBe(0)
+  }, 30_000)
 })

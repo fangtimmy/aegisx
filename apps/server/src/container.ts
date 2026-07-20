@@ -242,10 +242,17 @@ function shellQuote(value: string) {
 async function requireExec(
   name: string,
   args: string[],
-  options: { input?: string; signal?: AbortSignal } = {}
+  options: {
+    input?: string
+    signal?: AbortSignal
+    onFatal?: () => void
+  } = {}
 ) {
   const result = await dockerExec([name, ...args], options)
-  if (result.exitCode !== 0) throw new Error("Container operation failed")
+  if (result.exitCode !== 0) {
+    if (!(await containerRunningAsync(name))) options.onFatal?.()
+    throw new Error("Container operation failed")
+  }
   return result.stdout
 }
 
@@ -260,22 +267,23 @@ export function createContainerBackend(
     cwd,
     resolvePath,
     read: (path, signal) =>
-      requireExec(name, ["cat", resolvePath(path)], { signal }),
+      requireExec(name, ["cat", resolvePath(path)], { signal, onFatal }),
     write: async (path, content, signal) => {
       const target = resolvePath(path, true)
       await requireExec(name, ["mkdir", "-p", posix.dirname(target)], {
         signal,
+        onFatal,
       })
       await requireExec(
         name,
         ["sh", "-c", 'cat > "$1"', "aegisx-write", target],
-        { input: content, signal }
+        { input: content, signal, onFatal }
       )
     },
     list: async (path, signal) => {
       const target = resolvePath(path)
       const output = decoder.decode(
-        await requireExec(name, ["ls", "-1Ap", target], { signal })
+        await requireExec(name, ["ls", "-1Ap", target], { signal, onFatal })
       )
       return output
         .split("\n")
@@ -301,6 +309,9 @@ export function createContainerBackend(
             : { onFatal }),
         }
       )
+      if (result.exitCode !== 0 && !(await containerRunningAsync(name))) {
+        onFatal?.()
+      }
       return {
         stdout: decoder.decode(result.stdout),
         stderr: result.stderr,

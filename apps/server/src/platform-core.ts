@@ -49,6 +49,14 @@ export type TargetState = {
   message?: string
 }
 
+export function isActiveTarget(target: TargetState) {
+  return (
+    target.status === "starting" ||
+    target.status === "running" ||
+    target.status === "stopping"
+  )
+}
+
 export type SubmissionResult = {
   status:
     | "pending"

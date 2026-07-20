@@ -76,6 +76,32 @@ async function createRun(
   )
 }
 
+async function readSseUntilReady(
+  response: Response,
+  controller: AbortController
+) {
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error("SSE response body is unavailable")
+  const decoder = new TextDecoder()
+  let streamed = ""
+  try {
+    while (!streamed.includes('"type":"ready"')) {
+      const result = await Promise.race([
+        reader.read(),
+        Bun.sleep(2000).then(() => {
+          throw new Error("Timed out reading SSE replay")
+        }),
+      ])
+      if (result.done) break
+      streamed += decoder.decode(result.value, { stream: true })
+    }
+    return streamed
+  } finally {
+    controller.abort()
+    await reader.cancel().catch(() => undefined)
+  }
+}
+
 function configureFaux(app: ReturnType<typeof createApp>["app"]) {
   const cached = configuredModels.get(app)
   if (cached) return cached
@@ -572,7 +598,8 @@ describe("run API", () => {
         value.agents.some(
           (agent) =>
             agent.parentAgentId !== null && agent.status === "completed"
-        ) && JSON.stringify(value.messages).includes("Background agent Recon")
+        ) && JSON.stringify(value.messages).includes("Background agent Recon"),
+      30_000
     )
     const child = detail.agents.find(
       (agent) => agent.parentAgentId !== null
@@ -692,6 +719,50 @@ describe("run API", () => {
 
     await instance.app.request(`/api/runs/${run.id}/stop`, json("POST", {}))
     expect(instance.activeSessionCount()).toBe(0)
+  }, 35_000)
+
+  test("reports a failed child agent without failing its run", async () => {
+    const instance = setup(2)
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("spawn_agent", {
+          name: "Broken",
+          task: "Try the delegated task.",
+        }),
+        { stopReason: "toolUse" }
+      ),
+      fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "child provider failed",
+      }),
+      fauxAssistantMessage("Continuing after the child failure."),
+      fauxAssistantMessage("Continuing after the child failure."),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+
+    const detail = await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string }
+          agents: Array<{
+            parentAgentId: string | null
+            status: string
+            error: string | null
+          }>
+          messages: unknown[]
+        }>,
+      (value) =>
+        value.agents.some(
+          (agent) => agent.parentAgentId !== null && agent.status === "failed"
+        ) && JSON.stringify(value.messages).includes("child provider failed")
+    )
+
+    expect(detail.run.status).toBe("running")
+    expect(
+      detail.agents.find((agent) => agent.parentAgentId !== null)
+    ).toMatchObject({ status: "failed", error: "child provider failed" })
+    await instance.app.request(`/api/runs/${run.id}/stop`, json("POST", {}))
   })
 
   test("marks the run failed when Pi returns an assistant error", async () => {
@@ -889,22 +960,7 @@ describe("run API", () => {
       `/api/runs/${run.id}/events?after=0`,
       { signal: controller.signal }
     )
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error("SSE response body is unavailable")
-    const decoder = new TextDecoder()
-    let streamed = ""
-    while (!streamed.includes('"type":"ready"')) {
-      const result = await Promise.race([
-        reader.read(),
-        Bun.sleep(2000).then(() => {
-          throw new Error("Timed out reading SSE replay")
-        }),
-      ])
-      if (result.done) break
-      streamed += decoder.decode(result.value, { stream: true })
-    }
-    controller.abort()
-    await reader.cancel().catch(() => undefined)
+    const streamed = await readSseUntilReady(response, controller)
 
     expect(streamed).toContain('"type":"message.committed"')
     expect(streamed).toContain('"type":"run.updated"')
@@ -912,6 +968,62 @@ describe("run API", () => {
       streamed.indexOf('"type":"ready"')
     )
     expect(streamed).toMatch(/id: \d+/)
+  })
+
+  test("resumes SSE replay after Last-Event-ID without duplicating events", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("finish_run", { summary: "Reconnect complete" }),
+        { stopReason: "toolUse" }
+      ),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    await waitFor(
+      async () =>
+        (await instance.app.request(`/api/runs/${run.id}`)).json() as Promise<{
+          run: { status: string }
+        }>,
+      (value) => value.run.status === "completed"
+    )
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    const events = sqlite
+      .query("select id, type from run_events where run_id = ? order by id asc")
+      .all(run.id) as Array<{ id: number; type: string }>
+    sqlite.close()
+    const after = events.findLast(
+      (event) => event.type === "message_committed"
+    )?.id
+    const terminal = events.findLast(
+      (event) => event.type === "run_updated"
+    )?.id
+    if (after === undefined || terminal === undefined || terminal <= after) {
+      throw new Error(
+        "Expected a durable terminal event after the last message"
+      )
+    }
+
+    const controller = new AbortController()
+    const response = await instance.app.request(
+      `/api/runs/${run.id}/events?after=0`,
+      {
+        headers: { "last-event-id": String(after) },
+        signal: controller.signal,
+      }
+    )
+    const streamed = await readSseUntilReady(response, controller)
+    const ids = [...streamed.matchAll(/^id: (\d+)$/gm)].map((match) =>
+      Number(match[1])
+    )
+
+    expect(ids.length).toBeGreaterThan(0)
+    expect(ids.every((id) => id > after)).toBe(true)
+    expect(ids).toContain(terminal)
+    expect(streamed.indexOf('"type":"run.updated"')).toBeLessThan(
+      streamed.indexOf('"type":"ready"')
+    )
   })
 
   test("deduplicates retried user messages by client message id", async () => {

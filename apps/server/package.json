@@ -3,7 +3,7 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "check": "biome check . && tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test --max-concurrency 1"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.80.7",
