@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { CircleAlert } from "lucide-react"
+import { Controller, useForm } from "react-hook-form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -39,6 +40,17 @@ type RuntimeSettingsInput = Pick<
   | "maxAttachmentMb"
 >
 
+type RuntimeFormValues = {
+  defaultModelId: string
+  environment: "local" | "container"
+  containerImage: string
+  cpus: number
+  memoryMb: number
+  pidsLimit: number
+  maxConcurrency: number
+  maxAttachmentMb: number
+}
+
 export function RuntimeDefaults({
   settings,
   providers,
@@ -59,174 +71,242 @@ export function RuntimeDefaults({
           .map((model) => ({ ...model, provider }))
       : []
   )
-  const modelItems = Object.fromEntries([
-    ["", "No default model"],
-    ...models.map((model) => [
-      model.id,
-      `${model.provider.label} / ${model.label}`,
-    ]),
-  ])
-  const defaultModelId = models.some(
-    (model) => model.id === settings.defaultModelId
-  )
-    ? settings.defaultModelId
-    : ""
+  const defaultModelId =
+    models.some((model) => model.id === settings.defaultModelId) &&
+    settings.defaultModelId
+      ? settings.defaultModelId
+      : ""
+
+  const form = useForm<RuntimeFormValues>({
+    defaultValues: {
+      defaultModelId,
+      environment: settings.environment,
+      containerImage: settings.containerImage,
+      cpus: settings.cpus,
+      memoryMb: settings.memoryMb,
+      pidsLimit: settings.pidsLimit,
+      maxConcurrency: settings.maxConcurrency,
+      maxAttachmentMb: settings.maxAttachmentMb,
+    },
+  })
+
   return (
     <form
       className="grid grid-cols-2 gap-4"
       key={settings.updatedAt}
-      onSubmit={(event) => {
-        event.preventDefault()
-        const data = new FormData(event.currentTarget)
+      onSubmit={form.handleSubmit((values) =>
         mutation.mutate({
-          defaultModelId: String(data.get("defaultModelId")) || null,
-          environment: String(data.get("environment")) as "local" | "container",
-          containerImage: String(data.get("containerImage")).trim(),
-          cpus: Number(data.get("cpus")),
-          memoryMb: Number(data.get("memoryMb")),
-          pidsLimit: Number(data.get("pidsLimit")),
-          maxConcurrency: Number(data.get("maxConcurrency")),
-          maxAttachmentMb: Number(data.get("maxAttachmentMb")),
+          defaultModelId: values.defaultModelId || null,
+          environment: values.environment,
+          containerImage: values.containerImage.trim(),
+          cpus: values.cpus,
+          memoryMb: values.memoryMb,
+          pidsLimit: values.pidsLimit,
+          maxConcurrency: values.maxConcurrency,
+          maxAttachmentMb: values.maxAttachmentMb,
         })
-      }}
+      )}
     >
-      <Field className="col-span-2" name="defaultModelId">
+      <Field className="col-span-2">
         <FieldLabel>Default model</FieldLabel>
-        <Select
-          defaultValue={defaultModelId}
-          items={modelItems}
+        <Controller
+          control={form.control}
           name="defaultModelId"
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="No default model" />
-          </SelectTrigger>
-          <SelectPopup>
-            <SelectItem value="">No default model</SelectItem>
-            {providers.map((provider) => {
-              const providerModels = models.filter(
-                (model) => model.provider.id === provider.id
-              )
-              if (providerModels.length === 0) return null
-              return (
-                <SelectGroup key={provider.id}>
-                  <SelectGroupLabel>{provider.label}</SelectGroupLabel>
-                  {providerModels.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              )
-            })}
-          </SelectPopup>
-        </Select>
+          render={({ field }) => (
+            <Select
+              items={Object.fromEntries([
+                ["", "No default model"],
+                ...models.map((model) => [
+                  model.id,
+                  `${model.provider.label} / ${model.label}`,
+                ]),
+              ])}
+              onValueChange={field.onChange}
+              value={field.value}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="No default model" />
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="">No default model</SelectItem>
+                {providers.map((provider) => {
+                  const providerModels = models.filter(
+                    (model) => model.provider.id === provider.id
+                  )
+                  if (providerModels.length === 0) return null
+                  return (
+                    <SelectGroup key={provider.id}>
+                      <SelectGroupLabel>{provider.label}</SelectGroupLabel>
+                      {providerModels.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )
+                })}
+              </SelectPopup>
+            </Select>
+          )}
+        />
       </Field>
-      <Field name="environment">
+      <Field>
         <FieldLabel>Environment</FieldLabel>
-        <Select
-          defaultValue={settings.environment}
-          items={{ container: "Container", local: "Local" }}
+        <Controller
+          control={form.control}
           name="environment"
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectPopup>
-            <SelectItem value="local">Local</SelectItem>
-            <SelectItem value="container">Container</SelectItem>
-          </SelectPopup>
-        </Select>
+          render={({ field }) => (
+            <Select
+              items={{ container: "Container", local: "Local" }}
+              onValueChange={(value) =>
+                field.onChange(value as "local" | "container")
+              }
+              value={field.value}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="local">Local</SelectItem>
+                <SelectItem value="container">Container</SelectItem>
+              </SelectPopup>
+            </Select>
+          )}
+        />
       </Field>
       <Field>
         <FieldLabel htmlFor="runtime-image">Container image</FieldLabel>
-        <Input
-          defaultValue={settings.containerImage}
-          id="runtime-image"
+        <Controller
+          control={form.control}
           name="containerImage"
-          required
-          type="text"
+          render={({ field }) => (
+            <Input
+              id="runtime-image"
+              onBlur={field.onBlur}
+              onChange={field.onChange}
+              required
+              type="text"
+              value={field.value}
+            />
+          )}
+          rules={{ required: true }}
         />
       </Field>
-      <Field name="cpus">
+      <Field>
         <FieldLabel>CPUs</FieldLabel>
-        <NumberField
-          defaultValue={settings.cpus}
-          max={16}
-          min={0.1}
+        <Controller
+          control={form.control}
           name="cpus"
-          required
-          step={0.1}
-        >
-          <NumberFieldGroup>
-            <NumberFieldDecrement />
-            <NumberFieldInput />
-            <NumberFieldIncrement />
-          </NumberFieldGroup>
-        </NumberField>
+          render={({ field }) => (
+            <NumberField
+              max={16}
+              min={0.1}
+              onValueChange={field.onChange}
+              required
+              step={0.1}
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 0.1, max: 16 }}
+        />
       </Field>
-      <Field name="memoryMb">
+      <Field>
         <FieldLabel>Memory (MB)</FieldLabel>
-        <NumberField
-          defaultValue={settings.memoryMb}
-          max={32768}
-          min={128}
+        <Controller
+          control={form.control}
           name="memoryMb"
-          required
-        >
-          <NumberFieldGroup>
-            <NumberFieldDecrement />
-            <NumberFieldInput />
-            <NumberFieldIncrement />
-          </NumberFieldGroup>
-        </NumberField>
+          render={({ field }) => (
+            <NumberField
+              max={32768}
+              min={128}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 128, max: 32768 }}
+        />
       </Field>
-      <Field name="pidsLimit">
+      <Field>
         <FieldLabel>PID limit</FieldLabel>
-        <NumberField
-          defaultValue={settings.pidsLimit}
-          max={4096}
-          min={16}
+        <Controller
+          control={form.control}
           name="pidsLimit"
-          required
-        >
-          <NumberFieldGroup>
-            <NumberFieldDecrement />
-            <NumberFieldInput />
-            <NumberFieldIncrement />
-          </NumberFieldGroup>
-        </NumberField>
+          render={({ field }) => (
+            <NumberField
+              max={4096}
+              min={16}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 16, max: 4096 }}
+        />
       </Field>
-      <Field name="maxConcurrency">
+      <Field>
         <FieldLabel>Max active agents</FieldLabel>
-        <NumberField
-          defaultValue={settings.maxConcurrency}
-          max={32}
-          min={1}
+        <Controller
+          control={form.control}
           name="maxConcurrency"
-          required
-        >
-          <NumberFieldGroup>
-            <NumberFieldDecrement />
-            <NumberFieldInput />
-            <NumberFieldIncrement />
-          </NumberFieldGroup>
-        </NumberField>
+          render={({ field }) => (
+            <NumberField
+              max={32}
+              min={1}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1, max: 32 }}
+        />
       </Field>
-      <Field name="maxAttachmentMb">
+      <Field>
         <FieldLabel>Max attachment size (MiB)</FieldLabel>
-        <NumberField
-          defaultValue={settings.maxAttachmentMb}
-          max={10240}
-          min={1}
+        <Controller
+          control={form.control}
           name="maxAttachmentMb"
-          required
-        >
-          <NumberFieldGroup>
-            <NumberFieldDecrement />
-            <NumberFieldInput />
-            <NumberFieldIncrement />
-          </NumberFieldGroup>
-        </NumberField>
+          render={({ field }) => (
+            <NumberField
+              max={10240}
+              min={1}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1, max: 10240 }}
+        />
       </Field>
       <div className="col-span-2 flex items-center gap-3">
         <Button loading={mutation.isPending} type="submit">

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Trash2, TriangleAlert } from "lucide-react"
+import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -27,6 +28,9 @@ import { PlatformBinding } from "./platform-binding"
 export function EventSettings({ event }: { event: EventSummary }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const form = useForm<{ name: string }>({
+    defaultValues: { name: event.name },
+  })
   const update = useMutation({
     mutationFn: (input: EventInput) =>
       apiRequest<EventSummary>(
@@ -64,20 +68,26 @@ export function EventSettings({ event }: { event: EventSummary }) {
         </h2>
         <form
           className="mt-4 flex max-w-xl items-end gap-3"
-          onSubmit={(formEvent) => {
-            formEvent.preventDefault()
-            const data = new FormData(formEvent.currentTarget)
-            update.mutate({ name: String(data.get("name")).trim() })
-          }}
+          onSubmit={form.handleSubmit((values) =>
+            update.mutate({ name: values.name.trim() })
+          )}
         >
           <Field className="min-w-0 flex-1">
             <FieldLabel htmlFor="event-name">Name</FieldLabel>
-            <Input
-              defaultValue={event.name}
-              id="event-name"
-              key={event.updatedAt}
+            <Controller
+              control={form.control}
               name="name"
-              required
+              render={({ field }) => (
+                <Input
+                  id="event-name"
+                  onBlur={field.onBlur}
+                  onChange={field.onChange}
+                  required
+                  type="text"
+                  value={field.value}
+                />
+              )}
+              rules={{ required: true }}
             />
           </Field>
           <Button loading={update.isPending} type="submit">

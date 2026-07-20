@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query"
 import { CircleAlert, Plus } from "lucide-react"
 import { useState } from "react"
+import { Controller, useForm } from "react-hook-form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,11 +29,17 @@ import {
   type ProviderType,
 } from "@/lib/api"
 import {
-  type ProviderInput,
   providerTypeDefaults,
   providerTypeLabels,
   providerTypes,
 } from "./provider-config"
+
+type ProviderFormValues = {
+  type: ProviderType
+  label: string
+  baseUrl: string
+  apiKey: string
+}
 
 export function ProviderDialog({
   onCreated,
@@ -40,23 +47,41 @@ export function ProviderDialog({
   onCreated: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [type, setType] = useState<ProviderType>("openai-compatible")
-  const [label, setLabel] = useState("")
-  const [baseUrl, setBaseUrl] = useState(providerTypeDefaults[type])
-  const [apiKey, setApiKey] = useState("")
+  const form = useForm<ProviderFormValues>({
+    defaultValues: {
+      type: "openai-compatible",
+      label: "",
+      baseUrl: providerTypeDefaults["openai-compatible"],
+      apiKey: "",
+    },
+  })
   const mutation = useMutation({
-    mutationFn: (input: ProviderInput) =>
-      apiRequest<ProviderConnection>("/providers", jsonRequest("POST", input)),
+    mutationFn: (values: ProviderFormValues) =>
+      apiRequest<ProviderConnection>(
+        "/providers",
+        jsonRequest("POST", {
+          label: values.label.trim(),
+          type: values.type,
+          baseUrl: values.baseUrl.trim(),
+          apiKey: values.apiKey,
+          enabled: true,
+        })
+      ),
     onSuccess: (provider) => {
       onCreated(provider.id)
       setOpen(false)
-      setLabel("")
-      setApiKey("")
+      form.reset()
     },
   })
 
   return (
-    <Dialog onOpenChange={setOpen} open={open}>
+    <Dialog
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) form.reset()
+      }}
+      open={open}
+    >
       <DialogTrigger render={<Button type="button" variant="outline" />}>
         <Plus /> Add
       </DialogTrigger>
@@ -64,54 +89,72 @@ export function ProviderDialog({
         <DialogHeader>
           <DialogTitle>Add provider</DialogTitle>
         </DialogHeader>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            mutation.mutate({
-              label: label.trim(),
-              type,
-              baseUrl: baseUrl.trim(),
-              apiKey,
-              enabled: true,
-            })
-          }}
-        >
+        <form onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
           <DialogPanel className="grid gap-4">
-            <ProviderTypeField
-              onChange={(next) => {
-                setType(next)
-                setBaseUrl(providerTypeDefaults[next])
-              }}
-              value={type}
+            <Controller
+              control={form.control}
+              name="type"
+              render={({ field }) => (
+                <ProviderTypeField
+                  onChange={(next) => {
+                    field.onChange(next)
+                    form.setValue("baseUrl", providerTypeDefaults[next])
+                  }}
+                  value={field.value}
+                />
+              )}
             />
             <Field>
               <FieldLabel htmlFor="provider-label">Name</FieldLabel>
-              <Input
-                id="provider-label"
-                onChange={(event) => setLabel(event.target.value)}
-                required
-                type="text"
-                value={label}
+              <Controller
+                control={form.control}
+                name="label"
+                render={({ field }) => (
+                  <Input
+                    id="provider-label"
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    type="text"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
               />
             </Field>
             <Field>
               <FieldLabel htmlFor="provider-base-url">Base URL</FieldLabel>
-              <Input
-                id="provider-base-url"
-                onChange={(event) => setBaseUrl(event.target.value)}
-                required
-                type="url"
-                value={baseUrl}
+              <Controller
+                control={form.control}
+                name="baseUrl"
+                render={({ field }) => (
+                  <Input
+                    id="provider-base-url"
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    type="url"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
               />
             </Field>
             <Field>
               <FieldLabel htmlFor="provider-api-key">API key</FieldLabel>
-              <Input
-                autoComplete="new-password"
-                id="provider-api-key"
-                onChange={(event) => setApiKey(event.target.value)}
-                type="password"
-                value={apiKey}
+              <Controller
+                control={form.control}
+                name="apiKey"
+                render={({ field }) => (
+                  <Input
+                    autoComplete="new-password"
+                    id="provider-api-key"
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    type="password"
+                    value={field.value}
+                  />
+                )}
               />
             </Field>
             {mutation.error && (

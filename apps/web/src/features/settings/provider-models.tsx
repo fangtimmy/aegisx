@@ -10,6 +10,7 @@ import {
   Type,
   Unlink,
 } from "lucide-react"
+import { Controller, useForm } from "react-hook-form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -98,13 +99,9 @@ export function ProviderModels({
     discovered,
     editModel,
     editingBinding,
-    editingLabel,
-    editingMetadata,
     editingModel,
     filteredBuiltinModels,
     metadataError,
-    modelId,
-    modelLabel,
     modelMutation,
     removeModel,
     selected,
@@ -115,16 +112,31 @@ export function ProviderModels({
     setBindingModel,
     setDiscovered,
     setEditingBinding,
-    setEditingLabel,
-    setEditingMetadata,
     setEditingModel,
     setMetadataError,
-    setModelId,
-    setModelLabel,
     setSelected,
     setSelectedBuiltinModel,
     setSelectedBuiltinProvider,
   } = editor
+  const addForm = useForm<{ modelId: string; label: string }>({
+    defaultValues: { modelId: "", label: "" },
+  })
+  const editForm = useForm<{
+    label: string
+    metadata: string
+  }>({
+    defaultValues: { label: "", metadata: "{}" },
+  })
+  const openEdit = (model: ProviderModel) => {
+    editModel.reset()
+    setEditingModel(model)
+    editForm.reset({
+      label: model.label,
+      metadata: JSON.stringify(model.metadata, null, 2),
+    })
+    setEditingBinding(model.piBinding)
+    setMetadataError(null)
+  }
 
   return (
     <>
@@ -167,36 +179,50 @@ export function ProviderModels({
                 </DialogHeader>
                 <form
                   className="contents"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    const id = modelId.trim()
+                  onSubmit={addForm.handleSubmit((values) => {
+                    const id = values.modelId.trim()
                     addModels.mutate([
-                      { modelId: id, label: modelLabel.trim() || id },
+                      { modelId: id, label: values.label.trim() || id },
                     ])
-                  }}
+                  })}
                 >
                   <DialogPanel className="grid gap-4">
                     <Field>
                       <FieldLabel htmlFor="provider-model-id">
                         Model ID
                       </FieldLabel>
-                      <Input
-                        autoFocus
-                        id="provider-model-id"
-                        onChange={(event) => setModelId(event.target.value)}
-                        required
-                        value={modelId}
+                      <Controller
+                        control={addForm.control}
+                        name="modelId"
+                        render={({ field }) => (
+                          <Input
+                            autoFocus
+                            id="provider-model-id"
+                            onBlur={field.onBlur}
+                            onChange={field.onChange}
+                            required
+                            value={field.value}
+                          />
+                        )}
+                        rules={{ required: true }}
                       />
                     </Field>
                     <Field>
                       <FieldLabel htmlFor="provider-model-label">
                         Display name
                       </FieldLabel>
-                      <Input
-                        id="provider-model-label"
-                        onChange={(event) => setModelLabel(event.target.value)}
-                        placeholder="Defaults to the model ID"
-                        value={modelLabel}
+                      <Controller
+                        control={addForm.control}
+                        name="label"
+                        render={({ field }) => (
+                          <Input
+                            id="provider-model-label"
+                            onBlur={field.onBlur}
+                            onChange={field.onChange}
+                            placeholder="Defaults to the model ID"
+                            value={field.value}
+                          />
+                        )}
                       />
                     </Field>
                     {addModels.error && (
@@ -296,16 +322,7 @@ export function ProviderModels({
                     </div>
                     <Button
                       aria-label={`Edit ${model.label}`}
-                      onClick={() => {
-                        editModel.reset()
-                        setEditingModel(model)
-                        setEditingLabel(model.label)
-                        setEditingMetadata(
-                          JSON.stringify(model.metadata, null, 2)
-                        )
-                        setEditingBinding(model.piBinding)
-                        setMetadataError(null)
-                      }}
+                      onClick={() => openEdit(model)}
                       size="icon"
                       title="Edit model"
                       type="button"
@@ -382,8 +399,7 @@ export function ProviderModels({
         onOpenChange={(open) => {
           if (!open) {
             setEditingModel(null)
-            setEditingLabel("")
-            setEditingMetadata("{}")
+            editForm.reset({ label: "", metadata: "{}" })
             setMetadataError(null)
             setEditingBinding(null)
           }
@@ -399,32 +415,30 @@ export function ProviderModels({
           </DialogHeader>
           <form
             className="contents"
-            onSubmit={(event) => {
-              event.preventDefault()
-              if (editingModel) {
-                let metadata: ProviderModel["metadata"]
-                try {
-                  const parsed = JSON.parse(editingMetadata) as unknown
-                  if (
-                    !parsed ||
-                    typeof parsed !== "object" ||
-                    Array.isArray(parsed)
-                  ) {
-                    throw new Error()
-                  }
-                  metadata = parsed as ProviderModel["metadata"]
-                } catch {
-                  setMetadataError("Enter a JSON object")
-                  return
+            onSubmit={editForm.handleSubmit((values) => {
+              if (!editingModel) return
+              let metadata: ProviderModel["metadata"]
+              try {
+                const parsed = JSON.parse(values.metadata) as unknown
+                if (
+                  !parsed ||
+                  typeof parsed !== "object" ||
+                  Array.isArray(parsed)
+                ) {
+                  throw new Error()
                 }
-                editModel.mutate({
-                  id: editingModel.id,
-                  label: editingLabel.trim(),
-                  metadata,
-                  binding: editingBinding,
-                })
+                metadata = parsed as ProviderModel["metadata"]
+              } catch {
+                setMetadataError("Enter a JSON object")
+                return
               }
-            }}
+              editModel.mutate({
+                id: editingModel.id,
+                label: values.label.trim(),
+                metadata,
+                binding: editingBinding,
+              })
+            })}
           >
             <DialogPanel className="grid gap-4">
               <Field>
@@ -441,12 +455,20 @@ export function ProviderModels({
                 <FieldLabel htmlFor="editing-provider-model-label">
                   Display name
                 </FieldLabel>
-                <Input
-                  autoFocus
-                  id="editing-provider-model-label"
-                  onChange={(event) => setEditingLabel(event.target.value)}
-                  required
-                  value={editingLabel}
+                <Controller
+                  control={editForm.control}
+                  name="label"
+                  render={({ field }) => (
+                    <Input
+                      autoFocus
+                      id="editing-provider-model-label"
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      required
+                      value={field.value}
+                    />
+                  )}
+                  rules={{ required: true }}
                 />
               </Field>
               <Field>
@@ -489,16 +511,23 @@ export function ProviderModels({
                     )}
                   </div>
                 </div>
-                <Textarea
-                  className="font-mono text-xs"
-                  disabled={Boolean(editingBinding)}
-                  id="editing-provider-model-metadata"
-                  onChange={(event) => {
-                    setEditingMetadata(event.target.value)
-                    setMetadataError(null)
-                  }}
-                  rows={14}
-                  value={editingMetadata}
+                <Controller
+                  control={editForm.control}
+                  name="metadata"
+                  render={({ field }) => (
+                    <Textarea
+                      className="font-mono text-xs"
+                      disabled={Boolean(editingBinding)}
+                      id="editing-provider-model-metadata"
+                      onChange={(event) => {
+                        field.onChange(event.target.value)
+                        setMetadataError(null)
+                      }}
+                      rows={14}
+                      value={field.value}
+                    />
+                  )}
+                  rules={{ required: true }}
                 />
               </Field>
               {metadataError && (

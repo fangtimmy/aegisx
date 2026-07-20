@@ -1,4 +1,5 @@
 import { CircleAlert, Eye, EyeOff, Trash2 } from "lucide-react"
+import { Controller, useForm } from "react-hook-form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -35,6 +36,13 @@ import { ProviderTypeField } from "./provider-dialog"
 import { ProviderModels } from "./provider-models"
 import { useProviderEditor } from "./use-provider-editor"
 
+type ProviderFormValues = {
+  label: string
+  type: ProviderConnection["type"]
+  baseUrl: string
+  apiKey: string
+}
+
 export function ProviderDetail({
   provider,
   onDelete,
@@ -47,19 +55,15 @@ export function ProviderDetail({
   deletePending: boolean
 }) {
   const editor = useProviderEditor(provider)
-  const {
-    apiKey,
-    baseUrl,
-    label,
-    save,
-    setApiKey,
-    setBaseUrl,
-    setLabel,
-    setShowKey,
-    setType,
-    showKey,
-    type,
-  } = editor
+  const { save, setShowKey, showKey } = editor
+  const form = useForm<ProviderFormValues>({
+    defaultValues: {
+      label: provider.label,
+      type: provider.type,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+    },
+  })
 
   return (
     <div className="flex flex-col gap-4">
@@ -78,10 +82,10 @@ export function ProviderDetail({
               disabled={save.isPending}
               onCheckedChange={(enabled) =>
                 save.mutate({
-                  label,
-                  type,
-                  baseUrl,
-                  apiKey: apiKey.trim() || undefined,
+                  label: form.getValues("label"),
+                  type: form.getValues("type"),
+                  baseUrl: form.getValues("baseUrl"),
+                  apiKey: form.getValues("apiKey").trim() || undefined,
                   enabled: enabled === true,
                 })
               }
@@ -91,41 +95,65 @@ export function ProviderDetail({
         <Card
           render={
             <form
-              onSubmit={(event) => {
-                event.preventDefault()
+              onSubmit={form.handleSubmit((values) =>
                 save.mutate({
-                  label: label.trim(),
-                  type,
-                  baseUrl: baseUrl.trim(),
-                  apiKey: apiKey.trim() || undefined,
+                  label: values.label.trim(),
+                  type: values.type,
+                  baseUrl: values.baseUrl.trim(),
+                  apiKey: values.apiKey.trim() || undefined,
                   enabled: provider.enabled,
                 })
-              }}
+              )}
             />
           }
         >
           <CardPanel className="grid grid-cols-2 gap-4">
             <Field>
               <FieldLabel htmlFor="selected-provider-name">Name</FieldLabel>
-              <Input
-                id="selected-provider-name"
-                onChange={(event) => setLabel(event.target.value)}
-                required
-                type="text"
-                value={label}
+              <Controller
+                control={form.control}
+                name="label"
+                render={({ field }) => (
+                  <Input
+                    id="selected-provider-name"
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    type="text"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
               />
             </Field>
-            <ProviderTypeField onChange={setType} value={type} />
+            <Controller
+              control={form.control}
+              name="type"
+              render={({ field }) => (
+                <ProviderTypeField
+                  onChange={field.onChange}
+                  value={field.value}
+                />
+              )}
+            />
             <Field>
               <FieldLabel htmlFor="selected-provider-base-url">
                 Base URL
               </FieldLabel>
-              <Input
-                id="selected-provider-base-url"
-                onChange={(event) => setBaseUrl(event.target.value)}
-                required
-                type="url"
-                value={baseUrl}
+              <Controller
+                control={form.control}
+                name="baseUrl"
+                render={({ field }) => (
+                  <Input
+                    id="selected-provider-base-url"
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    type="url"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
               />
             </Field>
             <Field>
@@ -133,13 +161,20 @@ export function ProviderDetail({
                 API key
               </FieldLabel>
               <InputGroup>
-                <InputGroupInput
-                  autoComplete="off"
-                  id="selected-provider-api-key"
-                  onChange={(event) => setApiKey(event.target.value)}
-                  type={showKey ? "text" : "password"}
-                  placeholder="Leave blank to keep the current key"
-                  value={apiKey}
+                <Controller
+                  control={form.control}
+                  name="apiKey"
+                  render={({ field }) => (
+                    <InputGroupInput
+                      autoComplete="off"
+                      id="selected-provider-api-key"
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      type={showKey ? "text" : "password"}
+                      placeholder="Leave blank to keep the current key"
+                      value={field.value}
+                    />
+                  )}
                 />
                 <InputGroupAddon align="inline-end">
                   <Button

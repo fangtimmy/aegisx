@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CircleAlert, Link2, RefreshCw, Settings2, Unlink } from "lucide-react"
 import { useEffect, useState } from "react"
+import { Controller, useForm } from "react-hook-form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -360,41 +361,61 @@ function ConnectPlatformDialog({
 }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const [type, setType] = useState<PlatformType>(platform?.type ?? "ctfd")
-  const [baseUrl, setBaseUrl] = useState(platform?.baseUrl ?? "")
-  const [credential, setCredential] = useState(platform?.credential ?? "")
-  const [remoteEventId, setRemoteEventId] = useState(
-    platform?.remoteEventId ?? ""
-  )
+  const form = useForm<{
+    type: PlatformType
+    baseUrl: string
+    credential: string
+    remoteEventId: string
+  }>({
+    defaultValues: {
+      type: platform?.type ?? "ctfd",
+      baseUrl: platform?.baseUrl ?? "",
+      credential: platform?.credential ?? "",
+      remoteEventId: platform?.remoteEventId ?? "",
+    },
+  })
+  const type = form.watch("type")
+  const baseUrl = form.watch("baseUrl")
+  const credential = form.watch("credential")
+  const remoteEventId = form.watch("remoteEventId")
   const discover = useMutation({
     mutationFn: () =>
       apiRequest<{ items: RemoteEvent[] }>(
         "/platform/events/discover",
         jsonRequest("POST", { type, baseUrl: baseUrl.trim(), credential })
       ),
-    onSuccess: ({ items }) => setRemoteEventId(items[0]?.id ?? ""),
+    onSuccess: ({ items }) =>
+      form.setValue("remoteEventId", items[0]?.id ?? ""),
   })
   const bind = useMutation({
-    mutationFn: () =>
+    mutationFn: (values: {
+      type: PlatformType
+      baseUrl: string
+      credential: string
+      remoteEventId: string
+    }) =>
       apiRequest<EventPlatform>(
         `/events/${eventId}/platform`,
         jsonRequest("PUT", {
-          type,
-          baseUrl: baseUrl.trim(),
-          credential,
-          remoteEventId: type === "ctfd" ? "site" : remoteEventId,
+          type: values.type,
+          baseUrl: values.baseUrl.trim(),
+          credential: values.credential,
+          remoteEventId: values.type === "ctfd" ? "site" : values.remoteEventId,
         })
       ),
     onSuccess: async () => {
       await refreshEvent(queryClient, eventId)
       setOpen(false)
-      setCredential(platform?.credential ?? "")
+      form.reset({
+        type: platform?.type ?? "ctfd",
+        baseUrl: platform?.baseUrl ?? "",
+        credential: platform?.credential ?? "",
+        remoteEventId: platform?.remoteEventId ?? "",
+      })
     },
   })
-  const eventItems = Object.fromEntries(
-    (discover.data?.items ?? []).map((event) => [event.id, event.name])
-  )
-  const needsDiscovery = !platform && type !== "ctfd" && !discover.data
+  const discoverData = discover.data
+  const needsDiscovery = !platform && type !== "ctfd" && !discoverData
 
   return (
     <Dialog
@@ -403,10 +424,12 @@ function ConnectPlatformDialog({
         if (next) {
           discover.reset()
           bind.reset()
-          setType(platform?.type ?? "ctfd")
-          setBaseUrl(platform?.baseUrl ?? "")
-          setCredential(platform?.credential ?? "")
-          setRemoteEventId(platform?.remoteEventId ?? "")
+          form.reset({
+            type: platform?.type ?? "ctfd",
+            baseUrl: platform?.baseUrl ?? "",
+            credential: platform?.credential ?? "",
+            remoteEventId: platform?.remoteEventId ?? "",
+          })
         }
       }}
       open={open}
@@ -435,88 +458,121 @@ function ConnectPlatformDialog({
         </DialogHeader>
         <form
           className="contents"
-          onSubmit={(formEvent) => {
-            formEvent.preventDefault()
+          onSubmit={form.handleSubmit((values) => {
             if (needsDiscovery) discover.mutate()
-            else bind.mutate()
-          }}
+            else bind.mutate(values)
+          })}
         >
           <DialogPanel className="grid gap-4">
             <Field>
               <FieldLabel>Platform</FieldLabel>
-              <Select
-                disabled={Boolean(platform)}
-                items={platformLabels}
-                onValueChange={(value) => {
-                  setType(value as PlatformType)
-                  setRemoteEventId("")
-                  discover.reset()
-                }}
-                value={type}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectPopup>
-                  {(Object.keys(platformLabels) as PlatformType[]).map(
-                    (value) => (
-                      <SelectItem key={value} value={value}>
-                        {platformLabels[value]}
-                      </SelectItem>
-                    )
-                  )}
-                </SelectPopup>
-              </Select>
+              <Controller
+                control={form.control}
+                name="type"
+                render={({ field }) => (
+                  <Select
+                    disabled={Boolean(platform)}
+                    items={platformLabels}
+                    onValueChange={(value) => {
+                      field.onChange(value as PlatformType)
+                      form.setValue("remoteEventId", "")
+                      discover.reset()
+                    }}
+                    value={field.value}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {(Object.keys(platformLabels) as PlatformType[]).map(
+                        (value) => (
+                          <SelectItem key={value} value={value}>
+                            {platformLabels[value]}
+                          </SelectItem>
+                        )
+                      )}
+                    </SelectPopup>
+                  </Select>
+                )}
+              />
             </Field>
             <Field>
               <FieldLabel htmlFor="platform-url">Platform URL</FieldLabel>
-              <Input
-                disabled={Boolean(platform)}
-                id="platform-url"
-                onChange={(input) => {
-                  setBaseUrl(input.target.value)
-                  discover.reset()
-                }}
-                required
-                type="url"
-                value={baseUrl}
+              <Controller
+                control={form.control}
+                name="baseUrl"
+                render={({ field }) => (
+                  <Input
+                    disabled={Boolean(platform)}
+                    id="platform-url"
+                    onBlur={() => {
+                      field.onBlur()
+                      discover.reset()
+                    }}
+                    onChange={field.onChange}
+                    required
+                    type="url"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
               />
             </Field>
             <Field>
               <FieldLabel htmlFor="platform-credential">
                 {credentialLabels[type]}
               </FieldLabel>
-              <Input
-                autoComplete="off"
-                id="platform-credential"
-                onChange={(input) => {
-                  setCredential(input.target.value)
-                  discover.reset()
-                }}
-                required
-                type="text"
-                value={credential}
+              <Controller
+                control={form.control}
+                name="credential"
+                render={({ field }) => (
+                  <Input
+                    autoComplete="off"
+                    id="platform-credential"
+                    onBlur={() => {
+                      field.onBlur()
+                      discover.reset()
+                    }}
+                    onChange={field.onChange}
+                    required
+                    type="text"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
               />
             </Field>
-            {discover.data && type !== "ctfd" && (
+            {discoverData && type !== "ctfd" && (
               <Field>
                 <FieldLabel>Competition</FieldLabel>
-                <Select
-                  items={eventItems}
-                  onValueChange={(value) => setRemoteEventId(value ?? "")}
-                  value={remoteEventId}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a competition" />
-                  </SelectTrigger>
-                  <SelectPopup>
-                    {discover.data.items.map((event) => (
-                      <SelectItem key={event.id} value={event.id}>
-                        {event.name}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
+                <Controller
+                  control={form.control}
+                  name="remoteEventId"
+                  render={({ field }) => (
+                    <Select
+                      items={Object.fromEntries(
+                        discoverData.items.map((event) => [
+                          event.id,
+                          event.name,
+                        ])
+                      )}
+                      onValueChange={field.onChange}
+                      value={field.value}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a competition" />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {discoverData.items.map((event) => (
+                          <SelectItem key={event.id} value={event.id}>
+                            {event.name}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                  )}
+                  rules={{ required: true }}
+                />
               </Field>
             )}
             {(discover.error || bind.error) && (
@@ -536,7 +592,7 @@ function ConnectPlatformDialog({
               disabled={
                 !baseUrl.trim() ||
                 !credential ||
-                Boolean(discover.data && type !== "ctfd" && !remoteEventId)
+                Boolean(discoverData && type !== "ctfd" && !remoteEventId)
               }
               loading={discover.isPending || bind.isPending}
               type="submit"

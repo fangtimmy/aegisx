@@ -9,6 +9,7 @@ import {
   Upload,
 } from "lucide-react"
 import { useRef, useState } from "react"
+import { Controller, useForm } from "react-hook-form"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -47,7 +48,6 @@ import {
   type Attachment,
   apiRequest,
   type Challenge,
-  type ChallengeInput,
   jsonRequest,
 } from "@/lib/api"
 import { eventKeys } from "./event-shared"
@@ -72,6 +72,13 @@ async function uploadAttachment(challengeId: string, file: File) {
       body: file,
     }
   )
+}
+
+type ChallengeFormValues = {
+  name: string
+  description: string
+  category: string
+  points: number | null
 }
 
 export function ChallengeDialog({
@@ -101,19 +108,32 @@ export function ChallengeDialog({
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
   })
+  const form = useForm<ChallengeFormValues>({
+    defaultValues: {
+      name: challenge?.name ?? "",
+      description: challenge?.description ?? "",
+      category: challenge?.category ?? "",
+      points: challenge?.points ?? null,
+    },
+  })
   const mutation = useMutation({
     mutationFn: async ({
-      input,
+      values,
       files,
     }: {
-      input: ChallengeInput
+      values: ChallengeFormValues
       files: File[]
     }): Promise<ChallengeMutationResult> => {
       const saved = await apiRequest<Challenge>(
         challenge
           ? `/challenges/${challenge.id}`
           : `/events/${eventId}/challenges`,
-        jsonRequest(challenge ? "PATCH" : "POST", input)
+        jsonRequest(challenge ? "PATCH" : "POST", {
+          name: values.name.trim(),
+          description: values.description.trim(),
+          category: values.category.trim() || null,
+          points: values.points,
+        })
       )
 
       const results = await Promise.allSettled(
@@ -151,26 +171,13 @@ export function ChallengeDialog({
       mutation.reset()
       removeAttachment.reset()
       removeTarget.reset()
+      form.reset({
+        name: challenge?.name ?? "",
+        description: challenge?.description ?? "",
+        category: challenge?.category ?? "",
+        points: challenge?.points ?? null,
+      })
     }
-  }
-
-  function handleSubmit(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault()
-    const data = new FormData(formEvent.currentTarget)
-    const points = String(data.get("points") ?? "").trim()
-    const files = data
-      .getAll("attachments")
-      .filter((value): value is File => value instanceof File && value.size > 0)
-
-    mutation.mutate({
-      input: {
-        name: String(data.get("name")).trim(),
-        description: String(data.get("description")).trim(),
-        category: String(data.get("category") ?? "").trim() || null,
-        points: points ? Number(points) : null,
-      },
-      files,
-    })
   }
 
   return (
@@ -206,7 +213,13 @@ export function ChallengeDialog({
               : "Define the task details and add its attachments."}
           </DialogDescription>
         </DialogHeader>
-        <form className="contents" onSubmit={handleSubmit}>
+        <form
+          className="contents"
+          onSubmit={form.handleSubmit((values) => {
+            const files = pendingFiles.filter((file) => file.size > 0)
+            mutation.mutate({ values, files })
+          })}
+        >
           <DialogPanel className="min-w-0 overflow-x-hidden p-0">
             <section
               aria-labelledby="challenge-details"
@@ -217,46 +230,74 @@ export function ChallengeDialog({
               </h3>
               <Field>
                 <FieldLabel>Name</FieldLabel>
-                <Input
-                  defaultValue={challenge?.name}
+                <Controller
+                  control={form.control}
                   name="name"
-                  required
-                  type="text"
+                  render={({ field }) => (
+                    <Input
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      required
+                      type="text"
+                      value={field.value}
+                    />
+                  )}
+                  rules={{ required: true }}
                 />
               </Field>
               <Field>
                 <FieldLabel>Description</FieldLabel>
-                <Textarea
-                  defaultValue={challenge?.description}
+                <Controller
+                  control={form.control}
                   name="description"
-                  required
-                  rows={6}
+                  render={({ field }) => (
+                    <Textarea
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      required
+                      rows={6}
+                      value={field.value}
+                    />
+                  )}
+                  rules={{ required: true }}
                 />
               </Field>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
                 <Field>
                   <FieldLabel>Category</FieldLabel>
-                  <Input
-                    defaultValue={challenge?.category ?? ""}
+                  <Controller
+                    control={form.control}
                     name="category"
-                    placeholder="Web, Crypto, Pwn..."
-                    type="text"
+                    render={({ field }) => (
+                      <Input
+                        onChange={field.onChange}
+                        placeholder="Web, Crypto, Pwn..."
+                        type="text"
+                        value={field.value}
+                      />
+                    )}
                   />
                 </Field>
-                <Field name="points">
+                <Field>
                   <FieldLabel>Points</FieldLabel>
-                  <NumberField
-                    defaultValue={challenge?.points ?? undefined}
-                    min={0}
+                  <Controller
+                    control={form.control}
                     name="points"
-                    step={1}
-                  >
-                    <NumberFieldGroup>
-                      <NumberFieldDecrement />
-                      <NumberFieldInput />
-                      <NumberFieldIncrement />
-                    </NumberFieldGroup>
-                  </NumberField>
+                    render={({ field }) => (
+                      <NumberField
+                        min={0}
+                        onValueChange={(value) => field.onChange(value ?? null)}
+                        step={1}
+                        value={field.value ?? undefined}
+                      >
+                        <NumberFieldGroup>
+                          <NumberFieldDecrement />
+                          <NumberFieldInput />
+                          <NumberFieldIncrement />
+                        </NumberFieldGroup>
+                      </NumberField>
+                    )}
+                  />
                 </Field>
               </div>
             </section>

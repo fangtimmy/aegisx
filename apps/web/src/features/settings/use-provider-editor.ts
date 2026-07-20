@@ -13,22 +13,14 @@ type ProviderUpdate = Omit<ProviderInput, "apiKey"> & { apiKey?: string }
 
 export function useProviderEditor(provider: ProviderConnection) {
   const queryClient = useQueryClient()
-  const [label, setLabel] = useState(provider.label)
-  const [type, setType] = useState(provider.type)
-  const [baseUrl, setBaseUrl] = useState(provider.baseUrl)
-  const [apiKey, setApiKey] = useState(provider.apiKey)
   const [showKey, setShowKey] = useState(false)
   const [discovered, setDiscovered] = useState<string[] | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [addOpen, setAddOpen] = useState(false)
-  const [modelId, setModelId] = useState("")
-  const [modelLabel, setModelLabel] = useState("")
   const [editingModel, setEditingModel] = useState<ProviderModel | null>(null)
-  const [editingLabel, setEditingLabel] = useState("")
-  const [editingMetadata, setEditingMetadata] = useState("{}")
-  const [metadataError, setMetadataError] = useState<string | null>(null)
   const [editingBinding, setEditingBinding] =
     useState<ProviderModel["piBinding"]>(null)
+  const [metadataError, setMetadataError] = useState<string | null>(null)
   const [bindingModel, setBindingModel] = useState<ProviderModel | null>(null)
   const [selectedBuiltinProvider, setSelectedBuiltinProvider] = useState("")
   const [selectedBuiltinModel, setSelectedBuiltinModel] =
@@ -68,8 +60,6 @@ export function useProviderEditor(provider: ProviderConnection) {
       setDiscovered(null)
       setSelected([])
       setAddOpen(false)
-      setModelId("")
-      setModelLabel("")
       queryClient.invalidateQueries({ queryKey: ["providers"] })
     },
   })
@@ -99,8 +89,6 @@ export function useProviderEditor(provider: ProviderConnection) {
       ),
     onSuccess: () => {
       setEditingModel(null)
-      setEditingLabel("")
-      setEditingMetadata("{}")
       queryClient.invalidateQueries({ queryKey: ["providers"] })
     },
   })
@@ -130,14 +118,6 @@ export function useProviderEditor(provider: ProviderConnection) {
   const selectedProfile = selectedBuiltinModel
 
   return {
-    label,
-    setLabel,
-    type,
-    setType,
-    baseUrl,
-    setBaseUrl,
-    apiKey,
-    setApiKey,
     showKey,
     setShowKey,
     discovered,
@@ -146,20 +126,12 @@ export function useProviderEditor(provider: ProviderConnection) {
     setSelected,
     addOpen,
     setAddOpen,
-    modelId,
-    setModelId,
-    modelLabel,
-    setModelLabel,
     editingModel,
     setEditingModel,
-    editingLabel,
-    setEditingLabel,
-    editingMetadata,
-    setEditingMetadata,
-    metadataError,
-    setMetadataError,
     editingBinding,
     setEditingBinding,
+    metadataError,
+    setMetadataError,
     bindingModel,
     setBindingModel,
     selectedBuiltinProvider,

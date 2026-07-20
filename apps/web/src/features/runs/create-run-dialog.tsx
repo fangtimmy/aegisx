@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Box, CircleAlert, Monitor, Play, Plus } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
+import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, type ButtonProps } from "@/components/ui/button"
@@ -47,6 +48,14 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   max: "Maximum",
 }
 
+type RunFormValues = {
+  challengeId: string
+  modelId: string
+  thinkingLevel: ThinkingLevel
+  environment: "local" | "container"
+  image: string
+}
+
 export function CreateRunDialog({
   challenges,
   challenge,
@@ -65,9 +74,6 @@ export function CreateRunDialog({
   onCreated?: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const [environment, setEnvironment] = useState<"local" | "container">("local")
-  const [modelId, setModelId] = useState("")
-  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("off")
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const settings = useQuery({
@@ -81,22 +87,18 @@ export function CreateRunDialog({
     queryFn: () => apiRequest<{ items: ProviderConnection[] }>("/providers"),
   })
   const mutation = useMutation({
-    mutationFn: ({
-      challengeId,
-      modelId,
-      environment,
-      image,
-      thinkingLevel,
-    }: {
-      challengeId: string
-      modelId: string
-      environment: "local" | "container"
-      image?: string
-      thinkingLevel: ThinkingLevel
-    }) =>
+    mutationFn: (values: RunFormValues) =>
       apiRequest<RunPublic>(
-        `/challenges/${challengeId}/runs`,
-        jsonRequest("POST", { modelId, environment, image, thinkingLevel })
+        `/challenges/${challenge?.id ?? values.challengeId}/runs`,
+        jsonRequest("POST", {
+          modelId: values.modelId,
+          environment: values.environment,
+          image:
+            values.environment === "container"
+              ? values.image.trim()
+              : undefined,
+          thinkingLevel: values.thinkingLevel,
+        })
       ),
     onSuccess: async (run) => {
       await queryClient.invalidateQueries({
@@ -114,10 +116,6 @@ export function CreateRunDialog({
     },
   })
 
-  useEffect(() => {
-    if (open && settings.data) setEnvironment(settings.data.environment)
-  }, [open, settings.data])
-
   const availableModels = (providers.data?.items ?? []).flatMap((provider) =>
     provider.enabled && provider.apiKey
       ? provider.models
@@ -125,51 +123,56 @@ export function CreateRunDialog({
           .map((model) => ({ ...model, provider }))
       : []
   )
+
+  const form = useForm<RunFormValues>({
+    defaultValues: {
+      challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
+      modelId: "",
+      thinkingLevel: "off",
+      environment: "local",
+      image: "",
+    },
+  })
+  const environment = form.watch("environment")
+  const modelId = form.watch("modelId")
   const selectedModel = availableModels.find((model) => model.id === modelId)
   const supportedThinkingLevels = selectedModel?.thinkingLevels ?? ["off"]
 
   useEffect(() => {
-    if (!open || !settings.data || modelId) return
-    const defaultModel = availableModels.find(
-      (model) => model.id === settings.data.defaultModelId
-    )
-    setModelId(defaultModel?.id ?? availableModels[0]?.id ?? "")
-  }, [availableModels, modelId, open, settings.data])
+    if (open && settings.data) {
+      form.reset({
+        challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
+        modelId: settings.data.defaultModelId
+          ? (availableModels.find(
+              (model) => model.id === settings.data.defaultModelId
+            )?.id ??
+            availableModels[0]?.id ??
+            "")
+          : (availableModels[0]?.id ?? ""),
+        thinkingLevel: "off",
+        environment: settings.data.environment,
+        image: settings.data.containerImage,
+      })
+    }
+    // ponytail: availableModels derived from providers query; reset only on open/settings change
+  }, [
+    open,
+    settings.data,
+    challenges?.[0]?.id,
+    form.reset,
+    challenge?.id,
+    availableModels[0]?.id,
+    availableModels.find,
+  ])
 
   useEffect(() => {
-    if (!supportedThinkingLevels.includes(thinkingLevel)) {
-      setThinkingLevel(supportedThinkingLevels[0] ?? "off")
+    if (!supportedThinkingLevels.includes(form.getValues("thinkingLevel"))) {
+      form.setValue("thinkingLevel", supportedThinkingLevels[0] ?? "off")
     }
-  }, [supportedThinkingLevels, thinkingLevel])
-
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const data = new FormData(event.currentTarget)
-    mutation.mutate({
-      challengeId: challenge?.id ?? String(data.get("challengeId")),
-      modelId,
-      environment,
-      thinkingLevel,
-      image:
-        environment === "container"
-          ? String(data.get("image")).trim()
-          : undefined,
-    })
-  }
+  }, [supportedThinkingLevels, form.setValue, form.getValues])
 
   const available = challenge ? [challenge] : (challenges ?? [])
-  const challengeItems = Object.fromEntries(
-    available.map((item) => [item.id, item.name])
-  )
-  const modelItems = Object.fromEntries(
-    availableModels.map((model) => [
-      model.id,
-      `${model.provider.label} / ${model.label}`,
-    ])
-  )
-  const thinkingLevelItems = Object.fromEntries(
-    supportedThinkingLevels.map((level) => [level, thinkingLevelLabels[level]])
-  )
+
   return (
     <Dialog
       open={open}
@@ -177,9 +180,7 @@ export function CreateRunDialog({
         setOpen(next)
         if (next) {
           mutation.reset()
-          if (settings.data) setEnvironment(settings.data.environment)
-          setModelId("")
-          setThinkingLevel("off")
+          form.reset()
         }
       }}
     >
@@ -250,113 +251,156 @@ export function CreateRunDialog({
           <form
             className="contents"
             key={settings.data.updatedAt}
-            onSubmit={submit}
+            onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
           >
             <DialogPanel className="grid gap-4">
               {!challenge && (
-                <Field name="challengeId">
+                <Field>
                   <FieldLabel>Challenge</FieldLabel>
-                  <Select
-                    defaultValue={available[0]?.id}
-                    items={challengeItems}
+                  <Controller
+                    control={form.control}
                     name="challengeId"
-                    required
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a challenge" />
-                    </SelectTrigger>
-                    <SelectPopup>
-                      {available.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.name}
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                </Field>
-              )}
-              <Field name="modelId">
-                <FieldLabel>Model</FieldLabel>
-                <Select
-                  items={modelItems}
-                  name="modelId"
-                  required
-                  onValueChange={(value) => setModelId(value ?? "")}
-                  value={modelId}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="No enabled models" />
-                  </SelectTrigger>
-                  <SelectPopup>
-                    {(providers.data?.items ?? []).map((provider) => {
-                      const models = availableModels.filter(
-                        (model) => model.provider.id === provider.id
-                      )
-                      if (models.length === 0) return null
-                      return (
-                        <SelectGroup key={provider.id}>
-                          <SelectGroupLabel>{provider.label}</SelectGroupLabel>
-                          {models.map((model) => (
-                            <SelectItem key={model.id} value={model.id}>
-                              {model.label}
+                    render={({ field }) => (
+                      <Select
+                        items={Object.fromEntries(
+                          available.map((item) => [item.id, item.name])
+                        )}
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a challenge" />
+                        </SelectTrigger>
+                        <SelectPopup>
+                          {available.map((item) => (
+                            <SelectItem key={item.id} value={item.id}>
+                              {item.name}
                             </SelectItem>
                           ))}
-                        </SelectGroup>
-                      )
-                    })}
-                  </SelectPopup>
-                </Select>
+                        </SelectPopup>
+                      </Select>
+                    )}
+                    rules={{ required: true }}
+                  />
+                </Field>
+              )}
+              <Field>
+                <FieldLabel>Model</FieldLabel>
+                <Controller
+                  control={form.control}
+                  name="modelId"
+                  render={({ field }) => (
+                    <Select
+                      items={Object.fromEntries(
+                        availableModels.map((model) => [
+                          model.id,
+                          `${model.provider.label} / ${model.label}`,
+                        ])
+                      )}
+                      onValueChange={field.onChange}
+                      value={field.value}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="No enabled models" />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {(providers.data?.items ?? []).map((provider) => {
+                          const models = availableModels.filter(
+                            (model) => model.provider.id === provider.id
+                          )
+                          if (models.length === 0) return null
+                          return (
+                            <SelectGroup key={provider.id}>
+                              <SelectGroupLabel>
+                                {provider.label}
+                              </SelectGroupLabel>
+                              {models.map((model) => (
+                                <SelectItem key={model.id} value={model.id}>
+                                  {model.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          )
+                        })}
+                      </SelectPopup>
+                    </Select>
+                  )}
+                  rules={{ required: true }}
+                />
               </Field>
-              <Field name="thinkingLevel">
+              <Field>
                 <FieldLabel>Reasoning</FieldLabel>
-                <Select
-                  items={thinkingLevelItems}
+                <Controller
+                  control={form.control}
                   name="thinkingLevel"
-                  onValueChange={(value) =>
-                    setThinkingLevel(value as ThinkingLevel)
-                  }
-                  value={thinkingLevel}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopup>
-                    {supportedThinkingLevels.map((level) => (
-                      <SelectItem key={level} value={level}>
-                        {thinkingLevelLabels[level]}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
+                  render={({ field }) => (
+                    <Select
+                      items={Object.fromEntries(
+                        supportedThinkingLevels.map((level) => [
+                          level,
+                          thinkingLevelLabels[level],
+                        ])
+                      )}
+                      onValueChange={(value) =>
+                        field.onChange(value as ThinkingLevel)
+                      }
+                      value={field.value}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {supportedThinkingLevels.map((level) => (
+                          <SelectItem key={level} value={level}>
+                            {thinkingLevelLabels[level]}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                  )}
+                />
               </Field>
-              <Field name="environment">
+              <Field>
                 <FieldLabel>Environment</FieldLabel>
-                <Select
-                  items={{ container: "Container", local: "Local" }}
+                <Controller
+                  control={form.control}
                   name="environment"
-                  onValueChange={(value) =>
-                    setEnvironment(value as "local" | "container")
-                  }
-                  value={environment}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopup>
-                    <SelectItem value="local">Local</SelectItem>
-                    <SelectItem value="container">Container</SelectItem>
-                  </SelectPopup>
-                </Select>
+                  render={({ field }) => (
+                    <Select
+                      items={{ container: "Container", local: "Local" }}
+                      onValueChange={(value) =>
+                        field.onChange(value as "local" | "container")
+                      }
+                      value={field.value}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        <SelectItem value="local">Local</SelectItem>
+                        <SelectItem value="container">Container</SelectItem>
+                      </SelectPopup>
+                    </Select>
+                  )}
+                />
               </Field>
               {environment === "container" && (
                 <Field>
                   <FieldLabel htmlFor="run-image">Container image</FieldLabel>
-                  <Input
-                    defaultValue={settings.data.containerImage}
-                    id="run-image"
+                  <Controller
+                    control={form.control}
                     name="image"
-                    required
-                    type="text"
+                    render={({ field }) => (
+                      <Input
+                        id="run-image"
+                        onBlur={field.onBlur}
+                        onChange={field.onChange}
+                        required
+                        type="text"
+                        value={field.value}
+                      />
+                    )}
+                    rules={{ required: true }}
                   />
                 </Field>
               )}

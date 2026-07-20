@@ -8,6 +8,7 @@ import {
   Save,
 } from "lucide-react"
 import { type RefObject, useRef, useState } from "react"
+import { useForm } from "react-hook-form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -84,6 +85,19 @@ function VariableMenu({
   )
 }
 
+type PromptEditorProps = {
+  description: string
+  id: string
+  loading: boolean
+  onChange: (value: string) => void
+  onPreview: () => void
+  onVariable: (variable: string) => void
+  ref: RefObject<HTMLTextAreaElement | null>
+  title: string
+  value: string
+  variables: string[]
+}
+
 function PromptEditor({
   description,
   id,
@@ -95,18 +109,7 @@ function PromptEditor({
   title,
   value,
   variables,
-}: {
-  description: string
-  id: string
-  loading: boolean
-  onChange: (value: string) => void
-  onPreview: () => void
-  onVariable: (variable: string) => void
-  ref: RefObject<HTMLTextAreaElement | null>
-  title: string
-  value: string
-  variables: string[]
-}) {
+}: PromptEditorProps) {
   return (
     <section>
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -158,28 +161,26 @@ const variableGroups = [
   "capabilities",
 ] as const
 
+type PromptFormValues = PromptTemplates
+
 export function PromptSettings({ settings }: { settings: SettingsPublic }) {
   const queryClient = useQueryClient()
   const mainSystemRef = useRef<HTMLTextAreaElement>(null)
   const childSystemRef = useRef<HTMLTextAreaElement>(null)
   const initialRef = useRef<HTMLTextAreaElement>(null)
-  const [mainSystemPromptTemplate, setMainSystemPromptTemplate] = useState(
-    settings.mainSystemPromptTemplate
-  )
-  const [childSystemPromptTemplate, setChildSystemPromptTemplate] = useState(
-    settings.childSystemPromptTemplate
-  )
-  const [initialPromptTemplate, setInitialPromptTemplate] = useState(
-    settings.initialPromptTemplate
-  )
+  const form = useForm<PromptFormValues>({
+    defaultValues: {
+      mainSystemPromptTemplate: settings.mainSystemPromptTemplate,
+      childSystemPromptTemplate: settings.childSystemPromptTemplate,
+      initialPromptTemplate: settings.initialPromptTemplate,
+    },
+  })
+  const mainSystemPromptTemplate = form.watch("mainSystemPromptTemplate")
+  const childSystemPromptTemplate = form.watch("childSystemPromptTemplate")
+  const initialPromptTemplate = form.watch("initialPromptTemplate")
   const [previewKind, setPreviewKind] = useState<PromptKind | null>(null)
-  const templates = {
-    mainSystemPromptTemplate,
-    childSystemPromptTemplate,
-    initialPromptTemplate,
-  }
   const save = useMutation({
-    mutationFn: (input: PromptTemplates) =>
+    mutationFn: (input: PromptFormValues) =>
       apiRequest<SettingsPublic>(
         "/settings/prompts",
         jsonRequest("PATCH", input)
@@ -201,12 +202,15 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
   const previewSegments = preview.data?.segments
 
   return (
-    <div className="flex flex-col gap-6">
+    <form
+      className="flex flex-col gap-6"
+      onSubmit={form.handleSubmit((values) => save.mutate(values))}
+    >
       <PromptEditor
         description="Rendered for the Main Agent responsible for completing the Run."
         id="main-system-prompt-template"
         loading={preview.isPending && previewKind === "mainSystemPrompt"}
-        onChange={setMainSystemPromptTemplate}
+        onChange={(value) => form.setValue("mainSystemPromptTemplate", value)}
         onPreview={() =>
           openPreview("mainSystemPrompt", mainSystemPromptTemplate)
         }
@@ -215,7 +219,7 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
             mainSystemRef,
             mainSystemPromptTemplate,
             variable,
-            setMainSystemPromptTemplate
+            (value) => form.setValue("mainSystemPromptTemplate", value)
           )
         }
         ref={mainSystemRef}
@@ -229,7 +233,9 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
           description="Rendered for background Agents working on delegated tasks."
           id="child-system-prompt-template"
           loading={preview.isPending && previewKind === "childSystemPrompt"}
-          onChange={setChildSystemPromptTemplate}
+          onChange={(value) =>
+            form.setValue("childSystemPromptTemplate", value)
+          }
           onPreview={() =>
             openPreview("childSystemPrompt", childSystemPromptTemplate)
           }
@@ -238,7 +244,7 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
               childSystemRef,
               childSystemPromptTemplate,
               variable,
-              setChildSystemPromptTemplate
+              (value) => form.setValue("childSystemPromptTemplate", value)
             )
           }
           ref={childSystemRef}
@@ -253,14 +259,14 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
           description="Sent to the Main Agent when a new Run starts."
           id="initial-prompt-template"
           loading={preview.isPending && previewKind === "initialPrompt"}
-          onChange={setInitialPromptTemplate}
+          onChange={(value) => form.setValue("initialPromptTemplate", value)}
           onPreview={() => openPreview("initialPrompt", initialPromptTemplate)}
           onVariable={(variable) =>
             insertVariable(
               initialRef,
               initialPromptTemplate,
               variable,
-              setInitialPromptTemplate
+              (value) => form.setValue("initialPromptTemplate", value)
             )
           }
           ref={initialRef}
@@ -356,13 +362,13 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
         <div className="flex items-center gap-2">
           <Button
             onClick={() => {
-              setMainSystemPromptTemplate(
-                settings.defaultMainSystemPromptTemplate
-              )
-              setChildSystemPromptTemplate(
-                settings.defaultChildSystemPromptTemplate
-              )
-              setInitialPromptTemplate(settings.defaultInitialPromptTemplate)
+              form.reset({
+                mainSystemPromptTemplate:
+                  settings.defaultMainSystemPromptTemplate,
+                childSystemPromptTemplate:
+                  settings.defaultChildSystemPromptTemplate,
+                initialPromptTemplate: settings.defaultInitialPromptTemplate,
+              })
               preview.reset()
             }}
             type="button"
@@ -370,11 +376,7 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
           >
             <RotateCcw /> Reset to default
           </Button>
-          <Button
-            loading={save.isPending}
-            onClick={() => save.mutate(templates)}
-            type="button"
-          >
+          <Button loading={save.isPending} type="submit">
             <Save /> Save prompts
           </Button>
         </div>
@@ -430,6 +432,6 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
           </DialogPanel>
         </DialogPopup>
       </Dialog>
-    </div>
+    </form>
   )
 }

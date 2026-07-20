@@ -9,6 +9,7 @@ import {
   TriangleAlert,
 } from "lucide-react"
 import { useState } from "react"
+import { Controller, useForm } from "react-hook-form"
 import { Link } from "react-router"
 import { AppLayout } from "@/components/shell/app-layout"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -64,12 +65,14 @@ const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
 function EventDialog() {
   const [open, setOpen] = useState(false)
   const queryClient = useQueryClient()
+  const form = useForm<EventInput>({ defaultValues: { name: "" } })
   const mutation = useMutation({
     mutationFn: (input: EventInput) =>
       apiRequest<EventSummary>("/events", jsonRequest("POST", input)),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: eventKeys.all })
       setOpen(false)
+      form.reset()
     },
   })
 
@@ -77,15 +80,8 @@ function EventDialog() {
     setOpen(nextOpen)
     if (nextOpen) {
       mutation.reset()
+      form.reset()
     }
-  }
-
-  function handleSubmit(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault()
-    const data = new FormData(formEvent.currentTarget)
-    mutation.mutate({
-      name: String(data.get("name")).trim(),
-    })
   }
 
   return (
@@ -100,11 +96,30 @@ function EventDialog() {
             Set up a workspace for challenges and runs.
           </DialogDescription>
         </DialogHeader>
-        <form className="contents" onSubmit={handleSubmit}>
+        <form
+          className="contents"
+          onSubmit={form.handleSubmit((values) =>
+            mutation.mutate({ name: values.name.trim() })
+          )}
+        >
           <DialogPanel className="grid gap-4">
             <Field>
-              <FieldLabel>Name</FieldLabel>
-              <Input name="name" required type="text" />
+              <FieldLabel htmlFor="event-name">Name</FieldLabel>
+              <Controller
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <Input
+                    id="event-name"
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    type="text"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
+              />
             </Field>
             {mutation.error && (
               <Alert variant="error">
