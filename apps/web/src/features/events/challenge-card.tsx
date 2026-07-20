@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Paperclip, Play, Server, Trash2, TriangleAlert } from "lucide-react"
-import { IconTooltip } from "@/components/product-header"
+import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -27,7 +27,7 @@ import {
 import { CreateRunDialog } from "@/features/runs"
 import { apiRequest, type Challenge } from "@/lib/api"
 import { ChallengeDialog } from "./challenge-dialog"
-import { eventKeys } from "./shared"
+import { eventKeys } from "./event-shared"
 
 function DeleteChallengeDialog({
   eventId,

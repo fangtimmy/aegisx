@@ -35,7 +35,7 @@ import type {
   ThinkingLevel,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
-import { eventKeys } from "../events/shared"
+import { eventKeys } from "../events/event-shared"
 
 const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   off: "Off",

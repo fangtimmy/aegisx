@@ -21,8 +21,8 @@ import {
   type EventSummary,
   jsonRequest,
 } from "@/lib/api"
+import { eventKeys } from "./event-shared"
 import { PlatformBinding } from "./platform-binding"
-import { eventKeys } from "./shared"
 
 export function EventSettings({ event }: { event: EventSummary }) {
   const queryClient = useQueryClient()

@@ -1,4 +1,4 @@
-import { AppLayout } from "@/components/app-layout"
+import { AppLayout } from "@/components/shell/app-layout"
 import { SettingsScreen } from "./settings-screen"
 
 export function SettingsPage() {

@@ -9,7 +9,7 @@ import type {
   UsageSummary,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
-import { eventKeys } from "../events/shared"
+import { eventKeys } from "../events/event-shared"
 import { RunStreamStore } from "./run-stream-store"
 
 const terminalStatuses: RunStatus[] = ["completed", "failed", "stopped"]

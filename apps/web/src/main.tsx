@@ -3,7 +3,7 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
 import "./index.css"
-import { ThemeProvider } from "@/components/theme-provider.tsx"
+import { ThemeProvider } from "@/components/shell/theme-provider.tsx"
 import App from "./App.tsx"
 
 const queryClient = new QueryClient()

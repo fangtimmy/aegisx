@@ -9,7 +9,7 @@ import {
   Upload,
 } from "lucide-react"
 import { useRef, useState } from "react"
-import { IconTooltip } from "@/components/product-header"
+import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -50,7 +50,7 @@ import {
   type ChallengeInput,
   jsonRequest,
 } from "@/lib/api"
-import { eventKeys } from "./shared"
+import { eventKeys } from "./event-shared"
 
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`

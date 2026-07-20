@@ -1,6 +1,6 @@
 import { Download, Monitor, Moon, Sun, Upload } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
-import { useTheme } from "@/components/theme-provider"
+import { useTheme } from "@/components/shell/theme-provider"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {

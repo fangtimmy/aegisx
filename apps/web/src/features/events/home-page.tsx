@@ -10,7 +10,7 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router"
-import { AppLayout } from "@/components/app-layout"
+import { AppLayout } from "@/components/shell/app-layout"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -48,7 +48,7 @@ import {
   type EventSummary,
   jsonRequest,
 } from "@/lib/api"
-import { ErrorState, eventKeys } from "./shared"
+import { ErrorState, eventKeys } from "./event-shared"
 
 const platformLabels = {
   ctfd: "CTFd",

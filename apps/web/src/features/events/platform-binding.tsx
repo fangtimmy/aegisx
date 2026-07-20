@@ -54,8 +54,8 @@ import {
   type RemoteChallengeSummary,
   type RemoteEvent,
 } from "@/lib/api"
+import { eventKeys } from "./event-shared"
 import { syncChallengeStream } from "./platform-sync-stream"
-import { eventKeys } from "./shared"
 
 const platformLabels: Record<PlatformType, string> = {
   ctfd: "CTFd",
