@@ -15,9 +15,29 @@ const fakeWindow = {
   cancelAnimationFrame() {},
 }
 
+class FakeEventSource {
+  static latest: FakeEventSource | undefined
+  onopen: (() => void) | null = null
+  onerror: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  closed = false
+
+  constructor(readonly url: string) {
+    FakeEventSource.latest = this
+  }
+
+  close() {
+    this.closed = true
+  }
+}
+
 Object.defineProperty(globalThis, "window", {
   configurable: true,
   value: fakeWindow,
+})
+Object.defineProperty(globalThis, "EventSource", {
+  configurable: true,
+  value: FakeEventSource,
 })
 
 function message(
@@ -135,6 +155,99 @@ test("ignores out-of-order progress revisions", () => {
   assert.equal(items[0].blocks[0]?.type, "text")
   if (items[0].blocks[0]?.type !== "text") assert.fail("expected text")
   assert.equal(items[0].blocks[0].body, "new")
+})
+
+test("keeps completed turns stable while the current turn streams", () => {
+  const store = new RunStreamStore()
+  store.applySnapshot("agent-1", [
+    message("user-1", 1, {
+      role: "user",
+      content: [{ type: "text", text: "first task" }],
+    }),
+    message("assistant-1", 2, {
+      role: "assistant",
+      content: [{ type: "text", text: "first answer" }],
+    }),
+    message("user-2", 3, {
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+    }),
+  ])
+  const before = store.get("agent-1")
+
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "assistant-2",
+    revision: 1,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "partial" }],
+    },
+  })
+  const firstProgress = store.get("agent-1")
+
+  assert.equal(firstProgress[0], before[0])
+  assert.equal(firstProgress[1], before[1])
+  assert.equal(firstProgress[2], before[2])
+
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "assistant-2",
+    revision: 2,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "updated" }],
+    },
+  })
+  const secondProgress = store.get("agent-1")
+
+  assert.equal(secondProgress[0], before[0])
+  assert.notEqual(secondProgress[3], firstProgress[3])
+  assert.equal(secondProgress[3]?.type, "agent")
+  if (secondProgress[3]?.type !== "agent") {
+    assert.fail("expected the current agent turn")
+  }
+  assert.equal(secondProgress[3].blocks[0]?.type, "text")
+  if (secondProgress[3].blocks[0]?.type !== "text") {
+    assert.fail("expected current text")
+  }
+  assert.equal(secondProgress[3].blocks[0].body, "updated")
+})
+
+test("closes the stream after any terminal run update is refreshed", async () => {
+  const store = new RunStreamStore()
+  store.connect(
+    "run-1",
+    0,
+    () => {},
+    () => {},
+    () => {}
+  )
+  const source = FakeEventSource.latest
+  if (!source) assert.fail("expected an event source")
+
+  assert.equal(
+    store.closeOnTerminal("running", () => Promise.resolve()),
+    false
+  )
+  assert.equal(source.closed, false)
+
+  let resolveRefresh = () => {}
+  const refresh = new Promise<void>((resolve) => {
+    resolveRefresh = resolve
+  })
+  assert.equal(
+    store.closeOnTerminal("stopped", () => refresh),
+    true
+  )
+  assert.equal(source.closed, false)
+
+  resolveRefresh()
+  await refresh
+  await Promise.resolve()
+  assert.equal(source.closed, true)
 })
 
 test("ignores stale progress after a snapshot already committed the message", () => {

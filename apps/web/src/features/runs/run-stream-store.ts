@@ -31,7 +31,18 @@ type ToolProgress = {
   isError: boolean
 }
 
+type AgentView = {
+  stableThroughId: string | null
+  stable: ConversationItem[]
+  tail: ConversationMessage[]
+}
+
 const emptyItems: ConversationItem[] = []
+const terminalStatuses = new Set<RunPublic["status"]>([
+  "completed",
+  "failed",
+  "stopped",
+])
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -131,6 +142,8 @@ export class RunStreamStore {
     Map<string, MessageProgress>
   >()
   private readonly toolProgress = new Map<string, Map<string, ToolProgress>>()
+  private readonly completedTools = new Map<string, Set<string>>()
+  private readonly views = new Map<string, AgentView>()
   private readonly snapshots = new Map<string, ConversationItem[]>()
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly pendingNotifications = new Set<string>()
@@ -151,10 +164,37 @@ export class RunStreamStore {
     return this.snapshots.get(agentId) ?? emptyItems
   }
 
-  private invalidate(agentId: string) {
+  private rebuildCommitted(agentId: string) {
     const messages = [...(this.messages.get(agentId)?.values() ?? [])].sort(
       (left, right) => left.sequence - right.sequence
     )
+    let boundary = -1
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.message.role === "user") {
+        boundary = index
+        break
+      }
+    }
+    const stableThroughId = messages[boundary]?.id ?? null
+    const previous = this.views.get(agentId)
+    const stable =
+      previous?.stableThroughId === stableThroughId
+        ? previous.stable
+        : buildConversation(messages.slice(0, boundary + 1), [])
+    this.views.set(agentId, {
+      stableThroughId,
+      stable,
+      tail: messages.slice(boundary + 1),
+    })
+    this.rebuildLive(agentId)
+  }
+
+  private rebuildLive(agentId: string) {
+    const view = this.views.get(agentId) ?? {
+      stableThroughId: null,
+      stable: [],
+      tail: [],
+    }
     const live: LiveEntry[] = [
       ...[...(this.messageProgress.get(agentId)?.values() ?? [])].map(
         (entry) => ({
@@ -174,14 +214,18 @@ export class RunStreamStore {
         status: entry.status === "error" ? "done" : entry.status,
       })),
     ]
-    this.snapshots.set(agentId, buildConversation(messages, live))
+    const tail = buildConversation(view.tail, live)
+    this.snapshots.set(
+      agentId,
+      tail.length === 0 ? view.stable : [...view.stable, ...tail]
+    )
     this.notify(agentId)
   }
 
   applySnapshot(agentId: string, messages: ConversationMessage[]) {
     const stored = this.messages.get(agentId) ?? new Map()
     const committedIds = new Set<string>()
-    const completedTools = new Set<string>()
+    const completedTools = this.completedTools.get(agentId) ?? new Set<string>()
     for (const message of messages) {
       stored.set(message.id, message)
       committedIds.add(message.id)
@@ -193,6 +237,7 @@ export class RunStreamStore {
       }
     }
     this.messages.set(agentId, stored)
+    this.completedTools.set(agentId, completedTools)
     const progress = this.messageProgress.get(agentId)
     if (progress) {
       for (const messageId of committedIds) progress.delete(messageId)
@@ -201,7 +246,7 @@ export class RunStreamStore {
     if (tools) {
       for (const toolCallId of completedTools) tools.delete(toolCallId)
     }
-    this.invalidate(agentId)
+    this.rebuildCommitted(agentId)
   }
 
   applyEvent(event: RunStreamEvent) {
@@ -217,11 +262,15 @@ export class RunStreamStore {
         event.message.message.role === "toolResult" &&
         typeof event.message.message.toolCallId === "string"
       ) {
+        const completedTools =
+          this.completedTools.get(event.agentId) ?? new Set<string>()
+        completedTools.add(event.message.message.toolCallId)
+        this.completedTools.set(event.agentId, completedTools)
         this.toolProgress
           .get(event.agentId)
           ?.delete(event.message.message.toolCallId)
       }
-      this.invalidate(event.agentId)
+      this.rebuildCommitted(event.agentId)
       return
     }
     if (event.type === "message.progress") {
@@ -231,19 +280,12 @@ export class RunStreamStore {
       if (!existing || event.revision > existing.revision) {
         progress.set(event.messageId, { ...event, pending: false })
         this.messageProgress.set(event.agentId, progress)
-        this.invalidate(event.agentId)
+        this.rebuildLive(event.agentId)
       }
       return
     }
     if (event.type === "tool.progress") {
-      const hasResult = [
-        ...(this.messages.get(event.agentId)?.values() ?? []),
-      ].some(
-        (message) =>
-          message.message.role === "toolResult" &&
-          message.message.toolCallId === event.toolCallId
-      )
-      if (hasResult) return
+      if (this.completedTools.get(event.agentId)?.has(event.toolCallId)) return
       const tools = this.toolProgress.get(event.agentId) ?? new Map()
       const existing = tools.get(event.toolCallId)
       if (!existing || event.revision > existing.revision) {
@@ -252,7 +294,7 @@ export class RunStreamStore {
           isError: event.isError === true,
         })
         this.toolProgress.set(event.agentId, tools)
-        this.invalidate(event.agentId)
+        this.rebuildLive(event.agentId)
       }
     }
   }
@@ -267,12 +309,12 @@ export class RunStreamStore {
       pending: true,
     })
     this.messageProgress.set(message.agentId, progress)
-    this.invalidate(message.agentId)
+    this.rebuildLive(message.agentId)
   }
 
   removePendingMessage(agentId: string, messageId: string) {
     if (!this.messageProgress.get(agentId)?.delete(messageId)) return
-    this.invalidate(agentId)
+    this.rebuildLive(agentId)
   }
 
   clearEphemeral() {
@@ -282,7 +324,7 @@ export class RunStreamStore {
     ])
     this.messageProgress.clear()
     this.toolProgress.clear()
-    for (const agentId of agentIds) this.invalidate(agentId)
+    for (const agentId of agentIds) this.rebuildLive(agentId)
   }
 
   resetForReconnect() {
@@ -297,7 +339,20 @@ export class RunStreamStore {
       if (progress.size === 0) this.messageProgress.delete(agentId)
     }
     this.toolProgress.clear()
-    for (const agentId of agentIds) this.invalidate(agentId)
+    for (const agentId of agentIds) this.rebuildLive(agentId)
+  }
+
+  closeOnTerminal(
+    status: RunPublic["status"],
+    refresh: () => Promise<unknown>
+  ) {
+    if (!terminalStatuses.has(status)) return false
+    const close = () => {
+      this.close()
+      this.clearEphemeral()
+    }
+    void refresh().then(close, close)
+    return true
   }
 
   private notify(agentId: string) {

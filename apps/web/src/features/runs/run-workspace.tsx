@@ -192,10 +192,6 @@ export function RunWorkspace({
       streamCursor,
       (event: RunStreamEvent) => {
         if (event.type === "run.updated") {
-          const current = queryClient.getQueryData<RunDetail>(["runs", runId])
-          const enteredTerminalState =
-            terminalStatuses.includes(event.run.status) &&
-            !terminalStatuses.includes(current?.run.status ?? "running")
           queryClient.setQueryData<RunDetail>(["runs", runId], (value) =>
             value
               ? {
@@ -219,18 +215,15 @@ export function RunWorkspace({
                   }
                 : value
           )
-          if (enteredTerminalState) {
-            const detailRefresh = queryClient.invalidateQueries({
-              queryKey: ["runs", runId],
-            })
+          if (
+            streamStore.closeOnTerminal(event.run.status, () =>
+              queryClient.invalidateQueries({ queryKey: ["runs", runId] })
+            )
+          ) {
             setStreamDisconnected(false)
             void queryClient.invalidateQueries({ queryKey: eventKeys.all })
             void queryClient.invalidateQueries({
               queryKey: eventKeys.detail(eventId),
-            })
-            void detailRefresh.then(() => {
-              streamStore.clearEphemeral()
-              streamStore.close()
             })
           }
           return
