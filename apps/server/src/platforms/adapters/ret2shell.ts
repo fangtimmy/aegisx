@@ -12,7 +12,7 @@ import {
   type SubmissionResult,
   targetDefinitions,
   targetEndpoint,
-} from "./platform-core"
+} from "../core"
 
 export class Ret2ShellAdapter extends BaseAdapter {
   constructor(

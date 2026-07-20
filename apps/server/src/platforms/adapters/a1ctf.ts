@@ -10,7 +10,7 @@ import {
   type SubmissionResult,
   targetDefinitions,
   targetEndpoint,
-} from "./platform-core"
+} from "../core"
 
 export class A1CtfAdapter extends BaseAdapter {
   constructor(config: PlatformConfig) {

@@ -10,7 +10,7 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai"
 import { createApp } from "../src/app"
-import { createPlatformAdapter } from "../src/platform"
+import { createPlatformAdapter } from "../src/platforms/service"
 import { json, waitFor } from "./support"
 
 const roots: string[] = []

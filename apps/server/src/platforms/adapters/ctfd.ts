@@ -6,7 +6,7 @@ import {
   type PlatformConfig,
   type RemoteChallengeSummary,
   type SubmissionResult,
-} from "./platform-core"
+} from "../core"
 
 export class CtfdAdapter extends BaseAdapter {
   constructor(config: PlatformConfig) {

@@ -19,8 +19,8 @@ import {
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all"
 import { eq } from "drizzle-orm"
-import type { createDatabase } from "./db"
-import { providerConnections, providerModels } from "./db/schema"
+import type { createDatabase } from "../db"
+import { providerConnections, providerModels } from "../db/schema"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 const thinkingLevels: ModelThinkingLevel[] = [

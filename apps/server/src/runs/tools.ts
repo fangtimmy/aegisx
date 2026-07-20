@@ -7,7 +7,7 @@ import {
   type WorkspaceBackend,
 } from "../agents/tools"
 import type { runAgents, runs } from "../db/schema"
-import { isActiveTarget, type TargetState } from "../platform"
+import { isActiveTarget, type TargetState } from "../platforms/core"
 
 type StoredRun = typeof runs.$inferSelect
 type StoredAgent = typeof runAgents.$inferSelect

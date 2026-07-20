@@ -1,12 +1,12 @@
 import { and, eq } from "drizzle-orm"
-import type { createDatabase } from "./db"
-import { challenges, type eventPlatforms } from "./db/schema"
+import type { createDatabase } from "../db"
+import { challenges, type eventPlatforms } from "../db/schema"
 import {
   type CtfPlatformAdapter,
   isActiveTarget,
   type TargetState,
-} from "./platform"
-import { PlatformActionError, platformError } from "./platform-errors"
+} from "./core"
+import { PlatformActionError, platformError } from "./errors"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type StoredPlatform = typeof eventPlatforms.$inferSelect

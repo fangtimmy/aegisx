@@ -1,9 +1,10 @@
 import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
-import type { createDatabase } from "./db"
-import { providerConnections, providerModels, settings } from "./db/schema"
-import { notFound } from "./http-errors"
+import type { createDatabase } from "../db"
+import { providerConnections, providerModels, settings } from "../db/schema"
+import { notFound } from "../http-errors"
+import { validateJson } from "../validation"
 import {
   builtinModelProfile,
   builtinModelProfiles,
@@ -12,7 +13,6 @@ import {
   providerApi,
   supportedThinkingLevels,
 } from "./models"
-import { validateJson } from "./validation"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 

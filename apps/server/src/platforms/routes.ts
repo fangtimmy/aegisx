@@ -1,10 +1,10 @@
 import type { Hono } from "hono"
 import { streamText } from "hono/streaming"
 import { Type } from "typebox"
-import { jsonError } from "./http-errors"
-import type { createPlatformService } from "./platform-service"
-import { PlatformActionError } from "./platform-service"
-import { validateJson } from "./validation"
+import { jsonError } from "../http-errors"
+import { validateJson } from "../validation"
+import type { createPlatformService } from "./service"
+import { PlatformActionError } from "./service"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 

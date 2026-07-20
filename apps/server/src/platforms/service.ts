@@ -1,19 +1,29 @@
 import { and, eq, inArray } from "drizzle-orm"
-import type { EventPlatform } from "../../shared/api"
-import type { createDatabase } from "./db"
-import { challenges, eventPlatforms, events, runs } from "./db/schema"
-import {
-  createPlatformAdapter,
-  type PlatformConfig,
-  type PlatformType,
-} from "./platform"
-import { PlatformActionError, platformError } from "./platform-errors"
-import { createPlatformSubmissions } from "./platform-submissions"
-import { createPlatformSync } from "./platform-sync"
-import { createPlatformTargets } from "./platform-targets"
-import type { createStorage } from "./storage"
+import type { EventPlatform } from "../../../shared/api"
+import type { createDatabase } from "../db"
+import { challenges, eventPlatforms, events, runs } from "../db/schema"
+import type { createStorage } from "../storage"
+import { A1CtfAdapter } from "./adapters/a1ctf"
+import { CtfdAdapter } from "./adapters/ctfd"
+import { Ret2ShellAdapter } from "./adapters/ret2shell"
+import type { CtfPlatformAdapter, PlatformConfig, PlatformType } from "./core"
+import { PlatformActionError, platformError } from "./errors"
+import { createPlatformSubmissions } from "./submissions"
+import { createPlatformSync } from "./sync"
+import { createPlatformTargets } from "./targets"
 
-export { PlatformActionError } from "./platform-errors"
+export { PlatformActionError } from "./errors"
+
+export function createPlatformAdapter(
+  config: PlatformConfig,
+  onCredential?: (credential: string) => void
+): CtfPlatformAdapter {
+  if (config.type === "ctfd") return new CtfdAdapter(config)
+  if (config.type === "ret2shell") {
+    return new Ret2ShellAdapter(config, onCredential)
+  }
+  return new A1CtfAdapter(config)
+}
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type Storage = ReturnType<typeof createStorage>

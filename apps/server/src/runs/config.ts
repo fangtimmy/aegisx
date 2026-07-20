@@ -4,7 +4,7 @@ import {
   type PromptTemplateContext,
   type PromptTemplates,
   resolvePromptTemplates,
-} from "../prompt-templates"
+} from "../settings/prompt-templates"
 
 export type EnvironmentConfig =
   | { type: "local" }

@@ -50,16 +50,16 @@ import {
   runEvents,
   runs,
 } from "../db/schema"
-import type { ModelService } from "../models"
-import type { TargetState } from "../platform"
+import type { TargetState } from "../platforms/core"
+import type { ModelService } from "../providers/models"
+import { redactSecrets, replaceText } from "../redaction"
 import {
   type PromptAttachment,
   type PromptTemplateContext,
   type PromptTemplates,
   renderInitialPrompt,
   renderSystemPrompt,
-} from "../prompt-templates"
-import { redactSecrets, replaceText } from "../redaction"
+} from "../settings/prompt-templates"
 import {
   type EnvironmentConfig,
   type ModelConfig,

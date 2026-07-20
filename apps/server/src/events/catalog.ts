@@ -3,11 +3,11 @@ import type {
   Attachment,
   Challenge as ChallengePublic,
   EventSummary,
-} from "../../shared/api"
-import type { createDatabase } from "./db"
-import { attachments, challenges, events, runs } from "./db/schema"
-import type { RemoteTargetInfo } from "./platform"
-import type { createPlatformService } from "./platform-service"
+} from "../../../shared/api"
+import type { createDatabase } from "../db"
+import { attachments, challenges, events, runs } from "../db/schema"
+import type { RemoteTargetInfo } from "../platforms/core"
+import type { createPlatformService } from "../platforms/service"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type PlatformService = ReturnType<typeof createPlatformService>

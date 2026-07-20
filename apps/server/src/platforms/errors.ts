@@ -1,4 +1,4 @@
-import { PlatformError } from "./platform"
+import { PlatformError } from "./core"
 
 export class PlatformActionError extends Error {
   constructor(

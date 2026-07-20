@@ -3,7 +3,6 @@ import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 import { sumUsage } from "../agents/usage"
-import type { createCatalogReader } from "../catalog"
 import type { createDatabase } from "../db"
 import {
   challenges,
@@ -11,9 +10,10 @@ import {
   providerModels,
   type settings,
 } from "../db/schema"
+import type { createCatalogReader } from "../events/catalog"
 import { jsonError, notFound } from "../http-errors"
-import { parseModelMetadata } from "../models"
-import { providerName } from "../provider-routes"
+import { parseModelMetadata } from "../providers/models"
+import { providerName } from "../providers/routes"
 import { validateJson } from "../validation"
 import {
   readWorkspacePath,

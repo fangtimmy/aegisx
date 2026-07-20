@@ -1,16 +1,16 @@
 import { basename } from "node:path"
 import { and, eq } from "drizzle-orm"
-import type { createDatabase } from "./db"
-import { attachments, challenges, eventPlatforms } from "./db/schema"
+import type { createDatabase } from "../db"
+import { attachments, challenges, eventPlatforms } from "../db/schema"
+import type { createStorage } from "../storage"
 import {
   type CtfPlatformAdapter,
   PlatformError,
   type RemoteAttachment,
   type RemoteChallenge,
   type RemoteChallengeSummary,
-} from "./platform"
-import { PlatformActionError, platformError } from "./platform-errors"
-import type { createStorage } from "./storage"
+} from "./core"
+import { PlatformActionError, platformError } from "./errors"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type Storage = ReturnType<typeof createStorage>

@@ -1,15 +1,16 @@
 import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
-import type { createDatabase } from "./db"
-import { providerConnections, providerModels, settings } from "./db/schema"
-import { notFound } from "./http-errors"
+import type { createDatabase } from "../db"
+import { providerConnections, providerModels, settings } from "../db/schema"
+import { notFound } from "../http-errors"
 import {
   builtinModelProfile,
   normalizeModelMetadata,
   parseModelMetadata,
   providerApi,
-} from "./models"
+} from "../providers/models"
+import { validateJson } from "../validation"
 import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
@@ -20,7 +21,6 @@ import {
   resolvePromptTemplates,
   samplePromptContext,
 } from "./prompt-templates"
-import { validateJson } from "./validation"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
