@@ -11,15 +11,15 @@ import {
   type settings,
 } from "../db/schema"
 import type { createCatalogReader } from "../events/catalog"
-import { jsonError, notFound } from "../http-errors"
-import { parseModelMetadata } from "../providers/models"
-import { providerName } from "../providers/routes"
-import { validateJson } from "../validation"
+import { jsonError, notFound } from "../infrastructure/http-errors"
+import { validateJson } from "../infrastructure/validation"
 import {
   readWorkspacePath,
   WorkspaceFileError,
   workspaceDownload,
-} from "../workspace-files"
+} from "../infrastructure/workspace-files"
+import { parseModelMetadata } from "../providers/models"
+import { providerName } from "../providers/routes"
 import { type createRunManager, RunActionError } from "./manager"
 
 const runInput = Type.Object(

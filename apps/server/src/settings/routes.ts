@@ -3,14 +3,14 @@ import type { Hono } from "hono"
 import { Type } from "typebox"
 import type { createDatabase } from "../db"
 import { providerConnections, providerModels, settings } from "../db/schema"
-import { notFound } from "../http-errors"
+import { notFound } from "../infrastructure/http-errors"
+import { validateJson } from "../infrastructure/validation"
 import {
   builtinModelProfile,
   normalizeModelMetadata,
   parseModelMetadata,
   providerApi,
 } from "../providers/models"
-import { validateJson } from "../validation"
 import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,

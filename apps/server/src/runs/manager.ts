@@ -30,14 +30,6 @@ import {
 } from "../agents/runtime"
 import { createLocalBackend, type WorkspaceBackend } from "../agents/tools"
 import { sumUsage } from "../agents/usage"
-import {
-  containerName,
-  containerRunningAsync,
-  createContainerAsync,
-  createContainerBackend,
-  removeContainer,
-  removeContainerAsync,
-} from "../container"
 import type { createDatabase } from "../db"
 import {
   agentInbox,
@@ -50,9 +42,17 @@ import {
   runEvents,
   runs,
 } from "../db/schema"
+import {
+  containerName,
+  containerRunningAsync,
+  createContainerAsync,
+  createContainerBackend,
+  removeContainer,
+  removeContainerAsync,
+} from "../infrastructure/container"
+import { redactSecrets, replaceText } from "../infrastructure/redaction"
 import type { TargetState } from "../platforms/core"
 import type { ModelService } from "../providers/models"
-import { redactSecrets, replaceText } from "../redaction"
 import {
   type PromptAttachment,
   type PromptTemplateContext,

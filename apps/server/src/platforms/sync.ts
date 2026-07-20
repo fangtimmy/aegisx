@@ -2,7 +2,7 @@ import { basename } from "node:path"
 import { and, eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import { attachments, challenges, eventPlatforms } from "../db/schema"
-import type { createStorage } from "../storage"
+import type { createStorage } from "../infrastructure/storage"
 import {
   type CtfPlatformAdapter,
   PlatformError,

@@ -23,7 +23,7 @@ import {
   type runAgents,
   runEvents,
 } from "../db/schema"
-import { replaceText } from "../redaction"
+import { replaceText } from "../infrastructure/redaction"
 import { RunActionError } from "./errors"
 
 type Database = ReturnType<typeof createDatabase>["db"]

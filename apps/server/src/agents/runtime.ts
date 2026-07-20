@@ -22,7 +22,7 @@ import {
   runAgents,
   runEvents,
 } from "../db/schema"
-import { redactSecrets } from "../redaction"
+import { redactSecrets } from "../infrastructure/redaction"
 import {
   type AegisXMessage,
   type AegisXMetadata,

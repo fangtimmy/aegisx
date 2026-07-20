@@ -5,16 +5,16 @@ import { createDatabase } from "./db"
 import { providerConnections, providerModels, settings } from "./db/schema"
 import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
+import { redactSecrets } from "./infrastructure/redaction"
+import { createStorage } from "./infrastructure/storage"
 import { registerPlatformRoutes } from "./platforms/routes"
 import { createPlatformService } from "./platforms/service"
 import { createModelService } from "./providers/models"
 import { providerName, registerProviderRoutes } from "./providers/routes"
-import { redactSecrets } from "./redaction"
 import { createRunManager } from "./runs/manager"
 import { registerRunRoutes } from "./runs/routes"
 import { resolvePromptTemplates } from "./settings/prompt-templates"
 import { registerSettingsRoutes } from "./settings/routes"
-import { createStorage } from "./storage"
 
 export function createApp(options: {
   dataDir: string
