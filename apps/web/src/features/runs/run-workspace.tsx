@@ -86,6 +86,7 @@ export function RunWorkspace({
   const detail = useQuery({
     enabled: Boolean(runId),
     queryKey: ["runs", runId ?? ""],
+    refetchOnWindowFocus: false,
     queryFn: () =>
       apiRequest<{
         run: RunPublic
@@ -175,22 +176,49 @@ export function RunWorkspace({
       streamCursor,
       (event: RunStreamEvent) => {
         if (event.type === "status") {
+          const current = queryClient.getQueryData<{
+            run: RunPublic
+            agents: AgentSummary[]
+            history: SessionEntry[]
+            stats: UsageSummary
+            eventCursor: number
+          }>(["runs", runId])
+          const enteredTerminalState =
+            terminalStatuses.includes(event.run.status) &&
+            !terminalStatuses.includes(current?.run.status ?? "running")
           queryClient.setQueryData<{
             run: RunPublic
             agents: AgentSummary[]
             history: SessionEntry[]
             stats: UsageSummary
             eventCursor: number
-          }>(["runs", runId], (current) =>
-            current ? { ...current, run: event.run } : current
+          }>(["runs", runId], (value) =>
+            value
+              ? {
+                  ...value,
+                  run: event.run,
+                  ...(event.eventCursor !== undefined
+                    ? { eventCursor: event.eventCursor }
+                    : {}),
+                }
+              : value
           )
-          const detailRefresh = queryClient.invalidateQueries({
-            queryKey: ["runs", runId],
-          })
-          void queryClient.invalidateQueries({
-            queryKey: ["runs", "event", eventId],
-          })
-          if (terminalStatuses.includes(event.run.status)) {
+          queryClient.setQueryData<{ items: RunPublic[] }>(
+            ["runs", "event", eventId],
+            (value) =>
+              value
+                ? {
+                    ...value,
+                    items: value.items.map((run) =>
+                      run.id === event.run.id ? event.run : run
+                    ),
+                  }
+                : value
+          )
+          if (enteredTerminalState) {
+            const detailRefresh = queryClient.invalidateQueries({
+              queryKey: ["runs", runId],
+            })
             setStreamDisconnected(false)
             void queryClient.invalidateQueries({ queryKey: eventKeys.all })
             void queryClient.invalidateQueries({
@@ -201,21 +229,31 @@ export function RunWorkspace({
           return
         }
         if (event.type === "agent_status") {
-          void queryClient.invalidateQueries({ queryKey: ["runs", runId] })
-          void queryClient.invalidateQueries({
-            queryKey: ["runs", runId, "agents", event.agent.id],
-          })
-          void queryClient.invalidateQueries({
-            queryKey: ["runs", runId, "agents", event.agent.id, "inspector"],
-          })
+          queryClient.setQueryData<{
+            run: RunPublic
+            agents: AgentSummary[]
+            history: SessionEntry[]
+            stats: UsageSummary
+            eventCursor: number
+          }>(["runs", runId], (value) =>
+            value
+              ? {
+                  ...value,
+                  agents: value.agents.map((agent) =>
+                    agent.id === event.agent.id
+                      ? { ...agent, ...event.agent }
+                      : agent
+                  ),
+                  ...(event.eventCursor !== undefined
+                    ? { eventCursor: event.eventCursor }
+                    : {}),
+                }
+              : value
+          )
           return
         }
         if (event.type === "ready") {
-          void queryClient.invalidateQueries({ queryKey: ["runs", runId] })
           return
-        }
-        if (event.type === "agent_event" && event.event.type === "turn_end") {
-          void queryClient.invalidateQueries({ queryKey: ["runs", runId] })
         }
       },
       setStreamDisconnected

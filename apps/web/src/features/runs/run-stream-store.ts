@@ -42,7 +42,7 @@ export class RunStreamStore {
     runId: string,
     afterCursor: number,
     onEvent: (event: RunStreamEvent) => void,
-    onConnectionChange: (connected: boolean) => void
+    onDisconnectedChange: (disconnected: boolean) => void
   ) {
     this.close()
     this.clear()
@@ -52,11 +52,11 @@ export class RunStreamStore {
     this.source = source
     source.onopen = () => {
       if (this.source !== source) return
-      onConnectionChange(true)
+      onDisconnectedChange(false)
     }
     source.onerror = () => {
       if (this.source !== source) return
-      onConnectionChange(false)
+      onDisconnectedChange(true)
     }
     source.onmessage = (message) => {
       if (this.source !== source) return
