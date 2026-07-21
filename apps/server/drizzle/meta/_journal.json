@@ -176,6 +176,13 @@
       "when": 1784639731589,
       "tag": "0024_curious_iron_monger",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1784646000000,
+      "tag": "0025_event_prompt_hint",
+      "breakpoints": true
     }
   ]
 }

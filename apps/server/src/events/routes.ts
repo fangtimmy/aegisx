@@ -16,6 +16,7 @@ import type { createCatalogReader } from "./catalog"
 const eventInput = Type.Object(
   {
     name: Type.String({ minLength: 1, maxLength: 160 }),
+    promptHint: Type.Optional(Type.String({ maxLength: 10_000 })),
   },
   { additionalProperties: false }
 )
@@ -62,6 +63,7 @@ export function registerEventRoutes(
     const event = {
       id: crypto.randomUUID(),
       name: input.name.trim(),
+      promptHint: input.promptHint?.trim() ?? "",
       createdAt: now,
       updatedAt: now,
     }
@@ -106,17 +108,22 @@ export function registerEventRoutes(
     if (!getEvent(eventId)) {
       return notFound(c, "Event not found")
     }
-    const name = c.req.valid("json").name.trim()
+    const input = c.req.valid("json")
+    const name = input.name.trim()
     if (!name) {
       return c.json(
         { error: { code: "invalid_name", message: "Event name is required" } },
         400
       )
     }
-    db.update(events)
-      .set({ name, updatedAt: new Date().toISOString() })
-      .where(eq(events.id, eventId))
-      .run()
+    const updates: { name: string; promptHint?: string; updatedAt: string } = {
+      name,
+      updatedAt: new Date().toISOString(),
+    }
+    if (input.promptHint !== undefined) {
+      updates.promptHint = input.promptHint.trim()
+    }
+    db.update(events).set(updates).where(eq(events.id, eventId)).run()
     return c.json(getEvent(eventId))
   })
 

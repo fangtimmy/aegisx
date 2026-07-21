@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   apiRequest,
   type EventInput,
@@ -28,8 +29,8 @@ import { PlatformBinding } from "./platform-binding"
 export function EventSettings({ event }: { event: EventSummary }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const form = useForm<{ name: string }>({
-    defaultValues: { name: event.name },
+  const form = useForm<{ name: string; promptHint: string }>({
+    defaultValues: { name: event.name, promptHint: event.promptHint ?? "" },
   })
   const update = useMutation({
     mutationFn: (input: EventInput) =>
@@ -69,7 +70,10 @@ export function EventSettings({ event }: { event: EventSummary }) {
         <form
           className="mt-4 flex max-w-xl items-end gap-3"
           onSubmit={form.handleSubmit((values) =>
-            update.mutate({ name: values.name.trim() })
+            update.mutate({
+              name: values.name.trim(),
+              promptHint: values.promptHint.trim(),
+            })
           )}
         >
           <Field className="min-w-0 flex-1">
@@ -100,6 +104,45 @@ export function EventSettings({ event }: { event: EventSummary }) {
             <AlertDescription>{update.error.message}</AlertDescription>
           </Alert>
         )}
+      </section>
+
+      <section className="border-t py-6" aria-labelledby="event-prompt-hint">
+        <h2 className="font-medium text-base" id="event-prompt-hint">
+          Prompt instructions
+        </h2>
+        <p className="mt-1 text-muted-foreground text-sm">
+          Additional instructions appended to every agent prompt for this
+          event — flag formats, conventions, common gotchas.
+        </p>
+        <form
+          className="mt-4 max-w-xl"
+          onSubmit={form.handleSubmit((values) =>
+            update.mutate({
+              name: values.name.trim(),
+              promptHint: values.promptHint.trim(),
+            })
+          )}
+        >
+          <Field>
+            <Controller
+              control={form.control}
+              name="promptHint"
+              render={({ field }) => (
+                <Textarea
+                  id="event-prompt-hint"
+                  onBlur={field.onBlur}
+                  onChange={field.onChange}
+                  placeholder="e.g. Flag format is moectf{...}. Submit only flags matching this format."
+                  rows={6}
+                  value={field.value}
+                />
+              )}
+            />
+          </Field>
+          <Button className="mt-3" loading={update.isPending} type="submit">
+            Save instructions
+          </Button>
+        </form>
       </section>
 
       <section className="border-t py-6" aria-labelledby="event-platform">

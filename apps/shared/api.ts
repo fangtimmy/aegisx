@@ -1,6 +1,7 @@
 export type EventSummary = {
   id: string
   name: string
+  promptHint: string
   platform: EventPlatform | null
   createdAt: string
   updatedAt: string
@@ -12,6 +13,7 @@ export type EventSummary = {
 
 export type EventInput = {
   name: string
+  promptHint?: string
 }
 
 export type Attachment = {

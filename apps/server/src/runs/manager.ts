@@ -535,6 +535,7 @@ export function createRunManager(options: Options) {
         id: event.id,
         name: event.name,
         platform: platform?.type ?? null,
+        promptHint: event.promptHint ?? "",
       },
       challenge: {
         id: challenge.id,

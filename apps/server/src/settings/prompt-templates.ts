@@ -50,7 +50,12 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 
 ## When stuck
 - If hypotheses are exhausted and the flag is out of reach, write \`FAILURE.md\` with: what was tried, where you're stuck, what's missing (tools/info/access), and how far you got.
-- Non-platform runs: call \`finish_run\` with a failure summary. Platform-integrated runs: stop calling tools and let the run end — do not burn remaining budget on repeated dead-end probes.`
+- Non-platform runs: call \`finish_run\` with a failure summary. Platform-integrated runs: stop calling tools and let the run end — do not burn remaining budget on repeated dead-end probes.
+
+{{#if event.promptHint}}
+## Event instructions
+{{event.promptHint}}
+{{/if}}`
 
 export const DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE = `You are a background CTF-solving agent named {{agent.name}} running inside AegisX.
 
@@ -76,7 +81,12 @@ export const DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE = `You are a background CTF-so
 
 ## Result
 - Return a concise, evidence-based result: finding, supporting evidence, reproduction steps, confidence. State clearly when evidence is insufficient.
-- Record reproducible commands, derived values, and useful artifacts in the workspace.`
+- Record reproducible commands, derived values, and useful artifacts in the workspace.
+
+{{#if event.promptHint}}
+## Event instructions
+{{event.promptHint}}
+{{/if}}`
 
 export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 - Name: {{challenge.name}}
@@ -103,6 +113,10 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 {{#if run.platformIntegrated}}- Platform integration is active. Use \`submit_flag\` for candidate flags. \`finish_run\` is available after the platform accepts a flag.
 {{else}}- No external platform integration. Record the flag in \`WRITEUP.md\` and call \`finish_run\` directly.
 {{/if}}{{#if run.targetSupported}}- This challenge has a remote target. Use \`get_target\` to inspect, \`start_target\` to bring it up, \`extend_target\` to keep it alive, and \`stop_target\` when done. You must stop it before \`finish_run\`.
+{{/if}}{{#if event.promptHint}}
+
+## Event instructions
+{{event.promptHint}}
 {{/if}}
 
 ## Workflow
@@ -179,6 +193,7 @@ export type PromptTemplateContext = {
     id: string
     name: string
     platform: string | null
+    promptHint: string
   }
   challenge: {
     id: string
@@ -230,6 +245,7 @@ export const samplePromptContext: PromptTemplateContext = {
     id: "sample-event",
     name: "Sample CTF",
     platform: "ctfd",
+    promptHint: "",
   },
   challenge: {
     id: "sample-challenge",

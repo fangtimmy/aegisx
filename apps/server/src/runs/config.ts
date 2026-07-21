@@ -80,6 +80,7 @@ function isPromptTemplateContext(
     isString(event.id) &&
     isString(event.name) &&
     isNullableString(event.platform) &&
+    isString(event.promptHint) &&
     isString(challenge.id) &&
     isString(challenge.name) &&
     isString(challenge.description) &&
