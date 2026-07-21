@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from "node:fs"
+import { copyFileSync, mkdirSync, rmSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, extname, join, relative } from "node:path"
 import { clampThinkingLevel } from "@earendil-works/pi-ai"
@@ -1652,6 +1652,23 @@ export function createRunManager(options: Options) {
     runLocks.clear()
   }
 
+  function deleteRun(runId: string) {
+    const run = getStored(runId)
+    if (!run) throw new RunActionError("not_found", "Run not found")
+    if (!terminalRunStatuses.includes(run.status as RunStatus)) {
+      throw new RunActionError(
+        "invalid_state",
+        "Only completed, failed, or stopped runs can be deleted"
+      )
+    }
+    releaseRun(runId)
+    if (run.workspacePath) {
+      rmSync(join(dataDir, run.workspacePath), { recursive: true, force: true })
+    }
+    db.delete(runs).where(eq(runs.id, runId)).run()
+    listeners.delete(runId)
+  }
+
   return {
     create,
     get: getPublic,
@@ -1719,6 +1736,7 @@ export function createRunManager(options: Options) {
       )
     },
     cursor,
+    delete: deleteRun,
     close: closeManager,
   }
 }

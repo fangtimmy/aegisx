@@ -483,6 +483,15 @@ export function registerRunRoutes(
       return runError(c, error)
     }
   })
+
+  app.delete("/api/runs/:runId", (c) => {
+    try {
+      runManager.delete(c.req.param("runId"))
+      return c.body(null, 204)
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
 }
 
 function runError(

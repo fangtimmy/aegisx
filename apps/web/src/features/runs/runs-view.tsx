@@ -1,8 +1,25 @@
-import { useQuery } from "@tanstack/react-query"
-import { ArrowUpDown, CircleAlert, Flag, List, Plus } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  ArrowUpDown,
+  CircleAlert,
+  Flag,
+  List,
+  MoreHorizontal,
+  Plus,
+  Trash2,
+} from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -15,6 +32,7 @@ import {
 } from "@/components/ui/card"
 import {
   Menu,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -45,46 +63,115 @@ function RunItem({
   run: RunPublic
   runId?: string
 }) {
+  const queryClient = useQueryClient()
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const active = run.status === "running" || run.status === "paused"
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest<void>(`/runs/${run.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runs", "event", eventId] })
+    },
+  })
   return (
-    <Button
-      aria-current={run.id === runId ? "page" : undefined}
-      className="h-auto min-h-16 w-full items-start justify-start gap-2.5 whitespace-normal px-3 py-2.5 text-left"
-      render={<Link to={`/events/${eventId}/runs/${run.id}`} />}
-      variant={run.id === runId ? "secondary" : "ghost"}
-    >
-      <AgentStatusIcon className="mt-0.5" status={run.status} />
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate font-medium text-sm">
-            {run.challengeName}
-          </span>
-          {run.hasFlag && (
-            <Badge size="sm" variant="success">
-              <Flag /> Flag found
+    <div className="group relative">
+      <Button
+        aria-current={run.id === runId ? "page" : undefined}
+        className="h-auto min-h-16 w-full items-start justify-start gap-2.5 whitespace-normal px-3 py-2.5 pr-10 text-left"
+        render={<Link to={`/events/${eventId}/runs/${run.id}`} />}
+        variant={run.id === runId ? "secondary" : "ghost"}
+      >
+        <AgentStatusIcon className="mt-0.5" status={run.status} />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate font-medium text-sm">
+              {run.challengeName}
+            </span>
+            {run.hasFlag && (
+              <Badge size="sm" variant="success">
+                <Flag /> Flag found
+              </Badge>
+            )}
+            <Badge
+              className="capitalize"
+              size="sm"
+              variant={statusVariant(run.status)}
+            >
+              {run.status}
             </Badge>
-          )}
-          <Badge
-            className="capitalize"
-            size="sm"
-            variant={statusVariant(run.status)}
-          >
-            {run.status}
-          </Badge>
-        </span>
-        <span className="mt-1.5 flex min-w-0 items-start gap-2 text-muted-foreground text-xs">
-          <span className="min-w-0 flex-1 break-all font-mono">
-            {run.provider} / {run.modelName}
           </span>
-          <time
-            className="shrink-0"
-            dateTime={run.updatedAt}
-            title={new Date(run.updatedAt).toLocaleString()}
-          >
-            {runTimeFormatter.format(new Date(run.updatedAt))}
-          </time>
+          <span className="mt-1.5 flex min-w-0 items-start gap-2 text-muted-foreground text-xs">
+            <span className="min-w-0 flex-1 break-all font-mono">
+              {run.provider} / {run.modelName}
+            </span>
+            <time
+              className="shrink-0"
+              dateTime={run.updatedAt}
+              title={new Date(run.updatedAt).toLocaleString()}
+            >
+              {runTimeFormatter.format(new Date(run.updatedAt))}
+            </time>
+          </span>
         </span>
-      </span>
-    </Button>
+      </Button>
+      <div className="absolute right-1 top-1/2 -translate-y-1/2">
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                aria-label="Run actions"
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              />
+            }
+          >
+            <MoreHorizontal className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end">
+            <MenuItem
+              disabled={active || deleteMutation.isPending}
+              onClick={() => setConfirmDelete(true)}
+              variant="destructive"
+            >
+              <Trash2 />
+              Delete run
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      </div>
+      <AlertDialog
+        open={confirmDelete}
+        onOpenChange={(open) => setConfirmDelete(open)}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete run for {run.challengeName}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the run, its conversation history, and
+              workspace files.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              loading={deleteMutation.isPending}
+              onClick={() => {
+                deleteMutation.mutate()
+                setConfirmDelete(false)
+              }}
+              type="button"
+              variant="destructive"
+            >
+              Delete run
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </div>
   )
 }
 
