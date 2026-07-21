@@ -88,16 +88,9 @@ function RunItem({
             </span>
             {run.hasFlag && (
               <Badge size="sm" variant="success">
-                <Flag /> Flag found
+                <Flag />
               </Badge>
             )}
-            <Badge
-              className="capitalize"
-              size="sm"
-              variant={statusVariant(run.status)}
-            >
-              {run.status}
-            </Badge>
           </span>
           <span className="mt-1.5 flex min-w-0 items-start gap-2 text-muted-foreground text-xs">
             <span className="min-w-0 flex-1 break-all font-mono">

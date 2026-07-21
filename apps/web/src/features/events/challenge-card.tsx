@@ -1,5 +1,15 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Check, Paperclip, Pause, Play, Server, Square, Trash2, TriangleAlert, X } from "lucide-react"
+import {
+  Check,
+  CircleSlash,
+  Paperclip,
+  Pause,
+  Play,
+  Server,
+  Trash2,
+  TriangleAlert,
+  X,
+} from "lucide-react"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -25,6 +35,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { CreateRunDialog } from "@/features/runs"
+import { statusVariant } from "@/features/runs/run-overview"
 import { apiRequest, type Challenge } from "@/lib/api"
 import { ChallengeDialog } from "./challenge-dialog"
 import { eventKeys } from "./event-shared"
@@ -185,24 +196,12 @@ export function ChallengeCard({
           <span className="ml-auto flex items-center gap-1.5">
             {Object.entries(challenge.runStatusCounts).map(([status, count]) =>
               count > 0 ? (
-                <Badge
-                  key={status}
-                  size="sm"
-                  variant={
-                    status === "completed"
-                      ? "success"
-                      : status === "failed"
-                        ? "error"
-                        : status === "paused"
-                          ? "warning"
-                          : "secondary"
-                  }
-                >
+                <Badge key={status} size="sm" variant={statusVariant(status)}>
                   {count}
                   {status === "completed" && <Check className="size-3" />}
                   {status === "failed" && <X className="size-3" />}
                   {status === "paused" && <Pause className="size-3" />}
-                  {status === "stopped" && <Square className="size-3" />}
+                  {status === "stopped" && <CircleSlash className="size-3" />}
                   {status === "running" && <Play className="size-3" />}
                   <span className="sr-only"> {status}</span>
                 </Badge>

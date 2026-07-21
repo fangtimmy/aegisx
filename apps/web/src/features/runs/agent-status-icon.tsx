@@ -1,9 +1,9 @@
 import {
-  CircleCheck,
+  Check,
   CircleDashed,
-  CirclePause,
-  CircleStop,
-  CircleX,
+  Pause,
+  CircleSlash,
+  X,
   LoaderCircle,
 } from "lucide-react"
 import type { AgentStatus } from "@/lib/api"
@@ -20,13 +20,13 @@ export function AgentStatusIcon({
     status === "running"
       ? LoaderCircle
       : status === "completed"
-        ? CircleCheck
+        ? Check
         : status === "failed"
-          ? CircleX
+          ? X
           : status === "paused"
-            ? CirclePause
+            ? Pause
             : status === "stopped"
-              ? CircleStop
+              ? CircleSlash
               : CircleDashed
   return (
     <span

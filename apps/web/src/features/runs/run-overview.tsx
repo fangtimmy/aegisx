@@ -31,6 +31,7 @@ import { apiRequest, jsonRequest } from "@/lib/api"
 import { formatTime } from "./timeline"
 
 export function statusVariant(status: AgentStatus) {
+  if (status === "running") return "info" as const
   if (status === "completed") return "success" as const
   if (status === "failed") return "error" as const
   if (status === "paused") return "warning" as const
