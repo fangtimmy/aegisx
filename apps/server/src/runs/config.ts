@@ -138,9 +138,9 @@ export function parseEnvironment(value: string): EnvironmentConfig {
     return {
       type: "container",
       image: parsed.image,
-      cpus: isNumber(parsed.cpus) ? parsed.cpus : 1,
-      memoryMb: isNumber(parsed.memoryMb) ? parsed.memoryMb : 512,
-      pidsLimit: isNumber(parsed.pidsLimit) ? parsed.pidsLimit : 128,
+      cpus: isNumber(parsed.cpus) ? parsed.cpus : 2,
+      memoryMb: isNumber(parsed.memoryMb) ? parsed.memoryMb : 2048,
+      pidsLimit: isNumber(parsed.pidsLimit) ? parsed.pidsLimit : 256,
     }
   } catch {
     return { type: "local" }

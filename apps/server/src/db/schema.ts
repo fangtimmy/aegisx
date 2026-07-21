@@ -302,9 +302,9 @@ export const settings = sqliteTable(
       .default("off"),
     environment: text("environment").notNull().default("local"),
     containerImage: text("container_image").notNull().default("alpine:3.22"),
-    cpuLimit: integer("cpu_limit").notNull().default(1000),
-    memoryMb: integer("memory_mb").notNull().default(512),
-    pidsLimit: integer("pids_limit").notNull().default(128),
+    cpuLimit: integer("cpu_limit").notNull().default(2000),
+    memoryMb: integer("memory_mb").notNull().default(2048),
+    pidsLimit: integer("pids_limit").notNull().default(256),
     maxConcurrency: integer("max_concurrency").notNull().default(2),
     maxAttachmentMb: integer("max_attachment_mb").notNull().default(512),
     mainSystemPromptTemplate: text("system_prompt_template")
