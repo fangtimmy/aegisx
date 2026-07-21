@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
+import { normalizeThinkingLevel } from "../../../shared/api"
 import { sumUsage } from "../agents/usage"
 import type { createDatabase } from "../db"
 import {
@@ -151,15 +152,7 @@ export function registerRunRoutes(
               costKnown: parseModelMetadata(selected.model.metadata).costKnown,
               thinkingLevel:
                 input.thinkingLevel ??
-                (defaults.defaultThinkingLevel as
-                  | "off"
-                  | "minimal"
-                  | "low"
-                  | "medium"
-                  | "high"
-                  | "xhigh"
-                  | "max") ??
-                "off",
+                normalizeThinkingLevel(defaults.defaultThinkingLevel),
             },
             environment
           ),

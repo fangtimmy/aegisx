@@ -386,6 +386,44 @@ describe("run API", () => {
     sqlite.close()
   })
 
+  test("uses and freezes the configured default thinking level", async () => {
+    const instance = setup(2, undefined, 128_000, true)
+    const { challenge } = await createChallenge(instance.app)
+    const modelId = await configureFaux(instance.app)
+    const settings = await instance.app.request(
+      "/api/settings",
+      json("PATCH", {
+        defaultModelId: modelId,
+        defaultThinkingLevel: "high",
+        environment: "local",
+        containerImage: "alpine:3.22",
+        cpus: 1,
+        memoryMb: 512,
+        pidsLimit: 128,
+        maxConcurrency: 2,
+        maxAttachmentMb: 512,
+      })
+    )
+    expect(settings.status).toBe(200)
+
+    instance.faux.setResponses([fauxAssistantMessage("Default applied.")])
+    const response = await instance.app.request(
+      `/api/challenges/${challenge.id}/runs`,
+      json("POST", { modelId })
+    )
+    expect(response.status).toBe(202)
+    const run = await response.json()
+    expect(run.thinkingLevel).toBe("high")
+
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    expect(
+      sqlite.query("select model_config from runs where id = ?").get(run.id)
+    ).toEqual({
+      model_config: expect.stringContaining('"thinkingLevel":"high"'),
+    })
+    sqlite.close()
+  })
+
   test("isolates files, copies attachments, completes, and reloads messages", async () => {
     const first = setup()
     const { event, challenge } = await createChallenge(first.app)

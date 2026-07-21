@@ -119,6 +119,22 @@ export type ThinkingLevel =
   | "xhigh"
   | "max"
 
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  )
+}
+
+export function normalizeThinkingLevel(value: unknown): ThinkingLevel {
+  return isThinkingLevel(value) ? value : "off"
+}
+
 export type RunPublic = {
   id: string
   challengeId: string

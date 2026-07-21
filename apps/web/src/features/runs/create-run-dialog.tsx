@@ -47,6 +47,7 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   xhigh: "Extra high",
   max: "Maximum",
 }
+const offThinkingLevels: ThinkingLevel[] = ["off"]
 
 type RunFormValues = {
   challengeId: string
@@ -123,7 +124,6 @@ export function CreateRunDialog({
           .map((model) => ({ ...model, provider }))
       : []
   )
-
   const form = useForm<RunFormValues>({
     defaultValues: {
       challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
@@ -136,20 +136,28 @@ export function CreateRunDialog({
   const environment = form.watch("environment")
   const modelId = form.watch("modelId")
   const selectedModel = availableModels.find((model) => model.id === modelId)
-  const supportedThinkingLevels = selectedModel?.thinkingLevels ?? ["off"]
+  const supportedThinkingLevels =
+    selectedModel?.thinkingLevels ?? offThinkingLevels
+  const supportedThinkingLevelsKey = supportedThinkingLevels.join(",")
+  const firstSupportedThinkingLevel = supportedThinkingLevels[0] ?? "off"
+  const thinkingLevel = form.watch("thinkingLevel")
+  const isThinkingLevelSupported = supportedThinkingLevelsKey
+    .split(",")
+    .includes(thinkingLevel)
+  const initialModelId = settings.data?.defaultModelId
+    ? (availableModels.find(
+        (model) => model.id === settings.data?.defaultModelId
+      )?.id ??
+      availableModels[0]?.id ??
+      "")
+    : (availableModels[0]?.id ?? "")
 
   useEffect(() => {
     if (open && settings.data) {
       form.reset({
         challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
-        modelId: settings.data.defaultModelId
-          ? (availableModels.find(
-              (model) => model.id === settings.data.defaultModelId
-            )?.id ??
-            availableModels[0]?.id ??
-            "")
-          : (availableModels[0]?.id ?? ""),
-        thinkingLevel: "off",
+        modelId: initialModelId,
+        thinkingLevel: settings.data.defaultThinkingLevel,
         environment: settings.data.environment,
         image: settings.data.containerImage,
       })
@@ -161,15 +169,14 @@ export function CreateRunDialog({
     challenges?.[0]?.id,
     form.reset,
     challenge?.id,
-    availableModels[0]?.id,
-    availableModels.find,
+    initialModelId,
   ])
 
   useEffect(() => {
-    if (!supportedThinkingLevels.includes(form.getValues("thinkingLevel"))) {
-      form.setValue("thinkingLevel", supportedThinkingLevels[0] ?? "off")
+    if (!isThinkingLevelSupported) {
+      form.setValue("thinkingLevel", firstSupportedThinkingLevel)
     }
-  }, [supportedThinkingLevels, form.setValue, form.getValues])
+  }, [isThinkingLevelSupported, firstSupportedThinkingLevel, form.setValue])
 
   const available = challenge ? [challenge] : (challenges ?? [])
 

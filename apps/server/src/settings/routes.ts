@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
+import { normalizeThinkingLevel } from "../../../shared/api"
 import type { createDatabase } from "../db"
 import { providerConnections, providerModels, settings } from "../db/schema"
 import { notFound } from "../infrastructure/http-errors"
@@ -82,7 +83,7 @@ const promptPreviewInput = Type.Object(
 
 const settingsTransferInput = Type.Object(
   {
-    version: Type.Union([Type.Literal(1), Type.Literal(2)]),
+    version: Type.Literal(2),
     settings: Type.Object(
       {
         defaultModelId: Type.Union([
@@ -205,14 +206,7 @@ export function registerSettingsRoutes(
     const promptTemplates = resolvePromptTemplates(value)
     return {
       defaultModelId: value.defaultModelId,
-      defaultThinkingLevel: value.defaultThinkingLevel as
-        | "off"
-        | "minimal"
-        | "low"
-        | "medium"
-        | "high"
-        | "xhigh"
-        | "max",
+      defaultThinkingLevel: normalizeThinkingLevel(value.defaultThinkingLevel),
       environment: value.environment as "local" | "container",
       containerImage: value.containerImage,
       cpus: value.cpuLimit / 1000,
@@ -245,14 +239,9 @@ export function registerSettingsRoutes(
       const value = getSettings()
       return {
         defaultModelId: value.defaultModelId,
-        defaultThinkingLevel: value.defaultThinkingLevel as
-          | "off"
-          | "minimal"
-          | "low"
-          | "medium"
-          | "high"
-          | "xhigh"
-          | "max",
+        defaultThinkingLevel: normalizeThinkingLevel(
+          value.defaultThinkingLevel
+        ),
         environment: value.environment as "local" | "container",
         containerImage: value.containerImage,
         cpus: value.cpuLimit / 1000,

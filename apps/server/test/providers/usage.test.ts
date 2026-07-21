@@ -52,6 +52,7 @@ async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
 }
 
 const runtimeSettings = {
+  defaultThinkingLevel: "off",
   environment: "container",
   containerImage: "alpine:3.22",
   cpus: 0.5,
@@ -553,6 +554,7 @@ describe("providers, models, and usage", () => {
     )
     expect(exportedProvider.apiKey).toBe("export-secret")
     expect(exported.settings.defaultModelId).toBe(model.id)
+    expect(exported.settings.defaultThinkingLevel).toBe("off")
 
     exported.settings.maxConcurrency = 7
     exportedProvider.apiKey = "imported-secret"
@@ -572,6 +574,19 @@ describe("providers, models, and usage", () => {
     )
     expect(importedProvider.apiKey).toBe("imported-secret")
     expect(importedProvider.models[0].id).toBe(model.id)
+  })
+
+  test("rejects obsolete settings transfer versions", async () => {
+    const instance = setup()
+    const response = await instance.app.request(
+      "/api/settings/import",
+      json("POST", {
+        version: 1,
+        settings: {},
+        providers: [],
+      })
+    )
+    expect(response.status).toBe(400)
   })
 
   test("aggregates persisted usage for runs, challenges, and events", async () => {

@@ -1,5 +1,5 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai"
-import type { AgentRuntimeSnapshot, ThinkingLevel } from "../../../shared/api"
+import { type AgentRuntimeSnapshot, isThinkingLevel } from "../../../shared/api"
 import {
   type PromptTemplateContext,
   type PromptTemplates,
@@ -50,18 +50,6 @@ function isBoolean(value: unknown): value is boolean {
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || isString(value)
-}
-
-function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return (
-    value === "off" ||
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh" ||
-    value === "max"
-  )
 }
 
 function isPromptTemplateContext(

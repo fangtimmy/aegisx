@@ -141,6 +141,7 @@ describe("event, challenge, and attachment API", () => {
       "/api/settings",
       json("PATCH", {
         defaultModelId: settings.defaultModelId,
+        defaultThinkingLevel: settings.defaultThinkingLevel,
         environment: settings.environment,
         containerImage: settings.containerImage,
         cpus: settings.cpus,
