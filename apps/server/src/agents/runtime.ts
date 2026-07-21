@@ -12,6 +12,7 @@ import type {
   Models,
   ModelThinkingLevel,
 } from "@earendil-works/pi-ai"
+import { isRetryableAssistantError } from "@earendil-works/pi-ai"
 import { and, asc, eq, isNull, max } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import {
@@ -39,7 +40,12 @@ export type RuntimeOutcome = {
   status: "success" | "error" | "aborted"
   summary: string | null
   error: string | null
+  retries?: number
 }
+
+const maxRetryAttempts = 3
+const retryBaseDelayMs = 2_000
+const retryMaxDelayMs = 30_000
 
 type RuntimeOptions = {
   db: Database
@@ -428,6 +434,40 @@ export function createAgentRuntime(options: RuntimeOptions) {
     return { status: "success", summary: assistantText(final), error: null }
   }
 
+  async function retryAfterError(
+    initial: RuntimeOutcome
+  ): Promise<RuntimeOutcome> {
+    let outcome = initial
+    let attempts = 0
+    const stopped = () => phase === "disposed" || phase === "aborting"
+    while (
+      outcome.status === "error" &&
+      attempts < maxRetryAttempts &&
+      !stopped()
+    ) {
+      const messages = agent.state.messages
+      const last = messages[messages.length - 1]
+      if (last?.role !== "assistant" || !isRetryableAssistantError(last)) {
+        break
+      }
+      agent.state.messages = messages.slice(0, -1)
+      attempts += 1
+      const delay = Math.min(
+        retryBaseDelayMs * 2 ** (attempts - 1),
+        retryMaxDelayMs
+      )
+      await Bun.sleep(delay)
+      if (stopped()) break
+      try {
+        await agent.continue()
+      } catch {
+        break
+      }
+      outcome = classify()
+    }
+    return attempts > 0 ? { ...outcome, retries: attempts } : outcome
+  }
+
   function start(first: AegisXMessage) {
     if (phase !== "idle") {
       agent.steer(first)
@@ -451,6 +491,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
             error instanceof Error ? error.message : "Agent runtime failed",
         })
       )
+      .then((outcome) => retryAfterError(outcome))
       .then(async (outcome) => {
         if (phase === "disposed") return
         queued.clear()
