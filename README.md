@@ -38,10 +38,10 @@ Each run has one main agent and may have multiple background child agents. See [
 
 ## Solve container image
 
-`Dockerfile.solve` defines the Kali-based `aegis/solve:kali` image used for container Runs. Build it manually from the repository root:
+`container/Dockerfile.solve` defines the Kali-based `aegis/solve:kali` image used for container Runs. Build it manually from the repository root:
 
 ```sh
-docker build -f Dockerfile.solve -t aegis/solve:kali .
+docker build -f container/Dockerfile.solve -t aegis/solve:kali .
 ```
 
 ## Checks
