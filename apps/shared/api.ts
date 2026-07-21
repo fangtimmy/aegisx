@@ -35,6 +35,7 @@ export type Challenge = {
   updatedAt: string
   attachments: Attachment[]
   runCount: number
+  runStatusCounts: Record<RunStatus, number>
   remoteId: string | null
   remoteAvailable: boolean
   remoteSolved: boolean

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Paperclip, Play, Server, Trash2, TriangleAlert } from "lucide-react"
+import { Check, Paperclip, Pause, Play, Server, Square, Trash2, TriangleAlert, X } from "lucide-react"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -181,9 +181,35 @@ export function ChallengeCard({
             {challenge.remoteTargetCount}
           </span>
         )}
-        <span className="ml-auto tabular-nums">
-          {challenge.runCount} {challenge.runCount === 1 ? "run" : "runs"}
-        </span>
+        {challenge.runCount > 0 && (
+          <span className="ml-auto flex items-center gap-1.5">
+            {Object.entries(challenge.runStatusCounts).map(([status, count]) =>
+              count > 0 ? (
+                <Badge
+                  key={status}
+                  size="sm"
+                  variant={
+                    status === "completed"
+                      ? "success"
+                      : status === "failed"
+                        ? "error"
+                        : status === "paused"
+                          ? "warning"
+                          : "secondary"
+                  }
+                >
+                  {count}
+                  {status === "completed" && <Check className="size-3" />}
+                  {status === "failed" && <X className="size-3" />}
+                  {status === "paused" && <Pause className="size-3" />}
+                  {status === "stopped" && <Square className="size-3" />}
+                  {status === "running" && <Play className="size-3" />}
+                  <span className="sr-only"> {status}</span>
+                </Badge>
+              ) : null
+            )}
+          </span>
+        )}
       </CardFrameFooter>
     </CardFrame>
   )

@@ -83,10 +83,21 @@ export function createCatalogReader(
       createdAt: string
       downloadUrl: string
     }>,
-    runSummary?: { runCount: number; completedRunCount: number }
+    runSummary?: {
+      runCount: number
+      runningCount: number
+      pausedCount: number
+      completedCount: number
+      failedCount: number
+      stoppedCount: number
+    }
   ): ChallengePublic => {
     const runCount = Number(runSummary?.runCount ?? 0)
-    const completedRunCount = Number(runSummary?.completedRunCount ?? 0)
+    const runningCount = Number(runSummary?.runningCount ?? 0)
+    const pausedCount = Number(runSummary?.pausedCount ?? 0)
+    const completedCount = Number(runSummary?.completedCount ?? 0)
+    const failedCount = Number(runSummary?.failedCount ?? 0)
+    const stoppedCount = Number(runSummary?.stoppedCount ?? 0)
     const { remoteSourceKey: _, remoteTargetInfo, ...publicValue } = challenge
     return {
       ...publicValue,
@@ -98,8 +109,15 @@ export function createCatalogReader(
         : parseTargetInfo(remoteTargetInfo),
       attachments: challengeAttachments,
       runCount,
+      runStatusCounts: {
+        running: runningCount,
+        paused: pausedCount,
+        completed: completedCount,
+        failed: failedCount,
+        stopped: stoppedCount,
+      },
       status:
-        challenge.remoteSolved || completedRunCount > 0
+        challenge.remoteSolved || completedCount > 0
           ? ("solved" as const)
           : runCount > 0
             ? ("in_progress" as const)
@@ -117,7 +135,11 @@ export function createCatalogReader(
     const runSummary = db
       .select({
         runCount: count(),
-        completedRunCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
+        runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
+        pausedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'paused' then 1 else 0 end), 0)`,
+        completedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
+        failedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'failed' then 1 else 0 end), 0)`,
+        stoppedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'stopped' then 1 else 0 end), 0)`,
       })
       .from(runs)
       .where(eq(runs.challengeId, challengeId))
@@ -144,7 +166,11 @@ export function createCatalogReader(
             .select({
               challengeId: runs.challengeId,
               runCount: count(),
-              completedRunCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
+              runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
+              pausedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'paused' then 1 else 0 end), 0)`,
+              completedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
+              failedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'failed' then 1 else 0 end), 0)`,
+              stoppedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'stopped' then 1 else 0 end), 0)`,
             })
             .from(runs)
             .where(inArray(runs.challengeId, ids))
