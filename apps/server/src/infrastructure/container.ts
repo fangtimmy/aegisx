@@ -226,7 +226,15 @@ async function captureOutput(
 
 function containerPath(value: string, cwd = workspace, write = false) {
   const resolved = posix.resolve(cwd, value)
-  if (resolved !== workspace && !resolved.startsWith(`${workspace}/`)) {
+  const inWorkspace =
+    resolved === workspace || resolved.startsWith(`${workspace}/`)
+  // /opt/solver is a read-only resource tree (ENVIRONMENT.md, knowledges,
+  // tools). Allow bounded read tools (read/grep/find/ls) to reach it;
+  // writes remain blocked by the `write` check below and the read-only rootfs.
+  const inSolver =
+    !write &&
+    (resolved === "/opt/solver" || resolved.startsWith("/opt/solver/"))
+  if (!inWorkspace && !inSolver) {
     throw new Error("Path is outside the run workspace")
   }
   if (write && resolved !== cwd && !resolved.startsWith(`${cwd}/`)) {
@@ -297,10 +305,10 @@ export function createContainerBackend(
     exec: async (command, options) => {
       const boundedCommand =
         options.timeout && options.timeout > 0
-          ? `timeout -k 2s ${options.timeout}s sh -lc ${shellQuote(command)}`
+          ? `timeout -k 2s ${options.timeout}s sh -c ${shellQuote(command)}`
           : command
       const result = await dockerExec(
-        ["--workdir", cwd, name, "sh", "-lc", boundedCommand],
+        ["--workdir", cwd, name, "sh", "-c", boundedCommand],
         {
           ...options,
           maxOutputBytes: maxCapturedShellOutput,
