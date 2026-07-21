@@ -86,7 +86,6 @@ function containerCreateArgs(
     "bridge",
     "--ipc",
     "none",
-    "--read-only",
     "--cap-drop",
     "ALL",
     "--security-opt",
