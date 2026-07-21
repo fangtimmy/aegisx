@@ -30,7 +30,6 @@ Open the URL printed by Vite. The web development server proxies `/api` to `http
 ## Data and execution
 
 The API stores its SQLite database, attachments, and run workspaces under `data/`. Set `AEGISX_DATA_DIR` to use another directory.
-Attachments default to a 512 MiB per-file limit; change it under Settings > Runtime.
 
 Local runs execute commands with the API process permissions and are not sandboxed. Container runs use a dedicated Docker container with the run workspace mounted at `/workspace` and configurable CPU, memory, and PID limits.
 
@@ -38,11 +37,7 @@ Each run has one main agent and may have multiple background child agents. See [
 
 ## Solve container image
 
-`container/Dockerfile.solve` defines the Kali-based `aegis/solve:kali` image used for container Runs. Build it manually from the repository root:
-
-```sh
-docker build -f container/Dockerfile.solve -t aegis/solve:kali .
-```
+`container/Dockerfile.solve` defines the Kali-based `aegisx/solver:kali` image used for container Runs.
 
 ## Checks
 

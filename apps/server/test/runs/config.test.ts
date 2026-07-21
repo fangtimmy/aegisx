@@ -12,7 +12,7 @@ test("parses run configuration with conservative fallbacks", () => {
     parseEnvironment(
       JSON.stringify({
         type: "container",
-        image: "aegis/solve:kali",
+        image: "aegisx/solver:kali",
         cpus: 2,
         memoryMb: 1024,
         pidsLimit: 128,
@@ -20,7 +20,7 @@ test("parses run configuration with conservative fallbacks", () => {
     )
   ).toEqual({
     type: "container",
-    image: "aegis/solve:kali",
+    image: "aegisx/solver:kali",
     cpus: 2,
     memoryMb: 1024,
     pidsLimit: 128,
