@@ -97,6 +97,20 @@ export class PlatformError extends Error {
   }
 }
 
+export type PlatformRequestError = {
+  method: string
+  url: string
+  requestHeaders: Record<string, string>
+  requestBody: string | null
+  // HTTP status when a response was received; null for network-layer failures.
+  status: number | null
+  // null when no response was received (network failure).
+  responseHeaders: Record<string, string> | null
+  responseBody: string | null
+  // Populated only for network-layer failures; null for HTTP errors.
+  error: string | null
+}
+
 export class PlatformHttp {
   readonly origin: string
   private readonly baseUrl: string
@@ -104,7 +118,8 @@ export class PlatformHttp {
   constructor(
     baseUrl: string,
     private readonly headers: Record<string, string>,
-    private readonly onResponse?: (response: Response) => void
+    private readonly onResponse?: (response: Response) => void,
+    private readonly onError?: (info: PlatformRequestError) => void
   ) {
     const url = new URL(baseUrl.trim())
     if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -117,30 +132,76 @@ export class PlatformHttp {
   async request(path: string, init: RequestInit = {}, authenticated = true) {
     const url = new URL(path, `${this.baseUrl}/`)
     const sameOrigin = url.origin === this.origin
-    const response = await fetch(url, {
-      ...init,
-      headers: {
-        Accept: "application/json",
-        ...(authenticated && sameOrigin ? this.headers : {}),
-        ...init.headers,
-      },
-      redirect: "follow",
-      signal: init.signal ?? AbortSignal.timeout(30_000),
-    })
+    const method = String(init.method ?? "GET")
+    const requestHeaders: Record<string, string> = {
+      Accept: "application/json",
+      ...(authenticated && sameOrigin ? this.headers : {}),
+      ...(init.headers as Record<string, string> | undefined),
+    }
+    const requestBody = typeof init.body === "string" ? init.body : null
+
+    let response: Response
+    try {
+      response = await fetch(url, {
+        ...init,
+        headers: requestHeaders,
+        redirect: "follow",
+        signal: init.signal ?? AbortSignal.timeout(30_000),
+      })
+    } catch (rawError) {
+      // Network-layer failure: DNS, connection refused, timeout, abort.
+      // No HTTP response exists; record what failed and rethrow.
+      const error =
+        rawError instanceof Error ? rawError.message : String(rawError)
+      this.onError?.({
+        method,
+        url: url.toString(),
+        requestHeaders,
+        requestBody,
+        status: null,
+        responseHeaders: null,
+        responseBody: null,
+        error,
+      })
+      throw rawError
+    }
     this.onResponse?.(response)
     if (!response.ok) {
-      let message = `Platform request failed (${response.status})`
+      let responseBody: string | null = null
       try {
-        const body = (await response.clone().json()) as JsonRecord
-        message = String(
-          body.message ??
-            body.detail ??
-            (isRecord(body.error) ? body.error.message : body.error) ??
-            message
-        )
+        responseBody = await response.text()
       } catch {
-        // Keep the HTTP status when the platform does not return JSON.
+        // Body unreadable; leave null.
       }
+      let message = `Platform request failed (${response.status})`
+      if (responseBody) {
+        try {
+          const body = JSON.parse(responseBody) as JsonRecord
+          const extracted =
+            body.message ??
+            body.detail ??
+            (isRecord(body.error) ? body.error.message : body.error)
+          if (extracted !== undefined && extracted !== null) {
+            message = String(extracted)
+          }
+        } catch {
+          // Non-JSON body; keep the status-line message.
+        }
+      }
+      const responseHeaders: Record<string, string> = {}
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value
+      })
+      this.onError?.({
+        method,
+        url: url.toString(),
+        requestHeaders,
+        requestBody,
+        status: response.status,
+        responseHeaders,
+        responseBody,
+        error: null,
+      })
       throw new PlatformError(message, response.status)
     }
     return response
@@ -170,9 +231,10 @@ export abstract class BaseAdapter implements CtfPlatformAdapter {
   constructor(
     protected readonly config: PlatformConfig,
     headers: Record<string, string>,
-    onResponse?: (response: Response) => void
+    onResponse?: (response: Response) => void,
+    onError?: (info: PlatformRequestError) => void
   ) {
-    this.http = new PlatformHttp(config.baseUrl, headers, onResponse)
+    this.http = new PlatformHttp(config.baseUrl, headers, onResponse, onError)
   }
 
   abstract listEvents(): Promise<RemoteEvent[]>

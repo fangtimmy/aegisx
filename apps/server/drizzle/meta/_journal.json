@@ -169,6 +169,13 @@
       "when": 1784633888612,
       "tag": "0023_outgoing_may_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1784639731589,
+      "tag": "0024_curious_iron_monger",
+      "breakpoints": true
     }
   ]
 }

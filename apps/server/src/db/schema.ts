@@ -371,3 +371,22 @@ export const providerModels = sqliteTable(
     ),
   ]
 )
+
+export const platformRequestLog = sqliteTable(
+  "platform_request_log",
+  {
+    id: text("id").primaryKey().notNull(),
+    createdAt: text("created_at").notNull(),
+    method: text("method").notNull(),
+    url: text("url").notNull(),
+    requestHeaders: text("request_headers").notNull(),
+    requestBody: text("request_body"),
+    status: integer("status"),
+    responseHeaders: text("response_headers"),
+    responseBody: text("response_body"),
+    // Populated only for network-layer failures (no HTTP response received).
+    // null for HTTP errors — see `status` + `response_body` instead.
+    error: text("error"),
+  },
+  (table) => [index("platform_request_log_created_at_idx").on(table.createdAt)]
+)

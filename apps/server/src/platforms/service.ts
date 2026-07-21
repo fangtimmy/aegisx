@@ -1,12 +1,23 @@
 import { and, eq, inArray } from "drizzle-orm"
 import type { EventPlatform } from "../../../shared/api"
 import type { createDatabase } from "../db"
-import { challenges, eventPlatforms, events, runs } from "../db/schema"
+import {
+  challenges,
+  eventPlatforms,
+  events,
+  platformRequestLog,
+  runs,
+} from "../db/schema"
 import type { createStorage } from "../infrastructure/storage"
 import { A1CtfAdapter } from "./adapters/a1ctf"
 import { CtfdAdapter } from "./adapters/ctfd"
 import { Ret2ShellAdapter } from "./adapters/ret2shell"
-import type { CtfPlatformAdapter, PlatformConfig, PlatformType } from "./core"
+import type {
+  CtfPlatformAdapter,
+  PlatformConfig,
+  PlatformRequestError,
+  PlatformType,
+} from "./core"
 import { PlatformActionError, platformError } from "./errors"
 import { createPlatformSubmissions } from "./submissions"
 import { createPlatformSync } from "./sync"
@@ -16,13 +27,14 @@ export { PlatformActionError } from "./errors"
 
 export function createPlatformAdapter(
   config: PlatformConfig,
-  onCredential?: (credential: string) => void
+  onCredential?: (credential: string) => void,
+  onError?: (info: PlatformRequestError) => void
 ): CtfPlatformAdapter {
-  if (config.type === "ctfd") return new CtfdAdapter(config)
+  if (config.type === "ctfd") return new CtfdAdapter(config, onError)
   if (config.type === "ret2shell") {
-    return new Ret2ShellAdapter(config, onCredential)
+    return new Ret2ShellAdapter(config, onCredential, onError)
   }
-  return new A1CtfAdapter(config)
+  return new A1CtfAdapter(config, onError)
 }
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -33,6 +45,32 @@ export function createPlatformService(
   storage: Storage,
   maxAttachmentBytes: () => number
 ) {
+  const logPlatformRequest = (info: PlatformRequestError) => {
+    const now = new Date().toISOString()
+    db.insert(platformRequestLog)
+      .values({
+        id: crypto.randomUUID(),
+        createdAt: now,
+        method: info.method,
+        url: info.url,
+        requestHeaders: JSON.stringify(info.requestHeaders),
+        requestBody: info.requestBody,
+        status: info.status,
+        responseHeaders: info.responseHeaders
+          ? JSON.stringify(info.responseHeaders)
+          : null,
+        responseBody: info.responseBody,
+        error: info.error,
+      })
+      .run()
+    console.error("Platform request failed", {
+      method: info.method,
+      url: info.url,
+      status: info.status,
+      error: info.error,
+    })
+  }
+
   const storedEvent = (eventId: string) =>
     db.select().from(events).where(eq(events.id, eventId)).get()
 
@@ -58,12 +96,16 @@ export function createPlatformService(
   function adapterForEvent(eventId: string) {
     const config = configForEvent(eventId)
     if (!config) return undefined
-    return createPlatformAdapter(config, (credential) => {
-      db.update(eventPlatforms)
-        .set({ credential, updatedAt: new Date().toISOString() })
-        .where(eq(eventPlatforms.eventId, eventId))
-        .run()
-    })
+    return createPlatformAdapter(
+      config,
+      (credential) => {
+        db.update(eventPlatforms)
+          .set({ credential, updatedAt: new Date().toISOString() })
+          .where(eq(eventPlatforms.eventId, eventId))
+          .run()
+      },
+      logPlatformRequest
+    )
   }
 
   const platformSync = createPlatformSync(
@@ -132,9 +174,13 @@ export function createPlatformService(
       )
     }
     try {
-      const remoteEvents = await createPlatformAdapter(config, (credential) => {
-        config.credential = credential
-      }).listEvents()
+      const remoteEvents = await createPlatformAdapter(
+        config,
+        (credential) => {
+          config.credential = credential
+        },
+        logPlatformRequest
+      ).listEvents()
       if (!remoteEvents.some((remote) => remote.id === config.remoteEventId)) {
         throw new PlatformActionError("not_found", "Remote event not found")
       }
@@ -210,11 +256,15 @@ export function createPlatformService(
     credential: string
   }) {
     try {
-      return await createPlatformAdapter({
-        ...input,
-        baseUrl: normalizeBaseUrl(input.baseUrl),
-        remoteEventId: input.type === "ctfd" ? "site" : "",
-      }).listEvents()
+      return await createPlatformAdapter(
+        {
+          ...input,
+          baseUrl: normalizeBaseUrl(input.baseUrl),
+          remoteEventId: input.type === "ctfd" ? "site" : "",
+        },
+        undefined,
+        logPlatformRequest
+      ).listEvents()
     } catch (error) {
       throw platformError(error)
     }

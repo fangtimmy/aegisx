@@ -7,6 +7,7 @@ import {
   nullableNumber,
   nullableString,
   type PlatformConfig,
+  type PlatformRequestError,
   type RemoteChallengeSummary,
   type RemoteEvent,
   type SubmissionResult,
@@ -17,7 +18,8 @@ import {
 export class Ret2ShellAdapter extends BaseAdapter {
   constructor(
     config: PlatformConfig,
-    onCredential?: (credential: string) => void
+    onCredential?: (credential: string) => void,
+    onError?: (info: PlatformRequestError) => void
   ) {
     super(
       config,
@@ -25,7 +27,8 @@ export class Ret2ShellAdapter extends BaseAdapter {
       (response) => {
         const token = response.headers.get("Set-Token")
         if (token) onCredential?.(token)
-      }
+      },
+      onError
     )
   }
 

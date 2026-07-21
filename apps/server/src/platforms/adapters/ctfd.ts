@@ -4,16 +4,25 @@ import {
   nullableNumber,
   nullableString,
   type PlatformConfig,
+  type PlatformRequestError,
   type RemoteChallengeSummary,
   type SubmissionResult,
 } from "../core"
 
 export class CtfdAdapter extends BaseAdapter {
-  constructor(config: PlatformConfig) {
-    super(config, {
-      Authorization: `Token ${config.credential}`,
-      "Content-Type": "application/json",
-    })
+  constructor(
+    config: PlatformConfig,
+    onError?: (info: PlatformRequestError) => void
+  ) {
+    super(
+      config,
+      {
+        Authorization: `Token ${config.credential}`,
+        "Content-Type": "application/json",
+      },
+      undefined,
+      onError
+    )
   }
 
   async listEvents() {

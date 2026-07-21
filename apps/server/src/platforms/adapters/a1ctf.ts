@@ -7,14 +7,23 @@ import {
   nullableString,
   type PlatformConfig,
   PlatformError,
+  type PlatformRequestError,
   type SubmissionResult,
   targetDefinitions,
   targetEndpoint,
 } from "../core"
 
 export class A1CtfAdapter extends BaseAdapter {
-  constructor(config: PlatformConfig) {
-    super(config, { Cookie: `a1token=${config.credential}` })
+  constructor(
+    config: PlatformConfig,
+    onError?: (info: PlatformRequestError) => void
+  ) {
+    super(
+      config,
+      { Cookie: `a1token=${config.credential}` },
+      undefined,
+      onError
+    )
   }
 
   async listEvents() {
