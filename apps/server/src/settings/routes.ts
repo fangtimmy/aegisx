@@ -27,6 +27,15 @@ type Database = ReturnType<typeof createDatabase>["db"]
 const runtimeSettingsInput = Type.Object(
   {
     defaultModelId: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+    defaultThinkingLevel: Type.Union([
+      Type.Literal("off"),
+      Type.Literal("minimal"),
+      Type.Literal("low"),
+      Type.Literal("medium"),
+      Type.Literal("high"),
+      Type.Literal("xhigh"),
+      Type.Literal("max"),
+    ]),
     environment: Type.Union([Type.Literal("local"), Type.Literal("container")]),
     containerImage: Type.String({
       minLength: 1,
@@ -79,6 +88,15 @@ const settingsTransferInput = Type.Object(
         defaultModelId: Type.Union([
           Type.String({ minLength: 1 }),
           Type.Null(),
+        ]),
+        defaultThinkingLevel: Type.Union([
+          Type.Literal("off"),
+          Type.Literal("minimal"),
+          Type.Literal("low"),
+          Type.Literal("medium"),
+          Type.Literal("high"),
+          Type.Literal("xhigh"),
+          Type.Literal("max"),
         ]),
         environment: Type.Union([
           Type.Literal("local"),
@@ -187,6 +205,14 @@ export function registerSettingsRoutes(
     const promptTemplates = resolvePromptTemplates(value)
     return {
       defaultModelId: value.defaultModelId,
+      defaultThinkingLevel: value.defaultThinkingLevel as
+        | "off"
+        | "minimal"
+        | "low"
+        | "medium"
+        | "high"
+        | "xhigh"
+        | "max",
       environment: value.environment as "local" | "container",
       containerImage: value.containerImage,
       cpus: value.cpuLimit / 1000,
@@ -219,6 +245,14 @@ export function registerSettingsRoutes(
       const value = getSettings()
       return {
         defaultModelId: value.defaultModelId,
+        defaultThinkingLevel: value.defaultThinkingLevel as
+          | "off"
+          | "minimal"
+          | "low"
+          | "medium"
+          | "high"
+          | "xhigh"
+          | "max",
         environment: value.environment as "local" | "container",
         containerImage: value.containerImage,
         cpus: value.cpuLimit / 1000,
@@ -276,6 +310,7 @@ export function registerSettingsRoutes(
     db.update(settings)
       .set({
         defaultModelId: input.defaultModelId,
+        defaultThinkingLevel: input.defaultThinkingLevel,
         environment: input.environment,
         containerImage: input.containerImage.trim(),
         cpuLimit: Math.round(input.cpus * 1000),
@@ -414,7 +449,11 @@ export function registerSettingsRoutes(
       const now = new Date().toISOString()
       db.transaction((tx) => {
         tx.update(settings)
-          .set({ defaultModelId: null, updatedAt: now })
+          .set({
+            defaultModelId: null,
+            defaultThinkingLevel: "off",
+            updatedAt: now,
+          })
           .where(eq(settings.id, 1))
           .run()
         tx.delete(providerConnections).run()
@@ -444,6 +483,7 @@ export function registerSettingsRoutes(
         tx.update(settings)
           .set({
             defaultModelId: input.settings.defaultModelId,
+            defaultThinkingLevel: input.settings.defaultThinkingLevel,
             environment: input.settings.environment,
             containerImage: input.settings.containerImage.trim(),
             cpuLimit: Math.round(input.settings.cpus * 1000),

@@ -251,6 +251,7 @@ export type AgentInspector = {
 
 export type SettingsPublic = {
   defaultModelId: string | null
+  defaultThinkingLevel: ThinkingLevel
   environment: "local" | "container"
   containerImage: string
   cpus: number

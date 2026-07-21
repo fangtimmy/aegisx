@@ -149,7 +149,17 @@ export function registerRunRoutes(
               modelId: selected.model.modelId,
               modelLabel: selected.model.label,
               costKnown: parseModelMetadata(selected.model.metadata).costKnown,
-              thinkingLevel: input.thinkingLevel ?? "off",
+              thinkingLevel:
+                input.thinkingLevel ??
+                (defaults.defaultThinkingLevel as
+                  | "off"
+                  | "minimal"
+                  | "low"
+                  | "medium"
+                  | "high"
+                  | "xhigh"
+                  | "max") ??
+                "off",
             },
             environment
           ),

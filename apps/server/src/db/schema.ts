@@ -297,6 +297,9 @@ export const settings = sqliteTable(
     defaultModelId: text("default_model_id").references(
       () => providerModels.id
     ),
+    defaultThinkingLevel: text("default_thinking_level")
+      .notNull()
+      .default("off"),
     environment: text("environment").notNull().default("local"),
     containerImage: text("container_image").notNull().default("alpine:3.22"),
     cpuLimit: integer("cpu_limit").notNull().default(1000),

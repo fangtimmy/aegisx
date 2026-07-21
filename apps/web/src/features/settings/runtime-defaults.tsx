@@ -31,6 +31,7 @@ import {
 type RuntimeSettingsInput = Pick<
   SettingsPublic,
   | "defaultModelId"
+  | "defaultThinkingLevel"
   | "environment"
   | "containerImage"
   | "cpus"
@@ -42,6 +43,7 @@ type RuntimeSettingsInput = Pick<
 
 type RuntimeFormValues = {
   defaultModelId: string
+  defaultThinkingLevel: string
   environment: "local" | "container"
   containerImage: string
   cpus: number
@@ -80,6 +82,7 @@ export function RuntimeDefaults({
   const form = useForm<RuntimeFormValues>({
     defaultValues: {
       defaultModelId,
+      defaultThinkingLevel: settings.defaultThinkingLevel,
       environment: settings.environment,
       containerImage: settings.containerImage,
       cpus: settings.cpus,
@@ -97,6 +100,14 @@ export function RuntimeDefaults({
       onSubmit={form.handleSubmit((values) =>
         mutation.mutate({
           defaultModelId: values.defaultModelId || null,
+          defaultThinkingLevel: values.defaultThinkingLevel as
+            | "off"
+            | "minimal"
+            | "low"
+            | "medium"
+            | "high"
+            | "xhigh"
+            | "max",
           environment: values.environment,
           containerImage: values.containerImage.trim(),
           cpus: values.cpus,
@@ -145,6 +156,41 @@ export function RuntimeDefaults({
                     </SelectGroup>
                   )
                 })}
+              </SelectPopup>
+            </Select>
+          )}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Default reasoning level</FieldLabel>
+        <Controller
+          control={form.control}
+          name="defaultThinkingLevel"
+          render={({ field }) => (
+            <Select
+              items={{
+                off: "Off",
+                minimal: "Minimal",
+                low: "Low",
+                medium: "Medium",
+                high: "High",
+                xhigh: "Extra high",
+                max: "Maximum",
+              }}
+              onValueChange={field.onChange}
+              value={field.value}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                <SelectItem value="off">Off</SelectItem>
+                <SelectItem value="minimal">Minimal</SelectItem>
+                <SelectItem value="low">Low</SelectItem>
+                <SelectItem value="medium">Medium</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="xhigh">Extra high</SelectItem>
+                <SelectItem value="max">Maximum</SelectItem>
               </SelectPopup>
             </Select>
           )}
