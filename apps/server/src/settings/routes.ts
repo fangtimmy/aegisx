@@ -82,6 +82,15 @@ const runtimeSettingsInput = Type.Object(
     providerDiscoverTimeoutMs: Type.Optional(
       Type.Integer({ minimum: 1_000, maximum: 120_000 })
     ),
+    defaultToolTimeoutMs: Type.Optional(
+      Type.Integer({ minimum: 1_000, maximum: 600_000 })
+    ),
+    toolTimeouts: Type.Optional(
+      Type.Record(
+        Type.String(),
+        Type.Integer({ minimum: 1_000, maximum: 600_000 })
+      )
+    ),
   },
   { additionalProperties: false }
 )
@@ -249,6 +258,8 @@ export function registerSettingsRoutes(
       tmpfsSize: value.tmpfsSize,
       platformRequestTimeoutMs: value.platformRequestTimeoutMs,
       providerDiscoverTimeoutMs: value.providerDiscoverTimeoutMs,
+      defaultToolTimeoutMs: value.defaultToolTimeoutMs,
+      toolTimeouts: { ...value.toolTimeouts },
       ...promptTemplates,
       defaultMainSystemPromptTemplate: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       defaultChildSystemPromptTemplate: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
@@ -352,6 +363,10 @@ export function registerSettingsRoutes(
       patch.platformRequestTimeoutMs = input.platformRequestTimeoutMs
     if (input.providerDiscoverTimeoutMs !== undefined)
       patch.providerDiscoverTimeoutMs = input.providerDiscoverTimeoutMs
+    if (input.defaultToolTimeoutMs !== undefined)
+      patch.defaultToolTimeoutMs = input.defaultToolTimeoutMs
+    if (input.toolTimeouts !== undefined)
+      patch.toolTimeouts = input.toolTimeouts
     configStore.updateSettings(patch)
     setMaxConcurrency(input.maxConcurrency)
     return c.json(publicSettings())

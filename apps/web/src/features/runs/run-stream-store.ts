@@ -29,6 +29,8 @@ type ToolProgress = {
   result?: unknown
   status: "running" | "done" | "error"
   isError: boolean
+  terminal?: "timed_out" | "cancelled" | "failed"
+  terminalMessage?: string
 }
 
 type AgentView = {
@@ -52,6 +54,18 @@ function numberValue(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined
+}
+
+function isTerminal(
+  value: unknown
+): value is "timed_out" | "cancelled" | "failed" {
+  return value === "timed_out" || value === "cancelled" || value === "failed"
+}
+
+function isTransientActivity(
+  value: unknown
+): value is "retrying" | "compacting" {
+  return value === "retrying" || value === "compacting"
 }
 
 function parseEvent(value: unknown): RunStreamEvent | undefined {
@@ -113,8 +127,29 @@ function parseEvent(value: unknown): RunStreamEvent | undefined {
           ...("result" in value ? { result: value.result } : {}),
           status,
           ...(value.isError === true ? { isError: true } : {}),
+          ...(isTerminal(value.terminal)
+            ? {
+                terminal: value.terminal,
+                ...(typeof value.terminalMessage === "string"
+                  ? { terminalMessage: value.terminalMessage }
+                  : {}),
+              }
+            : {}),
         }
       : undefined
+  }
+  if (value.type === "agent.activity") {
+    if (typeof value.agentId !== "string") return undefined
+    if (value.activity === null) {
+      return { type: "agent.activity", agentId: value.agentId, activity: null }
+    }
+    if (!isTransientActivity(value.activity)) return undefined
+    return {
+      type: "agent.activity",
+      agentId: value.agentId,
+      activity: value.activity,
+      ...(typeof value.detail === "string" ? { detail: value.detail } : {}),
+    }
   }
   if (value.type === "message.committed") {
     const cursor = numberValue(value.cursor)
@@ -143,6 +178,10 @@ export class RunStreamStore {
   >()
   private readonly toolProgress = new Map<string, Map<string, ToolProgress>>()
   private readonly completedTools = new Map<string, Set<string>>()
+  private readonly activity = new Map<
+    string,
+    { activity: "retrying" | "compacting"; detail?: string }
+  >()
   private readonly views = new Map<string, AgentView>()
   private readonly snapshots = new Map<string, ConversationItem[]>()
   private readonly listeners = new Map<string, Set<Listener>>()
@@ -162,6 +201,24 @@ export class RunStreamStore {
 
   get(agentId: string) {
     return this.snapshots.get(agentId) ?? emptyItems
+  }
+
+  getActivity(agentId: string): {
+    activity: "retrying" | "compacting"
+    detail?: string
+  } | null {
+    return this.activity.get(agentId) ?? null
+  }
+
+  getRunningTool(agentId: string): { toolName: string; args: unknown } | null {
+    const tools = this.toolProgress.get(agentId)
+    if (!tools) return null
+    let latest: ToolProgress | null = null
+    for (const tool of tools.values()) {
+      if (tool.status === "running") latest = tool
+    }
+    if (!latest) return null
+    return { toolName: latest.toolName, args: latest.args }
   }
 
   private rebuildCommitted(agentId: string) {
@@ -212,6 +269,10 @@ export class RunStreamStore {
         result: entry.result,
         isError: entry.isError,
         status: entry.status === "error" ? "done" : entry.status,
+        ...("terminal" in entry ? { terminal: entry.terminal } : {}),
+        ...("terminalMessage" in entry
+          ? { terminalMessage: entry.terminalMessage }
+          : {}),
       })),
     ]
     const tail = buildConversation(view.tail, live)
@@ -296,6 +357,18 @@ export class RunStreamStore {
         this.toolProgress.set(event.agentId, tools)
         this.rebuildLive(event.agentId)
       }
+      return
+    }
+    if (event.type === "agent.activity") {
+      if (event.activity === null) {
+        if (this.activity.delete(event.agentId)) this.notify(event.agentId)
+      } else {
+        this.activity.set(event.agentId, {
+          activity: event.activity,
+          ...("detail" in event ? { detail: event.detail } : {}),
+        })
+        this.notify(event.agentId)
+      }
     }
   }
 
@@ -321,9 +394,11 @@ export class RunStreamStore {
     const agentIds = new Set([
       ...this.messageProgress.keys(),
       ...this.toolProgress.keys(),
+      ...this.activity.keys(),
     ])
     this.messageProgress.clear()
     this.toolProgress.clear()
+    this.activity.clear()
     for (const agentId of agentIds) this.rebuildLive(agentId)
   }
 
@@ -331,6 +406,7 @@ export class RunStreamStore {
     const agentIds = new Set([
       ...this.messageProgress.keys(),
       ...this.toolProgress.keys(),
+      ...this.activity.keys(),
     ])
     for (const [agentId, progress] of this.messageProgress) {
       for (const [messageId, entry] of progress) {
@@ -339,6 +415,7 @@ export class RunStreamStore {
       if (progress.size === 0) this.messageProgress.delete(agentId)
     }
     this.toolProgress.clear()
+    this.activity.clear()
     for (const agentId of agentIds) this.rebuildLive(agentId)
   }
 

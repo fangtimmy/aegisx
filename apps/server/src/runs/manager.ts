@@ -80,6 +80,12 @@ type RunEvent =
   | { type: "run.updated"; run: RunPublic; cursor?: number }
   | { type: "agent.updated"; agent: AgentSummary; cursor?: number }
   | {
+      type: "agent.activity"
+      agentId: string
+      activity: "retrying" | "compacting" | null
+      detail?: string
+    }
+  | {
       type: "message.progress"
       agentId: string
       messageId: string
@@ -96,6 +102,8 @@ type RunEvent =
       result?: unknown
       status: "running" | "done" | "error"
       isError?: boolean
+      terminal?: "timed_out" | "cancelled" | "failed"
+      terminalMessage?: string
     }
   | {
       type: "message.committed"
@@ -883,10 +891,21 @@ export function createRunManager(options: Options) {
         baseDelayMs: settings.retryBaseDelayMs,
         maxDelayMs: settings.retryMaxDelayMs,
       },
+      getToolTimeoutSettings: () => {
+        const live = options.getSettings()
+        return {
+          defaultToolTimeoutMs: live.defaultToolTimeoutMs,
+          toolTimeouts: live.toolTimeouts,
+        }
+      },
       canRunTool: () =>
         !containerFailures.has(runId) &&
         getStored(runId)?.status === "running" &&
         getStoredAgent(agentId)?.status === "running",
+      onActivity: (activity, detail) => {
+        if (current.get(agentId)?.generation !== generation) return
+        emit(runId, { type: "agent.activity", agentId, activity, detail })
+      },
       onEvent: (event, messageId, cursor) => {
         if (current.get(agentId)?.generation !== generation) return
         for (const secret of options.getApiKeys?.(provider) ?? []) {
@@ -928,6 +947,22 @@ export function createRunManager(options: Options) {
           const revision = nextRevision(toolRevisions, event.toolCallId)
           const ended = event.type === "tool_execution_end"
           const args = "args" in event ? event.args : undefined
+          const terminal =
+            ended && event.isError
+              ? db
+                  .select({
+                    status: agentToolCalls.status,
+                    error: agentToolCalls.error,
+                  })
+                  .from(agentToolCalls)
+                  .where(
+                    and(
+                      eq(agentToolCalls.agentId, agentId),
+                      eq(agentToolCalls.toolCallId, event.toolCallId)
+                    )
+                  )
+                  .get()
+              : undefined
           emit(runId, {
             type: "tool.progress",
             agentId,
@@ -942,6 +977,18 @@ export function createRunManager(options: Options) {
                 : {}),
             status: ended ? (event.isError ? "error" : "done") : "running",
             ...(ended && event.isError ? { isError: true } : {}),
+            ...(terminal &&
+            ["timed_out", "cancelled", "failed"].includes(terminal.status)
+              ? {
+                  terminal: terminal.status as
+                    | "timed_out"
+                    | "cancelled"
+                    | "failed",
+                  ...(terminal.error
+                    ? { terminalMessage: terminal.error }
+                    : {}),
+                }
+              : {}),
           })
         }
       },

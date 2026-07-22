@@ -2,6 +2,10 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core"
 import { eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import { agentToolCalls } from "../db/schema"
+import {
+  defaultSettings,
+  type SettingsData,
+} from "../infrastructure/config-store"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type ToolStatus =
@@ -12,19 +16,22 @@ type ToolStatus =
   | "cancelled"
   | "abandoned"
 
-const defaultTimeoutMs = 30_000
-const toolTimeoutMs: Record<string, number> = {
-  bash: 120_000,
-  submit_flag: 90_000,
-  get_target: 30_000,
-  start_target: 120_000,
-  extend_target: 30_000,
-  stop_target: 30_000,
-}
+export type ToolTimeoutSettings = Pick<
+  SettingsData,
+  "defaultToolTimeoutMs" | "toolTimeouts"
+>
 
-export type ToolTimeoutResolver = (toolName: string, args: unknown) => number
+export type ToolTimeoutResolver = (
+  toolName: string,
+  args: unknown,
+  settings: ToolTimeoutSettings
+) => number
 
-export const resolveToolTimeoutMs: ToolTimeoutResolver = (toolName, args) => {
+export function resolveToolTimeoutMs(
+  toolName: string,
+  args: unknown,
+  settings: ToolTimeoutSettings
+): number {
   if (
     toolName === "bash" &&
     args &&
@@ -34,7 +41,13 @@ export const resolveToolTimeoutMs: ToolTimeoutResolver = (toolName, args) => {
   ) {
     return args.timeout * 1000 + 1000
   }
-  return toolTimeoutMs[toolName] ?? defaultTimeoutMs
+  return settings.toolTimeouts[toolName] ?? settings.defaultToolTimeoutMs
+}
+
+export function createToolTimeoutResolver(
+  getSettings: () => ToolTimeoutSettings
+): (toolName: string, args: unknown) => number {
+  return (toolName, args) => resolveToolTimeoutMs(toolName, args, getSettings())
 }
 
 function resultBytes(content: AgentToolResult<unknown>["content"]) {
@@ -78,13 +91,14 @@ export function manageAgentTools(
   db: Database,
   agentId: string,
   tools: AgentTool[],
-  timeoutFor: ToolTimeoutResolver = resolveToolTimeoutMs
+  resolve: (toolName: string, args: unknown) => number = (name, args) =>
+    resolveToolTimeoutMs(name, args, defaultSettings)
 ): AgentTool[] {
   return tools.map((tool) => ({
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const id = crypto.randomUUID()
-      const timeoutMs = timeoutFor(tool.name, args)
+      const timeoutMs = resolve(tool.name, args)
       const started = performance.now()
       const createdAt = new Date().toISOString()
       db.insert(agentToolCalls)

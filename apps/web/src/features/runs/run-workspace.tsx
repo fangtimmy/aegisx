@@ -46,6 +46,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import type { Challenge } from "@/lib/api"
+import { AgentActivityBadge } from "./agent-activity-badge"
 import { AgentInspectorButton } from "./agent-inspector"
 import { AgentStatusIcon } from "./agent-status-icon"
 import { CreateRunDialog } from "./create-run-dialog"
@@ -386,6 +387,13 @@ export function RunWorkspace({
                         ? ` · ${control.variables?.action} pending`
                         : ""}
                     </span>
+                  )}
+                  {active && selectedAgent && (
+                    <AgentActivityBadge
+                      agentId={selectedAgent.id}
+                      agentStatus={selectedAgent.status}
+                      stream={streamStore}
+                    />
                   )}
                   {run.status === "running" && (
                     <Button

@@ -180,6 +180,12 @@ export type RunStreamEvent =
       cursor?: number
     }
   | {
+      type: "agent.activity"
+      agentId: string
+      activity: "retrying" | "compacting" | null
+      detail?: string
+    }
+  | {
       type: "message.progress"
       agentId: string
       messageId: string
@@ -196,6 +202,8 @@ export type RunStreamEvent =
       result?: unknown
       status: "running" | "done" | "error"
       isError?: boolean
+      terminal?: "timed_out" | "cancelled" | "failed"
+      terminalMessage?: string
     }
   | {
       type: "message.committed"
@@ -288,6 +296,8 @@ export type SettingsPublic = {
   tmpfsSize: string
   platformRequestTimeoutMs: number
   providerDiscoverTimeoutMs: number
+  defaultToolTimeoutMs: number
+  toolTimeouts: Record<string, number>
   mainSystemPromptTemplate: string
   childSystemPromptTemplate: string
   initialPromptTemplate: string

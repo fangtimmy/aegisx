@@ -45,6 +45,8 @@ export type SettingsData = {
   tmpfsSize: string
   platformRequestTimeoutMs: number
   providerDiscoverTimeoutMs: number
+  defaultToolTimeoutMs: number
+  toolTimeouts: Record<string, number>
   updatedAt: string
 }
 
@@ -75,6 +77,15 @@ export type ConfigData = {
 
 const now = () => new Date().toISOString()
 
+export const defaultToolTimeouts: Record<string, number> = {
+  bash: 120_000,
+  submit_flag: 90_000,
+  get_target: 30_000,
+  start_target: 120_000,
+  extend_target: 30_000,
+  stop_target: 30_000,
+}
+
 export const defaultSettings: SettingsData = {
   defaultModelId: null,
   defaultThinkingLevel: "off",
@@ -99,6 +110,8 @@ export const defaultSettings: SettingsData = {
   tmpfsSize: "64m",
   platformRequestTimeoutMs: 30_000,
   providerDiscoverTimeoutMs: 10_000,
+  defaultToolTimeoutMs: 30_000,
+  toolTimeouts: { ...defaultToolTimeouts },
   updatedAt: "",
 }
 
@@ -225,8 +238,26 @@ function normalizeSettings(raw: unknown): SettingsData {
       r.providerDiscoverTimeoutMs,
       defaultSettings.providerDiscoverTimeoutMs
     ),
+    defaultToolTimeoutMs: num(
+      r.defaultToolTimeoutMs,
+      defaultSettings.defaultToolTimeoutMs
+    ),
+    toolTimeouts: normalizeToolTimeouts(r.toolTimeouts),
     updatedAt: str(r.updatedAt, now()),
   }
+}
+
+function normalizeToolTimeouts(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...defaultToolTimeouts }
+  }
+  const merged: Record<string, number> = { ...defaultToolTimeouts }
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      merged[key] = value
+    }
+  }
+  return merged
 }
 
 function normalizeModel(raw: unknown): ProviderModelData | undefined {

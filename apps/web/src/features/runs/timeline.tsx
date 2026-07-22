@@ -216,6 +216,19 @@ function toolIcon(name: string) {
 const activityTriggerClass =
   "flex w-full cursor-pointer items-center justify-start gap-2 rounded-sm py-1 text-left text-muted-foreground text-sm hover:text-foreground data-panel-open:[&>svg:last-child]:rotate-90"
 
+function terminalLabel(tool: ToolBlock): string | null {
+  switch (tool.terminal) {
+    case "timed_out":
+      return "Timed out"
+    case "cancelled":
+      return "Cancelled"
+    case "failed":
+      return "Failed"
+    default:
+      return null
+  }
+}
+
 function ToolActivity({
   tool,
   separated = false,
@@ -223,10 +236,12 @@ function ToolActivity({
   tool: ToolBlock
   separated?: boolean
 }) {
+  const isError = tool.status === "error"
+  const label = isError ? (terminalLabel(tool) ?? "Failed") : null
   const StatusIcon =
     tool.status === "running"
       ? LoaderCircle
-      : tool.status === "error"
+      : isError
         ? CircleAlert
         : toolIcon(tool.name)
   return (
@@ -234,7 +249,7 @@ function ToolActivity({
       <CollapsibleTrigger className={activityTriggerClass}>
         <StatusIcon
           className={
-            tool.status === "error"
+            isError
               ? "size-3.5 shrink-0 text-destructive"
               : tool.status === "running"
                 ? "size-3.5 shrink-0 animate-spin text-muted-foreground"
@@ -245,8 +260,13 @@ function ToolActivity({
         {tool.status === "running" && (
           <span className="shrink-0 text-xs">Running</span>
         )}
-        {tool.status === "error" && (
-          <span className="shrink-0 text-destructive text-xs">Failed</span>
+        {label && (
+          <span
+            className="shrink-0 text-destructive text-xs"
+            title={tool.terminalMessage ?? undefined}
+          >
+            {label}
+          </span>
         )}
         <ChevronRight className="size-3.5 shrink-0 transition-transform" />
       </CollapsibleTrigger>

@@ -63,6 +63,8 @@ export type LiveEntry =
       result?: unknown
       isError: boolean
       status: "running" | "done"
+      terminal?: "timed_out" | "cancelled" | "failed"
+      terminalMessage?: string
     }
   | {
       key: string
@@ -78,6 +80,8 @@ export type ToolBlock = {
   args: unknown
   output: string
   status: "pending" | "running" | "done" | "error"
+  terminal?: "timed_out" | "cancelled" | "failed"
+  terminalMessage?: string
 }
 
 type AgentBlock =
@@ -305,6 +309,12 @@ export function buildConversation(
         : entry.status === "done"
           ? "done"
           : "running"
+      if ("terminal" in entry && entry.terminal) {
+        block.terminal = entry.terminal
+        if ("terminalMessage" in entry && entry.terminalMessage) {
+          block.terminalMessage = entry.terminalMessage
+        }
+      }
       if (!existing) {
         currentAgent().blocks.push(block)
         tools.set(entry.toolCallId, block)

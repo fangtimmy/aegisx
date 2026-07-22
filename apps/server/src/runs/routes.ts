@@ -301,6 +301,9 @@ export function registerRunRoutes(
         if (value.event.type === "tool.progress") {
           return `tool:${String(value.event.agentId ?? "")}:${String(value.event.toolCallId ?? "")}`
         }
+        if (value.event.type === "agent.activity") {
+          return `activity:${String(value.event.agentId ?? "")}`
+        }
         return null
       }
       const writePending = async () => {

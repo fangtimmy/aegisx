@@ -4,7 +4,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentTool } from "@earendil-works/pi-agent-core"
 import { Type } from "typebox"
-import { manageAgentTools } from "../../src/agents/managed-tools"
+import {
+  createToolTimeoutResolver,
+  manageAgentTools,
+  resolveToolTimeoutMs,
+} from "../../src/agents/managed-tools"
 import { createDatabase } from "../../src/db"
 
 const roots: string[] = []
@@ -117,4 +121,44 @@ test("cancels a tool even when its promise ignores abort", async () => {
     succeeded: 0,
     error: "bash was cancelled",
   })
+})
+
+test("resolveToolTimeoutMs honors settings overrides and the bash arg budget", () => {
+  const settings = {
+    defaultToolTimeoutMs: 30_000,
+    toolTimeouts: { bash: 120_000, submit_flag: 90_000 },
+  }
+  expect(resolveToolTimeoutMs("bash", {}, settings)).toBe(120_000)
+  expect(resolveToolTimeoutMs("submit_flag", {}, settings)).toBe(90_000)
+  expect(resolveToolTimeoutMs("unknown", {}, settings)).toBe(30_000)
+  expect(resolveToolTimeoutMs("bash", { timeout: 5 }, settings)).toBe(6_000)
+})
+
+test("manageAgentTools applies a settings-driven resolver live", async () => {
+  const { db, sqlite } = setup()
+  let current = {
+    defaultToolTimeoutMs: 30_000,
+    toolTimeouts: { bash: 20 },
+  }
+  const [tool] = manageAgentTools(
+    db,
+    "agent",
+    [hangingTool("bash")],
+    createToolTimeoutResolver(() => current)
+  )
+  const first = tool.execute("settings-1", {}, undefined)
+  await expect(first).rejects.toThrow("bash timed out after 1 seconds")
+  current = { defaultToolTimeoutMs: 30_000, toolTimeouts: { bash: 10 } }
+  const second = tool.execute("settings-2", {}, undefined)
+  await expect(second).rejects.toThrow("bash timed out after 1 seconds")
+  expect(
+    sqlite
+      .query(
+        "select tool_call_id, timeout_ms from agent_tool_calls order by created_at"
+      )
+      .all()
+  ).toEqual([
+    { tool_call_id: "settings-1", timeout_ms: 20 },
+    { tool_call_id: "settings-2", timeout_ms: 10 },
+  ])
 })

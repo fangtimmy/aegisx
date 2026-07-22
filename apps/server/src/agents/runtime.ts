@@ -22,7 +22,7 @@ import {
   runEvents,
 } from "../db/schema"
 import { redactSecrets } from "../infrastructure/redaction"
-import { manageAgentTools } from "./managed-tools"
+import { createToolTimeoutResolver, manageAgentTools } from "./managed-tools"
 import {
   type AegisXMessage,
   type AegisXMetadata,
@@ -48,6 +48,8 @@ export type RetryConfig = {
   maxDelayMs: number
 }
 
+export type AgentActivity = "retrying" | "compacting" | null
+
 type RuntimeOptions = {
   db: Database
   runId: string
@@ -60,7 +62,12 @@ type RuntimeOptions = {
   thinkingLevel: ModelThinkingLevel
   retryConfig?: RetryConfig
   canRunTool?(): boolean
+  getToolTimeoutSettings?: () => {
+    defaultToolTimeoutMs: number
+    toolTimeouts: Record<string, number>
+  }
   onEvent(event: AgentEvent, messageId?: string, cursor?: number): void
+  onActivity?(activity: AgentActivity, detail?: string): void
   onSettled(outcome: RuntimeOutcome): void | Promise<void>
 }
 
@@ -198,51 +205,66 @@ export function createAgentRuntime(options: RuntimeOptions) {
         : []),
       ...tail.slice(0, keepAt),
     ]
-    const response = await options.models.completeSimple(
-      options.model,
-      {
-        systemPrompt:
-          "Summarize the conversation for another agent. Preserve concrete findings, commands, files, failures, pending work, and constraints. Do not continue the task.",
-        messages: [textMessage(JSON.stringify(toLlm(compacted)))],
-      },
-      { signal, maxTokens: 4096 }
-    )
-    options.db
-      .insert(agentUsage)
-      .values({
-        id: crypto.randomUUID(),
-        agentId: options.agentId,
-        kind: "compaction",
-        usage: JSON.stringify(response.usage),
-        createdAt: new Date().toISOString(),
-      })
-      .run()
-    if (response.stopReason === "error" || response.stopReason === "aborted") {
-      return effective
-    }
-    const summary = response.content
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("\n")
-      .trim()
-    if (!summary) return effective
+    options.onActivity?.("compacting")
+    try {
+      const response = await options.models.completeSimple(
+        options.model,
+        {
+          systemPrompt:
+            "Summarize the conversation for another agent. Preserve concrete findings, commands, files, failures, pending work, and constraints. Do not continue the task.",
+          messages: [textMessage(JSON.stringify(toLlm(compacted)))],
+        },
+        { signal, maxTokens: 4096 }
+      )
+      options.db
+        .insert(agentUsage)
+        .values({
+          id: crypto.randomUUID(),
+          agentId: options.agentId,
+          kind: "compaction",
+          usage: JSON.stringify(response.usage),
+          createdAt: new Date().toISOString(),
+        })
+        .run()
+      if (
+        response.stopReason === "error" ||
+        response.stopReason === "aborted"
+      ) {
+        return effective
+      }
+      const summary = response.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n")
+        .trim()
+      if (!summary) return effective
 
-    contextSummary = { summary, through: through + keepAt }
-    options.db
-      .update(runAgents)
-      .set({
-        contextSummary: summary,
-        contextThroughSequence: through + keepAt,
-      })
-      .where(eq(runAgents.id, options.agentId))
-      .run()
-    return [summaryMessage(summary), ...tail.slice(keepAt)]
+      contextSummary = { summary, through: through + keepAt }
+      options.db
+        .update(runAgents)
+        .set({
+          contextSummary: summary,
+          contextThroughSequence: through + keepAt,
+        })
+        .where(eq(runAgents.id, options.agentId))
+        .run()
+      return [summaryMessage(summary), ...tail.slice(keepAt)]
+    } finally {
+      options.onActivity?.(null)
+    }
   }
 
   const agent = new Agent({
     initialState: {
       systemPrompt: options.systemPrompt,
       model: options.model,
-      tools: manageAgentTools(options.db, options.agentId, options.tools),
+      tools: manageAgentTools(
+        options.db,
+        options.agentId,
+        options.tools,
+        options.getToolTimeoutSettings
+          ? createToolTimeoutResolver(options.getToolTimeoutSettings)
+          : undefined
+      ),
       messages,
       thinkingLevel: options.thinkingLevel,
     },
@@ -411,6 +433,10 @@ export function createAgentRuntime(options: RuntimeOptions) {
         cfg.baseDelayMs * 2 ** (attempts - 1),
         cfg.maxDelayMs
       )
+      options.onActivity?.(
+        "retrying",
+        `attempt ${attempts} of ${cfg.maxAttempts}`
+      )
       await Bun.sleep(delay)
       if (stopped()) break
       try {
@@ -420,6 +446,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
       }
       outcome = classify()
     }
+    if (attempts > 0) options.onActivity?.(null)
     return attempts > 0 ? { ...outcome, retries: attempts } : outcome
   }
 

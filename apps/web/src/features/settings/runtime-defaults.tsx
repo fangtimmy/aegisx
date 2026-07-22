@@ -28,6 +28,15 @@ import {
   type SettingsPublic,
 } from "@/lib/api"
 
+const TOOL_TIMEOUT_FIELDS: Array<[string, string]> = [
+  ["bash", "Bash"],
+  ["submit_flag", "Submit flag"],
+  ["get_target", "Get target"],
+  ["start_target", "Start target"],
+  ["extend_target", "Extend target"],
+  ["stop_target", "Stop target"],
+]
+
 type RuntimeSettingsInput = Pick<
   SettingsPublic,
   | "defaultModelId"
@@ -51,6 +60,8 @@ type RuntimeSettingsInput = Pick<
   tmpfsSize: string
   platformRequestTimeoutMs: number
   providerDiscoverTimeoutMs: number
+  defaultToolTimeoutMs: number
+  toolTimeouts: Record<string, number>
 }
 
 type RuntimeFormValues = {
@@ -74,6 +85,8 @@ type RuntimeFormValues = {
   tmpfsSize: string
   platformRequestTimeoutMs: number
   providerDiscoverTimeoutMs: number
+  defaultToolTimeoutMs: number
+  toolTimeouts: Record<string, number>
 }
 
 export function RuntimeDefaults({
@@ -124,6 +137,8 @@ export function RuntimeDefaults({
       tmpfsSize: settings.tmpfsSize,
       platformRequestTimeoutMs: settings.platformRequestTimeoutMs,
       providerDiscoverTimeoutMs: settings.providerDiscoverTimeoutMs,
+      defaultToolTimeoutMs: settings.defaultToolTimeoutMs,
+      toolTimeouts: { ...settings.toolTimeouts },
     },
   })
 
@@ -160,6 +175,8 @@ export function RuntimeDefaults({
           tmpfsSize: values.tmpfsSize,
           platformRequestTimeoutMs: values.platformRequestTimeoutMs,
           providerDiscoverTimeoutMs: values.providerDiscoverTimeoutMs,
+          defaultToolTimeoutMs: values.defaultToolTimeoutMs,
+          toolTimeouts: values.toolTimeouts,
         })
       )}
     >
@@ -644,6 +661,54 @@ export function RuntimeDefaults({
           rules={{ required: true, min: 1000, max: 120000 }}
         />
       </Field>
+      <Field>
+        <FieldLabel>Default tool timeout (ms)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="defaultToolTimeoutMs"
+          render={({ field }) => (
+            <NumberField
+              max={600000}
+              min={1000}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1000, max: 600000 }}
+        />
+      </Field>
+      {TOOL_TIMEOUT_FIELDS.map(([key, label]) => (
+        <Field key={key}>
+          <FieldLabel>{label} timeout (ms)</FieldLabel>
+          <Controller
+            control={form.control}
+            name={`toolTimeouts.${key}`}
+            render={({ field }) => (
+              <NumberField
+                max={600000}
+                min={1000}
+                onValueChange={field.onChange}
+                required
+                value={field.value}
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement />
+                  <NumberFieldInput />
+                  <NumberFieldIncrement />
+                </NumberFieldGroup>
+              </NumberField>
+            )}
+            rules={{ required: true, min: 1000, max: 600000 }}
+          />
+        </Field>
+      ))}
       <div className="col-span-2 flex items-center gap-3">
         <Button loading={mutation.isPending} type="submit">
           Save defaults
