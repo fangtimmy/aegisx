@@ -1,10 +1,10 @@
 import {
   Check,
   CircleDashed,
-  Pause,
   CircleSlash,
-  X,
   LoaderCircle,
+  Pause,
+  X,
 } from "lucide-react"
 import type { AgentStatus } from "@/lib/api"
 import { cn } from "@/lib/utils"

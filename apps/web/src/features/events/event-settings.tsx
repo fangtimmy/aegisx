@@ -111,8 +111,8 @@ export function EventSettings({ event }: { event: EventSummary }) {
           Prompt instructions
         </h2>
         <p className="mt-1 text-muted-foreground text-sm">
-          Additional instructions appended to every agent prompt for this
-          event — flag formats, conventions, common gotchas.
+          Additional instructions appended to every agent prompt for this event
+          — flag formats, conventions, common gotchas.
         </p>
         <form
           className="mt-4 max-w-xl"

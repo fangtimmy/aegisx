@@ -6,11 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "check": "biome check .",
-    "lint": "biome lint .",
-    "format": "biome format --write .",
+    "check": "biome check --write . && tsc --noEmit",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
