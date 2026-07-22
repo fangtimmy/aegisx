@@ -47,7 +47,7 @@ import {
   type ConversationItem,
   isRecord,
   type ToolBlock,
-  text,
+  toolStatusLabel,
 } from "./timeline-model"
 
 export function formatTime(value: string | number | null | undefined) {
@@ -92,41 +92,11 @@ const Markdown = memo(function Markdown({ children }: { children: string }) {
 })
 
 function toolSummary(tool: ToolBlock) {
-  const args = isRecord(tool.args) ? tool.args : null
-  const fixed: Record<string, string> = {
-    extend_target: "Extended target lifetime",
-    get_target: "Checked target",
-    start_target: "Started target",
-    stop_target: "Stopped target",
-    submit_flag: "Submitted flag",
-  }
-  if (fixed[tool.name]) return fixed[tool.name]
-  const subject =
-    tool.name === "bash"
-      ? text(args?.command).split("\n", 1)[0]
-      : text(args?.path ?? args?.pattern ?? args?.summary ?? args?.name)
-  const verb =
-    tool.name === "bash"
-      ? "Ran"
-      : tool.name === "read"
-        ? "Read"
-        : tool.name === "grep"
-          ? "Searched"
-          : tool.name === "find"
-            ? "Found"
-            : tool.name === "ls"
-              ? "Listed"
-              : tool.name === "edit" || tool.name === "write"
-                ? "Updated"
-                : tool.name === "finish_run"
-                  ? "Completed run"
-                  : tool.name === "spawn_agent"
-                    ? "Started agent"
-                    : tool.name === "inspect_agent"
-                      ? "Inspected agent"
-                      : tool.name
-  const label = subject ? `${verb} ${subject}` : verb
-  return label.length > 100 ? `${label.slice(0, 99)}…` : label
+  return toolStatusLabel(
+    tool.name,
+    tool.args,
+    tool.status === "pending" || tool.status === "running"
+  )
 }
 
 function parseToolValue(value: unknown) {
@@ -244,6 +214,22 @@ function ToolActivity({
       : isError
         ? CircleAlert
         : toolIcon(tool.name)
+  const startedRef = useRef<number | null>(null)
+  const [elapsed, setElapsed] = useState<number | null>(null)
+  useEffect(() => {
+    if (tool.status !== "running") {
+      startedRef.current = null
+      setElapsed(null)
+      return
+    }
+    if (startedRef.current === null) startedRef.current = Date.now()
+    setElapsed(Date.now() - startedRef.current)
+    const id = setInterval(() => {
+      if (startedRef.current !== null)
+        setElapsed(Date.now() - startedRef.current)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [tool.status])
   return (
     <Collapsible className={separated ? "mt-3" : undefined}>
       <CollapsibleTrigger className={activityTriggerClass}>
@@ -257,8 +243,10 @@ function ToolActivity({
           }
         />
         <span className="min-w-0 flex-1 truncate">{toolSummary(tool)}</span>
-        {tool.status === "running" && (
-          <span className="shrink-0 text-xs">Running</span>
+        {elapsed !== null && (
+          <span className="shrink-0 text-muted-foreground text-xs">
+            {formatDuration(elapsed)}
+          </span>
         )}
         {label && (
           <span

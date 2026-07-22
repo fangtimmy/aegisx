@@ -3,38 +3,6 @@ import { useCallback, useSyncExternalStore } from "react"
 import type { AgentStatus } from "@/lib/api"
 import type { RunStreamStore } from "./run-stream-store"
 
-function text(value: unknown): string {
-  return typeof value === "string" ? value : ""
-}
-
-function activityToolLabel(name: string, args: unknown): string {
-  const record =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? (args as Record<string, unknown>)
-      : null
-  if (name === "bash") {
-    const cmd = text(record?.command).split("\n", 1)[0]
-    return cmd ? `Running ${cmd}` : "Running command"
-  }
-  const verbs: Record<string, string> = {
-    submit_flag: "Submitting flag",
-    start_target: "Starting target",
-    stop_target: "Stopping target",
-    get_target: "Checking target",
-    extend_target: "Extending target",
-    read: "Reading file",
-    grep: "Searching",
-    find: "Finding files",
-    ls: "Listing files",
-    edit: "Editing file",
-    write: "Writing file",
-    finish_run: "Finishing run",
-    spawn_agent: "Spawning agent",
-    inspect_agent: "Inspecting agent",
-  }
-  return verbs[name] ?? `Running ${name}`
-}
-
 export function AgentActivityBadge({
   stream,
   agentId,
@@ -51,23 +19,20 @@ export function AgentActivityBadge({
   const getSignature = useCallback(() => {
     const activity = stream.getActivity(agentId)
     const running = stream.getRunningTool(agentId)
-    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.detail ?? ""}|${running?.toolName ?? ""}`
+    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.detail ?? ""}|${running ? 1 : 0}`
   }, [stream, agentId, agentStatus])
   useSyncExternalStore(subscribe, getSignature, getSignature)
 
   if (agentStatus !== "running") return null
   const activity = stream.getActivity(agentId)
-  let label: string
-  if (activity?.activity === "compacting") {
-    label = "Compacting context…"
-  } else if (activity?.activity === "retrying") {
-    label = activity.detail ? `Retrying… (${activity.detail})` : "Retrying…"
-  } else {
-    const running = stream.getRunningTool(agentId)
-    label = running
-      ? `${activityToolLabel(running.toolName, running.args)}…`
-      : "Thinking…"
-  }
+  const label =
+    activity?.activity === "compacting"
+      ? "Compacting context…"
+      : activity?.activity === "retrying"
+        ? "Retrying…"
+        : stream.getRunningTool(agentId)
+          ? "Working…"
+          : "Thinking…"
   return (
     <span
       aria-live="polite"

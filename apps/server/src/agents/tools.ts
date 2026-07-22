@@ -39,7 +39,11 @@ export type WorkspaceBackend = {
   list(path: string, signal?: AbortSignal): Promise<WorkspaceEntry[]>
   exec(
     command: string,
-    options: { signal?: AbortSignal; timeout?: number }
+    options: {
+      signal?: AbortSignal
+      timeout?: number
+      onOutput?: (accumulatedStdout: string) => void
+    }
   ): Promise<{
     stdout: string
     stderr: string
@@ -101,15 +105,21 @@ export function createLocalBackend(
         let stderrBytes = 0
         let capturedStdoutBytes = 0
         let capturedStderrBytes = 0
+        let liveStdout = ""
         let timedOut = false
         const capture = (
           chunks: Buffer[],
           chunk: Uint8Array,
-          capturedBytes: number
+          capturedBytes: number,
+          onText?: (text: string) => void
         ) => {
           const value = Buffer.from(chunk)
           const remaining = maxCapturedShellOutput - capturedBytes
-          if (remaining > 0) chunks.push(value.subarray(0, remaining))
+          if (remaining > 0) {
+            const slice = value.subarray(0, remaining)
+            chunks.push(slice)
+            onText?.(slice.toString())
+          }
           return Math.min(
             maxCapturedShellOutput,
             capturedBytes + value.byteLength
@@ -117,7 +127,15 @@ export function createLocalBackend(
         }
         child.stdout.on("data", (chunk) => {
           stdoutBytes += Buffer.byteLength(chunk)
-          capturedStdoutBytes = capture(stdout, chunk, capturedStdoutBytes)
+          capturedStdoutBytes = capture(
+            stdout,
+            chunk,
+            capturedStdoutBytes,
+            (text) => {
+              liveStdout += text
+              options.onOutput?.(liveStdout)
+            }
+          )
         })
         child.stderr.on("data", (chunk) => {
           stderrBytes += Buffer.byteLength(chunk)
@@ -243,47 +261,73 @@ export function createWorkspaceTools(
       command: Type.String(),
       timeout: Type.Optional(Type.Number({ minimum: 0.1, maximum: 3600 })),
     }),
-    execute: async (_id, params, signal) => {
-      const result = await backend.exec(params.command, {
-        signal,
-        timeout: params.timeout,
-      })
-      const text = [result.stdout, result.stderr].filter(Boolean).join("\n")
-      const outputPath =
-        result.outputBytes > maxShellOutput || result.truncated
-          ? `.aegisx/tool-output/${crypto.randomUUID()}.log`
-          : undefined
-      if (outputPath) await backend.write(outputPath, text, signal)
-      const notices = [
-        outputPath
-          ? `Output was limited to ${maxShellOutput} bytes. Captured output: ${outputPath}`
-          : null,
-        result.truncated
-          ? `Capture was limited to ${maxCapturedShellOutput} bytes.`
-          : null,
-        result.exitCode !== 0
-          ? `Command exited with status ${result.exitCode}.`
-          : null,
-      ].filter(Boolean)
-      const visible = outputPath ? truncateText(text, maxShellOutput) : text
-      const message =
-        [visible, ...notices].filter(Boolean).join("\n\n") ||
-        "Command completed with no output"
-      if (result.exitCode !== 0) throw new Error(message)
-      return {
-        content: [
-          {
-            type: "text",
-            text: message,
+    execute: async (_id, params, signal, onUpdate) => {
+      let liveText = ""
+      let flushTimer: ReturnType<typeof setTimeout> | null = null
+      let lastFlush = 0
+      const emit = () => {
+        flushTimer = null
+        lastFlush = Date.now()
+        const preview =
+          liveText.length > 16_000 ? liveText.slice(-16_000) : liveText
+        // ponytail: streaming preview carries no structured details; UI reads content only
+        onUpdate?.({
+          content: [{ type: "text" as const, text: preview }],
+          details: {} as never,
+        })
+      }
+      try {
+        const result = await backend.exec(params.command, {
+          signal,
+          timeout: params.timeout,
+          onOutput: onUpdate
+            ? (text) => {
+                liveText = text
+                if (flushTimer) return
+                const wait = 250 - (Date.now() - lastFlush)
+                flushTimer = setTimeout(emit, Math.max(0, wait))
+              }
+            : undefined,
+        })
+        const text = [result.stdout, result.stderr].filter(Boolean).join("\n")
+        const outputPath =
+          result.outputBytes > maxShellOutput || result.truncated
+            ? `.aegisx/tool-output/${crypto.randomUUID()}.log`
+            : undefined
+        if (outputPath) await backend.write(outputPath, text, signal)
+        const notices = [
+          outputPath
+            ? `Output was limited to ${maxShellOutput} bytes. Captured output: ${outputPath}`
+            : null,
+          result.truncated
+            ? `Capture was limited to ${maxCapturedShellOutput} bytes.`
+            : null,
+          result.exitCode !== 0
+            ? `Command exited with status ${result.exitCode}.`
+            : null,
+        ].filter(Boolean)
+        const visible = outputPath ? truncateText(text, maxShellOutput) : text
+        const message =
+          [visible, ...notices].filter(Boolean).join("\n\n") ||
+          "Command completed with no output"
+        if (result.exitCode !== 0) throw new Error(message)
+        return {
+          content: [
+            {
+              type: "text",
+              text: message,
+            },
+          ],
+          details: {
+            exitCode: result.exitCode,
+            outputBytes: result.outputBytes,
+            truncated: Boolean(outputPath),
+            captureTruncated: result.truncated,
+            ...(outputPath ? { outputPath } : {}),
           },
-        ],
-        details: {
-          exitCode: result.exitCode,
-          outputBytes: result.outputBytes,
-          truncated: Boolean(outputPath),
-          captureTruncated: result.truncated,
-          ...(outputPath ? { outputPath } : {}),
-        },
+        }
+      } finally {
+        if (flushTimer) clearTimeout(flushTimer)
       }
     },
   })

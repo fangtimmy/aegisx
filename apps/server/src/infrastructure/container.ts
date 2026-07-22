@@ -154,6 +154,7 @@ async function dockerExec(
     timeout?: number
     maxOutputBytes?: number
     onFatal?: () => void
+    onOutput?: (accumulatedStdout: string) => void
   } = {}
 ) {
   if (options.signal?.aborted) throw new Error("aborted")
@@ -186,7 +187,7 @@ async function dockerExec(
   options.signal?.addEventListener("abort", abort, { once: true })
   try {
     const [stdout, stderr, exitCode] = await Promise.all([
-      captureOutput(process.stdout, options.maxOutputBytes),
+      captureOutput(process.stdout, options.maxOutputBytes, options.onOutput),
       captureOutput(process.stderr, options.maxOutputBytes),
       process.exited,
     ])
@@ -207,17 +208,20 @@ async function dockerExec(
 
 async function captureOutput(
   stream: ReadableStream<Uint8Array> | null,
-  limit?: number
+  limit?: number,
+  onOutput?: (accumulatedStdout: string) => void
 ) {
   if (!stream) return { content: Buffer.alloc(0), bytes: 0, truncated: false }
   if (limit === undefined) {
     const content = Buffer.from(await new Response(stream).arrayBuffer())
+    onOutput?.(content.toString())
     return { content, bytes: content.byteLength, truncated: false }
   }
   const chunks: Buffer[] = []
   const reader = stream.getReader()
   let bytes = 0
   let captured = 0
+  let live = ""
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
@@ -225,8 +229,13 @@ async function captureOutput(
     const remaining = limit - captured
     if (remaining > 0) {
       const chunk = Buffer.from(value)
-      chunks.push(chunk.subarray(0, remaining))
+      const slice = chunk.subarray(0, remaining)
+      chunks.push(slice)
       captured += Math.min(chunk.byteLength, remaining)
+      if (onOutput) {
+        live += slice.toString()
+        onOutput(live)
+      }
     }
   }
   return {
