@@ -370,6 +370,46 @@ export type EventStats = {
   usage: UsageSummary
   cost: EventCostSummary
   duration: EventDurationSummary
+  funnel: {
+    totalChallenges: number
+    attemptedChallenges: number
+    submittedChallenges: number
+    solvedChallenges: number
+    totalSubmissions: number
+    acceptedSubmissions: number
+    rejectedSubmissions: number
+    submittedRuns: number
+    firstAttemptAcceptedRuns: number
+  }
+  failures: Array<{
+    reason: string
+    runCount: number
+    usage: UsageSummary
+  }>
+  models: Array<{
+    key: string
+    provider: string
+    modelId: string
+    modelName: string
+    runCount: number
+    terminalRunCount: number
+    successfulRunCount: number
+    successRate: number | null
+    averageTokens: number
+    averageDurationMs: number | null
+    usage: UsageSummary
+    cost: EventCostSummary
+    duration: EventDurationSummary
+  }>
+  trend: Array<{
+    date: string
+    runCount: number
+    successfulRunCount: number
+    successRate: number | null
+    totalTokens: number
+    knownCost: number
+    averageDurationMs: number | null
+  }>
   categories: Array<{
     category: string
     challengeCount: number

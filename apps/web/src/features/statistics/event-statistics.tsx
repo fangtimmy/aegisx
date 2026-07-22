@@ -29,6 +29,13 @@ import {
 } from "@/components/ui/table"
 import { apiRequest, type EventStats } from "@/lib/api"
 import {
+  FailureAttributionChart,
+  ModelComparisonChart,
+  PerformanceTrendChart,
+  SubmissionFunnelChart,
+  TokenCompositionChart,
+} from "./event-statistics-analysis-charts"
+import {
   CategoryCoverageChart,
   ChallengeCostChart,
   RunEfficiencyChart,
@@ -63,7 +70,7 @@ export function EventStatistics({ eventId }: { eventId: string }) {
   const [runFilter, setRunFilter] = useState("all")
   const [runSort, setRunSort] = useState("recent")
   const query = useQuery({
-    queryKey: ["events", eventId, "statistics", 2],
+    queryKey: ["events", eventId, "statistics", 3],
     queryFn: () => apiRequest<EventStats>(`/events/${eventId}/stats`),
   })
 
@@ -118,6 +125,13 @@ export function EventStatistics({ eventId }: { eventId: string }) {
   const unknownCost = stats.cost.unknownRunCount
     ? `${stats.cost.unknownRunCount} runs unknown`
     : "All runs priced"
+  const firstAttemptRate =
+    stats.funnel.submittedRuns === 0
+      ? "-"
+      : `${(
+          (stats.funnel.firstAttemptAcceptedRuns / stats.funnel.submittedRuns) *
+            100
+        ).toFixed(1)}%`
 
   return (
     <div className="flex flex-col gap-8">
@@ -198,6 +212,143 @@ export function EventStatistics({ eventId }: { eventId: string }) {
           ))}
         </div>
       </section>
+
+      <div className="grid grid-cols-2 gap-x-8">
+        <section className="border-t pt-5" aria-labelledby="submission-funnel">
+          <div className="flex items-baseline justify-between gap-4">
+            <div>
+              <h2 className="font-semibold text-base" id="submission-funnel">
+                Challenge funnel
+              </h2>
+              <p className="mt-1 text-muted-foreground text-xs">
+                Coverage from available challenges to accepted solutions
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="font-medium tabular-nums text-sm">
+                {firstAttemptRate} first attempt
+              </p>
+              <p className="mt-1 text-muted-foreground text-xs">
+                {stats.funnel.acceptedSubmissions} accepted /{" "}
+                {stats.funnel.rejectedSubmissions} rejected
+              </p>
+            </div>
+          </div>
+          <div className="mt-3">
+            <SubmissionFunnelChart funnel={stats.funnel} />
+          </div>
+        </section>
+
+        <section
+          className="border-t pt-5"
+          aria-labelledby="failure-attribution"
+        >
+          <h2 className="font-semibold text-base" id="failure-attribution">
+            Failure attribution
+          </h2>
+          <p className="mt-1 text-muted-foreground text-xs">
+            Mutually exclusive outcomes for unsuccessful terminal runs
+          </p>
+          <div className="mt-3">
+            <FailureAttributionChart failures={stats.failures} />
+          </div>
+        </section>
+      </div>
+
+      <section className="border-t pt-6" aria-labelledby="model-comparison">
+        <div className="flex items-baseline justify-between gap-4">
+          <div>
+            <h2 className="font-semibold text-base" id="model-comparison">
+              Model comparison
+            </h2>
+            <p className="mt-1 text-muted-foreground text-xs">
+              Bubble size represents run count; low-sample models remain visible
+            </p>
+          </div>
+          <span className="text-muted-foreground text-xs">
+            {stats.models.length} models
+          </span>
+        </div>
+        <div className="mt-4 grid grid-cols-[minmax(0,1fr)_minmax(520px,1.2fr)] gap-8">
+          <ModelComparisonChart models={stats.models} />
+          <Table className="min-w-[600px]" variant="card">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Model</TableHead>
+                <TableHead className="text-right">Runs</TableHead>
+                <TableHead className="text-right">Success</TableHead>
+                <TableHead className="text-right">Avg tokens</TableHead>
+                <TableHead className="text-right">Avg duration</TableHead>
+                <TableHead className="text-right">Cost / solve</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {stats.models.map((model) => (
+                <TableRow key={model.key}>
+                  <TableCell>
+                    <p className="font-medium">{model.modelName}</p>
+                    <div className="mt-1 flex items-center gap-2 text-muted-foreground text-xs">
+                      <span>{model.provider}</span>
+                      {model.runCount < 5 && (
+                        <Badge size="sm" variant="warning">
+                          Low sample
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {model.runCount}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {model.successRate === null
+                      ? "-"
+                      : `${(model.successRate * 100).toFixed(1)}%`}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCompactNumber(model.averageTokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatDuration(model.averageDurationMs)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {model.successfulRunCount === 0
+                      ? "-"
+                      : `${model.cost.unknownRunCount > 0 ? "At least " : ""}${formatCost(
+                          model.cost.known / model.successfulRunCount
+                        )}`}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-2 gap-x-8">
+        <section className="border-t pt-5" aria-labelledby="token-composition">
+          <h2 className="font-semibold text-base" id="token-composition">
+            Token composition
+          </h2>
+          <p className="mt-1 text-muted-foreground text-xs">
+            Input, output and provider cache contribution
+          </p>
+          <div className="mt-3">
+            <TokenCompositionChart usage={stats.usage} />
+          </div>
+        </section>
+
+        <section className="border-t pt-5" aria-labelledby="performance-trend">
+          <h2 className="font-semibold text-base" id="performance-trend">
+            Performance trend
+          </h2>
+          <p className="mt-1 text-muted-foreground text-xs">
+            Daily token consumption and terminal success rate
+          </p>
+          <div className="mt-3">
+            <PerformanceTrendChart trend={stats.trend} />
+          </div>
+        </section>
+      </div>
 
       <div className="grid grid-cols-2 gap-x-8 gap-y-10">
         <section className="border-t pt-5" aria-labelledby="category-coverage">

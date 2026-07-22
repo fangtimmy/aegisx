@@ -635,6 +635,25 @@ describe("providers, models, and usage", () => {
     )
     insertTool.run(crypto.randomUUID(), "tool-1", 120, 10, 0, 1, 0, now)
     insertTool.run(crypto.randomUUID(), "tool-2", 80, 5, 1, 0, 1, now)
+    const insertSubmission = sqlite.prepare(
+      "insert into submissions (id, run_id, flag, status, created_at, updated_at) values (?, ?, ?, ?, ?, ?)"
+    )
+    insertSubmission.run(
+      crypto.randomUUID(),
+      "known-cost",
+      "flag{known}",
+      "accepted",
+      now,
+      now
+    )
+    insertSubmission.run(
+      crypto.randomUUID(),
+      "unknown-cost",
+      "flag{wrong}",
+      "rejected",
+      now,
+      now
+    )
     const insertMessage = sqlite.prepare(
       "insert into agent_messages (id, agent_id, sequence, runtime_id, message, created_at) values (?, ?, 1, ?, ?, ?)"
     )
@@ -716,6 +735,35 @@ describe("providers, models, and usage", () => {
       successRate: 0.5,
       cost: { known: 0.25, unknownRunCount: 1 },
       duration: { medianMs: 10_000, p90Ms: 10_000 },
+      funnel: {
+        totalChallenges: 1,
+        attemptedChallenges: 1,
+        submittedChallenges: 1,
+        solvedChallenges: 1,
+        totalSubmissions: 2,
+        acceptedSubmissions: 1,
+        rejectedSubmissions: 1,
+        submittedRuns: 2,
+        firstAttemptAcceptedRuns: 1,
+      },
+      failures: [
+        {
+          reason: "Completed without flag",
+          runCount: 1,
+          usage: { totalTokens: 6, cost: null },
+        },
+      ],
+      trend: [
+        {
+          date: now.slice(0, 10),
+          runCount: 2,
+          successfulRunCount: 1,
+          successRate: 0.5,
+          totalTokens: 24,
+          knownCost: 0.25,
+          averageDurationMs: 10_000,
+        },
+      ],
       categories: [
         {
           category: "Uncategorized",
@@ -749,6 +797,26 @@ describe("providers, models, and usage", () => {
         },
       ],
     })
+    expect(eventStats.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "faux",
+          modelId: "faux-1",
+          runCount: 1,
+          successfulRunCount: 1,
+          successRate: 1,
+          averageTokens: 18,
+        }),
+        expect.objectContaining({
+          provider: "custom",
+          modelId: "custom-1",
+          runCount: 1,
+          successfulRunCount: 0,
+          successRate: 0,
+          averageTokens: 6,
+        }),
+      ])
+    )
     expect(eventStats.challenges[0]).toMatchObject({
       challengeId: challenge.id,
       runCount: 2,

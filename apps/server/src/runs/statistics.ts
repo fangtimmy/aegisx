@@ -1,5 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai"
-import { and, count, eq, sql } from "drizzle-orm"
+import { and, asc, count, eq, sql } from "drizzle-orm"
 import type {
   EventCostSummary,
   EventDurationSummary,
@@ -16,6 +16,7 @@ import {
   challenges,
   runAgents,
   runs,
+  submissions,
 } from "../db/schema"
 import { parseModelConfig } from "./config"
 
@@ -70,6 +71,19 @@ export function eventStatistics(
     .all()) {
     addUsage(row.runId, parseUsage(row.usage))
   }
+  const submissionRows = db
+    .select({
+      runId: submissions.runId,
+      challengeId: runs.challengeId,
+      status: submissions.status,
+      createdAt: submissions.createdAt,
+    })
+    .from(submissions)
+    .innerJoin(runs, eq(submissions.runId, runs.id))
+    .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+    .where(eq(challenges.eventId, eventId))
+    .orderBy(asc(submissions.createdAt))
+    .all()
   for (const row of db
     .select({ runId: runs.id, usage: agentUsage.usage })
     .from(agentUsage)
@@ -150,6 +164,10 @@ export function eventStatistics(
     usage: sumUsage(runStats.map((item) => item.usage)),
     cost: costSummary(runStats),
     duration: durationSummary(terminalRuns),
+    funnel: funnelStatistics(challengeStats, submissionRows),
+    failures: failureStatistics(terminalRuns),
+    models: modelStatistics(runStats, modelConfigs),
+    trend: trendStatistics(runStats),
     categories: [...categories.values()].sort(
       (a, b) =>
         b.challengeCount - a.challengeCount ||
@@ -171,6 +189,170 @@ export function eventStatistics(
     ),
     runs: runStats,
   }
+}
+
+function funnelStatistics(
+  challenges: EventStats["challenges"],
+  submissions: Array<{
+    runId: string
+    challengeId: string
+    status: string
+    createdAt: string
+  }>
+): EventStats["funnel"] {
+  const accepted = new Set(["accepted", "already_solved"])
+  const acceptedChallenges = new Set(
+    submissions
+      .filter((item) => accepted.has(item.status))
+      .map((item) => item.challengeId)
+  )
+  const firstByRun = new Map<string, string>()
+  for (const submission of submissions) {
+    if (!firstByRun.has(submission.runId)) {
+      firstByRun.set(submission.runId, submission.status)
+    }
+  }
+  return {
+    totalChallenges: challenges.length,
+    attemptedChallenges: challenges.filter((item) => item.runCount > 0).length,
+    submittedChallenges: new Set(submissions.map((item) => item.challengeId))
+      .size,
+    solvedChallenges: acceptedChallenges.size,
+    totalSubmissions: submissions.length,
+    acceptedSubmissions: submissions.filter((item) => accepted.has(item.status))
+      .length,
+    rejectedSubmissions: submissions.filter(
+      (item) => item.status === "rejected"
+    ).length,
+    submittedRuns: firstByRun.size,
+    firstAttemptAcceptedRuns: [...firstByRun.values()].filter((status) =>
+      accepted.has(status)
+    ).length,
+  }
+}
+
+function failureStatistics(items: RunStats[]): EventStats["failures"] {
+  const groups = new Map<string, RunStats[]>()
+  for (const item of items) {
+    const reason = failureReason(item)
+    if (!reason) continue
+    const values = groups.get(reason) ?? []
+    values.push(item)
+    groups.set(reason, values)
+  }
+  return [...groups.entries()]
+    .map(([reason, runs]) => ({
+      reason,
+      runCount: runs.length,
+      usage: sumUsage(runs.map((item) => item.usage)),
+    }))
+    .sort((a, b) => b.runCount - a.runCount)
+}
+
+function failureReason(item: RunStats) {
+  if (item.successful) return null
+  if (item.run.status === "stopped") return "Stopped"
+  if (item.run.status === "completed") return "Completed without flag"
+  if (item.run.status !== "failed") return null
+  const error = item.run.error?.toLowerCase() ?? ""
+  if (/container|workspace|target|environment/.test(error)) {
+    return "Environment or target"
+  }
+  if (/provider|model|assistant|api|rate limit|timeout/.test(error)) {
+    return "Provider or model"
+  }
+  return "Agent or run error"
+}
+
+function modelStatistics(
+  items: RunStats[],
+  modelConfigs: Map<string, string>
+): EventStats["models"] {
+  const groups = new Map<string, RunStats[]>()
+  for (const item of items) {
+    const config = parseModelConfig(modelConfigs.get(item.run.id) ?? "{}")
+    const key = `${config.provider}/${config.modelId}`
+    const values = groups.get(key) ?? []
+    values.push(item)
+    groups.set(key, values)
+  }
+  return [...groups.entries()]
+    .map(([key, runs]) => {
+      const terminal = runs.filter((item) =>
+        ["completed", "failed", "stopped"].includes(item.run.status)
+      )
+      const successful = terminal.filter((item) => item.successful).length
+      const durations = terminal.flatMap((item) =>
+        item.durationMs === null ? [] : [item.durationMs]
+      )
+      const first = runs[0].run
+      return {
+        key,
+        provider: first.provider,
+        modelId: first.modelId,
+        modelName: first.modelName,
+        runCount: runs.length,
+        terminalRunCount: terminal.length,
+        successfulRunCount: successful,
+        successRate:
+          terminal.length === 0 ? null : successful / terminal.length,
+        averageTokens: Math.round(
+          runs.reduce((total, item) => total + item.usage.totalTokens, 0) /
+            runs.length
+        ),
+        averageDurationMs:
+          durations.length === 0
+            ? null
+            : Math.round(
+                durations.reduce((total, value) => total + value, 0) /
+                  durations.length
+              ),
+        usage: sumUsage(runs.map((item) => item.usage)),
+        cost: costSummary(runs),
+        duration: durationSummary(terminal),
+      }
+    })
+    .sort((a, b) => b.runCount - a.runCount)
+}
+
+function trendStatistics(items: RunStats[]): EventStats["trend"] {
+  const groups = new Map<string, RunStats[]>()
+  for (const item of items) {
+    const date = item.run.createdAt.slice(0, 10)
+    const values = groups.get(date) ?? []
+    values.push(item)
+    groups.set(date, values)
+  }
+  return [...groups.entries()]
+    .map(([date, runs]) => {
+      const terminal = runs.filter((item) =>
+        ["completed", "failed", "stopped"].includes(item.run.status)
+      )
+      const successful = terminal.filter((item) => item.successful).length
+      const durations = terminal.flatMap((item) =>
+        item.durationMs === null ? [] : [item.durationMs]
+      )
+      return {
+        date,
+        runCount: runs.length,
+        successfulRunCount: successful,
+        successRate:
+          terminal.length === 0 ? null : successful / terminal.length,
+        totalTokens: runs.reduce(
+          (total, item) => total + item.usage.totalTokens,
+          0
+        ),
+        knownCost: costSummary(runs).known,
+        averageDurationMs:
+          durations.length === 0
+            ? null
+            : Math.round(
+                durations.reduce((total, value) => total + value, 0) /
+                  durations.length
+              ),
+      }
+    })
+    .sort((a, b) => a.date.localeCompare(b.date))
 }
 
 function costSummary(items: Array<{ usage: UsageSummary }>): EventCostSummary {
