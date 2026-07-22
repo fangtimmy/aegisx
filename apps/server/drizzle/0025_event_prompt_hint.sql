@@ -1,1 +1,0 @@
-ALTER TABLE `events` ADD COLUMN `prompt_hint` text NOT NULL DEFAULT '';

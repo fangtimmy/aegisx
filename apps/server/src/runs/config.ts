@@ -163,9 +163,6 @@ export function parsePromptConfig(value: string): FrozenPromptConfig {
         initialPromptTemplate: isString(parsed.initialPromptTemplate)
           ? parsed.initialPromptTemplate
           : "",
-        systemPromptTemplate: isString(parsed.systemPromptTemplate)
-          ? parsed.systemPromptTemplate
-          : undefined,
       }),
       ...(isPromptTemplateContext(parsed.context)
         ? { context: parsed.context }

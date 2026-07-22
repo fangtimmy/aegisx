@@ -625,11 +625,12 @@ describe("providers, models, and usage", () => {
     insertAgent.run("known-cost", "known-cost", now, now, now)
     insertAgent.run("unknown-cost", "unknown-cost", now, now, now)
     const insertMessage = sqlite.prepare(
-      "insert into agent_messages (id, agent_id, sequence, message, created_at) values (?, ?, 1, ?, ?)"
+      "insert into agent_messages (id, agent_id, sequence, runtime_id, message, created_at) values (?, ?, 1, ?, ?, ?)"
     )
     insertMessage.run(
       crypto.randomUUID(),
       "known-cost",
+      crypto.randomUUID(),
       JSON.stringify(
         usageMessage({
           input: 10,
@@ -645,6 +646,7 @@ describe("providers, models, and usage", () => {
     insertMessage.run(
       crypto.randomUUID(),
       "unknown-cost",
+      crypto.randomUUID(),
       JSON.stringify(
         usageMessage({
           input: 4,

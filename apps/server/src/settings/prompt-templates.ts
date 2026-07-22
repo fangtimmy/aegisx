@@ -401,18 +401,12 @@ export function resolvePromptTemplates(value: {
   mainSystemPromptTemplate: string
   childSystemPromptTemplate: string
   initialPromptTemplate: string
-  systemPromptTemplate?: string
 }): PromptTemplates {
-  const legacySystemPromptTemplate = value.systemPromptTemplate ?? ""
   return {
     mainSystemPromptTemplate:
-      value.mainSystemPromptTemplate ||
-      legacySystemPromptTemplate ||
-      DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+      value.mainSystemPromptTemplate || DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
     childSystemPromptTemplate:
-      value.childSystemPromptTemplate ||
-      legacySystemPromptTemplate ||
-      DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+      value.childSystemPromptTemplate || DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
     initialPromptTemplate:
       value.initialPromptTemplate || DEFAULT_INITIAL_PROMPT_TEMPLATE,
   }

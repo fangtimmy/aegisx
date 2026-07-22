@@ -1,1 +1,0 @@
-ALTER TABLE `settings` ADD `child_system_prompt_template` text DEFAULT '' NOT NULL;

@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite"
 import {
   existsSync,
   mkdirSync,
@@ -278,77 +277,6 @@ function normalizeConfig(raw: unknown): ConfigData {
   }
 }
 
-function tryMigrateFromDb(dataDir: string): ConfigData | undefined {
-  const dbPath = join(dataDir, "aegisx.sqlite")
-  if (!existsSync(dbPath)) return undefined
-  try {
-    const sqlite = new Database(dbPath, { readonly: true })
-    try {
-      const settingsRow = sqlite
-        .query("SELECT * FROM settings WHERE id = 1 LIMIT 1")
-        .get() as Record<string, unknown> | null
-      const providers = sqlite
-        .query("SELECT * FROM provider_connections ORDER BY created_at")
-        .all() as Array<Record<string, unknown>>
-      const models = sqlite
-        .query("SELECT * FROM provider_models ORDER BY created_at")
-        .all() as Array<Record<string, unknown>>
-      if (!settingsRow && providers.length === 0) return undefined
-
-      const settings = settingsRow
-        ? normalizeSettings({
-            ...settingsRow,
-            ...defaultSettings,
-            defaultModelId: settingsRow.default_model_id ?? null,
-            defaultThinkingLevel: settingsRow.default_thinking_level ?? "off",
-            environment: settingsRow.environment ?? "local",
-            containerImage: settingsRow.container_image ?? "alpine:3.22",
-            cpuLimit: settingsRow.cpu_limit ?? 2000,
-            memoryMb: settingsRow.memory_mb ?? 2048,
-            pidsLimit: settingsRow.pids_limit ?? 256,
-            maxConcurrency: settingsRow.max_concurrency ?? 2,
-            maxAttachmentMb: settingsRow.max_attachment_mb ?? 512,
-            mainSystemPromptTemplate:
-              settingsRow.system_prompt_template ??
-              settingsRow.main_system_prompt_template ??
-              "",
-            childSystemPromptTemplate:
-              settingsRow.child_system_prompt_template ?? "",
-            initialPromptTemplate: settingsRow.initial_prompt_template ?? "",
-            updatedAt: settingsRow.updated_at ?? now(),
-          })
-        : { ...defaultSettings, updatedAt: now() }
-
-      const providerData: ProviderData[] = providers.map((p) => ({
-        id: String(p.id),
-        label: String(p.label),
-        type: p.type as ProviderType,
-        baseUrl: String(p.base_url),
-        apiKey: String(p.api_key),
-        enabled: p.enabled === 1 || p.enabled === true,
-        models: models
-          .filter((m) => m.provider_id === p.id)
-          .map((m) => ({
-            id: String(m.id),
-            modelId: String(m.model_id),
-            label: String(m.label),
-            enabled: m.enabled === 1 || m.enabled === true,
-            metadata: String(m.metadata ?? "{}"),
-            piProviderId:
-              typeof m.pi_provider_id === "string" ? m.pi_provider_id : null,
-            piModelId: typeof m.pi_model_id === "string" ? m.pi_model_id : null,
-          })),
-      }))
-
-      return { settings, providers: providerData }
-    } finally {
-      sqlite.close()
-    }
-  } catch {
-    return undefined
-  }
-}
-
 export function createConfigStore(dataDir: string) {
   const path = join(dataDir, "config.json")
   mkdirSync(dataDir, { recursive: true })
@@ -358,14 +286,8 @@ export function createConfigStore(dataDir: string) {
       try {
         return normalizeConfig(JSON.parse(readFileSync(path, "utf8")))
       } catch {
-        // corrupt file — fall through to migration/defaults
+        // corrupt file — fall through to defaults
       }
-    }
-    const migrated = tryMigrateFromDb(dataDir)
-    if (migrated) {
-      console.log("[config] Migrated settings from database to config.json")
-      save(migrated)
-      return migrated
     }
     const defaults = defaultConfig()
     save(defaults)
