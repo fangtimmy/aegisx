@@ -1,9 +1,7 @@
 import { posix } from "node:path"
 import type { WorkspaceBackend } from "../agents/tools"
 
-const workspace = "/workspace"
 const decoder = new TextDecoder()
-const maxCapturedShellOutput = 1_000_000
 
 export function containerName(runId: string) {
   return `aegisx-run-${runId}`
@@ -76,7 +74,9 @@ function containerCreateArgs(
   name: string,
   workspacePath: string,
   image: string,
-  limits: { cpus: number; memoryMb: number; pidsLimit: number }
+  limits: { cpus: number; memoryMb: number; pidsLimit: number },
+  containerWorkspace: string,
+  tmpfsSize: string
 ) {
   return [
     "create",
@@ -97,11 +97,11 @@ function containerCreateArgs(
     "--cpus",
     String(limits.cpus),
     "--tmpfs",
-    "/tmp:rw,nosuid,nodev,noexec,size=64m",
+    `/tmp:rw,nosuid,nodev,noexec,size=${tmpfsSize}`,
     "--mount",
-    `type=bind,src=${workspacePath},dst=${workspace}`,
+    `type=bind,src=${workspacePath},dst=${containerWorkspace}`,
     "--workdir",
-    workspace,
+    containerWorkspace,
     image,
     "tail",
     "-f",
@@ -113,20 +113,33 @@ export async function createContainerAsync(
   name: string,
   workspacePath: string,
   image: string,
-  limits: { cpus: number; memoryMb: number; pidsLimit: number }
+  limits: { cpus: number; memoryMb: number; pidsLimit: number },
+  config: {
+    containerWorkspace: string
+    dockerTimeoutMs: number
+    tmpfsSize: string
+  }
 ) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(image)) {
     throw new Error("Container image is invalid")
   }
   await removeContainerAsync(name)
   const created = await runDocker(
-    containerCreateArgs(name, workspacePath, image, limits)
+    containerCreateArgs(
+      name,
+      workspacePath,
+      image,
+      limits,
+      config.containerWorkspace,
+      config.tmpfsSize
+    ),
+    config.dockerTimeoutMs
   )
   if (created.exitCode !== 0) {
     await removeContainerAsync(name)
     throw new Error("Container could not be created")
   }
-  const started = await runDocker(["start", name])
+  const started = await runDocker(["start", name], config.dockerTimeoutMs)
   if (started.exitCode !== 0) {
     await removeContainerAsync(name)
     throw new Error("Container could not be started")
@@ -223,10 +236,15 @@ async function captureOutput(
   }
 }
 
-function containerPath(value: string, cwd = workspace, write = false) {
+function containerPath(
+  value: string,
+  cwd: string,
+  workspaceRoot: string,
+  write = false
+) {
   const resolved = posix.resolve(cwd, value)
   const inWorkspace =
-    resolved === workspace || resolved.startsWith(`${workspace}/`)
+    resolved === workspaceRoot || resolved.startsWith(`${workspaceRoot}/`)
   // /opt/solver is a read-only resource tree (ENVIRONMENT.md, knowledges,
   // tools). Allow bounded read tools (read/grep/find/ls) to reach it;
   // writes remain blocked by the `write` check below and the read-only rootfs.
@@ -265,11 +283,17 @@ async function requireExec(
 
 export function createContainerBackend(
   name: string,
-  cwd = workspace,
+  config: {
+    cwd?: string
+    maxCapturedShellOutput?: number
+  } = {},
   onFatal?: () => void
 ): WorkspaceBackend {
+  const cwd = config.cwd ?? "/workspace"
+  const maxCapturedShellOutput = config.maxCapturedShellOutput ?? 1_000_000
+  const workspaceRoot = cwd
   const resolvePath = (path: string, write = false) =>
-    containerPath(path, cwd, write)
+    containerPath(path, cwd, workspaceRoot, write)
   return {
     cwd,
     resolvePath,

@@ -16,13 +16,15 @@ import {
 export class A1CtfAdapter extends BaseAdapter {
   constructor(
     config: PlatformConfig,
-    onError?: (info: PlatformRequestError) => void
+    onError?: (info: PlatformRequestError) => void,
+    timeoutMs?: number
   ) {
     super(
       config,
       { Cookie: `a1token=${config.credential}` },
       undefined,
-      onError
+      onError,
+      timeoutMs
     )
   }
 

@@ -8,6 +8,7 @@ import {
   platformRequestLog,
   runs,
 } from "../db/schema"
+import type { ConfigStore } from "../infrastructure/config-store"
 import type { createStorage } from "../infrastructure/storage"
 import { A1CtfAdapter } from "./adapters/a1ctf"
 import { CtfdAdapter } from "./adapters/ctfd"
@@ -28,13 +29,14 @@ export { PlatformActionError } from "./errors"
 export function createPlatformAdapter(
   config: PlatformConfig,
   onCredential?: (credential: string) => void,
-  onError?: (info: PlatformRequestError) => void
+  onError?: (info: PlatformRequestError) => void,
+  timeoutMs?: number
 ): CtfPlatformAdapter {
-  if (config.type === "ctfd") return new CtfdAdapter(config, onError)
+  if (config.type === "ctfd") return new CtfdAdapter(config, onError, timeoutMs)
   if (config.type === "ret2shell") {
-    return new Ret2ShellAdapter(config, onCredential, onError)
+    return new Ret2ShellAdapter(config, onCredential, onError, timeoutMs)
   }
-  return new A1CtfAdapter(config, onError)
+  return new A1CtfAdapter(config, onError, timeoutMs)
 }
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -43,7 +45,8 @@ type Storage = ReturnType<typeof createStorage>
 export function createPlatformService(
   db: Database,
   storage: Storage,
-  maxAttachmentBytes: () => number
+  maxAttachmentBytes: () => number,
+  configStore: ConfigStore
 ) {
   const logPlatformRequest = (info: PlatformRequestError) => {
     const now = new Date().toISOString()
@@ -104,7 +107,8 @@ export function createPlatformService(
           .where(eq(eventPlatforms.eventId, eventId))
           .run()
       },
-      logPlatformRequest
+      logPlatformRequest,
+      configStore.getSettings().platformRequestTimeoutMs
     )
   }
 
@@ -179,7 +183,8 @@ export function createPlatformService(
         (credential) => {
           config.credential = credential
         },
-        logPlatformRequest
+        logPlatformRequest,
+        configStore.getSettings().platformRequestTimeoutMs
       ).listEvents()
       if (!remoteEvents.some((remote) => remote.id === config.remoteEventId)) {
         throw new PlatformActionError("not_found", "Remote event not found")
@@ -263,7 +268,8 @@ export function createPlatformService(
           remoteEventId: input.type === "ctfd" ? "site" : "",
         },
         undefined,
-        logPlatformRequest
+        logPlatformRequest,
+        configStore.getSettings().platformRequestTimeoutMs
       ).listEvents()
     } catch (error) {
       throw platformError(error)

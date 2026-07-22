@@ -1,9 +1,12 @@
-import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
 import { normalizeThinkingLevel } from "../../../shared/api"
-import type { createDatabase } from "../db"
-import { providerConnections, providerModels, settings } from "../db/schema"
+import type {
+  ConfigStore,
+  ProviderData,
+  ProviderModelData,
+  SettingsData,
+} from "../infrastructure/config-store"
 import { notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import {
@@ -23,20 +26,20 @@ import {
   samplePromptContext,
 } from "./prompt-templates"
 
-type Database = ReturnType<typeof createDatabase>["db"]
+const thinkingLevelUnion = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("minimal"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+  Type.Literal("xhigh"),
+  Type.Literal("max"),
+])
 
 const runtimeSettingsInput = Type.Object(
   {
     defaultModelId: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
-    defaultThinkingLevel: Type.Union([
-      Type.Literal("off"),
-      Type.Literal("minimal"),
-      Type.Literal("low"),
-      Type.Literal("medium"),
-      Type.Literal("high"),
-      Type.Literal("xhigh"),
-      Type.Literal("max"),
-    ]),
+    defaultThinkingLevel: thinkingLevelUnion,
     environment: Type.Union([Type.Literal("local"), Type.Literal("container")]),
     containerImage: Type.String({
       minLength: 1,
@@ -49,6 +52,35 @@ const runtimeSettingsInput = Type.Object(
     maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
     maxAttachmentMb: Type.Optional(
       Type.Integer({ minimum: 1, maximum: 10_240 })
+    ),
+    maxRetryAttempts: Type.Optional(Type.Integer({ minimum: 0, maximum: 20 })),
+    retryBaseDelayMs: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: 120_000 })
+    ),
+    retryMaxDelayMs: Type.Optional(
+      Type.Integer({ minimum: 0, maximum: 600_000 })
+    ),
+    maxToolOutputBytes: Type.Optional(
+      Type.Integer({ minimum: 1_000, maximum: 1_000_000 })
+    ),
+    maxInlineShellOutputBytes: Type.Optional(
+      Type.Integer({ minimum: 1_000, maximum: 500_000 })
+    ),
+    maxCapturedShellOutputBytes: Type.Optional(
+      Type.Integer({ minimum: 10_000, maximum: 50_000_000 })
+    ),
+    containerWorkspace: Type.Optional(
+      Type.String({ minLength: 1, maxLength: 500 })
+    ),
+    dockerTimeoutMs: Type.Optional(
+      Type.Integer({ minimum: 1_000, maximum: 300_000 })
+    ),
+    tmpfsSize: Type.Optional(Type.String({ minLength: 1, maxLength: 20 })),
+    platformRequestTimeoutMs: Type.Optional(
+      Type.Integer({ minimum: 1_000, maximum: 300_000 })
+    ),
+    providerDiscoverTimeoutMs: Type.Optional(
+      Type.Integer({ minimum: 1_000, maximum: 120_000 })
     ),
   },
   { additionalProperties: false }
@@ -90,15 +122,7 @@ const settingsTransferInput = Type.Object(
           Type.String({ minLength: 1 }),
           Type.Null(),
         ]),
-        defaultThinkingLevel: Type.Union([
-          Type.Literal("off"),
-          Type.Literal("minimal"),
-          Type.Literal("low"),
-          Type.Literal("medium"),
-          Type.Literal("high"),
-          Type.Literal("xhigh"),
-          Type.Literal("max"),
-        ]),
+        defaultThinkingLevel: thinkingLevelUnion,
         environment: Type.Union([
           Type.Literal("local"),
           Type.Literal("container"),
@@ -164,13 +188,12 @@ const settingsTransferInput = Type.Object(
 export function registerSettingsRoutes(
   app: Hono,
   options: {
-    db: Database
-    getSettings(): typeof settings.$inferSelect
+    configStore: ConfigStore
     setMaxConcurrency(value: number): void
     syncModels(): void
   }
 ) {
-  const { db, getSettings, setMaxConcurrency, syncModels } = options
+  const { configStore, setMaxConcurrency, syncModels } = options
   const childSampleContext = {
     ...samplePromptContext,
     agent: {
@@ -201,19 +224,31 @@ export function registerSettingsRoutes(
     previewPrompt("childSystemPrompt", input.childSystemPromptTemplate)
     previewPrompt("initialPrompt", input.initialPromptTemplate)
   }
+
   const publicSettings = () => {
-    const value = getSettings()
+    const value = configStore.getSettings()
     const promptTemplates = resolvePromptTemplates(value)
     return {
       defaultModelId: value.defaultModelId,
       defaultThinkingLevel: normalizeThinkingLevel(value.defaultThinkingLevel),
-      environment: value.environment as "local" | "container",
+      environment: value.environment,
       containerImage: value.containerImage,
       cpus: value.cpuLimit / 1000,
       memoryMb: value.memoryMb,
       pidsLimit: value.pidsLimit,
       maxConcurrency: value.maxConcurrency,
       maxAttachmentMb: value.maxAttachmentMb,
+      maxRetryAttempts: value.maxRetryAttempts,
+      retryBaseDelayMs: value.retryBaseDelayMs,
+      retryMaxDelayMs: value.retryMaxDelayMs,
+      maxToolOutputBytes: value.maxToolOutputBytes,
+      maxInlineShellOutputBytes: value.maxInlineShellOutputBytes,
+      maxCapturedShellOutputBytes: value.maxCapturedShellOutputBytes,
+      containerWorkspace: value.containerWorkspace,
+      dockerTimeoutMs: value.dockerTimeoutMs,
+      tmpfsSize: value.tmpfsSize,
+      platformRequestTimeoutMs: value.platformRequestTimeoutMs,
+      providerDiscoverTimeoutMs: value.providerDiscoverTimeoutMs,
       ...promptTemplates,
       defaultMainSystemPromptTemplate: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       defaultChildSystemPromptTemplate: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
@@ -222,7 +257,8 @@ export function registerSettingsRoutes(
       updatedAt: value.updatedAt,
     }
   }
-  const transferModel = (model: typeof providerModels.$inferSelect) => ({
+
+  const transferModel = (model: ProviderModelData) => ({
     id: model.id,
     modelId: model.modelId,
     label: model.label,
@@ -233,16 +269,16 @@ export function registerSettingsRoutes(
         ? { providerId: model.piProviderId, modelId: model.piModelId }
         : null,
   })
-  const transferData = () => ({
-    version: 2 as const,
-    settings: (() => {
-      const value = getSettings()
-      return {
+  const transferData = () => {
+    const value = configStore.getSettings()
+    return {
+      version: 2 as const,
+      settings: {
         defaultModelId: value.defaultModelId,
         defaultThinkingLevel: normalizeThinkingLevel(
           value.defaultThinkingLevel
         ),
-        environment: value.environment as "local" | "container",
+        environment: value.environment,
         containerImage: value.containerImage,
         cpus: value.cpuLimit / 1000,
         memoryMb: value.memoryMb,
@@ -250,27 +286,18 @@ export function registerSettingsRoutes(
         maxConcurrency: value.maxConcurrency,
         maxAttachmentMb: value.maxAttachmentMb,
         ...resolvePromptTemplates(value),
-      }
-    })(),
-    providers: db
-      .select()
-      .from(providerConnections)
-      .all()
-      .map((provider) => ({
+      },
+      providers: configStore.getProviders().map((provider) => ({
         id: provider.id,
         label: provider.label,
         type: provider.type,
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         enabled: provider.enabled,
-        models: db
-          .select()
-          .from(providerModels)
-          .where(eq(providerModels.providerId, provider.id))
-          .all()
-          .map(transferModel),
+        models: provider.models.map(transferModel),
       })),
-  })
+    }
+  }
 
   app.get("/api/settings", (c) => c.json(publicSettings()))
 
@@ -286,31 +313,46 @@ export function registerSettingsRoutes(
 
   app.patch("/api/settings", validateJson(runtimeSettingsInput), (c) => {
     const input = c.req.valid("json")
-    const defaultModel = input.defaultModelId
-      ? db
-          .select()
-          .from(providerModels)
-          .where(eq(providerModels.id, input.defaultModelId))
-          .get()
-      : undefined
-    if (input.defaultModelId && !defaultModel) {
-      return notFound(c, "Default model not found")
+    if (input.defaultModelId) {
+      const exists = configStore
+        .getProviders()
+        .some((p) => p.models.some((m) => m.id === input.defaultModelId))
+      if (!exists) return notFound(c, "Default model not found")
     }
-    db.update(settings)
-      .set({
-        defaultModelId: input.defaultModelId,
-        defaultThinkingLevel: input.defaultThinkingLevel,
-        environment: input.environment,
-        containerImage: input.containerImage.trim(),
-        cpuLimit: Math.round(input.cpus * 1000),
-        memoryMb: input.memoryMb,
-        pidsLimit: input.pidsLimit,
-        maxConcurrency: input.maxConcurrency,
-        maxAttachmentMb: input.maxAttachmentMb ?? getSettings().maxAttachmentMb,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(settings.id, 1))
-      .run()
+    const current = configStore.getSettings()
+    const patch: Partial<SettingsData> = {
+      defaultModelId: input.defaultModelId,
+      defaultThinkingLevel: input.defaultThinkingLevel,
+      environment: input.environment,
+      containerImage: input.containerImage.trim(),
+      cpuLimit: Math.round(input.cpus * 1000),
+      memoryMb: input.memoryMb,
+      pidsLimit: input.pidsLimit,
+      maxConcurrency: input.maxConcurrency,
+      maxAttachmentMb: input.maxAttachmentMb ?? current.maxAttachmentMb,
+    }
+    if (input.maxRetryAttempts !== undefined)
+      patch.maxRetryAttempts = input.maxRetryAttempts
+    if (input.retryBaseDelayMs !== undefined)
+      patch.retryBaseDelayMs = input.retryBaseDelayMs
+    if (input.retryMaxDelayMs !== undefined)
+      patch.retryMaxDelayMs = input.retryMaxDelayMs
+    if (input.maxToolOutputBytes !== undefined)
+      patch.maxToolOutputBytes = input.maxToolOutputBytes
+    if (input.maxInlineShellOutputBytes !== undefined)
+      patch.maxInlineShellOutputBytes = input.maxInlineShellOutputBytes
+    if (input.maxCapturedShellOutputBytes !== undefined)
+      patch.maxCapturedShellOutputBytes = input.maxCapturedShellOutputBytes
+    if (input.containerWorkspace !== undefined)
+      patch.containerWorkspace = input.containerWorkspace
+    if (input.dockerTimeoutMs !== undefined)
+      patch.dockerTimeoutMs = input.dockerTimeoutMs
+    if (input.tmpfsSize !== undefined) patch.tmpfsSize = input.tmpfsSize
+    if (input.platformRequestTimeoutMs !== undefined)
+      patch.platformRequestTimeoutMs = input.platformRequestTimeoutMs
+    if (input.providerDiscoverTimeoutMs !== undefined)
+      patch.providerDiscoverTimeoutMs = input.providerDiscoverTimeoutMs
+    configStore.updateSettings(patch)
     setMaxConcurrency(input.maxConcurrency)
     return c.json(publicSettings())
   })
@@ -360,10 +402,7 @@ export function registerSettingsRoutes(
           400
         )
       }
-      db.update(settings)
-        .set({ ...input, updatedAt: new Date().toISOString() })
-        .where(eq(settings.id, 1))
-        .run()
+      configStore.updateSettings(input)
       return c.json(publicSettings())
     }
   )
@@ -373,7 +412,7 @@ export function registerSettingsRoutes(
     const providerIds = new Set<string>()
     const modelIds = new Set<string>()
     const providerModelIds = new Set<string>()
-    const models: Array<typeof providerModels.$inferInsert> = []
+    const newProviders: ProviderData[] = []
     try {
       for (const provider of input.providers) {
         if (providerIds.has(provider.id))
@@ -382,6 +421,7 @@ export function registerSettingsRoutes(
         const baseUrl = normalizeBaseUrl(provider.baseUrl)
         const label = provider.label.trim()
         if (!label) throw new Error("Provider name is required")
+        const models: ProviderModelData[] = []
         for (const model of provider.models) {
           if (modelIds.has(model.id)) throw new Error("Duplicate model ID")
           modelIds.add(model.id)
@@ -407,7 +447,6 @@ export function registerSettingsRoutes(
           }
           models.push({
             id: model.id,
-            providerId: provider.id,
             modelId,
             label: modelLabel,
             enabled: model.enabled,
@@ -421,12 +460,17 @@ export function registerSettingsRoutes(
             ),
             piProviderId: model.piBinding?.providerId ?? null,
             piModelId: model.piBinding?.modelId ?? null,
-            createdAt: "",
-            updatedAt: "",
           })
         }
-        provider.baseUrl = baseUrl
-        provider.label = label
+        newProviders.push({
+          id: provider.id,
+          label,
+          type: provider.type,
+          baseUrl,
+          apiKey: provider.apiKey,
+          enabled: provider.enabled,
+          models,
+        })
       }
       if (
         input.settings.defaultModelId !== null &&
@@ -435,59 +479,26 @@ export function registerSettingsRoutes(
         throw new Error("Default model not found in imported configuration")
       }
       validatePrompts(input.settings)
-      const now = new Date().toISOString()
-      db.transaction((tx) => {
-        tx.update(settings)
-          .set({
-            defaultModelId: null,
-            defaultThinkingLevel: "off",
-            updatedAt: now,
-          })
-          .where(eq(settings.id, 1))
-          .run()
-        tx.delete(providerConnections).run()
-        tx.insert(providerConnections)
-          .values(
-            input.providers.map((provider) => ({
-              id: provider.id,
-              label: provider.label,
-              type: provider.type,
-              baseUrl: provider.baseUrl,
-              apiKey: provider.apiKey,
-              enabled: provider.enabled,
-              createdAt: now,
-              updatedAt: now,
-            }))
-          )
-          .run()
-        tx.insert(providerModels)
-          .values(
-            models.map((model) => ({
-              ...model,
-              createdAt: now,
-              updatedAt: now,
-            }))
-          )
-          .run()
-        tx.update(settings)
-          .set({
-            defaultModelId: input.settings.defaultModelId,
-            defaultThinkingLevel: input.settings.defaultThinkingLevel,
-            environment: input.settings.environment,
-            containerImage: input.settings.containerImage.trim(),
-            cpuLimit: Math.round(input.settings.cpus * 1000),
-            memoryMb: input.settings.memoryMb,
-            pidsLimit: input.settings.pidsLimit,
-            maxConcurrency: input.settings.maxConcurrency,
-            maxAttachmentMb: input.settings.maxAttachmentMb ?? 512,
-            mainSystemPromptTemplate: input.settings.mainSystemPromptTemplate,
-            childSystemPromptTemplate: input.settings.childSystemPromptTemplate,
-            initialPromptTemplate: input.settings.initialPromptTemplate,
-            updatedAt: now,
-          })
-          .where(eq(settings.id, 1))
-          .run()
-      })
+      const current = configStore.getSettings()
+      configStore.replaceAll(
+        {
+          ...current,
+          defaultModelId: input.settings.defaultModelId,
+          defaultThinkingLevel: input.settings.defaultThinkingLevel,
+          environment: input.settings.environment,
+          containerImage: input.settings.containerImage.trim(),
+          cpuLimit: Math.round(input.settings.cpus * 1000),
+          memoryMb: input.settings.memoryMb,
+          pidsLimit: input.settings.pidsLimit,
+          maxConcurrency: input.settings.maxConcurrency,
+          maxAttachmentMb:
+            input.settings.maxAttachmentMb ?? current.maxAttachmentMb,
+          mainSystemPromptTemplate: input.settings.mainSystemPromptTemplate,
+          childSystemPromptTemplate: input.settings.childSystemPromptTemplate,
+          initialPromptTemplate: input.settings.initialPromptTemplate,
+        },
+        newProviders
+      )
       setMaxConcurrency(input.settings.maxConcurrency)
       syncModels()
       return c.json(transferData())

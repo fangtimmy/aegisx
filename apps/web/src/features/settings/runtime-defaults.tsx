@@ -39,7 +39,19 @@ type RuntimeSettingsInput = Pick<
   | "pidsLimit"
   | "maxConcurrency"
   | "maxAttachmentMb"
->
+> & {
+  maxRetryAttempts: number
+  retryBaseDelayMs: number
+  retryMaxDelayMs: number
+  maxToolOutputBytes: number
+  maxInlineShellOutputBytes: number
+  maxCapturedShellOutputBytes: number
+  containerWorkspace: string
+  dockerTimeoutMs: number
+  tmpfsSize: string
+  platformRequestTimeoutMs: number
+  providerDiscoverTimeoutMs: number
+}
 
 type RuntimeFormValues = {
   defaultModelId: string
@@ -51,6 +63,17 @@ type RuntimeFormValues = {
   pidsLimit: number
   maxConcurrency: number
   maxAttachmentMb: number
+  maxRetryAttempts: number
+  retryBaseDelayMs: number
+  retryMaxDelayMs: number
+  maxToolOutputBytes: number
+  maxInlineShellOutputBytes: number
+  maxCapturedShellOutputBytes: number
+  containerWorkspace: string
+  dockerTimeoutMs: number
+  tmpfsSize: string
+  platformRequestTimeoutMs: number
+  providerDiscoverTimeoutMs: number
 }
 
 export function RuntimeDefaults({
@@ -90,6 +113,17 @@ export function RuntimeDefaults({
       pidsLimit: settings.pidsLimit,
       maxConcurrency: settings.maxConcurrency,
       maxAttachmentMb: settings.maxAttachmentMb,
+      maxRetryAttempts: settings.maxRetryAttempts,
+      retryBaseDelayMs: settings.retryBaseDelayMs,
+      retryMaxDelayMs: settings.retryMaxDelayMs,
+      maxToolOutputBytes: settings.maxToolOutputBytes,
+      maxInlineShellOutputBytes: settings.maxInlineShellOutputBytes,
+      maxCapturedShellOutputBytes: settings.maxCapturedShellOutputBytes,
+      containerWorkspace: settings.containerWorkspace,
+      dockerTimeoutMs: settings.dockerTimeoutMs,
+      tmpfsSize: settings.tmpfsSize,
+      platformRequestTimeoutMs: settings.platformRequestTimeoutMs,
+      providerDiscoverTimeoutMs: settings.providerDiscoverTimeoutMs,
     },
   })
 
@@ -115,6 +149,17 @@ export function RuntimeDefaults({
           pidsLimit: values.pidsLimit,
           maxConcurrency: values.maxConcurrency,
           maxAttachmentMb: values.maxAttachmentMb,
+          maxRetryAttempts: values.maxRetryAttempts,
+          retryBaseDelayMs: values.retryBaseDelayMs,
+          retryMaxDelayMs: values.retryMaxDelayMs,
+          maxToolOutputBytes: values.maxToolOutputBytes,
+          maxInlineShellOutputBytes: values.maxInlineShellOutputBytes,
+          maxCapturedShellOutputBytes: values.maxCapturedShellOutputBytes,
+          containerWorkspace: values.containerWorkspace,
+          dockerTimeoutMs: values.dockerTimeoutMs,
+          tmpfsSize: values.tmpfsSize,
+          platformRequestTimeoutMs: values.platformRequestTimeoutMs,
+          providerDiscoverTimeoutMs: values.providerDiscoverTimeoutMs,
         })
       )}
     >
@@ -352,6 +397,249 @@ export function RuntimeDefaults({
             </NumberField>
           )}
           rules={{ required: true, min: 1, max: 10240 }}
+        />
+      </Field>
+      <Field className="col-span-2">
+        <FieldLabel htmlFor="runtime-workspace">Container workspace path</FieldLabel>
+        <Controller
+          control={form.control}
+          name="containerWorkspace"
+          render={({ field }) => (
+            <Input
+              id="runtime-workspace"
+              onBlur={field.onBlur}
+              onChange={field.onChange}
+              required
+              type="text"
+              value={field.value}
+            />
+          )}
+          rules={{ required: true }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Max retry attempts</FieldLabel>
+        <Controller
+          control={form.control}
+          name="maxRetryAttempts"
+          render={({ field }) => (
+            <NumberField
+              max={20}
+              min={0}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 0, max: 20 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Retry base delay (ms)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="retryBaseDelayMs"
+          render={({ field }) => (
+            <NumberField
+              max={120000}
+              min={0}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 0, max: 120000 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Retry max delay (ms)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="retryMaxDelayMs"
+          render={({ field }) => (
+            <NumberField
+              max={600000}
+              min={0}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 0, max: 600000 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Tool output limit (bytes)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="maxToolOutputBytes"
+          render={({ field }) => (
+            <NumberField
+              max={1000000}
+              min={1000}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1000, max: 1000000 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Inline shell output (bytes)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="maxInlineShellOutputBytes"
+          render={({ field }) => (
+            <NumberField
+              max={500000}
+              min={1000}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1000, max: 500000 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Captured shell output (bytes)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="maxCapturedShellOutputBytes"
+          render={({ field }) => (
+            <NumberField
+              max={50000000}
+              min={10000}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 10000, max: 50000000 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Docker command timeout (ms)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="dockerTimeoutMs"
+          render={({ field }) => (
+            <NumberField
+              max={300000}
+              min={1000}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1000, max: 300000 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="runtime-tmpfs">Tmpfs size</FieldLabel>
+        <Controller
+          control={form.control}
+          name="tmpfsSize"
+          render={({ field }) => (
+            <Input
+              id="runtime-tmpfs"
+              onBlur={field.onBlur}
+              onChange={field.onChange}
+              required
+              type="text"
+              value={field.value}
+            />
+          )}
+          rules={{ required: true }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Platform request timeout (ms)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="platformRequestTimeoutMs"
+          render={({ field }) => (
+            <NumberField
+              max={300000}
+              min={1000}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1000, max: 300000 }}
+        />
+      </Field>
+      <Field>
+        <FieldLabel>Provider discover timeout (ms)</FieldLabel>
+        <Controller
+          control={form.control}
+          name="providerDiscoverTimeoutMs"
+          render={({ field }) => (
+            <NumberField
+              max={120000}
+              min={1000}
+              onValueChange={field.onChange}
+              required
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+          rules={{ required: true, min: 1000, max: 120000 }}
         />
       </Field>
       <div className="col-span-2 flex items-center gap-3">

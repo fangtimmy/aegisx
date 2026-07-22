@@ -11,9 +11,15 @@ import {
 import type { AgentTool } from "@earendil-works/pi-agent-core"
 import { type TSchema, Type } from "typebox"
 
-const maxOutput = 64_000
-const maxShellOutput = 12_000
-const maxCapturedShellOutput = 1_000_000
+const defaultMaxOutput = 64_000
+const defaultMaxShellOutput = 12_000
+const defaultMaxCapturedShellOutput = 1_000_000
+
+export type ToolLimits = {
+  maxOutput: number
+  maxShellOutput: number
+  maxCapturedShellOutput: number
+}
 
 export function defineAgentTool<T extends TSchema>(tool: AgentTool<T>) {
   return tool
@@ -48,7 +54,11 @@ function inside(root: string, path: string) {
   return value === "" || (!value.startsWith("..") && !isAbsolute(value))
 }
 
-export function createLocalBackend(root: string, cwd = root): WorkspaceBackend {
+export function createLocalBackend(
+  root: string,
+  cwd = root,
+  maxCapturedShellOutput = defaultMaxCapturedShellOutput
+): WorkspaceBackend {
   const runRoot = resolve(root)
   const workingDirectory = resolve(cwd)
   const resolvePath = (path: string, write = false) => {
@@ -154,7 +164,7 @@ function truncateText(value: string, limit: number) {
   return bytes.byteLength > limit ? bytes.subarray(0, limit).toString() : value
 }
 
-function boundedText(value: string) {
+function boundedText(value: string, maxOutput: number) {
   const outputBytes = Buffer.byteLength(value)
   const truncated = outputBytes > maxOutput
   return {
@@ -186,7 +196,15 @@ async function walk(
   return result
 }
 
-export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
+export function createWorkspaceTools(
+  backend: WorkspaceBackend,
+  limits: ToolLimits = {
+    maxOutput: defaultMaxOutput,
+    maxShellOutput: defaultMaxShellOutput,
+    maxCapturedShellOutput: defaultMaxCapturedShellOutput,
+  }
+): AgentTool[] {
+  const { maxOutput, maxShellOutput, maxCapturedShellOutput } = limits
   const read = defineAgentTool({
     name: "read",
     label: "Read",
@@ -204,7 +222,7 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
       const lines = text
         .split("\n")
         .slice(offset - 1, params.limit ? offset - 1 + params.limit : undefined)
-      const output = boundedText(lines.join("\n"))
+      const output = boundedText(lines.join("\n"), maxOutput)
       return {
         content: [{ type: "text", text: output.text }],
         details: {
@@ -324,7 +342,8 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
       const output = boundedText(
         entries
           .map((entry) => `${entry.name}${entry.directory ? "/" : ""}`)
-          .join("\n")
+          .join("\n"),
+        maxOutput
       )
       return {
         content: [
@@ -361,7 +380,8 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
       })
       const values = entries.slice(0, params.limit ?? 1000)
       const output = boundedText(
-        values.map((entry) => relative(backend.cwd, entry.path)).join("\n")
+        values.map((entry) => relative(backend.cwd, entry.path)).join("\n"),
+        maxOutput
       )
       return {
         content: [
@@ -431,7 +451,10 @@ export function createWorkspaceTools(backend: WorkspaceBackend): AgentTool[] {
         }
         if (matches.length >= (params.limit ?? 100)) break
       }
-      const output = boundedText(matches.join("\n") || "No matches found")
+      const output = boundedText(
+        matches.join("\n") || "No matches found",
+        maxOutput
+      )
       return {
         content: [
           {

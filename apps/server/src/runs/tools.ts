@@ -4,6 +4,7 @@ import type { AgentPublic } from "../../../shared/api"
 import {
   createWorkspaceTools,
   defineAgentTool,
+  type ToolLimits,
   type WorkspaceBackend,
 } from "../agents/tools"
 import type { runAgents, runs } from "../db/schema"
@@ -26,6 +27,7 @@ export type RunToolContext = {
     remoteTargetIgnored: boolean
   }
   backend: WorkspaceBackend
+  toolLimits?: ToolLimits
   getStoredRun(): StoredRun | undefined
   updateRun(values: Partial<typeof runs.$inferInsert>): void
   getStoredAgent(agentId: string): StoredAgent | undefined
@@ -65,6 +67,9 @@ function lastAssistantText(entries: AgentMessage[]) {
 
 export function createRunTools(context: RunToolContext): AgentTool[] {
   const { backend, isMain, challenge } = context
+  const workspaceTools = context.toolLimits
+    ? createWorkspaceTools(backend, context.toolLimits)
+    : createWorkspaceTools(backend)
   const finishRun = defineAgentTool({
     name: "finish_run",
     label: "Finish run",
@@ -261,7 +266,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
       : []
 
   return [
-    ...createWorkspaceTools(backend),
+    ...workspaceTools,
     ...(isMain
       ? [
           finishRun,

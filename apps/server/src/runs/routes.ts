@@ -5,13 +5,9 @@ import { Type } from "typebox"
 import { normalizeThinkingLevel } from "../../../shared/api"
 import { sumUsage } from "../agents/usage"
 import type { createDatabase } from "../db"
-import {
-  challenges,
-  providerConnections,
-  providerModels,
-  type settings,
-} from "../db/schema"
+import { challenges } from "../db/schema"
 import type { createCatalogReader } from "../events/catalog"
+import type { ConfigStore } from "../infrastructure/config-store"
 import { jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import {
@@ -76,17 +72,19 @@ const emptyInput = Type.Object({}, { additionalProperties: false })
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunManager = ReturnType<typeof createRunManager>
 type Catalog = ReturnType<typeof createCatalogReader>
+type SettingsData = ReturnType<ConfigStore["getSettings"]>
 
 export function registerRunRoutes(
   app: Hono,
   options: {
     db: Database
     runManager: RunManager
-    getSettings(): typeof settings.$inferSelect
+    getSettings(): SettingsData
+    configStore: ConfigStore
     catalog: Pick<Catalog, "getChallenge" | "getEvent">
   }
 ) {
-  const { db, runManager, getSettings, catalog } = options
+  const { db, runManager, getSettings, configStore, catalog } = options
   const { getChallenge, getEvent } = catalog
 
   app.post(
@@ -98,15 +96,15 @@ export function registerRunRoutes(
         const defaults = getSettings()
         const selectedModelId = input.modelId ?? defaults.defaultModelId
         const selected = selectedModelId
-          ? db
-              .select({ model: providerModels, provider: providerConnections })
-              .from(providerModels)
-              .innerJoin(
-                providerConnections,
-                eq(providerModels.providerId, providerConnections.id)
-              )
-              .where(eq(providerModels.id, selectedModelId))
-              .get()
+          ? (() => {
+              for (const provider of configStore.getProviders()) {
+                const model = provider.models.find(
+                  (m) => m.id === selectedModelId
+                )
+                if (model) return { model, provider }
+              }
+              return undefined
+            })()
           : undefined
         if (!selected?.model.enabled || !selected.provider.enabled) {
           return c.json(

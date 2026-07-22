@@ -277,6 +277,17 @@ export type SettingsPublic = {
   pidsLimit: number
   maxConcurrency: number
   maxAttachmentMb: number
+  maxRetryAttempts: number
+  retryBaseDelayMs: number
+  retryMaxDelayMs: number
+  maxToolOutputBytes: number
+  maxInlineShellOutputBytes: number
+  maxCapturedShellOutputBytes: number
+  containerWorkspace: string
+  dockerTimeoutMs: number
+  tmpfsSize: string
+  platformRequestTimeoutMs: number
+  providerDiscoverTimeoutMs: number
   mainSystemPromptTemplate: string
   childSystemPromptTemplate: string
   initialPromptTemplate: string

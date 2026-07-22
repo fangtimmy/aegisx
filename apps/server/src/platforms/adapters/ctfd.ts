@@ -12,7 +12,8 @@ import {
 export class CtfdAdapter extends BaseAdapter {
   constructor(
     config: PlatformConfig,
-    onError?: (info: PlatformRequestError) => void
+    onError?: (info: PlatformRequestError) => void,
+    timeoutMs?: number
   ) {
     super(
       config,
@@ -21,7 +22,8 @@ export class CtfdAdapter extends BaseAdapter {
         "Content-Type": "application/json",
       },
       undefined,
-      onError
+      onError,
+      timeoutMs
     )
   }
 

@@ -43,9 +43,11 @@ export type RuntimeOutcome = {
   retries?: number
 }
 
-const maxRetryAttempts = 3
-const retryBaseDelayMs = 2_000
-const retryMaxDelayMs = 30_000
+export type RetryConfig = {
+  maxAttempts: number
+  baseDelayMs: number
+  maxDelayMs: number
+}
 
 type RuntimeOptions = {
   db: Database
@@ -57,6 +59,7 @@ type RuntimeOptions = {
   tools: AgentTool[]
   secrets: Iterable<string>
   thinkingLevel: ModelThinkingLevel
+  retryConfig?: RetryConfig
   canRunTool?(): boolean
   onEvent(event: AgentEvent, messageId?: string, cursor?: number): void
   onSettled(outcome: RuntimeOutcome): void | Promise<void>
@@ -437,12 +440,17 @@ export function createAgentRuntime(options: RuntimeOptions) {
   async function retryAfterError(
     initial: RuntimeOutcome
   ): Promise<RuntimeOutcome> {
+    const cfg = options.retryConfig ?? {
+      maxAttempts: 3,
+      baseDelayMs: 2_000,
+      maxDelayMs: 30_000,
+    }
     let outcome = initial
     let attempts = 0
     const stopped = () => phase === "disposed" || phase === "aborting"
     while (
       outcome.status === "error" &&
-      attempts < maxRetryAttempts &&
+      attempts < cfg.maxAttempts &&
       !stopped()
     ) {
       const messages = agent.state.messages
@@ -453,8 +461,8 @@ export function createAgentRuntime(options: RuntimeOptions) {
       agent.state.messages = messages.slice(0, -1)
       attempts += 1
       const delay = Math.min(
-        retryBaseDelayMs * 2 ** (attempts - 1),
-        retryMaxDelayMs
+        cfg.baseDelayMs * 2 ** (attempts - 1),
+        cfg.maxDelayMs
       )
       await Bun.sleep(delay)
       if (stopped()) break

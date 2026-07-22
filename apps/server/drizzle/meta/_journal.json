@@ -183,6 +183,13 @@
       "when": 1784646000000,
       "tag": "0025_event_prompt_hint",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1784686724327,
+      "tag": "0026_whole_bloodaxe",
+      "breakpoints": true
     }
   ]
 }

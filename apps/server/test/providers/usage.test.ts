@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -418,12 +418,13 @@ describe("providers, models, and usage", () => {
       memoryMb: 256,
       pidsLimit: 64,
     })
-    expect(
-      sqlite
-        .query("select api_key from provider_connections where id = ?")
-        .get(provider.id)
-    ).toEqual({ api_key: "provider-test-secret" })
     sqlite.close()
+    const config = JSON.parse(
+      readFileSync(join(instance.dataDir, "config.json"), "utf8")
+    ) as { providers: Array<{ id: string; apiKey: string }> }
+    expect(config.providers.find((p) => p.id === provider.id)?.apiKey).toEqual(
+      "provider-test-secret"
+    )
 
     const invalid = await instance.app.request(
       "/api/providers",

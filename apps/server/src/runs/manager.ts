@@ -42,6 +42,7 @@ import {
   runEvents,
   runs,
 } from "../db/schema"
+import type { SettingsData } from "../infrastructure/config-store"
 import {
   containerName,
   containerRunningAsync,
@@ -111,6 +112,7 @@ type Options = {
   dataDir: string
   maxConcurrency: number
   modelService: ModelService
+  getSettings(): SettingsData
   getPromptTemplates(): PromptTemplates
   getApiKeys?: (provider: string) => Iterable<string>
   submitFlag?(
@@ -556,7 +558,9 @@ export function createRunManager(options: Options) {
         environment: environment.type,
         isContainer: environment.type === "container",
         workspace:
-          environment.type === "container" ? "/workspace" : "$WORKSPACE",
+          environment.type === "container"
+            ? options.getSettings().containerWorkspace
+            : "$WORKSPACE",
         targetSupported,
         platformIntegrated,
         containerImage:
@@ -690,6 +694,7 @@ export function createRunManager(options: Options) {
     sessionGenerations.set(agentId, generation)
     const isMain = agent.parentAgentId === null
     const runWorkspacePath = join(dataDir, run.workspacePath as string)
+    const settings = options.getSettings()
     let backend: WorkspaceBackend
     if (environment.type === "container") {
       let name = activeContainers.get(runId)
@@ -707,23 +712,38 @@ export function createRunManager(options: Options) {
             name,
             join(dataDir, run.workspacePath),
             environment.image,
-            environment
+            environment,
+            {
+              containerWorkspace: settings.containerWorkspace,
+              dockerTimeoutMs: settings.dockerTimeoutMs,
+              tmpfsSize: settings.tmpfsSize,
+            }
           )
         } catch {
           throw new RunStartError("Container could not be started")
         }
         activeContainers.set(runId, name)
       }
-      backend = createContainerBackend(name, undefined, () => {
-        if (activeContainers.get(runId) === name) {
-          activeContainers.delete(runId)
-          void removeContainerAsync(name)
+      backend = createContainerBackend(
+        name,
+        {
+          cwd: settings.containerWorkspace,
+          maxCapturedShellOutput: settings.maxCapturedShellOutputBytes,
+        },
+        () => {
+          if (activeContainers.get(runId) === name) {
+            activeContainers.delete(runId)
+            void removeContainerAsync(name)
+          }
+          if (!containerFailures.has(runId)) {
+            containerFailures.set(
+              runId,
+              "Container execution became unavailable"
+            )
+            void abortRun(runId)
+          }
         }
-        if (!containerFailures.has(runId)) {
-          containerFailures.set(runId, "Container execution became unavailable")
-          void abortRun(runId)
-        }
-      })
+      )
     } else {
       backend = createLocalBackend(runWorkspacePath)
     }
@@ -741,6 +761,11 @@ export function createRunManager(options: Options) {
       run,
       challenge,
       backend,
+      toolLimits: {
+        maxOutput: settings.maxToolOutputBytes,
+        maxShellOutput: settings.maxInlineShellOutputBytes,
+        maxCapturedShellOutput: settings.maxCapturedShellOutputBytes,
+      },
       getStoredRun: () => getStored(runId),
       updateRun: (values) => update(runId, values),
       getStoredAgent,
@@ -753,7 +778,9 @@ export function createRunManager(options: Options) {
     })
     const secrets = new Set(options.getApiKeys?.(provider))
     const logicalCwd =
-      environment.type === "container" ? "/workspace" : "$WORKSPACE"
+      environment.type === "container"
+        ? settings.containerWorkspace
+        : "$WORKSPACE"
     const modelConfig = parseModelConfig(run.modelConfig)
     const thinkingLevel = clampThinkingLevel(model, modelConfig.thinkingLevel)
     const promptConfig = parsePromptConfig(run.promptConfig)
@@ -823,6 +850,11 @@ export function createRunManager(options: Options) {
       tools,
       secrets,
       thinkingLevel,
+      retryConfig: {
+        maxAttempts: settings.maxRetryAttempts,
+        baseDelayMs: settings.retryBaseDelayMs,
+        maxDelayMs: settings.retryMaxDelayMs,
+      },
       canRunTool: () =>
         !containerFailures.has(runId) &&
         getStored(runId)?.status === "running" &&

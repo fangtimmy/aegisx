@@ -119,7 +119,8 @@ export class PlatformHttp {
     baseUrl: string,
     private readonly headers: Record<string, string>,
     private readonly onResponse?: (response: Response) => void,
-    private readonly onError?: (info: PlatformRequestError) => void
+    private readonly onError?: (info: PlatformRequestError) => void,
+    private readonly timeoutMs = 30_000
   ) {
     const url = new URL(baseUrl.trim())
     if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -146,7 +147,7 @@ export class PlatformHttp {
         ...init,
         headers: requestHeaders,
         redirect: "follow",
-        signal: init.signal ?? AbortSignal.timeout(30_000),
+        signal: init.signal ?? AbortSignal.timeout(this.timeoutMs),
       })
     } catch (rawError) {
       // Network-layer failure: DNS, connection refused, timeout, abort.
@@ -232,9 +233,16 @@ export abstract class BaseAdapter implements CtfPlatformAdapter {
     protected readonly config: PlatformConfig,
     headers: Record<string, string>,
     onResponse?: (response: Response) => void,
-    onError?: (info: PlatformRequestError) => void
+    onError?: (info: PlatformRequestError) => void,
+    timeoutMs?: number
   ) {
-    this.http = new PlatformHttp(config.baseUrl, headers, onResponse, onError)
+    this.http = new PlatformHttp(
+      config.baseUrl,
+      headers,
+      onResponse,
+      onError,
+      timeoutMs
+    )
   }
 
   abstract listEvents(): Promise<RemoteEvent[]>

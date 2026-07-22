@@ -18,11 +18,8 @@ import {
   getBuiltinModels,
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all"
-import { eq } from "drizzle-orm"
-import type { createDatabase } from "../db"
-import { providerConnections, providerModels } from "../db/schema"
+import type { ConfigStore } from "../infrastructure/config-store"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 const thinkingLevels: ModelThinkingLevel[] = [
   "off",
   "minimal",
@@ -308,22 +305,17 @@ const streams: Record<
 }
 
 export function createModelService(
-  db: Database,
+  configStore: ConfigStore,
   collection: MutableModels = createModels(),
   resolveModel?: (provider: string, modelId: string) => Model<Api> | undefined
 ) {
   const registered = new Set<string>()
 
   function sync() {
-    const providers = db.select().from(providerConnections).all()
+    const providers = configStore.getProviders()
     const active = new Set<string>()
     for (const provider of providers) {
-      const models = db
-        .select()
-        .from(providerModels)
-        .where(eq(providerModels.providerId, provider.id))
-        .all()
-        .filter((model) => model.enabled)
+      const models = provider.models.filter((model) => model.enabled)
       if (!provider.enabled || !provider.apiKey || models.length === 0) continue
 
       const id = providerName(provider.id)
@@ -338,11 +330,9 @@ export function createModelService(
             apiKey: {
               name: `${provider.label} API key`,
               resolve: async () => {
-                const current = db
-                  .select()
-                  .from(providerConnections)
-                  .where(eq(providerConnections.id, provider.id))
-                  .get()
+                const current = configStore
+                  .getProviders()
+                  .find((p) => p.id === provider.id)
                 return current?.enabled && current.apiKey
                   ? {
                       auth: { apiKey: current.apiKey },

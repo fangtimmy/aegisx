@@ -284,7 +284,7 @@ function ImportExportDialog({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            version: 1,
+            version: 2,
             settings: merged.settings,
             providers: merged.providers,
           }),

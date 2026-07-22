@@ -19,7 +19,8 @@ export class Ret2ShellAdapter extends BaseAdapter {
   constructor(
     config: PlatformConfig,
     onCredential?: (credential: string) => void,
-    onError?: (info: PlatformRequestError) => void
+    onError?: (info: PlatformRequestError) => void,
+    timeoutMs?: number
   ) {
     super(
       config,
@@ -28,7 +29,8 @@ export class Ret2ShellAdapter extends BaseAdapter {
         const token = response.headers.get("Set-Token")
         if (token) onCredential?.(token)
       },
-      onError
+      onError,
+      timeoutMs
     )
   }
 
