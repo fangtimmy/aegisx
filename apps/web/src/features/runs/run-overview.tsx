@@ -28,6 +28,7 @@ import type {
   UsageSummary,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { formatTime } from "./timeline"
 
 export function statusVariant(status: AgentStatus) {
@@ -188,7 +189,17 @@ function TargetPanel({ run }: { run: RunPublic }) {
         `/challenges/${run.challengeId}/target/${value}`,
         jsonRequest("POST", {})
       ),
-    onSuccess: (value) => queryClient.setQueryData(key, value),
+    onSuccess: (_value, variables) => {
+      queryClient.setQueryData(key, _value)
+      const verb =
+        variables === "start"
+          ? "started"
+          : variables === "stop"
+            ? "stopped"
+            : "extended"
+      toast.success(`Target ${verb}`)
+    },
+    onError: (error) => toast.error("Target action failed", error.message),
   })
   const value = target.data
 

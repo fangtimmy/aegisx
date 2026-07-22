@@ -5,6 +5,8 @@ import {
   Flag,
   LayoutPanelTop,
   ListTree,
+  Maximize2,
+  Minimize2,
   Play,
   Settings,
   TriangleAlert,
@@ -42,6 +44,12 @@ import { ImportChallengesDialog } from "./platform-binding"
 
 type ChallengeSort = "event" | "name" | "points"
 type ChallengeGroup = "category" | "status" | "none"
+
+const FULLWIDTH_KEY = "aegisx:event-fullwidth"
+
+function readFullWidth(): boolean {
+  return localStorage.getItem(FULLWIDTH_KEY) === "1"
+}
 
 function challengeGroups(
   challenges: Challenge[],
@@ -88,6 +96,13 @@ export function EventPage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [sort, setSort] = useState<ChallengeSort>("event")
   const [group, setGroup] = useState<ChallengeGroup>("category")
+  const [fullWidth, setFullWidth] = useState(readFullWidth)
+  const toggleFullWidth = () =>
+    setFullWidth((prev) => {
+      const next = !prev
+      localStorage.setItem(FULLWIDTH_KEY, next ? "1" : "0")
+      return next
+    })
   const eventQuery = useQuery({
     enabled: Boolean(eventId),
     queryKey: eventKeys.detail(eventId ?? ""),
@@ -109,7 +124,11 @@ export function EventPage() {
   const workspace = tab === "run"
 
   return (
-    <AppLayout eventName={eventQuery.data?.event.name} workspace={workspace}>
+    <AppLayout
+      eventName={eventQuery.data?.event.name}
+      fullWidth={fullWidth}
+      workspace={workspace}
+    >
       {eventQuery.isPending && (
         <div
           className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
@@ -146,23 +165,36 @@ export function EventPage() {
           orientation="vertical"
           value={tab}
         >
-          <TabsList
-            className="w-40 shrink-0 items-stretch border-r pr-3"
-            variant="underline"
+          <aside
+            className={
+              workspace
+                ? "flex w-40 shrink-0 flex-col self-stretch border-r pr-3"
+                : "sticky top-[4.5rem] flex h-[calc(100svh-5.5rem)] w-40 shrink-0 flex-col self-start border-r pr-3"
+            }
           >
-            <TabsTab className="justify-start gap-2" value="overview">
-              <LayoutPanelTop /> Overview
-            </TabsTab>
-            <TabsTab className="justify-start gap-2" value="run">
-              <Play /> Run
-            </TabsTab>
-            <TabsTab className="justify-start gap-2" value="statistics">
-              <BarChart3 /> Statistics
-            </TabsTab>
-            <TabsTab className="justify-start gap-2" value="settings">
-              <Settings /> Settings
-            </TabsTab>
-          </TabsList>
+            <TabsList className="w-full items-stretch" variant="underline">
+              <TabsTab className="justify-start gap-2" value="overview">
+                <LayoutPanelTop /> Overview
+              </TabsTab>
+              <TabsTab className="justify-start gap-2" value="run">
+                <Play /> Run
+              </TabsTab>
+              <TabsTab className="justify-start gap-2" value="statistics">
+                <BarChart3 /> Statistics
+              </TabsTab>
+              <TabsTab className="justify-start gap-2" value="settings">
+                <Settings /> Settings
+              </TabsTab>
+            </TabsList>
+            <button
+              className="mt-auto flex h-9 w-full shrink-0 cursor-pointer items-center justify-start gap-1.5 rounded-md border border-transparent px-[calc(--spacing(2.5)-1px)] text-left text-muted-foreground text-sm transition-colors hover:bg-accent [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:-mx-0.5 [&_svg]:shrink-0"
+              onClick={toggleFullWidth}
+              type="button"
+            >
+              {fullWidth ? <Minimize2 /> : <Maximize2 />}
+              {fullWidth ? "Normal width" : "Full width"}
+            </button>
+          </aside>
           <div
             className={
               workspace

@@ -42,9 +42,9 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import type { Challenge, RunPublic } from "@/lib/api"
 import { apiRequest } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { AgentStatusIcon } from "./agent-status-icon"
 import { CreateRunDialog } from "./create-run-dialog"
-import { statusVariant } from "./run-overview"
 import { RunWorkspace } from "./run-workspace"
 
 const runTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -70,7 +70,9 @@ function RunItem({
     mutationFn: () => apiRequest<void>(`/runs/${run.id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runs", "event", eventId] })
+      toast.success("Run deleted")
     },
+    onError: (error) => toast.error("Failed to delete run", error.message),
   })
   return (
     <div className="group relative">

@@ -68,6 +68,7 @@ import {
   type RemoteChallengeSummary,
   type RemoteEvent,
 } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { eventKeys } from "./event-shared"
 import { syncChallengeStream } from "./platform-sync-stream"
 
@@ -95,7 +96,12 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
       apiRequest<{ ok: true }>(`/events/${event.id}/platform/test`, {
         method: "POST",
       }),
-    onSuccess: () => refreshEvent(queryClient, event.id),
+    onSuccess: () => {
+      refreshEvent(queryClient, event.id)
+      toast.success("Platform connection OK")
+    },
+    onError: (error) =>
+      toast.error("Platform connection failed", error.message),
   })
   const detach = useMutation({
     mutationFn: () =>
@@ -214,12 +220,19 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
       const failed = result.results
         .filter((item) => item.status === "failed")
         .map((item) => item.remoteId)
+      const synced = result.results.length - failed.length
       if (failed.length === 0) {
+        toast.success(`Imported ${synced} challenge${synced === 1 ? "" : "s"}`)
         setOpen(false)
         return
       }
+      toast.warning(
+        `Imported ${synced}, ${failed.length} failed`,
+        "Retrying failed items"
+      )
       setSelected(failed)
     },
+    onError: (error) => toast.error("Challenge sync failed", error.message),
   })
   const items = challenges.data?.items ?? []
   const failures = sync.data?.results.filter(

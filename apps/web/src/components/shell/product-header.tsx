@@ -24,8 +24,8 @@ export function ProductHeader({ eventName }: { eventName?: string }) {
   const { eventId } = useParams()
 
   return (
-    <header className="border-b bg-card">
-      <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-6">
+    <header className="sticky top-0 z-50 border-b bg-card">
+      <div className="mx-auto flex h-14 w-full items-center justify-between px-6">
         <div className="flex min-w-0 items-center gap-2.5">
           <Button
             aria-label="AegisX events"

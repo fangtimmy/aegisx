@@ -37,6 +37,7 @@ import {
 import { CreateRunDialog } from "@/features/runs"
 import { statusVariant } from "@/features/runs/run-overview"
 import { apiRequest, type Challenge } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { ChallengeDialog } from "./challenge-dialog"
 import { eventKeys } from "./event-shared"
 
@@ -56,7 +57,10 @@ function DeleteChallengeDialog({
         queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
         queryClient.invalidateQueries({ queryKey: eventKeys.all }),
       ])
+      toast.success("Challenge deleted")
     },
+    onError: (error) =>
+      toast.error("Failed to delete challenge", error.message),
   })
 
   return (

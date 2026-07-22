@@ -5,10 +5,12 @@ export function AppLayout({
   children,
   eventName,
   workspace = false,
+  fullWidth = false,
 }: {
   children: ReactNode
   eventName?: string
   workspace?: boolean
+  fullWidth?: boolean
 }) {
   return (
     <div
@@ -22,8 +24,8 @@ export function AppLayout({
       <main
         className={
           workspace
-            ? "mx-auto flex min-h-0 w-full max-w-6xl flex-1 px-6 py-4"
-            : "mx-auto w-full max-w-6xl px-6 py-4"
+            ? `mx-auto flex min-h-0 w-full flex-1 px-6 py-4 ${fullWidth ? "max-w-none" : "max-w-6xl"}`
+            : `mx-auto w-full px-6 py-4 ${fullWidth ? "max-w-none" : "max-w-6xl"}`
         }
       >
         {children}

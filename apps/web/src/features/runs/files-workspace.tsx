@@ -9,7 +9,20 @@ import {
   FolderOpen,
   Info,
 } from "lucide-react"
-import { useState } from "react"
+import { useCallback, useRef, useState } from "react"
+
+const SIDEBAR_STORAGE_KEY = "aegisx:files-sidebar-width"
+const SIDEBAR_DEFAULT = 288
+const SIDEBAR_MIN = 200
+const SIDEBAR_MAX_RATIO = 0.6
+
+function readStoredWidth(): number {
+  const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY)
+  if (!stored) return SIDEBAR_DEFAULT
+  const n = Number(stored)
+  return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT
+}
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -136,6 +149,43 @@ export function FilesWorkspace({
   enabled: boolean
 }) {
   const [selectedPath, setSelectedPath] = useState<string>()
+  const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null)
+
+  const onHandlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+      dragState.current = { startX: e.clientX, startWidth: sidebarWidth }
+    },
+    [sidebarWidth]
+  )
+
+  const onHandlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragState.current) return
+    const container = containerRef.current
+    if (!container) return
+    const max = container.clientWidth * SIDEBAR_MAX_RATIO
+    const delta = e.clientX - dragState.current.startX
+    const next = Math.min(
+      Math.max(dragState.current.startWidth + delta, SIDEBAR_MIN),
+      max
+    )
+    setSidebarWidth(next)
+  }, [])
+
+  const onHandlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (dragState.current) {
+      dragState.current = null
+      setSidebarWidth((w) => {
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(w)))
+        return w
+      })
+    }
+    ;(e.target as HTMLElement).releasePointerCapture?.(e.pointerId)
+  }, [])
+
   const root = useQuery({
     enabled,
     queryKey: ["runs", runId, "files", ""],
@@ -151,8 +201,11 @@ export function FilesWorkspace({
   })
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[18rem_minmax(0,1fr)] gap-4 px-6 py-4">
-      <section className="flex min-h-0 min-w-0 flex-col border-r pr-4">
+    <div className="flex h-full min-h-0 px-6 py-4" ref={containerRef}>
+      <section
+        className="flex min-h-0 shrink-0 flex-col pr-2"
+        style={{ width: sidebarWidth }}
+      >
         <h3 className="mb-2 font-medium text-sm">Workspace files</h3>
         <ScrollArea className="flex-1" scrollFade>
           {root.isPending && (
@@ -186,7 +239,17 @@ export function FilesWorkspace({
             ))}
         </ScrollArea>
       </section>
-      <section className="flex min-h-0 min-w-0 flex-col">
+      <div
+        aria-hidden="true"
+        className="group relative w-px shrink-0 cursor-col-resize bg-border"
+        onPointerDown={onHandlePointerDown}
+        onPointerMove={onHandlePointerMove}
+        onPointerUp={onHandlePointerUp}
+      >
+        <div className="absolute inset-y-0 -left-1 -right-1" />
+        <div className="absolute inset-y-0 left-0 w-0.5 bg-transparent transition-colors group-hover:bg-primary/40 data-[active]:bg-primary" />
+      </div>
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col pl-4">
         <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
           <h3 className="min-w-0 truncate font-medium text-sm">
             {selectedPath || "Preview"}

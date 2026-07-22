@@ -27,6 +27,7 @@ import {
   type ProviderConnection,
   type SettingsPublic,
 } from "@/lib/api"
+import { toast } from "@/lib/toast"
 
 const TOOL_TIMEOUT_FIELDS: Array<[string, string]> = [
   ["bash", "Bash"],
@@ -100,7 +101,11 @@ export function RuntimeDefaults({
   const mutation = useMutation({
     mutationFn: (input: RuntimeSettingsInput) =>
       apiRequest<SettingsPublic>("/settings", jsonRequest("PATCH", input)),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] })
+      toast.success("Settings saved")
+    },
+    onError: (error) => toast.error("Failed to save settings", error.message),
   })
   const models = providers.flatMap((provider) =>
     provider.enabled && provider.apiKey

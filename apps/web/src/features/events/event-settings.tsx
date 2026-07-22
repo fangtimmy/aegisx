@@ -23,6 +23,7 @@ import {
   type EventSummary,
   jsonRequest,
 } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { eventKeys } from "./event-shared"
 import { PlatformBinding } from "./platform-binding"
 
@@ -43,15 +44,19 @@ export function EventSettings({ event }: { event: EventSummary }) {
         queryClient.invalidateQueries({ queryKey: eventKeys.detail(event.id) }),
         queryClient.invalidateQueries({ queryKey: eventKeys.all }),
       ])
+      toast.success("Event updated")
     },
+    onError: (error) => toast.error("Failed to update event", error.message),
   })
   const remove = useMutation({
     mutationFn: () =>
       apiRequest<void>(`/events/${event.id}`, { method: "DELETE" }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: eventKeys.all })
+      toast.success("Event deleted")
       navigate("/")
     },
+    onError: (error) => toast.error("Failed to delete event", error.message),
   })
 
   return (

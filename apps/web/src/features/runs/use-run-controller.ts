@@ -9,6 +9,7 @@ import type {
   UsageSummary,
 } from "@/lib/api"
 import { apiRequest, jsonRequest } from "@/lib/api"
+import { toast } from "@/lib/toast"
 import { eventKeys } from "../events/event-shared"
 import { RunStreamStore } from "./run-stream-store"
 
@@ -117,7 +118,14 @@ export function useRunController({
         queryClient.invalidateQueries({ queryKey: eventKeys.all }),
       ])
     },
-    onError: (_error, variables) => {
+    onError: (error, variables) => {
+      const actionLabel =
+        variables.action === "message"
+          ? "send message"
+          : variables.action === "stop"
+            ? "stop run"
+            : variables.action
+      toast.error(`Failed to ${actionLabel}`, error.message)
       if (variables.agentId && variables.body.clientMessageId) {
         streamStore.removePendingMessage(
           variables.agentId,

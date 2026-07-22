@@ -25,6 +25,7 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { apiRequest, jsonRequest, type SettingsPublic } from "@/lib/api"
+import { toast } from "@/lib/toast"
 
 type PromptTemplates = Pick<
   SettingsPublic,
@@ -185,7 +186,11 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
         "/settings/prompts",
         jsonRequest("PATCH", input)
       ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] })
+      toast.success("Prompts saved")
+    },
+    onError: (error) => toast.error("Failed to save prompts", error.message),
   })
   const preview = useMutation({
     mutationFn: (input: { kind: PromptKind; template: string }) =>

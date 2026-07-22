@@ -1,4 +1,5 @@
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router"
+import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { EventPage } from "@/features/events/event-page"
 import { HomePage } from "@/features/events/home-page"
@@ -20,9 +21,13 @@ const router = createBrowserRouter([
 
 export function App() {
   return (
-    <TooltipProvider>
-      <RouterProvider router={router} />
-    </TooltipProvider>
+    <ToastProvider>
+      <AnchoredToastProvider>
+        <TooltipProvider>
+          <RouterProvider router={router} />
+        </TooltipProvider>
+      </AnchoredToastProvider>
+    </ToastProvider>
   )
 }
 
