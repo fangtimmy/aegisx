@@ -34,6 +34,7 @@ import type { createDatabase } from "../db"
 import {
   agentInbox,
   agentMessages,
+  agentToolCalls,
   attachments,
   challenges,
   eventPlatforms,
@@ -118,12 +119,14 @@ type Options = {
   submitFlag?(
     runId: string,
     challengeId: string,
-    flag?: string
+    flag?: string,
+    signal?: AbortSignal
   ): Promise<unknown>
   canFinishRun?(runId: string, challengeId: string): boolean
   targetAction?(
     challengeId: string,
-    action: "get" | "start" | "extend" | "stop"
+    action: "get" | "start" | "extend" | "stop",
+    signal?: AbortSignal
   ): Promise<TargetState>
 }
 
@@ -182,6 +185,16 @@ export function createRunManager(options: Options) {
       and(eq(runs.status, "running"), isNotNull(runs.pendingCompletionSummary))
     )
     .all()
+  const interruptedAt = new Date().toISOString()
+  db.update(agentToolCalls)
+    .set({
+      status: "abandoned",
+      succeeded: false,
+      error: "Server stopped before the tool call completed",
+      completedAt: interruptedAt,
+    })
+    .where(eq(agentToolCalls.status, "running"))
+    .run()
   for (const pending of pendingCompletions) {
     const completedAt = new Date().toISOString()
     db.transaction((tx) => {
@@ -1107,13 +1120,14 @@ export function createRunManager(options: Options) {
   }
 
   async function abortRun(runId: string, exceptAgentId?: string) {
-    await Promise.allSettled(
+    const pending = Promise.allSettled(
       [...current.values()]
         .filter(
           (active) => active.runId === runId && active.agentId !== exceptAgentId
         )
         .map((active) => active.runtime.abort())
     )
+    await Promise.race([pending, Bun.sleep(5000)])
   }
 
   async function notifyMain(agent: AgentPublic) {
@@ -1576,10 +1590,6 @@ export function createRunManager(options: Options) {
     requireMutable(runId, ["running", "paused"])
     aborting.set(runId, "stopped")
     try {
-      await abortRun(runId)
-      const latest = getPublic(runId) as RunPublic
-      if (terminalRunStatuses.includes(latest.status)) return latest
-      await releaseRun(runId)
       const completedAt = new Date().toISOString()
       const stopped = transitionRun(
         runId,
@@ -1594,6 +1604,8 @@ export function createRunManager(options: Options) {
             values: { status: "stopped" as const, completedAt },
           }))
       )
+      await abortRun(runId)
+      await releaseRun(runId)
       containerFailures.delete(runId)
       return stopped
     } finally {

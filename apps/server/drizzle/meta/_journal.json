@@ -8,6 +8,13 @@
       "when": 1784689783538,
       "tag": "0000_cultured_clea",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784707322509,
+      "tag": "0001_smart_polaris",
+      "breakpoints": true
     }
   ]
 }

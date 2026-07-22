@@ -76,15 +76,20 @@ export interface CtfPlatformAdapter {
   listChallenges(): Promise<RemoteChallengeSummary[]>
   getChallenge(remoteId: string): Promise<RemoteChallenge>
   downloadAttachment(attachment: RemoteAttachment): Promise<Response>
-  submitFlag(remoteId: string, flag: string): Promise<SubmissionResult>
+  submitFlag(
+    remoteId: string,
+    flag: string,
+    signal?: AbortSignal
+  ): Promise<SubmissionResult>
   getSubmission?(
     remoteId: string,
-    submissionId: string
+    submissionId: string,
+    signal?: AbortSignal
   ): Promise<SubmissionResult>
-  getTarget?(remoteId: string): Promise<TargetState>
-  startTarget?(remoteId: string): Promise<TargetState>
-  extendTarget?(remoteId: string): Promise<TargetState>
-  stopTarget?(remoteId: string): Promise<TargetState>
+  getTarget?(remoteId: string, signal?: AbortSignal): Promise<TargetState>
+  startTarget?(remoteId: string, signal?: AbortSignal): Promise<TargetState>
+  extendTarget?(remoteId: string, signal?: AbortSignal): Promise<TargetState>
+  stopTarget?(remoteId: string, signal?: AbortSignal): Promise<TargetState>
 }
 
 export type JsonRecord = Record<string, unknown>
@@ -144,11 +149,12 @@ export class PlatformHttp {
 
     let response: Response
     try {
+      const timeout = AbortSignal.timeout(this.timeoutMs)
       response = await fetch(url, {
         ...init,
         headers: requestHeaders,
         redirect: "follow",
-        signal: init.signal ?? AbortSignal.timeout(this.timeoutMs),
+        signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
       })
     } catch (rawError) {
       // Network-layer failure: DNS, connection refused, timeout, abort.
@@ -250,7 +256,11 @@ export abstract class BaseAdapter implements CtfPlatformAdapter {
   abstract testConnection(): Promise<void>
   abstract listChallenges(): Promise<RemoteChallengeSummary[]>
   abstract getChallenge(remoteId: string): Promise<RemoteChallenge>
-  abstract submitFlag(remoteId: string, flag: string): Promise<SubmissionResult>
+  abstract submitFlag(
+    remoteId: string,
+    flag: string,
+    signal?: AbortSignal
+  ): Promise<SubmissionResult>
 
   downloadAttachment(attachment: RemoteAttachment) {
     return this.http.request(

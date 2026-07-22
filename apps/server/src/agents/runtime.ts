@@ -3,7 +3,6 @@ import {
   Agent,
   type AgentEvent,
   type AgentTool,
-  type AgentToolResult,
 } from "@earendil-works/pi-agent-core"
 import type {
   Api,
@@ -18,12 +17,12 @@ import type { createDatabase } from "../db"
 import {
   agentInbox,
   agentMessages,
-  agentToolCalls,
   agentUsage,
   runAgents,
   runEvents,
 } from "../db/schema"
 import { redactSecrets } from "../infrastructure/redaction"
+import { manageAgentTools } from "./managed-tools"
 import {
   type AegisXMessage,
   type AegisXMetadata,
@@ -137,35 +136,6 @@ function contextSize(messages: AgentMessage[]) {
   return JSON.stringify(messages).length
 }
 
-function toolResultBytes(content: AgentToolResult<unknown>["content"]) {
-  return content.reduce(
-    (total, part) =>
-      total +
-      (part.type === "text"
-        ? Buffer.byteLength(part.text)
-        : Buffer.byteLength(part.data, "base64")),
-    0
-  )
-}
-
-function toolMetricDetails(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {}
-  }
-  const details = value as Record<string, unknown>
-  return {
-    outputBytes:
-      typeof details.outputBytes === "number" && details.outputBytes >= 0
-        ? details.outputBytes
-        : undefined,
-    truncated: details.truncated === true,
-    exitCode:
-      typeof details.exitCode === "number" && Number.isInteger(details.exitCode)
-        ? details.exitCode
-        : undefined,
-  }
-}
-
 export function createAgentRuntime(options: RuntimeOptions) {
   const rows = options.db
     .select()
@@ -183,7 +153,6 @@ export function createAgentRuntime(options: RuntimeOptions) {
   let phase: "idle" | "prompting" | "aborting" | "disposed" = "idle"
   const queued = new Set<string>()
   const secrets = new Set(options.secrets)
-  const startedToolCalls = new Map<string, number>()
   let contextSummary = options.db
     .select({
       summary: runAgents.contextSummary,
@@ -273,7 +242,7 @@ export function createAgentRuntime(options: RuntimeOptions) {
     initialState: {
       systemPrompt: options.systemPrompt,
       model: options.model,
-      tools: options.tools,
+      tools: manageAgentTools(options.db, options.agentId, options.tools),
       messages,
       thinkingLevel: options.thinkingLevel,
     },
@@ -282,39 +251,17 @@ export function createAgentRuntime(options: RuntimeOptions) {
       options.models.streamSimple(model, context, streamOptions),
     convertToLlm: toLlm,
     transformContext,
-    beforeToolCall: async (context) => {
+    beforeToolCall: async () => {
       if (options.canRunTool?.() === false) {
         return {
           block: true,
           reason: "Run state no longer allows tool execution",
         }
       }
-      startedToolCalls.set(context.toolCall.id, performance.now())
       return undefined
     },
     afterToolCall: async (context) => {
-      const startedAt = startedToolCalls.get(context.toolCall.id)
-      startedToolCalls.delete(context.toolCall.id)
-      const details = toolMetricDetails(context.result.details)
       const failed = context.isError
-      if (startedAt !== undefined) {
-        options.db
-          .insert(agentToolCalls)
-          .values({
-            id: crypto.randomUUID(),
-            agentId: options.agentId,
-            toolCallId: context.toolCall.id,
-            toolName: context.toolCall.name,
-            durationMs: Math.round(performance.now() - startedAt),
-            outputBytes:
-              details.outputBytes ?? toolResultBytes(context.result.content),
-            truncated: details.truncated,
-            succeeded: !failed,
-            exitCode: details.exitCode ?? null,
-            createdAt: new Date().toISOString(),
-          })
-          .run()
-      }
       if (!failed && options.canRunTool?.() !== false) return undefined
       return {
         ...(failed ? { isError: true } : {}),

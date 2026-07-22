@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises"
 import { and, eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import { challenges, type eventPlatforms } from "../db/schema"
@@ -51,7 +52,8 @@ export function createPlatformTargets(
 
   async function targetAction(
     challengeId: string,
-    action: "get" | "start" | "extend" | "stop"
+    action: "get" | "start" | "extend" | "stop",
+    signal?: AbortSignal
   ) {
     const challenge = db
       .select()
@@ -93,9 +95,9 @@ export function createPlatformTargets(
       )
     }
     try {
-      const target = await method.call(adapter, challenge.remoteId)
+      const target = await method.call(adapter, challenge.remoteId, signal)
       return action === "start"
-        ? await waitForTarget(adapter, challenge.remoteId, target)
+        ? await waitForTarget(adapter, challenge.remoteId, target, signal)
         : target
     } catch (error) {
       throw platformError(error)
@@ -153,7 +155,8 @@ export function createPlatformTargets(
 async function waitForTarget(
   adapter: CtfPlatformAdapter,
   remoteId: string,
-  initial: TargetState
+  initial: TargetState,
+  signal?: AbortSignal
 ) {
   let target = initial
   for (
@@ -161,8 +164,8 @@ async function waitForTarget(
     target.status === "starting" && attempt < 60;
     attempt += 1
   ) {
-    await Bun.sleep(1000)
-    target = (await adapter.getTarget?.(remoteId)) ?? target
+    await sleep(1000, undefined, { signal })
+    target = (await adapter.getTarget?.(remoteId, signal)) ?? target
   }
   if (target.status !== "running") {
     throw new PlatformActionError(

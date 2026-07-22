@@ -256,20 +256,30 @@ export const agentToolCalls = sqliteTable(
       .references(() => runAgents.id, { onDelete: "cascade" }),
     toolCallId: text("tool_call_id").notNull(),
     toolName: text("tool_name").notNull(),
-    durationMs: integer("duration_ms").notNull(),
-    outputBytes: integer("output_bytes").notNull(),
+    status: text("status").notNull().default("succeeded"),
+    timeoutMs: integer("timeout_ms").notNull().default(0),
+    durationMs: integer("duration_ms").notNull().default(0),
+    outputBytes: integer("output_bytes").notNull().default(0),
     truncated: integer("truncated", { mode: "boolean" })
       .notNull()
       .default(false),
-    succeeded: integer("succeeded", { mode: "boolean" }).notNull(),
+    succeeded: integer("succeeded", { mode: "boolean" })
+      .notNull()
+      .default(false),
     exitCode: integer("exit_code"),
+    error: text("error"),
     createdAt: text("created_at").notNull(),
+    completedAt: text("completed_at"),
   },
   (table) => [
     index("agent_tool_calls_agent_id_idx").on(table.agentId),
     index("agent_tool_calls_agent_created_at_idx").on(
       table.agentId,
       table.createdAt
+    ),
+    uniqueIndex("agent_tool_calls_agent_tool_call_unique").on(
+      table.agentId,
+      table.toolCallId
     ),
   ]
 )

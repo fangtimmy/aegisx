@@ -44,11 +44,13 @@ export type RunToolContext = {
   submitFlag?(
     runId: string,
     challengeId: string,
-    flag?: string
+    flag?: string,
+    signal?: AbortSignal
   ): Promise<unknown>
   targetAction?(
     challengeId: string,
-    action: "get" | "start" | "extend" | "stop"
+    action: "get" | "start" | "extend" | "stop",
+    signal?: AbortSignal
   ): Promise<TargetState>
 }
 
@@ -77,7 +79,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
     parameters: Type.Object({
       summary: Type.String({ minLength: 1 }),
     }),
-    execute: async (_id, params) => {
+    execute: async (_id, params, signal) => {
       const stored = context.getStoredRun()
       if (
         !stored ||
@@ -96,7 +98,8 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
       ) {
         const target = await context.targetAction(
           context.run.challengeId,
-          "get"
+          "get",
+          signal
         )
         if (isActiveTarget(target)) {
           throw new Error("Stop the remote target before finishing this Run")
@@ -118,12 +121,13 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
     description: "Submit a candidate flag to the connected CTF platform",
     parameters: Type.Object({ flag: Type.String({ minLength: 1 }) }),
     executionMode: "sequential",
-    execute: async (_id, params) => {
+    execute: async (_id, params, signal) => {
       if (!context.submitFlag) throw new Error("Flag submission is unavailable")
       const result = await context.submitFlag(
         context.runId,
         context.run.challengeId,
-        params.flag
+        params.flag,
+        signal
       )
       if (!result) throw new Error("Flag submission is unavailable")
       return {
@@ -217,12 +221,13 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
       description,
       parameters: Type.Object({}, { additionalProperties: false }),
       executionMode: "sequential",
-      execute: async () => {
+      execute: async (_id, _params, signal) => {
         if (!context.targetAction)
           throw new Error("Target management is unavailable")
         const target = await context.targetAction(
           context.run.challengeId,
-          action
+          action,
+          signal
         )
         return {
           content: [{ type: "text" as const, text: JSON.stringify(target) }],

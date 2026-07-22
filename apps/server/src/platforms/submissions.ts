@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises"
 import { and, desc, eq, inArray } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import {
@@ -21,7 +22,12 @@ export function createPlatformSubmissions(
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
   adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined
 ) {
-  async function submitFlag(runId: string, challengeId: string, flag?: string) {
+  async function submitFlag(
+    runId: string,
+    challengeId: string,
+    flag?: string,
+    signal?: AbortSignal
+  ) {
     const challenge = db
       .select()
       .from(challenges)
@@ -88,8 +94,12 @@ export function createPlatformSubmissions(
         submission.status === "pending" &&
         submission.remoteId &&
         adapter.getSubmission
-          ? await adapter.getSubmission(challenge.remoteId, submission.remoteId)
-          : await adapter.submitFlag(challenge.remoteId, value)
+          ? await adapter.getSubmission(
+              challenge.remoteId,
+              submission.remoteId,
+              signal
+            )
+          : await adapter.submitFlag(challenge.remoteId, value, signal)
       persist(result)
       for (
         let attempt = 0;
@@ -97,10 +107,11 @@ export function createPlatformSubmissions(
         attempt += 1
       ) {
         if (!result.remoteId || !adapter.getSubmission) break
-        await Bun.sleep(1000)
+        await sleep(1000, undefined, { signal })
         result = await adapter.getSubmission(
           challenge.remoteId,
-          result.remoteId
+          result.remoteId,
+          signal
         )
         persist(result)
       }

@@ -113,13 +113,18 @@ export class A1CtfAdapter extends BaseAdapter {
     }
   }
 
-  async submitFlag(remoteId: string, flag: string): Promise<SubmissionResult> {
+  async submitFlag(
+    remoteId: string,
+    flag: string,
+    signal?: AbortSignal
+  ): Promise<SubmissionResult> {
     const body = await this.http.json<{ data?: { judge_id?: string } }>(
       `/api/game/${encodeURIComponent(this.config.remoteEventId)}/flag/${encodeURIComponent(remoteId)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ flag }),
+        signal,
       }
     )
     const remoteIdValue = body.data?.judge_id
@@ -128,11 +133,16 @@ export class A1CtfAdapter extends BaseAdapter {
       : { status: "error", message: "Platform did not return a judge ID" }
   }
 
-  async getSubmission(_remoteId: string, submissionId: string) {
+  async getSubmission(
+    _remoteId: string,
+    submissionId: string,
+    signal?: AbortSignal
+  ) {
     const body = await this.http.json<{
       data?: { judge_status?: string }
     }>(
-      `/api/game/${encodeURIComponent(this.config.remoteEventId)}/flag/${encodeURIComponent(submissionId)}`
+      `/api/game/${encodeURIComponent(this.config.remoteEventId)}/flag/${encodeURIComponent(submissionId)}`,
+      { signal }
     )
     const statuses: Record<string, SubmissionResult["status"]> = {
       JudgeQueueing: "pending",
@@ -149,10 +159,11 @@ export class A1CtfAdapter extends BaseAdapter {
     }
   }
 
-  async getTarget(remoteId: string) {
+  async getTarget(remoteId: string, signal?: AbortSignal) {
     try {
       const body = await this.http.json<{ data: JsonRecord }>(
-        `/api/game/${encodeURIComponent(this.config.remoteEventId)}/container/${encodeURIComponent(remoteId)}`
+        `/api/game/${encodeURIComponent(this.config.remoteEventId)}/container/${encodeURIComponent(remoteId)}`,
+        { signal }
       )
       const value = body.data
       const statuses = {
@@ -201,23 +212,27 @@ export class A1CtfAdapter extends BaseAdapter {
     }
   }
 
-  async targetAction(remoteId: string, method: "POST" | "PATCH" | "DELETE") {
+  async targetAction(
+    remoteId: string,
+    method: "POST" | "PATCH" | "DELETE",
+    signal?: AbortSignal
+  ) {
     await this.http.request(
       `/api/game/${encodeURIComponent(this.config.remoteEventId)}/container/${encodeURIComponent(remoteId)}`,
-      { method }
+      { method, signal }
     )
-    return this.getTarget(remoteId)
+    return this.getTarget(remoteId, signal)
   }
 
-  startTarget(remoteId: string) {
-    return this.targetAction(remoteId, "POST")
+  startTarget(remoteId: string, signal?: AbortSignal) {
+    return this.targetAction(remoteId, "POST", signal)
   }
 
-  extendTarget(remoteId: string) {
-    return this.targetAction(remoteId, "PATCH")
+  extendTarget(remoteId: string, signal?: AbortSignal) {
+    return this.targetAction(remoteId, "PATCH", signal)
   }
 
-  stopTarget(remoteId: string) {
-    return this.targetAction(remoteId, "DELETE")
+  stopTarget(remoteId: string, signal?: AbortSignal) {
+    return this.targetAction(remoteId, "DELETE", signal)
   }
 }

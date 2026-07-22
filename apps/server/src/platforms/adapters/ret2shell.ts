@@ -100,26 +100,33 @@ export class Ret2ShellAdapter extends BaseAdapter {
     }
   }
 
-  async submitFlag(remoteId: string, flag: string) {
+  async submitFlag(remoteId: string, flag: string, signal?: AbortSignal) {
     const root = `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge/${encodeURIComponent(remoteId)}/submit`
     const value = await this.http.json<JsonRecord>(root, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content: flag }),
+      signal,
     })
     return ret2Submission(value)
   }
 
-  async getSubmission(remoteId: string, submissionId: string) {
+  async getSubmission(
+    remoteId: string,
+    submissionId: string,
+    signal?: AbortSignal
+  ) {
     const value = await this.http.json<JsonRecord>(
-      `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge/${encodeURIComponent(remoteId)}/submit?id=${encodeURIComponent(submissionId)}`
+      `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge/${encodeURIComponent(remoteId)}/submit?id=${encodeURIComponent(submissionId)}`,
+      { signal }
     )
     return ret2Submission(value)
   }
 
-  async getTarget(remoteId: string) {
+  async getTarget(remoteId: string, signal?: AbortSignal) {
     const values = await this.http.json<JsonRecord[]>(
-      `/api/game/${encodeURIComponent(this.config.remoteEventId)}/instance`
+      `/api/game/${encodeURIComponent(this.config.remoteEventId)}/instance`,
+      { signal }
     )
     const value = values.find(
       (instance) => String(instance.challenge_id) === remoteId
@@ -153,24 +160,28 @@ export class Ret2ShellAdapter extends BaseAdapter {
     }
   }
 
-  async targetAction(remoteId: string, method: "POST" | "PATCH" | "DELETE") {
+  async targetAction(
+    remoteId: string,
+    method: "POST" | "PATCH" | "DELETE",
+    signal?: AbortSignal
+  ) {
     await this.http.request(
       `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge/${encodeURIComponent(remoteId)}/instance`,
-      { method }
+      { method, signal }
     )
-    return this.getTarget(remoteId)
+    return this.getTarget(remoteId, signal)
   }
 
-  startTarget(remoteId: string) {
-    return this.targetAction(remoteId, "POST")
+  startTarget(remoteId: string, signal?: AbortSignal) {
+    return this.targetAction(remoteId, "POST", signal)
   }
 
-  extendTarget(remoteId: string) {
-    return this.targetAction(remoteId, "PATCH")
+  extendTarget(remoteId: string, signal?: AbortSignal) {
+    return this.targetAction(remoteId, "PATCH", signal)
   }
 
-  stopTarget(remoteId: string) {
-    return this.targetAction(remoteId, "DELETE")
+  stopTarget(remoteId: string, signal?: AbortSignal) {
+    return this.targetAction(remoteId, "DELETE", signal)
   }
 }
 

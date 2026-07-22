@@ -94,13 +94,18 @@ export class CtfdAdapter extends BaseAdapter {
     }
   }
 
-  async submitFlag(remoteId: string, flag: string): Promise<SubmissionResult> {
+  async submitFlag(
+    remoteId: string,
+    flag: string,
+    signal?: AbortSignal
+  ): Promise<SubmissionResult> {
     const body = await this.http.json<{
       data?: { status?: string; message?: string }
     }>("/api/v1/challenges/attempt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ challenge_id: remoteId, submission: flag }),
+      signal,
     })
     const statuses: Record<string, SubmissionResult["status"]> = {
       correct: "accepted",

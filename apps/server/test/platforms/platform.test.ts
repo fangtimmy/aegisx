@@ -933,4 +933,26 @@ describe("CTF platform integration", () => {
       ],
     })
   })
+
+  test("aborts an in-flight platform request", async () => {
+    const server = Bun.serve({
+      port: 0,
+      async fetch() {
+        await Bun.sleep(30_000)
+        return Response.json({ data: { status: "correct" } })
+      },
+    })
+    servers.push(server)
+    const adapter = createPlatformAdapter({
+      type: "ctfd",
+      baseUrl: `http://127.0.0.1:${server.port}`,
+      credential: "ctfd-secret",
+      remoteEventId: "site",
+    })
+    const controller = new AbortController()
+    const submission = adapter.submitFlag("8", "flag{abort}", controller.signal)
+
+    controller.abort()
+    await expect(submission).rejects.toThrow()
+  })
 })

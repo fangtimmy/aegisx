@@ -939,6 +939,43 @@ describe("run API", () => {
     sqlite.close()
   })
 
+  test("stops a run while a tool ignores normal completion", async () => {
+    const instance = setup()
+    const { challenge } = await createChallenge(instance.app)
+    instance.faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("bash", { command: "sleep 30", timeout: 30 }),
+        { stopReason: "toolUse" }
+      ),
+    ])
+    const run = await (await createRun(instance.app, challenge.id)).json()
+    const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
+    await waitFor(
+      async () =>
+        sqlite
+          .query(
+            "select status from agent_tool_calls where agent_id = ? order by created_at desc limit 1"
+          )
+          .get(run.id) as { status: string } | null,
+      (value) => value?.status === "running"
+    )
+
+    const response = await instance.app.request(
+      `/api/runs/${run.id}/stop`,
+      json("POST", {})
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ status: "stopped" })
+    expect(
+      sqlite
+        .query(
+          "select status, succeeded from agent_tool_calls where agent_id = ? order by created_at desc limit 1"
+        )
+        .get(run.id)
+    ).toEqual({ status: "cancelled", succeeded: 0 })
+    sqlite.close()
+  })
+
   test("summarizes oversized context before the next request", async () => {
     const instance = setup(2, undefined, 200)
     const { challenge } = await createChallenge(instance.app)
@@ -1268,6 +1305,10 @@ describe("run API", () => {
       "insert into run_agents (id, run_id, name, status, created_at, updated_at) values ('interrupted', 'interrupted', 'Main agent', 'running', ?, ?)",
       [now, now]
     )
+    sqlite.run(
+      "insert into agent_tool_calls (id, agent_id, tool_call_id, tool_name, status, timeout_ms, created_at) values ('interrupted-tool', 'interrupted', 'call-1', 'start_target', 'running', 120000, ?)",
+      [now]
+    )
     sqlite.close()
 
     const second = setup(2, first.dataDir)
@@ -1283,6 +1324,19 @@ describe("run API", () => {
         },
       ],
     })
+    const recovered = new Database(join(first.dataDir, "aegisx.sqlite"))
+    expect(
+      recovered
+        .query(
+          "select status, error, completed_at from agent_tool_calls where id = 'interrupted-tool'"
+        )
+        .get()
+    ).toEqual({
+      status: "abandoned",
+      error: "Server stopped before the tool call completed",
+      completed_at: expect.any(String),
+    })
+    recovered.close()
   })
 
   test("repairs nonterminal agents that belong to a terminal run", async () => {
