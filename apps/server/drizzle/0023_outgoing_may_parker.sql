@@ -15,8 +15,8 @@ CREATE TABLE `__new_settings` (
 	`initial_prompt_template` text DEFAULT '' NOT NULL,
 	`updated_at` text NOT NULL,
 	FOREIGN KEY (`default_model_id`) REFERENCES `provider_models`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT "settings_singleton_check" CHECK("__new_settings"."id" = 1),
-	CONSTRAINT "settings_environment_check" CHECK("__new_settings"."environment" in ('local', 'container'))
+	CONSTRAINT "settings_singleton_check" CHECK("id" = 1),
+	CONSTRAINT "settings_environment_check" CHECK("environment" in ('local', 'container'))
 );
 --> statement-breakpoint
 INSERT INTO `__new_settings`("id", "default_model_id", "default_thinking_level", "environment", "container_image", "cpu_limit", "memory_mb", "pids_limit", "max_concurrency", "max_attachment_mb", "system_prompt_template", "child_system_prompt_template", "initial_prompt_template", "updated_at") SELECT "id", "default_model_id", "default_thinking_level", "environment", "container_image", "cpu_limit", "memory_mb", "pids_limit", "max_concurrency", "max_attachment_mb", "system_prompt_template", "child_system_prompt_template", "initial_prompt_template", "updated_at" FROM `settings`;--> statement-breakpoint
