@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { CircleAlert, Link2, RefreshCw, Settings2, Unlink } from "lucide-react"
+import {
+  CircleAlert,
+  CircleCheck,
+  Link2,
+  RefreshCw,
+  Settings2,
+  Unlink,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -30,6 +37,12 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+} from "@/components/ui/input-group"
 import { Label } from "@/components/ui/label"
 import {
   Progress,
@@ -70,8 +83,20 @@ const credentialLabels: Record<PlatformType, string> = {
   a1ctf: "a1token cookie",
 }
 
+const credentialPrefixes: Partial<Record<PlatformType, string>> = {
+  ret2shell: "Bearer",
+  a1ctf: "a1token=",
+}
+
 export function PlatformBinding({ event }: { event: EventSummary }) {
   const queryClient = useQueryClient()
+  const testConnection = useMutation({
+    mutationFn: () =>
+      apiRequest<{ ok: true }>(`/events/${event.id}/platform/test`, {
+        method: "POST",
+      }),
+    onSuccess: () => refreshEvent(queryClient, event.id),
+  })
   const detach = useMutation({
     mutationFn: () =>
       apiRequest<void>(`/events/${event.id}/platform`, { method: "DELETE" }),
@@ -86,7 +111,14 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
       <span className="max-w-56 truncate text-muted-foreground text-xs">
         {event.platform.baseUrl}
       </span>
-      <ImportChallengesDialog eventId={event.id} />
+      <Button
+        loading={testConnection.isPending}
+        onClick={() => testConnection.mutate()}
+        type="button"
+        variant="outline"
+      >
+        <CircleCheck /> Test connection
+      </Button>
       <ConnectPlatformDialog eventId={event.id} platform={event.platform} />
       <AlertDialog>
         <AlertDialogTrigger
@@ -126,6 +158,14 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
       </AlertDialog>
       {detach.error && (
         <span className="text-destructive text-xs">{detach.error.message}</span>
+      )}
+      {testConnection.isSuccess && (
+        <span className="text-success text-xs">Connection successful</span>
+      )}
+      {testConnection.error && (
+        <span className="text-destructive text-xs">
+          {testConnection.error.message}
+        </span>
       )}
     </div>
   )
@@ -387,6 +427,16 @@ function ConnectPlatformDialog({
     onSuccess: ({ items }) =>
       form.setValue("remoteEventId", items[0]?.id ?? ""),
   })
+  const testConnection = useMutation({
+    mutationFn: () =>
+      apiRequest<{ credential: string | null }>(
+        "/platform/connection/test",
+        jsonRequest("POST", { type, baseUrl: baseUrl.trim(), credential })
+      ),
+    onSuccess: ({ credential: renewedCredential }) => {
+      if (renewedCredential) form.setValue("credential", renewedCredential)
+    },
+  })
   const bind = useMutation({
     mutationFn: (values: {
       type: PlatformType
@@ -423,6 +473,7 @@ function ConnectPlatformDialog({
         setOpen(next)
         if (next) {
           discover.reset()
+          testConnection.reset()
           bind.reset()
           form.reset({
             type: platform?.type ?? "ctfd",
@@ -477,6 +528,7 @@ function ConnectPlatformDialog({
                       field.onChange(value as PlatformType)
                       form.setValue("remoteEventId", "")
                       discover.reset()
+                      testConnection.reset()
                     }}
                     value={field.value}
                   >
@@ -509,7 +561,10 @@ function ConnectPlatformDialog({
                       field.onBlur()
                       discover.reset()
                     }}
-                    onChange={field.onChange}
+                    onChange={(event) => {
+                      field.onChange(event)
+                      testConnection.reset()
+                    }}
                     required
                     type="url"
                     value={field.value}
@@ -526,18 +581,30 @@ function ConnectPlatformDialog({
                 control={form.control}
                 name="credential"
                 render={({ field }) => (
-                  <Input
-                    autoComplete="off"
-                    id="platform-credential"
-                    onBlur={() => {
-                      field.onBlur()
-                      discover.reset()
-                    }}
-                    onChange={field.onChange}
-                    required
-                    type="text"
-                    value={field.value}
-                  />
+                  <InputGroup>
+                    <InputGroupInput
+                      autoComplete="off"
+                      id="platform-credential"
+                      onBlur={() => {
+                        field.onBlur()
+                        discover.reset()
+                      }}
+                      onChange={(event) => {
+                        field.onChange(event)
+                        testConnection.reset()
+                      }}
+                      required
+                      type="text"
+                      value={field.value}
+                    />
+                    {credentialPrefixes[type] && (
+                      <InputGroupAddon>
+                        <InputGroupText>
+                          {credentialPrefixes[type]}
+                        </InputGroupText>
+                      </InputGroupAddon>
+                    )}
+                  </InputGroup>
                 )}
                 rules={{ required: true }}
               />
@@ -575,11 +642,20 @@ function ConnectPlatformDialog({
                 />
               </Field>
             )}
-            {(discover.error || bind.error) && (
+            {testConnection.isSuccess && (
+              <Alert variant="success">
+                <CircleCheck />
+                <AlertDescription>Connection successful</AlertDescription>
+              </Alert>
+            )}
+            {(testConnection.error || discover.error || bind.error) && (
               <Alert variant="error">
                 <CircleAlert />
                 <AlertDescription>
-                  {(discover.error ?? bind.error)?.message}
+                  {
+                    (testConnection.error ?? discover.error ?? bind.error)
+                      ?.message
+                  }
                 </AlertDescription>
               </Alert>
             )}
@@ -592,6 +668,21 @@ function ConnectPlatformDialog({
               disabled={
                 !baseUrl.trim() ||
                 !credential ||
+                discover.isPending ||
+                bind.isPending
+              }
+              loading={testConnection.isPending}
+              onClick={() => testConnection.mutate()}
+              type="button"
+              variant="outline"
+            >
+              Test connection
+            </Button>
+            <Button
+              disabled={
+                !baseUrl.trim() ||
+                !credential ||
+                testConnection.isPending ||
                 Boolean(discoverData && type !== "ctfd" && !remoteEventId)
               }
               loading={discover.isPending || bind.isPending}

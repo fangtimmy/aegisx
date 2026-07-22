@@ -276,6 +276,46 @@ export function createPlatformService(
     }
   }
 
+  async function testConnection(input: {
+    type: PlatformType
+    baseUrl: string
+    credential: string
+  }) {
+    try {
+      const config: PlatformConfig = {
+        ...input,
+        baseUrl: normalizeBaseUrl(input.baseUrl),
+        remoteEventId: input.type === "ctfd" ? "site" : "",
+      }
+      await createPlatformAdapter(
+        config,
+        (credential) => {
+          config.credential = credential
+        },
+        logPlatformRequest,
+        configStore.getSettings().platformRequestTimeoutMs
+      ).testConnection()
+      return {
+        credential:
+          config.credential === input.credential ? null : config.credential,
+      }
+    } catch (error) {
+      throw platformError(error)
+    }
+  }
+
+  async function testBoundConnection(eventId: string) {
+    const adapter = adapterForEvent(eventId)
+    if (!adapter) {
+      throw new PlatformActionError("not_bound", "Platform is not connected")
+    }
+    try {
+      await adapter.testConnection()
+    } catch (error) {
+      throw platformError(error)
+    }
+  }
+
   return {
     bind,
     canFinishRun: platformSubmissions.canFinishRun,
@@ -289,6 +329,8 @@ export function createPlatformService(
     submitFlag: platformSubmissions.submitFlag,
     syncChallenges: platformSync.syncChallenges,
     targetAction: platformTargets.targetAction,
+    testBoundConnection,
+    testConnection,
   }
 }
 

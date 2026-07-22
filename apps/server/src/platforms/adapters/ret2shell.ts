@@ -34,6 +34,10 @@ export class Ret2ShellAdapter extends BaseAdapter {
     )
   }
 
+  async testConnection() {
+    await this.http.json<unknown>("/api/account/profile")
+  }
+
   async listEvents() {
     const items: RemoteEvent[] = []
     for (let page = 1; ; page += 1) {

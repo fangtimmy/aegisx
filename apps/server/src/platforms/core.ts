@@ -71,6 +71,7 @@ export type SubmissionResult = {
 }
 
 export interface CtfPlatformAdapter {
+  testConnection(): Promise<void>
   listEvents(): Promise<RemoteEvent[]>
   listChallenges(): Promise<RemoteChallengeSummary[]>
   getChallenge(remoteId: string): Promise<RemoteChallenge>
@@ -246,6 +247,7 @@ export abstract class BaseAdapter implements CtfPlatformAdapter {
   }
 
   abstract listEvents(): Promise<RemoteEvent[]>
+  abstract testConnection(): Promise<void>
   abstract listChallenges(): Promise<RemoteChallengeSummary[]>
   abstract getChallenge(remoteId: string): Promise<RemoteChallenge>
   abstract submitFlag(remoteId: string, flag: string): Promise<SubmissionResult>

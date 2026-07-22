@@ -55,6 +55,122 @@ describe("CTF platform integration", () => {
     ])
   })
 
+  test("tests platform credentials and preserves ret2shell token renewal", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url)
+        const authorization = request.headers.get("authorization")
+        const cookie = request.headers.get("cookie")
+
+        if (url.pathname === "/api/v1/users/me") {
+          if (authorization === "Token invalid") {
+            return Response.json(
+              { message: "Invalid access token" },
+              { status: 401 }
+            )
+          }
+          expect(authorization).toBe("Token ctfd-secret")
+          return Response.json({ data: { name: "ctfd-user" } })
+        }
+        if (url.pathname === "/api/account/profile" && cookie) {
+          expect(cookie).toBe("a1token=a1-secret")
+          return Response.json({ code: 200, data: { username: "a1-user" } })
+        }
+        if (url.pathname === "/api/account/profile") {
+          const renewed =
+            authorization === "Bearer ret-old"
+              ? "ret-new"
+              : authorization === "Bearer stored-old"
+                ? "stored-new"
+                : null
+          if (!renewed) {
+            return Response.json({ message: "Unauthorized" }, { status: 401 })
+          }
+          return Response.json(
+            { account: "ret-user" },
+            { headers: { "Set-Token": renewed } }
+          )
+        }
+        if (url.pathname === "/api/game") {
+          expect(authorization).toBe("Bearer stored-old")
+          return Response.json([[{ id: 3, name: "Ret event" }], 1])
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+    servers.push(server)
+
+    const dataDir = mkdtempSync(join(tmpdir(), "aegisx-platform-test-"))
+    roots.push(dataDir)
+    const instance = createApp({ dataDir })
+    closeApps.push(instance.close)
+    const baseUrl = `http://127.0.0.1:${server.port}`
+
+    for (const input of [
+      { type: "ctfd", credential: "ctfd-secret" },
+      { type: "a1ctf", credential: "a1-secret" },
+    ] as const) {
+      const response = await instance.app.request(
+        "/api/platform/connection/test",
+        json("POST", { ...input, baseUrl })
+      )
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ credential: null })
+    }
+
+    const renewed = await instance.app.request(
+      "/api/platform/connection/test",
+      json("POST", {
+        type: "ret2shell",
+        baseUrl,
+        credential: "ret-old",
+      })
+    )
+    expect(renewed.status).toBe(200)
+    expect(await renewed.json()).toEqual({ credential: "ret-new" })
+
+    const rejected = await instance.app.request(
+      "/api/platform/connection/test",
+      json("POST", { type: "ctfd", baseUrl, credential: "invalid" })
+    )
+    expect(rejected.status).toBe(502)
+    expect(await rejected.json()).toMatchObject({
+      error: { code: "platform_error", message: "Invalid access token" },
+    })
+
+    const event = await (
+      await instance.app.request(
+        "/api/events",
+        json("POST", { name: "Connection test" })
+      )
+    ).json()
+    expect(
+      (
+        await instance.app.request(
+          `/api/events/${event.id}/platform`,
+          json("PUT", {
+            type: "ret2shell",
+            baseUrl,
+            credential: "stored-old",
+            remoteEventId: "3",
+          })
+        )
+      ).status
+    ).toBe(200)
+    expect(
+      (
+        await instance.app.request(`/api/events/${event.id}/platform/test`, {
+          method: "POST",
+        })
+      ).status
+    ).toBe(200)
+    const detail = await (
+      await instance.app.request(`/api/events/${event.id}`)
+    ).json()
+    expect(detail.event.platform.credential).toBe("stored-new")
+  })
+
   test("discovers, syncs, preserves identity, and reconnects CTFd challenges", async () => {
     let authorization = ""
     let detailRequests = 0

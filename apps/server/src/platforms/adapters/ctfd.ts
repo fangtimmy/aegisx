@@ -27,6 +27,10 @@ export class CtfdAdapter extends BaseAdapter {
     )
   }
 
+  async testConnection() {
+    await this.http.json<unknown>("/api/v1/users/me")
+  }
+
   async listEvents() {
     await this.listChallenges()
     return [{ id: "site", name: new URL(this.config.baseUrl).hostname }]

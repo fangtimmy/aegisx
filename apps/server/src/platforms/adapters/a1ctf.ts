@@ -28,6 +28,10 @@ export class A1CtfAdapter extends BaseAdapter {
     )
   }
 
+  async testConnection() {
+    await this.http.json<unknown>("/api/account/profile")
+  }
+
   async listEvents() {
     const body = await this.http.json<{ data?: JsonRecord[] }>("/api/game/list")
     return (body.data ?? []).map((game) => ({

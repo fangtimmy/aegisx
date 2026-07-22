@@ -59,6 +59,18 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
     }
   )
 
+  app.post(
+    "/api/platform/connection/test",
+    validateJson(connectionInput),
+    async (c) => {
+      try {
+        return c.json(await service.testConnection(c.req.valid("json")))
+      } catch (error) {
+        return platformError(c, error)
+      }
+    }
+  )
+
   app.put(
     "/api/events/:eventId/platform",
     validateJson(bindingInput),
@@ -74,6 +86,15 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
       }
     }
   )
+
+  app.post("/api/events/:eventId/platform/test", async (c) => {
+    try {
+      await service.testBoundConnection(c.req.param("eventId"))
+      return c.json({ ok: true })
+    } catch (error) {
+      return platformError(c, error)
+    }
+  })
 
   app.delete("/api/events/:eventId/platform", async (c) => {
     try {
