@@ -1,6 +1,5 @@
 import { homedir } from "node:os"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
-import type { Usage } from "@earendil-works/pi-ai"
 import { and, asc, count, eq, sql } from "drizzle-orm"
 import type {
   AgentInspector,
@@ -11,6 +10,7 @@ import type {
 import { parseAgentMessage } from "../agents/messages"
 import { publicAgentMessage } from "../agents/runtime"
 import {
+  parseUsage,
   summarizeUsage,
   summarizeUsageRecords,
   sumUsage,
@@ -31,17 +31,6 @@ type StoredAgent = typeof runAgents.$inferSelect
 type StoredRun = {
   id: string
   modelConfig: string
-}
-
-function parseUsage(value: string): Partial<Usage> {
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Partial<Usage>)
-      : {}
-  } catch {
-    return {}
-  }
 }
 
 export function createRunInspector(options: {

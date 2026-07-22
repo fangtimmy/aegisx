@@ -19,6 +19,17 @@ const zeroUsage = () => ({
   cost: 0,
 })
 
+export function parseUsage(value: string): Partial<Usage> {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Partial<Usage>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
 function number(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value

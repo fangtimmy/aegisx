@@ -1,11 +1,9 @@
-import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 import { normalizeThinkingLevel } from "../../../shared/api"
 import { sumUsage } from "../agents/usage"
 import type { createDatabase } from "../db"
-import { challenges } from "../db/schema"
 import type { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { jsonError, notFound } from "../infrastructure/http-errors"
@@ -18,6 +16,7 @@ import {
 import { parseModelMetadata } from "../providers/models"
 import { providerName } from "../providers/routes"
 import { type createRunManager, RunActionError } from "./manager"
+import { eventStatistics } from "./statistics"
 
 const runInput = Type.Object(
   {
@@ -240,33 +239,9 @@ export function registerRunRoutes(
   app.get("/api/events/:eventId/stats", (c) => {
     const event = getEvent(c.req.param("eventId"))
     if (!event) return notFound(c, "Event not found")
-    const items = runManager.listForEvent(event.id).map((run) => ({
-      run,
-      usage: runManager.usage(run.id),
-    }))
-    const challengesByEvent = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.eventId, event.id))
-      .all()
-      .map((challenge) => {
-        const challengeRuns = items.filter(
-          ({ run }) => run.challengeId === challenge.id
-        )
-        return {
-          challengeId: challenge.id,
-          challengeName: challenge.name,
-          runCount: challengeRuns.length,
-          usage: sumUsage(challengeRuns.map((item) => item.usage)),
-        }
-      })
-    return c.json({
-      eventId: event.id,
-      runCount: items.length,
-      usage: sumUsage(items.map((item) => item.usage)),
-      challenges: challengesByEvent,
-      runs: items,
-    })
+    return c.json(
+      eventStatistics(db, event.id, runManager.listForEvent(event.id))
+    )
   })
 
   app.get("/api/runs/:runId/files", (c) => {

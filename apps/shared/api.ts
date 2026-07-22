@@ -360,15 +360,55 @@ export type ProviderConnection = {
 
 export type EventStats = {
   eventId: string
+  challengeCount: number
+  attemptedChallengeCount: number
+  solvedChallengeCount: number
   runCount: number
+  terminalRunCount: number
+  successfulRunCount: number
+  successRate: number | null
   usage: UsageSummary
+  cost: EventCostSummary
+  duration: EventDurationSummary
+  categories: Array<{
+    category: string
+    challengeCount: number
+    attemptedCount: number
+    solvedCount: number
+  }>
+  outcomes: Array<{
+    outcome: "successful" | "unsuccessful"
+    runCount: number
+    averageTokens: number
+    averageDurationMs: number | null
+  }>
+  tools: AgentToolStats[]
   challenges: Array<{
     challengeId: string
     challengeName: string
+    category: string | null
     runCount: number
+    successfulRunCount: number
     usage: UsageSummary
+    cost: EventCostSummary
+    duration: EventDurationSummary
   }>
-  runs: Array<{ run: RunPublic; usage: UsageSummary }>
+  runs: Array<{
+    run: RunPublic
+    usage: UsageSummary
+    durationMs: number | null
+    successful: boolean
+  }>
+}
+
+export type EventCostSummary = {
+  known: number
+  unknownRunCount: number
+}
+
+export type EventDurationSummary = {
+  medianMs: number | null
+  p90Ms: number | null
 }
 
 export type RunFileEntry = {

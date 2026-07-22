@@ -595,15 +595,19 @@ describe("providers, models, and usage", () => {
     const instance = setup()
     const { event, challenge } = await createChallenge(instance.app)
     const sqlite = new Database(join(instance.dataDir, "aegisx.sqlite"))
-    const now = new Date().toISOString()
+    const nowValue = Date.now()
+    const now = new Date(nowValue).toISOString()
+    const started = new Date(nowValue - 10_000).toISOString()
     const insert = sqlite.prepare(
-      "insert into runs (id, challenge_id, status, model_config, created_at, updated_at, completed_at) values (?, ?, 'completed', ?, ?, ?, ?)"
+      "insert into runs (id, challenge_id, status, model_config, flag, created_at, started_at, updated_at, completed_at) values (?, ?, 'completed', ?, ?, ?, ?, ?, ?)"
     )
     insert.run(
       "known-cost",
       challenge.id,
       JSON.stringify({ provider: "faux", modelId: "faux-1" }),
+      "flag{known}",
       now,
+      started,
       now,
       now
     )
@@ -615,7 +619,9 @@ describe("providers, models, and usage", () => {
         modelId: "custom-1",
         costKnown: false,
       }),
+      null,
       now,
+      started,
       now,
       now
     )
@@ -624,6 +630,11 @@ describe("providers, models, and usage", () => {
     )
     insertAgent.run("known-cost", "known-cost", now, now, now)
     insertAgent.run("unknown-cost", "unknown-cost", now, now, now)
+    const insertTool = sqlite.prepare(
+      "insert into agent_tool_calls (id, agent_id, tool_call_id, tool_name, duration_ms, output_bytes, truncated, succeeded, exit_code, created_at) values (?, 'known-cost', ?, 'bash', ?, ?, ?, ?, ?, ?)"
+    )
+    insertTool.run(crypto.randomUUID(), "tool-1", 120, 10, 0, 1, 0, now)
+    insertTool.run(crypto.randomUUID(), "tool-2", 80, 5, 1, 0, 1, now)
     const insertMessage = sqlite.prepare(
       "insert into agent_messages (id, agent_id, sequence, runtime_id, message, created_at) values (?, ?, 1, ?, ?, ?)"
     )
@@ -696,10 +707,55 @@ describe("providers, models, and usage", () => {
     ).json()
     expect(eventStats.runCount).toBe(2)
     expect(eventStats.usage).toEqual(challengeStats.usage)
+    expect(eventStats).toMatchObject({
+      challengeCount: 1,
+      attemptedChallengeCount: 1,
+      solvedChallengeCount: 1,
+      terminalRunCount: 2,
+      successfulRunCount: 1,
+      successRate: 0.5,
+      cost: { known: 0.25, unknownRunCount: 1 },
+      duration: { medianMs: 10_000, p90Ms: 10_000 },
+      categories: [
+        {
+          category: "Uncategorized",
+          challengeCount: 1,
+          attemptedCount: 1,
+          solvedCount: 1,
+        },
+      ],
+      outcomes: [
+        {
+          outcome: "successful",
+          runCount: 1,
+          averageTokens: 18,
+          averageDurationMs: 10_000,
+        },
+        {
+          outcome: "unsuccessful",
+          runCount: 1,
+          averageTokens: 6,
+          averageDurationMs: 10_000,
+        },
+      ],
+      tools: [
+        {
+          toolName: "bash",
+          callCount: 2,
+          failedCount: 1,
+          durationMs: 200,
+          outputBytes: 15,
+          truncatedCount: 1,
+        },
+      ],
+    })
     expect(eventStats.challenges[0]).toMatchObject({
       challengeId: challenge.id,
       runCount: 2,
+      successfulRunCount: 1,
       usage: { totalTokens: 24, cost: null },
+      cost: { known: 0.25, unknownRunCount: 1 },
+      duration: { medianMs: 10_000, p90Ms: 10_000 },
     })
     expect(JSON.stringify(eventStats)).not.toContain(instance.dataDir)
   })

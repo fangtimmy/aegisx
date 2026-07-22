@@ -382,25 +382,26 @@ export function createRunManager(options: Options) {
     parseRuntimeSnapshot,
   })
 
-  function getPublic(
-    runId: string,
+  const publicRunSelection = {
+    run: runs,
+    challengeName: challenges.name,
+    eventId: events.id,
+    targetSupported: challenges.remoteTarget,
+    targetIgnored: challenges.remoteTargetIgnored,
+    targetAvailable: challenges.remoteAvailable,
+  }
+
+  function publicRun(
+    row: {
+      run: typeof runs.$inferSelect
+      challengeName: string
+      eventId: string
+      targetSupported: boolean
+      targetIgnored: boolean
+      targetAvailable: boolean
+    },
     includeFlag = false
-  ): RunPublic | undefined {
-    const row = db
-      .select({
-        run: runs,
-        challengeName: challenges.name,
-        eventId: events.id,
-        targetSupported: challenges.remoteTarget,
-        targetIgnored: challenges.remoteTargetIgnored,
-        targetAvailable: challenges.remoteAvailable,
-      })
-      .from(runs)
-      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
-      .innerJoin(events, eq(challenges.eventId, events.id))
-      .where(eq(runs.id, runId))
-      .get()
-    if (!row) return undefined
+  ): RunPublic {
     const config = parseModelConfig(row.run.modelConfig)
     const environment = parseEnvironment(row.run.environmentConfig)
     const value: RunPublic = {
@@ -432,6 +433,20 @@ export function createRunManager(options: Options) {
     }
     if (includeFlag) value.flag = row.run.flag
     return value
+  }
+
+  function getPublic(
+    runId: string,
+    includeFlag = false
+  ): RunPublic | undefined {
+    const row = db
+      .select(publicRunSelection)
+      .from(runs)
+      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+      .innerJoin(events, eq(challenges.eventId, events.id))
+      .where(eq(runs.id, runId))
+      .get()
+    return row ? publicRun(row, includeFlag) : undefined
   }
 
   function emit(runId: string, event: RunEvent) {
@@ -1721,13 +1736,14 @@ export function createRunManager(options: Options) {
     conversationSnapshot,
     listForEvent: (eventId: string) =>
       db
-        .select({ id: runs.id })
+        .select(publicRunSelection)
         .from(runs)
         .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+        .innerJoin(events, eq(challenges.eventId, events.id))
         .where(eq(challenges.eventId, eventId))
         .orderBy(desc(runs.createdAt))
         .all()
-        .map(({ id }) => getPublic(id) as RunPublic),
+        .map((row) => publicRun(row)),
     listForChallenge: (challengeId: string) =>
       db
         .select({ id: runs.id })
