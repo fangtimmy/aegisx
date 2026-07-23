@@ -346,23 +346,35 @@ export function createRunStore(db: Database) {
     }
   }
 
-  function getRuntimeSnapshot(agentId: string): string | null {
+  /**
+   * Large TEXT columns can return null via drizzle select in some bun/sqlite
+   * paths; prefer the underlying bun:sqlite client when available.
+   */
+  function rawTextColumn(
+    table: string,
+    column: string,
+    id: string
+  ): string | null {
     const client = (
       db as unknown as {
         $client?: {
           query: (sql: string) => {
-            get: (id: string) => { runtime_snapshot: string | null } | null
+            get: (id: string) => Record<string, string | null> | null
           }
         }
       }
     ).$client
-    if (client) {
-      return (
-        client
-          .query("select runtime_snapshot from agents where id = ?")
-          .get(agentId)?.runtime_snapshot ?? null
-      )
-    }
+    if (!client) return null
+    const row = client
+      .query(`select ${column} as value from ${table} where id = ?`)
+      .get(id)
+    const value = row?.value
+    return typeof value === "string" ? value : null
+  }
+
+  function getRuntimeSnapshot(agentId: string): string | null {
+    const viaRaw = rawTextColumn("agents", "runtime_snapshot", agentId)
+    if (viaRaw !== null) return viaRaw
     return (
       db
         .select({ runtimeSnapshot: agents.runtimeSnapshot })

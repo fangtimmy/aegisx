@@ -45,16 +45,11 @@ export function createApp(options: {
   }
   syncModels()
   const getSettings = () => configStore.getSettings()
-  // Late-bound: platform submit may update run.flag after runService exists.
-  let onRunFlagAccepted: ((runId: string) => void) | undefined
   const platformService = createPlatformService(
     db,
     storage,
     () => getSettings().maxAttachmentMb * 1024 * 1024,
-    configStore,
-    {
-      onRunFlagAccepted: (runId) => onRunFlagAccepted?.(runId),
-    }
+    configStore
   )
   const initialSettings = getSettings()
   const environmentConcurrency = process.env.AEGISX_MAX_CONCURRENCY
@@ -80,9 +75,12 @@ export function createApp(options: {
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,
   })
-  onRunFlagAccepted = (runId) => {
-    runService.refresh(runId)
-  }
+  // Flag writes are a side path (not reduce Cmd); broadcast after DB update.
+  platformService.setRunHooks({
+    onRunFlagAccepted: (runId) => {
+      runService.refresh(runId)
+    },
+  })
   void runService.recoverOnBoot()
 
   const app = new Hono()

@@ -2,13 +2,11 @@ import { rmSync } from "node:fs"
 import { join } from "node:path"
 import { eq } from "drizzle-orm"
 import type {
-  AgentSummary,
   EnvironmentConfig,
   FrozenPromptConfig,
   LiveEvent,
   ModelConfig,
   RunPublic,
-  UsageSummary,
 } from "../../../shared"
 import { isTerminalRunStatus } from "../../../shared"
 import type { createDatabase } from "../db"
@@ -16,6 +14,7 @@ import { challenges } from "../db/schema"
 import { createLiveBus } from "./bus"
 import { RunActionError } from "./errors"
 import { activeAgentCount, pausedAgentCount, reduce } from "./machine"
+import { createRunQueries } from "./queries"
 import type { RuntimePort } from "./runtime-port"
 import { createRunStore } from "./store"
 import type { AgentOutcome, Cmd, Effect, RunAggregate } from "./types"
@@ -48,6 +47,11 @@ export type RunServiceOptions = {
 export function createRunService(options: RunServiceOptions) {
   const store = createRunStore(options.db)
   const bus = createLiveBus()
+  const queries = createRunQueries({
+    store,
+    dataDir: options.dataDir,
+    resolveChallenge: options.resolveChallenge,
+  })
   const locks = new Map<string, Promise<unknown>>()
   const aborting = new Set<string>()
   let maxConcurrency = options.maxConcurrency
@@ -78,13 +82,6 @@ export function createRunService(options: RunServiceOptions) {
   function emit(runId: string, event: LiveEvent) {
     bus.emit(runId, event)
     options.onLiveEvent?.(runId, event)
-  }
-
-  function resolveChallenge(challengeId: string) {
-    return (
-      options.resolveChallenge?.(challengeId) ??
-      store.challengeMeta(challengeId)
-    )
   }
 
   async function applyEffects(runId: string, effects: Effect[]): Promise<void> {
@@ -132,7 +129,7 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   function emitState(state: RunAggregate) {
-    const run = toRunPublic(state)
+    const run = queries.mapPublic(state)
     emit(state.id, { type: "run.updated", run })
     for (const agent of state.agents) {
       emit(state.id, {
@@ -142,49 +139,6 @@ export function createRunService(options: RunServiceOptions) {
           usage: store.usageForAgent(agent.id),
         },
       })
-    }
-  }
-
-  function toRunPublic(state: RunAggregate): RunPublic {
-    let model: ModelConfig
-    let env: EnvironmentConfig
-    try {
-      model = JSON.parse(state.modelJson) as ModelConfig
-      env = JSON.parse(state.envJson) as EnvironmentConfig
-    } catch {
-      model = {
-        provider: "unknown",
-        modelId: "unknown",
-        thinkingLevel: "off",
-      }
-      env = { type: "local" }
-    }
-    const challenge = resolveChallenge(state.challengeId)
-    return {
-      id: state.id,
-      mainAgentId: state.mainAgentId,
-      challengeId: state.challengeId,
-      challengeName: challenge?.name ?? "",
-      eventId: challenge?.eventId ?? "",
-      status: state.status,
-      provider: model.providerLabel ?? model.provider,
-      modelId: model.modelId,
-      modelName: model.modelLabel ?? model.modelId,
-      thinkingLevel: model.thinkingLevel,
-      environment: env.type,
-      targetSupported: challenge?.targetSupported ?? false,
-      image: env.type === "container" ? env.image : null,
-      cpus: env.type === "container" ? env.cpus : undefined,
-      memoryMb: env.type === "container" ? env.memoryMb : undefined,
-      pidsLimit: env.type === "container" ? env.pidsLimit : undefined,
-      createdAt: state.createdAt,
-      startedAt: state.startedAt,
-      updatedAt: state.updatedAt,
-      completedAt: state.completedAt,
-      error: state.error,
-      summary: state.summary,
-      hasFlag: Boolean(state.flag),
-      flag: state.flag,
     }
   }
 
@@ -250,13 +204,13 @@ export function createRunService(options: RunServiceOptions) {
         },
         null
       )
-      return toRunPublic(state)
+      return queries.mapPublic(state)
     })
   }
 
   function pause(runId: string) {
     return withLock(runId, () =>
-      apply(runId, { t: "pause", now: now() }).then(toRunPublic)
+      apply(runId, { t: "pause", now: now() }).then(queries.mapPublic)
     )
   }
 
@@ -270,7 +224,7 @@ export function createRunService(options: RunServiceOptions) {
         const main = mainAgent(current)
         if (main) {
           const existing = store.findByClientMessageId(main.id, clientMessageId)
-          if (existing) return toRunPublic(current)
+          if (existing) return queries.mapPublic(current)
         }
       }
       requireCapacity(pausedAgentCount(current))
@@ -286,13 +240,13 @@ export function createRunService(options: RunServiceOptions) {
         },
         current
       )
-      return toRunPublic(state)
+      return queries.mapPublic(state)
     })
   }
 
   function stop(runId: string) {
     return withLock(runId, () =>
-      apply(runId, { t: "stop", now: now() }).then(toRunPublic)
+      apply(runId, { t: "stop", now: now() }).then(queries.mapPublic)
     )
   }
 
@@ -308,7 +262,7 @@ export function createRunService(options: RunServiceOptions) {
       }
       if (clientMessageId) {
         const existing = store.findByClientMessageId(main.id, clientMessageId)
-        if (existing) return toRunPublic(current)
+        if (existing) return queries.mapPublic(current)
       }
       const state = await apply(
         runId,
@@ -321,13 +275,13 @@ export function createRunService(options: RunServiceOptions) {
         },
         current
       )
-      return toRunPublic(state)
+      return queries.mapPublic(state)
     })
   }
 
   function requestFinish(runId: string, summary: string) {
     return withLock(runId, () =>
-      apply(runId, { t: "request_finish", summary }).then(toRunPublic)
+      apply(runId, { t: "request_finish", summary }).then(queries.mapPublic)
     )
   }
 
@@ -382,7 +336,7 @@ export function createRunService(options: RunServiceOptions) {
         t: "container_failed",
         error,
         now: now(),
-      }).then(toRunPublic)
+      }).then(queries.mapPublic)
     )
   }
 
@@ -395,73 +349,19 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   function get(runId: string): RunPublic | undefined {
-    const state = store.loadAggregate(runId)
-    return state ? toRunPublic(state) : undefined
+    return queries.get(runId)
   }
 
-  function getAggregate(runId: string) {
-    return store.loadAggregate(runId)
-  }
-
-  function agents(runId: string): AgentSummary[] {
+  function agents(runId: string) {
     const state = store.loadAggregate(runId)
     if (!state) throw new RunActionError("not_found", "Run not found")
-    return state.agents.map((agent) => ({
-      ...agent,
-      usage: store.usageForAgent(agent.id),
-    }))
+    return queries.agents(runId)
   }
 
-  function agentUsage(agentId: string): UsageSummary {
-    return store.usageForAgent(agentId)
-  }
-
-  function usage(runId: string): UsageSummary {
+  function usage(runId: string) {
     const state = store.loadAggregate(runId)
     if (!state) throw new RunActionError("not_found", "Run not found")
-    return state.agents
-      .map((a) => store.usageForAgent(a.id))
-      .reduce(
-        (acc, item) => ({
-          input: acc.input + item.input,
-          output: acc.output + item.output,
-          cacheRead: acc.cacheRead + item.cacheRead,
-          cacheWrite: acc.cacheWrite + item.cacheWrite,
-          totalTokens: acc.totalTokens + item.totalTokens,
-          cost:
-            acc.cost === null || item.cost === null
-              ? null
-              : (acc.cost ?? 0) + item.cost,
-        }),
-        {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: 0 as number | null,
-        }
-      )
-  }
-
-  function listForEvent(eventId: string): RunPublic[] {
-    return store
-      .listRunIdsForEvent(eventId)
-      .map((id) => get(id))
-      .filter((run): run is RunPublic => Boolean(run))
-  }
-
-  function listForChallenge(challengeId: string): RunPublic[] {
-    return store
-      .listRunIdsForChallenge(challengeId)
-      .map((id) => get(id))
-      .filter((run): run is RunPublic => Boolean(run))
-  }
-
-  function workspacePath(runId: string): string | undefined {
-    const state = store.loadAggregate(runId)
-    if (!state?.workspacePath || !options.dataDir) return undefined
-    return join(options.dataDir, state.workspacePath)
+    return queries.usage(runId)
   }
 
   async function deleteRun(runId: string) {
@@ -489,77 +389,7 @@ export function createRunService(options: RunServiceOptions) {
     const state = store.loadAggregate(runId)
     if (!state) return undefined
     emitState(state)
-    return toRunPublic(state)
-  }
-
-  function getAgent(runId: string, agentId: string): AgentSummary | undefined {
-    const state = store.loadAggregate(runId)
-    const row = state?.agents.find((a) => a.id === agentId)
-    if (!row) return undefined
-    return { ...row, usage: store.usageForAgent(agentId) }
-  }
-
-  function inspector(runId: string, agentId: string) {
-    const state = store.loadAggregate(runId)
-    const row = state?.agents.find((a) => a.id === agentId)
-    if (!state || !row) return undefined
-    let runtime: {
-      capturedAt?: string
-      systemPrompt?: string
-      cwd?: string
-      model?: unknown
-      tools: Array<{ name: string; description?: string; parameters?: unknown }>
-    } = { tools: [] }
-    try {
-      const snapshotText = store.getRuntimeSnapshot(agentId)
-      if (snapshotText) {
-        const parsed = JSON.parse(snapshotText) as {
-          capturedAt?: string
-          systemPrompt?: string
-          cwd?: string
-          model?: unknown
-          tools?: Array<{
-            name: string
-            description?: string
-            parameters?: unknown
-          }>
-        }
-        runtime = {
-          capturedAt: parsed.capturedAt,
-          systemPrompt: parsed.systemPrompt ?? "",
-          cwd: parsed.cwd ?? "",
-          model: parsed.model,
-          tools: Array.isArray(parsed.tools)
-            ? parsed.tools.map((tool) => ({
-                name: String(tool?.name ?? "unknown"),
-                description: tool?.description,
-                parameters: tool?.parameters ?? {},
-              }))
-            : [],
-        }
-      }
-    } catch {
-      runtime = { tools: [], systemPrompt: "" }
-    }
-    return {
-      agent: {
-        id: row.id,
-        runId: row.runId,
-        parentAgentId: row.parentAgentId,
-        name: row.name,
-        status: row.status,
-        summary: row.summary,
-        error: row.error,
-        createdAt: row.createdAt,
-        startedAt: row.startedAt,
-        updatedAt: row.updatedAt,
-        completedAt: row.completedAt,
-      },
-      task: row.task,
-      runtime,
-      usage: store.usageForAgent(agentId),
-      toolStats: [],
-    }
+    return queries.mapPublic(state)
   }
 
   async function close() {
@@ -581,15 +411,15 @@ export function createRunService(options: RunServiceOptions) {
     containerFailed,
     recoverOnBoot,
     get,
-    getAggregate,
-    getAgent,
+    getAggregate: queries.getAggregate,
+    getAgent: queries.getAgent,
     agents,
-    inspector,
+    inspector: queries.inspector,
     usage,
-    agentUsage,
-    listForEvent,
-    listForChallenge,
-    workspacePath,
+    agentUsage: queries.agentUsage,
+    listForEvent: queries.listForEvent,
+    listForChallenge: queries.listForChallenge,
+    workspacePath: queries.workspacePath,
     delete: deleteRun,
     refresh,
     subscribe: bus.subscribe,

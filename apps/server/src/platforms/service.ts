@@ -52,6 +52,7 @@ export function createPlatformService(
     onRunFlagAccepted?(runId: string): void
   }
 ) {
+  let onRunFlagAccepted = options?.onRunFlagAccepted
   const logPlatformRequest = (info: PlatformRequestError) => {
     const now = new Date().toISOString()
     db.insert(platformRequestLog)
@@ -127,7 +128,7 @@ export function createPlatformService(
     db,
     storedPlatform,
     adapterForEvent,
-    { onRunFlagAccepted: options?.onRunFlagAccepted }
+    { onRunFlagAccepted: (runId) => onRunFlagAccepted?.(runId) }
   )
   const platformTargets = createPlatformTargets(
     db,
@@ -322,6 +323,9 @@ export function createPlatformService(
     isBoundEvent: (eventId: string) => Boolean(storedPlatform(eventId)),
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
+    setRunHooks(hooks: { onRunFlagAccepted?(runId: string): void }) {
+      onRunFlagAccepted = hooks.onRunFlagAccepted
+    },
     submitFlag: platformSubmissions.submitFlag,
     syncChallenges: platformSync.syncChallenges,
     targetAction: platformTargets.targetAction,

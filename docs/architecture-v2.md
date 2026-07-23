@@ -1,6 +1,6 @@
 # AegisX Architecture v2
 
-Status: **complete** (Phases 0–6)  
+Status: **complete** (Phases 0–6 + post-cut stats/tests/queries)  
 Branch: `rewrite/v2`  
 Last updated: 2026-07-23
 
@@ -33,12 +33,15 @@ Last updated: 2026-07-23
 | D5 | Single pure reducer owns lifecycle transitions. |
 | D6 | No v1 DB migration — wipe `data/`. |
 | D7 | Full-stack contract change. |
+| D8 | Successful run = `completed` **and** has flag (stats/UI). |
+| D9 | Event stats `tools[]` empty (no tool_calls table). |
+| D10 | Platform flag write is a side path; `refresh` broadcasts only. |
 
 ## Layout
 
 ```text
 apps/server/src/
-  run/       machine, service, store, session, tools, routes, live, stats
+  run/       machine, service, queries, public, store, session, tools, routes, live, stats
   agent/     runtime, compact, convert, managed-tools
   agents/    workspace tools (bash/read/…), usage helpers
   platforms/ adapters + bind/sync/submit/target
@@ -49,6 +52,12 @@ apps/server/src/
 apps/shared/ wire types
 apps/web/    api + live stream store + features
 ```
+
+## Known limitations
+
+- Live SSE only — reconnect uses REST message page, not event cursor.
+- Event stats omit per-tool analytics (`tools: []`).
+- `agents/` vs `agent/` naming is legacy; merge later if desired.
 
 ## API (run)
 
