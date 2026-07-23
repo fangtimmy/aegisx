@@ -295,9 +295,10 @@ try {
         .get() as { c: number }
     ).c
   )
+  // sqlite_sequence has no UNIQUE/PK on name; DELETE + INSERT is required.
+  db.run(`DELETE FROM sqlite_sequence WHERE name = 'run_events'`)
   db.run(
-    `INSERT INTO sqlite_sequence (name, seq) VALUES ('run_events', ${maxRunEventId})
-     ON CONFLICT(name) DO UPDATE SET seq = excluded.seq`
+    `INSERT INTO sqlite_sequence (name, seq) VALUES ('run_events', ${maxRunEventId})`
   )
 
   copy(
