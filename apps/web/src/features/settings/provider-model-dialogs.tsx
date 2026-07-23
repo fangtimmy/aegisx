@@ -59,7 +59,6 @@ export function EditModelDialog({
     setEditingModel,
     setMetadataError,
     setSelectedBuiltinModel,
-    setSelectedBuiltinProvider,
   } = editor
 
   return (
@@ -156,7 +155,6 @@ export function EditModelDialog({
                   <Button
                     onClick={() => {
                       setBindingModel(editingModel ?? null)
-                      setSelectedBuiltinProvider("")
                       setSelectedBuiltinModel(null)
                     }}
                     size="sm"
@@ -228,15 +226,15 @@ export function EditModelDialog({
 export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
   const {
     bindingModel,
+    builtinProfiles,
+    builtinSearch,
     builtins,
-    filteredBuiltinModels,
     selectedBuiltinModel,
-    selectedBuiltinProvider,
     selectedProfile,
     setBindingModel,
+    setBuiltinSearch,
     setEditingBinding,
     setSelectedBuiltinModel,
-    setSelectedBuiltinProvider,
   } = editor
 
   return (
@@ -244,8 +242,8 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
       onOpenChange={(open) => {
         if (!open) {
           setBindingModel(null)
-          setSelectedBuiltinProvider("")
           setSelectedBuiltinModel(null)
+          setBuiltinSearch("")
         }
       }}
       open={bindingModel !== null}
@@ -255,7 +253,8 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
           <DialogTitle>Bind Pi built-in model</DialogTitle>
           <DialogDescription>
             Apply a Pi profile to <code>{bindingModel?.modelId}</code>. This
-            replaces its metadata but keeps its configured model ID.
+            replaces its metadata but keeps its configured model ID. Any
+            built-in profile can be bound regardless of protocol.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="grid gap-4">
@@ -269,69 +268,58 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
               <AlertDescription>{builtins.error.message}</AlertDescription>
             </Alert>
           ) : (
-            <>
-              <Field>
-                <FieldLabel htmlFor="pi-provider-binding">
-                  Pi provider
-                </FieldLabel>
-                <Combobox<string>
-                  items={editor.builtinProviderIds}
-                  onValueChange={(value) => {
-                    setSelectedBuiltinProvider(value ?? "")
-                    setSelectedBuiltinModel(null)
-                  }}
-                  value={selectedBuiltinProvider || null}
-                >
-                  <ComboboxInput
-                    id="pi-provider-binding"
-                    placeholder="Search Pi providers"
-                  />
-                  <ComboboxPopup>
-                    <ComboboxList>
-                      <ComboboxCollection>
-                        {(providerId) => (
-                          <ComboboxItem key={providerId} value={providerId}>
-                            {providerId}
-                          </ComboboxItem>
-                        )}
-                      </ComboboxCollection>
-                      <ComboboxEmpty>No providers found</ComboboxEmpty>
-                    </ComboboxList>
-                  </ComboboxPopup>
-                </Combobox>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="pi-model-binding">Pi model</FieldLabel>
-                <Combobox<PiModelProfile>
-                  disabled={!selectedBuiltinProvider}
-                  itemToStringLabel={(model) => model.name}
-                  itemToStringValue={(model) => model.modelId}
-                  items={filteredBuiltinModels}
-                  onValueChange={setSelectedBuiltinModel}
-                  value={selectedBuiltinModel}
-                >
-                  <ComboboxInput
-                    id="pi-model-binding"
-                    placeholder="Search Pi models"
-                  />
-                  <ComboboxPopup>
-                    <ComboboxList>
-                      <ComboboxCollection>
-                        {(model: PiModelProfile) => (
-                          <ComboboxItem key={model.modelId} value={model}>
-                            <span className="block truncate">{model.name}</span>
-                            <span className="block truncate font-mono text-muted-foreground text-xs">
-                              {model.modelId}
-                            </span>
-                          </ComboboxItem>
-                        )}
-                      </ComboboxCollection>
-                      <ComboboxEmpty>No models found</ComboboxEmpty>
-                    </ComboboxList>
-                  </ComboboxPopup>
-                </Combobox>
-              </Field>
-            </>
+            <Field>
+              <FieldLabel htmlFor="pi-model-binding">Pi model</FieldLabel>
+              <Combobox<PiModelProfile>
+                filter={(item, query) => {
+                  const q = query.trim().toLowerCase()
+                  if (!q) return true
+                  return (
+                    item.name.toLowerCase().includes(q) ||
+                    item.modelId.toLowerCase().includes(q) ||
+                    item.providerId.toLowerCase().includes(q)
+                  )
+                }}
+                inputValue={builtinSearch}
+                isItemEqualToValue={(item, value) =>
+                  item.providerId === value.providerId &&
+                  item.modelId === value.modelId
+                }
+                itemToStringLabel={(model) =>
+                  `${model.name} (${model.providerId}/${model.modelId})`
+                }
+                itemToStringValue={(model) =>
+                  `${model.providerId}/${model.modelId}`
+                }
+                items={builtinProfiles}
+                onInputValueChange={setBuiltinSearch}
+                onValueChange={setSelectedBuiltinModel}
+                value={selectedBuiltinModel}
+              >
+                <ComboboxInput
+                  id="pi-model-binding"
+                  placeholder="Search by model id, name, or provider"
+                />
+                <ComboboxPopup>
+                  <ComboboxList>
+                    <ComboboxCollection>
+                      {(model: PiModelProfile) => (
+                        <ComboboxItem
+                          key={`${model.providerId}/${model.modelId}`}
+                          value={model}
+                        >
+                          <span className="block truncate">{model.name}</span>
+                          <span className="block truncate font-mono text-muted-foreground text-xs">
+                            {model.providerId}/{model.modelId}
+                          </span>
+                        </ComboboxItem>
+                      )}
+                    </ComboboxCollection>
+                    <ComboboxEmpty>No models found</ComboboxEmpty>
+                  </ComboboxList>
+                </ComboboxPopup>
+              </Combobox>
+            </Field>
           )}
         </DialogPanel>
         <DialogFooter>

@@ -12,7 +12,6 @@ import {
   builtinModelProfiles,
   normalizeModelMetadata,
   parseModelMetadata,
-  providerApi,
   supportedThinkingLevels,
 } from "./models"
 
@@ -150,7 +149,7 @@ export function registerProviderRoutes(
     )
     if (!provider) return notFound(c, "Provider not found")
     return c.json({
-      items: builtinModelProfiles(providerApi(provider.type)).map((model) => ({
+      items: builtinModelProfiles().map((model) => ({
         providerId: model.providerId,
         modelId: model.modelId,
         name: model.name,
@@ -356,8 +355,7 @@ export function registerProviderRoutes(
           const profile = input.binding
             ? builtinModelProfile(
                 input.binding.providerId,
-                input.binding.modelId,
-                providerApi(provider.type)
+                input.binding.modelId
               )
             : undefined
           if (input.binding && !profile) {
@@ -365,7 +363,7 @@ export function registerProviderRoutes(
               {
                 error: {
                   code: "invalid_pi_model",
-                  message: "Pi model is unavailable for this provider protocol",
+                  message: "Pi model binding is unavailable",
                 },
               },
               400
@@ -379,16 +377,14 @@ export function registerProviderRoutes(
           if (input.binding) {
             const profile = builtinModelProfile(
               input.binding.providerId,
-              input.binding.modelId,
-              providerApi(provider.type)
+              input.binding.modelId
             )
             if (!profile) {
               return c.json(
                 {
                   error: {
                     code: "invalid_pi_model",
-                    message:
-                      "Pi model is unavailable for this provider protocol",
+                    message: "Pi model binding is unavailable",
                   },
                 },
                 400
@@ -433,17 +429,13 @@ export function registerProviderRoutes(
       )
       if (!provider || !model) return notFound(c, "Model not found")
       const binding = c.req.valid("json")
-      const profile = builtinModelProfile(
-        binding.providerId,
-        binding.modelId,
-        providerApi(provider.type)
-      )
+      const profile = builtinModelProfile(binding.providerId, binding.modelId)
       if (!profile) {
         return c.json(
           {
             error: {
               code: "invalid_pi_model",
-              message: "Pi model is unavailable for this provider protocol",
+              message: "Pi model binding is unavailable",
             },
           },
           400

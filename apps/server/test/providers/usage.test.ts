@@ -503,7 +503,14 @@ describe("providers, models, and usage", () => {
       )
     ).json()
     expect(profiles.items.length).toBeGreaterThan(0)
-    const profile = profiles.items[0]
+    const providerIds = new Set(
+      profiles.items.map((item: { providerId: string }) => item.providerId)
+    )
+    expect(providerIds.size).toBeGreaterThan(1)
+    const profile =
+      profiles.items.find(
+        (item: { providerId: string }) => item.providerId !== "openai"
+      ) ?? profiles.items[0]
     const bound = await (
       await instance.app.request(
         `/api/provider-models/${model.id}/binding`,

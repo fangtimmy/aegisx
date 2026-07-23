@@ -268,29 +268,19 @@ function metadataFromModel(model: Model<Api>): ModelMetadata {
   })
 }
 
-export function builtinModelProfiles(api: Api): BuiltinModelProfile[] {
+export function builtinModelProfiles(): BuiltinModelProfile[] {
   return getBuiltinProviders().flatMap((providerId) =>
-    getBuiltinModels(providerId).flatMap((model) =>
-      model.api === api
-        ? [
-            {
-              providerId,
-              modelId: model.id,
-              name: model.name,
-              metadata: metadataFromModel(model),
-            },
-          ]
-        : []
-    )
+    getBuiltinModels(providerId).map((model) => ({
+      providerId,
+      modelId: model.id,
+      name: model.name,
+      metadata: metadataFromModel(model),
+    }))
   )
 }
 
-export function builtinModelProfile(
-  providerId: string,
-  modelId: string,
-  api: Api
-) {
-  return builtinModelProfiles(api).find(
+export function builtinModelProfile(providerId: string, modelId: string) {
+  return builtinModelProfiles().find(
     (model) => model.providerId === providerId && model.modelId === modelId
   )
 }

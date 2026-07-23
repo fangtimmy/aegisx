@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   keys,
   type PiModelProfile,
@@ -22,9 +22,9 @@ export function useProviderEditor(provider: ProviderConnection) {
     useState<ProviderModel["piBinding"]>(null)
   const [metadataError, setMetadataError] = useState<string | null>(null)
   const [bindingModel, setBindingModel] = useState<ProviderModel | null>(null)
-  const [selectedBuiltinProvider, setSelectedBuiltinProvider] = useState("")
   const [selectedBuiltinModel, setSelectedBuiltinModel] =
     useState<PiModelProfile | null>(null)
+  const [builtinSearch, setBuiltinSearch] = useState("")
   const save = useMutation({
     mutationFn: (input: ProviderUpdate) =>
       providersApi.updateProvider(provider.id, input),
@@ -90,13 +90,22 @@ export function useProviderEditor(provider: ProviderConnection) {
     },
   })
   const builtinProfiles = builtins.data?.items ?? []
-  const builtinProviderIds = [
-    ...new Set(builtinProfiles.map((model) => model.providerId)),
-  ]
-  const filteredBuiltinModels = builtinProfiles.filter(
-    (model) => model.providerId === selectedBuiltinProvider
-  )
   const selectedProfile = selectedBuiltinModel
+
+  useEffect(() => {
+    if (!bindingModel) return
+    setBuiltinSearch(bindingModel.modelId)
+    setSelectedBuiltinModel(null)
+  }, [bindingModel])
+
+  useEffect(() => {
+    if (!bindingModel || !builtins.data) return
+    const query = bindingModel.modelId.toLowerCase()
+    const exact = builtins.data.items.find(
+      (model) => model.modelId.toLowerCase() === query
+    )
+    setSelectedBuiltinModel(exact ?? null)
+  }, [bindingModel, builtins.data])
 
   return {
     showKey,
@@ -115,10 +124,10 @@ export function useProviderEditor(provider: ProviderConnection) {
     setMetadataError,
     bindingModel,
     setBindingModel,
-    selectedBuiltinProvider,
-    setSelectedBuiltinProvider,
     selectedBuiltinModel,
     setSelectedBuiltinModel,
+    builtinSearch,
+    setBuiltinSearch,
     save,
     discover,
     addModels,
@@ -127,8 +136,6 @@ export function useProviderEditor(provider: ProviderConnection) {
     builtins,
     removeModel,
     builtinProfiles,
-    builtinProviderIds,
-    filteredBuiltinModels,
     selectedProfile,
   }
 }
