@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { CircleAlert } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 import {
+  type ConversationToolExpandPrefs,
   keys,
   type ProviderConnection,
   type SettingsPublic,
@@ -20,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { toast } from "@/lib/toast"
 import { NumberFieldControl } from "./number-field-control"
 
@@ -57,6 +59,7 @@ type RuntimeSettingsInput = Pick<
   providerDiscoverTimeoutMs: number
   defaultToolTimeoutMs: number
   toolTimeouts: Record<string, number>
+  conversationToolExpand: ConversationToolExpandPrefs
 }
 
 type RuntimeFormValues = {
@@ -82,7 +85,20 @@ type RuntimeFormValues = {
   providerDiscoverTimeoutMs: number
   defaultToolTimeoutMs: number
   toolTimeouts: Record<string, number>
+  conversationToolExpand: ConversationToolExpandPrefs
 }
+
+const TOOL_EXPAND_FIELDS: Array<
+  [keyof ConversationToolExpandPrefs, string, string]
+> = [
+  ["fileRead", "File read tools", "read, ls, find, grep while running"],
+  ["fileEdit", "File edit tools", "write, edit while running"],
+  ["bash", "Bash", "shell commands while running"],
+  ["target", "Target control", "start/stop/extend remote targets"],
+  ["flag", "Flag & finish", "submit_flag, finish_run"],
+  ["agent", "Agent tools", "spawn_agent, inspect_agent, other tools"],
+  ["errors", "Failed tools", "expand tools that end in error"],
+]
 
 export function RuntimeDefaults({
   settings,
@@ -138,6 +154,7 @@ export function RuntimeDefaults({
       providerDiscoverTimeoutMs: settings.providerDiscoverTimeoutMs,
       defaultToolTimeoutMs: settings.defaultToolTimeoutMs,
       toolTimeouts: { ...settings.toolTimeouts },
+      conversationToolExpand: { ...settings.conversationToolExpand },
     },
   })
 
@@ -176,6 +193,7 @@ export function RuntimeDefaults({
           providerDiscoverTimeoutMs: values.providerDiscoverTimeoutMs,
           defaultToolTimeoutMs: values.defaultToolTimeoutMs,
           toolTimeouts: values.toolTimeouts,
+          conversationToolExpand: values.conversationToolExpand,
         })
       )}
     >
@@ -453,6 +471,38 @@ export function RuntimeDefaults({
           name={`toolTimeouts.${key}`}
         />
       ))}
+      <div className="col-span-2 grid gap-3 rounded-lg border p-4">
+        <div>
+          <h3 className="font-medium text-sm">Conversation tool panels</h3>
+          <p className="text-muted-foreground text-xs">
+            Auto-expand tool I/O while running (or on error). Default is
+            collapsed for every category.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {TOOL_EXPAND_FIELDS.map(([key, label, description]) => (
+            <Field
+              className="flex flex-row items-start justify-between gap-3"
+              key={key}
+            >
+              <div className="min-w-0">
+                <FieldLabel className="font-normal">{label}</FieldLabel>
+                <p className="text-muted-foreground text-xs">{description}</p>
+              </div>
+              <Controller
+                control={form.control}
+                name={`conversationToolExpand.${key}`}
+                render={({ field }) => (
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                )}
+              />
+            </Field>
+          ))}
+        </div>
+      </div>
       <div className="col-span-2 flex items-center gap-3">
         <Button loading={mutation.isPending} type="submit">
           Save defaults

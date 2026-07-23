@@ -58,6 +58,17 @@ export const defaultToolTimeouts: Record<string, number> = {
   stop_target: 30_000,
 }
 
+export const defaultConversationToolExpand: SettingsPublic["conversationToolExpand"] =
+  {
+    fileRead: false,
+    fileEdit: false,
+    bash: false,
+    target: false,
+    flag: false,
+    agent: false,
+    errors: false,
+  }
+
 export const defaultSettings: SettingsPublic = {
   defaultModelId: null,
   defaultThinkingLevel: "off",
@@ -84,6 +95,7 @@ export const defaultSettings: SettingsPublic = {
   providerDiscoverTimeoutMs: 10_000,
   defaultToolTimeoutMs: 30_000,
   toolTimeouts: { ...defaultToolTimeouts },
+  conversationToolExpand: { ...defaultConversationToolExpand },
   // Derived display-only fields; populated for type completeness.
   defaultMainSystemPromptTemplate: "",
   defaultChildSystemPromptTemplate: "",
@@ -119,6 +131,20 @@ const SettingsSchema = Type.Object(
     providerDiscoverTimeoutMs: Type.Number(),
     defaultToolTimeoutMs: Type.Number(),
     toolTimeouts: Type.Record(Type.String(), Type.Number()),
+    conversationToolExpand: Type.Optional(
+      Type.Object(
+        {
+          fileRead: Type.Boolean(),
+          fileEdit: Type.Boolean(),
+          bash: Type.Boolean(),
+          target: Type.Boolean(),
+          flag: Type.Boolean(),
+          agent: Type.Boolean(),
+          errors: Type.Boolean(),
+        },
+        { additionalProperties: false }
+      )
+    ),
     updatedAt: Type.String(),
   },
   { additionalProperties: true }
@@ -200,6 +226,28 @@ function normalizeToolTimeouts(raw: unknown): Record<string, number> {
     }
   }
   return merged
+}
+
+function normalizeConversationToolExpand(
+  raw: unknown
+): SettingsPublic["conversationToolExpand"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...defaultConversationToolExpand }
+  }
+  const value = raw as Record<string, unknown>
+  const bool = (key: keyof SettingsPublic["conversationToolExpand"]) =>
+    typeof value[key] === "boolean"
+      ? value[key]
+      : defaultConversationToolExpand[key]
+  return {
+    fileRead: bool("fileRead"),
+    fileEdit: bool("fileEdit"),
+    bash: bool("bash"),
+    target: bool("target"),
+    flag: bool("flag"),
+    agent: bool("agent"),
+    errors: bool("errors"),
+  }
 }
 
 function normalizeSettings(raw: unknown): SettingsPublic {
@@ -313,6 +361,9 @@ function normalizeSettings(raw: unknown): SettingsPublic {
       defaultSettings.defaultToolTimeoutMs
     ),
     toolTimeouts: normalizeToolTimeouts(cleaned.toolTimeouts),
+    conversationToolExpand: normalizeConversationToolExpand(
+      cleaned.conversationToolExpand
+    ),
     // Derived display-only fields; publicSettings() fills real values.
     defaultMainSystemPromptTemplate: "",
     defaultChildSystemPromptTemplate: "",

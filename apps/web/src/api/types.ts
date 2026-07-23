@@ -10,6 +10,7 @@ export type {
   Challenge,
   ChallengeInput,
   ChallengeSyncResult,
+  ConversationToolExpandPrefs,
   EventInput,
   EventPlatform,
   EventStats,

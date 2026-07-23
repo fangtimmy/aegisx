@@ -26,7 +26,7 @@ import {
 import { createPortal } from "react-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { AgentStatus } from "@/api"
+import type { AgentStatus, ConversationToolExpandPrefs } from "@/api"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -49,6 +49,7 @@ import {
   type ToolBlock,
   toolStatusLabel,
 } from "./timeline-model"
+import { shouldAutoExpandTool } from "./tool-expand"
 
 export function formatTime(value: string | number | null | undefined) {
   if (!value) return "Not available"
@@ -202,9 +203,11 @@ function terminalLabel(tool: ToolBlock): string | null {
 function ToolActivity({
   tool,
   separated = false,
+  expandPrefs,
 }: {
   tool: ToolBlock
   separated?: boolean
+  expandPrefs: ConversationToolExpandPrefs
 }) {
   const isError = tool.status === "error"
   const label = isError ? (terminalLabel(tool) ?? "Failed") : null
@@ -214,6 +217,11 @@ function ToolActivity({
       : isError
         ? CircleAlert
         : toolIcon(tool.name)
+  const autoExpand = shouldAutoExpandTool(tool.name, tool.status, expandPrefs)
+  const [open, setOpen] = useState(autoExpand)
+  useEffect(() => {
+    if (autoExpand) setOpen(true)
+  }, [autoExpand])
   const startedRef = useRef<number | null>(null)
   const [elapsed, setElapsed] = useState<number | null>(null)
   useEffect(() => {
@@ -231,7 +239,11 @@ function ToolActivity({
     return () => clearInterval(id)
   }, [tool.status])
   return (
-    <Collapsible className={separated ? "mt-3" : undefined}>
+    <Collapsible
+      className={separated ? "mt-3" : undefined}
+      onOpenChange={setOpen}
+      open={open}
+    >
       <CollapsibleTrigger className={activityTriggerClass}>
         <StatusIcon
           className={
@@ -297,8 +309,10 @@ function ToolActivity({
 
 const ConversationRow = memo(function ConversationRow({
   item,
+  expandPrefs,
 }: {
   item: ConversationItem
+  expandPrefs: ConversationToolExpandPrefs
 }) {
   const time = item.timestamp ? formatConversationTime(item.timestamp) : null
   if (item.type === "user") {
@@ -347,8 +361,17 @@ const ConversationRow = memo(function ConversationRow({
           const separated = index > 0 && !(activity && previousActivity)
           if (block.type === "text") {
             return (
-              <div className={separated ? "mt-3" : undefined} key={block.key}>
+              <div
+                className={cn(
+                  separated && "mt-3",
+                  block.streaming && "conversation-text-streaming"
+                )}
+                key={block.key}
+              >
                 <Markdown>{block.body}</Markdown>
+                {block.streaming ? (
+                  <span aria-hidden="true" className="streaming-cursor" />
+                ) : null}
               </div>
             )
           }
@@ -392,7 +415,12 @@ const ConversationRow = memo(function ConversationRow({
             )
           }
           return (
-            <ToolActivity key={block.key} separated={separated} tool={block} />
+            <ToolActivity
+              expandPrefs={expandPrefs}
+              key={block.key}
+              separated={separated}
+              tool={block}
+            />
           )
         })}
       </div>
@@ -403,9 +431,11 @@ const ConversationRow = memo(function ConversationRow({
 export function Conversation({
   agentId,
   stream,
+  expandPrefs,
 }: {
   agentId: string
   stream: ConversationStore
+  expandPrefs: ConversationToolExpandPrefs
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -537,7 +567,7 @@ export function Conversation({
           scrollContainer
         )}
       {items.map((item) => (
-        <ConversationRow item={item} key={item.key} />
+        <ConversationRow expandPrefs={expandPrefs} item={item} key={item.key} />
       ))}
       <div aria-live="polite" className="sr-only">
         {items.length > 0 ? "Agent activity updated" : ""}

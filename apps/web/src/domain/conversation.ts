@@ -142,7 +142,7 @@ export type ToolBlock = {
 }
 
 type AgentBlock =
-  | { key: string; type: "text"; body: string }
+  | { key: string; type: "text"; body: string; streaming?: boolean }
   | {
       key: string
       type: "reasoning"
@@ -293,7 +293,8 @@ function applyAssistant(
   ) => Extract<ConversationItem, { type: "agent" }>,
   itemsLength: number,
   fallback?: string | number,
-  stableKey?: string
+  stableKey?: string,
+  streaming = false
 ) {
   const timestamp = messageTimestamp(message, fallback)
   const blocks = currentAgent(timestamp).blocks
@@ -302,16 +303,25 @@ function applyAssistant(
   const content = Array.isArray(message.content)
     ? message.content
     : [message.content]
+  let lastTextBlock: Extract<AgentBlock, { type: "text" }> | null = null
   for (const [index, part] of content.entries()) {
     const key = `${blockPrefix}:${index}`
     if (typeof part === "string") {
-      if (part.trim()) blocks.push({ key, type: "text", body: part })
+      if (part.trim()) {
+        const block = { key, type: "text" as const, body: part }
+        blocks.push(block)
+        lastTextBlock = block
+      }
       continue
     }
     if (!isRecord(part)) continue
     if (part.type === "text") {
       const body = text(part.text)
-      if (body.trim()) blocks.push({ key, type: "text", body })
+      if (body.trim()) {
+        const block = { key, type: "text" as const, body }
+        blocks.push(block)
+        lastTextBlock = block
+      }
     } else if (part.type === "thinking") {
       const body = text(part.thinking)
       if (body.trim()) {
@@ -332,6 +342,7 @@ function applyAssistant(
       tools.set(id, block)
     }
   }
+  if (streaming && lastTextBlock) lastTextBlock.streaming = true
   if (message.stopReason === "error" && message.errorMessage) {
     blocks.push({
       key: `${blockPrefix}:error`,
@@ -364,7 +375,8 @@ export function buildConversation(
   function applyMessage(
     message: Message,
     fallback?: string | number,
-    stableKey?: string
+    stableKey?: string,
+    streaming = false
   ) {
     if (message.role === "user") {
       applyUser(message, items, fallback, stableKey)
@@ -392,7 +404,8 @@ export function buildConversation(
         currentAgent,
         items.length,
         fallback,
-        stableKey
+        stableKey,
+        streaming
       )
     }
   }
@@ -403,7 +416,7 @@ export function buildConversation(
 
   for (const entry of live) {
     if (entry.type === "message") {
-      applyMessage(entry.message, entry.message.createdAt, entry.key)
+      applyMessage(entry.message, entry.message.createdAt, entry.key, true)
     } else if (entry.type === "tool") {
       const existing = tools.get(entry.toolCallId)
       const block =

@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query"
 import {
   Bot,
   BotMessageSquare,
@@ -12,7 +13,8 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { Link, useSearchParams } from "react-router"
-import type { Challenge } from "@/api"
+import type { Challenge, ConversationToolExpandPrefs } from "@/api"
+import { keys, settingsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -58,6 +60,16 @@ import { useRunController } from "./use-run-controller"
 const defaultResumeMessage =
   "Continue solving the challenge from the current state."
 
+const defaultExpandPrefs: ConversationToolExpandPrefs = {
+  fileRead: false,
+  fileEdit: false,
+  bash: false,
+  target: false,
+  flag: false,
+  agent: false,
+  errors: false,
+}
+
 export function RunWorkspace({
   eventId,
   runId,
@@ -70,6 +82,13 @@ export function RunWorkspace({
   const [searchParams, setSearchParams] = useSearchParams()
   const [draft, setDraft] = useState("")
   const requestedAgentId = searchParams.get("agent")
+  const settings = useQuery({
+    queryKey: keys.settings.all,
+    queryFn: () => settingsApi.getSettings(),
+    staleTime: 60_000,
+  })
+  const expandPrefs =
+    settings.data?.conversationToolExpand ?? defaultExpandPrefs
   const controller = useRunController({
     eventId,
     onMessageSent: () => setDraft(""),
@@ -303,6 +322,7 @@ export function RunWorkspace({
                         <ScrollArea className="relative h-full pr-1" scrollFade>
                           <Conversation
                             agentId={selectedAgent.id}
+                            expandPrefs={expandPrefs}
                             key={selectedAgent.id}
                             stream={streamStore}
                           />

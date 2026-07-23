@@ -2,6 +2,18 @@ import type { ThinkingLevel } from "./thinking";
 
 export type Environment = "local" | "container";
 
+/** When a tool is running (or errors, if enabled), auto-expand that category. */
+export type ConversationToolExpandPrefs = {
+	fileRead: boolean;
+	fileEdit: boolean;
+	bash: boolean;
+	target: boolean;
+	flag: boolean;
+	agent: boolean;
+	/** Expand tools that ended in error regardless of category. */
+	errors: boolean;
+};
+
 export type SettingsPublic = {
 	defaultModelId: string | null;
 	defaultThinkingLevel: ThinkingLevel;
@@ -25,6 +37,7 @@ export type SettingsPublic = {
 	providerDiscoverTimeoutMs: number;
 	defaultToolTimeoutMs: number;
 	toolTimeouts: Record<string, number>;
+	conversationToolExpand: ConversationToolExpandPrefs;
 	mainSystemPromptTemplate: string;
 	childSystemPromptTemplate: string;
 	initialPromptTemplate: string;

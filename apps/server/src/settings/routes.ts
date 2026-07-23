@@ -14,7 +14,6 @@ import {
   builtinModelProfile,
   normalizeModelMetadata,
   parseModelMetadata,
-  providerApi,
 } from "../providers/models"
 import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
@@ -80,6 +79,20 @@ const runtimeSettingsInput = Type.Object(
       Type.Record(
         Type.String(),
         Type.Integer({ minimum: 1_000, maximum: 600_000 })
+      )
+    ),
+    conversationToolExpand: Type.Optional(
+      Type.Object(
+        {
+          fileRead: Type.Boolean(),
+          fileEdit: Type.Boolean(),
+          bash: Type.Boolean(),
+          target: Type.Boolean(),
+          flag: Type.Boolean(),
+          agent: Type.Boolean(),
+          errors: Type.Boolean(),
+        },
+        { additionalProperties: false }
       )
     ),
   },
@@ -336,6 +349,8 @@ export function registerSettingsRoutes(
       patch.defaultToolTimeoutMs = input.defaultToolTimeoutMs
     if (input.toolTimeouts !== undefined)
       patch.toolTimeouts = input.toolTimeouts
+    if (input.conversationToolExpand !== undefined)
+      patch.conversationToolExpand = input.conversationToolExpand
     configStore.updateSettings(patch)
     setMaxConcurrency(input.maxConcurrency)
     return c.json(publicSettings())
@@ -423,11 +438,10 @@ export function registerSettingsRoutes(
             model.piBinding &&
             !builtinModelProfile(
               model.piBinding.providerId,
-              model.piBinding.modelId,
-              providerApi(provider.type)
+              model.piBinding.modelId
             )
           ) {
-            throw new Error("Pi model binding is unavailable for this provider")
+            throw new Error("Pi model binding is unavailable")
           }
           models.push({
             id: model.id,

@@ -165,3 +165,35 @@
     font-family: var(--font-mono);
   }
 }
+
+/* Live assistant token stream: soft fade on the bubble + caret */
+.conversation-text-streaming {
+  animation: conversation-stream-fade 180ms ease-out;
+}
+.streaming-cursor {
+  display: inline-block;
+  width: 0.45ch;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  opacity: 0.85;
+  animation: streaming-cursor-blink 1s step-end infinite;
+}
+@keyframes conversation-stream-fade {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes streaming-cursor-blink {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 0;
+  }
+}
