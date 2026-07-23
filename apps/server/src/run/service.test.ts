@@ -390,4 +390,48 @@ describe("run service L2", () => {
       cleanup()
     }
   })
+
+  test("publish fans progress events to bus subscribers", async () => {
+    const { service, cleanup } = setup()
+    try {
+      const run = await service.create({
+        challengeId: "ch-1",
+        model,
+        prompt,
+        workspacePath: "w",
+        bootstrapText: "go",
+      })
+      const received: string[] = []
+      const unsubscribe = service.subscribe(run.id, (event) => {
+        received.push(event.type)
+      })
+      service.publish(run.id, {
+        type: "message.progress",
+        agentId: run.mainAgentId,
+        messageId: "msg-1",
+        revision: 1,
+        message: {
+          role: "assistant",
+          id: "msg-1",
+          agentId: run.mainAgentId,
+          seq: 0,
+          createdAt: new Date().toISOString(),
+          content: [{ type: "text", text: "partial" }],
+        },
+      })
+      service.publish(run.id, {
+        type: "tool.progress",
+        agentId: run.mainAgentId,
+        toolCallId: "tool-1",
+        revision: 1,
+        toolName: "bash",
+        args: { command: "echo hi" },
+        status: "running",
+      })
+      expect(received).toEqual(["message.progress", "tool.progress"])
+      unsubscribe()
+    } finally {
+      cleanup()
+    }
+  })
 })

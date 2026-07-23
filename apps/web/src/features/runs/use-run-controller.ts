@@ -40,10 +40,14 @@ export function useRunController({
     queryFn: () => runsApi.getRun(runId ?? ""),
   })
 
+  // Reset store when navigating between runs (runId is intentionally a dependency).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on runId change
   useEffect(() => {
+    streamStore.reset()
     setStreamReady(false)
     setStreamDisconnected(false)
-  }, [])
+    retryMessage.current = null
+  }, [runId, streamStore])
 
   useEffect(() => {
     if (
@@ -59,16 +63,16 @@ export function useRunController({
     detail.data?.agents.find((agent) => agent.id === requestedAgentId) ??
     detail.data?.agents.find((agent) => agent.parentAgentId === null) ??
     detail.data?.agents[0]
+  const selectedAgentId = selectedAgent?.id
 
   const mainAgent = detail.data?.agents.find(
     (agent) => agent.parentAgentId === null
   )
 
   const agentMessages = useQuery({
-    enabled: Boolean(runId && selectedAgent),
-    queryKey: keys.runs.messages(runId ?? "", selectedAgent?.id ?? ""),
-    queryFn: () =>
-      runsApi.getAgentMessages(runId ?? "", selectedAgent?.id ?? ""),
+    enabled: Boolean(runId && selectedAgentId),
+    queryKey: keys.runs.messages(runId ?? "", selectedAgentId ?? ""),
+    queryFn: () => runsApi.getAgentMessages(runId ?? "", selectedAgentId ?? ""),
   })
 
   useEffect(() => {
@@ -83,11 +87,11 @@ export function useRunController({
   // Prefetch main transcript when viewing a child so handoff context is ready
   // when switching back (optional lightweight).
   useEffect(() => {
-    if (!runId || !mainAgent || selectedAgent?.id === mainAgent.id) return
+    if (!runId || !mainAgent || selectedAgentId === mainAgent.id) return
     void runsApi.getAgentMessages(runId, mainAgent.id).then((page) => {
       streamStore.applySnapshot(page.agentId, page.messages)
     })
-  }, [mainAgent, runId, selectedAgent?.id, streamStore])
+  }, [mainAgent, runId, selectedAgentId, streamStore])
 
   const control = useMutation({
     mutationFn: ({
@@ -109,7 +113,7 @@ export function useRunController({
         queryClient,
         eventId,
         runId ?? "",
-        selectedAgent?.id
+        selectedAgentId
       )
     },
     onError: (error, variables) => {
@@ -153,11 +157,6 @@ export function useRunController({
             })
           }
         }
-        if (event.type === "message.committed") {
-          void queryClient.invalidateQueries({
-            queryKey: keys.runs.messages(runId, event.agentId),
-          })
-        }
       },
       setStreamDisconnected,
       () => {
@@ -165,15 +164,15 @@ export function useRunController({
         void queryClient.invalidateQueries({
           queryKey: keys.runs.detail(runId),
         })
-        if (selectedAgent) {
+        if (selectedAgentId) {
           void queryClient.invalidateQueries({
-            queryKey: keys.runs.messages(runId, selectedAgent.id),
+            queryKey: keys.runs.messages(runId, selectedAgentId),
           })
         }
       }
     )
     return stop
-  }, [eventId, queryClient, runId, selectedAgent, streamReady, streamStore])
+  }, [eventId, queryClient, runId, selectedAgentId, streamReady, streamStore])
 
   return {
     detail,

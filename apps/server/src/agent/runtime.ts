@@ -236,15 +236,15 @@ export function createAgentRuntime(options: CreateRuntimeOptions) {
       const revision = nextRevision(messageRevisions, messageId)
       if (event.type === "message_end") {
         // Only persist assistant + toolResult; user/notice already committed by service.
+        // Reuse the progress messageId so clients can replace the live bubble in place.
         if (
           event.message.role === "assistant" ||
           event.message.role === "toolResult"
         ) {
           const createdAt = new Date().toISOString()
-          const id = crypto.randomUUID()
           const stored = options.callbacks.commitMessage(
             fromAgentMessage(event.message, {
-              id,
+              id: messageId,
               agentId: options.agentId,
               seq: 0,
               createdAt,

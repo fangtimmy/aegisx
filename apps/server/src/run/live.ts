@@ -72,14 +72,18 @@ export function createLiveRunService(options: {
     modelService: options.modelService,
     getSettings: options.getSettings,
     getApiKeys: options.getApiKeys,
-    onLiveEvent: (runId, event) => options.onLiveEvent?.(runId, event),
+    onLiveEvent: (runId, event) => {
+      // Fan out through the run bus so SSE subscribers receive progress/commits.
+      // serviceRef is set before any session can emit.
+      serviceRef?.publish(runId, event)
+    },
     onSettled: (runId, agentId, outcome) => {
       if (!serviceRef) return
       return serviceRef.onSettled(runId, agentId, outcome)
     },
     requestFinish: (runId, summary) => {
       if (!serviceRef) return
-      return serviceRef.requestFinish(runId, summary)
+      void serviceRef.requestFinish(runId, summary)
     },
     spawnChild: async (runId, parentId, name, task) => {
       if (!serviceRef) throw new Error("service not ready")

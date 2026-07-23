@@ -52,9 +52,7 @@ function assistant(
 test("isolates conversation snapshots by agent", () => {
   const store = new ConversationStore()
   store.applySnapshot("main", [user("m1", 1, "main task", "main")])
-  store.applySnapshot("child", [
-    assistant("c1", 1, "child answer", "child"),
-  ])
+  store.applySnapshot("child", [assistant("c1", 1, "child answer", "child")])
 
   const main = store.get("main")
   const child = store.get("child")
@@ -122,4 +120,105 @@ test("running tool lookup prefers the latest running entry", () => {
     toolName: "read",
     args: { path: "flag.txt" },
   })
+})
+
+test("message.committed replaces progress when ids match", () => {
+  const store = new ConversationStore()
+  store.applySnapshot("agent-1", [user("u1", 1, "hi")])
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "a1",
+    revision: 1,
+    message: assistant("a1", 0, "partial"),
+  })
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "a1",
+    revision: 2,
+    message: assistant("a1", 0, "partial more"),
+  })
+  assert.equal(store.get("agent-1").length, 2)
+
+  store.applyEvent({
+    type: "message.committed",
+    agentId: "agent-1",
+    message: assistant("a1", 2, "final answer"),
+  })
+  const items = store.get("agent-1")
+  assert.equal(items.length, 2)
+  assert.equal(items[0]?.type, "user")
+  assert.equal(items[1]?.type, "agent")
+  if (items[1]?.type === "agent") {
+    assert.equal(items[1].blocks[0]?.type, "text")
+    if (items[1].blocks[0]?.type === "text") {
+      assert.equal(items[1].blocks[0].body, "final answer")
+    }
+  }
+})
+
+test("committed toolResult clears tool: progress key and tool progress", () => {
+  const store = new ConversationStore()
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "tool:call-1",
+    revision: 1,
+    message: {
+      role: "toolResult",
+      id: "tool:call-1",
+      agentId: "agent-1",
+      seq: 0,
+      createdAt: new Date().toISOString(),
+      toolCallId: "call-1",
+      toolName: "bash",
+      content: [{ type: "text", text: "partial out" }],
+    },
+  })
+  store.applyEvent({
+    type: "tool.progress",
+    agentId: "agent-1",
+    toolCallId: "call-1",
+    revision: 1,
+    toolName: "bash",
+    args: { command: "echo hi" },
+    status: "running",
+  })
+  assert.ok(store.getRunningTool("agent-1"))
+
+  store.applyEvent({
+    type: "message.committed",
+    agentId: "agent-1",
+    message: {
+      role: "toolResult",
+      id: "tool:call-1",
+      agentId: "agent-1",
+      seq: 1,
+      createdAt: new Date().toISOString(),
+      toolCallId: "call-1",
+      toolName: "bash",
+      content: [{ type: "text", text: "final out" }],
+    },
+  })
+  assert.equal(store.getRunningTool("agent-1"), null)
+  const items = store.get("agent-1")
+  assert.equal(items.length, 1)
+  assert.equal(items[0]?.type, "agent")
+})
+
+test("reset clears committed and live state", () => {
+  const store = new ConversationStore()
+  store.applySnapshot("agent-1", [user("u1", 1, "hi")])
+  store.applyEvent({
+    type: "message.progress",
+    agentId: "agent-1",
+    messageId: "a1",
+    revision: 1,
+    message: assistant("a1", 0, "live"),
+  })
+  store.reset()
+  assert.equal(store.get("agent-1").length, 0)
+  assert.equal(store.getActivity("agent-1"), null)
+  assert.equal(store.getRunningTool("agent-1"), null)
 })

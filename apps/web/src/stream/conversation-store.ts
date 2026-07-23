@@ -168,6 +168,7 @@ export class ConversationStore {
       committedIds.add(message.id)
       if (message.role === "toolResult") {
         completedTools.add(message.toolCallId)
+        committedIds.add(`tool:${message.toolCallId}`)
       }
     }
     this.messages.set(agentId, stored)
@@ -175,10 +176,12 @@ export class ConversationStore {
     const progress = this.messageProgress.get(agentId)
     if (progress) {
       for (const messageId of committedIds) progress.delete(messageId)
+      if (progress.size === 0) this.messageProgress.delete(agentId)
     }
     const tools = this.toolProgress.get(agentId)
     if (tools) {
       for (const toolCallId of completedTools) tools.delete(toolCallId)
+      if (tools.size === 0) this.toolProgress.delete(agentId)
     }
     this.rebuildCommitted(agentId)
   }
@@ -189,7 +192,15 @@ export class ConversationStore {
       const stored = this.messages.get(event.agentId) ?? new Map()
       stored.set(event.message.id, event.message)
       this.messages.set(event.agentId, stored)
-      this.messageProgress.get(event.agentId)?.delete(event.message.id)
+      const progress = this.messageProgress.get(event.agentId)
+      if (progress) {
+        progress.delete(event.message.id)
+        // Legacy / defensive: progress may have used tool:<callId> while commit used a UUID.
+        if (event.message.role === "toolResult") {
+          progress.delete(`tool:${event.message.toolCallId}`)
+        }
+        if (progress.size === 0) this.messageProgress.delete(event.agentId)
+      }
       if (event.message.role === "toolResult") {
         const completedTools =
           this.completedTools.get(event.agentId) ?? new Set<string>()
@@ -266,6 +277,28 @@ export class ConversationStore {
     this.toolProgress.clear()
     this.activity.clear()
     for (const agentId of agentIds) this.rebuildLive(agentId)
+  }
+
+  /** Drop all conversation state (e.g. when switching runs). */
+  reset() {
+    this.close()
+    const agentIds = new Set([
+      ...this.messages.keys(),
+      ...this.messageProgress.keys(),
+      ...this.toolProgress.keys(),
+      ...this.activity.keys(),
+      ...this.views.keys(),
+      ...this.snapshots.keys(),
+      ...this.listeners.keys(),
+    ])
+    this.messages.clear()
+    this.messageProgress.clear()
+    this.toolProgress.clear()
+    this.completedTools.clear()
+    this.activity.clear()
+    this.views.clear()
+    this.snapshots.clear()
+    for (const agentId of agentIds) this.notify(agentId)
   }
 
   resetForReconnect() {

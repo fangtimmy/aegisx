@@ -84,6 +84,11 @@ export function createRunService(options: RunServiceOptions) {
     options.onLiveEvent?.(runId, event)
   }
 
+  /** Publish a live event from the agent runtime (progress / committed / activity). */
+  function publish(runId: string, event: LiveEvent) {
+    emit(runId, event)
+  }
+
   async function applyEffects(runId: string, effects: Effect[]): Promise<void> {
     for (const effect of effects) {
       switch (effect.t) {
@@ -422,6 +427,7 @@ export function createRunService(options: RunServiceOptions) {
     workspacePath: queries.workspacePath,
     delete: deleteRun,
     refresh,
+    publish,
     subscribe: bus.subscribe,
     store,
     setMaxConcurrency(value: number) {
