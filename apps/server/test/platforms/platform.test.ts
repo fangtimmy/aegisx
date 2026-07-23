@@ -618,7 +618,8 @@ describe("CTF platform integration", () => {
     const mainAgentId =
       firstDetail.run.mainAgentId ??
       firstDetail.agents.find(
-        (agent: { parentAgentId: string | null }) => agent.parentAgentId === null
+        (agent: { parentAgentId: string | null }) =>
+          agent.parentAgentId === null
       )?.id
     const inspector = await (
       await instance.app.request(
@@ -794,7 +795,8 @@ describe("CTF platform integration", () => {
     const ignoredMainId =
       ignoredDetail.run.mainAgentId ??
       ignoredDetail.agents.find(
-        (agent: { parentAgentId: string | null }) => agent.parentAgentId === null
+        (agent: { parentAgentId: string | null }) =>
+          agent.parentAgentId === null
       )?.id
     const ignoredInspector = await (
       await instance.app.request(

@@ -2,10 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import {
-  createLocalBackend,
-  createWorkspaceTools,
-} from "../../src/agent/tools"
+import { createLocalBackend, createWorkspaceTools } from "../../src/agent/tools"
 
 const roots: string[] = []
 

@@ -1,10 +1,5 @@
 import { Database } from "bun:sqlite"
-import {
-  mkdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs"
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
@@ -72,7 +67,12 @@ function assertCompatibleSchema(sqlite: Database) {
   const tables = tableNames(sqlite)
   if (tables.size === 0) return
 
-  const v1Markers = ["agent_inbox", "run_agents", "run_events", "agent_messages"]
+  const v1Markers = [
+    "agent_inbox",
+    "run_agents",
+    "run_events",
+    "agent_messages",
+  ]
   const hasV1 = v1Markers.some((name) => tables.has(name))
   const hasV2 = tables.has("messages") && tables.has("agents")
 

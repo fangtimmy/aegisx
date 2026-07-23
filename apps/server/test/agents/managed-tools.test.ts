@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
+import type { AgentTool } from "@earendil-works/pi-agent-core"
+import { Type } from "typebox"
 import {
   clearToolTerminals,
   createToolTimeoutResolver,
@@ -6,8 +8,6 @@ import {
   manageAgentTools,
   resolveToolTimeoutMs,
 } from "../../src/agent/managed-tools"
-import type { AgentTool } from "@earendil-works/pi-agent-core"
-import { Type } from "typebox"
 
 afterEach(() => {
   clearToolTerminals("agent")
@@ -48,11 +48,7 @@ test("times out platform tools and records terminal state in memory", async () =
 })
 
 test("cancels a tool even when its promise ignores abort", async () => {
-  const [tool] = manageAgentTools(
-    "agent",
-    [hangingTool("bash")],
-    () => 10_000
-  )
+  const [tool] = manageAgentTools("agent", [hangingTool("bash")], () => 10_000)
   const controller = new AbortController()
   const executing = tool.execute("cancel-call", {}, controller.signal)
 

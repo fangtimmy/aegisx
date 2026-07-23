@@ -237,10 +237,7 @@ describe("lifecycle v2 HTTP", () => {
       targetId = run2.id
     }
     const stopped = await (
-      await instance.app.request(
-        `/api/runs/${targetId}/stop`,
-        json("POST", {})
-      )
+      await instance.app.request(`/api/runs/${targetId}/stop`, json("POST", {}))
     ).json()
     expect(stopped.status).toBe("stopped")
   })
@@ -317,9 +314,7 @@ describe("lifecycle v2 HTTP", () => {
     const instance = setup()
     const { challenge } = await createChallenge(instance.app)
     const modelId = await configureFaux(instance.app)
-    instance.faux.setResponses([
-      tool("finish_run", { summary: "to delete" }),
-    ])
+    instance.faux.setResponses([tool("finish_run", { summary: "to delete" })])
     const run = await createRun(instance.app, challenge.id, modelId)
     await waitStatus(instance.app, run.id, ["completed"])
     const del = await instance.app.request(`/api/runs/${run.id}`, {

@@ -1,10 +1,10 @@
+import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Database } from "bun:sqlite"
 import { createDatabase } from "./index"
-import { SCHEMA_VERSION, agents, messages, runs } from "./schema"
+import { agents, messages, runs, SCHEMA_VERSION } from "./schema"
 
 describe("schema v2 bootstrap", () => {
   test("fresh database migrates and sets user_version", () => {
