@@ -5,58 +5,47 @@ export type {
   AgentStatus,
   AgentSummary,
   AgentToolStats,
+  AssistantMessage,
   Attachment,
   Challenge,
   ChallengeInput,
   ChallengeSyncResult,
-  ConversationMessage,
   EventInput,
   EventPlatform,
   EventStats,
   EventSummary,
+  LiveEvent,
+  Message,
+  MessagesPage,
   ModelMetadata,
+  NoticeMessage,
   PiModelProfile,
   PlatformType,
   ProviderConnection,
   ProviderModel,
   ProviderType,
-  PublicAgentMessage,
-  PublicAssistantMessage,
-  PublicToolResultMessage,
-  PublicUserMessage,
   RemoteChallengeSummary,
   RemoteEvent,
+  RunDetail,
   RunFile,
   RunFileEntry,
   RunPublic,
   RunStatus,
-  RunStreamEvent,
   SettingsPublic,
   TargetState,
   ThinkingLevel,
+  ToolResultMessage,
   UsageSummary,
+  UserMessage,
 } from "../../../shared"
 
-export { isPublicAgentMessage } from "../../../shared"
+export { isMessage } from "../../../shared"
 
-import type {
-  AgentSummary,
-  ConversationMessage,
-  RunPublic,
-  UsageSummary,
-} from "../../../shared"
+import type { Message } from "../../../shared"
 
-export type RunDetail = {
-  run: RunPublic
-  agents: AgentSummary[]
-  messages: ConversationMessage[]
-  stats: UsageSummary
-  cursor: number
-}
-
-export type AgentConversation = {
+/** Agent message page from REST. */
+export type AgentMessages = {
   runId: string
   agentId: string
-  messages: ConversationMessage[]
-  cursor: number
+  messages: Message[]
 }

@@ -128,7 +128,7 @@ export function RunWorkspace({
       </Alert>
     )
   if (!detail.data) return null
-  const { run, agents, stats } = detail.data
+  const { run, agents, usage: stats } = detail.data
   const active = run.status === "running" || run.status === "paused"
   const mainSelected = selectedAgent?.parentAgentId === null
   const requestedView = searchParams.get("view")
@@ -158,18 +158,18 @@ export function RunWorkspace({
       streamStore.addPendingMessage({
         id: clientMessageId,
         agentId: selectedAgent.id,
-        sequence: Number.MAX_SAFE_INTEGER,
+        seq: Number.MAX_SAFE_INTEGER,
         createdAt,
-        message: {
-          role: "user",
-          timestamp: Date.parse(createdAt),
-          content: [
-            {
-              type: "text",
-              text: outgoingMessage,
-            },
-          ],
-        },
+        role: "user",
+        source: "user",
+        clientMessageId,
+        timestamp: Date.parse(createdAt),
+        content: [
+          {
+            type: "text",
+            text: outgoingMessage,
+          },
+        ],
       })
     }
     if (run.status === "paused") {

@@ -7,8 +7,8 @@ export const keys = {
   runs: {
     byEvent: (eventId: string) => ["runs", "event", eventId] as const,
     detail: (runId: string) => ["runs", runId] as const,
-    conversation: (runId: string, agentId: string) =>
-      ["runs", runId, "agents", agentId] as const,
+    messages: (runId: string, agentId: string) =>
+      ["runs", runId, "agents", agentId, "messages"] as const,
     inspector: (runId: string, agentId: string) =>
       ["runs", runId, "agents", agentId, "inspector"] as const,
     files: (runId: string, path: string) =>

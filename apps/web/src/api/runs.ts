@@ -1,7 +1,8 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
-  AgentConversation,
   AgentInspector,
+  AgentMessages,
+  Message,
   RunDetail,
   RunFile,
   RunPublic,
@@ -32,10 +33,12 @@ export function getRun(runId: string) {
   return apiRequest<RunDetail>(`/runs/${runId}`)
 }
 
-export function getAgentConversation(runId: string, agentId: string) {
-  return apiRequest<AgentConversation>(
-    `/runs/${runId}/conversation?agentId=${encodeURIComponent(agentId)}`
-  )
+export function getAgentMessages(runId: string, agentId: string, after = 0) {
+  const params = new URLSearchParams({
+    agentId,
+    after: String(after),
+  })
+  return apiRequest<AgentMessages>(`/runs/${runId}/messages?${params}`)
 }
 
 export function getAgentInspector(runId: string, agentId: string) {
@@ -49,7 +52,11 @@ export function controlRun(
   action: RunControlAction,
   body: { message?: string; clientMessageId?: string } = {}
 ) {
-  return apiRequest<void>(`/runs/${runId}/${action}`, jsonRequest("POST", body))
+  const path =
+    action === "message"
+      ? `/runs/${runId}/messages`
+      : `/runs/${runId}/${action}`
+  return apiRequest<RunPublic>(path, jsonRequest("POST", body))
 }
 
 export function deleteRun(runId: string) {
@@ -61,3 +68,5 @@ export function getRunFile(runId: string, path: string) {
     `/runs/${runId}/files?path=${encodeURIComponent(path)}`
   )
 }
+
+export type { Message }

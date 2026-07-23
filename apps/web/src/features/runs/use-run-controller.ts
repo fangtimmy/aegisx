@@ -2,9 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 import {
   keys,
+  type LiveEvent,
   type RunDetail,
   type RunStatus,
-  type RunStreamEvent,
   runsApi,
 } from "@/api"
 import { toast } from "@/lib/toast"
@@ -31,7 +31,7 @@ export function useRunController({
   const streamStore = useRef(new ConversationStore()).current
   const retryMessage = useRef<{ id: string; text: string } | null>(null)
   const [streamDisconnected, setStreamDisconnected] = useState(false)
-  const [streamCursor, setStreamCursor] = useState<number | null>(null)
+  const [streamReady, setStreamReady] = useState(false)
 
   const detail = useQuery({
     enabled: Boolean(runId),
@@ -41,43 +41,53 @@ export function useRunController({
   })
 
   useEffect(() => {
+    setStreamReady(false)
+    setStreamDisconnected(false)
+  }, [])
+
+  useEffect(() => {
     if (
-      streamCursor === null &&
+      !streamReady &&
       detail.data &&
       !terminalStatuses.includes(detail.data.run.status)
     ) {
-      setStreamCursor(detail.data.cursor)
+      setStreamReady(true)
     }
-  }, [detail.data, streamCursor])
+  }, [detail.data, streamReady])
 
   const selectedAgent =
     detail.data?.agents.find((agent) => agent.id === requestedAgentId) ??
     detail.data?.agents.find((agent) => agent.parentAgentId === null) ??
     detail.data?.agents[0]
 
-  const agentDetail = useQuery({
-    enabled: Boolean(
-      runId && selectedAgent && selectedAgent.parentAgentId !== null
-    ),
-    queryKey: keys.runs.conversation(runId ?? "", selectedAgent?.id ?? ""),
+  const mainAgent = detail.data?.agents.find(
+    (agent) => agent.parentAgentId === null
+  )
+
+  const agentMessages = useQuery({
+    enabled: Boolean(runId && selectedAgent),
+    queryKey: keys.runs.messages(runId ?? "", selectedAgent?.id ?? ""),
     queryFn: () =>
-      runsApi.getAgentConversation(runId ?? "", selectedAgent?.id ?? ""),
+      runsApi.getAgentMessages(runId ?? "", selectedAgent?.id ?? ""),
   })
 
   useEffect(() => {
-    const main = detail.data?.agents.find(
-      (agent) => agent.parentAgentId === null
-    )
-    if (main && detail.data) {
-      streamStore.applySnapshot(main.id, detail.data.messages)
-    }
-    if (agentDetail.data) {
+    if (agentMessages.data) {
       streamStore.applySnapshot(
-        agentDetail.data.agentId,
-        agentDetail.data.messages
+        agentMessages.data.agentId,
+        agentMessages.data.messages
       )
     }
-  }, [agentDetail.data, detail.data, streamStore])
+  }, [agentMessages.data, streamStore])
+
+  // Prefetch main transcript when viewing a child so handoff context is ready
+  // when switching back (optional lightweight).
+  useEffect(() => {
+    if (!runId || !mainAgent || selectedAgent?.id === mainAgent.id) return
+    void runsApi.getAgentMessages(runId, mainAgent.id).then((page) => {
+      streamStore.applySnapshot(page.agentId, page.messages)
+    })
+  }, [mainAgent, runId, selectedAgent?.id, streamStore])
 
   const control = useMutation({
     mutationFn: ({
@@ -121,11 +131,10 @@ export function useRunController({
 
   useEffect(() => {
     setStreamDisconnected(false)
-    if (!runId || streamCursor === null) return
+    if (!runId || !streamReady) return
     const stop = streamStore.connect(
       runId,
-      streamCursor,
-      (event: RunStreamEvent) => {
+      (event: LiveEvent) => {
         if (event.type === "run.updated" || event.type === "agent.updated") {
           applyRunMetaFromStream(queryClient, eventId, runId, event)
         }
@@ -144,6 +153,11 @@ export function useRunController({
             })
           }
         }
+        if (event.type === "message.committed") {
+          void queryClient.invalidateQueries({
+            queryKey: keys.runs.messages(runId, event.agentId),
+          })
+        }
       },
       setStreamDisconnected,
       () => {
@@ -151,14 +165,19 @@ export function useRunController({
         void queryClient.invalidateQueries({
           queryKey: keys.runs.detail(runId),
         })
+        if (selectedAgent) {
+          void queryClient.invalidateQueries({
+            queryKey: keys.runs.messages(runId, selectedAgent.id),
+          })
+        }
       }
     )
     return stop
-  }, [eventId, queryClient, runId, streamCursor, streamStore])
+  }, [eventId, queryClient, runId, selectedAgent, streamReady, streamStore])
 
   return {
     detail,
-    agentDetail,
+    agentDetail: agentMessages,
     selectedAgent,
     control,
     retryMessage,

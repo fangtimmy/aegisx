@@ -1,10 +1,9 @@
 import {
   type AgentSummary,
-  type ConversationMessage,
-  isPublicAgentMessage,
-  type PublicAgentMessage,
+  isMessage,
+  type LiveEvent,
+  type Message,
   type RunPublic,
-  type RunStreamEvent,
 } from "@/api"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -29,33 +28,20 @@ function isTransientActivity(
   return value === "retrying" || value === "compacting"
 }
 
-export function parseRunStreamEvent(
-  value: unknown
-): RunStreamEvent | undefined {
+export function parseLiveEvent(value: unknown): LiveEvent | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined
   if (value.type === "ready") {
-    const cursor = numberValue(value.cursor)
-    return typeof value.runId === "string" && cursor !== undefined
-      ? { type: "ready", runId: value.runId, cursor }
+    return typeof value.runId === "string"
+      ? { type: "ready", runId: value.runId }
       : undefined
   }
   if (value.type === "run.updated") {
     if (!isRecord(value.run)) return undefined
-    const cursor = numberValue(value.cursor)
-    return {
-      type: "run.updated",
-      run: value.run as RunPublic,
-      ...(cursor !== undefined ? { cursor } : {}),
-    }
+    return { type: "run.updated", run: value.run as RunPublic }
   }
   if (value.type === "agent.updated") {
     if (!isRecord(value.agent)) return undefined
-    const cursor = numberValue(value.cursor)
-    return {
-      type: "agent.updated",
-      agent: value.agent as AgentSummary,
-      ...(cursor !== undefined ? { cursor } : {}),
-    }
+    return { type: "agent.updated", agent: value.agent as AgentSummary }
   }
   if (value.type === "message.progress") {
     const revision = numberValue(value.revision)
@@ -63,7 +49,7 @@ export function parseRunStreamEvent(
       typeof value.agentId !== "string" ||
       typeof value.messageId !== "string" ||
       revision === undefined ||
-      !isPublicAgentMessage(value.message)
+      !isMessage(value.message)
     ) {
       return undefined
     }
@@ -118,32 +104,23 @@ export function parseRunStreamEvent(
     }
   }
   if (value.type === "message.committed") {
-    const cursor = numberValue(value.cursor)
-    if (
-      typeof value.agentId !== "string" ||
-      cursor === undefined ||
-      !isRecord(value.message)
-    ) {
+    if (typeof value.agentId !== "string" || !isMessage(value.message)) {
       return undefined
     }
-    const message = value.message
+    const message = value.message as Message
     if (
       typeof message.id !== "string" ||
       typeof message.agentId !== "string" ||
-      typeof message.sequence !== "number" ||
-      typeof message.createdAt !== "string" ||
-      !isPublicAgentMessage(message.message)
+      typeof message.seq !== "number" ||
+      typeof message.createdAt !== "string"
     ) {
       return undefined
     }
     return {
       type: "message.committed",
       agentId: value.agentId,
-      cursor,
-      message: message as ConversationMessage,
+      message,
     }
   }
   return undefined
 }
-
-export type { PublicAgentMessage }

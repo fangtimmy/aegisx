@@ -1,4 +1,1 @@
-export {
-  ConversationStore,
-  ConversationStore as RunStreamStore,
-} from "@/stream/conversation-store"
+export { ConversationStore } from "@/stream/conversation-store"

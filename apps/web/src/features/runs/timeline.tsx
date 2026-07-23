@@ -42,7 +42,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { AgentStatusIcon } from "./agent-status-icon"
-import type { RunStreamStore } from "./run-stream-store"
+import type { ConversationStore } from "./run-stream-store"
 import {
   type ConversationItem,
   isRecord,
@@ -405,7 +405,7 @@ export function Conversation({
   stream,
 }: {
   agentId: string
-  stream: RunStreamStore
+  stream: ConversationStore
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)

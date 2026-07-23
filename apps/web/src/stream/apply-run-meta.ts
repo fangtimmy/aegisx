@@ -1,27 +1,16 @@
 import type { QueryClient } from "@tanstack/react-query"
-import type {
-  AgentConversation,
-  RunDetail,
-  RunPublic,
-  RunStreamEvent,
-} from "@/api"
+import type { LiveEvent, RunDetail, RunPublic } from "@/api"
 import { keys } from "@/api"
 
 export function applyRunMetaFromStream(
   queryClient: QueryClient,
   eventId: string,
   runId: string,
-  event: Extract<RunStreamEvent, { type: "run.updated" | "agent.updated" }>
+  event: Extract<LiveEvent, { type: "run.updated" | "agent.updated" }>
 ) {
   if (event.type === "run.updated") {
     queryClient.setQueryData<RunDetail>(keys.runs.detail(runId), (value) =>
-      value
-        ? {
-            ...value,
-            run: event.run,
-            ...(event.cursor !== undefined ? { cursor: event.cursor } : {}),
-          }
-        : value
+      value ? { ...value, run: event.run } : value
     )
     queryClient.setQueryData<{ items: RunPublic[] }>(
       keys.runs.byEvent(eventId),
@@ -49,7 +38,6 @@ export function applyRunMetaFromStream(
                   : agent
               )
             : [...value.agents, event.agent],
-          ...(event.cursor !== undefined ? { cursor: event.cursor } : {}),
         }
       : value
   )
@@ -70,11 +58,9 @@ export function invalidateRunQueries(
   if (agentId) {
     tasks.push(
       queryClient.invalidateQueries({
-        queryKey: keys.runs.conversation(runId, agentId),
+        queryKey: keys.runs.messages(runId, agentId),
       })
     )
   }
   return Promise.all(tasks)
 }
-
-export type { AgentConversation }

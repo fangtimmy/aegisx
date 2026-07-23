@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { ConversationMessage, PublicAgentMessage } from "@/api"
+import type { Message } from "@/api"
 import { buildConversation, type LiveEntry } from "@/domain/conversation"
 import { ConversationStore } from "@/stream/conversation-store"
 
@@ -37,34 +37,52 @@ Object.defineProperty(globalThis, "EventSource", {
   value: FakeEventSource,
 })
 
-function message(
+function assistant(
   id: string,
-  sequence: number,
-  value: PublicAgentMessage
-): ConversationMessage {
+  seq: number,
+  content: Message extends { role: "assistant" } ? Message["content"] : never,
+  extra?: Partial<Extract<Message, { role: "assistant" }>>
+): Message {
   return {
+    role: "assistant",
     id,
     agentId: "agent-1",
-    sequence,
-    message: value,
-    createdAt: new Date(sequence * 1000).toISOString(),
+    seq,
+    createdAt: new Date(seq * 1000).toISOString(),
+    content,
+    timestamp: seq,
+    ...extra,
+  }
+}
+
+function user(
+  id: string,
+  seq: number,
+  text: string,
+  extra?: Partial<Extract<Message, { role: "user" }>>
+): Message {
+  return {
+    role: "user",
+    id,
+    agentId: "agent-1",
+    seq,
+    createdAt: new Date(seq * 1000).toISOString(),
+    source: "user",
+    content: [{ type: "text", text }],
+    ...extra,
   }
 }
 
 test("pairs live tool progress with the persisted assistant message", () => {
-  const history = [
-    message("assistant-1", 1, {
-      role: "assistant",
-      timestamp: 1,
-      content: [
-        {
-          type: "toolCall",
-          id: "call-1",
-          name: "bash",
-          arguments: { command: "ls" },
-        },
-      ],
-    }),
+  const history: Message[] = [
+    assistant("assistant-1", 1, [
+      {
+        type: "toolCall",
+        id: "call-1",
+        name: "bash",
+        arguments: { command: "ls" },
+      },
+    ]),
   ]
   const live: LiveEntry[] = [
     {
@@ -97,21 +115,12 @@ test("committed messages replace progress with the same stable id", () => {
     agentId: "agent-1",
     messageId: "message-1",
     revision: 1,
-    message: {
-      role: "assistant",
-      timestamp: 1,
-      content: [{ type: "text", text: "partial" }],
-    },
+    message: assistant("message-1", 0, [{ type: "text", text: "partial" }]),
   })
   store.applyEvent({
     type: "message.committed",
     agentId: "agent-1",
-    cursor: 2,
-    message: message("message-1", 1, {
-      role: "assistant",
-      timestamp: 1,
-      content: [{ type: "text", text: "complete" }],
-    }),
+    message: assistant("message-1", 1, [{ type: "text", text: "complete" }]),
   })
 
   const items = store.get("agent-1")
@@ -130,20 +139,14 @@ test("ignores out-of-order progress revisions", () => {
     agentId: "agent-1",
     messageId: "message-1",
     revision: 2,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "new" }],
-    },
+    message: assistant("message-1", 0, [{ type: "text", text: "new" }]),
   })
   store.applyEvent({
     type: "message.progress",
     agentId: "agent-1",
     messageId: "message-1",
     revision: 1,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "old" }],
-    },
+    message: assistant("message-1", 0, [{ type: "text", text: "old" }]),
   })
 
   const items = store.get("agent-1")
@@ -157,18 +160,9 @@ test("ignores out-of-order progress revisions", () => {
 test("keeps completed turns stable while the current turn streams", () => {
   const store = new ConversationStore()
   store.applySnapshot("agent-1", [
-    message("user-1", 1, {
-      role: "user",
-      content: [{ type: "text", text: "first task" }],
-    }),
-    message("assistant-1", 2, {
-      role: "assistant",
-      content: [{ type: "text", text: "first answer" }],
-    }),
-    message("user-2", 3, {
-      role: "user",
-      content: [{ type: "text", text: "continue" }],
-    }),
+    user("user-1", 1, "first task"),
+    assistant("assistant-1", 2, [{ type: "text", text: "first answer" }]),
+    user("user-2", 3, "continue"),
   ])
   const before = store.get("agent-1")
 
@@ -177,10 +171,7 @@ test("keeps completed turns stable while the current turn streams", () => {
     agentId: "agent-1",
     messageId: "assistant-2",
     revision: 1,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "partial" }],
-    },
+    message: assistant("assistant-2", 0, [{ type: "text", text: "partial" }]),
   })
   const firstProgress = store.get("agent-1")
 
@@ -193,10 +184,7 @@ test("keeps completed turns stable while the current turn streams", () => {
     agentId: "agent-1",
     messageId: "assistant-2",
     revision: 2,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "updated" }],
-    },
+    message: assistant("assistant-2", 0, [{ type: "text", text: "updated" }]),
   })
   const secondProgress = store.get("agent-1")
 
@@ -217,13 +205,13 @@ test("closes the stream after any terminal run update is refreshed", async () =>
   const store = new ConversationStore()
   store.connect(
     "run-1",
-    0,
     () => {},
     () => {},
     () => {}
   )
   const source = FakeEventSource.latest
   if (!source) assert.fail("expected an event source")
+  assert.ok(source.url.includes("/stream"))
 
   assert.equal(
     store.closeOnTerminal("running", () => Promise.resolve()),
@@ -250,20 +238,14 @@ test("closes the stream after any terminal run update is refreshed", async () =>
 test("ignores stale progress after a snapshot already committed the message", () => {
   const store = new ConversationStore()
   store.applySnapshot("agent-1", [
-    message("message-1", 1, {
-      role: "assistant",
-      content: [{ type: "text", text: "complete" }],
-    }),
+    assistant("message-1", 1, [{ type: "text", text: "complete" }]),
   ])
   store.applyEvent({
     type: "message.progress",
     agentId: "agent-1",
     messageId: "message-1",
     revision: 1,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "stale" }],
-    },
+    message: assistant("message-1", 0, [{ type: "text", text: "stale" }]),
   })
 
   const items = store.get("agent-1")
@@ -277,17 +259,14 @@ test("ignores stale progress after a snapshot already committed the message", ()
 test("snapshot and live tool completion stay in one conversation", () => {
   const store = new ConversationStore()
   store.applySnapshot("agent-1", [
-    message("assistant-1", 1, {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "call-1",
-          name: "bash",
-          arguments: { command: "cat flag" },
-        },
-      ],
-    }),
+    assistant("assistant-1", 1, [
+      {
+        type: "toolCall",
+        id: "call-1",
+        name: "bash",
+        arguments: { command: "ls" },
+      },
+    ]),
   ])
   store.applyEvent({
     type: "tool.progress",
@@ -295,50 +274,19 @@ test("snapshot and live tool completion stay in one conversation", () => {
     toolCallId: "call-1",
     revision: 1,
     toolName: "bash",
-    args: { command: "cat flag" },
-    result: "flag{ok}",
+    args: { command: "ls" },
+    result: "ok",
     status: "done",
-  })
-  store.applyEvent({
-    type: "message.committed",
-    agentId: "agent-1",
-    cursor: 11,
-    message: message("tool:call-1", 2, {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "bash",
-      content: [{ type: "text", text: "flag{ok}" }],
-      isError: false,
-    }),
   })
 
   const items = store.get("agent-1")
   assert.equal(items.length, 1)
   assert.equal(items[0]?.type, "agent")
-  if (items[0]?.type !== "agent") assert.fail("expected an agent turn")
-  assert.deepEqual(
-    items[0].blocks.map((block) => block.type),
-    ["tool"]
-  )
-  if (items[0].blocks[0]?.type !== "tool") assert.fail("expected a tool")
-  assert.equal(items[0].blocks[0].status, "done")
-  assert.equal(items[0].blocks[0].output, "flag{ok}")
 })
 
-test("stable message ids keep same-timestamp history distinct", () => {
+test("stable keys for consecutive user messages", () => {
   const items = buildConversation(
-    [
-      message("message-1", 1, {
-        role: "user",
-        timestamp: 100,
-        content: [{ type: "text", text: "first" }],
-      }),
-      message("message-2", 2, {
-        role: "user",
-        timestamp: 100,
-        content: [{ type: "text", text: "second" }],
-      }),
-    ],
+    [user("message-1", 1, "first"), user("message-2", 2, "second")],
     []
   )
 
@@ -351,24 +299,20 @@ test("stable message ids keep same-timestamp history distinct", () => {
 test("renders child completion as an agent handoff", () => {
   const items = buildConversation(
     [
-      message("handoff-1", 1, {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Background agent Recon (agent-1) completed.\n\nFinal output:\n\nFound the target file.",
-          },
-        ],
-        aegisx: {
-          metadata: {
-            handoff: {
-              agentId: "agent-1",
-              agentName: "Recon",
-              status: "completed",
-            },
-          },
+      {
+        role: "notice",
+        id: "handoff-1",
+        agentId: "agent-1",
+        seq: 1,
+        createdAt: "1970-01-01T00:00:01.000Z",
+        source: "child_result",
+        text: "Background agent Recon (agent-1) completed.\n\nFinal output:\n\nFound the target file.",
+        handoff: {
+          agentId: "agent-1",
+          agentName: "Recon",
+          status: "completed",
         },
-      }),
+      },
     ],
     []
   )

@@ -1,9 +1,9 @@
 import type {
-  ConversationMessage,
-  PublicAgentMessage,
-  PublicAssistantMessage,
-  PublicToolResultMessage,
-  PublicUserMessage,
+  AssistantMessage,
+  Message,
+  NoticeMessage,
+  ToolResultMessage,
+  UserMessage,
 } from "@/api"
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -92,32 +92,24 @@ export function toolStatusLabel(
   return label.length > 100 ? `${label.slice(0, 99)}…` : label
 }
 
-function handoffFromMessage(message: PublicUserMessage, body: string) {
-  const handoff = message.aegisx?.metadata?.handoff
-  if (
-    handoff &&
-    typeof handoff.agentId === "string" &&
-    typeof handoff.agentName === "string" &&
-    typeof handoff.status === "string"
-  ) {
-    const marker = "\n\nFinal output:\n\n"
-    return {
-      agentId: handoff.agentId,
-      agentName: handoff.agentName,
-      status: handoff.status,
-      body: body.includes(marker)
-        ? body.slice(body.indexOf(marker) + marker.length)
-        : body,
-    }
+function handoffFromNotice(message: NoticeMessage) {
+  if (!message.handoff) return null
+  const marker = "\n\nFinal output:\n\n"
+  return {
+    agentId: message.handoff.agentId,
+    agentName: message.handoff.agentName,
+    status: message.handoff.status,
+    body: message.text.includes(marker)
+      ? message.text.slice(message.text.indexOf(marker) + marker.length)
+      : message.text,
   }
-  return null
 }
 
 export type LiveEntry =
   | {
       key: string
       type: "message"
-      message: PublicAgentMessage
+      message: Message
     }
   | {
       key: string
@@ -204,17 +196,11 @@ function resultText(value: unknown) {
   return text(value)
 }
 
-function messageTimestamp(
-  message: PublicAgentMessage,
-  fallback?: string | number
-) {
+function messageTimestamp(message: Message, fallback?: string | number) {
   return typeof message.timestamp === "number" ? message.timestamp : fallback
 }
 
-function messageDuration(
-  message: PublicAgentMessage,
-  endedAt?: string | number
-) {
+function messageDuration(message: Message, endedAt?: string | number) {
   if (typeof message.timestamp !== "number" || endedAt === undefined) {
     return undefined
   }
@@ -225,7 +211,7 @@ function messageDuration(
 }
 
 function applyUser(
-  message: PublicUserMessage,
+  message: UserMessage,
   items: ConversationItem[],
   fallback?: string | number,
   stableKey?: string
@@ -233,29 +219,45 @@ function applyUser(
   const body = contentText(message.content)
   if (!body) return
   const timestamp = messageTimestamp(message, fallback)
-  const handoff = handoffFromMessage(message, body)
-  items.push(
-    handoff
-      ? {
-          key: stableKey ?? `handoff:${items.length}`,
-          type: "handoff",
-          agentName: handoff.agentName,
-          agentId: handoff.agentId,
-          status: handoff.status,
-          body: handoff.body,
-          timestamp,
-        }
-      : {
-          key: stableKey ?? `user:${items.length}`,
-          type: "user",
-          body,
-          timestamp,
-        }
-  )
+  items.push({
+    key: stableKey ?? `user:${items.length}`,
+    type: "user",
+    body,
+    timestamp,
+  })
+}
+
+function applyNotice(
+  message: NoticeMessage,
+  items: ConversationItem[],
+  fallback?: string | number,
+  stableKey?: string
+) {
+  const timestamp = messageTimestamp(message, fallback)
+  const handoff = handoffFromNotice(message)
+  if (handoff) {
+    items.push({
+      key: stableKey ?? `handoff:${items.length}`,
+      type: "handoff",
+      agentName: handoff.agentName,
+      agentId: handoff.agentId,
+      status: handoff.status,
+      body: handoff.body,
+      timestamp,
+    })
+    return
+  }
+  if (!message.text.trim()) return
+  items.push({
+    key: stableKey ?? `notice:${items.length}`,
+    type: "user",
+    body: message.text,
+    timestamp,
+  })
 }
 
 function applyToolResult(
-  message: PublicToolResultMessage,
+  message: ToolResultMessage,
   tools: Map<string, ToolBlock>,
   currentAgent: (
     timestamp?: string | number
@@ -284,7 +286,7 @@ function applyToolResult(
 }
 
 function applyAssistant(
-  message: PublicAssistantMessage,
+  message: AssistantMessage,
   tools: Map<string, ToolBlock>,
   currentAgent: (
     timestamp?: string | number
@@ -340,7 +342,7 @@ function applyAssistant(
 }
 
 export function buildConversation(
-  history: ConversationMessage[],
+  history: Message[],
   live: LiveEntry[]
 ): ConversationItem[] {
   const items: ConversationItem[] = []
@@ -360,12 +362,17 @@ export function buildConversation(
   }
 
   function applyMessage(
-    message: PublicAgentMessage,
+    message: Message,
     fallback?: string | number,
     stableKey?: string
   ) {
     if (message.role === "user") {
       applyUser(message, items, fallback, stableKey)
+      agent = null
+      return
+    }
+    if (message.role === "notice") {
+      applyNotice(message, items, fallback, stableKey)
       agent = null
       return
     }
@@ -391,12 +398,12 @@ export function buildConversation(
   }
 
   for (const entry of history) {
-    applyMessage(entry.message, entry.createdAt, entry.id)
+    applyMessage(entry, entry.createdAt, entry.id)
   }
 
   for (const entry of live) {
     if (entry.type === "message") {
-      applyMessage(entry.message, undefined, entry.key)
+      applyMessage(entry.message, entry.message.createdAt, entry.key)
     } else if (entry.type === "tool") {
       const existing = tools.get(entry.toolCallId)
       const block =

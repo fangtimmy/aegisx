@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { ConversationMessage, PublicAgentMessage } from "@/api"
+import type { Message } from "@/api"
 import { ConversationStore } from "@/stream/conversation-store"
 
 const fakeWindow = {
@@ -16,39 +16,44 @@ Object.defineProperty(globalThis, "window", {
   value: fakeWindow,
 })
 
-function message(
+function user(
   id: string,
-  sequence: number,
-  value: PublicAgentMessage,
+  seq: number,
+  text: string,
   agentId = "agent-1"
-): ConversationMessage {
+): Message {
   return {
+    role: "user",
     id,
     agentId,
-    sequence,
-    message: value,
-    createdAt: new Date(sequence * 1000).toISOString(),
+    seq,
+    createdAt: new Date(seq * 1000).toISOString(),
+    source: "user",
+    content: [{ type: "text", text }],
+  }
+}
+
+function assistant(
+  id: string,
+  seq: number,
+  text: string,
+  agentId = "agent-1"
+): Message {
+  return {
+    role: "assistant",
+    id,
+    agentId,
+    seq,
+    createdAt: new Date(seq * 1000).toISOString(),
+    content: [{ type: "text", text }],
   }
 }
 
 test("isolates conversation snapshots by agent", () => {
   const store = new ConversationStore()
-  store.applySnapshot("main", [
-    message("m1", 1, {
-      role: "user",
-      content: [{ type: "text", text: "main task" }],
-    }),
-  ])
+  store.applySnapshot("main", [user("m1", 1, "main task", "main")])
   store.applySnapshot("child", [
-    message(
-      "c1",
-      1,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "child answer" }],
-      },
-      "child"
-    ),
+    assistant("c1", 1, "child answer", "child"),
   ])
 
   const main = store.get("main")
@@ -63,12 +68,7 @@ test("isolates conversation snapshots by agent", () => {
 
 test("pending user message is removed after failure cleanup", () => {
   const store = new ConversationStore()
-  store.addPendingMessage(
-    message("pending-1", 99, {
-      role: "user",
-      content: [{ type: "text", text: "hello" }],
-    })
-  )
+  store.addPendingMessage(user("pending-1", 99, "hello"))
   assert.equal(store.get("agent-1").length, 1)
   store.removePendingMessage("agent-1", "pending-1")
   assert.equal(store.get("agent-1").length, 0)
@@ -76,21 +76,13 @@ test("pending user message is removed after failure cleanup", () => {
 
 test("resetForReconnect keeps pending messages and drops live progress", () => {
   const store = new ConversationStore()
-  store.addPendingMessage(
-    message("pending-1", 99, {
-      role: "user",
-      content: [{ type: "text", text: "still sending" }],
-    })
-  )
+  store.addPendingMessage(user("pending-1", 99, "still sending"))
   store.applyEvent({
     type: "message.progress",
     agentId: "agent-1",
     messageId: "assistant-1",
     revision: 1,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "ephemeral" }],
-    },
+    message: assistant("assistant-1", 0, "ephemeral"),
   })
   store.applyEvent({
     type: "agent.activity",

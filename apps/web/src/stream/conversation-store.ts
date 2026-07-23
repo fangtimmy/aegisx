@@ -1,15 +1,10 @@
-import type {
-  ConversationMessage,
-  PublicAgentMessage,
-  RunPublic,
-  RunStreamEvent,
-} from "@/api"
+import type { LiveEvent, Message, RunPublic } from "@/api"
 import {
   buildConversation,
   type ConversationItem,
   type LiveEntry,
 } from "@/domain/conversation"
-import { parseRunStreamEvent } from "./parse-event"
+import { parseLiveEvent } from "./parse-event"
 
 type Listener = () => void
 
@@ -17,7 +12,7 @@ type MessageProgress = {
   agentId: string
   messageId: string
   revision: number
-  message: PublicAgentMessage
+  message: Message
   pending: boolean
 }
 
@@ -37,7 +32,7 @@ type ToolProgress = {
 type AgentView = {
   stableThroughId: string | null
   stable: ConversationItem[]
-  tail: ConversationMessage[]
+  tail: Message[]
 }
 
 const emptyItems: ConversationItem[] = []
@@ -47,11 +42,12 @@ const terminalStatuses = new Set<RunPublic["status"]>([
   "stopped",
 ])
 
+function isUserLike(message: Message) {
+  return message.role === "user" || message.role === "notice"
+}
+
 export class ConversationStore {
-  private readonly messages = new Map<
-    string,
-    Map<string, ConversationMessage>
-  >()
+  private readonly messages = new Map<string, Map<string, Message>>()
   private readonly messageProgress = new Map<
     string,
     Map<string, MessageProgress>
@@ -103,11 +99,11 @@ export class ConversationStore {
 
   private rebuildCommitted(agentId: string) {
     const messages = [...(this.messages.get(agentId)?.values() ?? [])].sort(
-      (left, right) => left.sequence - right.sequence
+      (left, right) => left.seq - right.seq
     )
     let boundary = -1
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index]?.message.role === "user") {
+      if (messages[index] && isUserLike(messages[index])) {
         boundary = index
         break
       }
@@ -163,18 +159,15 @@ export class ConversationStore {
     this.notify(agentId)
   }
 
-  applySnapshot(agentId: string, messages: ConversationMessage[]) {
+  applySnapshot(agentId: string, messages: Message[]) {
     const stored = this.messages.get(agentId) ?? new Map()
     const committedIds = new Set<string>()
     const completedTools = this.completedTools.get(agentId) ?? new Set<string>()
     for (const message of messages) {
       stored.set(message.id, message)
       committedIds.add(message.id)
-      if (
-        message.message.role === "toolResult" &&
-        typeof message.message.toolCallId === "string"
-      ) {
-        completedTools.add(message.message.toolCallId)
+      if (message.role === "toolResult") {
+        completedTools.add(message.toolCallId)
       }
     }
     this.messages.set(agentId, stored)
@@ -190,24 +183,19 @@ export class ConversationStore {
     this.rebuildCommitted(agentId)
   }
 
-  applyEvent(event: RunStreamEvent) {
+  applyEvent(event: LiveEvent) {
     if (event.type === "ready") return
     if (event.type === "message.committed") {
       const stored = this.messages.get(event.agentId) ?? new Map()
       stored.set(event.message.id, event.message)
       this.messages.set(event.agentId, stored)
       this.messageProgress.get(event.agentId)?.delete(event.message.id)
-      if (
-        event.message.message.role === "toolResult" &&
-        typeof event.message.message.toolCallId === "string"
-      ) {
+      if (event.message.role === "toolResult") {
         const completedTools =
           this.completedTools.get(event.agentId) ?? new Set<string>()
-        completedTools.add(event.message.message.toolCallId)
+        completedTools.add(event.message.toolCallId)
         this.completedTools.set(event.agentId, completedTools)
-        this.toolProgress
-          .get(event.agentId)
-          ?.delete(event.message.message.toolCallId)
+        this.toolProgress.get(event.agentId)?.delete(event.message.toolCallId)
       }
       this.rebuildCommitted(event.agentId)
       return
@@ -250,13 +238,13 @@ export class ConversationStore {
     }
   }
 
-  addPendingMessage(message: ConversationMessage) {
+  addPendingMessage(message: Message) {
     const progress = this.messageProgress.get(message.agentId) ?? new Map()
     progress.set(message.id, {
       agentId: message.agentId,
       messageId: message.id,
       revision: 0,
-      message: message.message,
+      message,
       pending: true,
     })
     this.messageProgress.set(message.agentId, progress)
@@ -325,15 +313,12 @@ export class ConversationStore {
 
   connect(
     runId: string,
-    afterCursor: number,
-    onEvent: (event: RunStreamEvent) => void,
+    onEvent: (event: LiveEvent) => void,
     onDisconnectedChange: (disconnected: boolean) => void,
     onReconnect: () => void
   ) {
     this.close()
-    const source = new EventSource(
-      `/api/runs/${runId}/events?after=${encodeURIComponent(afterCursor)}`
-    )
+    const source = new EventSource(`/api/runs/${runId}/stream`)
     this.source = source
     let opened = false
     source.onopen = () => {
@@ -355,7 +340,7 @@ export class ConversationStore {
       } catch {
         return
       }
-      const event = parseRunStreamEvent(payload)
+      const event = parseLiveEvent(payload)
       if (!event) return
       this.applyEvent(event)
       onEvent(event)
@@ -378,6 +363,3 @@ export class ConversationStore {
     }
   }
 }
-
-/** @deprecated Use ConversationStore */
-export { ConversationStore as RunStreamStore }
