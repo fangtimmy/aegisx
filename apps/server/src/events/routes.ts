@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
+import type { RunPublic } from "../../../shared"
 import type { createDatabase } from "../db"
 import { attachments, challenges, events, runs } from "../db/schema"
 import { jsonError, notFound } from "../infrastructure/http-errors"
@@ -10,7 +11,6 @@ import { isSafeFilename, StorageLimitError } from "../infrastructure/storage"
 import { validateJson } from "../infrastructure/validation"
 import type { createPlatformService } from "../platforms/service"
 import { PlatformActionError } from "../platforms/service"
-import type { createRunManager } from "../runs/manager"
 import type { createCatalogReader } from "./catalog"
 
 const eventInput = Type.Object(
@@ -35,7 +35,9 @@ const challengeInput = Type.Object({
 type Database = ReturnType<typeof createDatabase>["db"]
 type Storage = ReturnType<typeof createStorage>
 type PlatformService = ReturnType<typeof createPlatformService>
-type RunManager = ReturnType<typeof createRunManager>
+type RunList = {
+  listForEvent(eventId: string): RunPublic[]
+}
 
 export function registerEventRoutes(
   app: Hono,
@@ -43,7 +45,7 @@ export function registerEventRoutes(
     db: Database
     storage: Storage
     platformService: PlatformService
-    runManager: RunManager
+    runManager: RunList
     getSettings(): { maxAttachmentMb: number }
     catalog: Pick<
       ReturnType<typeof createCatalogReader>,

@@ -612,9 +612,17 @@ describe("CTF platform integration", () => {
         )
     )
     expect(targetReads).toBe(0)
+    const firstDetail = await (
+      await instance.app.request(`/api/runs/${firstRun.id}`)
+    ).json()
+    const mainAgentId =
+      firstDetail.run.mainAgentId ??
+      firstDetail.agents.find(
+        (agent: { parentAgentId: string | null }) => agent.parentAgentId === null
+      )?.id
     const inspector = await (
       await instance.app.request(
-        `/api/runs/${firstRun.id}/agents/${firstRun.id}/inspector`
+        `/api/runs/${firstRun.id}/agents/${mainAgentId}/inspector`
       )
     ).json()
     expect(
@@ -780,9 +788,17 @@ describe("CTF platform integration", () => {
             agent.parentAgentId === null && agent.status === "idle"
         )
     )
+    const ignoredDetail = await (
+      await instance.app.request(`/api/runs/${ignoredRun.id}`)
+    ).json()
+    const ignoredMainId =
+      ignoredDetail.run.mainAgentId ??
+      ignoredDetail.agents.find(
+        (agent: { parentAgentId: string | null }) => agent.parentAgentId === null
+      )?.id
     const ignoredInspector = await (
       await instance.app.request(
-        `/api/runs/${ignoredRun.id}/agents/${ignoredRun.id}/inspector`
+        `/api/runs/${ignoredRun.id}/agents/${ignoredMainId}/inspector`
       )
     ).json()
     expect(ignoredRun.targetSupported).toBe(false)

@@ -9,6 +9,9 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core"
 
+/** Schema major version stored in SQLite user_version. */
+export const SCHEMA_VERSION = 2
+
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -108,12 +111,9 @@ export const runs = sqliteTable(
       .notNull()
       .references(() => challenges.id, { onDelete: "cascade" }),
     status: text("status").notNull(),
-    prompt: text("prompt").notNull().default(""),
-    promptConfig: text("prompt_config").notNull().default("{}"),
-    modelConfig: text("model_config").notNull().default("{}"),
-    environmentConfig: text("environment_config")
-      .notNull()
-      .default('{"type":"local"}'),
+    modelJson: text("model_json").notNull(),
+    envJson: text("env_json").notNull(),
+    promptJson: text("prompt_json").notNull(),
     workspacePath: text("workspace_path"),
     createdAt: text("created_at").notNull(),
     startedAt: text("started_at"),
@@ -121,7 +121,7 @@ export const runs = sqliteTable(
     completedAt: text("completed_at"),
     error: text("error"),
     summary: text("summary"),
-    pendingCompletionSummary: text("pending_completion_summary"),
+    pendingFinishSummary: text("pending_finish_summary"),
     flag: text("flag"),
   },
   (table) => [
@@ -131,6 +131,83 @@ export const runs = sqliteTable(
       sql`${table.status} in ('running', 'paused', 'completed', 'failed', 'stopped')`
     ),
   ]
+)
+
+export const agents = sqliteTable(
+  "agents",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    parentAgentId: text("parent_agent_id").references(
+      (): AnySQLiteColumn => agents.id,
+      { onDelete: "cascade" }
+    ),
+    name: text("name").notNull(),
+    task: text("task"),
+    status: text("status").notNull(),
+    runtimeSnapshot: text("runtime_snapshot"),
+    contextSummary: text("context_summary"),
+    contextThroughSeq: integer("context_through_seq"),
+    summary: text("summary"),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    startedAt: text("started_at"),
+    updatedAt: text("updated_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    index("agents_run_id_idx").on(table.runId),
+    index("agents_parent_agent_id_idx").on(table.parentAgentId),
+    uniqueIndex("agents_main_unique")
+      .on(table.runId)
+      .where(sql`${table.parentAgentId} is null`),
+    check(
+      "agents_status_check",
+      sql`${table.status} in ('running', 'idle', 'paused', 'completed', 'failed', 'stopped')`
+    ),
+  ]
+)
+
+export const messages = sqliteTable(
+  "messages",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    role: text("role").notNull(),
+    body: text("body").notNull(),
+    clientMessageId: text("client_message_id"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("messages_agent_seq_unique").on(table.agentId, table.seq),
+    uniqueIndex("messages_agent_client_unique")
+      .on(table.agentId, table.clientMessageId)
+      .where(sql`${table.clientMessageId} is not null`),
+    index("messages_agent_id_idx").on(table.agentId),
+    check(
+      "messages_role_check",
+      sql`${table.role} in ('user', 'assistant', 'toolResult', 'notice')`
+    ),
+  ]
+)
+
+export const agentUsage = sqliteTable(
+  "agent_usage",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    usage: text("usage").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("agent_usage_agent_id_idx").on(table.agentId)]
 )
 
 export const submissions = sqliteTable(
@@ -157,158 +234,6 @@ export const submissions = sqliteTable(
   ]
 )
 
-export const runAgents = sqliteTable(
-  "run_agents",
-  {
-    id: text("id").primaryKey(),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
-    parentAgentId: text("parent_agent_id").references(
-      (): AnySQLiteColumn => runAgents.id,
-      { onDelete: "cascade" }
-    ),
-    name: text("name").notNull(),
-    task: text("task"),
-    status: text("status").notNull(),
-    runtimeSnapshot: text("runtime_snapshot"),
-    contextSummary: text("context_summary"),
-    contextThroughSequence: integer("context_through_sequence"),
-    summary: text("summary"),
-    error: text("error"),
-    createdAt: text("created_at").notNull(),
-    startedAt: text("started_at"),
-    updatedAt: text("updated_at").notNull(),
-    completedAt: text("completed_at"),
-  },
-  (table) => [
-    index("run_agents_run_id_idx").on(table.runId),
-    index("run_agents_parent_agent_id_idx").on(table.parentAgentId),
-    uniqueIndex("run_agents_main_unique")
-      .on(table.runId)
-      .where(sql`${table.parentAgentId} is null`),
-    check(
-      "run_agents_status_check",
-      sql`${table.status} in ('running', 'idle', 'paused', 'completed', 'failed', 'stopped')`
-    ),
-  ]
-)
-
-export const agentMessages = sqliteTable(
-  "agent_messages",
-  {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => runAgents.id, { onDelete: "cascade" }),
-    sequence: integer("sequence").notNull(),
-    runtimeId: text("runtime_id").notNull(),
-    message: text("message").notNull(),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [
-    uniqueIndex("agent_messages_agent_sequence_unique").on(
-      table.agentId,
-      table.sequence
-    ),
-    uniqueIndex("agent_messages_agent_runtime_unique").on(
-      table.agentId,
-      table.runtimeId
-    ),
-    index("agent_messages_agent_id_idx").on(table.agentId),
-  ]
-)
-
-export const agentInbox = sqliteTable(
-  "agent_inbox",
-  {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => runAgents.id, { onDelete: "cascade" }),
-    kind: text("kind").notNull(),
-    content: text("content").notNull(),
-    metadata: text("metadata"),
-    createdAt: text("created_at").notNull(),
-    deliveredAt: text("delivered_at"),
-  },
-  (table) => [
-    index("agent_inbox_pending_idx").on(table.agentId, table.deliveredAt),
-    check(
-      "agent_inbox_kind_check",
-      sql`${table.kind} in ('user', 'child_result', 'resume')`
-    ),
-  ]
-)
-
-export const agentUsage = sqliteTable(
-  "agent_usage",
-  {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => runAgents.id, { onDelete: "cascade" }),
-    kind: text("kind").notNull(),
-    usage: text("usage").notNull(),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [index("agent_usage_agent_id_idx").on(table.agentId)]
-)
-
-export const agentToolCalls = sqliteTable(
-  "agent_tool_calls",
-  {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => runAgents.id, { onDelete: "cascade" }),
-    toolCallId: text("tool_call_id").notNull(),
-    toolName: text("tool_name").notNull(),
-    status: text("status").notNull().default("succeeded"),
-    timeoutMs: integer("timeout_ms").notNull().default(0),
-    durationMs: integer("duration_ms").notNull().default(0),
-    outputBytes: integer("output_bytes").notNull().default(0),
-    truncated: integer("truncated", { mode: "boolean" })
-      .notNull()
-      .default(false),
-    succeeded: integer("succeeded", { mode: "boolean" })
-      .notNull()
-      .default(false),
-    exitCode: integer("exit_code"),
-    error: text("error"),
-    createdAt: text("created_at").notNull(),
-    completedAt: text("completed_at"),
-  },
-  (table) => [
-    index("agent_tool_calls_agent_id_idx").on(table.agentId),
-    index("agent_tool_calls_agent_created_at_idx").on(
-      table.agentId,
-      table.createdAt
-    ),
-    uniqueIndex("agent_tool_calls_agent_tool_call_unique").on(
-      table.agentId,
-      table.toolCallId
-    ),
-  ]
-)
-
-export const runEvents = sqliteTable(
-  "run_events",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
-    type: text("type").notNull(),
-    agentId: text("agent_id").references(() => runAgents.id, {
-      onDelete: "cascade",
-    }),
-    entityId: text("entity_id"),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [index("run_events_run_id_idx").on(table.runId, table.id)]
-)
-
 export const platformRequestLog = sqliteTable(
   "platform_request_log",
   {
@@ -321,8 +246,6 @@ export const platformRequestLog = sqliteTable(
     status: integer("status"),
     responseHeaders: text("response_headers"),
     responseBody: text("response_body"),
-    // Populated only for network-layer failures (no HTTP response received).
-    // null for HTTP errors — see `status` + `response_body` instead.
     error: text("error"),
   },
   (table) => [index("platform_request_log_created_at_idx").on(table.createdAt)]

@@ -47,7 +47,10 @@ export function createPlatformService(
   db: Database,
   storage: Storage,
   maxAttachmentBytes: () => number,
-  configStore: ConfigStore
+  configStore: ConfigStore,
+  options?: {
+    onRunFlagAccepted?(runId: string): void
+  }
 ) {
   const logPlatformRequest = (info: PlatformRequestError) => {
     const now = new Date().toISOString()
@@ -123,7 +126,8 @@ export function createPlatformService(
   const platformSubmissions = createPlatformSubmissions(
     db,
     storedPlatform,
-    adapterForEvent
+    adapterForEvent,
+    { onRunFlagAccepted: options?.onRunFlagAccepted }
   )
   const platformTargets = createPlatformTargets(
     db,

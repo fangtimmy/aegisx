@@ -10,9 +10,8 @@ import { registerPlatformRoutes } from "./platforms/routes"
 import { createPlatformService } from "./platforms/service"
 import { createModelService } from "./providers/models"
 import { providerName, registerProviderRoutes } from "./providers/routes"
-import { createRunManager } from "./runs/manager"
-import { registerRunRoutes } from "./runs/routes"
-import { resolvePromptTemplates } from "./settings/prompt-templates"
+import { createLiveRunService } from "./run/live"
+import { registerRunRoutes } from "./run/routes"
 import { registerSettingsRoutes } from "./settings/routes"
 
 export function createApp(options: {
@@ -46,11 +45,16 @@ export function createApp(options: {
   }
   syncModels()
   const getSettings = () => configStore.getSettings()
+  // Late-bound: platform submit may update run.flag after runService exists.
+  let onRunFlagAccepted: ((runId: string) => void) | undefined
   const platformService = createPlatformService(
     db,
     storage,
     () => getSettings().maxAttachmentMb * 1024 * 1024,
-    configStore
+    configStore,
+    {
+      onRunFlagAccepted: (runId) => onRunFlagAccepted?.(runId),
+    }
   )
   const initialSettings = getSettings()
   const environmentConcurrency = process.env.AEGISX_MAX_CONCURRENCY
@@ -60,23 +64,28 @@ export function createApp(options: {
     options.maxConcurrency ??
     environmentConcurrency ??
     initialSettings.maxConcurrency
-  const runManager = createRunManager({
+  const maxConcurrency =
+    Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
+      ? configuredConcurrency
+      : 2
+
+  const runService = createLiveRunService({
     db,
     dataDir: options.dataDir,
-    maxConcurrency:
-      Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
-        ? configuredConcurrency
-        : 2,
-    getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
-    getPromptTemplates: () => resolvePromptTemplates(getSettings()),
-    getSettings,
+    maxConcurrency,
     modelService,
+    getSettings,
+    getApiKeys: (provider) => providerSecrets.get(provider) ?? [],
     canFinishRun: platformService.canFinishRun,
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,
   })
-  const app = new Hono()
+  onRunFlagAccepted = (runId) => {
+    runService.refresh(runId)
+  }
+  void runService.recoverOnBoot()
 
+  const app = new Hono()
   const catalog = createCatalogReader(db, platformService)
 
   app.onError((error, c) => {
@@ -97,7 +106,7 @@ export function createApp(options: {
     )
   })
 
-  app.get("/", (c) => c.json({ name: "AegisX", status: "ok" }))
+  app.get("/", (c) => c.json({ name: "AegisX", status: "ok", version: 2 }))
 
   registerProviderRoutes(app, {
     configStore,
@@ -105,7 +114,7 @@ export function createApp(options: {
   })
   registerSettingsRoutes(app, {
     configStore,
-    setMaxConcurrency: runManager.setMaxConcurrency,
+    setMaxConcurrency: runService.setMaxConcurrency,
     syncModels,
   })
   registerPlatformRoutes(app, platformService)
@@ -113,13 +122,16 @@ export function createApp(options: {
     db,
     storage,
     platformService,
-    runManager,
+    runManager: {
+      listForEvent: (eventId: string) => runService.listForEvent(eventId),
+    },
     getSettings,
     catalog,
   })
   registerRunRoutes(app, {
     db,
-    runManager,
+    dataDir: options.dataDir,
+    runService,
     getSettings,
     configStore,
     catalog,
@@ -129,9 +141,9 @@ export function createApp(options: {
 
   return {
     app,
-    activeSessionCount: runManager.activeSessionCount,
+    activeSessionCount: () => runService.activeSessionCount(),
     close: async () => {
-      await runManager.close()
+      await runService.close()
       sqlite.close()
       releaseLock()
     },

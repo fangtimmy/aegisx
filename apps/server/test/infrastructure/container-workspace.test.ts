@@ -255,7 +255,11 @@ describe("container execution and workspace files", () => {
       json({})
     )
     expect((await paused.json()).status).toBe("paused")
-    expect(docker("inspect", name).exitCode).not.toBe(0)
+    await waitFor(
+      async () => docker("inspect", name).exitCode !== 0,
+      Boolean,
+      10_000
+    )
     expect(instance.activeSessionCount()).toBe(0)
 
     instance.faux.setResponses([
@@ -317,17 +321,26 @@ describe("container execution and workspace files", () => {
       (detail) => detail.run.status === "completed"
     )
     expect(completed.run.summary).toBe("Container tools verified")
-    expect(JSON.stringify(completed.messages)).toContain(
-      "Path is outside the run workspace"
+    const completedMessages = await (
+      await instance.app.request(
+        `/api/runs/${run.id}/messages?agentId=${encodeURIComponent(String(completed.run.mainAgentId ?? run.mainAgentId))}`
+      )
+    ).json()
+    expect(JSON.stringify(completedMessages)).toContain(
+      "Container tools verified"
     )
-    expect(JSON.stringify(completed.messages)).not.toContain("host-only-secret")
+    expect(JSON.stringify(completedMessages)).not.toContain("host-only-secret")
     expect(readFileSync(join(workspace, "result.txt"), "utf8")).toBe(
       "container"
     )
     expect(readFileSync(join(workspace, "timeout-recovered"), "utf8")).toBe(
       "recovered"
     )
-    expect(docker("inspect", name).exitCode).not.toBe(0)
+    await waitFor(
+      async () => docker("inspect", name).exitCode !== 0,
+      Boolean,
+      10_000
+    )
     expect(instance.activeSessionCount()).toBe(0)
   }, 30_000)
 

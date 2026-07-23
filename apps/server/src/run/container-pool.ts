@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import type { EnvironmentConfig } from "../../../shared"
 import { createLocalBackend, type WorkspaceBackend } from "../agents/tools"
 import type { SettingsPublic } from "../infrastructure/config-store"
 import {
@@ -8,7 +9,6 @@ import {
   createContainerBackend,
   removeContainerAsync,
 } from "../infrastructure/container"
-import type { EnvironmentConfig } from "./config"
 import { RunStartError } from "./errors"
 
 export type ContainerPool = ReturnType<typeof createContainerPool>

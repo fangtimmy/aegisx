@@ -1,39 +1,31 @@
-import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core"
+import type { AgentTool } from "@earendil-works/pi-agent-core"
 import { Type } from "typebox"
-import type { AgentPublic } from "../../../shared"
+import type { AgentPublic, Message } from "../../../shared"
 import {
   createWorkspaceTools,
   defineAgentTool,
   type ToolLimits,
   type WorkspaceBackend,
 } from "../agents/tools"
-import type { runAgents, runs } from "../db/schema"
 import { isActiveTarget, type TargetState } from "../platforms/core"
-
-type StoredRun = typeof runs.$inferSelect
-type StoredAgent = typeof runAgents.$inferSelect
+import type { AgentRecord, RunAggregate } from "./types"
 
 export type RunToolContext = {
   runId: string
   agentId: string
   isMain: boolean
-  agent: StoredAgent
-  run: StoredRun
+  challengeId: string
   challenge: {
-    id: string
     platformIntegrated: boolean
     targetCapable: boolean
   }
   backend: WorkspaceBackend
   toolLimits?: ToolLimits
-  getStoredRun(): StoredRun | undefined
-  updateRun(values: Partial<typeof runs.$inferInsert>): void
-  getStoredAgent(agentId: string): StoredAgent | undefined
-  getAgentPublic(agentId: string): AgentPublic | undefined
-  messagesForAgent(agentId: string): AgentMessage[]
-  createChildAgent(
-    runId: string,
-    parentAgentId: string,
+  getRun(): RunAggregate | null
+  requestFinish(summary: string): void
+  getAgent(agentId: string): AgentRecord | undefined
+  messagesForAgent(agentId: string): Message[]
+  spawnChild(
     name: string,
     task: string,
     signal?: AbortSignal
@@ -52,12 +44,18 @@ export type RunToolContext = {
   ): Promise<TargetState>
 }
 
-function lastAssistantText(entries: AgentMessage[]) {
+function lastAssistantText(entries: Message[]) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const message = entries[index]
-    if (message.role !== "assistant") continue
+    if (message?.role !== "assistant") continue
     const text = message.content
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .flatMap((part) =>
+        typeof part === "string"
+          ? [part]
+          : part.type === "text"
+            ? [part.text]
+            : []
+      )
       .join("\n")
       .trim()
     if (text) return text.slice(0, 50_000)
@@ -70,6 +68,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
   const workspaceTools = context.toolLimits
     ? createWorkspaceTools(backend, context.toolLimits)
     : createWorkspaceTools(backend)
+
   const finishRun = defineAgentTool({
     name: "finish_run",
     label: "Finish run",
@@ -78,19 +77,19 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
       summary: Type.String({ minLength: 1 }),
     }),
     execute: async (_id, params, signal) => {
-      const stored = context.getStoredRun()
+      const stored = context.getRun()
       if (
         !stored ||
         ["completed", "failed", "stopped"].includes(stored.status)
       ) {
         throw new Error("Run is already finished")
       }
-      if (!context.canFinishRun?.(context.runId, context.run.challengeId)) {
+      if (!context.canFinishRun?.(context.runId, context.challengeId)) {
         throw new Error("Submit an accepted flag before finishing this Run")
       }
       if (challenge.targetCapable && context.targetAction) {
         const target = await context.targetAction(
-          context.run.challengeId,
+          context.challengeId,
           "get",
           signal
         )
@@ -98,7 +97,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
           throw new Error("Stop the remote target before finishing this Run")
         }
       }
-      context.updateRun({ pendingCompletionSummary: params.summary })
+      context.requestFinish(params.summary)
       return {
         content: [{ type: "text" as const, text: "Run completed" }],
         details: {},
@@ -118,7 +117,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
       if (!context.submitFlag) throw new Error("Flag submission is unavailable")
       const result = await context.submitFlag(
         context.runId,
-        context.run.challengeId,
+        context.challengeId,
         params.flag,
         signal
       )
@@ -142,9 +141,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
     executionMode: "parallel",
     execute: async (_id, params, signal) => {
       if (signal?.aborted) throw new Error("Sub-agent creation was aborted")
-      const child = await context.createChildAgent(
-        context.runId,
-        context.agentId,
+      const child = await context.spawnChild(
         params.name.trim(),
         params.task.trim(),
         signal
@@ -174,26 +171,26 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
       agent_id: Type.String({ minLength: 1 }),
     }),
     execute: async (_id, params) => {
-      const child = context.getStoredAgent(params.agent_id)
+      const child = context.getAgent(params.agent_id)
       if (
-        child?.runId !== context.runId ||
+        !child ||
+        child.runId !== context.runId ||
         child.parentAgentId !== context.agentId
       ) {
         throw new Error("Child agent was not found")
       }
-      const value = context.getAgentPublic(child.id) as AgentPublic
       const summary =
-        value.summary ?? lastAssistantText(context.messagesForAgent(child.id))
+        child.summary ?? lastAssistantText(context.messagesForAgent(child.id))
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              id: value.id,
-              name: value.name,
-              status: value.status,
+              id: child.id,
+              name: child.name,
+              status: child.status,
               summary,
-              error: value.error,
+              error: child.error,
             }),
           },
         ],
@@ -218,7 +215,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
         if (!context.targetAction)
           throw new Error("Target management is unavailable")
         const target = await context.targetAction(
-          context.run.challengeId,
+          context.challengeId,
           action,
           signal
         )

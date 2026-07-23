@@ -86,7 +86,7 @@ describe("event, challenge, and attachment API", () => {
       [challenge.id, "2099-01-01T00:00:00.000Z"]
     )
     sqlite.run(
-      "insert into runs (id, challenge_id, status, created_at, updated_at) values (?, ?, ?, ?, ?)",
+      "insert into runs (id, challenge_id, status, model_json, env_json, prompt_json, created_at, updated_at) values (?, ?, ?, '{}', '{\"type\":\"local\"}', '{}', ?, ?)",
       [
         "paused-run",
         challenge.id,
@@ -114,7 +114,7 @@ describe("event, challenge, and attachment API", () => {
     const challenge = await createChallenge(app, event.id)
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, created_at, updated_at) values (?, ?, 'completed', ?, ?)",
+      "insert into runs (id, challenge_id, status, model_json, env_json, prompt_json, created_at, updated_at) values (?, ?, 'completed', '{}', '{\"type\":\"local\"}', '{}', ?, ?)",
       [
         "completed-local-run",
         challenge.id,
@@ -204,7 +204,7 @@ describe("event, challenge, and attachment API", () => {
 
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, created_at, updated_at) values (?, ?, ?, ?, ?)",
+      "insert into runs (id, challenge_id, status, model_json, env_json, prompt_json, created_at, updated_at) values (?, ?, ?, '{}', '{\"type\":\"local\"}', '{}', ?, ?)",
       [
         "active-run",
         challenge.id,

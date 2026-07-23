@@ -22,7 +22,11 @@ type StoredPlatform = typeof eventPlatforms.$inferSelect
 export function createPlatformSubmissions(
   db: Database,
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
-  adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined
+  adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined,
+  options?: {
+    /** Notify run layer after DB flag/solved writes (SSE refresh). */
+    onRunFlagAccepted?(runId: string): void
+  }
 ) {
   async function submitFlag(
     runId: string,
@@ -126,6 +130,7 @@ export function createPlatformSubmissions(
             .run()
           tx.update(runs).set({ flag: value }).where(eq(runs.id, runId)).run()
         })
+        options?.onRunFlagAccepted?.(runId)
       }
       return result
     } catch (error) {
