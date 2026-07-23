@@ -5,7 +5,7 @@ import { join } from "node:path"
 import {
   createLocalBackend,
   createWorkspaceTools,
-} from "../../src/agents/tools"
+} from "../../src/agent/tools"
 
 const roots: string[] = []
 

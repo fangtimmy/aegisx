@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import type { EnvironmentConfig } from "../../../shared"
-import { createLocalBackend, type WorkspaceBackend } from "../agents/tools"
+import { createLocalBackend, type WorkspaceBackend } from "../agent/tools"
 import type { SettingsPublic } from "../infrastructure/config-store"
 import {
   containerName,

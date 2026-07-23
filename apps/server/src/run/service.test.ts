@@ -2,9 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { eq } from "drizzle-orm"
 import type { FrozenPromptConfig, ModelConfig } from "../../../shared"
 import { createDatabase } from "../db"
-import { challenges, events } from "../db/schema"
+import { challenges, events, runs } from "../db/schema"
 import { createFakeRuntime } from "./runtime-port"
 import { createRunService } from "./service"
 
@@ -358,6 +359,33 @@ describe("run service L2", () => {
       await expect(service.pause(run.id)).rejects.toMatchObject({
         code: "invalid_state",
       })
+    } finally {
+      cleanup()
+    }
+  })
+
+  test("refresh after flag write broadcasts run.updated with hasFlag", async () => {
+    const { service, eventsLog, db, cleanup } = setup()
+    try {
+      const run = await service.create({
+        challengeId: "ch-1",
+        model,
+        prompt,
+        workspacePath: "w",
+        bootstrapText: "go",
+      })
+      expect(service.get(run.id)?.hasFlag).toBe(false)
+      // side-path write (platform submit), then refresh
+      db.update(runs)
+        .set({ flag: "flag{accepted}" })
+        .where(eq(runs.id, run.id))
+        .run()
+      eventsLog.length = 0
+      const refreshed = service.refresh(run.id)
+      expect(refreshed?.hasFlag).toBe(true)
+      expect(refreshed?.flag).toBe("flag{accepted}")
+      expect(eventsLog.some((e) => e.type === "run.updated")).toBe(true)
+      expect(service.get(run.id)?.hasFlag).toBe(true)
     } finally {
       cleanup()
     }

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createLocalBackend } from "../agents/tools"
+import { createLocalBackend } from "../agent/tools"
 import { createRunTools } from "./tools"
 import type { RunAggregate } from "./types"
 

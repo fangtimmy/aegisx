@@ -6,7 +6,7 @@ import type {
   RunPublic,
   UsageSummary,
 } from "../../../shared"
-import { sumUsage } from "../agents/usage"
+import { sumUsage } from "../agent/usage"
 import type { createDatabase } from "../db"
 import { challenges, runs, submissions } from "../db/schema"
 

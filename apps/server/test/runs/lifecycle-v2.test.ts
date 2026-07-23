@@ -293,30 +293,24 @@ describe("lifecycle v2 HTTP", () => {
     expect(stats.terminalRunCount).toBeGreaterThanOrEqual(1)
   })
 
-  test("capacity rejects when active agents exceed max", async () => {
+  test("capacity rejects second run while first agent is idle", async () => {
     const instance = setup({ maxConcurrency: 1 })
     const { challenge } = await createChallenge(instance.app)
     const modelId = await configureFaux(instance.app)
+    // leave main idle (turn finished without finish_run)
     instance.faux.setResponses([fauxAssistantMessage("occupying slot")])
     const first = await createRun(instance.app, challenge.id, modelId)
-    await waitStatus(instance.app, first.id, ["running", "idle", "completed"])
+    await waitStatus(instance.app, first.id, ["idle", "running"])
     const firstStatus = (await getDetail(instance.app, first.id)).run!.status
-    if (["completed", "failed", "stopped"].includes(firstStatus)) {
-      // idle/completed frees capacity; assert helper path via global count only
-      expect(instance.activeSessionCount()).toBeGreaterThanOrEqual(0)
-      return
-    }
+    expect(["idle", "running"]).toContain(firstStatus)
     instance.faux.setResponses([fauxAssistantMessage("blocked")])
     const res = await instance.app.request(
       `/api/challenges/${challenge.id}/runs`,
       json("POST", { modelId, environment: "local" })
     )
-    // active includes idle; capacity should fire if first still active
-    if (res.status === 409) {
-      expect(JSON.stringify(await res.json())).toMatch(/capacity/i)
-    } else {
-      expect([200, 201]).toContain(res.status)
-    }
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error?.code ?? body.error).toMatch(/capacity/i)
   })
 
   test("delete terminal run returns 204 then 404", async () => {

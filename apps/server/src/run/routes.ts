@@ -248,19 +248,6 @@ export function registerRunRoutes(
     })
   })
 
-  app.get("/api/runs/:runId/conversation", (c) => {
-    const run = runService.get(c.req.param("runId"))
-    const agentId = c.req.query("agentId")
-    if (!run || !agentId) return notFound(c, "Agent not found")
-    const agent = runService.getAgent(run.id, agentId)
-    if (!agent) return notFound(c, "Agent not found")
-    return c.json({
-      runId: run.id,
-      agentId: agent.id,
-      messages: runService.store.listMessages(agent.id),
-    })
-  })
-
   app.get("/api/runs/:runId/agents/:agentId", (c) => {
     const run = runService.get(c.req.param("runId"))
     const agent = runService.getAgent(
@@ -404,62 +391,6 @@ export function registerRunRoutes(
         })
       } catch {
         finish()
-      } finally {
-        finish()
-      }
-    })
-  })
-
-  app.get("/api/runs/:runId/events", (c) => {
-    // v1 path → stream (live only)
-    return streamSSE(c, async (stream) => {
-      const runId = c.req.param("runId")
-      const run = runService.get(runId)
-      if (!run) {
-        await stream.writeSSE({
-          data: JSON.stringify({
-            type: "ready",
-            runId,
-          }),
-        })
-        return
-      }
-      let finished = false
-      let unsubscribe = () => {}
-      const finish = () => {
-        if (finished) return
-        finished = true
-        unsubscribe()
-      }
-      unsubscribe = runService.subscribe(runId, (event) => {
-        if (finished) return
-        void stream.writeSSE({ data: JSON.stringify(event) }).catch(finish)
-      })
-      c.req.raw.signal.addEventListener("abort", finish, { once: true })
-      try {
-        await stream.writeSSE({
-          data: JSON.stringify({ type: "ready", runId }),
-        })
-        await stream.writeSSE({
-          data: JSON.stringify({
-            type: "run.updated",
-            run: runService.get(runId),
-          }),
-        })
-        for (const agent of runService.agents(runId)) {
-          await stream.writeSSE({
-            data: JSON.stringify({ type: "agent.updated", agent }),
-          })
-        }
-        await new Promise<void>((resolve) => {
-          if (c.req.raw.signal.aborted) {
-            resolve()
-            return
-          }
-          c.req.raw.signal.addEventListener("abort", () => resolve(), {
-            once: true,
-          })
-        })
       } finally {
         finish()
       }

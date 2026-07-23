@@ -42,8 +42,7 @@ Last updated: 2026-07-23
 ```text
 apps/server/src/
   run/       machine, service, queries, public, store, session, tools, routes, live, stats
-  agent/     runtime, compact, convert, managed-tools
-  agents/    workspace tools (bash/read/…), usage helpers
+  agent/     runtime, tools, usage, compact, convert, managed-tools
   platforms/ adapters + bind/sync/submit/target
   providers/ model registry
   settings/  prompts + runtime settings
@@ -57,7 +56,6 @@ apps/web/    api + live stream store + features
 
 - Live SSE only — reconnect uses REST message page, not event cursor.
 - Event stats omit per-tool analytics (`tools: []`).
-- `agents/` vs `agent/` naming is legacy; merge later if desired.
 
 ## API (run)
 
@@ -67,11 +65,9 @@ apps/web/    api + live stream store + features
 | GET | `/api/runs/:id` | `{ run, agents, usage }` |
 | GET | `/api/runs/:id/messages` | `?agentId&after=` |
 | GET | `/api/runs/:id/stream` | live SSE |
-| POST | `/api/runs/:id/messages` | user message |
+| POST | `/api/runs/:id/message` | user message |
 | POST | `/api/runs/:id/pause\|resume\|stop` | control |
 | DELETE | `/api/runs/:id` | terminal only |
-
-`/api/runs/:id/events` remains as a live stream alias for older clients.
 
 ## Wipe / upgrade
 

@@ -9,7 +9,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from "@earendil-works/pi-ai"
-import { summarizeUsage } from "../../src/agents/usage"
+import { summarizeUsage } from "../../src/agent/usage"
 import { createApp } from "../../src/app"
 import { json, waitFor } from "../support"
 

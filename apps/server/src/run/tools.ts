@@ -6,7 +6,7 @@ import {
   defineAgentTool,
   type ToolLimits,
   type WorkspaceBackend,
-} from "../agents/tools"
+} from "../agent/tools"
 import { isActiveTarget, type TargetState } from "../platforms/core"
 import type { AgentRecord, RunAggregate } from "./types"
 
