@@ -737,28 +737,30 @@ describe("providers, models, and usage", () => {
     ).json()
     expect(eventStats.runCount).toBe(2)
     expect(eventStats.usage).toEqual(challengeStats.usage)
-    // v2 simplified stats: successful = status completed (flag is orthogonal).
+    // successful = completed ∧ flag
     expect(eventStats).toMatchObject({
       challengeCount: 1,
       attemptedChallengeCount: 1,
       solvedChallengeCount: 1,
       terminalRunCount: 2,
-      successfulRunCount: 2,
-      successRate: 1,
+      successfulRunCount: 1,
+      successRate: 0.5,
       cost: { known: 0.25, unknownRunCount: 1 },
       funnel: {
         totalChallenges: 1,
         totalSubmissions: 2,
         acceptedSubmissions: 1,
         rejectedSubmissions: 1,
+        submittedRuns: 2,
+        firstAttemptAcceptedRuns: 1,
       },
       tools: [],
-      models: [],
     })
+    expect(eventStats.models.length).toBeGreaterThan(0)
     expect(eventStats.challenges[0]).toMatchObject({
       challengeId: challenge.id,
       runCount: 2,
-      successfulRunCount: 2,
+      successfulRunCount: 1,
     })
     expect(JSON.stringify(eventStats)).not.toContain(instance.dataDir)
   })
