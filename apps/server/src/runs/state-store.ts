@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm"
-import type { AgentPublic, RunPublic, UsageSummary } from "../../../shared/api"
+import type { AgentPublic, RunPublic, UsageSummary } from "../../../shared"
 import type { createDatabase } from "../db"
 import { runAgents, runEvents, runs } from "../db/schema"
 

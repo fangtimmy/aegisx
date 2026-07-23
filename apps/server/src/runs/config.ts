@@ -1,147 +1,229 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai"
-import { type AgentRuntimeSnapshot, isThinkingLevel } from "../../../shared/api"
-import {
-  type PromptTemplateContext,
-  type PromptTemplates,
-  resolvePromptTemplates,
-} from "../settings/prompt-templates"
+import { type Static, Type } from "typebox"
+import { Value } from "typebox/value"
+import type {
+  AgentRuntimeSnapshot,
+  EnvironmentConfig,
+  FrozenPromptConfig,
+  ModelConfig,
+  PromptAttachment,
+  PromptTemplateContext,
+  ThinkingLevel,
+} from "../../../shared"
+import { normalizeThinkingLevel } from "../../../shared"
+import { isRecord } from "../lib/guards"
+import { ThinkingLevelSchema } from "../lib/schemas"
 
-export type EnvironmentConfig =
-  | { type: "local" }
-  | {
-      type: "container"
-      image: string
-      cpus: number
-      memoryMb: number
-      pidsLimit: number
+export type {
+  AgentRuntimeSnapshot,
+  EnvironmentConfig,
+  FrozenPromptConfig,
+  ModelConfig,
+  ModelThinkingLevel,
+  PromptAttachment,
+  PromptTemplateContext,
+  ThinkingLevel,
+}
+
+const ModelConfigSchema = Type.Object(
+  {
+    provider: Type.String(),
+    providerLabel: Type.Optional(Type.String()),
+    modelId: Type.String(),
+    modelLabel: Type.Optional(Type.String()),
+    baseUrl: Type.Optional(Type.String()),
+    costKnown: Type.Optional(Type.Boolean()),
+    thinkingLevel: Type.Optional(ThinkingLevelSchema),
+  },
+  { additionalProperties: false }
+)
+
+const LocalEnvironmentSchema = Type.Object(
+  { type: Type.Literal("local") },
+  { additionalProperties: false }
+)
+
+const ContainerEnvironmentSchema = Type.Object(
+  {
+    type: Type.Literal("container"),
+    image: Type.String(),
+    cpus: Type.Optional(Type.Number()),
+    memoryMb: Type.Optional(Type.Number()),
+    pidsLimit: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false }
+)
+
+const EnvironmentSchema = Type.Union([
+  LocalEnvironmentSchema,
+  ContainerEnvironmentSchema,
+])
+
+const PromptAttachmentSchema = Type.Object(
+  {
+    name: Type.String(),
+    path: Type.String(),
+    size: Type.Number(),
+  },
+  { additionalProperties: false }
+)
+
+const PromptTemplateContextSchema = Type.Object(
+  {
+    agent: Type.Object(
+      {
+        role: Type.Union([Type.Literal("main"), Type.Literal("child")]),
+        isMain: Type.Boolean(),
+        name: Type.String(),
+        task: Type.Union([Type.String(), Type.Null()]),
+      },
+      { additionalProperties: false }
+    ),
+    event: Type.Object(
+      {
+        id: Type.String(),
+        name: Type.String(),
+        platform: Type.Union([Type.String(), Type.Null()]),
+        promptHint: Type.String(),
+      },
+      { additionalProperties: false }
+    ),
+    challenge: Type.Object(
+      {
+        id: Type.String(),
+        name: Type.String(),
+        description: Type.String(),
+        category: Type.Union([Type.String(), Type.Null()]),
+        points: Type.Union([Type.Number(), Type.Null()]),
+        attachments: Type.Array(PromptAttachmentSchema),
+        attachmentPaths: Type.Array(Type.String()),
+      },
+      { additionalProperties: false }
+    ),
+    model: Type.Object(
+      {
+        provider: Type.String(),
+        name: Type.String(),
+        id: Type.String(),
+      },
+      { additionalProperties: false }
+    ),
+    run: Type.Object(
+      {
+        id: Type.String(),
+        environment: Type.Union([
+          Type.Literal("local"),
+          Type.Literal("container"),
+        ]),
+        isContainer: Type.Boolean(),
+        workspace: Type.String(),
+        targetSupported: Type.Boolean(),
+        platformIntegrated: Type.Boolean(),
+        containerImage: Type.Union([Type.String(), Type.Null()]),
+        cpus: Type.Union([Type.Number(), Type.Null()]),
+        memoryMb: Type.Union([Type.Number(), Type.Null()]),
+        pidsLimit: Type.Union([Type.Number(), Type.Null()]),
+      },
+      { additionalProperties: false }
+    ),
+    capabilities: Type.Object(
+      {
+        canFinishRun: Type.Boolean(),
+        canSpawnAgent: Type.Boolean(),
+        canSubmitFlag: Type.Boolean(),
+        canManageTarget: Type.Boolean(),
+      },
+      { additionalProperties: false }
+    ),
+  },
+  { additionalProperties: false }
+)
+
+const FrozenPromptConfigSchema = Type.Object(
+  {
+    mainSystemPromptTemplate: Type.Optional(Type.String()),
+    childSystemPromptTemplate: Type.Optional(Type.String()),
+    initialPromptTemplate: Type.Optional(Type.String()),
+    context: Type.Optional(PromptTemplateContextSchema),
+  },
+  { additionalProperties: false }
+)
+
+const RuntimeToolSchema = Type.Object(
+  {
+    name: Type.String(),
+    description: Type.String(),
+    parameters: Type.Optional(Type.Unknown()),
+    promptGuidelines: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: true }
+)
+
+const RuntimeSnapshotSchema = Type.Object(
+  {
+    capturedAt: Type.String(),
+    systemPrompt: Type.String(),
+    cwd: Type.String(),
+    model: Type.Object(
+      {
+        provider: Type.String(),
+        modelId: Type.String(),
+        thinkingLevel: Type.Optional(ThinkingLevelSchema),
+      },
+      { additionalProperties: false }
+    ),
+    tools: Type.Array(RuntimeToolSchema),
+  },
+  { additionalProperties: false }
+)
+
+export function parseModelConfig(value: string): ModelConfig {
+  try {
+    const cleaned = Value.Clean(
+      ModelConfigSchema,
+      JSON.parse(value) as unknown
+    ) as Static<typeof ModelConfigSchema>
+    return {
+      provider: typeof cleaned.provider === "string" ? cleaned.provider : "",
+      modelId: typeof cleaned.modelId === "string" ? cleaned.modelId : "",
+      thinkingLevel: normalizeThinkingLevel(cleaned.thinkingLevel),
+      ...(typeof cleaned.providerLabel === "string"
+        ? { providerLabel: cleaned.providerLabel }
+        : {}),
+      ...(typeof cleaned.modelLabel === "string"
+        ? { modelLabel: cleaned.modelLabel }
+        : {}),
+      ...(typeof cleaned.baseUrl === "string"
+        ? { baseUrl: cleaned.baseUrl }
+        : {}),
+      ...(cleaned.costKnown === false ? { costKnown: false } : {}),
     }
-
-export type ModelConfig = {
-  provider: string
-  providerLabel?: string
-  modelId: string
-  modelLabel?: string
-  baseUrl?: string
-  costKnown?: boolean
-  thinkingLevel: ModelThinkingLevel
-}
-
-export type FrozenPromptConfig = PromptTemplates & {
-  context?: PromptTemplateContext
-}
-
-type RecordValue = Record<string, unknown>
-
-function isRecord(value: unknown): value is RecordValue {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === "string"
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value)
-}
-
-function isBoolean(value: unknown): value is boolean {
-  return typeof value === "boolean"
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || isString(value)
-}
-
-function isPromptTemplateContext(
-  value: unknown
-): value is PromptTemplateContext {
-  if (!isRecord(value)) return false
-  const agent = value.agent
-  const event = value.event
-  const challenge = value.challenge
-  const model = value.model
-  const run = value.run
-  const capabilities = value.capabilities
-  if (
-    !isRecord(agent) ||
-    !isRecord(event) ||
-    !isRecord(challenge) ||
-    !isRecord(model) ||
-    !isRecord(run) ||
-    !isRecord(capabilities)
-  ) {
-    return false
+  } catch {
+    return { provider: "", modelId: "", thinkingLevel: "off" }
   }
-  return (
-    (agent.role === "main" || agent.role === "child") &&
-    isBoolean(agent.isMain) &&
-    isString(agent.name) &&
-    isNullableString(agent.task) &&
-    isString(event.id) &&
-    isString(event.name) &&
-    isNullableString(event.platform) &&
-    isString(event.promptHint) &&
-    isString(challenge.id) &&
-    isString(challenge.name) &&
-    isString(challenge.description) &&
-    isNullableString(challenge.category) &&
-    (challenge.points === null || isNumber(challenge.points)) &&
-    Array.isArray(challenge.attachments) &&
-    challenge.attachments.every(
-      (attachment) =>
-        isRecord(attachment) &&
-        isString(attachment.name) &&
-        isString(attachment.path) &&
-        isNumber(attachment.size)
-    ) &&
-    Array.isArray(challenge.attachmentPaths) &&
-    challenge.attachmentPaths.every(isString) &&
-    isString(model.provider) &&
-    isString(model.name) &&
-    isString(model.id) &&
-    isString(run.id) &&
-    (run.environment === "local" || run.environment === "container") &&
-    isBoolean(run.isContainer) &&
-    isString(run.workspace) &&
-    isBoolean(run.targetSupported) &&
-    isBoolean(run.platformIntegrated) &&
-    isNullableString(run.containerImage) &&
-    (run.cpus === null || isNumber(run.cpus)) &&
-    (run.memoryMb === null || isNumber(run.memoryMb)) &&
-    (run.pidsLimit === null || isNumber(run.pidsLimit)) &&
-    isBoolean(capabilities.canFinishRun) &&
-    isBoolean(capabilities.canSpawnAgent) &&
-    isBoolean(capabilities.canSubmitFlag) &&
-    isBoolean(capabilities.canManageTarget)
-  )
-}
-
-function isRuntimeTool(
-  value: unknown
-): value is AgentRuntimeSnapshot["tools"][number] {
-  if (!isRecord(value)) return false
-  return (
-    isString(value.name) &&
-    isString(value.description) &&
-    (value.promptGuidelines === undefined ||
-      (Array.isArray(value.promptGuidelines) &&
-        value.promptGuidelines.every(isString)))
-  )
 }
 
 export function parseEnvironment(value: string): EnvironmentConfig {
   try {
     const parsed: unknown = JSON.parse(value)
-    if (!isRecord(parsed)) return { type: "local" }
-    if (parsed.type !== "container" || !isString(parsed.image)) {
-      return { type: "local" }
-    }
+    if (!Value.Check(EnvironmentSchema, parsed)) return { type: "local" }
+    if (parsed.type === "local") return { type: "local" }
     return {
       type: "container",
       image: parsed.image,
-      cpus: isNumber(parsed.cpus) ? parsed.cpus : 2,
-      memoryMb: isNumber(parsed.memoryMb) ? parsed.memoryMb : 2048,
-      pidsLimit: isNumber(parsed.pidsLimit) ? parsed.pidsLimit : 256,
+      cpus:
+        typeof parsed.cpus === "number" && Number.isFinite(parsed.cpus)
+          ? parsed.cpus
+          : 2,
+      memoryMb:
+        typeof parsed.memoryMb === "number" && Number.isFinite(parsed.memoryMb)
+          ? parsed.memoryMb
+          : 2048,
+      pidsLimit:
+        typeof parsed.pidsLimit === "number" &&
+        Number.isFinite(parsed.pidsLimit)
+          ? parsed.pidsLimit
+          : 256,
     }
   } catch {
     return { type: "local" }
@@ -152,51 +234,42 @@ export function parsePromptConfig(value: string): FrozenPromptConfig {
   try {
     const parsed: unknown = JSON.parse(value)
     if (!isRecord(parsed)) throw new Error("Invalid prompt config")
+    const cleaned = Value.Clean(FrozenPromptConfigSchema, parsed) as Static<
+      typeof FrozenPromptConfigSchema
+    >
+    const context =
+      cleaned.context &&
+      Value.Check(PromptTemplateContextSchema, cleaned.context)
+        ? (cleaned.context as PromptTemplateContext)
+        : undefined
     return {
-      ...resolvePromptTemplates({
-        mainSystemPromptTemplate: isString(parsed.mainSystemPromptTemplate)
-          ? parsed.mainSystemPromptTemplate
+      mainSystemPromptTemplate:
+        typeof cleaned.mainSystemPromptTemplate === "string"
+          ? cleaned.mainSystemPromptTemplate
           : "",
-        childSystemPromptTemplate: isString(parsed.childSystemPromptTemplate)
-          ? parsed.childSystemPromptTemplate
+      childSystemPromptTemplate:
+        typeof cleaned.childSystemPromptTemplate === "string"
+          ? cleaned.childSystemPromptTemplate
           : "",
-        initialPromptTemplate: isString(parsed.initialPromptTemplate)
-          ? parsed.initialPromptTemplate
+      initialPromptTemplate:
+        typeof cleaned.initialPromptTemplate === "string"
+          ? cleaned.initialPromptTemplate
           : "",
-      }),
-      ...(isPromptTemplateContext(parsed.context)
-        ? { context: parsed.context }
-        : {}),
+      ...(context ? { context } : {}),
     }
   } catch {
-    return resolvePromptTemplates({
+    return {
       mainSystemPromptTemplate: "",
       childSystemPromptTemplate: "",
       initialPromptTemplate: "",
-    })
+    }
   }
 }
 
-export function parseModelConfig(value: string): ModelConfig {
-  try {
-    const parsed: unknown = JSON.parse(value)
-    if (!isRecord(parsed)) throw new Error("Invalid model config")
-    return {
-      provider: isString(parsed.provider) ? parsed.provider : "",
-      ...(isString(parsed.providerLabel)
-        ? { providerLabel: parsed.providerLabel }
-        : {}),
-      modelId: isString(parsed.modelId) ? parsed.modelId : "",
-      ...(isString(parsed.modelLabel) ? { modelLabel: parsed.modelLabel } : {}),
-      ...(isString(parsed.baseUrl) ? { baseUrl: parsed.baseUrl } : {}),
-      ...(parsed.costKnown === false ? { costKnown: false } : {}),
-      thinkingLevel: isThinkingLevel(parsed.thinkingLevel)
-        ? parsed.thinkingLevel
-        : "off",
-    }
-  } catch {
-    return { provider: "", modelId: "", thinkingLevel: "off" }
-  }
+export function isPromptTemplateContext(
+  value: unknown
+): value is PromptTemplateContext {
+  return Value.Check(PromptTemplateContextSchema, value)
 }
 
 export function parseRuntimeSnapshot(
@@ -205,18 +278,7 @@ export function parseRuntimeSnapshot(
   if (!value) return null
   try {
     const parsed: unknown = JSON.parse(value)
-    if (!isRecord(parsed) || !isRecord(parsed.model)) return null
-    if (
-      !isString(parsed.capturedAt) ||
-      !isString(parsed.systemPrompt) ||
-      !isString(parsed.cwd) ||
-      !isString(parsed.model.provider) ||
-      !isString(parsed.model.modelId) ||
-      !Array.isArray(parsed.tools) ||
-      !parsed.tools.every(isRuntimeTool)
-    ) {
-      return null
-    }
+    if (!Value.Check(RuntimeSnapshotSchema, parsed)) return null
     return {
       capturedAt: parsed.capturedAt,
       systemPrompt: parsed.systemPrompt,
@@ -224,11 +286,16 @@ export function parseRuntimeSnapshot(
       model: {
         provider: parsed.model.provider,
         modelId: parsed.model.modelId,
-        thinkingLevel: isThinkingLevel(parsed.model.thinkingLevel)
-          ? parsed.model.thinkingLevel
-          : "off",
+        thinkingLevel: normalizeThinkingLevel(parsed.model.thinkingLevel),
       },
-      tools: parsed.tools,
+      tools: parsed.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters ?? {},
+        ...(tool.promptGuidelines
+          ? { promptGuidelines: tool.promptGuidelines }
+          : {}),
+      })),
     }
   } catch {
     return null

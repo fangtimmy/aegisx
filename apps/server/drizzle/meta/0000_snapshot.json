@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "44bb2bdf-1234-432f-9945-39102513b132",
+  "id": "49d52ce2-c988-4444-89ee-27d690ef2774",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agent_inbox": {
@@ -212,19 +212,37 @@
           "notNull": true,
           "autoincrement": false
         },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'succeeded'"
+        },
+        "timeout_ms": {
+          "name": "timeout_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "duration_ms": {
           "name": "duration_ms",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
+          "autoincrement": false,
+          "default": 0
         },
         "output_bytes": {
           "name": "output_bytes",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
+          "autoincrement": false,
+          "default": 0
         },
         "truncated": {
           "name": "truncated",
@@ -239,11 +257,19 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
+          "autoincrement": false,
+          "default": false
         },
         "exit_code": {
           "name": "exit_code",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -253,6 +279,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         }
       },
@@ -271,6 +304,14 @@
             "created_at"
           ],
           "isUnique": false
+        },
+        "agent_tool_calls_agent_tool_call_unique": {
+          "name": "agent_tool_calls_agent_tool_call_unique",
+          "columns": [
+            "agent_id",
+            "tool_call_id"
+          ],
+          "isUnique": true
         }
       },
       "foreignKeys": {
@@ -463,6 +504,115 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "challenge_remote": {
+      "name": "challenge_remote",
+      "columns": {
+        "challenge_id": {
+          "name": "challenge_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source_key": {
+          "name": "source_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "remote_id": {
+          "name": "remote_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "available": {
+          "name": "available",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "solved": {
+          "name": "solved",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "target_supported": {
+          "name": "target_supported",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "target_ignored": {
+          "name": "target_ignored",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "target_count": {
+          "name": "target_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "target_info": {
+          "name": "target_info",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "synced_at": {
+          "name": "synced_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "challenge_remote_source_unique": {
+          "name": "challenge_remote_source_unique",
+          "columns": [
+            "source_key",
+            "remote_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "challenge_remote_challenge_id_challenges_id_fk": {
+          "name": "challenge_remote_challenge_id_challenges_id_fk",
+          "tableFrom": "challenge_remote",
+          "tableTo": "challenges",
+          "columnsFrom": [
+            "challenge_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "challenges": {
       "name": "challenges",
       "columns": {
@@ -508,75 +658,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "remote_source_key": {
-          "name": "remote_source_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "remote_id": {
-          "name": "remote_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "remote_available": {
-          "name": "remote_available",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": true
-        },
-        "remote_solved": {
-          "name": "remote_solved",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "remote_target": {
-          "name": "remote_target",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "remote_target_ignored": {
-          "name": "remote_target_ignored",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "remote_target_count": {
-          "name": "remote_target_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "remote_target_info": {
-          "name": "remote_target_info",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'[]'"
-        },
-        "remote_updated_at": {
-          "name": "remote_updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -599,16 +680,6 @@
             "event_id"
           ],
           "isUnique": false
-        },
-        "challenges_event_remote_source_unique": {
-          "name": "challenges_event_remote_source_unique",
-          "columns": [
-            "event_id",
-            "remote_source_key",
-            "remote_id"
-          ],
-          "isUnique": true,
-          "where": "\"challenges\".\"remote_id\" is not null"
         }
       },
       "foreignKeys": {

@@ -29,17 +29,22 @@ CREATE TABLE `agent_tool_calls` (
 	`agent_id` text NOT NULL,
 	`tool_call_id` text NOT NULL,
 	`tool_name` text NOT NULL,
-	`duration_ms` integer NOT NULL,
-	`output_bytes` integer NOT NULL,
+	`status` text DEFAULT 'succeeded' NOT NULL,
+	`timeout_ms` integer DEFAULT 0 NOT NULL,
+	`duration_ms` integer DEFAULT 0 NOT NULL,
+	`output_bytes` integer DEFAULT 0 NOT NULL,
 	`truncated` integer DEFAULT false NOT NULL,
-	`succeeded` integer NOT NULL,
+	`succeeded` integer DEFAULT false NOT NULL,
 	`exit_code` integer,
+	`error` text,
 	`created_at` text NOT NULL,
+	`completed_at` text,
 	FOREIGN KEY (`agent_id`) REFERENCES `run_agents`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE INDEX `agent_tool_calls_agent_id_idx` ON `agent_tool_calls` (`agent_id`);--> statement-breakpoint
 CREATE INDEX `agent_tool_calls_agent_created_at_idx` ON `agent_tool_calls` (`agent_id`,`created_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `agent_tool_calls_agent_tool_call_unique` ON `agent_tool_calls` (`agent_id`,`tool_call_id`);--> statement-breakpoint
 CREATE TABLE `agent_usage` (
 	`id` text PRIMARY KEY NOT NULL,
 	`agent_id` text NOT NULL,
@@ -65,6 +70,21 @@ CREATE TABLE `attachments` (
 CREATE UNIQUE INDEX `attachments_storage_key_unique` ON `attachments` (`storage_key`);--> statement-breakpoint
 CREATE INDEX `attachments_challenge_id_idx` ON `attachments` (`challenge_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `attachments_challenge_remote_unique` ON `attachments` (`challenge_id`,`remote_id`) WHERE "attachments"."remote_id" is not null;--> statement-breakpoint
+CREATE TABLE `challenge_remote` (
+	`challenge_id` text PRIMARY KEY NOT NULL,
+	`source_key` text NOT NULL,
+	`remote_id` text NOT NULL,
+	`available` integer DEFAULT true NOT NULL,
+	`solved` integer DEFAULT false NOT NULL,
+	`target_supported` integer DEFAULT false NOT NULL,
+	`target_ignored` integer DEFAULT false NOT NULL,
+	`target_count` integer DEFAULT 0 NOT NULL,
+	`target_info` text DEFAULT '[]' NOT NULL,
+	`synced_at` text NOT NULL,
+	FOREIGN KEY (`challenge_id`) REFERENCES `challenges`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `challenge_remote_source_unique` ON `challenge_remote` (`source_key`,`remote_id`);--> statement-breakpoint
 CREATE TABLE `challenges` (
 	`id` text PRIMARY KEY NOT NULL,
 	`event_id` text NOT NULL,
@@ -72,22 +92,12 @@ CREATE TABLE `challenges` (
 	`description` text NOT NULL,
 	`category` text,
 	`points` integer,
-	`remote_source_key` text,
-	`remote_id` text,
-	`remote_available` integer DEFAULT true NOT NULL,
-	`remote_solved` integer DEFAULT false NOT NULL,
-	`remote_target` integer DEFAULT false NOT NULL,
-	`remote_target_ignored` integer DEFAULT false NOT NULL,
-	`remote_target_count` integer DEFAULT 0 NOT NULL,
-	`remote_target_info` text DEFAULT '[]' NOT NULL,
-	`remote_updated_at` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
 	FOREIGN KEY (`event_id`) REFERENCES `events`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE INDEX `challenges_event_id_idx` ON `challenges` (`event_id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `challenges_event_remote_source_unique` ON `challenges` (`event_id`,`remote_source_key`,`remote_id`) WHERE "challenges"."remote_id" is not null;--> statement-breakpoint
 CREATE TABLE `event_platforms` (
 	`event_id` text PRIMARY KEY NOT NULL,
 	`type` text NOT NULL,

@@ -1,14 +1,15 @@
 import type { Hono } from "hono"
 import { Type } from "typebox"
-import { normalizeThinkingLevel } from "../../../shared/api"
+import { normalizeThinkingLevel } from "../../../shared"
 import type {
   ConfigStore,
   ProviderData,
   ProviderModelData,
-  SettingsData,
+  SettingsPublic,
 } from "../infrastructure/config-store"
 import { notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
+import { ThinkingLevelSchema as thinkingLevelUnion } from "../lib/schemas"
 import {
   builtinModelProfile,
   normalizeModelMetadata,
@@ -25,16 +26,6 @@ import {
   resolvePromptTemplates,
   samplePromptContext,
 } from "./prompt-templates"
-
-const thinkingLevelUnion = Type.Union([
-  Type.Literal("off"),
-  Type.Literal("minimal"),
-  Type.Literal("low"),
-  Type.Literal("medium"),
-  Type.Literal("high"),
-  Type.Literal("xhigh"),
-  Type.Literal("max"),
-])
 
 const runtimeSettingsInput = Type.Object(
   {
@@ -234,38 +225,16 @@ export function registerSettingsRoutes(
     previewPrompt("initialPrompt", input.initialPromptTemplate)
   }
 
-  const publicSettings = () => {
+  const publicSettings = (): SettingsPublic => {
     const value = configStore.getSettings()
     const promptTemplates = resolvePromptTemplates(value)
     return {
-      defaultModelId: value.defaultModelId,
-      defaultThinkingLevel: normalizeThinkingLevel(value.defaultThinkingLevel),
-      environment: value.environment,
-      containerImage: value.containerImage,
-      cpus: value.cpuLimit / 1000,
-      memoryMb: value.memoryMb,
-      pidsLimit: value.pidsLimit,
-      maxConcurrency: value.maxConcurrency,
-      maxAttachmentMb: value.maxAttachmentMb,
-      maxRetryAttempts: value.maxRetryAttempts,
-      retryBaseDelayMs: value.retryBaseDelayMs,
-      retryMaxDelayMs: value.retryMaxDelayMs,
-      maxToolOutputBytes: value.maxToolOutputBytes,
-      maxInlineShellOutputBytes: value.maxInlineShellOutputBytes,
-      maxCapturedShellOutputBytes: value.maxCapturedShellOutputBytes,
-      containerWorkspace: value.containerWorkspace,
-      dockerTimeoutMs: value.dockerTimeoutMs,
-      tmpfsSize: value.tmpfsSize,
-      platformRequestTimeoutMs: value.platformRequestTimeoutMs,
-      providerDiscoverTimeoutMs: value.providerDiscoverTimeoutMs,
-      defaultToolTimeoutMs: value.defaultToolTimeoutMs,
-      toolTimeouts: { ...value.toolTimeouts },
+      ...value,
       ...promptTemplates,
       defaultMainSystemPromptTemplate: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       defaultChildSystemPromptTemplate: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
       defaultInitialPromptTemplate: DEFAULT_INITIAL_PROMPT_TEMPLATE,
-      promptTemplateVariables: PROMPT_TEMPLATE_VARIABLES,
-      updatedAt: value.updatedAt,
+      promptTemplateVariables: [...PROMPT_TEMPLATE_VARIABLES],
     }
   }
 
@@ -291,7 +260,7 @@ export function registerSettingsRoutes(
         ),
         environment: value.environment,
         containerImage: value.containerImage,
-        cpus: value.cpuLimit / 1000,
+        cpus: value.cpus,
         memoryMb: value.memoryMb,
         pidsLimit: value.pidsLimit,
         maxConcurrency: value.maxConcurrency,
@@ -331,12 +300,12 @@ export function registerSettingsRoutes(
       if (!exists) return notFound(c, "Default model not found")
     }
     const current = configStore.getSettings()
-    const patch: Partial<SettingsData> = {
+    const patch: Partial<SettingsPublic> = {
       defaultModelId: input.defaultModelId,
       defaultThinkingLevel: input.defaultThinkingLevel,
       environment: input.environment,
       containerImage: input.containerImage.trim(),
-      cpuLimit: Math.round(input.cpus * 1000),
+      cpus: input.cpus,
       memoryMb: input.memoryMb,
       pidsLimit: input.pidsLimit,
       maxConcurrency: input.maxConcurrency,
@@ -502,7 +471,7 @@ export function registerSettingsRoutes(
           defaultThinkingLevel: input.settings.defaultThinkingLevel,
           environment: input.settings.environment,
           containerImage: input.settings.containerImage.trim(),
-          cpuLimit: Math.round(input.settings.cpus * 1000),
+          cpus: input.settings.cpus,
           memoryMb: input.settings.memoryMb,
           pidsLimit: input.settings.pidsLimit,
           maxConcurrency: input.settings.maxConcurrency,

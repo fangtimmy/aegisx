@@ -1,12 +1,21 @@
 import { count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
+import { Value } from "typebox/value"
 import type {
   Attachment,
   Challenge as ChallengePublic,
   EventSummary,
-} from "../../../shared/api"
+  RemoteTargetInfo,
+} from "../../../shared"
 import type { createDatabase } from "../db"
-import { attachments, challenges, events, runs } from "../db/schema"
-import type { RemoteTargetInfo } from "../platforms/core"
+import {
+  attachments,
+  challengeRemote,
+  challenges,
+  events,
+  runs,
+} from "../db/schema"
+import { RemoteTargetInfoSchema } from "../lib/schemas"
+import type { ChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -21,7 +30,7 @@ export function createCatalogReader(
       .select({
         ...getTableColumns(events),
         challengeCount: count(challenges.id),
-        solvedCount: sql<number>`coalesce(sum(case when ${challenges.remoteSolved} = 1 or exists (select 1 from ${runs} where ${runs.challengeId} = ${challenges.id} and ${runs.status} = 'completed') then 1 else 0 end), 0)`,
+        solvedCount: sql<number>`coalesce(sum(case when ${challengeRemote.solved} = 1 or exists (select 1 from ${runs} where ${runs.challengeId} = ${challenges.id} and ${runs.status} = 'completed') then 1 else 0 end), 0)`,
         lastChallengeAt: max(challenges.updatedAt),
         activeRunCount: sql<number>`coalesce((select sum(case when r.status in ('running', 'paused') then 1 else 0 end) from runs r inner join challenges rc on r.challenge_id = rc.id where rc.event_id = events.id), 0)`,
         lastRunAt: sql<
@@ -30,6 +39,7 @@ export function createCatalogReader(
       })
       .from(events)
       .leftJoin(challenges, eq(challenges.eventId, events.id))
+      .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
     return (eventId ? query.where(eq(events.id, eventId)) : query)
       .groupBy(events.id)
       .orderBy(events.createdAt)
@@ -74,6 +84,7 @@ export function createCatalogReader(
 
   const publicChallenge = (
     challenge: typeof challenges.$inferSelect,
+    remote: ChallengeRemote | null,
     challengeAttachments: Array<{
       id: string
       challengeId: string
@@ -98,15 +109,16 @@ export function createCatalogReader(
     const completedCount = Number(runSummary?.completedCount ?? 0)
     const failedCount = Number(runSummary?.failedCount ?? 0)
     const stoppedCount = Number(runSummary?.stoppedCount ?? 0)
-    const { remoteSourceKey: _, remoteTargetInfo, ...publicValue } = challenge
+    const ignored = remote?.targetIgnored ?? false
     return {
-      ...publicValue,
-      remoteTargetCount: challenge.remoteTargetIgnored
-        ? 0
-        : challenge.remoteTargetCount,
-      targets: challenge.remoteTargetIgnored
-        ? []
-        : parseTargetInfo(remoteTargetInfo),
+      id: challenge.id,
+      eventId: challenge.eventId,
+      name: challenge.name,
+      description: challenge.description,
+      category: challenge.category,
+      points: challenge.points,
+      createdAt: challenge.createdAt,
+      updatedAt: challenge.updatedAt,
       attachments: challengeAttachments,
       runCount,
       runStatusCounts: {
@@ -116,8 +128,16 @@ export function createCatalogReader(
         failed: failedCount,
         stopped: stoppedCount,
       },
+      remoteId: remote?.remoteId ?? null,
+      remoteAvailable: remote ? remote.available : true,
+      remoteSolved: remote?.solved ?? false,
+      remoteTarget: remote?.targetSupported ?? false,
+      remoteTargetIgnored: ignored,
+      remoteTargetCount: ignored ? 0 : (remote?.targetCount ?? 0),
+      targets: ignored ? [] : parseTargetInfo(remote?.targetInfo),
+      remoteUpdatedAt: remote?.syncedAt ?? null,
       status:
-        challenge.remoteSolved || completedCount > 0
+        remote?.solved || completedCount > 0
           ? ("solved" as const)
           : runCount > 0
             ? ("in_progress" as const)
@@ -126,12 +146,13 @@ export function createCatalogReader(
   }
 
   const getChallenge = (challengeId: string) => {
-    const challenge = db
-      .select()
+    const row = db
+      .select({ challenge: challenges, remote: challengeRemote })
       .from(challenges)
+      .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
       .where(eq(challenges.id, challengeId))
       .get()
-    if (!challenge) return undefined
+    if (!row) return undefined
     const runSummary = db
       .select({
         runCount: count(),
@@ -145,7 +166,8 @@ export function createCatalogReader(
       .where(eq(runs.challengeId, challengeId))
       .get()
     return publicChallenge(
-      challenge,
+      row.challenge,
+      row.remote,
       listAttachments([challengeId]),
       runSummary
     )
@@ -153,11 +175,12 @@ export function createCatalogReader(
 
   const listChallengesForEvent = (eventId: string) => {
     const rows = db
-      .select()
+      .select({ challenge: challenges, remote: challengeRemote })
       .from(challenges)
+      .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
       .where(eq(challenges.eventId, eventId))
       .all()
-    const ids = rows.map(({ id }) => id)
+    const ids = rows.map(({ challenge }) => challenge.id)
     const attachmentRows = listAttachments(ids)
     const runRows =
       ids.length === 0
@@ -185,9 +208,10 @@ export function createCatalogReader(
     const runsByChallenge = new Map(
       runRows.map((row) => [row.challengeId, row])
     )
-    return rows.map((challenge) =>
+    return rows.map(({ challenge, remote }) =>
       publicChallenge(
         challenge,
+        remote,
         attachmentsByChallenge.get(challenge.id) ?? [],
         runsByChallenge.get(challenge.id)
       )
@@ -197,28 +221,15 @@ export function createCatalogReader(
   return { getChallenge, getEvent, listChallengesForEvent, listEvents }
 }
 
-function parseTargetInfo(value: string): RemoteTargetInfo[] {
+function parseTargetInfo(value: string | null | undefined): RemoteTargetInfo[] {
+  if (!value) return []
   try {
     const parsed = JSON.parse(value) as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((target) =>
-      typeof target === "object" &&
-      target !== null &&
-      "name" in target &&
-      typeof target.name === "string" &&
-      "services" in target &&
-      Array.isArray(target.services)
-        ? [
-            {
-              name: target.name,
-              services: target.services.filter(
-                (service: unknown): service is string =>
-                  typeof service === "string"
-              ),
-            },
-          ]
-        : []
-    )
+    return parsed.flatMap((target) => {
+      const cleaned = Value.Clean(RemoteTargetInfoSchema, target)
+      return Value.Check(RemoteTargetInfoSchema, cleaned) ? [cleaned] : []
+    })
   } catch {
     return []
   }

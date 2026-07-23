@@ -1,14 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { Usage } from "@earendil-works/pi-ai"
+import type { UsageSummary } from "../../../shared"
 
-export type UsageSummary = {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  cost: number | null
-}
+export type { UsageSummary }
 
 const zeroUsage = () => ({
   input: 0,

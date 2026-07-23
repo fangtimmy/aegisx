@@ -10,3 +10,5 @@ export class RunActionError extends Error {
     super(message)
   }
 }
+
+export class RunStartError extends Error {}

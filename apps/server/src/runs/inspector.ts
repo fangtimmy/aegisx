@@ -6,7 +6,7 @@ import type {
   AgentPublic,
   AgentRuntimeSnapshot,
   ConversationMessage,
-} from "../../../shared/api"
+} from "../../../shared"
 import { parseAgentMessage } from "../agents/messages"
 import { publicAgentMessage } from "../agents/runtime"
 import {

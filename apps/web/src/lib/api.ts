@@ -31,7 +31,7 @@ export type {
   TargetState,
   ThinkingLevel,
   UsageSummary,
-} from "../../../shared/api"
+} from "../../../shared"
 
 export async function apiRequest<T>(
   path: string,

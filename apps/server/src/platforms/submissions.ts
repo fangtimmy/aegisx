@@ -2,11 +2,13 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { and, desc, eq, inArray } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import {
+  challengeRemote,
   challenges,
   type eventPlatforms,
   runs,
   submissions,
 } from "../db/schema"
+import { getChallengeRemote, isPlatformIntegrated } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
   PlatformError,
@@ -34,11 +36,12 @@ export function createPlatformSubmissions(
       .where(eq(challenges.id, challengeId))
       .get()
     const platform = challenge ? storedPlatform(challenge.eventId) : undefined
+    const remote = challenge ? getChallengeRemote(db, challengeId) : undefined
     if (
-      !challenge?.remoteId ||
-      !challenge.remoteAvailable ||
+      !challenge ||
+      !isPlatformIntegrated(remote) ||
       !platform ||
-      challenge.remoteSourceKey !== platform.sourceKey
+      remote.sourceKey !== platform.sourceKey
     ) {
       return undefined
     }
@@ -95,11 +98,11 @@ export function createPlatformSubmissions(
         submission.remoteId &&
         adapter.getSubmission
           ? await adapter.getSubmission(
-              challenge.remoteId,
+              remote.remoteId,
               submission.remoteId,
               signal
             )
-          : await adapter.submitFlag(challenge.remoteId, value, signal)
+          : await adapter.submitFlag(remote.remoteId, value, signal)
       persist(result)
       for (
         let attempt = 0;
@@ -109,7 +112,7 @@ export function createPlatformSubmissions(
         if (!result.remoteId || !adapter.getSubmission) break
         await sleep(1000, undefined, { signal })
         result = await adapter.getSubmission(
-          challenge.remoteId,
+          remote.remoteId,
           result.remoteId,
           signal
         )
@@ -117,9 +120,9 @@ export function createPlatformSubmissions(
       }
       if (result.status === "accepted" || result.status === "already_solved") {
         db.transaction((tx) => {
-          tx.update(challenges)
-            .set({ remoteSolved: true, updatedAt: new Date().toISOString() })
-            .where(eq(challenges.id, challengeId))
+          tx.update(challengeRemote)
+            .set({ solved: true })
+            .where(eq(challengeRemote.challengeId, challengeId))
             .run()
           tx.update(runs).set({ flag: value }).where(eq(runs.id, runId)).run()
         })
@@ -132,16 +135,8 @@ export function createPlatformSubmissions(
   }
 
   function canFinishRun(runId: string, challengeId: string) {
-    const challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()
-    if (
-      !challenge?.remoteId ||
-      !challenge.remoteAvailable ||
-      challenge.remoteSolved
-    ) {
+    const remote = getChallengeRemote(db, challengeId)
+    if (!isPlatformIntegrated(remote) || remote.solved) {
       return true
     }
     return Boolean(

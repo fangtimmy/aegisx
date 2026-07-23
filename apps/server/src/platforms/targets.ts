@@ -1,7 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises"
-import { and, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
-import { challenges, type eventPlatforms } from "../db/schema"
+import { challengeRemote, challenges, type eventPlatforms } from "../db/schema"
+import { getChallengeRemote, isTargetCapable } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
   isActiveTarget,
@@ -17,24 +18,26 @@ export function createPlatformTargets(
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
   adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined
 ) {
+  function platformForChallenge(challengeId: string) {
+    const challenge = db
+      .select({ eventId: challenges.eventId })
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+    return challenge ? storedPlatform(challenge.eventId) : undefined
+  }
+
   async function assertNoActiveTargets(eventId: string) {
     const platform = storedPlatform(eventId)
     const adapter = adapterForEvent(eventId)
     if (!platform || !adapter?.getTarget) return
-    const targets = db
-      .select({ remoteId: challenges.remoteId })
-      .from(challenges)
-      .where(
-        and(
-          eq(challenges.eventId, eventId),
-          eq(challenges.remoteTarget, true),
-          eq(challenges.remoteAvailable, true),
-          eq(challenges.remoteTargetIgnored, false)
-        )
-      )
+    const rows = db
+      .select()
+      .from(challengeRemote)
+      .where(eq(challengeRemote.sourceKey, platform.sourceKey))
       .all()
-    for (const target of targets) {
-      if (!target.remoteId) continue
+      .filter(isTargetCapable)
+    for (const target of rows) {
       let state: TargetState
       try {
         state = await adapter.getTarget(target.remoteId)
@@ -55,25 +58,19 @@ export function createPlatformTargets(
     action: "get" | "start" | "extend" | "stop",
     signal?: AbortSignal
   ) {
-    const challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()
-    const platform = challenge ? storedPlatform(challenge.eventId) : undefined
+    const platform = platformForChallenge(challengeId)
+    const remote = getChallengeRemote(db, challengeId)
     if (
-      !challenge?.remoteId ||
-      !challenge.remoteAvailable ||
-      challenge.remoteTargetIgnored ||
+      !isTargetCapable(remote) ||
       !platform ||
-      challenge.remoteSourceKey !== platform.sourceKey
+      remote.sourceKey !== platform.sourceKey
     ) {
       throw new PlatformActionError(
         "not_bound",
         "Challenge is not managed by the connected platform"
       )
     }
-    const adapter = adapterForEvent(challenge.eventId)
+    const adapter = adapterForEvent(platform.eventId)
     if (!adapter) {
       throw new PlatformActionError(
         "not_bound",
@@ -95,9 +92,9 @@ export function createPlatformTargets(
       )
     }
     try {
-      const target = await method.call(adapter, challenge.remoteId, signal)
+      const target = await method.call(adapter, remote.remoteId, signal)
       return action === "start"
-        ? await waitForTarget(adapter, challenge.remoteId, target, signal)
+        ? await waitForTarget(adapter, remote.remoteId, target, signal)
         : target
     } catch (error) {
       throw platformError(error)
@@ -105,26 +102,22 @@ export function createPlatformTargets(
   }
 
   async function ignoreTarget(challengeId: string) {
-    const challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()
-    const platform = challenge ? storedPlatform(challenge.eventId) : undefined
+    const platform = platformForChallenge(challengeId)
+    const remote = getChallengeRemote(db, challengeId)
     if (
-      !challenge?.remoteId ||
-      !challenge.remoteAvailable ||
-      !challenge.remoteTarget ||
+      !remote ||
+      !remote.available ||
+      !remote.targetSupported ||
       !platform ||
-      challenge.remoteSourceKey !== platform.sourceKey
+      remote.sourceKey !== platform.sourceKey
     ) {
       throw new PlatformActionError(
         "not_bound",
         "Challenge has no platform target"
       )
     }
-    if (challenge.remoteTargetIgnored) return
-    const adapter = adapterForEvent(challenge.eventId)
+    if (remote.targetIgnored) return
+    const adapter = adapterForEvent(platform.eventId)
     if (!adapter?.getTarget) {
       throw new PlatformActionError(
         "invalid_state",
@@ -133,7 +126,7 @@ export function createPlatformTargets(
     }
     let target: TargetState
     try {
-      target = await adapter.getTarget(challenge.remoteId)
+      target = await adapter.getTarget(remote.remoteId)
     } catch (error) {
       throw platformError(error)
     }
@@ -143,9 +136,9 @@ export function createPlatformTargets(
         "Stop the remote target before removing it from AegisX"
       )
     }
-    db.update(challenges)
-      .set({ remoteTargetIgnored: true, updatedAt: new Date().toISOString() })
-      .where(eq(challenges.id, challengeId))
+    db.update(challengeRemote)
+      .set({ targetIgnored: true })
+      .where(eq(challengeRemote.challengeId, challengeId))
       .run()
   }
 

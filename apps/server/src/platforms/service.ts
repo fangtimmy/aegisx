@@ -1,7 +1,8 @@
 import { and, eq, inArray } from "drizzle-orm"
-import type { EventPlatform } from "../../../shared/api"
+import type { EventPlatform } from "../../../shared"
 import type { createDatabase } from "../db"
 import {
+  challengeRemote,
   challenges,
   eventPlatforms,
   events,
@@ -160,18 +161,14 @@ export function createPlatformService(
       remoteEventId: input.type === "ctfd" ? "site" : input.remoteEventId,
     }
     const sourceKey = platformSourceKey(config)
-    const eventChallenges = db
-      .select()
-      .from(challenges)
+    const linkedSources = db
+      .select({ sourceKey: challengeRemote.sourceKey })
+      .from(challengeRemote)
+      .innerJoin(challenges, eq(challengeRemote.challengeId, challenges.id))
       .where(eq(challenges.eventId, eventId))
       .all()
-    if (
-      eventChallenges.some(
-        (challenge) =>
-          challenge.remoteSourceKey !== null &&
-          challenge.remoteSourceKey !== sourceKey
-      )
-    ) {
+      .map((row) => row.sourceKey)
+    if (linkedSources.some((value) => value !== sourceKey)) {
       throw new PlatformActionError(
         "invalid_state",
         "This event contains challenges from another source"
@@ -242,14 +239,9 @@ export function createPlatformService(
     }
     await platformTargets.assertNoActiveTargets(eventId)
     db.transaction((tx) => {
-      tx.update(challenges)
-        .set({ remoteAvailable: false })
-        .where(
-          and(
-            eq(challenges.eventId, eventId),
-            eq(challenges.remoteSourceKey, platform.sourceKey)
-          )
-        )
+      tx.update(challengeRemote)
+        .set({ available: false })
+        .where(eq(challengeRemote.sourceKey, platform.sourceKey))
         .run()
       tx.delete(eventPlatforms).where(eq(eventPlatforms.eventId, eventId)).run()
     })

@@ -4,7 +4,7 @@ import type { createDatabase } from "../db"
 import { agentToolCalls } from "../db/schema"
 import {
   defaultSettings,
-  type SettingsData,
+  type SettingsPublic,
 } from "../infrastructure/config-store"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -17,7 +17,7 @@ type ToolStatus =
   | "abandoned"
 
 export type ToolTimeoutSettings = Pick<
-  SettingsData,
+  SettingsPublic,
   "defaultToolTimeoutMs" | "toolTimeouts"
 >
 

@@ -1,127 +1,59 @@
-import { copyFileSync, mkdirSync, rmSync } from "node:fs"
-import { homedir } from "node:os"
-import { basename, extname, join, relative } from "node:path"
+import { mkdirSync, rmSync } from "node:fs"
+import { join, relative } from "node:path"
 import { clampThinkingLevel } from "@earendil-works/pi-ai"
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gt,
-  inArray,
-  isNotNull,
-  isNull,
-  sql,
-} from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import type {
   AgentPublic,
-  AgentRuntimeSnapshot,
   AgentStatus,
   AgentSummary,
-  ConversationMessage,
   RunPublic,
   RunStatus,
-} from "../../../shared/api"
-import {
-  type AgentRuntime,
-  createAgentRuntime,
-  type RuntimeOutcome,
-} from "../agents/runtime"
-import { createLocalBackend, type WorkspaceBackend } from "../agents/tools"
+} from "../../../shared"
 import { sumUsage } from "../agents/usage"
 import type { createDatabase } from "../db"
 import {
   agentInbox,
-  agentMessages,
-  agentToolCalls,
-  attachments,
   challenges,
-  eventPlatforms,
-  events,
   runAgents,
   runEvents,
   runs,
 } from "../db/schema"
-import type { SettingsData } from "../infrastructure/config-store"
-import {
-  containerName,
-  containerRunningAsync,
-  createContainerAsync,
-  createContainerBackend,
-  removeContainer,
-  removeContainerAsync,
-} from "../infrastructure/container"
-import { redactSecrets, replaceText } from "../infrastructure/redaction"
+import type { SettingsPublic } from "../infrastructure/config-store"
+import { containerName, removeContainer } from "../infrastructure/container"
+import { getChallengeRemote } from "../platforms/challenge-state"
 import type { TargetState } from "../platforms/core"
 import type { ModelService } from "../providers/models"
 import {
-  type PromptAttachment,
-  type PromptTemplateContext,
   type PromptTemplates,
   renderInitialPrompt,
-  renderSystemPrompt,
 } from "../settings/prompt-templates"
 import {
   type EnvironmentConfig,
   type ModelConfig,
   parseEnvironment,
   parseModelConfig,
-  parsePromptConfig,
   parseRuntimeSnapshot,
 } from "./config"
-import { RunActionError } from "./errors"
+import { createContainerPool } from "./container-pool"
+import { RunActionError, RunStartError } from "./errors"
+import { createRunEventBus, type RunEventBus } from "./events"
 import { createRunInspector } from "./inspector"
-import { type AgentChange, createRunStateStore } from "./state-store"
+import { createSettledHandlers } from "./lifecycle"
+import { createPromptContextBuilder } from "./prompt-context"
+import { recoverInterruptedRuns } from "./recovery"
+import { createRunRepository } from "./repository"
+import { createRunHandleRegistry } from "./run-handle"
+import { createSessionAttacher, createSessionRegistry } from "./session"
+import { createRunStateStore } from "./state-store"
 import { createRunTools } from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
-type RunEvent =
-  | { type: "run.updated"; run: RunPublic; cursor?: number }
-  | { type: "agent.updated"; agent: AgentSummary; cursor?: number }
-  | {
-      type: "agent.activity"
-      agentId: string
-      activity: "retrying" | "compacting" | null
-      detail?: string
-    }
-  | {
-      type: "message.progress"
-      agentId: string
-      messageId: string
-      revision: number
-      message: Record<string, unknown>
-    }
-  | {
-      type: "tool.progress"
-      agentId: string
-      toolCallId: string
-      revision: number
-      toolName: string
-      args: unknown
-      result?: unknown
-      status: "running" | "done" | "error"
-      isError?: boolean
-      terminal?: "timed_out" | "cancelled" | "failed"
-      terminalMessage?: string
-    }
-  | {
-      type: "message.committed"
-      agentId: string
-      cursor: number
-      message: ConversationMessage
-    }
-type RunEventListener = (
-  event: RunEvent,
-  sequence: number,
-  replay: boolean
-) => void
 type Options = {
   db: Database
   dataDir: string
   maxConcurrency: number
   modelService: ModelService
-  getSettings(): SettingsData
+  getSettings(): SettingsPublic
   getPromptTemplates(): PromptTemplates
   getApiKeys?: (provider: string) => Iterable<string>
   submitFlag?(
@@ -138,12 +70,6 @@ type Options = {
   ): Promise<TargetState>
 }
 
-type CurrentSession = {
-  runId: string
-  agentId: string
-  runtime: AgentRuntime
-  generation: number
-}
 const terminalRunStatuses: RunStatus[] = ["completed", "failed", "stopped"]
 const terminalAgentStatuses: AgentStatus[] = ["completed", "failed", "stopped"]
 const defaultResumeMessage =
@@ -152,180 +78,50 @@ const defaultResumeMessage =
 export function createRunManager(options: Options) {
   const { db, dataDir } = options
   let maxConcurrency = options.maxConcurrency
-  const current = new Map<string, CurrentSession>()
-  const activeContainers = new Map<string, string>()
-  const listeners = new Map<string, Set<RunEventListener>>()
-  const aborting = new Map<string, "paused" | "stopped">()
-  const containerFailures = new Map<string, string>()
-  const runLocks = new Map<string, Promise<unknown>>()
-  const sessionGenerations = new Map<string, number>()
   let closed = false
 
-  function withRunLock<T>(runId: string, operation: () => T | Promise<T>) {
-    if (closed) {
-      return Promise.reject(
-        new RunActionError("invalid_state", "Run manager is closed")
-      )
-    }
-    const previous = runLocks.get(runId) ?? Promise.resolve()
-    const current = previous.catch(() => undefined).then(operation)
-    runLocks.set(runId, current)
-    return current.finally(() => {
-      if (runLocks.get(runId) === current) runLocks.delete(runId)
-    })
+  const sessions = createSessionRegistry()
+  const handles = createRunHandleRegistry({ isClosed: () => closed })
+  const withRunLock = handles.withLock
+
+  for (const id of recoverInterruptedRuns(db))
+    removeContainer(containerName(id))
+
+  const containers = createContainerPool({
+    dataDir,
+    onFailure: (runId) => {
+      void sessions.abortRun(runId)
+    },
+  })
+
+  const {
+    buildPromptContext,
+    promptContextForAgent,
+    attachmentFiles,
+    copyAttachments,
+  } = createPromptContextBuilder({
+    db,
+    dataDir,
+    getContainerWorkspace: () => options.getSettings().containerWorkspace,
+  })
+  const prompts = {
+    buildPromptContext,
+    promptContextForAgent,
+    attachmentFiles,
+    copyAttachments,
   }
 
-  const staleContainers = db
-    .select({ id: runs.id, environmentConfig: runs.environmentConfig })
-    .from(runs)
-    .all()
-    .filter(
-      ({ environmentConfig }) =>
-        parseEnvironment(environmentConfig).type === "container"
-    )
-  const pendingCompletions = db
-    .select({
-      id: runs.id,
-      summary: runs.pendingCompletionSummary,
-    })
-    .from(runs)
-    .where(
-      and(eq(runs.status, "running"), isNotNull(runs.pendingCompletionSummary))
-    )
-    .all()
-  const interruptedAt = new Date().toISOString()
-  db.update(agentToolCalls)
-    .set({
-      status: "abandoned",
-      succeeded: false,
-      error: "Server stopped before the tool call completed",
-      completedAt: interruptedAt,
-    })
-    .where(eq(agentToolCalls.status, "running"))
-    .run()
-  for (const pending of pendingCompletions) {
-    const completedAt = new Date().toISOString()
-    db.transaction((tx) => {
-      tx.update(runAgents)
-        .set({
-          status: "stopped",
-          completedAt,
-          updatedAt: completedAt,
-        })
-        .where(
-          and(
-            eq(runAgents.runId, pending.id),
-            isNotNull(runAgents.parentAgentId),
-            inArray(runAgents.status, ["running", "idle", "paused"])
-          )
-        )
-        .run()
-      tx.update(runAgents)
-        .set({
-          status: "completed",
-          summary: pending.summary,
-          error: null,
-          completedAt,
-          updatedAt: completedAt,
-        })
-        .where(
-          and(eq(runAgents.runId, pending.id), isNull(runAgents.parentAgentId))
-        )
-        .run()
-      tx.update(runs)
-        .set({
-          status: "completed",
-          summary: pending.summary,
-          pendingCompletionSummary: null,
-          error: null,
-          completedAt,
-          updatedAt: completedAt,
-        })
-        .where(eq(runs.id, pending.id))
-        .run()
-      tx.insert(runEvents)
-        .values({
-          runId: pending.id,
-          type: "run_updated",
-          createdAt: completedAt,
-        })
-        .run()
-    })
-  }
-  db.update(runs)
-    .set({ status: "paused", updatedAt: new Date().toISOString() })
-    .where(eq(runs.status, "running"))
-    .run()
-  db.update(runAgents)
-    .set({ status: "paused", updatedAt: new Date().toISOString() })
-    .where(inArray(runAgents.status, ["running", "idle"]))
-    .run()
-  for (const run of db
-    .select({ id: runs.id, status: runs.status, summary: runs.summary })
-    .from(runs)
-    .where(inArray(runs.status, terminalRunStatuses))
-    .all()) {
-    const completedAt = new Date().toISOString()
-    db.transaction((tx) => {
-      tx.update(runAgents)
-        .set({
-          status:
-            run.status === "completed"
-              ? "completed"
-              : run.status === "failed"
-                ? "failed"
-                : "stopped",
-          ...(run.status === "completed" ? { summary: run.summary } : {}),
-          completedAt,
-          updatedAt: completedAt,
-        })
-        .where(
-          and(
-            eq(runAgents.runId, run.id),
-            isNull(runAgents.parentAgentId),
-            inArray(runAgents.status, ["running", "idle", "paused"])
-          )
-        )
-        .run()
-      tx.update(runAgents)
-        .set({ status: "stopped", completedAt, updatedAt: completedAt })
-        .where(
-          and(
-            eq(runAgents.runId, run.id),
-            isNotNull(runAgents.parentAgentId),
-            inArray(runAgents.status, ["running", "idle", "paused"])
-          )
-        )
-        .run()
-    })
-  }
-  for (const { id } of staleContainers) removeContainer(containerName(id))
-
-  function getStored(runId: string) {
-    return db.select().from(runs).where(eq(runs.id, runId)).get()
-  }
-
-  function cursor(runId: string) {
-    return (
-      db
-        .select({ value: sql<number>`coalesce(max(${runEvents.id}), 0)` })
-        .from(runEvents)
-        .where(eq(runEvents.runId, runId))
-        .get()?.value ?? 0
-    )
-  }
-
-  function getStoredAgent(agentId: string) {
-    return db.select().from(runAgents).where(eq(runAgents.id, agentId)).get()
-  }
-
-  function getMainAgent(runId: string) {
-    return db
-      .select()
-      .from(runAgents)
-      .where(and(eq(runAgents.runId, runId), isNull(runAgents.parentAgentId)))
-      .get()
-  }
+  const repo = createRunRepository(db)
+  const {
+    getStored,
+    getStoredAgent,
+    getMainAgent,
+    listStoredAgents,
+    cursor,
+    runningCount,
+    getAgentPublic,
+    getPublic,
+  } = repo
 
   function replayedMessage(
     runId: string,
@@ -359,33 +155,6 @@ export function createRunManager(options: Options) {
     return { ...run, messageId }
   }
 
-  function listStoredAgents(runId: string) {
-    return db
-      .select()
-      .from(runAgents)
-      .where(eq(runAgents.runId, runId))
-      .orderBy(runAgents.createdAt, runAgents.id)
-      .all()
-  }
-
-  function getAgentPublic(agentId: string): AgentPublic | undefined {
-    const agent = getStoredAgent(agentId)
-    if (!agent) return undefined
-    return {
-      id: agent.id,
-      runId: agent.runId,
-      parentAgentId: agent.parentAgentId,
-      name: agent.name,
-      status: agent.status as AgentStatus,
-      summary: agent.summary,
-      error: agent.error,
-      createdAt: agent.createdAt,
-      startedAt: agent.startedAt,
-      updatedAt: agent.updatedAt,
-      completedAt: agent.completedAt,
-    }
-  }
-
   const {
     messagesForAgent,
     conversationMessage,
@@ -403,79 +172,14 @@ export function createRunManager(options: Options) {
     parseRuntimeSnapshot,
   })
 
-  const publicRunSelection = {
-    run: runs,
-    challengeName: challenges.name,
-    eventId: events.id,
-    targetSupported: challenges.remoteTarget,
-    targetIgnored: challenges.remoteTargetIgnored,
-    targetAvailable: challenges.remoteAvailable,
-  }
-
-  function publicRun(
-    row: {
-      run: typeof runs.$inferSelect
-      challengeName: string
-      eventId: string
-      targetSupported: boolean
-      targetIgnored: boolean
-      targetAvailable: boolean
-    },
-    includeFlag = false
-  ): RunPublic {
-    const config = parseModelConfig(row.run.modelConfig)
-    const environment = parseEnvironment(row.run.environmentConfig)
-    const value: RunPublic = {
-      id: row.run.id,
-      challengeId: row.run.challengeId,
-      challengeName: row.challengeName,
-      eventId: row.eventId,
-      status: row.run.status as RunStatus,
-      provider: config.providerLabel ?? config.provider ?? "",
-      modelId: config.modelId ?? "",
-      modelName: config.modelLabel ?? config.modelId ?? "",
-      thinkingLevel: config.thinkingLevel,
-      environment: environment.type,
-      targetSupported:
-        row.targetSupported && row.targetAvailable && !row.targetIgnored,
-      createdAt: row.run.createdAt,
-      startedAt: row.run.startedAt,
-      updatedAt: row.run.updatedAt,
-      completedAt: row.run.completedAt,
-      error: row.run.error,
-      summary: row.run.summary,
-      hasFlag: Boolean(row.run.flag),
-    }
-    if (environment.type === "container") {
-      value.image = environment.image
-      value.cpus = environment.cpus
-      value.memoryMb = environment.memoryMb
-      value.pidsLimit = environment.pidsLimit
-    }
-    if (includeFlag) value.flag = row.run.flag
-    return value
-  }
-
-  function getPublic(
-    runId: string,
-    includeFlag = false
-  ): RunPublic | undefined {
-    const row = db
-      .select(publicRunSelection)
-      .from(runs)
-      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
-      .innerJoin(events, eq(challenges.eventId, events.id))
-      .where(eq(runs.id, runId))
-      .get()
-    return row ? publicRun(row, includeFlag) : undefined
-  }
-
-  function emit(runId: string, event: RunEvent) {
-    const sequence = "cursor" in event ? (event.cursor ?? 0) : 0
-    for (const listener of listeners.get(runId) ?? []) {
-      listener(event, sequence, false)
-    }
-  }
+  const eventBus: RunEventBus = createRunEventBus({
+    db,
+    getRun: getPublic,
+    getAgent: getAgentPublic,
+    getAgentUsage: usageForAgent,
+    conversationMessage,
+  })
+  const emit = eventBus.emit
 
   const {
     transition: transitionRun,
@@ -498,182 +202,41 @@ export function createRunManager(options: Options) {
   })
 
   function releaseAgent(agentId: string) {
-    const active = current.get(agentId)
-    if (active) {
-      active.runtime.dispose()
-      current.delete(agentId)
-    }
+    sessions.release(agentId)
   }
 
   async function releaseRun(runId: string) {
-    for (const active of [...current.values()]) {
-      if (active.runId === runId) releaseAgent(active.agentId)
-    }
-    const name = activeContainers.get(runId)
-    if (name) {
-      await removeContainerAsync(name)
-      activeContainers.delete(runId)
-    }
+    sessions.releaseRun(runId)
+    await containers.release(runId)
   }
 
-  function runningCount() {
-    return (
-      db
-        .select({ value: count() })
-        .from(runAgents)
-        .where(inArray(runAgents.status, ["running", "idle"]))
-        .get()?.value ?? 0
-    )
+  async function abortRun(runId: string, exceptAgentId?: string) {
+    await sessions.abortRun(runId, exceptAgentId)
   }
+
+  const { handleMainSettled, handleChildSettled, notifyMain } =
+    createSettledHandlers({
+      db,
+      handles,
+      isClosed: () => closed,
+      withRunLock,
+      getStored,
+      getStoredAgent,
+      getMainAgent,
+      listStoredAgents,
+      takeContainerFailure: (runId) => containers.takeFailure(runId),
+      abortRun,
+      releaseRun,
+      releaseAgent,
+      transitionRun,
+      updateAgent,
+      getMainRuntime: (agentId) => sessions.get(agentId)?.runtime,
+    })
 
   function requireCapacity(count = 1) {
     if (runningCount() + count > maxConcurrency) {
       throw new RunActionError("capacity", "Run capacity reached")
     }
-  }
-
-  function buildPromptContext(
-    runId: string,
-    challenge: typeof challenges.$inferSelect,
-    challengeAttachments: PromptAttachment[],
-    environment: EnvironmentConfig,
-    modelConfig: ModelConfig,
-    agent: {
-      name: string
-      task: string | null
-      isMain: boolean
-    }
-  ): PromptTemplateContext {
-    const event = db
-      .select()
-      .from(events)
-      .where(eq(events.id, challenge.eventId))
-      .get()
-    if (!event) throw new RunStartError("Event is unavailable")
-    const platform = db
-      .select({ type: eventPlatforms.type })
-      .from(eventPlatforms)
-      .where(eq(eventPlatforms.eventId, event.id))
-      .get()
-    const targetSupported =
-      challenge.remoteTarget &&
-      challenge.remoteAvailable &&
-      !challenge.remoteTargetIgnored
-    const platformIntegrated = Boolean(
-      challenge.remoteId && challenge.remoteAvailable
-    )
-    return {
-      agent: {
-        role: agent.isMain ? "main" : "child",
-        isMain: agent.isMain,
-        name: agent.name,
-        task: agent.task,
-      },
-      event: {
-        id: event.id,
-        name: event.name,
-        platform: platform?.type ?? null,
-        promptHint: event.promptHint ?? "",
-      },
-      challenge: {
-        id: challenge.id,
-        name: challenge.name,
-        description: challenge.description,
-        category: challenge.category,
-        points: challenge.points,
-        attachments: challengeAttachments,
-        attachmentPaths: challengeAttachments.map(({ path }) => path),
-      },
-      model: {
-        provider: modelConfig.providerLabel ?? modelConfig.provider,
-        name: modelConfig.modelLabel ?? modelConfig.modelId,
-        id: modelConfig.modelId,
-      },
-      run: {
-        id: runId,
-        environment: environment.type,
-        isContainer: environment.type === "container",
-        workspace:
-          environment.type === "container"
-            ? options.getSettings().containerWorkspace
-            : "$WORKSPACE",
-        targetSupported,
-        platformIntegrated,
-        containerImage:
-          environment.type === "container" ? environment.image : null,
-        cpus: environment.type === "container" ? environment.cpus : null,
-        memoryMb:
-          environment.type === "container" ? environment.memoryMb : null,
-        pidsLimit:
-          environment.type === "container" ? environment.pidsLimit : null,
-      },
-      capabilities: {
-        canFinishRun: agent.isMain,
-        canSpawnAgent: agent.isMain,
-        canSubmitFlag: agent.isMain && platformIntegrated,
-        canManageTarget: agent.isMain && targetSupported,
-      },
-    }
-  }
-
-  function promptContextForAgent(
-    context: PromptTemplateContext,
-    agent: { name: string; task: string | null; isMain: boolean }
-  ): PromptTemplateContext {
-    return {
-      ...context,
-      agent: {
-        role: agent.isMain ? "main" : "child",
-        isMain: agent.isMain,
-        name: agent.name,
-        task: agent.task,
-      },
-      capabilities: {
-        canFinishRun: agent.isMain,
-        canSpawnAgent: agent.isMain,
-        canSubmitFlag: agent.isMain && context.run.platformIntegrated,
-        canManageTarget: agent.isMain && context.run.targetSupported,
-      },
-    }
-  }
-
-  function attachmentFiles(challengeId: string) {
-    const rows = db
-      .select()
-      .from(attachments)
-      .where(eq(attachments.challengeId, challengeId))
-      .orderBy(attachments.createdAt, attachments.id)
-      .all()
-    const used = new Set<string>()
-    return rows.map((attachment) => {
-      const original = basename(attachment.originalName) || "attachment"
-      const extension = extname(original)
-      const stem = original.slice(0, original.length - extension.length)
-      let filename = original
-      for (let suffix = 2; used.has(filename); suffix += 1) {
-        filename = `${stem} (${suffix})${extension}`
-      }
-      used.add(filename)
-      return {
-        name: attachment.originalName,
-        path: filename,
-        size: attachment.size,
-        storageKey: attachment.storageKey,
-      }
-    })
-  }
-
-  function copyAttachments(
-    challengeId: string,
-    workspacePath: string
-  ): PromptAttachment[] {
-    return attachmentFiles(challengeId).map(({ storageKey, ...attachment }) => {
-      copyFileSync(
-        join(dataDir, "attachments", ...storageKey.split("/")),
-        join(workspacePath, attachment.path)
-      )
-      return attachment
-    })
   }
 
   async function resolveRequestedModel(config: ModelConfig) {
@@ -695,528 +258,42 @@ export function createRunManager(options: Options) {
     return join(dataDir, run.workspacePath)
   }
 
-  async function ensureSession(agentId: string) {
-    const existing = current.get(agentId)
-    if (existing) return existing.runtime
-    const agent = getStoredAgent(agentId)
-    const run = agent ? getStored(agent.runId) : undefined
-    if (!agent || !run) {
-      throw new RunStartError("Agent session is unavailable")
-    }
-    const modelConfig = parseModelConfig(run.modelConfig)
-    const model = await resolveRequestedModel(modelConfig)
-    const workspacePath = runWorkspacePath(run)
-    return attachSession(
-      agent,
-      run,
-      workspacePath,
-      model,
-      parseEnvironment(run.environmentConfig),
-      modelConfig.provider
-    )
-  }
-
-  async function attachSession(
-    agent: typeof runAgents.$inferSelect,
-    run: typeof runs.$inferSelect,
-    workspacePath: string,
-    model: Awaited<ReturnType<typeof resolveRequestedModel>>,
-    environment: EnvironmentConfig,
-    provider: string
-  ) {
-    const runId = run.id
-    const agentId = agent.id
-    const generation = (sessionGenerations.get(agentId) ?? 0) + 1
-    sessionGenerations.set(agentId, generation)
-    const isMain = agent.parentAgentId === null
-    const runWorkspacePath = join(dataDir, run.workspacePath as string)
-    const settings = options.getSettings()
-    let backend: WorkspaceBackend
-    if (environment.type === "container") {
-      let name = activeContainers.get(runId)
-      if (name && !(await containerRunningAsync(name))) {
-        activeContainers.delete(runId)
-        name = undefined
-      }
-      if (!name) {
-        name = containerName(runId)
-        if (!run.workspacePath) {
-          throw new RunStartError("Run workspace is unavailable")
-        }
-        try {
-          await createContainerAsync(
-            name,
-            join(dataDir, run.workspacePath),
-            environment.image,
-            environment,
-            {
-              containerWorkspace: settings.containerWorkspace,
-              dockerTimeoutMs: settings.dockerTimeoutMs,
-              tmpfsSize: settings.tmpfsSize,
-            }
-          )
-        } catch {
-          throw new RunStartError("Container could not be started")
-        }
-        activeContainers.set(runId, name)
-      }
-      backend = createContainerBackend(
-        name,
-        {
-          cwd: settings.containerWorkspace,
-          maxCapturedShellOutput: settings.maxCapturedShellOutputBytes,
-        },
-        () => {
-          if (activeContainers.get(runId) === name) {
-            activeContainers.delete(runId)
-            void removeContainerAsync(name)
-          }
-          if (!containerFailures.has(runId)) {
-            containerFailures.set(
-              runId,
-              "Container execution became unavailable"
-            )
-            void abortRun(runId)
-          }
-        }
-      )
-    } else {
-      backend = createLocalBackend(runWorkspacePath)
-    }
-    const challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, run.challengeId))
-      .get()
-    if (!challenge) throw new RunStartError("Challenge is unavailable")
-    const tools = createRunTools({
-      runId,
-      agentId,
-      isMain,
-      agent,
-      run,
-      challenge,
-      backend,
-      toolLimits: {
-        maxOutput: settings.maxToolOutputBytes,
-        maxShellOutput: settings.maxInlineShellOutputBytes,
-        maxCapturedShellOutput: settings.maxCapturedShellOutputBytes,
-      },
-      getStoredRun: () => getStored(runId),
-      updateRun: (values) => update(runId, values),
-      getStoredAgent,
-      getAgentPublic,
-      messagesForAgent,
-      createChildAgent,
-      canFinishRun: options.canFinishRun,
-      submitFlag: options.submitFlag,
-      targetAction: options.targetAction,
-    })
-    const secrets = new Set(options.getApiKeys?.(provider))
-    const logicalCwd =
-      environment.type === "container"
-        ? settings.containerWorkspace
-        : "$WORKSPACE"
-    const modelConfig = parseModelConfig(run.modelConfig)
-    const thinkingLevel = clampThinkingLevel(model, modelConfig.thinkingLevel)
-    const promptConfig = parsePromptConfig(run.promptConfig)
-    const agentContext = {
-      name: agent.name,
-      task: agent.task,
-      isMain,
-    }
-    const promptContext = promptConfig.context
-      ? promptContextForAgent(promptConfig.context, agentContext)
-      : buildPromptContext(
-          runId,
-          challenge,
-          attachmentFiles(challenge.id).map(
-            ({ storageKey: _, ...attachment }) => attachment
-          ),
-          environment,
-          modelConfig,
-          agentContext
-        )
-    const systemPrompt = renderSystemPrompt(
-      isMain
-        ? promptConfig.mainSystemPromptTemplate
-        : promptConfig.childSystemPromptTemplate,
-      promptContext
-    )
-    const snapshot: AgentRuntimeSnapshot = {
-      capturedAt: new Date().toISOString(),
-      systemPrompt,
-      cwd: logicalCwd,
-      model: {
-        provider: modelConfig.providerLabel ?? provider,
-        modelId: model.id,
-        thinkingLevel,
-      },
-      tools: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      })),
-    }
-    redactSecrets(snapshot, secrets)
-    replaceText(snapshot, workspacePath, logicalCwd)
-    if (run.workspacePath) {
-      replaceText(snapshot, join(dataDir, run.workspacePath), "$WORKSPACE")
-    }
-    replaceText(snapshot, dataDir, "$DATA")
-    replaceText(snapshot, homedir(), "$HOME")
-    db.update(runAgents)
-      .set({ runtimeSnapshot: JSON.stringify(snapshot) })
-      .where(eq(runAgents.id, agentId))
-      .run()
-    const messageRevisions = new Map<string, number>()
-    const toolRevisions = new Map<string, number>()
-    const nextRevision = (values: Map<string, number>, id: string) => {
-      const revision = (values.get(id) ?? -1) + 1
-      values.set(id, revision)
-      return revision
-    }
-    const runtime = createAgentRuntime({
-      db,
-      runId,
-      agentId,
-      systemPrompt,
-      model,
-      models: options.modelService.models,
-      tools,
-      secrets,
-      thinkingLevel,
-      retryConfig: {
-        maxAttempts: settings.maxRetryAttempts,
-        baseDelayMs: settings.retryBaseDelayMs,
-        maxDelayMs: settings.retryMaxDelayMs,
-      },
-      getToolTimeoutSettings: () => {
-        const live = options.getSettings()
-        return {
-          defaultToolTimeoutMs: live.defaultToolTimeoutMs,
-          toolTimeouts: live.toolTimeouts,
-        }
-      },
-      canRunTool: () =>
-        !containerFailures.has(runId) &&
-        getStored(runId)?.status === "running" &&
-        getStoredAgent(agentId)?.status === "running",
-      onActivity: (activity, detail) => {
-        if (current.get(agentId)?.generation !== generation) return
-        emit(runId, { type: "agent.activity", agentId, activity, detail })
-      },
-      onEvent: (event, messageId, cursor) => {
-        if (current.get(agentId)?.generation !== generation) return
-        for (const secret of options.getApiKeys?.(provider) ?? []) {
-          runtime.addSecrets([secret])
-        }
-        if (
-          messageId &&
-          (event.type === "message_start" ||
-            event.type === "message_update" ||
-            event.type === "message_end")
-        ) {
-          const revision = nextRevision(messageRevisions, messageId)
-          if (event.type === "message_end" && cursor !== undefined) {
-            const message = conversationMessageForRuntime(agentId, messageId)
-            if (message) {
-              emit(runId, {
-                type: "message.committed",
-                agentId,
-                cursor,
-                message,
-              })
-              return
-            }
-          }
-          emit(runId, {
-            type: "message.progress",
-            agentId,
-            messageId,
-            revision,
-            message: event.message as unknown as Record<string, unknown>,
-          })
-          return
-        }
-        if (
-          event.type === "tool_execution_start" ||
-          event.type === "tool_execution_update" ||
-          event.type === "tool_execution_end"
-        ) {
-          const revision = nextRevision(toolRevisions, event.toolCallId)
-          const ended = event.type === "tool_execution_end"
-          const args = "args" in event ? event.args : undefined
-          const terminal =
-            ended && event.isError
-              ? db
-                  .select({
-                    status: agentToolCalls.status,
-                    error: agentToolCalls.error,
-                  })
-                  .from(agentToolCalls)
-                  .where(
-                    and(
-                      eq(agentToolCalls.agentId, agentId),
-                      eq(agentToolCalls.toolCallId, event.toolCallId)
-                    )
-                  )
-                  .get()
-              : undefined
-          emit(runId, {
-            type: "tool.progress",
-            agentId,
-            toolCallId: event.toolCallId,
-            revision,
-            toolName: event.toolName,
-            args,
-            ...(event.type === "tool_execution_update"
-              ? { result: event.partialResult }
-              : event.type === "tool_execution_end"
-                ? { result: event.result }
-                : {}),
-            status: ended ? (event.isError ? "error" : "done") : "running",
-            ...(ended && event.isError ? { isError: true } : {}),
-            ...(terminal &&
-            ["timed_out", "cancelled", "failed"].includes(terminal.status)
-              ? {
-                  terminal: terminal.status as
-                    | "timed_out"
-                    | "cancelled"
-                    | "failed",
-                  ...(terminal.error
-                    ? { terminalMessage: terminal.error }
-                    : {}),
-                }
-              : {}),
-          })
-        }
-      },
-      onSettled: (outcome) => {
-        if (current.get(agentId)?.generation !== generation) return
-        return isMain
-          ? handleMainSettled(runId, agentId, outcome)
-          : handleChildSettled(runId, agentId, outcome)
-      },
-    })
-    current.set(agentId, { runId, agentId, runtime, generation })
-    return runtime
-  }
-
-  async function handleMainSettled(
+  // createChildAgent is assigned after attachSession wiring to break the cycle.
+  let createChildAgent: (
     runId: string,
-    agentId: string,
-    outcome: RuntimeOutcome
-  ) {
-    if (closed || aborting.has(runId)) return
-    return withRunLock(runId, async () => {
-      if (closed || aborting.has(runId)) return
-      const storedRun = getStored(runId)
-      if (
-        !storedRun ||
-        terminalRunStatuses.includes(storedRun.status as RunStatus)
-      ) {
-        await releaseRun(runId)
-        return
-      }
-      if (getStoredAgent(agentId)?.status !== "running") return
+    parentAgentId: string,
+    name: string,
+    task: string,
+    signal?: AbortSignal
+  ) => Promise<AgentPublic>
 
-      const containerFailure = containerFailures.get(runId)
-      if (containerFailure) {
-        aborting.set(runId, "paused")
-        try {
-          await abortRun(runId, agentId)
-          const changes = listStoredAgents(runId)
-            .filter(
-              (agent) =>
-                !terminalAgentStatuses.includes(agent.status as AgentStatus)
-            )
-            .map((agent) => ({
-              agentId: agent.id,
-              values: { status: "paused" as const },
-            }))
-          await releaseRun(runId)
-          transitionRun(
-            runId,
-            { status: "paused", error: containerFailure },
-            changes
-          )
-        } finally {
-          containerFailures.delete(runId)
-          aborting.delete(runId)
-        }
-        return
-      }
+  const { attachSession, ensureSession } = createSessionAttacher({
+    db,
+    dataDir,
+    sessions,
+    containers,
+    modelService: options.modelService,
+    getSettings: options.getSettings,
+    getApiKeys: options.getApiKeys,
+    getStored,
+    getStoredAgent,
+    getAgentPublic,
+    messagesForAgent,
+    conversationMessageForRuntime,
+    update,
+    emit,
+    prompts,
+    createChildAgent: (...args) => createChildAgent(...args),
+    canFinishRun: options.canFinishRun,
+    submitFlag: options.submitFlag,
+    targetAction: options.targetAction,
+    onMainSettled: handleMainSettled,
+    onChildSettled: handleChildSettled,
+    resolveRequestedModel,
+    createTools: createRunTools,
+  })
 
-      if (outcome.status === "success" && storedRun.pendingCompletionSummary) {
-        const completedAt = new Date().toISOString()
-        aborting.set(runId, "stopped")
-        try {
-          await abortRun(runId, agentId)
-          const changes: AgentChange[] = []
-          for (const agent of listStoredAgents(runId)) {
-            if (agent.id === agentId) {
-              changes.push({
-                agentId,
-                values: {
-                  status: "completed",
-                  completedAt,
-                  summary: storedRun.pendingCompletionSummary,
-                  error: null,
-                },
-              })
-              continue
-            }
-            if (!terminalAgentStatuses.includes(agent.status as AgentStatus)) {
-              changes.push({
-                agentId: agent.id,
-                values: { status: "stopped", completedAt },
-              })
-            }
-          }
-          await releaseRun(runId)
-          transitionRun(
-            runId,
-            {
-              status: "completed",
-              completedAt,
-              summary: storedRun.pendingCompletionSummary,
-              pendingCompletionSummary: null,
-              error: null,
-            },
-            changes
-          )
-        } finally {
-          aborting.delete(runId)
-        }
-        return
-      }
-      if (outcome.status === "success") {
-        updateAgent(agentId, { status: "idle" })
-        return
-      }
-
-      const completedAt = new Date().toISOString()
-      const error = outcome.error ?? "Agent session failed"
-      aborting.set(runId, "stopped")
-      try {
-        await abortRun(runId, agentId)
-        const changes: AgentChange[] = []
-        for (const agent of listStoredAgents(runId)) {
-          if (agent.id === agentId) {
-            changes.push({
-              agentId,
-              values: {
-                status: "failed",
-                completedAt,
-                summary: outcome.summary,
-                error,
-              },
-            })
-            continue
-          }
-          if (!terminalAgentStatuses.includes(agent.status as AgentStatus)) {
-            changes.push({
-              agentId: agent.id,
-              values: { status: "stopped", completedAt },
-            })
-          }
-        }
-        await releaseRun(runId)
-        transitionRun(runId, { status: "failed", completedAt, error }, changes)
-      } finally {
-        aborting.delete(runId)
-      }
-    })
-  }
-
-  async function handleChildSettled(
-    runId: string,
-    agentId: string,
-    outcome: RuntimeOutcome
-  ) {
-    if (
-      closed ||
-      aborting.has(runId) ||
-      getStoredAgent(agentId)?.status !== "running"
-    ) {
-      releaseAgent(agentId)
-      return
-    }
-    return withRunLock(runId, async () => {
-      if (
-        closed ||
-        aborting.has(runId) ||
-        getStoredAgent(agentId)?.status !== "running"
-      ) {
-        releaseAgent(agentId)
-        return
-      }
-      const finished = updateAgent(agentId, {
-        status: outcome.status === "success" ? "completed" : "failed",
-        completedAt: new Date().toISOString(),
-        summary: outcome.summary,
-        error:
-          outcome.status === "success"
-            ? null
-            : (outcome.error ?? "Agent session failed"),
-      })
-      await notifyMain(finished)
-      releaseAgent(agentId)
-    })
-  }
-
-  async function abortRun(runId: string, exceptAgentId?: string) {
-    const pending = Promise.allSettled(
-      [...current.values()]
-        .filter(
-          (active) => active.runId === runId && active.agentId !== exceptAgentId
-        )
-        .map((active) => active.runtime.abort())
-    )
-    await Promise.race([pending, Bun.sleep(5000)])
-  }
-
-  async function notifyMain(agent: AgentPublic) {
-    if (closed || aborting.has(agent.runId)) return
-    const run = getStored(agent.runId)
-    const main = getMainAgent(agent.runId)
-    if (
-      run?.status !== "running" ||
-      !main ||
-      (main.status !== "running" && main.status !== "idle")
-    ) {
-      return
-    }
-    const result =
-      agent.summary ?? agent.error ?? "No final output was produced."
-    const message = [
-      `Background agent ${agent.name} (${agent.id}) ${agent.status}.`,
-      "Final output:",
-      result,
-    ].join("\n\n")
-    db.insert(agentInbox)
-      .values({
-        id: crypto.randomUUID(),
-        agentId: main.id,
-        kind: "child_result",
-        content: message,
-        metadata: JSON.stringify({
-          handoff: {
-            agentId: agent.id,
-            agentName: agent.name,
-            status: agent.status,
-          },
-        }),
-        createdAt: new Date().toISOString(),
-      })
-      .run()
-    if (main.status === "idle") updateAgent(main.id, { status: "running" })
-    const runtime = current.get(main.id)?.runtime
-    if (runtime) runtime.replayPending()
-  }
-
-  async function createChildAgent(
+  createChildAgent = async function createChildAgentImpl(
     runId: string,
     parentAgentId: string,
     name: string,
@@ -1323,7 +400,7 @@ export function createRunManager(options: Options) {
       return getAgentPublic(id) as AgentPublic
     } catch (error) {
       if (
-        !aborting.has(runId) &&
+        !handles.isAborting(runId) &&
         getStored(runId)?.status === "running" &&
         getStoredAgent(id)?.status === "running"
       ) {
@@ -1352,6 +429,7 @@ export function createRunManager(options: Options) {
       .where(eq(challenges.id, challengeId))
       .get()
     if (!challenge) throw new RunActionError("not_found", "Challenge not found")
+    const remote = getChallengeRemote(db, challengeId)
     requireCapacity()
     const configuredModel = options.modelService.find(
       modelConfig.provider,
@@ -1373,6 +451,7 @@ export function createRunManager(options: Options) {
     const promptContext = buildPromptContext(
       id,
       challenge,
+      remote,
       challengeAttachments,
       environment,
       frozenModelConfig,
@@ -1454,13 +533,13 @@ export function createRunManager(options: Options) {
 
   async function pauseNow(runId: string) {
     requireMutable(runId, ["running"])
-    aborting.set(runId, "paused")
+    handles.beginAbort(runId, "paused")
     try {
       await abortRun(runId)
       const latest = getPublic(runId) as RunPublic
       if (terminalRunStatuses.includes(latest.status)) return latest
       await releaseRun(runId)
-      containerFailures.delete(runId)
+      containers.clearFailure(runId)
       const paused = transitionRun(
         runId,
         { status: "paused" },
@@ -1475,7 +554,7 @@ export function createRunManager(options: Options) {
       )
       return paused
     } finally {
-      aborting.delete(runId)
+      handles.endAbort(runId)
     }
   }
 
@@ -1510,7 +589,7 @@ export function createRunManager(options: Options) {
     if (!main)
       throw new RunActionError("invalid_state", "Main agent is unavailable")
     requireCapacity(pausedAgents.length)
-    containerFailures.delete(runId)
+    containers.clearFailure(runId)
     transitionRun(
       runId,
       { status: "running", error: null, completedAt: null },
@@ -1635,7 +714,7 @@ export function createRunManager(options: Options) {
 
   async function stopNow(runId: string) {
     requireMutable(runId, ["running", "paused"])
-    aborting.set(runId, "stopped")
+    handles.beginAbort(runId, "stopped")
     try {
       const completedAt = new Date().toISOString()
       const stopped = transitionRun(
@@ -1653,10 +732,10 @@ export function createRunManager(options: Options) {
       )
       await abortRun(runId)
       await releaseRun(runId)
-      containerFailures.delete(runId)
+      containers.clearFailure(runId)
       return stopped
     } finally {
-      aborting.delete(runId)
+      handles.endAbort(runId)
     }
   }
 
@@ -1672,61 +751,17 @@ export function createRunManager(options: Options) {
     return run
   }
 
-  function replayEvents(
-    runId: string,
-    afterCursor: number,
-    listener: RunEventListener
-  ) {
-    const rows = db
-      .select()
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), gt(runEvents.id, afterCursor)))
-      .orderBy(asc(runEvents.id))
-      .all()
-    for (const row of rows) {
-      let event: RunEvent | undefined
-      if (row.type === "run_updated") {
-        const run = getPublic(runId)
-        if (run) event = { type: "run.updated", run, cursor: row.id }
-      } else if (row.type === "agent_updated" && row.agentId) {
-        const agent = getAgentPublic(row.agentId)
-        if (agent) {
-          event = {
-            type: "agent.updated",
-            agent: { ...agent, usage: usageForAgent(agent.id) },
-            cursor: row.id,
-          }
-        }
-      } else if (row.type === "message_committed" && row.entityId) {
-        const stored = db
-          .select()
-          .from(agentMessages)
-          .where(eq(agentMessages.id, row.entityId))
-          .get()
-        if (stored) {
-          event = {
-            type: "message.committed",
-            agentId: stored.agentId,
-            cursor: row.id,
-            message: conversationMessage(stored),
-          }
-        }
-      }
-      if (event) listener(event, row.id, true)
-    }
-  }
-
   async function closeManager() {
     if (closed) return
     closed = true
-    await Promise.allSettled([...runLocks.values()])
+    await handles.drain()
     const runningRuns = db
       .select({ id: runs.id })
       .from(runs)
       .where(eq(runs.status, "running"))
       .all()
     for (const { id } of runningRuns) {
-      aborting.set(id, "paused")
+      handles.beginAbort(id, "paused")
       try {
         await abortRun(id)
         await releaseRun(id)
@@ -1745,18 +780,13 @@ export function createRunManager(options: Options) {
           error: error instanceof Error ? error.message : String(error),
         })
       } finally {
-        aborting.delete(id)
+        handles.endAbort(id)
       }
     }
-    for (const { runtime } of current.values()) runtime.dispose()
-    current.clear()
-    await Promise.allSettled(
-      [...activeContainers.values()].map((name) => removeContainerAsync(name))
-    )
-    activeContainers.clear()
-    containerFailures.clear()
-    listeners.clear()
-    runLocks.clear()
+    sessions.disposeAll()
+    await containers.releaseAll()
+    eventBus.clear()
+    handles.clear()
   }
 
   function deleteRun(runId: string) {
@@ -1773,7 +803,7 @@ export function createRunManager(options: Options) {
       rmSync(join(dataDir, run.workspacePath), { recursive: true, force: true })
     }
     db.delete(runs).where(eq(runs.id, runId)).run()
-    listeners.delete(runId)
+    eventBus.clearRun(runId)
   }
 
   return {
@@ -1793,41 +823,14 @@ export function createRunManager(options: Options) {
     agent: getAgentPublic,
     inspector: inspectorForAgent,
     conversationSnapshot,
-    listForEvent: (eventId: string) =>
-      db
-        .select(publicRunSelection)
-        .from(runs)
-        .innerJoin(challenges, eq(runs.challengeId, challenges.id))
-        .innerJoin(events, eq(challenges.eventId, events.id))
-        .where(eq(challenges.eventId, eventId))
-        .orderBy(desc(runs.createdAt))
-        .all()
-        .map((row) => publicRun(row)),
-    listForChallenge: (challengeId: string) =>
-      db
-        .select({ id: runs.id })
-        .from(runs)
-        .where(eq(runs.challengeId, challengeId))
-        .orderBy(desc(runs.createdAt))
-        .all()
-        .map(({ id }) => getPublic(id) as RunPublic),
+    listForEvent: repo.listForEvent,
+    listForChallenge: repo.listForChallenge,
     pause,
     resume,
     message,
     stop,
-    subscribe: (runId: string, listener: RunEventListener, afterCursor = 0) => {
-      const runListeners = listeners.get(runId) ?? new Set()
-      runListeners.add(listener)
-      listeners.set(runId, runListeners)
-      replayEvents(runId, afterCursor, listener)
-      return () => {
-        runListeners.delete(listener)
-        if (runListeners.size === 0) {
-          listeners.delete(runId)
-        }
-      }
-    },
-    activeSessionCount: () => current.size,
+    subscribe: eventBus.subscribe,
+    activeSessionCount: () => sessions.size,
     setMaxConcurrency: (value: number) => {
       maxConcurrency = value
     },
@@ -1849,6 +852,4 @@ export function createRunManager(options: Options) {
   }
 }
 
-export { RunActionError }
-
-class RunStartError extends Error {}
+export { RunActionError } from "./errors"

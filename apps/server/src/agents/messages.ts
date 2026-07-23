@@ -1,23 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
+import { Type } from "typebox"
+import { Value } from "typebox/value"
+import type { AegisXMessage, AegisXMetadata, InboxKind } from "../../../shared"
 
-export type InboxKind = "user" | "child_result" | "resume"
-
-export type AegisXMetadata = {
-  handoff?: {
-    agentId: string
-    agentName: string
-    status: string
-  }
-}
-
-export type AegisXMessage = {
-  role: "aegisx"
-  id: string
-  kind: InboxKind
-  text: string
-  timestamp: number
-  metadata?: AegisXMetadata
-}
+export type { AegisXMessage, AegisXMetadata, InboxKind }
 
 declare module "@earendil-works/pi-agent-core" {
   interface CustomAgentMessages {
@@ -25,146 +11,153 @@ declare module "@earendil-works/pi-agent-core" {
   }
 }
 
-type RecordValue = Record<string, unknown>
+const TextContentSchema = Type.Object(
+  {
+    type: Type.Literal("text"),
+    text: Type.String(),
+  },
+  { additionalProperties: true }
+)
 
-function isRecord(value: unknown): value is RecordValue {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
+const ImageContentSchema = Type.Object(
+  {
+    type: Type.Literal("image"),
+    data: Type.String(),
+    mimeType: Type.String(),
+  },
+  { additionalProperties: true }
+)
 
-function isString(value: unknown): value is string {
-  return typeof value === "string"
-}
+const ThinkingContentSchema = Type.Object(
+  {
+    type: Type.Literal("thinking"),
+    thinking: Type.String(),
+    thinkingSignature: Type.Optional(Type.String()),
+    redacted: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: true }
+)
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value)
-}
+const ToolCallContentSchema = Type.Object(
+  {
+    type: Type.Literal("toolCall"),
+    id: Type.String(),
+    name: Type.String(),
+    arguments: Type.Record(Type.String(), Type.Unknown()),
+  },
+  { additionalProperties: true }
+)
 
-function isTextContent(value: unknown): boolean {
-  return isRecord(value) && value.type === "text" && isString(value.text)
-}
+const TextOrImageSchema = Type.Union([TextContentSchema, ImageContentSchema])
 
-function isImageContent(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    value.type === "image" &&
-    isString(value.data) &&
-    isString(value.mimeType)
-  )
-}
+const UsageSchema = Type.Object(
+  {
+    input: Type.Number(),
+    output: Type.Number(),
+    cacheRead: Type.Number(),
+    cacheWrite: Type.Number(),
+    totalTokens: Type.Number(),
+    cost: Type.Object(
+      {
+        input: Type.Number(),
+        output: Type.Number(),
+        cacheRead: Type.Number(),
+        cacheWrite: Type.Number(),
+        total: Type.Number(),
+      },
+      { additionalProperties: true }
+    ),
+  },
+  { additionalProperties: true }
+)
 
-function isThinkingContent(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    value.type === "thinking" &&
-    isString(value.thinking) &&
-    (value.thinkingSignature === undefined ||
-      isString(value.thinkingSignature)) &&
-    (value.redacted === undefined || typeof value.redacted === "boolean")
-  )
-}
+const UserMessageSchema = Type.Object(
+  {
+    role: Type.Literal("user"),
+    timestamp: Type.Number(),
+    content: Type.Union([Type.String(), Type.Array(TextOrImageSchema)]),
+  },
+  { additionalProperties: true }
+)
 
-function isToolCallContent(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    value.type === "toolCall" &&
-    isString(value.id) &&
-    isString(value.name) &&
-    isRecord(value.arguments)
-  )
-}
+const AssistantMessageSchema = Type.Object(
+  {
+    role: Type.Literal("assistant"),
+    timestamp: Type.Number(),
+    api: Type.String(),
+    provider: Type.String(),
+    model: Type.String(),
+    content: Type.Array(
+      Type.Union([
+        TextContentSchema,
+        ThinkingContentSchema,
+        ToolCallContentSchema,
+      ])
+    ),
+    usage: UsageSchema,
+    stopReason: Type.Union([
+      Type.Literal("stop"),
+      Type.Literal("length"),
+      Type.Literal("toolUse"),
+      Type.Literal("error"),
+      Type.Literal("aborted"),
+    ]),
+  },
+  { additionalProperties: true }
+)
 
-function isTextOrImageContent(value: unknown): boolean {
-  return isTextContent(value) || isImageContent(value)
-}
+const ToolResultMessageSchema = Type.Object(
+  {
+    role: Type.Literal("toolResult"),
+    timestamp: Type.Number(),
+    toolCallId: Type.String(),
+    toolName: Type.String(),
+    content: Type.Array(TextOrImageSchema),
+    isError: Type.Boolean(),
+  },
+  { additionalProperties: true }
+)
 
-function isUsage(value: unknown): boolean {
-  if (!isRecord(value)) return false
-  const cost = value.cost
-  return (
-    isFiniteNumber(value.input) &&
-    isFiniteNumber(value.output) &&
-    isFiniteNumber(value.cacheRead) &&
-    isFiniteNumber(value.cacheWrite) &&
-    isFiniteNumber(value.totalTokens) &&
-    isRecord(cost) &&
-    isFiniteNumber(cost.input) &&
-    isFiniteNumber(cost.output) &&
-    isFiniteNumber(cost.cacheRead) &&
-    isFiniteNumber(cost.cacheWrite) &&
-    isFiniteNumber(cost.total)
-  )
-}
+const InboxKindSchema = Type.Union([
+  Type.Literal("user"),
+  Type.Literal("child_result"),
+  Type.Literal("resume"),
+])
 
-function isUserMessage(value: RecordValue): boolean {
-  return (
-    value.role === "user" &&
-    isFiniteNumber(value.timestamp) &&
-    (isString(value.content) ||
-      (Array.isArray(value.content) &&
-        value.content.every(isTextOrImageContent)))
-  )
-}
+const AegisXMetadataSchema = Type.Object(
+  {
+    handoff: Type.Optional(
+      Type.Object(
+        {
+          agentId: Type.String(),
+          agentName: Type.String(),
+          status: Type.String(),
+        },
+        { additionalProperties: true }
+      )
+    ),
+  },
+  { additionalProperties: true }
+)
 
-function isAssistantMessage(value: RecordValue): boolean {
-  return (
-    value.role === "assistant" &&
-    isFiniteNumber(value.timestamp) &&
-    isString(value.api) &&
-    isString(value.provider) &&
-    isString(value.model) &&
-    Array.isArray(value.content) &&
-    value.content.every(
-      (part) =>
-        isTextContent(part) ||
-        isThinkingContent(part) ||
-        isToolCallContent(part)
-    ) &&
-    isUsage(value.usage) &&
-    (value.stopReason === "stop" ||
-      value.stopReason === "length" ||
-      value.stopReason === "toolUse" ||
-      value.stopReason === "error" ||
-      value.stopReason === "aborted")
-  )
-}
+const AegisXMessageSchema = Type.Object(
+  {
+    role: Type.Literal("aegisx"),
+    id: Type.String(),
+    kind: InboxKindSchema,
+    text: Type.String(),
+    timestamp: Type.Number(),
+    metadata: Type.Optional(AegisXMetadataSchema),
+  },
+  { additionalProperties: true }
+)
 
-function isToolResultMessage(value: RecordValue): boolean {
-  return (
-    value.role === "toolResult" &&
-    isFiniteNumber(value.timestamp) &&
-    isString(value.toolCallId) &&
-    isString(value.toolName) &&
-    Array.isArray(value.content) &&
-    value.content.every(isTextOrImageContent) &&
-    typeof value.isError === "boolean"
-  )
-}
-
-function isInboxKind(value: unknown): value is InboxKind {
-  return value === "user" || value === "child_result" || value === "resume"
-}
-
-function isAegisXMessage(value: RecordValue): boolean {
-  return (
-    value.role === "aegisx" &&
-    isString(value.id) &&
-    isInboxKind(value.kind) &&
-    isString(value.text) &&
-    isFiniteNumber(value.timestamp) &&
-    (value.metadata === undefined || isAegisXMetadata(value.metadata))
-  )
-}
-
-function isAegisXMetadata(value: unknown): value is AegisXMetadata {
-  if (!isRecord(value)) return false
-  if (value.handoff === undefined) return true
-  return (
-    isRecord(value.handoff) &&
-    isString(value.handoff.agentId) &&
-    isString(value.handoff.agentName) &&
-    isString(value.handoff.status)
-  )
-}
+const AgentMessageSchema = Type.Union([
+  UserMessageSchema,
+  AssistantMessageSchema,
+  ToolResultMessageSchema,
+  AegisXMessageSchema,
+])
 
 export function parseAgentMessage(value: string): AgentMessage {
   let parsed: unknown
@@ -173,15 +166,7 @@ export function parseAgentMessage(value: string): AgentMessage {
   } catch {
     throw new Error("Persisted agent message is invalid")
   }
-  if (!isRecord(parsed)) {
-    throw new Error("Persisted agent message is invalid")
-  }
-  if (
-    !isUserMessage(parsed) &&
-    !isAssistantMessage(parsed) &&
-    !isToolResultMessage(parsed) &&
-    !isAegisXMessage(parsed)
-  ) {
+  if (!Value.Check(AgentMessageSchema, parsed)) {
     throw new Error("Persisted agent message is invalid")
   }
   return parsed as AgentMessage
@@ -190,8 +175,14 @@ export function parseAgentMessage(value: string): AgentMessage {
 export function parseInboxMetadata(value: string): AegisXMetadata | undefined {
   try {
     const parsed: unknown = JSON.parse(value)
-    return isAegisXMetadata(parsed) ? parsed : undefined
+    return Value.Check(AegisXMetadataSchema, parsed)
+      ? (parsed as AegisXMetadata)
+      : undefined
   } catch {
     return undefined
   }
+}
+
+export function isInboxKind(value: unknown): value is InboxKind {
+  return Value.Check(InboxKindSchema, value)
 }

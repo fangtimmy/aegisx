@@ -42,31 +42,39 @@ export const challenges = sqliteTable(
     description: text("description").notNull(),
     category: text("category"),
     points: integer("points"),
-    remoteSourceKey: text("remote_source_key"),
-    remoteId: text("remote_id"),
-    remoteAvailable: integer("remote_available", { mode: "boolean" })
-      .notNull()
-      .default(true),
-    remoteSolved: integer("remote_solved", { mode: "boolean" })
-      .notNull()
-      .default(false),
-    remoteTarget: integer("remote_target", { mode: "boolean" })
-      .notNull()
-      .default(false),
-    remoteTargetIgnored: integer("remote_target_ignored", { mode: "boolean" })
-      .notNull()
-      .default(false),
-    remoteTargetCount: integer("remote_target_count").notNull().default(0),
-    remoteTargetInfo: text("remote_target_info").notNull().default("[]"),
-    remoteUpdatedAt: text("remote_updated_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
+  (table) => [index("challenges_event_id_idx").on(table.eventId)]
+)
+
+export const challengeRemote = sqliteTable(
+  "challenge_remote",
+  {
+    challengeId: text("challenge_id")
+      .primaryKey()
+      .references(() => challenges.id, { onDelete: "cascade" }),
+    sourceKey: text("source_key").notNull(),
+    remoteId: text("remote_id").notNull(),
+    available: integer("available", { mode: "boolean" })
+      .notNull()
+      .default(true),
+    solved: integer("solved", { mode: "boolean" }).notNull().default(false),
+    targetSupported: integer("target_supported", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    targetIgnored: integer("target_ignored", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    targetCount: integer("target_count").notNull().default(0),
+    targetInfo: text("target_info").notNull().default("[]"),
+    syncedAt: text("synced_at").notNull(),
+  },
   (table) => [
-    index("challenges_event_id_idx").on(table.eventId),
-    uniqueIndex("challenges_event_remote_source_unique")
-      .on(table.eventId, table.remoteSourceKey, table.remoteId)
-      .where(sql`${table.remoteId} is not null`),
+    uniqueIndex("challenge_remote_source_unique").on(
+      table.sourceKey,
+      table.remoteId
+    ),
   ]
 )
 

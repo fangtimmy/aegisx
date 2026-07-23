@@ -240,10 +240,10 @@ describe("container execution and workspace files", () => {
       NetworkMode: "bridge",
       IpcMode: "none",
       Privileged: false,
-      ReadonlyRootfs: true,
-      PidsLimit: 128,
-      Memory: 536_870_912,
-      NanoCpus: 1_000_000_000,
+      ReadonlyRootfs: false,
+      PidsLimit: 256,
+      Memory: 2_147_483_648,
+      NanoCpus: 2_000_000_000,
     })
     expect(config.HostConfig.CapDrop).toEqual(["ALL"])
     expect(config.HostConfig.SecurityOpt).toContain("no-new-privileges")

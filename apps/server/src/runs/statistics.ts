@@ -6,7 +6,7 @@ import type {
   EventStats,
   RunPublic,
   UsageSummary,
-} from "../../../shared/api"
+} from "../../../shared"
 import { parseUsage, summarizeUsageRecords, sumUsage } from "../agents/usage"
 import type { createDatabase } from "../db"
 import {

@@ -1,7 +1,12 @@
 import { basename } from "node:path"
 import { and, eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
-import { attachments, challenges, eventPlatforms } from "../db/schema"
+import {
+  attachments,
+  challengeRemote,
+  challenges,
+  eventPlatforms,
+} from "../db/schema"
 import type { createStorage } from "../infrastructure/storage"
 import {
   type CtfPlatformAdapter,
@@ -81,39 +86,59 @@ export function createPlatformSync(
     adapter: CtfPlatformAdapter
   ) {
     const existing = db
-      .select()
+      .select({
+        challenge: challenges,
+        remote: challengeRemote,
+      })
       .from(challenges)
+      .innerJoin(
+        challengeRemote,
+        eq(challenges.id, challengeRemote.challengeId)
+      )
       .where(
         and(
           eq(challenges.eventId, eventId),
-          eq(challenges.remoteSourceKey, sourceKey),
-          eq(challenges.remoteId, remote.id)
+          eq(challengeRemote.sourceKey, sourceKey),
+          eq(challengeRemote.remoteId, remote.id)
         )
       )
       .get()
-    const id = existing?.id ?? crypto.randomUUID()
+    const id = existing?.challenge.id ?? crypto.randomUUID()
     const now = new Date().toISOString()
-    const values = {
+    const challengeValues = {
       eventId,
       name: remote.name,
       description: remote.description || "No challenge description provided.",
       category: remote.category,
       points: remote.points,
-      remoteSourceKey: sourceKey,
-      remoteId: remote.id,
-      remoteAvailable: true,
-      remoteSolved: existing?.remoteSolved === true || remote.solved,
-      remoteTarget: remote.targetSupported,
-      remoteTargetCount: remote.targetCount,
-      remoteTargetInfo: JSON.stringify(remote.targets),
-      remoteUpdatedAt: now,
       updatedAt: now,
     }
+    const remoteValues = {
+      sourceKey,
+      remoteId: remote.id,
+      available: true,
+      solved: existing?.remote.solved === true || remote.solved,
+      targetSupported: remote.targetSupported,
+      targetIgnored: existing?.remote.targetIgnored ?? false,
+      targetCount: remote.targetCount,
+      targetInfo: JSON.stringify(remote.targets),
+      syncedAt: now,
+    }
     if (existing) {
-      db.update(challenges).set(values).where(eq(challenges.id, id)).run()
+      db.update(challenges)
+        .set(challengeValues)
+        .where(eq(challenges.id, id))
+        .run()
+      db.update(challengeRemote)
+        .set(remoteValues)
+        .where(eq(challengeRemote.challengeId, id))
+        .run()
     } else {
       db.insert(challenges)
-        .values({ id, ...values, createdAt: now })
+        .values({ id, ...challengeValues, createdAt: now })
+        .run()
+      db.insert(challengeRemote)
+        .values({ challengeId: id, ...remoteValues })
         .run()
     }
 
@@ -164,26 +189,20 @@ export function createPlatformSync(
     }
     const now = new Date().toISOString()
     db.transaction((tx) => {
-      tx.update(challenges)
-        .set({ remoteAvailable: false })
-        .where(
-          and(
-            eq(challenges.eventId, eventId),
-            eq(challenges.remoteSourceKey, platform.sourceKey)
-          )
-        )
+      tx.update(challengeRemote)
+        .set({ available: false })
+        .where(eq(challengeRemote.sourceKey, platform.sourceKey))
         .run()
       for (const item of remote) {
-        tx.update(challenges)
+        tx.update(challengeRemote)
           .set({
-            remoteAvailable: true,
-            ...(item.solved ? { remoteSolved: true } : {}),
+            available: true,
+            ...(item.solved ? { solved: true } : {}),
           })
           .where(
             and(
-              eq(challenges.eventId, eventId),
-              eq(challenges.remoteSourceKey, platform.sourceKey),
-              eq(challenges.remoteId, item.id)
+              eq(challengeRemote.sourceKey, platform.sourceKey),
+              eq(challengeRemote.remoteId, item.id)
             )
           )
           .run()
@@ -200,25 +219,30 @@ export function createPlatformSync(
     const inventory = await discoverInventory(eventId)
     const imported = new Map(
       db
-        .select()
+        .select({
+          remoteId: challengeRemote.remoteId,
+          challengeId: challenges.id,
+        })
         .from(challenges)
+        .innerJoin(
+          challengeRemote,
+          eq(challenges.id, challengeRemote.challengeId)
+        )
         .where(
           and(
             eq(challenges.eventId, eventId),
-            eq(challenges.remoteSourceKey, inventory.platform.sourceKey)
+            eq(challengeRemote.sourceKey, inventory.platform.sourceKey)
           )
         )
         .all()
-        .flatMap((challenge) =>
-          challenge.remoteId ? [[challenge.remoteId, challenge] as const] : []
-        )
+        .map(({ remoteId, challengeId }) => [remoteId, challengeId] as const)
     )
     return {
       syncedAt: inventory.syncedAt,
       items: inventory.remote.map((remote) => ({
         ...remote,
         imported: imported.has(remote.id),
-        localChallengeId: imported.get(remote.id)?.id ?? null,
+        localChallengeId: imported.get(remote.id) ?? null,
       })),
     }
   }

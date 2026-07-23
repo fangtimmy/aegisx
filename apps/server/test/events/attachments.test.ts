@@ -82,8 +82,8 @@ describe("event, challenge, and attachment API", () => {
     const challenge = await createChallenge(app, event.id)
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "update challenges set remote_solved = 1, updated_at = ? where id = ?",
-      ["2099-01-01T00:00:00.000Z", challenge.id]
+      "insert into challenge_remote (challenge_id, source_key, remote_id, available, solved, target_supported, target_ignored, target_count, target_info, synced_at) values (?, 'source', 'remote-1', 1, 1, 0, 0, 0, '[]', ?)",
+      [challenge.id, "2099-01-01T00:00:00.000Z"]
     )
     sqlite.run(
       "insert into runs (id, challenge_id, status, created_at, updated_at) values (?, ?, ?, ?, ?)",

@@ -656,8 +656,8 @@ describe("run API", () => {
     const { challenge } = await createChallenge(instance.app)
     const targetDb = new Database(join(instance.dataDir, "aegisx.sqlite"))
     targetDb.run(
-      "update challenges set remote_id = 'remote-1', remote_target = true, remote_available = true where id = ?",
-      [challenge.id]
+      "insert into challenge_remote (challenge_id, source_key, remote_id, available, solved, target_supported, target_ignored, target_count, target_info, synced_at) values (?, 'source', 'remote-1', 1, 0, 1, 0, 0, '[]', ?)",
+      [challenge.id, new Date().toISOString()]
     )
     targetDb.close()
     instance.faux.setResponses([

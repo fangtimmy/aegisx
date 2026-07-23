@@ -1,4 +1,14 @@
-export type PlatformType = "ctfd" | "ret2shell" | "a1ctf"
+import type {
+  PlatformType,
+  RemoteEvent,
+  RemoteTargetInfo,
+  TargetState,
+} from "../../../shared"
+import { isActiveTarget } from "../../../shared/target"
+import { isRecord, nullableNumber, nullableString } from "../lib/guards"
+
+export type { PlatformType, RemoteEvent, RemoteTargetInfo, TargetState }
+export { isActiveTarget, isRecord, nullableNumber, nullableString }
 
 export type PlatformConfig = {
   type: PlatformType
@@ -6,8 +16,6 @@ export type PlatformConfig = {
   credential: string
   remoteEventId: string
 }
-
-export type RemoteEvent = { id: string; name: string }
 
 export type RemoteAttachment = {
   id: string
@@ -24,37 +32,12 @@ export type RemoteChallengeSummary = {
   solved: boolean
 }
 
-export type RemoteTargetInfo = {
-  name: string
-  services: string[]
-}
-
 export type RemoteChallenge = RemoteChallengeSummary & {
   description: string
   targetSupported: boolean
   targetCount: number
   targets: RemoteTargetInfo[]
   attachments: RemoteAttachment[]
-}
-
-export type TargetState = {
-  status: "absent" | "starting" | "running" | "stopping" | "failed"
-  endpoints: Array<{
-    name: string
-    address: string
-    protocol: "http" | "https" | "ws" | "wss" | "tcp" | "udp"
-    guidance?: string[]
-  }>
-  expiresAt: string | null
-  message?: string
-}
-
-export function isActiveTarget(target: TargetState) {
-  return (
-    target.status === "starting" ||
-    target.status === "running" ||
-    target.status === "stopping"
-  )
 }
 
 export type SubmissionResult = {
@@ -327,16 +310,4 @@ export function targetDefinitions(value: unknown): RemoteTargetInfo[] {
       services,
     }
   })
-}
-
-export function nullableString(value: unknown) {
-  return typeof value === "string" && value ? value : null
-}
-
-export function nullableNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null
-}
-
-export function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

@@ -1,7 +1,7 @@
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
-import { normalizeThinkingLevel } from "../../../shared/api"
+import { normalizeThinkingLevel } from "../../../shared"
 import { sumUsage } from "../agents/usage"
 import type { createDatabase } from "../db"
 import type { createCatalogReader } from "../events/catalog"
@@ -71,14 +71,14 @@ const emptyInput = Type.Object({}, { additionalProperties: false })
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunManager = ReturnType<typeof createRunManager>
 type Catalog = ReturnType<typeof createCatalogReader>
-type SettingsData = ReturnType<ConfigStore["getSettings"]>
+type SettingsPublic = ReturnType<ConfigStore["getSettings"]>
 
 export function registerRunRoutes(
   app: Hono,
   options: {
     db: Database
     runManager: RunManager
-    getSettings(): SettingsData
+    getSettings(): SettingsPublic
     configStore: ConfigStore
     catalog: Pick<Catalog, "getChallenge" | "getEvent">
   }
@@ -133,7 +133,7 @@ export function registerRunRoutes(
             ? {
                 type: "container" as const,
                 image: input.image?.trim() || defaults.containerImage,
-                cpus: defaults.cpuLimit / 1000,
+                cpus: defaults.cpus,
                 memoryMb: defaults.memoryMb,
                 pidsLimit: defaults.pidsLimit,
               }

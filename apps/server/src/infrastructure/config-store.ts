@@ -6,49 +6,21 @@ import {
   writeFileSync,
 } from "node:fs"
 import { join } from "node:path"
+import { type Static, Type } from "typebox"
+import { Value } from "typebox/value"
+import type {
+  Environment,
+  ProviderType,
+  SettingsPublic,
+  ThinkingLevel,
+} from "../../../shared"
+import {
+  EnvironmentSchema,
+  ProviderTypeSchema,
+  ThinkingLevelSchema,
+} from "../lib/schemas"
 
-export type ThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
-export type Environment = "local" | "container"
-export type ProviderType =
-  | "openai-compatible"
-  | "openai-responses"
-  | "anthropic-messages"
-
-export type SettingsData = {
-  defaultModelId: string | null
-  defaultThinkingLevel: ThinkingLevel
-  environment: Environment
-  containerImage: string
-  cpuLimit: number
-  memoryMb: number
-  pidsLimit: number
-  maxConcurrency: number
-  maxAttachmentMb: number
-  mainSystemPromptTemplate: string
-  childSystemPromptTemplate: string
-  initialPromptTemplate: string
-  maxRetryAttempts: number
-  retryBaseDelayMs: number
-  retryMaxDelayMs: number
-  maxToolOutputBytes: number
-  maxInlineShellOutputBytes: number
-  maxCapturedShellOutputBytes: number
-  containerWorkspace: string
-  dockerTimeoutMs: number
-  tmpfsSize: string
-  platformRequestTimeoutMs: number
-  providerDiscoverTimeoutMs: number
-  defaultToolTimeoutMs: number
-  toolTimeouts: Record<string, number>
-  updatedAt: string
-}
+export type { Environment, ProviderType, SettingsPublic, ThinkingLevel }
 
 export type ProviderModelData = {
   id: string
@@ -71,7 +43,7 @@ export type ProviderData = {
 }
 
 export type ConfigData = {
-  settings: SettingsData
+  settings: SettingsPublic
   providers: ProviderData[]
 }
 
@@ -86,12 +58,12 @@ export const defaultToolTimeouts: Record<string, number> = {
   stop_target: 30_000,
 }
 
-export const defaultSettings: SettingsData = {
+export const defaultSettings: SettingsPublic = {
   defaultModelId: null,
   defaultThinkingLevel: "off",
   environment: "local",
   containerImage: "alpine:3.22",
-  cpuLimit: 2000,
+  cpus: 2,
   memoryMb: 2048,
   pidsLimit: 256,
   maxConcurrency: 2,
@@ -112,8 +84,71 @@ export const defaultSettings: SettingsData = {
   providerDiscoverTimeoutMs: 10_000,
   defaultToolTimeoutMs: 30_000,
   toolTimeouts: { ...defaultToolTimeouts },
+  // Derived display-only fields; populated for type completeness.
+  defaultMainSystemPromptTemplate: "",
+  defaultChildSystemPromptTemplate: "",
+  defaultInitialPromptTemplate: "",
+  promptTemplateVariables: [],
   updatedAt: "",
 }
+
+const SettingsSchema = Type.Object(
+  {
+    defaultModelId: Type.Union([Type.String(), Type.Null()]),
+    defaultThinkingLevel: ThinkingLevelSchema,
+    environment: EnvironmentSchema,
+    containerImage: Type.String(),
+    cpus: Type.Number(),
+    memoryMb: Type.Number(),
+    pidsLimit: Type.Number(),
+    maxConcurrency: Type.Number(),
+    maxAttachmentMb: Type.Number(),
+    mainSystemPromptTemplate: Type.String(),
+    childSystemPromptTemplate: Type.String(),
+    initialPromptTemplate: Type.String(),
+    maxRetryAttempts: Type.Number(),
+    retryBaseDelayMs: Type.Number(),
+    retryMaxDelayMs: Type.Number(),
+    maxToolOutputBytes: Type.Number(),
+    maxInlineShellOutputBytes: Type.Number(),
+    maxCapturedShellOutputBytes: Type.Number(),
+    containerWorkspace: Type.String(),
+    dockerTimeoutMs: Type.Number(),
+    tmpfsSize: Type.String(),
+    platformRequestTimeoutMs: Type.Number(),
+    providerDiscoverTimeoutMs: Type.Number(),
+    defaultToolTimeoutMs: Type.Number(),
+    toolTimeouts: Type.Record(Type.String(), Type.Number()),
+    updatedAt: Type.String(),
+  },
+  { additionalProperties: true }
+)
+
+const ProviderModelSchema = Type.Object(
+  {
+    id: Type.String(),
+    modelId: Type.Optional(Type.String()),
+    label: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
+    metadata: Type.Optional(Type.String()),
+    piProviderId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    piModelId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  },
+  { additionalProperties: true }
+)
+
+const ProviderSchema = Type.Object(
+  {
+    id: Type.String(),
+    label: Type.Optional(Type.String()),
+    type: ProviderTypeSchema,
+    baseUrl: Type.Optional(Type.String()),
+    apiKey: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
+    models: Type.Optional(Type.Array(ProviderModelSchema)),
+  },
+  { additionalProperties: true }
+)
 
 function defaultProviders(): ProviderData[] {
   return [
@@ -150,101 +185,8 @@ function defaultConfig(): ConfigData {
   }
 }
 
-function isThinkingLevel(v: unknown): v is ThinkingLevel {
-  return (
-    v === "off" ||
-    v === "minimal" ||
-    v === "low" ||
-    v === "medium" ||
-    v === "high" ||
-    v === "xhigh" ||
-    v === "max"
-  )
-}
-
-function isEnvironment(v: unknown): v is Environment {
-  return v === "local" || v === "container"
-}
-
-function isProviderType(v: unknown): v is ProviderType {
-  return (
-    v === "openai-compatible" ||
-    v === "openai-responses" ||
-    v === "anthropic-messages"
-  )
-}
-
-function num(v: unknown, fallback: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback
-}
-
-function str(v: unknown, fallback: string): string {
-  return typeof v === "string" ? v : fallback
-}
-
-function normalizeSettings(raw: unknown): SettingsData {
-  const r = (raw ?? {}) as Record<string, unknown>
-  return {
-    defaultModelId:
-      typeof r.defaultModelId === "string" ? r.defaultModelId : null,
-    defaultThinkingLevel: isThinkingLevel(r.defaultThinkingLevel)
-      ? r.defaultThinkingLevel
-      : "off",
-    environment: isEnvironment(r.environment) ? r.environment : "local",
-    containerImage: str(r.containerImage, defaultSettings.containerImage),
-    cpuLimit: num(r.cpuLimit, defaultSettings.cpuLimit),
-    memoryMb: num(r.memoryMb, defaultSettings.memoryMb),
-    pidsLimit: num(r.pidsLimit, defaultSettings.pidsLimit),
-    maxConcurrency: num(r.maxConcurrency, defaultSettings.maxConcurrency),
-    maxAttachmentMb: num(r.maxAttachmentMb, defaultSettings.maxAttachmentMb),
-    mainSystemPromptTemplate: str(
-      r.mainSystemPromptTemplate,
-      defaultSettings.mainSystemPromptTemplate
-    ),
-    childSystemPromptTemplate: str(
-      r.childSystemPromptTemplate,
-      defaultSettings.childSystemPromptTemplate
-    ),
-    initialPromptTemplate: str(
-      r.initialPromptTemplate,
-      defaultSettings.initialPromptTemplate
-    ),
-    maxRetryAttempts: num(r.maxRetryAttempts, defaultSettings.maxRetryAttempts),
-    retryBaseDelayMs: num(r.retryBaseDelayMs, defaultSettings.retryBaseDelayMs),
-    retryMaxDelayMs: num(r.retryMaxDelayMs, defaultSettings.retryMaxDelayMs),
-    maxToolOutputBytes: num(
-      r.maxToolOutputBytes,
-      defaultSettings.maxToolOutputBytes
-    ),
-    maxInlineShellOutputBytes: num(
-      r.maxInlineShellOutputBytes,
-      defaultSettings.maxInlineShellOutputBytes
-    ),
-    maxCapturedShellOutputBytes: num(
-      r.maxCapturedShellOutputBytes,
-      defaultSettings.maxCapturedShellOutputBytes
-    ),
-    containerWorkspace: str(
-      r.containerWorkspace,
-      defaultSettings.containerWorkspace
-    ),
-    dockerTimeoutMs: num(r.dockerTimeoutMs, defaultSettings.dockerTimeoutMs),
-    tmpfsSize: str(r.tmpfsSize, defaultSettings.tmpfsSize),
-    platformRequestTimeoutMs: num(
-      r.platformRequestTimeoutMs,
-      defaultSettings.platformRequestTimeoutMs
-    ),
-    providerDiscoverTimeoutMs: num(
-      r.providerDiscoverTimeoutMs,
-      defaultSettings.providerDiscoverTimeoutMs
-    ),
-    defaultToolTimeoutMs: num(
-      r.defaultToolTimeoutMs,
-      defaultSettings.defaultToolTimeoutMs
-    ),
-    toolTimeouts: normalizeToolTimeouts(r.toolTimeouts),
-    updatedAt: str(r.updatedAt, now()),
-  }
+function finite(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback
 }
 
 function normalizeToolTimeouts(raw: unknown): Record<string, number> {
@@ -260,47 +202,168 @@ function normalizeToolTimeouts(raw: unknown): Record<string, number> {
   return merged
 }
 
-function normalizeModel(raw: unknown): ProviderModelData | undefined {
-  if (!raw || typeof raw !== "object") return undefined
-  const r = raw as Record<string, unknown>
-  if (typeof r.id !== "string") return undefined
+function normalizeSettings(raw: unknown): SettingsPublic {
+  const source =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {}
+  // One-time migration: legacy config.json stored cpuLimit (millicores).
+  // New schema stores cpus (cores) directly.
+  const legacyCpuLimit = source.cpuLimit
+  const migrated: Record<string, unknown> = { ...source }
+  if (
+    typeof legacyCpuLimit === "number" &&
+    Number.isFinite(legacyCpuLimit) &&
+    source.cpus === undefined
+  ) {
+    migrated.cpus = legacyCpuLimit / 1000
+    delete migrated.cpuLimit
+  }
+  const base = { ...defaultSettings, ...migrated }
+  const cleaned = Value.Clean(SettingsSchema, base) as Static<
+    typeof SettingsSchema
+  >
   return {
-    id: r.id,
-    modelId: str(r.modelId, ""),
-    label: str(r.label, ""),
-    enabled: r.enabled !== false,
-    metadata: str(r.metadata, "{}"),
-    piProviderId: typeof r.piProviderId === "string" ? r.piProviderId : null,
-    piModelId: typeof r.piModelId === "string" ? r.piModelId : null,
+    defaultModelId:
+      typeof cleaned.defaultModelId === "string"
+        ? cleaned.defaultModelId
+        : null,
+    defaultThinkingLevel: Value.Check(
+      ThinkingLevelSchema,
+      cleaned.defaultThinkingLevel
+    )
+      ? cleaned.defaultThinkingLevel
+      : "off",
+    environment: Value.Check(EnvironmentSchema, cleaned.environment)
+      ? cleaned.environment
+      : "local",
+    containerImage:
+      typeof cleaned.containerImage === "string"
+        ? cleaned.containerImage
+        : defaultSettings.containerImage,
+    cpus: finite(cleaned.cpus, defaultSettings.cpus),
+    memoryMb: finite(cleaned.memoryMb, defaultSettings.memoryMb),
+    pidsLimit: finite(cleaned.pidsLimit, defaultSettings.pidsLimit),
+    maxConcurrency: finite(
+      cleaned.maxConcurrency,
+      defaultSettings.maxConcurrency
+    ),
+    maxAttachmentMb: finite(
+      cleaned.maxAttachmentMb,
+      defaultSettings.maxAttachmentMb
+    ),
+    mainSystemPromptTemplate:
+      typeof cleaned.mainSystemPromptTemplate === "string"
+        ? cleaned.mainSystemPromptTemplate
+        : "",
+    childSystemPromptTemplate:
+      typeof cleaned.childSystemPromptTemplate === "string"
+        ? cleaned.childSystemPromptTemplate
+        : "",
+    initialPromptTemplate:
+      typeof cleaned.initialPromptTemplate === "string"
+        ? cleaned.initialPromptTemplate
+        : "",
+    maxRetryAttempts: finite(
+      cleaned.maxRetryAttempts,
+      defaultSettings.maxRetryAttempts
+    ),
+    retryBaseDelayMs: finite(
+      cleaned.retryBaseDelayMs,
+      defaultSettings.retryBaseDelayMs
+    ),
+    retryMaxDelayMs: finite(
+      cleaned.retryMaxDelayMs,
+      defaultSettings.retryMaxDelayMs
+    ),
+    maxToolOutputBytes: finite(
+      cleaned.maxToolOutputBytes,
+      defaultSettings.maxToolOutputBytes
+    ),
+    maxInlineShellOutputBytes: finite(
+      cleaned.maxInlineShellOutputBytes,
+      defaultSettings.maxInlineShellOutputBytes
+    ),
+    maxCapturedShellOutputBytes: finite(
+      cleaned.maxCapturedShellOutputBytes,
+      defaultSettings.maxCapturedShellOutputBytes
+    ),
+    containerWorkspace:
+      typeof cleaned.containerWorkspace === "string"
+        ? cleaned.containerWorkspace
+        : defaultSettings.containerWorkspace,
+    dockerTimeoutMs: finite(
+      cleaned.dockerTimeoutMs,
+      defaultSettings.dockerTimeoutMs
+    ),
+    tmpfsSize:
+      typeof cleaned.tmpfsSize === "string"
+        ? cleaned.tmpfsSize
+        : defaultSettings.tmpfsSize,
+    platformRequestTimeoutMs: finite(
+      cleaned.platformRequestTimeoutMs,
+      defaultSettings.platformRequestTimeoutMs
+    ),
+    providerDiscoverTimeoutMs: finite(
+      cleaned.providerDiscoverTimeoutMs,
+      defaultSettings.providerDiscoverTimeoutMs
+    ),
+    defaultToolTimeoutMs: finite(
+      cleaned.defaultToolTimeoutMs,
+      defaultSettings.defaultToolTimeoutMs
+    ),
+    toolTimeouts: normalizeToolTimeouts(cleaned.toolTimeouts),
+    // Derived display-only fields; publicSettings() fills real values.
+    defaultMainSystemPromptTemplate: "",
+    defaultChildSystemPromptTemplate: "",
+    defaultInitialPromptTemplate: "",
+    promptTemplateVariables: [],
+    updatedAt:
+      typeof cleaned.updatedAt === "string" ? cleaned.updatedAt : now(),
+  }
+}
+
+function normalizeModel(raw: unknown): ProviderModelData | undefined {
+  if (!Value.Check(ProviderModelSchema, raw)) return undefined
+  return {
+    id: raw.id,
+    modelId: typeof raw.modelId === "string" ? raw.modelId : "",
+    label: typeof raw.label === "string" ? raw.label : "",
+    enabled: raw.enabled !== false,
+    metadata: typeof raw.metadata === "string" ? raw.metadata : "{}",
+    piProviderId:
+      typeof raw.piProviderId === "string" ? raw.piProviderId : null,
+    piModelId: typeof raw.piModelId === "string" ? raw.piModelId : null,
   }
 }
 
 function normalizeProvider(raw: unknown): ProviderData | undefined {
-  if (!raw || typeof raw !== "object") return undefined
-  const r = raw as Record<string, unknown>
-  if (typeof r.id !== "string" || !isProviderType(r.type)) return undefined
-  const models = Array.isArray(r.models)
-    ? r.models
+  if (!Value.Check(ProviderSchema, raw)) return undefined
+  const models = Array.isArray(raw.models)
+    ? raw.models
         .map(normalizeModel)
-        .filter((m): m is ProviderModelData => m !== undefined)
+        .filter((model): model is ProviderModelData => model !== undefined)
     : []
   return {
-    id: r.id,
-    label: str(r.label, ""),
-    type: r.type,
-    baseUrl: str(r.baseUrl, ""),
-    apiKey: str(r.apiKey, ""),
-    enabled: r.enabled !== false,
+    id: raw.id,
+    label: typeof raw.label === "string" ? raw.label : "",
+    type: raw.type,
+    baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl : "",
+    apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
+    enabled: raw.enabled !== false,
     models,
   }
 }
 
 function normalizeConfig(raw: unknown): ConfigData {
-  const r = (raw ?? {}) as Record<string, unknown>
+  const r =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {}
   const providers = Array.isArray(r.providers)
     ? r.providers
         .map(normalizeProvider)
-        .filter((p): p is ProviderData => p !== undefined)
+        .filter((provider): provider is ProviderData => provider !== undefined)
     : []
   return {
     settings: normalizeSettings(r.settings),
@@ -337,13 +400,13 @@ export function createConfigStore(dataDir: string) {
     get(): ConfigData {
       return data
     },
-    getSettings(): SettingsData {
+    getSettings(): SettingsPublic {
       return data.settings
     },
     getProviders(): ProviderData[] {
       return data.providers
     },
-    updateSettings(patch: Partial<SettingsData>): SettingsData {
+    updateSettings(patch: Partial<SettingsPublic>): SettingsPublic {
       data = {
         ...data,
         settings: { ...data.settings, ...patch, updatedAt: now() },
@@ -355,7 +418,7 @@ export function createConfigStore(dataDir: string) {
       data = { ...data, providers }
       save(data)
     },
-    replaceAll(settings: SettingsData, providers: ProviderData[]): void {
+    replaceAll(settings: SettingsPublic, providers: ProviderData[]): void {
       data = { settings: { ...settings, updatedAt: now() }, providers }
       save(data)
     },

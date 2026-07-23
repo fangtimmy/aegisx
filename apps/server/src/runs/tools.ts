@@ -1,6 +1,6 @@
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core"
 import { Type } from "typebox"
-import type { AgentPublic } from "../../../shared/api"
+import type { AgentPublic } from "../../../shared"
 import {
   createWorkspaceTools,
   defineAgentTool,
@@ -21,10 +21,8 @@ export type RunToolContext = {
   run: StoredRun
   challenge: {
     id: string
-    remoteId: string | null
-    remoteAvailable: boolean
-    remoteTarget: boolean
-    remoteTargetIgnored: boolean
+    platformIntegrated: boolean
+    targetCapable: boolean
   }
   backend: WorkspaceBackend
   toolLimits?: ToolLimits
@@ -90,12 +88,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
       if (!context.canFinishRun?.(context.runId, context.run.challengeId)) {
         throw new Error("Submit an accepted flag before finishing this Run")
       }
-      if (
-        challenge.remoteTarget &&
-        challenge.remoteAvailable &&
-        !challenge.remoteTargetIgnored &&
-        context.targetAction
-      ) {
+      if (challenge.targetCapable && context.targetAction) {
         const target = await context.targetAction(
           context.run.challengeId,
           "get",
@@ -237,11 +230,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
     })
 
   const targetTools =
-    isMain &&
-    challenge.remoteTarget &&
-    challenge.remoteAvailable &&
-    !challenge.remoteTargetIgnored &&
-    context.targetAction
+    isMain && challenge.targetCapable && context.targetAction
       ? [
           targetTool(
             "get_target",
@@ -275,9 +264,7 @@ export function createRunTools(context: RunToolContext): AgentTool[] {
     ...(isMain
       ? [
           finishRun,
-          ...(challenge.remoteId && challenge.remoteAvailable
-            ? [submitFlag]
-            : []),
+          ...(challenge.platformIntegrated ? [submitFlag] : []),
           spawnAgent,
           inspectAgent,
           ...targetTools,
