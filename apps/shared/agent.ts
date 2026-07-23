@@ -1,3 +1,4 @@
+import type { PublicAgentMessage } from "./message";
 import type { AgentStatus } from "./run-status";
 import type { ThinkingLevel } from "./thinking";
 import type { AgentToolStats, UsageSummary } from "./usage";
@@ -47,6 +48,6 @@ export type ConversationMessage = {
 	id: string;
 	agentId: string;
 	sequence: number;
-	message: Record<string, unknown>;
+	message: PublicAgentMessage;
 	createdAt: string;
 };

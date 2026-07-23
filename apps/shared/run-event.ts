@@ -1,5 +1,12 @@
 import type { AgentSummary, ConversationMessage } from "./agent";
+import type { PublicAgentMessage } from "./message";
 import type { RunPublic } from "./run";
+
+export type TransientActivity = "retrying" | "compacting";
+
+export type ToolProgressStatus = "running" | "done" | "error";
+
+export type ToolTerminal = "timed_out" | "cancelled" | "failed";
 
 export type RunStreamEvent =
 	| {
@@ -20,7 +27,7 @@ export type RunStreamEvent =
 	| {
 			type: "agent.activity";
 			agentId: string;
-			activity: "retrying" | "compacting" | null;
+			activity: TransientActivity | null;
 			detail?: string;
 	  }
 	| {
@@ -28,7 +35,7 @@ export type RunStreamEvent =
 			agentId: string;
 			messageId: string;
 			revision: number;
-			message: Record<string, unknown>;
+			message: PublicAgentMessage;
 	  }
 	| {
 			type: "tool.progress";
@@ -38,9 +45,9 @@ export type RunStreamEvent =
 			toolName: string;
 			args: unknown;
 			result?: unknown;
-			status: "running" | "done" | "error";
+			status: ToolProgressStatus;
 			isError?: boolean;
-			terminal?: "timed_out" | "cancelled" | "failed";
+			terminal?: ToolTerminal;
 			terminalMessage?: string;
 	  }
 	| {

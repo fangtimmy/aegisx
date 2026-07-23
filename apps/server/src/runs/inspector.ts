@@ -79,7 +79,7 @@ export function createRunInspector(options: {
       sequence: row.sequence,
       message: publicAgentMessage(
         parseAgentMessage(row.message)
-      ) as unknown as Record<string, unknown>,
+      ) as ConversationMessage["message"],
       createdAt: row.createdAt,
     }
   }

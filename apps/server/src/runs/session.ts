@@ -374,7 +374,7 @@ export function createSessionAttacher(options: {
             agentId,
             messageId,
             revision,
-            message: event.message as unknown as Record<string, unknown>,
+            message: event.message as ConversationMessage["message"],
           })
           return
         }
