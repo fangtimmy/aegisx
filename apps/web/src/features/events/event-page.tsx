@@ -4,6 +4,7 @@ import {
   BarChart3,
   Flag,
   LayoutPanelTop,
+  ListFilter,
   ListTree,
   Maximize2,
   Minimize2,
@@ -11,7 +12,7 @@ import {
   Settings,
   TriangleAlert,
 } from "lucide-react"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
 import { type Challenge, eventsApi, keys } from "@/api"
 import { AppLayout } from "@/components/shell/app-layout"
@@ -27,9 +28,14 @@ import {
 } from "@/components/ui/empty"
 import {
   Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
@@ -39,7 +45,13 @@ import { EventStatistics } from "@/features/statistics/event-statistics"
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
 import { EventSettings } from "./event-settings"
-import { ErrorState } from "./event-shared"
+import {
+  ErrorState,
+  type LocalChallengeStatus,
+  localChallengeStatus,
+  type RemoteChallengeStatus,
+  remoteChallengeStatus,
+} from "./event-shared"
 import { ImportChallengesDialog } from "./platform-binding"
 
 type EventTab = "overview" | "run" | "statistics" | "settings"
@@ -69,9 +81,61 @@ type ChallengeSort = "event" | "name" | "points"
 type ChallengeGroup = "category" | "status" | "none"
 
 const FULLWIDTH_KEY = "aegisx:event-fullwidth"
+const UNCATEGORIZED = "Uncategorized"
+
+const LOCAL_STATUS_OPTIONS: Array<{
+  value: LocalChallengeStatus
+  label: string
+}> = [
+  { value: "not_started", label: "Not started" },
+  { value: "in_progress", label: "In progress" },
+  { value: "solved", label: "Solved" },
+]
+
+const REMOTE_STATUS_OPTIONS: Array<{
+  value: RemoteChallengeStatus
+  label: string
+}> = [
+  { value: "no_remote", label: "No remote" },
+  { value: "unsolved", label: "Remote unsolved" },
+  { value: "solved", label: "Remote solved" },
+  { value: "unavailable", label: "Remote unavailable" },
+]
 
 function readFullWidth(): boolean {
   return localStorage.getItem(FULLWIDTH_KEY) === "1"
+}
+
+function toggleInSet<T>(values: T[], value: T, checked: boolean) {
+  if (checked) return values.includes(value) ? values : [...values, value]
+  return values.filter((item) => item !== value)
+}
+
+function filterChallenges(
+  challenges: Challenge[],
+  categories: string[],
+  localStatuses: LocalChallengeStatus[],
+  remoteStatuses: RemoteChallengeStatus[]
+) {
+  return challenges.filter((challenge) => {
+    if (categories.length > 0) {
+      const category = challenge.category || UNCATEGORIZED
+      if (!categories.includes(category)) return false
+    }
+    if (
+      localStatuses.length > 0 &&
+      !localStatuses.includes(localChallengeStatus(challenge))
+    ) {
+      return false
+    }
+    if (
+      remoteStatuses.length > 0 &&
+      !remoteStatuses.includes(remoteChallengeStatus(challenge))
+    ) {
+      return false
+    }
+    return true
+  })
 }
 
 function challengeGroups(
@@ -98,14 +162,14 @@ function challengeGroups(
 
   const keyFor = (challenge: Challenge) =>
     group === "category"
-      ? challenge.category || "Uncategorized"
+      ? challenge.category || UNCATEGORIZED
       : challenge.status === "solved"
         ? "Solved"
         : challenge.status === "in_progress"
           ? "In progress"
           : "Not started"
-  const keys = [...new Set(challenges.map(keyFor))]
-  return keys.map((key) => ({
+  const groupKeys = [...new Set(sorted.map(keyFor))]
+  return groupKeys.map((key) => ({
     key,
     label: key,
     items: sorted.filter((challenge) => keyFor(challenge) === key),
@@ -119,6 +183,9 @@ export function EventPage() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [sort, setSort] = useState<ChallengeSort>("event")
   const [group, setGroup] = useState<ChallengeGroup>("category")
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([])
+  const [localFilter, setLocalFilter] = useState<LocalChallengeStatus[]>([])
+  const [remoteFilter, setRemoteFilter] = useState<RemoteChallengeStatus[]>([])
   const [fullWidth, setFullWidth] = useState(readFullWidth)
   const toggleFullWidth = () =>
     setFullWidth((prev) => {
@@ -131,6 +198,28 @@ export function EventPage() {
     queryKey: keys.events.detail(eventId ?? ""),
     queryFn: () => eventsApi.getEvent(eventId ?? ""),
   })
+  const challenges = eventQuery.data?.challenges ?? []
+  const categoryOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          challenges.map((challenge) => challenge.category || UNCATEGORIZED)
+        ),
+      ].sort((left, right) =>
+        left.localeCompare(right, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      ),
+    [challenges]
+  )
+  const filteredChallenges = useMemo(
+    () =>
+      filterChallenges(challenges, categoryFilter, localFilter, remoteFilter),
+    [challenges, categoryFilter, localFilter, remoteFilter]
+  )
+  const activeFilterCount =
+    categoryFilter.length + localFilter.length + remoteFilter.length
 
   if (!eventId) return null
   const tab = tabFromPath(location.pathname, eventId)
@@ -214,12 +303,94 @@ export function EventPage() {
                     {eventQuery.data.event.name}
                   </h1>
                   <Badge variant="secondary">
-                    {eventQuery.data.challenges.length} challenges
+                    {activeFilterCount > 0
+                      ? `${filteredChallenges.length} / ${eventQuery.data.challenges.length}`
+                      : eventQuery.data.challenges.length}{" "}
+                    challenges
                   </Badge>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {eventQuery.data.challenges.length > 0 && (
                     <>
+                      <Menu>
+                        <MenuTrigger
+                          render={<Button type="button" variant="outline" />}
+                        >
+                          <ListFilter />
+                          Filter
+                          {activeFilterCount > 0 && (
+                            <Badge size="sm" variant="secondary">
+                              {activeFilterCount}
+                            </Badge>
+                          )}
+                        </MenuTrigger>
+                        <MenuPopup align="end" className="min-w-56">
+                          <MenuGroup>
+                            <MenuGroupLabel>Category</MenuGroupLabel>
+                            {categoryOptions.map((category) => (
+                              <MenuCheckboxItem
+                                checked={categoryFilter.includes(category)}
+                                key={category}
+                                onCheckedChange={(checked) =>
+                                  setCategoryFilter((values) =>
+                                    toggleInSet(values, category, checked)
+                                  )
+                                }
+                              >
+                                {category}
+                              </MenuCheckboxItem>
+                            ))}
+                          </MenuGroup>
+                          <MenuSeparator />
+                          <MenuGroup>
+                            <MenuGroupLabel>Local status</MenuGroupLabel>
+                            {LOCAL_STATUS_OPTIONS.map((option) => (
+                              <MenuCheckboxItem
+                                checked={localFilter.includes(option.value)}
+                                key={option.value}
+                                onCheckedChange={(checked) =>
+                                  setLocalFilter((values) =>
+                                    toggleInSet(values, option.value, checked)
+                                  )
+                                }
+                              >
+                                {option.label}
+                              </MenuCheckboxItem>
+                            ))}
+                          </MenuGroup>
+                          <MenuSeparator />
+                          <MenuGroup>
+                            <MenuGroupLabel>Remote status</MenuGroupLabel>
+                            {REMOTE_STATUS_OPTIONS.map((option) => (
+                              <MenuCheckboxItem
+                                checked={remoteFilter.includes(option.value)}
+                                key={option.value}
+                                onCheckedChange={(checked) =>
+                                  setRemoteFilter((values) =>
+                                    toggleInSet(values, option.value, checked)
+                                  )
+                                }
+                              >
+                                {option.label}
+                              </MenuCheckboxItem>
+                            ))}
+                          </MenuGroup>
+                          {activeFilterCount > 0 && (
+                            <>
+                              <MenuSeparator />
+                              <MenuItem
+                                onClick={() => {
+                                  setCategoryFilter([])
+                                  setLocalFilter([])
+                                  setRemoteFilter([])
+                                }}
+                              >
+                                Clear filters
+                              </MenuItem>
+                            </>
+                          )}
+                        </MenuPopup>
+                      </Menu>
                       <Menu>
                         <MenuTrigger
                           render={<Button type="button" variant="outline" />}
@@ -306,9 +477,21 @@ export function EventPage() {
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
+              ) : filteredChallenges.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <ListFilter />
+                    </EmptyMedia>
+                    <EmptyTitle>No matching challenges</EmptyTitle>
+                    <EmptyDescription>
+                      Clear or adjust filters to see challenges again.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               ) : (
                 <div className="grid gap-6">
-                  {challengeGroups(eventQuery.data.challenges, sort, group).map(
+                  {challengeGroups(filteredChallenges, sort, group).map(
                     (challengeGroup) => (
                       <section key={challengeGroup.key}>
                         {challengeGroup.label && (

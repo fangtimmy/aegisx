@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Check,
   CircleSlash,
+  Cloud,
+  HardDrive,
   Paperclip,
   Pause,
   Play,
@@ -39,6 +41,7 @@ import { CreateRunDialog } from "@/features/runs"
 import { statusVariant } from "@/features/runs/run-overview"
 import { toast } from "@/lib/toast"
 import { ChallengeDialog } from "./challenge-dialog"
+import { isChallengeSolved } from "./event-shared"
 
 function DeleteChallengeDialog({
   eventId,
@@ -128,14 +131,39 @@ export function ChallengeCard({
               <Badge size="sm" variant="outline">
                 {challenge.category || "Uncategorized"}
               </Badge>
-              <Badge
-                size="sm"
-                variant={
-                  challenge.status === "solved" ? "success" : "secondary"
-                }
-              >
-                {challenge.status === "solved" ? "Solved" : "Open"}
-              </Badge>
+              {isChallengeSolved(challenge) ? (
+                <Badge size="sm" variant="success">
+                  Solved
+                  <Cloud
+                    aria-label={
+                      challenge.remoteSolved
+                        ? "Remote solved"
+                        : "Remote unsolved"
+                    }
+                    className={
+                      challenge.remoteSolved
+                        ? "size-3 opacity-100"
+                        : "size-3 opacity-35"
+                    }
+                  />
+                  <HardDrive
+                    aria-label={
+                      challenge.runStatusCounts.completed > 0
+                        ? "Local solved"
+                        : "Local unsolved"
+                    }
+                    className={
+                      challenge.runStatusCounts.completed > 0
+                        ? "size-3 opacity-100"
+                        : "size-3 opacity-35"
+                    }
+                  />
+                </Badge>
+              ) : (
+                <Badge size="sm" variant="secondary">
+                  Open
+                </Badge>
+              )}
               {challenge.remoteId && !challenge.remoteAvailable && (
                 <Badge size="sm" variant="warning">
                   Remote unavailable
