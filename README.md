@@ -2,6 +2,9 @@
 
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, and token usage.
 
+> **Schema v2** — wipe any old `data/` directory before first start.  
+> Design notes: [docs/architecture-v2.md](docs/architecture-v2.md), [docs/agent-orchestration.md](docs/agent-orchestration.md).
+
 ## Requirements
 
 - [Bun](https://bun.sh/)
@@ -33,15 +36,15 @@ The API stores its SQLite database, attachments, and run workspaces under `data/
 
 Local runs execute commands with the API process permissions and are not sandboxed. Container runs use a dedicated Docker container with the run workspace mounted at `/workspace` and configurable CPU, memory, and PID limits.
 
-Each run has one main agent and may have multiple background child agents. See [multi-agent orchestration](docs/agent-orchestration.md) for the stable runtime constraints.
+Each run has one main agent and may have multiple background child agents.
 
 ## Solve container image
 
-`container/Dockerfile.solve` defines the Kali-based `aegisx/solver:kali` image used for container Runs.
+`containers/solver` defines the Kali-based solver image used for container Runs.
 
 ## Checks
 
 ```sh
 cd apps/server && bun run check && bun test
-cd apps/web && bun run check && bun run typecheck && bun test && bun run build
+cd apps/web && bun run check && bun test && bun run build
 ```

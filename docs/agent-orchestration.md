@@ -1,60 +1,53 @@
-# Multi-agent orchestration
+# Multi-agent orchestration (v2)
 
-This document records runtime constraints that are not obvious from the UI. The implementation in `apps/server/src/runs/manager.ts` and the database schema remain authoritative.
+Authoritative design: [architecture-v2.md](./architecture-v2.md).  
+Implementation: `apps/server/src/run/` and `apps/server/src/agent/`.
 
 ## Run model
 
 - A run has exactly one main agent and zero or more child agents.
+- Run id and main agent id are **distinct**.
 - Only the main agent can create children or complete the run.
 - Child agents cannot create more agents.
 - User messages are delivered only to the main agent.
 - All agents in a run use the run's model, credentials, and execution environment.
-- `maxConcurrency` counts active agents, not runs.
+- `maxConcurrency` counts active agents (`running` ∪ `idle`), not runs.
 
-The main agent can call `spawn_agent` to start focused work in the background and `inspect_agent` to read a child status when needed. Completed child output is persisted to the main agent inbox and delivered automatically.
+The main agent can call `spawn_agent` / `inspect_agent`. Completed child output
+is written as a `notice` message on the main agent and dispatched live.
 
 ## Lifecycle
 
-- A main agent that finishes a turn without completing the run becomes `idle`; the run remains `running`.
-- A child that finishes becomes `completed` or `failed` and reports its result to the main agent.
-- A child failure does not fail the run.
-- Pause, resume, stop, and completion apply to every non-terminal agent in the run.
-- Resume requires enough concurrency capacity for all paused agents.
-- On API startup, interrupted running agents and runs become `paused`; no model or tool is called automatically.
-- A Run with a persisted, validated `finish_run` request is completed during API startup instead of being paused or invoking the model again.
-- Only `finish_run(summary)` changes a run to `completed`.
+- A main agent that finishes a turn without `finish_run` becomes `idle`; the run stays `running`.
+- A child that finishes becomes `completed` or `failed` and does **not** fail the run.
+- Pause / resume / stop apply to every non-terminal agent in the run.
+- Resume requires concurrency capacity for all paused agents.
+- On API startup, interrupted `running` runs become `paused` (or complete if a valid pending finish exists). No model call is made automatically.
+- Only `finish_run(summary)` (after the main turn settles) completes a run.
 
 ## Persistence
 
-SQLite stores run and agent state, ordered messages, pending inbox entries, context summaries, runtime snapshots, compaction usage, and durable run event cursors. Messages keep a stable runtime ID so live and persisted views can be reconciled without timestamp matching. Inbox entries are marked delivered only after the corresponding message and its committed event are persisted.
+- SQLite stores runs, agents, ordered `messages`, and `agent_usage`.
+- There is **no** durable SSE event log and **no** `agent_inbox`.
+- Wire message shape is the persisted `Message` type (`apps/shared/message.ts`).
 
-Runtime snapshots expose the effective system prompt, logical working directory, model, and tools. API keys, flags, home paths, and data paths are redacted before snapshots or events leave the runtime.
+## Live events
+
+Clients should:
+
+1. `GET /api/runs/:id` — run + agents + usage  
+2. `GET /api/runs/:id/messages?agentId=&after=` — committed messages  
+3. `GET /api/runs/:id/stream` — live-only SSE  
+
+Reconnect by re-fetching messages and opening a new stream.
 
 ## Workspaces
 
-Every agent in a run uses the same workspace root and the same path namespace. Tool arguments, shell commands, runtime snapshots, and reported artifact paths are all relative to that root.
-
-The workspace is collaborative rather than isolated. Delegated tasks should avoid conflicting writes; AegisX does not lock files or merge per-agent copies. Local execution inherits API process permissions, while container execution uses the run's shared restricted container.
+Every agent in a run uses the same workspace root. Local execution inherits API
+process permissions; container execution uses the run's shared restricted container.
 
 ## Challenge targets
 
-- AegisX does not start or extend a remote challenge target when a run begins or resumes.
-- The main agent alone receives `get_target`, `start_target`, `extend_target`, and `stop_target` for supported challenges. Children receive no target tools.
-- `start_target` waits for the platform target to become ready and returns its live endpoints.
-- Pause and service restart do not change target state.
-- A Run does not automatically close a target on completion, stop, or failure because multiple Runs may share a challenge target. The main agent must stop it explicitly before completion. Platform detachment and event deletion are blocked while a target is active.
-
-## Events and usage
-
-SSE events identify the run or agent they belong to. Durable events use the SQLite event cursor for replay; token and tool progress events are ephemeral and converge on the next committed message:
-
-```ts
-type RunEvent =
-  | { type: "status"; run: RunPublic }
-  | { type: "agent_status"; agent: AgentPublic }
-  | { type: "agent_event"; agentId: string; event: AgentEvent }
-```
-
-Terminal run status is emitted only after the final agent message is committed. Clients refresh the final snapshot before closing the stream.
-
-Conversation history and live events are isolated by agent ID. Run usage is the sum of message and compaction usage for every agent in the run.
+- AegisX does not start a remote target when a run begins.
+- Target tools are main-agent only.
+- Runs do not auto-stop targets on completion; the main agent must stop them before `finish_run` when required.
