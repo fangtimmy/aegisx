@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import {
-  apiRequest,
-  jsonRequest,
+  keys,
   type PiModelProfile,
   type ProviderConnection,
   type ProviderModel,
-} from "@/lib/api"
+  providersApi,
+} from "@/api"
 import type { ProviderInput } from "./provider-config"
 
 type ProviderUpdate = Omit<ProviderInput, "apiKey"> & { apiKey?: string }
@@ -27,18 +27,12 @@ export function useProviderEditor(provider: ProviderConnection) {
     useState<PiModelProfile | null>(null)
   const save = useMutation({
     mutationFn: (input: ProviderUpdate) =>
-      apiRequest<ProviderConnection>(
-        `/providers/${provider.id}`,
-        jsonRequest("PATCH", input)
-      ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
+      providersApi.updateProvider(provider.id, input),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: keys.providers.all }),
   })
   const discover = useMutation({
-    mutationFn: () =>
-      apiRequest<{ models: string[] }>(
-        `/providers/${provider.id}/models/discover`,
-        { method: "POST" }
-      ),
+    mutationFn: () => providersApi.discoverModels(provider.id),
     onSuccess: ({ models }) => {
       const known = new Set(provider.models.map((model) => model.modelId))
       const fresh = models.filter((model) => !known.has(model))
@@ -50,26 +44,21 @@ export function useProviderEditor(provider: ProviderConnection) {
     mutationFn: (models: Array<{ modelId: string; label: string }>) =>
       Promise.all(
         models.map((model) =>
-          apiRequest<ProviderModel>(
-            `/providers/${provider.id}/models`,
-            jsonRequest("POST", model)
-          )
+          providersApi.createProviderModel(provider.id, model)
         )
       ),
     onSuccess: () => {
       setDiscovered(null)
       setSelected([])
       setAddOpen(false)
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
+      queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
   const modelMutation = useMutation({
     mutationFn: ({ modelId, body }: { modelId: string; body: object }) =>
-      apiRequest<ProviderModel>(
-        `/provider-models/${modelId}`,
-        jsonRequest("PATCH", body)
-      ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
+      providersApi.updateProviderModel(modelId, body),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: keys.providers.all }),
   })
   const editModel = useMutation({
     mutationFn: ({
@@ -82,30 +71,22 @@ export function useProviderEditor(provider: ProviderConnection) {
       label: string
       metadata: ProviderModel["metadata"]
       binding: ProviderModel["piBinding"]
-    }) =>
-      apiRequest<ProviderModel>(
-        `/provider-models/${id}`,
-        jsonRequest("PATCH", { label, metadata, binding })
-      ),
+    }) => providersApi.updateProviderModel(id, { label, metadata, binding }),
     onSuccess: () => {
       setEditingModel(null)
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
+      queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
   const builtins = useQuery({
     enabled: Boolean(bindingModel),
     queryKey: ["providers", provider.id, "builtins"],
-    queryFn: () =>
-      apiRequest<{ items: PiModelProfile[] }>(
-        `/providers/${provider.id}/models/builtins`
-      ),
+    queryFn: () => providersApi.listBuiltinModels(provider.id),
   })
   const removeModel = useMutation({
-    mutationFn: (id: string) =>
-      apiRequest<void>(`/provider-models/${id}`, { method: "DELETE" }),
+    mutationFn: (id: string) => providersApi.deleteProviderModel(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
-      queryClient.invalidateQueries({ queryKey: ["settings"] })
+      queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      queryClient.invalidateQueries({ queryKey: keys.settings.all })
     },
   })
   const builtinProfiles = builtins.data?.items ?? []

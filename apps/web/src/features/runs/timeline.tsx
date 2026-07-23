@@ -26,6 +26,7 @@ import {
 import { createPortal } from "react-dom"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import type { AgentStatus } from "@/api"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -39,7 +40,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import type { AgentStatus } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { AgentStatusIcon } from "./agent-status-icon"
 import type { RunStreamStore } from "./run-stream-store"

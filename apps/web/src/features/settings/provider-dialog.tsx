@@ -2,6 +2,7 @@ import { useMutation } from "@tanstack/react-query"
 import { CircleAlert, Plus } from "lucide-react"
 import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
+import { type ProviderType, providersApi } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -22,12 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  apiRequest,
-  jsonRequest,
-  type ProviderConnection,
-  type ProviderType,
-} from "@/lib/api"
 import {
   providerTypeDefaults,
   providerTypeLabels,
@@ -57,16 +52,13 @@ export function ProviderDialog({
   })
   const mutation = useMutation({
     mutationFn: (values: ProviderFormValues) =>
-      apiRequest<ProviderConnection>(
-        "/providers",
-        jsonRequest("POST", {
-          label: values.label.trim(),
-          type: values.type,
-          baseUrl: values.baseUrl.trim(),
-          apiKey: values.apiKey,
-          enabled: true,
-        })
-      ),
+      providersApi.createProvider({
+        label: values.label.trim(),
+        type: values.type,
+        baseUrl: values.baseUrl.trim(),
+        apiKey: values.apiKey,
+        enabled: true,
+      }),
     onSuccess: (provider) => {
       onCreated(provider.id)
       setOpen(false)

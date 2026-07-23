@@ -5,18 +5,22 @@ import { EventPage } from "@/features/events/event-page"
 import { HomePage } from "@/features/events/home-page"
 import { SettingsPage } from "@/features/settings/settings-page"
 
+const settingsSections = ["general", "models", "prompts", "runtime"] as const
+const eventTabs = ["run", "statistics", "settings"] as const
+
 const router = createBrowserRouter([
   { path: "/", Component: HomePage },
   { path: "/settings", element: <Navigate replace to="/settings/general" /> },
-  { path: "/settings/general", Component: SettingsPage },
-  { path: "/settings/models", Component: SettingsPage },
-  { path: "/settings/prompts", Component: SettingsPage },
-  { path: "/settings/runtime", Component: SettingsPage },
+  ...settingsSections.map((section) => ({
+    path: `/settings/${section}`,
+    Component: SettingsPage,
+  })),
   { path: "/events/:eventId", Component: EventPage },
-  { path: "/events/:eventId/run", Component: EventPage },
+  ...eventTabs.map((tab) => ({
+    path: `/events/:eventId/${tab}`,
+    Component: EventPage,
+  })),
   { path: "/events/:eventId/runs/:runId", Component: EventPage },
-  { path: "/events/:eventId/statistics", Component: EventPage },
-  { path: "/events/:eventId/settings", Component: EventPage },
 ])
 
 export function App() {

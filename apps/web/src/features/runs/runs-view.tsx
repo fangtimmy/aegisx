@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router"
+import { type Challenge, keys, type RunPublic, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -40,8 +41,6 @@ import {
 } from "@/components/ui/menu"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
-import type { Challenge, RunPublic } from "@/lib/api"
-import { apiRequest } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { AgentStatusIcon } from "./agent-status-icon"
 import { CreateRunDialog } from "./create-run-dialog"
@@ -67,9 +66,9 @@ function RunItem({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const active = run.status === "running" || run.status === "paused"
   const deleteMutation = useMutation({
-    mutationFn: () => apiRequest<void>(`/runs/${run.id}`, { method: "DELETE" }),
+    mutationFn: () => runsApi.deleteRun(run.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["runs", "event", eventId] })
+      queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) })
       toast.success("Run deleted")
     },
     onError: (error) => toast.error("Failed to delete run", error.message),
@@ -212,9 +211,8 @@ export function RunsView({
 }) {
   const [sort, setSort] = useState<"event" | "name" | "recent">("recent")
   const runs = useQuery({
-    queryKey: ["runs", "event", eventId],
-    queryFn: () =>
-      apiRequest<{ items: RunPublic[] }>(`/events/${eventId}/runs`),
+    queryKey: keys.runs.byEvent(eventId),
+    queryFn: () => runsApi.listEventRuns(eventId),
   })
   if (runs.isPending)
     return (

@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { Link, useSearchParams } from "react-router"
+import type { Challenge } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -45,7 +46,6 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import type { Challenge } from "@/lib/api"
 import { AgentActivityBadge } from "./agent-activity-badge"
 import { AgentInspectorButton } from "./agent-inspector"
 import { AgentStatusIcon } from "./agent-status-icon"

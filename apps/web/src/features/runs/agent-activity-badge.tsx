@@ -1,6 +1,6 @@
 import { LoaderCircle } from "lucide-react"
 import { useCallback, useSyncExternalStore } from "react"
-import type { AgentStatus } from "@/lib/api"
+import type { AgentStatus } from "@/api"
 import type { RunStreamStore } from "./run-stream-store"
 
 export function AgentActivityBadge({

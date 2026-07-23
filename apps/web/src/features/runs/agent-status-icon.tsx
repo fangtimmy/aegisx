@@ -6,7 +6,7 @@ import {
   Pause,
   X,
 } from "lucide-react"
-import type { AgentStatus } from "@/lib/api"
+import type { AgentStatus } from "@/api"
 import { cn } from "@/lib/utils"
 
 export function AgentStatusIcon({

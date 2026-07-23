@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { ChartNoAxesColumn, CircleAlert } from "lucide-react"
 import { useState } from "react"
 import { Link } from "react-router"
+import { eventsApi, keys } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -27,7 +28,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { apiRequest, type EventStats } from "@/lib/api"
 import {
   FailureAttributionChart,
   ModelComparisonChart,
@@ -70,8 +70,8 @@ export function EventStatistics({ eventId }: { eventId: string }) {
   const [runFilter, setRunFilter] = useState("all")
   const [runSort, setRunSort] = useState("recent")
   const query = useQuery({
-    queryKey: ["events", eventId, "statistics", 3],
-    queryFn: () => apiRequest<EventStats>(`/events/${eventId}/stats`),
+    queryKey: keys.events.stats(eventId),
+    queryFn: () => eventsApi.getEventStats(eventId),
   })
 
   if (query.isPending) {

@@ -10,6 +10,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react"
+import { type AgentStatus, type Challenge, challengesApi, keys } from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -36,10 +37,8 @@ import {
 } from "@/components/ui/card"
 import { CreateRunDialog } from "@/features/runs"
 import { statusVariant } from "@/features/runs/run-overview"
-import { apiRequest, type Challenge } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { ChallengeDialog } from "./challenge-dialog"
-import { eventKeys } from "./event-shared"
 
 function DeleteChallengeDialog({
   eventId,
@@ -50,12 +49,13 @@ function DeleteChallengeDialog({
 }) {
   const queryClient = useQueryClient()
   const mutation = useMutation({
-    mutationFn: () =>
-      apiRequest<void>(`/challenges/${challenge.id}`, { method: "DELETE" }),
+    mutationFn: () => challengesApi.deleteChallenge(challenge.id),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
-        queryClient.invalidateQueries({ queryKey: eventKeys.all }),
+        queryClient.invalidateQueries({
+          queryKey: keys.events.detail(eventId),
+        }),
+        queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
       toast.success("Challenge deleted")
     },
@@ -200,7 +200,11 @@ export function ChallengeCard({
           <span className="ml-auto flex items-center gap-1.5">
             {Object.entries(challenge.runStatusCounts).map(([status, count]) =>
               count > 0 ? (
-                <Badge key={status} size="sm" variant={statusVariant(status)}>
+                <Badge
+                  key={status}
+                  size="sm"
+                  variant={statusVariant(status as AgentStatus)}
+                >
                   {count}
                   {status === "completed" && <Check className="size-3" />}
                   {status === "failed" && <X className="size-3" />}

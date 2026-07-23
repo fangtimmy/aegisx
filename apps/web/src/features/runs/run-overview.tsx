@@ -8,6 +8,8 @@ import {
   RefreshCw,
   Square,
 } from "lucide-react"
+import type { AgentStatus, AgentSummary, RunPublic, UsageSummary } from "@/api"
+import { challengesApi, keys } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,14 +22,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import type {
-  AgentStatus,
-  AgentSummary,
-  RunPublic,
-  TargetState,
-  UsageSummary,
-} from "@/lib/api"
-import { apiRequest, jsonRequest } from "@/lib/api"
 import { toast } from "@/lib/toast"
 import { formatTime } from "./timeline"
 
@@ -177,18 +171,14 @@ export function RunOverview({
 
 function TargetPanel({ run }: { run: RunPublic }) {
   const queryClient = useQueryClient()
-  const key = ["challenges", run.challengeId, "target"]
+  const key = keys.challenges.target(run.challengeId)
   const target = useQuery({
     queryKey: key,
-    queryFn: () =>
-      apiRequest<TargetState>(`/challenges/${run.challengeId}/target`),
+    queryFn: () => challengesApi.getTarget(run.challengeId),
   })
   const action = useMutation({
     mutationFn: (value: "start" | "extend" | "stop") =>
-      apiRequest<TargetState>(
-        `/challenges/${run.challengeId}/target/${value}`,
-        jsonRequest("POST", {})
-      ),
+      challengesApi.targetAction(run.challengeId, value),
     onSuccess: (_value, variables) => {
       queryClient.setQueryData(key, _value)
       const verb =

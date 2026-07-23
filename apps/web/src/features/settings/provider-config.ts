@@ -1,4 +1,4 @@
-import type { ProviderType } from "@/lib/api"
+import type { ProviderType } from "@/api"
 
 export const providerTypeLabels: Record<ProviderType, string> = {
   "openai-compatible": "OpenAI compatible",

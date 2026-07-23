@@ -10,6 +10,13 @@ import {
 } from "lucide-react"
 import { useRef, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
+import {
+  type Attachment,
+  type Challenge,
+  challengesApi,
+  eventsApi,
+  keys,
+} from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -44,13 +51,6 @@ import {
   NumberFieldInput,
 } from "@/components/ui/number-field"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  type Attachment,
-  apiRequest,
-  type Challenge,
-  jsonRequest,
-} from "@/lib/api"
-import { eventKeys } from "./event-shared"
 
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`
@@ -61,17 +61,6 @@ function formatBytes(value: number) {
 type ChallengeMutationResult = {
   challenge: Challenge
   uploadErrors: string[]
-}
-
-async function uploadAttachment(challengeId: string, file: File) {
-  return apiRequest<Attachment>(
-    `/challenges/${challengeId}/attachments?filename=${encodeURIComponent(file.name)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: file,
-    }
-  )
 }
 
 type ChallengeFormValues = {
@@ -96,17 +85,14 @@ export function ChallengeDialog({
   const queryClient = useQueryClient()
   const removeAttachment = useMutation({
     mutationFn: (attachmentId: string) =>
-      apiRequest<void>(`/attachments/${attachmentId}`, { method: "DELETE" }),
+      challengesApi.deleteAttachment(attachmentId),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
+      queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
   })
   const removeTarget = useMutation({
-    mutationFn: () =>
-      apiRequest<void>(`/challenges/${challenge?.id}/target`, {
-        method: "DELETE",
-      }),
+    mutationFn: () => challengesApi.ignoreTarget(challenge?.id ?? ""),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
+      queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
   })
   const form = useForm<ChallengeFormValues>({
     defaultValues: {
@@ -124,20 +110,18 @@ export function ChallengeDialog({
       values: ChallengeFormValues
       files: File[]
     }): Promise<ChallengeMutationResult> => {
-      const saved = await apiRequest<Challenge>(
-        challenge
-          ? `/challenges/${challenge.id}`
-          : `/events/${eventId}/challenges`,
-        jsonRequest(challenge ? "PATCH" : "POST", {
-          name: values.name.trim(),
-          description: values.description.trim(),
-          category: values.category.trim() || null,
-          points: values.points,
-        })
-      )
+      const input = {
+        name: values.name.trim(),
+        description: values.description.trim(),
+        category: values.category.trim() || null,
+        points: values.points,
+      }
+      const saved = challenge
+        ? await challengesApi.updateChallenge(challenge.id, input)
+        : await eventsApi.createChallenge(eventId, input)
 
       const results = await Promise.allSettled(
-        files.map((file) => uploadAttachment(saved.id, file))
+        files.map((file) => challengesApi.uploadAttachment(saved.id, file))
       )
       return {
         challenge: saved,
@@ -152,8 +136,10 @@ export function ChallengeDialog({
     },
     onSuccess: async ({ challenge: saved, uploadErrors }) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: eventKeys.detail(eventId) }),
-        queryClient.invalidateQueries({ queryKey: eventKeys.all }),
+        queryClient.invalidateQueries({
+          queryKey: keys.events.detail(eventId),
+        }),
+        queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
       onUploadError(
         uploadErrors.length > 0

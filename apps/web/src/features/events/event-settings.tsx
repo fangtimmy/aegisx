@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Trash2, TriangleAlert } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
+import { type EventInput, type EventSummary, eventsApi, keys } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -17,14 +18,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  apiRequest,
-  type EventInput,
-  type EventSummary,
-  jsonRequest,
-} from "@/lib/api"
 import { toast } from "@/lib/toast"
-import { eventKeys } from "./event-shared"
 import { PlatformBinding } from "./platform-binding"
 
 export function EventSettings({ event }: { event: EventSummary }) {
@@ -34,25 +28,22 @@ export function EventSettings({ event }: { event: EventSummary }) {
     defaultValues: { name: event.name, promptHint: event.promptHint ?? "" },
   })
   const update = useMutation({
-    mutationFn: (input: EventInput) =>
-      apiRequest<EventSummary>(
-        `/events/${event.id}`,
-        jsonRequest("PATCH", input)
-      ),
+    mutationFn: (input: EventInput) => eventsApi.updateEvent(event.id, input),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: eventKeys.detail(event.id) }),
-        queryClient.invalidateQueries({ queryKey: eventKeys.all }),
+        queryClient.invalidateQueries({
+          queryKey: keys.events.detail(event.id),
+        }),
+        queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
       toast.success("Event updated")
     },
     onError: (error) => toast.error("Failed to update event", error.message),
   })
   const remove = useMutation({
-    mutationFn: () =>
-      apiRequest<void>(`/events/${event.id}`, { method: "DELETE" }),
+    mutationFn: () => eventsApi.deleteEvent(event.id),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: eventKeys.all })
+      await queryClient.invalidateQueries({ queryKey: keys.events.all })
       toast.success("Event deleted")
       navigate("/")
     },

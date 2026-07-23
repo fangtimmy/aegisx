@@ -13,7 +13,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import type { EventStats } from "@/lib/api"
+import type { EventStats } from "@/api"
 import {
   formatCompactNumber,
   formatCost,

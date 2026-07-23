@@ -1,4 +1,4 @@
-import { type ChallengeSyncResult, jsonRequest } from "@/lib/api"
+import { type ChallengeSyncResult, jsonRequest } from "@/api"
 
 type SyncStreamEvent =
   | {

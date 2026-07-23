@@ -7,11 +7,6 @@ import {
 } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 
-export const eventKeys = {
-  all: ["events"] as const,
-  detail: (id: string) => ["events", id] as const,
-}
-
 export function ErrorState({
   error,
   retry,

@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
+import { type Challenge, eventsApi, keys } from "@/api"
 import { AppLayout } from "@/components/shell/app-layout"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -35,12 +36,34 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { RunsView } from "@/features/runs"
 import { EventStatistics } from "@/features/statistics/event-statistics"
-import { apiRequest, type Challenge, type EventSummary } from "@/lib/api"
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
 import { EventSettings } from "./event-settings"
-import { ErrorState, eventKeys } from "./event-shared"
+import { ErrorState } from "./event-shared"
 import { ImportChallengesDialog } from "./platform-binding"
+
+type EventTab = "overview" | "run" | "statistics" | "settings"
+
+function tabFromPath(pathname: string, eventId: string): EventTab {
+  if (pathname === `/events/${eventId}/settings`) return "settings"
+  if (pathname === `/events/${eventId}/statistics`) return "statistics"
+  if (
+    pathname === `/events/${eventId}/run` ||
+    pathname.startsWith(`/events/${eventId}/runs/`)
+  ) {
+    return "run"
+  }
+  return "overview"
+}
+
+function pathForTab(eventId: string, tab: EventTab, runId?: string) {
+  if (tab === "run") {
+    return runId ? `/events/${eventId}/runs/${runId}` : `/events/${eventId}/run`
+  }
+  if (tab === "statistics") return `/events/${eventId}/statistics`
+  if (tab === "settings") return `/events/${eventId}/settings`
+  return `/events/${eventId}`
+}
 
 type ChallengeSort = "event" | "name" | "points"
 type ChallengeGroup = "category" | "status" | "none"
@@ -105,22 +128,12 @@ export function EventPage() {
     })
   const eventQuery = useQuery({
     enabled: Boolean(eventId),
-    queryKey: eventKeys.detail(eventId ?? ""),
-    queryFn: () =>
-      apiRequest<{ event: EventSummary; challenges: Challenge[] }>(
-        `/events/${eventId}`
-      ),
+    queryKey: keys.events.detail(eventId ?? ""),
+    queryFn: () => eventsApi.getEvent(eventId ?? ""),
   })
 
   if (!eventId) return null
-  const tab =
-    location.pathname === `/events/${eventId}/settings`
-      ? "settings"
-      : location.pathname === `/events/${eventId}/statistics`
-        ? "statistics"
-        : location.pathname.includes(`/events/${eventId}/run`)
-          ? "run"
-          : "overview"
+  const tab = tabFromPath(location.pathname, eventId)
   const workspace = tab === "run"
 
   return (
@@ -152,15 +165,7 @@ export function EventPage() {
               : "items-start gap-4"
           }
           onValueChange={(value) =>
-            navigate(
-              value === "run"
-                ? `/events/${eventId}/run`
-                : value === "statistics"
-                  ? `/events/${eventId}/statistics`
-                  : value === "settings"
-                    ? `/events/${eventId}/settings`
-                    : `/events/${eventId}`
-            )
+            navigate(pathForTab(eventId, value as EventTab, runId))
           }
           orientation="vertical"
           value={tab}

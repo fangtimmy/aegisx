@@ -3,6 +3,14 @@ import { Box, CircleAlert, Monitor, Play, Plus } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
+import {
+  type Challenge,
+  keys,
+  providersApi,
+  runsApi,
+  settingsApi,
+  type ThinkingLevel,
+} from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, type ButtonProps } from "@/components/ui/button"
 import {
@@ -28,15 +36,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
-import type {
-  Challenge,
-  ProviderConnection,
-  RunPublic,
-  SettingsPublic,
-  ThinkingLevel,
-} from "@/lib/api"
-import { apiRequest, jsonRequest } from "@/lib/api"
-import { eventKeys } from "../events/event-shared"
 
 const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   off: "Off",
@@ -79,37 +78,32 @@ export function CreateRunDialog({
   const queryClient = useQueryClient()
   const settings = useQuery({
     enabled: open,
-    queryKey: ["settings"],
-    queryFn: () => apiRequest<SettingsPublic>("/settings"),
+    queryKey: keys.settings.all,
+    queryFn: () => settingsApi.getSettings(),
   })
   const providers = useQuery({
     enabled: open,
-    queryKey: ["providers"],
-    queryFn: () => apiRequest<{ items: ProviderConnection[] }>("/providers"),
+    queryKey: keys.providers.all,
+    queryFn: () => providersApi.listProviders(),
   })
   const mutation = useMutation({
     mutationFn: (values: RunFormValues) =>
-      apiRequest<RunPublic>(
-        `/challenges/${challenge?.id ?? values.challengeId}/runs`,
-        jsonRequest("POST", {
-          modelId: values.modelId,
-          environment: values.environment,
-          image:
-            values.environment === "container"
-              ? values.image.trim()
-              : undefined,
-          thinkingLevel: values.thinkingLevel,
-        })
-      ),
+      runsApi.createRun(challenge?.id ?? values.challengeId, {
+        modelId: values.modelId,
+        environment: values.environment,
+        image:
+          values.environment === "container" ? values.image.trim() : undefined,
+        thinkingLevel: values.thinkingLevel,
+      }),
     onSuccess: async (run) => {
-      await queryClient.invalidateQueries({
-        queryKey: ["runs", "event", run.eventId],
-      })
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: eventKeys.detail(run.eventId),
+          queryKey: keys.runs.byEvent(run.eventId),
         }),
-        queryClient.invalidateQueries({ queryKey: eventKeys.all }),
+        queryClient.invalidateQueries({
+          queryKey: keys.events.detail(run.eventId),
+        }),
+        queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
       setOpen(false)
       onCreated?.()

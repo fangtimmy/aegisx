@@ -10,19 +10,7 @@ import {
   Info,
 } from "lucide-react"
 import { useCallback, useRef, useState } from "react"
-
-const SIDEBAR_STORAGE_KEY = "aegisx:files-sidebar-width"
-const SIDEBAR_DEFAULT = 288
-const SIDEBAR_MIN = 200
-const SIDEBAR_MAX_RATIO = 0.6
-
-function readStoredWidth(): number {
-  const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY)
-  if (!stored) return SIDEBAR_DEFAULT
-  const n = Number(stored)
-  return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT
-}
-
+import { keys, type RunFileEntry, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -38,9 +26,19 @@ import {
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
-import type { RunFile, RunFileEntry } from "@/lib/api"
-import { apiRequest } from "@/lib/api"
 import { formatTime } from "./timeline"
+
+const SIDEBAR_STORAGE_KEY = "aegisx:files-sidebar-width"
+const SIDEBAR_DEFAULT = 288
+const SIDEBAR_MIN = 200
+const SIDEBAR_MAX_RATIO = 0.6
+
+function readStoredWidth(): number {
+  const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY)
+  if (!stored) return SIDEBAR_DEFAULT
+  const n = Number(stored)
+  return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT
+}
 
 function formatSize(size: number) {
   if (size < 1024) return `${size} B`
@@ -62,11 +60,8 @@ function DirectoryEntry({
   const [expanded, setExpanded] = useState(false)
   const directory = useQuery({
     enabled: entry.type === "directory" && expanded,
-    queryKey: ["runs", runId, "files", entry.path],
-    queryFn: () =>
-      apiRequest<RunFile>(
-        `/runs/${runId}/files?path=${encodeURIComponent(entry.path)}`
-      ),
+    queryKey: keys.runs.files(runId, entry.path),
+    queryFn: () => runsApi.getRunFile(runId, entry.path),
   })
   const isDirectory = entry.type === "directory"
   const FolderIcon = expanded ? FolderOpen : Folder
@@ -188,16 +183,13 @@ export function FilesWorkspace({
 
   const root = useQuery({
     enabled,
-    queryKey: ["runs", runId, "files", ""],
-    queryFn: () => apiRequest<RunFile>(`/runs/${runId}/files?path=`),
+    queryKey: keys.runs.files(runId, ""),
+    queryFn: () => runsApi.getRunFile(runId, ""),
   })
   const selected = useQuery({
     enabled: enabled && Boolean(selectedPath),
-    queryKey: ["runs", runId, "files", selectedPath ?? ""],
-    queryFn: () =>
-      apiRequest<RunFile>(
-        `/runs/${runId}/files?path=${encodeURIComponent(selectedPath ?? "")}`
-      ),
+    queryKey: keys.runs.files(runId, selectedPath ?? ""),
+    queryFn: () => runsApi.getRunFile(runId, selectedPath ?? ""),
   })
 
   return (

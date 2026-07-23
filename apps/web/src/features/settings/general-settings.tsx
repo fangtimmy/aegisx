@@ -1,5 +1,6 @@
 import { Download, Monitor, Moon, Sun, Upload } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
+import { settingsApi } from "@/api"
 import { useTheme } from "@/components/shell/theme-provider"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -24,7 +25,6 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Radio, RadioGroup } from "@/components/ui/radio-group"
-import { apiRequest } from "@/lib/api"
 
 const themes = [
   { label: "System", value: "system" },
@@ -280,14 +280,10 @@ function ImportExportDialog({
           for (const key of promptKeys)
             merged.settings[key] = current.settings[key]
         }
-        await apiRequest("/settings/import", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            version: 2,
-            settings: merged.settings,
-            providers: merged.providers,
-          }),
+        await settingsApi.importSettingsPayload({
+          version: 2,
+          settings: merged.settings,
+          providers: merged.providers,
         })
         if (selected.includes("appearance") && file.appearance?.theme) {
           if (!isTheme(file.appearance.theme)) {

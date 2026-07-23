@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { Info } from "lucide-react"
 import { useState } from "react"
+import { type AgentInspector, type AgentSummary, keys, runsApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -14,8 +15,6 @@ import {
 } from "@/components/ui/dialog"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import type { AgentInspector, AgentSummary } from "@/lib/api"
-import { apiRequest } from "@/lib/api"
 import { statusVariant } from "./run-overview"
 import { formatTime } from "./timeline"
 
@@ -29,9 +28,8 @@ export function AgentInspectorButton({
   const [open, setOpen] = useState(false)
   const inspector = useQuery({
     enabled: open,
-    queryKey: ["runs", runId, "agents", agent.id, "inspector"],
-    queryFn: () =>
-      apiRequest<AgentInspector>(`/runs/${runId}/agents/${agent.id}/inspector`),
+    queryKey: keys.runs.inspector(runId, agent.id),
+    queryFn: () => runsApi.getAgentInspector(runId, agent.id),
   })
 
   return (

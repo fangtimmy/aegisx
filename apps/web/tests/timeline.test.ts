@@ -1,11 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { RunStreamStore } from "@/features/runs/run-stream-store"
-import {
-  buildConversation,
-  type LiveEntry,
-} from "@/features/runs/timeline-model"
-import type { ConversationMessage } from "@/lib/api"
+import type { ConversationMessage, PublicAgentMessage } from "@/api"
+import { buildConversation, type LiveEntry } from "@/domain/conversation"
+import { ConversationStore } from "@/stream/conversation-store"
 
 const fakeWindow = {
   requestAnimationFrame(callback: FrameRequestCallback) {
@@ -43,7 +40,7 @@ Object.defineProperty(globalThis, "EventSource", {
 function message(
   id: string,
   sequence: number,
-  value: Record<string, unknown>
+  value: PublicAgentMessage
 ): ConversationMessage {
   return {
     id,
@@ -94,7 +91,7 @@ test("pairs live tool progress with the persisted assistant message", () => {
 })
 
 test("committed messages replace progress with the same stable id", () => {
-  const store = new RunStreamStore()
+  const store = new ConversationStore()
   store.applyEvent({
     type: "message.progress",
     agentId: "agent-1",
@@ -127,7 +124,7 @@ test("committed messages replace progress with the same stable id", () => {
 })
 
 test("ignores out-of-order progress revisions", () => {
-  const store = new RunStreamStore()
+  const store = new ConversationStore()
   store.applyEvent({
     type: "message.progress",
     agentId: "agent-1",
@@ -158,7 +155,7 @@ test("ignores out-of-order progress revisions", () => {
 })
 
 test("keeps completed turns stable while the current turn streams", () => {
-  const store = new RunStreamStore()
+  const store = new ConversationStore()
   store.applySnapshot("agent-1", [
     message("user-1", 1, {
       role: "user",
@@ -217,7 +214,7 @@ test("keeps completed turns stable while the current turn streams", () => {
 })
 
 test("closes the stream after any terminal run update is refreshed", async () => {
-  const store = new RunStreamStore()
+  const store = new ConversationStore()
   store.connect(
     "run-1",
     0,
@@ -251,7 +248,7 @@ test("closes the stream after any terminal run update is refreshed", async () =>
 })
 
 test("ignores stale progress after a snapshot already committed the message", () => {
-  const store = new RunStreamStore()
+  const store = new ConversationStore()
   store.applySnapshot("agent-1", [
     message("message-1", 1, {
       role: "assistant",
@@ -278,7 +275,7 @@ test("ignores stale progress after a snapshot already committed the message", ()
 })
 
 test("snapshot and live tool completion stay in one conversation", () => {
-  const store = new RunStreamStore()
+  const store = new ConversationStore()
   store.applySnapshot("agent-1", [
     message("assistant-1", 1, {
       role: "assistant",

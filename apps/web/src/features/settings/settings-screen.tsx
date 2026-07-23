@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
+import { keys, providersApi, type SettingsPublic, settingsApi } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -29,12 +30,6 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import {
-  apiRequest,
-  jsonRequest,
-  type ProviderConnection,
-  type SettingsPublic,
-} from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { GeneralSettings } from "./general-settings"
 import { PromptSettings } from "./prompt-settings"
@@ -61,12 +56,12 @@ export function SettingsScreen() {
       ([, path]) => path === location.pathname
     )?.[0] as SettingsSection | undefined) ?? "general"
   const providers = useQuery({
-    queryKey: ["providers"],
-    queryFn: () => apiRequest<{ items: ProviderConnection[] }>("/providers"),
+    queryKey: keys.providers.all,
+    queryFn: () => providersApi.listProviders(),
   })
   const settings = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => apiRequest<SettingsPublic>("/settings"),
+    queryKey: keys.settings.all,
+    queryFn: () => settingsApi.getSettings(),
   })
   useEffect(() => {
     const items = providers.data?.items ?? []
@@ -79,20 +74,17 @@ export function SettingsScreen() {
     }
   }, [providers.data, selectedId])
   const remove = useMutation({
-    mutationFn: (id: string) =>
-      apiRequest<void>(`/providers/${id}`, { method: "DELETE" }),
+    mutationFn: (id: string) => providersApi.deleteProvider(id),
     onSuccess: () => {
       setSelectedId(null)
-      queryClient.invalidateQueries({ queryKey: ["providers"] })
+      queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
   const toggleProvider = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      apiRequest<ProviderConnection>(
-        `/providers/${id}`,
-        jsonRequest("PATCH", { enabled })
-      ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
+      providersApi.updateProvider(id, { enabled }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: keys.providers.all }),
   })
 
   if (providers.isPending || settings.isPending) {

@@ -11,6 +11,7 @@ import {
 import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { Link } from "react-router"
+import { type EventInput, type EventSummary, eventsApi, keys } from "@/api"
 import { AppLayout } from "@/components/shell/app-layout"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -43,13 +44,7 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  apiRequest,
-  type EventInput,
-  type EventSummary,
-  jsonRequest,
-} from "@/lib/api"
-import { ErrorState, eventKeys } from "./event-shared"
+import { ErrorState } from "./event-shared"
 
 const platformLabels = {
   ctfd: "CTFd",
@@ -67,10 +62,9 @@ function EventDialog() {
   const queryClient = useQueryClient()
   const form = useForm<EventInput>({ defaultValues: { name: "" } })
   const mutation = useMutation({
-    mutationFn: (input: EventInput) =>
-      apiRequest<EventSummary>("/events", jsonRequest("POST", input)),
+    mutationFn: (input: EventInput) => eventsApi.createEvent(input),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: eventKeys.all })
+      await queryClient.invalidateQueries({ queryKey: keys.events.all })
       setOpen(false)
       form.reset()
     },
@@ -219,8 +213,8 @@ function EventCard({ event }: { event: EventSummary }) {
 
 export function HomePage() {
   const events = useQuery({
-    queryKey: eventKeys.all,
-    queryFn: () => apiRequest<{ items: EventSummary[] }>("/events"),
+    queryKey: keys.events.all,
+    queryFn: () => eventsApi.listEvents(),
   })
 
   return (

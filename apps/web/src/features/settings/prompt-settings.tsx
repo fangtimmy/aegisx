@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { type RefObject, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
+import { keys, type SettingsPublic, settingsApi } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -24,7 +25,6 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { apiRequest, jsonRequest, type SettingsPublic } from "@/lib/api"
 import { toast } from "@/lib/toast"
 
 type PromptTemplates = Pick<
@@ -35,16 +35,6 @@ type PromptTemplates = Pick<
 >
 
 type PromptKind = "mainSystemPrompt" | "childSystemPrompt" | "initialPrompt"
-
-type PromptPreviewSegment = {
-  id: number
-  text: string
-  highlighted: boolean
-}
-
-type PromptPreview = {
-  segments: PromptPreviewSegment[]
-}
 
 function insertVariable(
   ref: RefObject<HTMLTextAreaElement | null>,
@@ -181,23 +171,16 @@ export function PromptSettings({ settings }: { settings: SettingsPublic }) {
   const initialPromptTemplate = form.watch("initialPromptTemplate")
   const [previewKind, setPreviewKind] = useState<PromptKind | null>(null)
   const save = useMutation({
-    mutationFn: (input: PromptFormValues) =>
-      apiRequest<SettingsPublic>(
-        "/settings/prompts",
-        jsonRequest("PATCH", input)
-      ),
+    mutationFn: (input: PromptFormValues) => settingsApi.updatePrompts(input),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings"] })
+      queryClient.invalidateQueries({ queryKey: keys.settings.all })
       toast.success("Prompts saved")
     },
     onError: (error) => toast.error("Failed to save prompts", error.message),
   })
   const preview = useMutation({
     mutationFn: (input: { kind: PromptKind; template: string }) =>
-      apiRequest<PromptPreview>(
-        "/settings/prompts/preview",
-        jsonRequest("POST", input)
-      ),
+      settingsApi.previewPrompts(input),
   })
   const openPreview = (kind: PromptKind, template: string) => {
     preview.reset()
