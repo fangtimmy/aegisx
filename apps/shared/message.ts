@@ -1,94 +1,108 @@
-export type InboxKind = "user" | "child_result" | "resume";
+/** Single message shape for storage and wire (v2). */
 
-export type AegisXMetadata = {
-	handoff?: {
-		agentId: string;
-		agentName: string;
-		status: string;
-	};
-};
+export type MessageRole = "user" | "assistant" | "toolResult" | "notice"
 
-/** Internal persisted inbox message (runtime). */
-export type AegisXMessage = {
-	role: "aegisx";
-	id: string;
-	kind: InboxKind;
-	text: string;
-	timestamp: number;
-	metadata?: AegisXMetadata;
-};
+export type UserMessageSource = "user" | "resume" | "bootstrap"
 
 export type TextContent = {
-	type: "text";
-	text: string;
-};
+	type: "text"
+	text: string
+}
 
 export type ImageContent = {
-	type: "image";
-	data?: string;
-	mimeType: string;
-};
+	type: "image"
+	data?: string
+	mimeType: string
+}
 
 export type ThinkingContent = {
-	type: "thinking";
-	thinking: string;
-	thinkingSignature?: string;
-	redacted?: boolean;
-};
+	type: "thinking"
+	thinking: string
+	thinkingSignature?: string
+	redacted?: boolean
+}
 
 export type ToolCallContent = {
-	type: "toolCall";
-	id: string;
-	name: string;
-	arguments: Record<string, unknown>;
-};
+	type: "toolCall"
+	id: string
+	name: string
+	arguments: Record<string, unknown>
+}
 
-export type UserContent = string | Array<TextContent | ImageContent>;
+export type ChildHandoff = {
+	agentId: string
+	agentName: string
+	status: string
+}
 
-export type PublicUserMessage = {
-	role: "user";
-	timestamp?: number;
-	content: UserContent;
-	aegisx?: {
-		id?: string;
-		kind?: InboxKind;
-		metadata?: AegisXMetadata;
-	};
-};
+export type UserMessage = {
+	role: "user"
+	id: string
+	seq: number
+	agentId: string
+	createdAt: string
+	clientMessageId?: string
+	source: UserMessageSource
+	content: string | Array<TextContent | ImageContent>
+	timestamp?: number
+}
 
-export type PublicAssistantMessage = {
-	role: "assistant";
-	timestamp?: number;
-	content: Array<TextContent | ThinkingContent | ToolCallContent | string>;
-	stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted" | string;
-	errorMessage?: string;
-	api?: string;
-	provider?: string;
-	model?: string;
-};
+export type AssistantMessage = {
+	role: "assistant"
+	id: string
+	seq: number
+	agentId: string
+	createdAt: string
+	content: Array<TextContent | ThinkingContent | ToolCallContent | string>
+	stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted" | string
+	errorMessage?: string
+	api?: string
+	provider?: string
+	model?: string
+	timestamp?: number
+}
 
-export type PublicToolResultMessage = {
-	role: "toolResult";
-	timestamp?: number;
-	toolCallId: string;
-	toolName: string;
-	content: Array<TextContent | ImageContent | string>;
-	isError?: boolean;
-	details?: unknown;
-};
+export type ToolResultMessage = {
+	role: "toolResult"
+	id: string
+	seq: number
+	agentId: string
+	createdAt: string
+	toolCallId: string
+	toolName: string
+	content: Array<TextContent | ImageContent | string>
+	isError?: boolean
+	details?: unknown
+	timestamp?: number
+}
 
-/** Wire shape of agent messages after publicAgentMessage(). */
-export type PublicAgentMessage =
-	| PublicUserMessage
-	| PublicAssistantMessage
-	| PublicToolResultMessage;
+export type NoticeMessage = {
+	role: "notice"
+	id: string
+	seq: number
+	agentId: string
+	createdAt: string
+	source: "child_result"
+	text: string
+	handoff?: ChildHandoff
+	timestamp?: number
+}
 
-export function isPublicAgentMessage(
-	value: unknown,
-): value is PublicAgentMessage {
+export type Message =
+	| UserMessage
+	| AssistantMessage
+	| ToolResultMessage
+	| NoticeMessage
+
+export function isMessage(value: unknown): value is Message {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return false;
+		return false
 	}
-	const role = (value as { role?: unknown }).role;
-	return role === "user" || role === "assistant" || role === "toolResult";
+	const role = (value as { role?: unknown }).role
+	return (
+		role === "user" ||
+		role === "assistant" ||
+		role === "toolResult" ||
+		role === "notice"
+	)
 }
