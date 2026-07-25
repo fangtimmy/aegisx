@@ -31,6 +31,7 @@ export function useRunController({
   const streamStore = useRef(new ConversationStore()).current
   const retryMessage = useRef<{ id: string; text: string } | null>(null)
   const [streamDisconnected, setStreamDisconnected] = useState(false)
+  const [streamClosed, setStreamClosed] = useState(false)
   const [streamReady, setStreamReady] = useState(false)
 
   const detail = useQuery({
@@ -46,6 +47,7 @@ export function useRunController({
     streamStore.reset()
     setStreamReady(false)
     setStreamDisconnected(false)
+    setStreamClosed(false)
     retryMessage.current = null
   }, [runId, streamStore])
 
@@ -135,6 +137,7 @@ export function useRunController({
 
   useEffect(() => {
     setStreamDisconnected(false)
+    setStreamClosed(false)
     if (!runId || !streamReady) return
     const stop = streamStore.connect(
       runId,
@@ -145,9 +148,7 @@ export function useRunController({
         if (event.type === "run.updated") {
           if (
             streamStore.closeOnTerminal(event.run.status, () =>
-              queryClient.invalidateQueries({
-                queryKey: keys.runs.detail(runId),
-              })
+              invalidateRunAndAgentQueries(queryClient, runId)
             )
           ) {
             setStreamDisconnected(false)
@@ -164,15 +165,12 @@ export function useRunController({
         void queryClient.invalidateQueries({
           queryKey: keys.runs.detail(runId),
         })
-        if (selectedAgentId) {
-          void queryClient.invalidateQueries({
-            queryKey: keys.runs.messages(runId, selectedAgentId),
-          })
-        }
-      }
+        void invalidateRunAndAgentQueries(queryClient, runId)
+      },
+      () => setStreamClosed(true)
     )
     return stop
-  }, [eventId, queryClient, runId, selectedAgentId, streamReady, streamStore])
+  }, [eventId, queryClient, runId, streamReady, streamStore])
 
   return {
     detail,
@@ -180,9 +178,27 @@ export function useRunController({
     selectedAgent,
     control,
     retryMessage,
+    streamClosed,
     streamDisconnected,
     streamStore,
   }
 }
 
 export type { RunDetail }
+
+/**
+ * Invalidate the run detail and all per-agent message/inspector queries via a
+ * shared prefix. Ensures terminal/close and reconnect paths re-fetch every
+ * agent's transcript instead of just the currently visible one.
+ */
+function invalidateRunAndAgentQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  runId: string
+) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
+    queryClient.invalidateQueries({
+      queryKey: ["runs", runId, "agents"],
+    }),
+  ])
+}

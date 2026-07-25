@@ -101,6 +101,7 @@ export function RunWorkspace({
     detail,
     retryMessage,
     selectedAgent,
+    streamClosed,
     streamDisconnected,
     streamStore,
   } = controller
@@ -340,7 +341,16 @@ export function RunWorkspace({
                 />
               </TabsPanel>
             </Tabs>
-            {streamDisconnected && (
+            {streamClosed && (
+              <Alert className="mx-6 mb-3 w-auto" variant="error">
+                <CircleAlert />
+                <AlertDescription>
+                  Live connection closed permanently. Reload the page to
+                  reconnect.
+                </AlertDescription>
+              </Alert>
+            )}
+            {streamDisconnected && !streamClosed && (
               <Alert className="mx-6 mb-3 w-auto" variant="warning">
                 <CircleAlert />
                 <AlertDescription>

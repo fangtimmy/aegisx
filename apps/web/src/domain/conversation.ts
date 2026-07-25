@@ -137,6 +137,8 @@ export type ToolBlock = {
   args: unknown
   output: string
   status: "pending" | "running" | "done" | "error"
+  /** True while the LLM is still generating tool-call arguments (not yet executing). */
+  streaming?: boolean
   terminal?: "timed_out" | "cancelled" | "failed"
   terminalMessage?: string
 }
@@ -304,6 +306,7 @@ function applyAssistant(
     ? message.content
     : [message.content]
   let lastTextBlock: Extract<AgentBlock, { type: "text" }> | null = null
+  let lastToolBlock: ToolBlock | null = null
   for (const [index, part] of content.entries()) {
     const key = `${blockPrefix}:${index}`
     if (typeof part === "string") {
@@ -340,9 +343,11 @@ function applyAssistant(
       }
       blocks.push(block)
       tools.set(id, block)
+      lastToolBlock = block
     }
   }
   if (streaming && lastTextBlock) lastTextBlock.streaming = true
+  if (streaming && lastToolBlock) lastToolBlock.streaming = true
   if (message.stopReason === "error" && message.errorMessage) {
     blocks.push({
       key: `${blockPrefix}:error`,
@@ -437,6 +442,8 @@ export function buildConversation(
         : entry.status === "done"
           ? "done"
           : "running"
+      // Tool execution has started — the LLM finished generating arguments.
+      block.streaming = false
       if (entry.terminal) {
         block.terminal = entry.terminal
         if (entry.terminalMessage) block.terminalMessage = entry.terminalMessage

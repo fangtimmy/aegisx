@@ -210,9 +210,11 @@ function ToolActivity({
   expandPrefs: ConversationToolExpandPrefs
 }) {
   const isError = tool.status === "error"
+  const isStreaming = tool.streaming === true
   const label = isError ? (terminalLabel(tool) ?? "Failed") : null
-  const StatusIcon =
-    tool.status === "running"
+  const StatusIcon = isStreaming
+    ? LoaderCircle
+    : tool.status === "running"
       ? LoaderCircle
       : isError
         ? CircleAlert
@@ -238,6 +240,7 @@ function ToolActivity({
     }, 1000)
     return () => clearInterval(id)
   }, [tool.status])
+  const summary = isStreaming ? `Generating ${tool.name}…` : toolSummary(tool)
   return (
     <Collapsible
       className={separated ? "mt-3" : undefined}
@@ -249,12 +252,12 @@ function ToolActivity({
           className={
             isError
               ? "size-3.5 shrink-0 text-destructive"
-              : tool.status === "running"
+              : tool.status === "running" || isStreaming
                 ? "size-3.5 shrink-0 animate-spin text-muted-foreground"
                 : "size-3.5 shrink-0 text-muted-foreground"
           }
         />
-        <span className="min-w-0 flex-1 truncate">{toolSummary(tool)}</span>
+        <span className="min-w-0 flex-1 truncate">{summary}</span>
         {elapsed !== null && (
           <span className="shrink-0 text-muted-foreground text-xs">
             {formatDuration(elapsed)}
@@ -306,6 +309,20 @@ function ToolActivity({
     </Collapsible>
   )
 }
+
+const TextBlock = memo(function TextBlock({
+  body,
+  separated,
+}: {
+  body: string
+  separated?: boolean
+}) {
+  return (
+    <div className={cn(separated && "mt-3")}>
+      <Markdown>{body}</Markdown>
+    </div>
+  )
+})
 
 const ConversationRow = memo(function ConversationRow({
   item,
@@ -361,18 +378,11 @@ const ConversationRow = memo(function ConversationRow({
           const separated = index > 0 && !(activity && previousActivity)
           if (block.type === "text") {
             return (
-              <div
-                className={cn(
-                  separated && "mt-3",
-                  block.streaming && "conversation-text-streaming"
-                )}
+              <TextBlock
+                body={block.body}
                 key={block.key}
-              >
-                <Markdown>{block.body}</Markdown>
-                {block.streaming ? (
-                  <span aria-hidden="true" className="streaming-cursor" />
-                ) : null}
-              </div>
+                separated={separated}
+              />
             )
           }
           if (block.type === "reasoning") {

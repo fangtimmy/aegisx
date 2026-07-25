@@ -18,6 +18,7 @@ class FakeEventSource {
   onerror: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
   closed = false
+  readyState = 0 // CONNECTING
 
   constructor(readonly url: string) {
     FakeEventSource.latest = this
@@ -25,6 +26,7 @@ class FakeEventSource {
 
   close() {
     this.closed = true
+    this.readyState = 2 // CLOSED
   }
 }
 
@@ -34,7 +36,11 @@ Object.defineProperty(globalThis, "window", {
 })
 Object.defineProperty(globalThis, "EventSource", {
   configurable: true,
-  value: FakeEventSource,
+  value: Object.assign(FakeEventSource, {
+    CONNECTING: 0,
+    OPEN: 1,
+    CLOSED: 2,
+  }),
 })
 
 function assistant(
@@ -106,6 +112,61 @@ test("pairs live tool progress with the persisted assistant message", () => {
   if (items[0].blocks[0]?.type !== "tool") assert.fail("expected a tool")
   assert.equal(items[0].blocks[0].status, "running")
   assert.equal(items[0].blocks[0].output, "file.txt")
+})
+
+test("streaming tool call marks the last tool block as generating", () => {
+  const items = buildConversation(
+    [],
+    [
+      {
+        key: "message:msg-1",
+        type: "message",
+        message: assistant("msg-1", 0, [
+          { type: "text", text: "Let me check." },
+          {
+            type: "toolCall",
+            id: "call-1",
+            name: "bash",
+            arguments: { command: "ls" },
+          },
+        ]),
+      },
+    ]
+  )
+
+  assert.equal(items.length, 1)
+  const item = items[0]
+  if (item?.type !== "agent") assert.fail("expected agent item")
+  // Last block is the streaming tool call
+  const toolBlock = item.blocks[item.blocks.length - 1]
+  if (toolBlock?.type !== "tool") assert.fail("expected tool block")
+  assert.equal(toolBlock.streaming, true)
+  assert.equal(toolBlock.status, "pending")
+})
+
+test("streaming text marks only the last text block as streaming", () => {
+  const items = buildConversation(
+    [],
+    [
+      {
+        key: "message:msg-1",
+        type: "message",
+        message: assistant("msg-1", 0, [
+          { type: "text", text: "Done text." },
+          { type: "text", text: "streaming text" },
+        ]),
+      },
+    ]
+  )
+
+  const item = items[0]
+  if (item?.type !== "agent") assert.fail("expected agent item")
+  const blocks = item.blocks.filter((b) => b.type === "text")
+  if (blocks.length !== 2) assert.fail("expected two text blocks")
+  if (blocks[0]?.type !== "text" || blocks[0].streaming === true)
+    assert.fail("first text should not be streaming")
+  if (blocks[1]?.type !== "text" || blocks[1].streaming !== true)
+    assert.fail("last text should be streaming")
 })
 
 test("committed messages replace progress with the same stable id", () => {
@@ -233,6 +294,35 @@ test("closes the stream after any terminal run update is refreshed", async () =>
   await refresh
   await Promise.resolve()
   assert.equal(source.closed, true)
+})
+
+test("onClosed fires when EventSource gives up reconnecting", () => {
+  const store = new ConversationStore()
+  let disconnected = false
+  let closed = false
+  store.connect(
+    "run-1",
+    () => {},
+    (d) => {
+      disconnected = d
+    },
+    () => {},
+    () => {
+      closed = true
+    }
+  )
+  const source = FakeEventSource.latest
+  if (!source) assert.fail("expected an event source")
+
+  // Simulate a transient error — should flag disconnected, not closed.
+  source.onerror?.()
+  assert.equal(disconnected, true)
+  assert.equal(closed, false)
+
+  // Simulate the browser giving up (e.g. HTTP 404 from a deleted run).
+  source.readyState = 2 // CLOSED
+  source.onerror?.()
+  assert.equal(closed, true)
 })
 
 test("ignores stale progress after a snapshot already committed the message", () => {

@@ -62,7 +62,10 @@ export class ConversationStore {
   private readonly snapshots = new Map<string, ConversationItem[]>()
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly pendingNotifications = new Set<string>()
+  private readonly pendingRebuilds = new Set<string>()
   private notificationFrame: number | null = null
+  private rebuildScheduled = false
+  private rebuildFrame: number | null = null
   private source: EventSource | null = null
 
   subscribe(agentId: string, listener: Listener) {
@@ -119,10 +122,26 @@ export class ConversationStore {
       stable,
       tail: messages.slice(boundary + 1),
     })
-    this.rebuildLive(agentId)
+    this.rebuildLiveNow(agentId)
   }
 
   private rebuildLive(agentId: string) {
+    // Debounce: batch high-frequency progress events into a single rebuild per
+    // animation frame. Structural changes (snapshot/committed) use
+    // rebuildLiveNow to reflect immediately.
+    this.pendingRebuilds.add(agentId)
+    if (this.rebuildScheduled) return
+    this.rebuildScheduled = true
+    this.rebuildFrame = window.requestAnimationFrame(() => {
+      this.rebuildScheduled = false
+      this.rebuildFrame = null
+      const pending = [...this.pendingRebuilds]
+      this.pendingRebuilds.clear()
+      for (const id of pending) this.rebuildLiveNow(id)
+    })
+  }
+
+  private rebuildLiveNow(agentId: string) {
     const view = this.views.get(agentId) ?? {
       stableThroughId: null,
       stable: [],
@@ -159,25 +178,33 @@ export class ConversationStore {
     this.notify(agentId)
   }
 
+  /** Drop live progress that matches a committed message (id / clientMessageId / tool:). */
+  private clearProgressForMessage(agentId: string, message: Message) {
+    const progress = this.messageProgress.get(agentId)
+    if (!progress) return
+    progress.delete(message.id)
+    if (message.role === "user" && message.clientMessageId) {
+      progress.delete(message.clientMessageId)
+    }
+    // Legacy / defensive: progress may have used tool:<callId> while commit used a UUID.
+    if (message.role === "toolResult") {
+      progress.delete(`tool:${message.toolCallId}`)
+    }
+    if (progress.size === 0) this.messageProgress.delete(agentId)
+  }
+
   applySnapshot(agentId: string, messages: Message[]) {
     const stored = this.messages.get(agentId) ?? new Map()
-    const committedIds = new Set<string>()
     const completedTools = this.completedTools.get(agentId) ?? new Set<string>()
     for (const message of messages) {
       stored.set(message.id, message)
-      committedIds.add(message.id)
+      this.clearProgressForMessage(agentId, message)
       if (message.role === "toolResult") {
         completedTools.add(message.toolCallId)
-        committedIds.add(`tool:${message.toolCallId}`)
       }
     }
     this.messages.set(agentId, stored)
     this.completedTools.set(agentId, completedTools)
-    const progress = this.messageProgress.get(agentId)
-    if (progress) {
-      for (const messageId of committedIds) progress.delete(messageId)
-      if (progress.size === 0) this.messageProgress.delete(agentId)
-    }
     const tools = this.toolProgress.get(agentId)
     if (tools) {
       for (const toolCallId of completedTools) tools.delete(toolCallId)
@@ -192,15 +219,7 @@ export class ConversationStore {
       const stored = this.messages.get(event.agentId) ?? new Map()
       stored.set(event.message.id, event.message)
       this.messages.set(event.agentId, stored)
-      const progress = this.messageProgress.get(event.agentId)
-      if (progress) {
-        progress.delete(event.message.id)
-        // Legacy / defensive: progress may have used tool:<callId> while commit used a UUID.
-        if (event.message.role === "toolResult") {
-          progress.delete(`tool:${event.message.toolCallId}`)
-        }
-        if (progress.size === 0) this.messageProgress.delete(event.agentId)
-      }
+      this.clearProgressForMessage(event.agentId, event.message)
       if (event.message.role === "toolResult") {
         const completedTools =
           this.completedTools.get(event.agentId) ?? new Set<string>()
@@ -259,12 +278,12 @@ export class ConversationStore {
       pending: true,
     })
     this.messageProgress.set(message.agentId, progress)
-    this.rebuildLive(message.agentId)
+    this.rebuildLiveNow(message.agentId)
   }
 
   removePendingMessage(agentId: string, messageId: string) {
     if (!this.messageProgress.get(agentId)?.delete(messageId)) return
-    this.rebuildLive(agentId)
+    this.rebuildLiveNow(agentId)
   }
 
   clearEphemeral() {
@@ -276,7 +295,7 @@ export class ConversationStore {
     this.messageProgress.clear()
     this.toolProgress.clear()
     this.activity.clear()
-    for (const agentId of agentIds) this.rebuildLive(agentId)
+    for (const agentId of agentIds) this.rebuildLiveNow(agentId)
   }
 
   /** Drop all conversation state (e.g. when switching runs). */
@@ -315,7 +334,7 @@ export class ConversationStore {
     }
     this.toolProgress.clear()
     this.activity.clear()
-    for (const agentId of agentIds) this.rebuildLive(agentId)
+    for (const agentId of agentIds) this.rebuildLiveNow(agentId)
   }
 
   closeOnTerminal(
@@ -348,7 +367,8 @@ export class ConversationStore {
     runId: string,
     onEvent: (event: LiveEvent) => void,
     onDisconnectedChange: (disconnected: boolean) => void,
-    onReconnect: () => void
+    onReconnect: () => void,
+    onClosed?: () => void
   ) {
     this.close()
     const source = new EventSource(`/api/runs/${runId}/stream`)
@@ -363,6 +383,14 @@ export class ConversationStore {
     }
     source.onerror = () => {
       if (this.source !== source) return
+      // readyState CLOSED means the browser gave up reconnecting (e.g. HTTP
+      // 404/410 from a deleted run, or too many failed retries). The connection
+      // will NOT automatically recover, so surface it as permanently closed.
+      if (source.readyState === EventSource.CLOSED) {
+        this.source = null
+        onClosed?.()
+        return
+      }
       onDisconnectedChange(true)
     }
     source.onmessage = (message) => {
@@ -393,6 +421,13 @@ export class ConversationStore {
       window.cancelAnimationFrame(this.notificationFrame)
       this.notificationFrame = null
       this.pendingNotifications.clear()
+    }
+    if (this.rebuildScheduled) {
+      if (this.rebuildFrame !== null)
+        window.cancelAnimationFrame(this.rebuildFrame)
+      this.rebuildScheduled = false
+      this.rebuildFrame = null
+      this.pendingRebuilds.clear()
     }
   }
 }
