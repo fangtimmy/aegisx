@@ -355,31 +355,55 @@ export function registerRunRoutes(
     return streamSSE(c, async (stream) => {
       let finished = false
       let unsubscribe = () => {}
+      let heartbeat: ReturnType<typeof setInterval> | undefined
+      // Serialize all SSE writes (snapshot + live) so events cannot reorder.
+      let writeChain: Promise<void> = Promise.resolve()
       const finish = () => {
         if (finished) return
         finished = true
+        if (heartbeat !== undefined) clearInterval(heartbeat)
         unsubscribe()
       }
+      const enqueue = (write: () => Promise<void>) => {
+        if (finished) return writeChain
+        writeChain = writeChain
+          .then(async () => {
+            if (finished) return
+            await write()
+          })
+          .catch(() => {
+            finish()
+          })
+        return writeChain
+      }
+      const sendData = (data: string) =>
+        enqueue(() => stream.writeSSE({ data }))
+      // SSE comment frames are ignored by EventSource and keep proxies awake.
+      const sendPing = () =>
+        enqueue(async () => {
+          await stream.write(":ping\n\n")
+        })
+      // Subscribe before snapshot so live events that arrive mid-snapshot stay ordered.
       unsubscribe = runService.subscribe(runId, (event) => {
-        if (finished) return
-        void stream.writeSSE({ data: JSON.stringify(event) }).catch(finish)
+        void sendData(JSON.stringify(event))
       })
       c.req.raw.signal.addEventListener("abort", finish, { once: true })
       try {
-        await stream.writeSSE({
-          data: JSON.stringify({ type: "ready", runId }),
-        })
-        await stream.writeSSE({
-          data: JSON.stringify({
+        await sendData(JSON.stringify({ type: "ready", runId }))
+        await sendData(
+          JSON.stringify({
             type: "run.updated",
             run: runService.get(runId),
-          }),
-        })
-        for (const agent of runService.agents(runId)) {
-          await stream.writeSSE({
-            data: JSON.stringify({ type: "agent.updated", agent }),
           })
+        )
+        for (const agent of runService.agents(runId)) {
+          await sendData(JSON.stringify({ type: "agent.updated", agent }))
         }
+        if (finished) return
+        // Keep proxies awake; Bun idleTimeout is disabled in index.ts.
+        heartbeat = setInterval(() => {
+          void sendPing()
+        }, 15_000)
         await new Promise<void>((resolve) => {
           if (c.req.raw.signal.aborted) {
             resolve()
@@ -389,6 +413,7 @@ export function registerRunRoutes(
             once: true,
           })
         })
+        await writeChain
       } catch {
         finish()
       } finally {

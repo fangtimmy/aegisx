@@ -20,5 +20,8 @@ process.once("SIGTERM", shutdown)
 export default {
   hostname: "127.0.0.1",
   port: Number(process.env.PORT ?? 3000),
+  // Bun.serve default idleTimeout is 10s; quiet SSE (thinking / long tools) is idle
+  // and gets reset mid-stream. 0 disables. See bun docs: guides/http/sse.
+  idleTimeout: 0,
   fetch: instance.app.fetch,
 }
