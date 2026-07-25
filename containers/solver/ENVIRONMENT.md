@@ -12,12 +12,14 @@
 
 ## Python (重要)
 
-`pwntools` / `angr` / `impacket` / `pycryptodome` / `scapy` / `playwright` / `volatility3` / `bloodyAD` / `certipy-ad` / `coercer` / `pypykatz` / `flask-unsign` 等都在 venv 里, **不在系统 python3**:
+`python` / `python3` 已指向 `/opt/venv` (PATH + `/usr/local/bin` 软链)。CTF 库都在 venv 里:
+
+`pwntools` / `angr` / `impacket` / `pycryptodome` / `gmpy2` / `numpy` / `scipy` / `pillow` / `pefile` / `fpylll` / `uncompyle6` / `scapy` / `playwright` / `volatility3` / `bloodyAD` / `certipy-ad` / `coercer` / `pypykatz` / `flask-unsign` / `pysmx` / `gmssl` 等。
 
 ```bash
+python3 script.py
+# 等价
 /opt/venv/bin/python script.py
-# 或
-source /opt/venv/bin/activate && python script.py
 ```
 
 ## 特殊命令入口
@@ -27,21 +29,24 @@ source /opt/venv/bin/activate && python script.py
 | `ghidra-analyze` | Ghidra headless 反编译 (软链到 `/opt/ghidra_*/support/analyzeHeadless`) |
 | `fd` | 等价 `fdfind` (ripgrep 家族文件搜索) |
 | `pwndbg` | gdb 自动加载 pwndbg 集成 |
-| `jwt_tool.py` | `/opt/solver/tools/jwt_tool/jwt_tool.py`, 用 `/opt/venv/bin/python` 运行 |
+| `bkcrack` | ZipCrypto known-plaintext 攻击 |
+| `jwt_tool.py` | `/opt/solver/tools/jwt_tool/jwt_tool.py`, 用 `python3` 运行 |
 
 ## 工具分类速查
 
 不是完整列表, 用 `which <tool>` / `ls /usr/local/bin` / `compgen -c` 自行探.
 
 - **Web**: nmap, ffuf, dirsearch, feroxbuster, httpx, nuclei, katana, naabu, dalfox, seclists, wsrx
-- **Binary/Pwn**: gdb(+pwndbg), ropper, ropgadget, rizin, jadx, apktool, checksec, qemu-user, one_gadget
-- **Forensics**: binwalk, foremost, steghide, pngcheck, ffmpeg, tshark, volatility3 (venv)
+- **Binary/Pwn**: gdb(+pwndbg), ropper, ropgadget, rizin, jadx, apktool, checksec, qemu-user, one_gadget, patchelf, strace, upx, bkcrack
+- **Forensics/Stego**: binwalk, foremost, steghide, zsteg, outguess, pngcheck, exiftool, ffmpeg, imagemagick (`convert`/`identify`), tshark, volatility3 (venv)
+- **OCR/Docs/QR**: tesseract, pdfinfo/pdftotext (poppler), zbarimg; pillow/pyzbar/pypdf/pdfminer (venv)
 - **AD/Windows**: smbclient, krb5-user, enum4linux-ng, kerbrute, bloodyAD (venv), certipy-ad (venv), coercer (venv), pypykatz (venv)
-- **Crypto**: pycryptodome, gmpy2, sympy, z3-solver (均在 venv)
+- **Crypto**: pycryptodome, gmpy2, sympy, z3-solver, numpy, scipy, fpylll, pysmx, gmssl, mnemonic, eth-account (venv)
+- **Rev helpers**: uncompyle6, pefile, lief, pyelftools, opencv-python-headless (venv)
 - **Cloud**: cloudfox
 - **Java**: ysoserial.jar (`/opt/solver/tools/`), jdwp-shellifier (`/opt/solver/tools/`), jadx
 - **Ruby**: one_gadget, zsteg
-- **Misc**: jq, yq, rg, fd, 7z, unzip, file, rlwrap, chisel, ncat, sqlite3, redis-tools
+- **Misc**: jq, yq, rg, fd, 7z, unzip, file, rlwrap, chisel, ncat, sqlite3, redis-tools, cmake
 
 ## Workspace 约定
 

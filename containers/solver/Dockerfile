@@ -14,7 +14,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
 
 # === Packages ===
-# meta · base/files · net/tunnel · web · binary/pwn · forensics · net-analysis · windows/ad · databases · bruteforce · runtimes
+# meta · base/files · net/tunnel · web · binary/pwn · forensics/stego · net-analysis · windows/ad · databases · bruteforce · crypto/math · docs/ocr · runtimes
 RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=solver-apt-lists,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -24,16 +24,19 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so && \
     apt-get -y install --no-install-recommends \
       kali-linux-headless \
-      python3-venv build-essential pkg-config fonts-noto-cjk \
+      python3-venv build-essential pkg-config cmake fonts-noto-cjk \
       bsdextrautils file unzip 7zip-rar jq yq ripgrep fd-find rlwrap \
       iputils-ping sshpass ncat netcat-openbsd chisel \
       dirsearch feroxbuster httpx-toolkit nuclei seclists \
       gdb checksec rizin qemu-user-binfmt jadx apktool \
-      foremost steghide pngcheck ffmpeg \
+      patchelf strace upx-ucl \
+      foremost steghide pngcheck ffmpeg imagemagick \
+      libimage-exiftool-perl \
       tshark \
       smbclient krb5-user enum4linux-ng \
       redis-tools sqlite3 \
       fcrackzip rarcrack \
+      poppler-utils tesseract-ocr zbar-tools libzbar0 \
       default-jdk-headless nodejs npm golang-go ruby && \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd && \
     (gzip -dk /usr/share/wordlists/rockyou.txt.gz 2>/dev/null || true)
@@ -52,18 +55,21 @@ RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked
     python3 /usr/local/bin/solver-cache.py sync-knowledges && \
     find /opt/solver/knowledges -name .git -type d -prune -exec rm -rf {} +
 
-# === GitHub Release Binary ===
+# === GitHub Release Binary + outguess ===
+# ghidra · wsrx · katana · naabu · dalfox · cloudfox · kerbrute · bkcrack · outguess(src)
 RUN --mount=type=cache,id=solver-downloads,target=/var/cache/solver/downloads,sharing=locked \
+    D=/var/cache/solver/downloads && \
     python3 /usr/local/bin/solver-cache.py sync-downloads && \
-    unzip -q /var/cache/solver/downloads/ghidra.zip -d /opt && \
+    unzip -q "$D/ghidra.zip" -d /opt && \
     ln -sf /opt/ghidra_12.1.2_PUBLIC/support/analyzeHeadless /usr/local/bin/ghidra-analyze && \
-    tar -xzf /var/cache/solver/downloads/wsrx.tar.gz -C /usr/local/bin && \
-    unzip -q /var/cache/solver/downloads/katana.zip katana -d /tmp && mv /tmp/katana /usr/local/bin/ && \
-    unzip -q /var/cache/solver/downloads/naabu.zip naabu -d /tmp && mv /tmp/naabu /usr/local/bin/ && \
-    tar -xzf /var/cache/solver/downloads/dalfox.tar.gz -C /tmp && mv /tmp/dalfox-linux-amd64 /usr/local/bin/dalfox && \
-    unzip -q /var/cache/solver/downloads/cloudfox.zip cloudfox/cloudfox -d /tmp && mv /tmp/cloudfox/cloudfox /usr/local/bin/cloudfox && \
-    cp /var/cache/solver/downloads/kerbrute /usr/local/bin/kerbrute && chmod +x /usr/local/bin/kerbrute && \
-    rm -rf /tmp/cloudfox
+    tar -xzf "$D/wsrx.tar.gz" -C /usr/local/bin && \
+    unzip -q "$D/katana.zip" katana -d /usr/local/bin && \
+    unzip -q "$D/naabu.zip" naabu -d /usr/local/bin && \
+    tar -xzf "$D/dalfox.tar.gz" -C /tmp && mv /tmp/dalfox-linux-amd64 /usr/local/bin/dalfox && \
+    unzip -q "$D/cloudfox.zip" cloudfox/cloudfox -d /tmp && mv /tmp/cloudfox/cloudfox /usr/local/bin/cloudfox && \
+    install -m755 "$D/kerbrute" /usr/local/bin/kerbrute && \
+    tar -xzf "$D/bkcrack.tar.gz" -C /tmp && install -m755 /tmp/bkcrack-*/bkcrack /usr/local/bin/bkcrack && \
+    rm -rf /tmp/cloudfox /tmp/bkcrack-*
 
 # === pwndbg ===
 RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
@@ -78,10 +84,16 @@ RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
     /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install \
       pwntools ropper ropgadget capstone requests \
-      pycryptodome pycryptodomex gmpy2 sympy z3-solver \
+      pycryptodome pycryptodomex gmpy2 sympy z3-solver numpy scipy \
+      pillow pefile fpylll uncompyle6 pyelftools lief \
+      pyzbar pypdf pdfminer.six pyshark \
+      mnemonic base58 eth-account pysmx gmssl mido \
+      opencv-python-headless \
       angr impacket ldap3 git-dumper playwright volatility3 \
       cryptography pyOpenSSL pyjwt flask-unsign scapy \
-      bloodyAD certipy-ad coercer pypykatz
+      bloodyAD certipy-ad coercer pypykatz && \
+    ln -sfn /opt/venv/bin/python3 /usr/local/bin/python3 && \
+    ln -sfn /opt/venv/bin/python /usr/local/bin/python
 
 # === Playwright Chromium ===
 RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \

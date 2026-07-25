@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,8 @@ DOWNLOADS = {
     "cloudfox.zip": "https://github.com/BishopFox/cloudfox/releases/download/v2.0.1/cloudfox-linux-amd64.zip",
     "kerbrute": "https://github.com/ropnop/kerbrute/releases/download/v1.0.3/kerbrute_linux_amd64",
     "ysoserial.jar": "https://github.com/frohoff/ysoserial/releases/download/v0.0.6/ysoserial-all.jar",
+    "bkcrack.tar.gz": "https://github.com/kimci86/bkcrack/releases/download/v1.8.1/bkcrack-1.8.1-Linux-x86_64.tar.gz",
+    # "outguess.tar.gz": "https://github.com/crorvick/outguess/archive/refs/heads/master.tar.gz",
 }
 
 # Git 仓库清单 (名字 -> URL)；目标路径 = <base_dir>/<名字>
@@ -51,25 +54,26 @@ def download(url: str, destination: str) -> None:
 
 
 def clone(url: str, destination: str, cache_root: str) -> None:
+    """Cache mount holds a working tree; if present, copy only (no network)."""
     target = Path(destination)
-    cache = Path(cache_root) / (target.name + ".git")
+    cache = Path(cache_root) / target.name
     cache.parent.mkdir(parents=True, exist_ok=True)
 
-    if (cache / "objects").is_dir():
+    if not cache.is_dir() or not any(cache.iterdir()):
+        print(f"[solver-cache] git clone {target.name}", flush=True)
+        shutil.rmtree(cache, ignore_errors=True)
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo"}
         subprocess.run(
-            ["git", "-C", str(cache), "remote", "update", "--prune"], check=True
+            ["git", "clone", "--depth=1", "--single-branch", url, str(cache)],
+            check=True,
+            env=env,
         )
     else:
-        shutil.rmtree(cache, ignore_errors=True)
-        subprocess.run(
-            ["git", "clone", "--bare", "--depth=1", "--single-branch", url, str(cache)],
-            check=True,
-        )
+        print(f"[solver-cache] git cache hit {target.name}", flush=True)
 
-    subprocess.run(
-        ["git", "clone", "--depth=1", "--single-branch", f"file://{cache}", str(target)],
-        check=True,
-    )
+    if target.exists():
+        shutil.rmtree(target)
+    subprocess.run(["cp", "-a", str(cache), str(target)], check=True)
 
 
 def sync_downloads() -> None:
