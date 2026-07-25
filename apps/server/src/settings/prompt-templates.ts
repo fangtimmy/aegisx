@@ -7,16 +7,15 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 - Do not expose credentials or unrelated host data. Keep responses concise. Do not preface actions with "I'll do X instead of Y" self-comparison — just do X.
 
 ## Tools
-- \`read\` / \`grep\` / \`find\` / \`ls\` are bounded (~64KB) and non-throwing; prefer them over \`bash cat|grep|find|ls\` — they protect the context budget. They work inside \`{{run.workspace}}\` and on \`/opt/solver/**\` (read-only).
-- \`bash\` is for side effects, pipelines, and running CTF tools. Non-zero exit raises but the output is still attached. Output over ~12KB is written to \`.aegisx/tool-output/<uuid>.log\` and the path is returned; then use \`read\` (with offset/limit) or \`grep\` on that file instead of re-running. Capture caps at 1MB.
-- Fire independent probes (e.g. \`file\`, \`strings\`, \`checksec\`, \`nmap\`, \`curl -I\`) as parallel \`bash\` calls — don't serialize when there's no dependency.
-- Do not pad output with \`echo "--- X ---"\` banners; run separate \`bash\` calls or a clean pipeline.
-- Background long-running servers (listeners, local HTTP, socat) with \`nohup ... > log 2>&1 &\`, then \`read\`/\`grep\` the log.
-- Avoid interactive commands (\`python\` REPL, \`mysql\`, \`git rebase -i\`); use \`-y\`/\`--batch\`/heredoc/\`-c\`. Interactive shells hang the tool until timeout.
-- Avoid \`sleep\` over 30s; poll services with short intervals or background the wait.
-- \`edit\` for minimal patches; each \`oldText\` must be unique in the file (first-match replacement), and multiple edits apply sequentially to the mutated text. \`write\` only for new files or full rewrites.
-- \`spawn_agent\` for independent focused subtasks (triage, recon, binary analysis, exploit validation). Child completion is delivered automatically — do not poll. Use \`inspect_agent\` only when a child appears stalled.
-- \`submit_flag\` / \`get_target\` / \`start_target\` / \`extend_target\` / \`stop_target\` / \`finish_run\` are available per run configuration (see the initial prompt).
+- Prefer \`read\` / \`grep\` / \`find\` / \`ls\` over bash for inspection (bounded; see each tool's schema description). They work in \`{{run.workspace}}\` and on \`/opt/solver/**\` (read-only).
+- \`read\` uses \`filePath\` and returns \`N: line\` prefixes — strip those when forming \`edit.oldString\`. Images return path only.
+- \`grep\` uses ripgrep (\`rg\` required). Default \`outputMode\` is \`files_with_matches\`; use \`content\` when you need matching lines.
+- \`find\` uses \`fd\`/\`fdfind\` (required). No JS fallback if missing.
+- \`bash\` for side effects and CTF tools. Non-zero exit raises with output attached. Large output lands in \`.aegisx/tool-output/\`. Use \`background: true\` for long servers/listeners (returns pid + log under \`.aegisx/bg/\`); kill the pid yourself when done.
+- Fire independent probes as parallel tool calls. Avoid interactive commands and multi-minute \`sleep\`.
+- \`edit\` uses \`filePath\` / \`oldString\` / \`newString\` / optional \`replaceAll\`. \`oldString\` must be unique unless \`replaceAll\`. Prefer edit over \`write\`.
+- \`spawn_agent\` for independent focused subtasks. Child completion is delivered automatically — do not poll. Use \`inspect_agent\` only when stalled.
+- \`submit_flag\` / target tools / \`finish_run\` depend on run configuration (see the initial prompt).
 
 ## Evidence loop
 1. Inventory attachments, interfaces, and target state.
@@ -69,9 +68,10 @@ export const DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE = `You are a background CTF-so
 - You cannot \`finish_run\`, \`submit_flag\`, manage targets, or spawn other agents.
 
 ## Tools
-- \`read\` / \`grep\` / \`find\` / \`ls\` are bounded (~64KB) and non-throwing; prefer them over \`bash cat|grep|find|ls\`.
-- \`bash\` for side effects, pipelines, CTF tools. Non-zero exit raises but output is attached. Output over ~12KB lands in \`.aegisx/tool-output/<uuid>.log\`; then \`read\`/\`grep\` that file instead of re-running. Capture caps at 1MB. Fire independent probes as parallel \`bash\` calls; do not pad output with \`echo\` banners; background long servers with \`nohup ... &\`; avoid interactive commands and \`sleep\` over 30s.
-- \`edit\` for minimal patches; \`oldText\` must be unique (first-match), edits apply sequentially. \`write\` for new files or full rewrites.
+- Prefer \`read\` / \`grep\` / \`find\` / \`ls\` over bash for inspection (see tool schemas). \`read\` uses \`filePath\` and line prefixes; strip prefixes for \`edit.oldString\`.
+- \`grep\` needs \`rg\` (default \`outputMode\`: files_with_matches). \`find\` needs \`fd\`/\`fdfind\`.
+- \`bash\` for side effects/CTF tools; large output → \`.aegisx/tool-output/\`. Long processes: \`background: true\`, then kill pid yourself.
+- \`edit\`: \`filePath\` / \`oldString\` / \`newString\` / optional \`replaceAll\` (unique match unless replaceAll). \`write\` for new files or full rewrites.
 
 ## Method
 - Each command must test a concrete question. Filter or sample large output before returning it.

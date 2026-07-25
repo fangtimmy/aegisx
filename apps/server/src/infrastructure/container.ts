@@ -335,12 +335,13 @@ export function createContainerBackend(
         }))
     },
     exec: async (command, options) => {
+      const workdir = options.workdir ? resolvePath(options.workdir) : cwd
       const boundedCommand =
         options.timeout && options.timeout > 0
           ? `timeout -k 2s ${options.timeout}s sh -c ${shellQuote(command)}`
           : command
       const result = await dockerExec(
-        ["--workdir", cwd, name, "sh", "-c", boundedCommand],
+        ["--workdir", workdir, name, "sh", "-c", boundedCommand],
         {
           ...options,
           maxOutputBytes: maxCapturedShellOutput,
@@ -359,6 +360,31 @@ export function createContainerBackend(
         outputBytes: result.outputBytes,
         truncated: result.truncated,
       }
+    },
+    execBackground: async (command, options) => {
+      if (options.signal?.aborted) throw new Error("aborted")
+      const workdir = options.workdir ? resolvePath(options.workdir) : cwd
+      const absLog = resolvePath(options.logPath, true)
+      await requireExec(name, ["mkdir", "-p", posix.dirname(absLog)], {
+        signal: options.signal,
+        onFatal,
+      })
+      const wrapped = `nohup sh -c ${shellQuote(command)} > ${shellQuote(absLog)} 2>&1 & echo $!`
+      const result = await dockerExec(
+        ["--workdir", workdir, name, "sh", "-c", wrapped],
+        { signal: options.signal, onFatal }
+      )
+      if (result.exitCode !== 0) {
+        if (!(await containerRunningAsync(name))) onFatal?.()
+        throw new Error(
+          result.stderr.trim() || "Failed to start background command"
+        )
+      }
+      const pid = Number(decoder.decode(result.stdout).trim())
+      if (!Number.isFinite(pid) || pid <= 0) {
+        throw new Error("Failed to start background command (no pid)")
+      }
+      return { pid, logPath: options.logPath }
     },
   }
 }

@@ -263,7 +263,7 @@ describe("container execution and workspace files", () => {
     expect(instance.activeSessionCount()).toBe(0)
 
     instance.faux.setResponses([
-      fauxAssistantMessage(fauxToolCall("read", { path: "/etc/passwd" }), {
+      fauxAssistantMessage(fauxToolCall("read", { filePath: "/etc/passwd" }), {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage(
@@ -277,17 +277,18 @@ describe("container execution and workspace files", () => {
         { stopReason: "toolUse" }
       ),
       fauxAssistantMessage(
-        fauxToolCall("write", { path: "result.txt", content: "first" }),
+        fauxToolCall("write", { filePath: "result.txt", content: "first" }),
         { stopReason: "toolUse" }
       ),
       fauxAssistantMessage(
         fauxToolCall("edit", {
-          path: "result.txt",
-          edits: [{ oldText: "first", newText: "container" }],
+          filePath: "result.txt",
+          oldString: "first",
+          newString: "container",
         }),
         { stopReason: "toolUse" }
       ),
-      fauxAssistantMessage(fauxToolCall("read", { path: "result.txt" }), {
+      fauxAssistantMessage(fauxToolCall("read", { filePath: "result.txt" }), {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage(

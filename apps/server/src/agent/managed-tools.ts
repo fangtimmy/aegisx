@@ -37,14 +37,14 @@ export function resolveToolTimeoutMs(
   args: unknown,
   settings: ToolTimeoutSettings
 ): number {
-  if (
-    toolName === "bash" &&
-    args &&
-    typeof args === "object" &&
-    "timeout" in args &&
-    typeof args.timeout === "number"
-  ) {
-    return args.timeout * 1000 + 1000
+  if (toolName === "bash" && args && typeof args === "object") {
+    if ("background" in args && args.background === true) {
+      // Only covers spawn/setup; the process itself is detached.
+      return 15_000
+    }
+    if ("timeout" in args && typeof args.timeout === "number") {
+      return args.timeout * 1000 + 1000
+    }
   }
   return settings.toolTimeouts[toolName] ?? settings.defaultToolTimeoutMs
 }
