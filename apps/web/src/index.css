@@ -1,4 +1,13 @@
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
+@import "streamdown/styles.css";
+
+/* Streamdown + plugins: scan package class names for Tailwind (v4) */
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
+@source "../node_modules/@streamdown/mermaid/dist/*.js";
+@source "../node_modules/@streamdown/math/dist/*.js";
+@source "../node_modules/@streamdown/cjk/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -166,4 +175,80 @@
   }
 }
 
+[data-streamdown="code-block"] {
+  background-color: var(--background);
+  gap: var(--spacing);
+}
 
+[data-streamdown="code-block-actions"] {
+  opacity: 0;
+}
+
+[data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"] {
+  opacity: 1;
+}
+
+[data-streamdown="code-block-body"] {
+  border: none;
+  padding: calc(var(--spacing) * 2);
+}
+
+/* File preview: dual-theme tokens (defaultColor: false) + wrap */
+.file-preview .shiki {
+  margin: 0;
+  padding: 0.75rem;
+  overflow: visible;
+  border: none;
+  border-radius: 0;
+  font-size: inherit;
+  line-height: inherit;
+  color: var(--shiki-light);
+  background-color: transparent;
+}
+
+.file-preview .shiki span {
+  color: var(--shiki-light);
+  font-style: var(--shiki-light-font-style);
+  font-weight: var(--shiki-light-font-weight);
+  text-decoration: var(--shiki-light-text-decoration);
+}
+
+html.dark .file-preview .shiki {
+  color: var(--shiki-dark);
+  background-color: transparent;
+}
+
+html.dark .file-preview .shiki span {
+  color: var(--shiki-dark);
+  font-style: var(--shiki-dark-font-style);
+  font-weight: var(--shiki-dark-font-weight);
+  text-decoration: var(--shiki-dark-text-decoration);
+}
+
+.file-preview code {
+  counter-reset: file-line;
+  counter-increment: file-line 0;
+}
+
+.file-preview .line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.file-preview .line::before {
+  display: inline-block;
+  width: 2rem;
+  margin-right: 1.5rem;
+  color: var(--muted-foreground);
+  text-align: right;
+  content: counter(file-line);
+  counter-increment: file-line;
+  opacity: 0.64;
+  user-select: none;
+}
+
+.file-preview .line:last-child:empty::before {
+  content: none;
+  counter-increment: none;
+}

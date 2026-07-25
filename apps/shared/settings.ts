@@ -37,6 +37,7 @@ export type SettingsPublic = {
 	providerDiscoverTimeoutMs: number;
 	defaultToolTimeoutMs: number;
 	toolTimeouts: Record<string, number>;
+	renderUserMessagesAsMarkdown: boolean;
 	conversationToolExpand: ConversationToolExpandPrefs;
 	mainSystemPromptTemplate: string;
 	childSystemPromptTemplate: string;

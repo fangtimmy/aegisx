@@ -81,6 +81,7 @@ const runtimeSettingsInput = Type.Object(
         Type.Integer({ minimum: 1_000, maximum: 600_000 })
       )
     ),
+    renderUserMessagesAsMarkdown: Type.Optional(Type.Boolean()),
     conversationToolExpand: Type.Optional(
       Type.Object(
         {
@@ -349,6 +350,8 @@ export function registerSettingsRoutes(
       patch.defaultToolTimeoutMs = input.defaultToolTimeoutMs
     if (input.toolTimeouts !== undefined)
       patch.toolTimeouts = input.toolTimeouts
+    if (input.renderUserMessagesAsMarkdown !== undefined)
+      patch.renderUserMessagesAsMarkdown = input.renderUserMessagesAsMarkdown
     if (input.conversationToolExpand !== undefined)
       patch.conversationToolExpand = input.conversationToolExpand
     configStore.updateSettings(patch)

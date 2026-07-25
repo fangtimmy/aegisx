@@ -323,8 +323,13 @@ export function RunWorkspace({
                         <ScrollArea className="relative h-full pr-1" scrollFade>
                           <Conversation
                             agentId={selectedAgent.id}
+                            agentStatus={selectedAgent.status}
                             expandPrefs={expandPrefs}
                             key={selectedAgent.id}
+                            renderUserMessagesAsMarkdown={
+                              settings.data?.renderUserMessagesAsMarkdown ??
+                              false
+                            }
                             stream={streamStore}
                           />
                         </ScrollArea>

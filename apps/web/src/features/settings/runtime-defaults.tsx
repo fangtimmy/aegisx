@@ -59,6 +59,7 @@ type RuntimeSettingsInput = Pick<
   providerDiscoverTimeoutMs: number
   defaultToolTimeoutMs: number
   toolTimeouts: Record<string, number>
+  renderUserMessagesAsMarkdown: boolean
   conversationToolExpand: ConversationToolExpandPrefs
 }
 
@@ -85,6 +86,7 @@ type RuntimeFormValues = {
   providerDiscoverTimeoutMs: number
   defaultToolTimeoutMs: number
   toolTimeouts: Record<string, number>
+  renderUserMessagesAsMarkdown: boolean
   conversationToolExpand: ConversationToolExpandPrefs
 }
 
@@ -154,6 +156,7 @@ export function RuntimeDefaults({
       providerDiscoverTimeoutMs: settings.providerDiscoverTimeoutMs,
       defaultToolTimeoutMs: settings.defaultToolTimeoutMs,
       toolTimeouts: { ...settings.toolTimeouts },
+      renderUserMessagesAsMarkdown: settings.renderUserMessagesAsMarkdown,
       conversationToolExpand: { ...settings.conversationToolExpand },
     },
   })
@@ -193,6 +196,7 @@ export function RuntimeDefaults({
           providerDiscoverTimeoutMs: values.providerDiscoverTimeoutMs,
           defaultToolTimeoutMs: values.defaultToolTimeoutMs,
           toolTimeouts: values.toolTimeouts,
+          renderUserMessagesAsMarkdown: values.renderUserMessagesAsMarkdown,
           conversationToolExpand: values.conversationToolExpand,
         })
       )}
@@ -473,7 +477,27 @@ export function RuntimeDefaults({
       ))}
       <div className="col-span-2 grid gap-3 rounded-lg border p-4">
         <div>
-          <h3 className="font-medium text-sm">Conversation tool panels</h3>
+          <h3 className="font-medium text-sm">Conversation</h3>
+        </div>
+        <Field className="flex flex-row items-start justify-between gap-3">
+          <div className="min-w-0">
+            <FieldLabel className="font-normal">
+              Render user messages as Markdown
+            </FieldLabel>
+            <p className="text-muted-foreground text-xs">
+              Enable rich Markdown rendering for messages sent by the user.
+            </p>
+          </div>
+          <Controller
+            control={form.control}
+            name="renderUserMessagesAsMarkdown"
+            render={({ field }) => (
+              <Switch checked={field.value} onCheckedChange={field.onChange} />
+            )}
+          />
+        </Field>
+        <div className="border-t pt-3">
+          <h4 className="font-medium text-sm">Tool panels</h4>
           <p className="text-muted-foreground text-xs">
             Auto-expand tool I/O while running (or on error). Default is
             collapsed for every category.

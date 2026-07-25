@@ -24,9 +24,8 @@ import {
   useSyncExternalStore,
 } from "react"
 import { createPortal } from "react-dom"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
 import type { AgentStatus, ConversationToolExpandPrefs } from "@/api"
+import { Markdown } from "@/components/markdown"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -72,25 +71,6 @@ function formatDuration(durationMs: number) {
   if (seconds < 60) return `${Math.round(seconds)}s`
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
 }
-
-const Markdown = memo(function Markdown({ children }: { children: string }) {
-  return (
-    <div className="min-w-0 break-words text-sm leading-6 [&_a]:underline [&_a]:underline-offset-4 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_h1]:mb-3 [&_h1]:font-semibold [&_h1]:text-xl [&_h2]:mb-2 [&_h2]:font-semibold [&_h2]:text-lg [&_h3]:mb-2 [&_h3]:font-semibold [&_h3]:text-base [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:mb-3 [&_p:last-child]:mb-0 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:bg-muted/40 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:bg-muted/40 [&_th]:p-2 [&_ul]:my-3">
-      <ReactMarkdown
-        components={{
-          a: ({ node: _node, ...props }) => (
-            <a {...props} rel="noreferrer" target="_blank" />
-          ),
-        }}
-        remarkPlugins={[remarkGfm]}
-      >
-        {children.length > 100_000
-          ? `${children.slice(0, 100_000)}\n\n[Message preview truncated]`
-          : children}
-      </ReactMarkdown>
-    </div>
-  )
-})
 
 function toolSummary(tool: ToolBlock) {
   return toolStatusLabel(
@@ -313,13 +293,15 @@ function ToolActivity({
 const TextBlock = memo(function TextBlock({
   body,
   separated,
+  isAnimating,
 }: {
   body: string
   separated?: boolean
+  isAnimating?: boolean
 }) {
   return (
     <div className={cn(separated && "mt-3")}>
-      <Markdown>{body}</Markdown>
+      <Markdown isAnimating={isAnimating}>{body}</Markdown>
     </div>
   )
 })
@@ -327,16 +309,26 @@ const TextBlock = memo(function TextBlock({
 const ConversationRow = memo(function ConversationRow({
   item,
   expandPrefs,
+  isAnimating = false,
+  renderUserMessagesAsMarkdown,
 }: {
   item: ConversationItem
   expandPrefs: ConversationToolExpandPrefs
+  isAnimating?: boolean
+  renderUserMessagesAsMarkdown: boolean
 }) {
   const time = item.timestamp ? formatConversationTime(item.timestamp) : null
   if (item.type === "user") {
     return (
       <article className="flex justify-end py-5">
         <div className="max-w-[90%] rounded-lg border bg-muted/45 px-4 py-3">
-          <Markdown>{item.body}</Markdown>
+          {renderUserMessagesAsMarkdown ? (
+            <Markdown>{item.body}</Markdown>
+          ) : (
+            <p className="whitespace-pre-wrap break-words text-sm leading-6">
+              {item.body}
+            </p>
+          )}
         </div>
       </article>
     )
@@ -361,7 +353,7 @@ const ConversationRow = memo(function ConversationRow({
               <span className="capitalize">{item.status}</span>
               {time && <time className="ml-auto">{time}</time>}
             </div>
-            <Markdown>{item.body}</Markdown>
+            <Markdown isAnimating={isAnimating}>{item.body}</Markdown>
           </div>
         </div>
       </article>
@@ -380,6 +372,7 @@ const ConversationRow = memo(function ConversationRow({
             return (
               <TextBlock
                 body={block.body}
+                isAnimating={isAnimating}
                 key={block.key}
                 separated={separated}
               />
@@ -403,7 +396,7 @@ const ConversationRow = memo(function ConversationRow({
                 </CollapsibleTrigger>
                 <CollapsiblePanel>
                   <div className="mt-1 ml-5 min-w-0 pb-2 text-muted-foreground">
-                    <Markdown>{block.body}</Markdown>
+                    <Markdown isAnimating={isAnimating}>{block.body}</Markdown>
                   </div>
                 </CollapsiblePanel>
               </Collapsible>
@@ -442,10 +435,14 @@ export function Conversation({
   agentId,
   stream,
   expandPrefs,
+  agentStatus,
+  renderUserMessagesAsMarkdown,
 }: {
   agentId: string
   stream: ConversationStore
   expandPrefs: ConversationToolExpandPrefs
+  agentStatus?: AgentStatus
+  renderUserMessagesAsMarkdown: boolean
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -576,8 +573,14 @@ export function Conversation({
           </div>,
           scrollContainer
         )}
-      {items.map((item) => (
-        <ConversationRow expandPrefs={expandPrefs} item={item} key={item.key} />
+      {items.map((item, index) => (
+        <ConversationRow
+          expandPrefs={expandPrefs}
+          isAnimating={agentStatus === "running" && index === items.length - 1}
+          item={item}
+          key={item.key}
+          renderUserMessagesAsMarkdown={renderUserMessagesAsMarkdown}
+        />
       ))}
       <div aria-live="polite" className="sr-only">
         {items.length > 0 ? "Agent activity updated" : ""}
