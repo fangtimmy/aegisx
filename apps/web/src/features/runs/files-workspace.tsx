@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { useCallback, useRef, useState } from "react"
 import { keys, type RunFileEntry, runsApi } from "@/api"
+import { CodePreview } from "@/components/code-preview"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -242,10 +243,19 @@ export function FilesWorkspace({
         <div className="absolute inset-y-0 left-0 w-0.5 bg-transparent transition-colors group-hover:bg-primary/40 data-[active]:bg-primary" />
       </div>
       <section className="flex min-h-0 min-w-0 flex-1 flex-col pl-4">
-        <div className="mb-2 flex min-h-8 items-center justify-between gap-2">
-          <h3 className="min-w-0 truncate font-medium text-sm">
-            {selectedPath || "Preview"}
-          </h3>
+        <div className="mb-2 flex min-h-8 items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <h3 className="truncate font-medium text-sm">
+              {selectedPath || "Preview"}
+            </h3>
+            {selected.data?.type === "text" && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground text-xs">
+                <span>{formatSize(selected.data.size)}</span>
+                <span>Modified {formatTime(selected.data.modifiedAt)}</span>
+                {selected.data.truncated && <span>Preview truncated</span>}
+              </div>
+            )}
+          </div>
           {selectedPath && (
             <Button
               aria-label={`Download ${selectedPath}`}
@@ -288,18 +298,12 @@ export function FilesWorkspace({
           </Alert>
         )}
         {selected.data?.type === "text" && (
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border">
-            <div className="flex flex-wrap gap-x-4 gap-y-1 border-b bg-muted/30 px-3 py-2 text-muted-foreground text-xs">
-              <span>{formatSize(selected.data.size)}</span>
-              <span>Modified {formatTime(selected.data.modifiedAt)}</span>
-              {selected.data.truncated && <span>Preview truncated</span>}
-            </div>
-            <ScrollArea className="flex-1" scrollFade>
-              <pre className="whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5">
-                {selected.data.content}
-              </pre>
-            </ScrollArea>
-          </div>
+          <ScrollArea className="flex min-h-0 flex-1" scrollFade>
+            <CodePreview
+              code={selected.data.content}
+              path={selectedPath ?? selected.data.path}
+            />
+          </ScrollArea>
         )}
         {selected.data?.type === "binary" && (
           <Alert>
