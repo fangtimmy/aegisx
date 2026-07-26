@@ -58,6 +58,23 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
+function pendingFileKey(file: File) {
+  return `${file.name}:${file.size}:${file.lastModified}`
+}
+
+function mergePendingFiles(current: File[], incoming: File[]) {
+  const seen = new Set(current.map(pendingFileKey))
+  const next = [...current]
+  for (const file of incoming) {
+    if (file.size <= 0) continue
+    const key = pendingFileKey(file)
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(file)
+  }
+  return next
+}
+
 type ChallengeMutationResult = {
   challenge: Challenge
   uploadErrors: string[]
@@ -297,7 +314,7 @@ export function ChallengeDialog({
                 </h3>
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground text-xs tabular-nums">
-                    {challenge?.attachments.length ?? 0}
+                    {(challenge?.attachments.length ?? 0) + pendingFiles.length}
                   </span>
                   <Button
                     aria-label="Upload attachments"
@@ -313,18 +330,23 @@ export function ChallengeDialog({
                     className="sr-only"
                     multiple
                     name="attachments"
-                    onChange={(event) =>
-                      setPendingFiles(Array.from(event.target.files ?? []))
-                    }
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? [])
+                      setPendingFiles((current) =>
+                        mergePendingFiles(current, files)
+                      )
+                      event.target.value = ""
+                    }}
                     ref={uploadInput}
                     tabIndex={-1}
                     type="file"
                   />
                 </div>
               </div>
-              {challenge && challenge.attachments.length > 0 && (
+              {(challenge?.attachments.length ?? 0) > 0 ||
+              pendingFiles.length > 0 ? (
                 <div className="mt-3 border-y">
-                  {challenge.attachments.map((attachment) => (
+                  {challenge?.attachments.map((attachment) => (
                     <AttachmentRow
                       attachment={attachment}
                       deleting={
@@ -335,12 +357,25 @@ export function ChallengeDialog({
                       onDelete={() => removeAttachment.mutate(attachment.id)}
                     />
                   ))}
+                  {pendingFiles.map((file) => (
+                    <PendingFileRow
+                      file={file}
+                      key={pendingFileKey(file)}
+                      onRemove={() =>
+                        setPendingFiles((current) =>
+                          current.filter(
+                            (item) =>
+                              pendingFileKey(item) !== pendingFileKey(file)
+                          )
+                        )
+                      }
+                    />
+                  ))}
                 </div>
-              )}
-              {pendingFiles.length > 0 && (
-                <p className="mt-3 truncate text-muted-foreground text-xs">
-                  {pendingFiles.length} selected:{" "}
-                  {pendingFiles.map((file) => file.name).join(", ")}
+              ) : (
+                <p className="mt-3 text-muted-foreground text-xs">
+                  No attachments yet. Upload files to include with this
+                  challenge.
                 </p>
               )}
             </section>
@@ -515,6 +550,37 @@ function AttachmentRow({
           </AlertDialogPopup>
         </AlertDialog>
       )}
+    </div>
+  )
+}
+
+function PendingFileRow({
+  file,
+  onRemove,
+}: {
+  file: File
+  onRemove: () => void
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 border-t py-3 first:border-t-0">
+      <FileArchive className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-medium text-sm">{file.name}</p>
+        <p className="mt-0.5 text-muted-foreground text-xs">
+          {formatBytes(file.size)} · uploads on save
+        </p>
+      </div>
+      <IconTooltip label={`Remove ${file.name}`}>
+        <Button
+          aria-label={`Remove ${file.name}`}
+          onClick={onRemove}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <Trash2 />
+        </Button>
+      </IconTooltip>
     </div>
   )
 }
