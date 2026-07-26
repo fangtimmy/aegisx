@@ -613,7 +613,7 @@ export function Conversation({
           <div
             aria-hidden={!showJumpToLatest}
             className={cn(
-              "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center transition-opacity duration-200",
+              "pointer-events-none absolute inset-x-0 bottom-2 z-10 flex justify-center transition-opacity duration-200",
               showJumpToLatest ? "opacity-100" : "opacity-0"
             )}
           >

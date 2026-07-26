@@ -38,6 +38,7 @@ import {
   CardFrame,
   CardFrameAction,
   CardFrameDescription,
+  CardFrameFooter,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -48,11 +49,10 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
 import { AgentActivityBadge } from "./agent-activity-badge"
 import { AgentInspectorButton } from "./agent-inspector"
 import { AgentStatusIcon } from "./agent-status-icon"
@@ -376,131 +376,136 @@ export function RunWorkspace({
               </Alert>
             )}
             {(showComposer || active || control.error) && (
-              <div className="border-t bg-background/95 px-6 py-3">
+              <div className="bg-card px-3 pb-3">
                 {showComposer && (
-                  <form
-                    className="mx-auto flex max-w-3xl items-end gap-2"
-                    onSubmit={send}
-                  >
-                    <Field className="min-w-0 flex-1">
-                      <FieldLabel className="sr-only" htmlFor="run-message">
-                        Message to agent
-                      </FieldLabel>
-                      <Textarea
-                        className="min-h-0 resize-none bg-muted/30"
-                        disabled={control.isPending}
-                        id="run-message"
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder={
-                          run.status === "paused"
-                            ? "Optional guidance when resuming"
-                            : "Send guidance to the agent"
-                        }
-                        rows={20}
-                        size="sm"
-                        value={draft}
-                      />
-                    </Field>
-                    <Button
-                      aria-label={
-                        run.status === "paused" ? "Resume run" : "Send message"
-                      }
-                      disabled={!canSubmit}
-                      loading={
-                        control.isPending &&
-                        (control.variables?.action === "message" ||
-                          control.variables?.action === "resume")
-                      }
-                      size="icon"
-                      title={
-                        run.status === "paused" ? "Resume run" : "Send message"
-                      }
-                      type="submit"
-                    >
-                      {run.status === "paused" ? <Play /> : <Send />}
-                    </Button>
-                  </form>
-                )}
-                <div
-                  className={`mx-auto flex max-w-3xl flex-wrap items-center gap-2 ${showComposer ? "mt-3" : ""}`}
-                >
-                  {(active || control.isPending) && (
-                    <span
-                      className="text-muted-foreground text-xs"
-                      role="status"
-                    >
-                      Run is {run.status}
-                      {control.isPending
-                        ? ` · ${control.variables?.action} pending`
-                        : ""}
-                    </span>
-                  )}
-                  {active && selectedAgent && (
-                    <AgentActivityBadge
-                      agentId={selectedAgent.id}
-                      agentStatus={selectedAgent.status}
-                      stream={streamStore}
-                    />
-                  )}
-                  {run.status === "running" && (
-                    <Button
-                      className="ml-auto"
-                      loading={
-                        control.isPending &&
-                        control.variables?.action === "pause"
-                      }
-                      onClick={() =>
-                        control.mutate({ action: "pause", body: {} })
-                      }
-                      variant="outline"
-                    >
-                      <Pause /> Pause
-                    </Button>
-                  )}
-                  {active && (
-                    <AlertDialog>
-                      <AlertDialogTrigger
-                        render={
-                          <Button
-                            className={run.status === "paused" ? "ml-auto" : ""}
-                            variant="destructive-outline"
+                  <CardFrame className="mx-auto max-w-3xl">
+                    <Card>
+                      <CardPanel className="p-2">
+                        <form
+                          className="flex w-full items-center gap-2"
+                          onSubmit={send}
+                        >
+                          <Input
+                            aria-label="Message to agent"
+                            className="flex-1 text-sm text-foreground"
+                            disabled={control.isPending}
+                            id="run-message"
+                            onChange={(event) => setDraft(event.target.value)}
+                            placeholder={
+                              run.status === "paused"
+                                ? "Optional guidance when resuming"
+                                : "Send guidance to the agent"
+                            }
+                            value={draft}
+                            unstyled
                           />
-                        }
-                      >
-                        <Square /> Stop
-                      </AlertDialogTrigger>
-                      <AlertDialogPopup>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Stop this run?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            The active agent process will be terminated and
-                            cannot be resumed.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogClose
-                            render={<Button type="button" variant="ghost" />}
+                          <Button
+                            aria-label={
+                              run.status === "paused"
+                                ? "Resume run"
+                                : "Send message"
+                            }
+                            disabled={!canSubmit}
+                            loading={
+                              control.isPending &&
+                              (control.variables?.action === "message" ||
+                                control.variables?.action === "resume")
+                            }
+                            size="icon"
+                            variant="secondary"
+                            title={
+                              run.status === "paused"
+                                ? "Resume run"
+                                : "Send message"
+                            }
+                            type="submit"
                           >
-                            Cancel
-                          </AlertDialogClose>
+                            {run.status === "paused" ? <Play /> : <Send />}
+                          </Button>
+                        </form>
+                      </CardPanel>
+                    </Card>
+                    <CardFrameFooter className="py-2 px-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(active || control.isPending) && (
+                          <span
+                            className="text-muted-foreground text-xs"
+                            role="status"
+                          >
+                            Run is {run.status}
+                            {control.isPending
+                              ? ` · ${control.variables?.action} pending`
+                              : ""}
+                          </span>
+                        )}
+                        {active && selectedAgent && (
+                          <AgentActivityBadge
+                            agentId={selectedAgent.id}
+                            agentStatus={selectedAgent.status}
+                            stream={streamStore}
+                          />
+                        )}
+                        {run.status === "running" && (
                           <Button
                             loading={
                               control.isPending &&
-                              control.variables?.action === "stop"
+                              control.variables?.action === "pause"
                             }
                             onClick={() =>
-                              control.mutate({ action: "stop", body: {} })
+                              control.mutate({ action: "pause", body: {} })
                             }
-                            type="button"
-                            variant="destructive"
+                            variant="outline"
+                            size="sm"
                           >
-                            Stop run
+                            <Pause /> Pause
                           </Button>
-                        </AlertDialogFooter>
-                      </AlertDialogPopup>
-                    </AlertDialog>
-                  )}
-                </div>
+                        )}
+                        {active && (
+                          <AlertDialog>
+                            <AlertDialogTrigger
+                              render={<Button variant="destructive-outline" size="sm"/>}
+                            >
+                              <Square /> Stop
+                            </AlertDialogTrigger>
+                            <AlertDialogPopup>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>
+                                  Stop this run?
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  The active agent process will be terminated
+                                  and cannot be resumed.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogClose
+                                  render={
+                                    <Button type="button" variant="ghost" />
+                                  }
+                                >
+                                  Cancel
+                                </AlertDialogClose>
+                                <Button
+                                  loading={
+                                    control.isPending &&
+                                    control.variables?.action === "stop"
+                                  }
+                                  onClick={() =>
+                                    control.mutate({ action: "stop", body: {} })
+                                  }
+                                  type="button"
+                                  variant="destructive"
+                                >
+                                  Stop run
+                                </Button>
+                              </AlertDialogFooter>
+                            </AlertDialogPopup>
+                          </AlertDialog>
+                        )}
+                      </div>
+                    </CardFrameFooter>
+                  </CardFrame>
+                )}
                 {control.error && (
                   <Alert className="mx-auto mt-2 max-w-3xl" variant="error">
                     <CircleAlert />
