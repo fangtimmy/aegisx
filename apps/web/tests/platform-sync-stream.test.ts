@@ -6,15 +6,59 @@ test("parses challenge sync progress and completion events", () => {
   assert.deepEqual(
     parseSyncStreamLine(
       JSON.stringify({
+        type: "progress",
+        progress: {
+          remoteId: "challenge-1",
+          phase: "attachment",
+          message: "Downloading attachment 1/1: pwn.bin",
+          name: "Remote Pwn",
+          category: "pwn",
+          points: 500,
+          attachment: { filename: "pwn.bin", index: 1, total: 1 },
+        },
+      })
+    ),
+    {
+      type: "progress",
+      progress: {
+        remoteId: "challenge-1",
+        phase: "attachment",
+        message: "Downloading attachment 1/1: pwn.bin",
+        name: "Remote Pwn",
+        category: "pwn",
+        points: 500,
+        attachment: { filename: "pwn.bin", index: 1, total: 1 },
+      },
+    }
+  )
+  assert.deepEqual(
+    parseSyncStreamLine(
+      JSON.stringify({
         type: "item",
-        item: { remoteId: "challenge-1", status: "created" },
+        item: {
+          remoteId: "challenge-1",
+          status: "created",
+          name: "Remote Pwn",
+          category: "pwn",
+          points: 500,
+          attachments: [
+            { filename: "pwn.bin", size: 12, status: "downloaded" },
+          ],
+        },
         completed: 1,
         total: 2,
       })
     ),
     {
       type: "item",
-      item: { remoteId: "challenge-1", status: "created" },
+      item: {
+        remoteId: "challenge-1",
+        status: "created",
+        name: "Remote Pwn",
+        category: "pwn",
+        points: 500,
+        attachments: [{ filename: "pwn.bin", size: 12, status: "downloaded" }],
+      },
       completed: 1,
       total: 2,
     }

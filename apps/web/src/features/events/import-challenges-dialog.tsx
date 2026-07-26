@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CircleAlert, RefreshCw } from "lucide-react"
-import { useEffect, useState } from "react"
-import { type ChallengeSyncResult, keys, platformsApi } from "@/api"
+import { useEffect, useRef, useState } from "react"
+import {
+  type ChallengeSyncItem,
+  type ChallengeSyncProgress,
+  keys,
+  platformsApi,
+} from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -27,15 +32,60 @@ import {
 } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/lib/toast"
+import { cn } from "@/lib/utils"
 import { refreshEvent } from "./platform-config"
 import { syncChallengeStream } from "./platform-sync-stream"
+
+type ImportLogEntry = {
+  key: string
+  level: "info" | "success" | "error"
+  text: string
+}
+
+function challengeTitle(entry: { name?: string; remoteId: string }) {
+  return entry.name?.trim() || entry.remoteId
+}
+
+function progressLogText(progress: ChallengeSyncProgress): string | null {
+  const subject = challengeTitle(progress)
+  if (progress.phase === "fetching") {
+    return `${subject}: fetching challenge metadata`
+  }
+  if (progress.phase === "attachment" && progress.attachment) {
+    return `${subject}: downloading ${progress.attachment.filename} (${progress.attachment.index}/${progress.attachment.total})`
+  }
+  return null
+}
+
+function itemLogLines(item: ChallengeSyncItem): ImportLogEntry[] {
+  const subject = challengeTitle(item)
+  if (item.status === "failed") {
+    return [
+      {
+        key: `item-${item.remoteId}-failed`,
+        level: "error",
+        text: `${subject}: failed${item.error ? ` — ${item.error}` : ""}`,
+      },
+    ]
+  }
+  return [
+    {
+      key: `item-${item.remoteId}`,
+      level: "success",
+      text: `${subject}: imported challenge`,
+    },
+  ]
+}
 
 export function ImportChallengesDialog({ eventId }: { eventId: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [progress, setProgress] = useState({ completed: 0, total: 0 })
-  const [log, setLog] = useState<ChallengeSyncResult["results"]>([])
+  const [log, setLog] = useState<ImportLogEntry[]>([])
+  const [results, setResults] = useState<ChallengeSyncItem[]>([])
+  const logRef = useRef<HTMLDivElement>(null)
+  const logSeq = useRef(0)
   const challengeKey = [
     ...keys.events.detail(eventId),
     "platform",
@@ -55,18 +105,39 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
       )
     }
   }, [challenges.data, open])
+  const appendLog = (entries: ImportLogEntry[]) => {
+    setLog((current) => {
+      const next = [...current, ...entries]
+      queueMicrotask(() => {
+        const node = logRef.current
+        if (node) node.scrollTop = node.scrollHeight
+      })
+      return next
+    })
+  }
   const sync = useMutation({
     mutationFn: () => {
       setProgress({ completed: 0, total: selected.length })
       setLog([])
-      return syncChallengeStream(
-        eventId,
-        selected,
-        (item, completed, total) => {
-          setProgress({ completed, total })
-          setLog((current) => [...current, item])
+      setResults([])
+      logSeq.current = 0
+      return syncChallengeStream(eventId, selected, (event) => {
+        if (event.type === "progress") {
+          const text = progressLogText(event.progress)
+          if (!text) return
+          appendLog([
+            {
+              key: `progress-${++logSeq.current}`,
+              level: "info",
+              text,
+            },
+          ])
+          return
         }
-      )
+        setProgress({ completed: event.completed, total: event.total })
+        setResults((current) => [...current, event.item])
+        appendLog(itemLogLines(event.item))
+      })
     },
     onSuccess: async (result) => {
       await refreshEvent(queryClient, eventId)
@@ -88,9 +159,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
     onError: (error) => toast.error("Challenge sync failed", error.message),
   })
   const items = challenges.data?.items ?? []
-  const failures = sync.data?.results.filter(
-    (result) => result.status === "failed"
-  )
+  const failures = results.filter((result) => result.status === "failed")
 
   return (
     <Dialog
@@ -101,6 +170,8 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
           sync.reset()
           setProgress({ completed: 0, total: 0 })
           setLog([])
+          setResults([])
+          logSeq.current = 0
         }
       }}
       open={open}
@@ -207,27 +278,41 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                     </ProgressTrack>
                   </Progress>
                   <div
-                    className="max-h-32 overflow-y-auto border bg-muted/30 p-2 font-mono text-xs"
+                    className="h-48 overflow-y-auto border bg-muted/30 p-2 font-mono text-xs"
+                    ref={logRef}
                     role="log"
                   >
-                    {log.map((entry) => (
-                      <p className="py-0.5" key={entry.remoteId}>
-                        [{entry.status.toUpperCase()}] {entry.remoteId}
-                        {entry.error ? `: ${entry.error}` : ""}
+                    {log.length === 0 ? (
+                      <p className="text-muted-foreground">
+                        Waiting for import events...
                       </p>
-                    ))}
+                    ) : (
+                      log.map((entry) => (
+                        <p
+                          className={cn(
+                            "py-0.5 break-words whitespace-pre-wrap",
+                            entry.level === "error" && "text-destructive",
+                            entry.level === "success" && "text-foreground",
+                            entry.level === "info" && "text-muted-foreground"
+                          )}
+                          key={entry.key}
+                        >
+                          {entry.text}
+                        </p>
+                      ))
+                    )}
                   </div>
                 </div>
               )}
-              {(sync.error || failures?.length) && (
+              {(sync.error || failures.length > 0) && (
                 <Alert className="mt-3" variant="error">
                   <CircleAlert />
                   <AlertDescription>
                     {sync.error?.message ??
                       failures
-                        ?.map(
+                        .map(
                           (failure) =>
-                            `${failure.remoteId}: ${failure.error ?? "Sync failed"}`
+                            `${challengeTitle(failure)}: ${failure.error ?? "Sync failed"}`
                         )
                         .join("; ")}
                   </AlertDescription>

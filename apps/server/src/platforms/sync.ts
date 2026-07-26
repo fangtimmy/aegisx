@@ -1,5 +1,10 @@
 import { basename } from "node:path"
 import { and, eq } from "drizzle-orm"
+import type {
+  ChallengeSyncAttachment,
+  ChallengeSyncItem,
+  ChallengeSyncProgress,
+} from "../../../shared"
 import type { createDatabase } from "../db"
 import {
   attachments,
@@ -33,7 +38,7 @@ export function createPlatformSync(
     challengeId: string,
     remote: RemoteAttachment,
     adapter: CtfPlatformAdapter
-  ) {
+  ): Promise<ChallengeSyncAttachment> {
     const existing = db
       .select()
       .from(attachments)
@@ -59,9 +64,10 @@ export function createPlatformSync(
       maxAttachmentBytes()
     )
     const now = new Date().toISOString()
+    const originalName = basename(remote.filename) || "attachment"
     const values = {
       challengeId,
-      originalName: basename(remote.filename) || "attachment",
+      originalName,
       storageKey,
       remoteId: remote.id,
       ...metadata,
@@ -77,13 +83,19 @@ export function createPlatformSync(
         .values({ id, ...values })
         .run()
     }
+    return {
+      filename: originalName,
+      size: metadata.size,
+      status: existing ? "updated" : "downloaded",
+    }
   }
 
   async function syncRemoteChallenge(
     eventId: string,
     sourceKey: string,
     remote: RemoteChallenge,
-    adapter: CtfPlatformAdapter
+    adapter: CtfPlatformAdapter,
+    onProgress?: (progress: ChallengeSyncProgress) => void | Promise<void>
   ) {
     const existing = db
       .select({
@@ -124,6 +136,16 @@ export function createPlatformSync(
       targetInfo: JSON.stringify(remote.targets),
       syncedAt: now,
     }
+    await onProgress?.({
+      remoteId: remote.id,
+      phase: "metadata",
+      message: existing
+        ? `Updating challenge metadata`
+        : `Creating challenge metadata`,
+      name: remote.name,
+      category: remote.category,
+      points: remote.points,
+    })
     if (existing) {
       db.update(challenges)
         .set(challengeValues)
@@ -142,9 +164,23 @@ export function createPlatformSync(
         .run()
     }
 
+    const syncedAttachments: ChallengeSyncAttachment[] = []
     try {
-      for (const attachment of remote.attachments) {
-        await syncAttachment(eventId, id, attachment, adapter)
+      const total = remote.attachments.length
+      for (const [index, attachment] of remote.attachments.entries()) {
+        const filename = basename(attachment.filename) || "attachment"
+        await onProgress?.({
+          remoteId: remote.id,
+          phase: "attachment",
+          message: `Downloading attachment ${index + 1}/${total}: ${filename}`,
+          name: remote.name,
+          category: remote.category,
+          points: remote.points,
+          attachment: { filename, index: index + 1, total },
+        })
+        syncedAttachments.push(
+          await syncAttachment(eventId, id, attachment, adapter)
+        )
       }
       const liveIds = new Set(
         remote.attachments.map((attachment) => attachment.id)
@@ -169,7 +205,14 @@ export function createPlatformSync(
       }
       throw error
     }
-    return { id, created: !existing }
+    return {
+      id,
+      created: !existing,
+      name: remote.name,
+      category: remote.category,
+      points: remote.points,
+      attachments: syncedAttachments,
+    }
   }
 
   async function discoverInventory(eventId: string) {
@@ -250,29 +293,24 @@ export function createPlatformSync(
   async function syncChallenges(
     eventId: string,
     remoteIds: string[],
-    onResult?: (
-      result: {
-        remoteId: string
-        status: "created" | "updated" | "failed"
-        challengeId?: string
-        error?: string
-      },
-      completed: number,
-      total: number
+    onEvent?: (
+      event:
+        | { type: "progress"; progress: ChallengeSyncProgress }
+        | {
+            type: "item"
+            item: ChallengeSyncItem
+            completed: number
+            total: number
+          }
     ) => void | Promise<void>
   ) {
     const inventory = await discoverInventory(eventId)
     const available = new Map(inventory.remote.map((item) => [item.id, item]))
-    const results: Array<{
-      remoteId: string
-      status: "created" | "updated" | "failed"
-      challengeId?: string
-      error?: string
-    }> = []
+    const results: ChallengeSyncItem[] = []
     const ids = [...new Set(remoteIds)]
     for (const remoteId of ids) {
       const summary = available.get(remoteId)
-      let result: (typeof results)[number]
+      let result: ChallengeSyncItem
       if (!summary) {
         result = {
           remoteId,
@@ -280,29 +318,55 @@ export function createPlatformSync(
           error: "Remote challenge is unavailable",
         }
       } else {
+        await onEvent?.({
+          type: "progress",
+          progress: {
+            remoteId,
+            phase: "fetching",
+            message: `Fetching challenge details`,
+            name: summary.name,
+            category: summary.category,
+            points: summary.points,
+          },
+        })
         try {
           const remote = await inventory.adapter.getChallenge(remoteId)
           const synced = await syncRemoteChallenge(
             eventId,
             inventory.platform.sourceKey,
             { ...remote, solved: remote.solved || summary.solved },
-            inventory.adapter
+            inventory.adapter,
+            async (progress) => {
+              await onEvent?.({ type: "progress", progress })
+            }
           )
           result = {
             remoteId,
             challengeId: synced.id,
             status: synced.created ? "created" : "updated",
+            name: synced.name,
+            category: synced.category,
+            points: synced.points,
+            attachments: synced.attachments,
           }
         } catch (error) {
           result = {
             remoteId,
             status: "failed",
             error: syncFailureMessage(error),
+            name: summary.name,
+            category: summary.category,
+            points: summary.points,
           }
         }
       }
       results.push(result)
-      await onResult?.(result, results.length, ids.length)
+      await onEvent?.({
+        type: "item",
+        item: result,
+        completed: results.length,
+        total: ids.length,
+      })
     }
     return { syncedAt: inventory.syncedAt, results }
   }

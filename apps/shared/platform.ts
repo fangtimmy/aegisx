@@ -17,14 +17,40 @@ export type RemoteChallengeSummary = {
 	localChallengeId: string | null;
 };
 
+export type ChallengeSyncAttachment = {
+	filename: string;
+	size: number;
+	status: "downloaded" | "updated";
+};
+
+export type ChallengeSyncItem = {
+	remoteId: string;
+	status: "created" | "updated" | "failed";
+	challengeId?: string;
+	error?: string;
+	name?: string;
+	category?: string | null;
+	points?: number | null;
+	attachments?: ChallengeSyncAttachment[];
+};
+
+export type ChallengeSyncProgress = {
+	remoteId: string;
+	phase: "fetching" | "metadata" | "attachment";
+	message: string;
+	name?: string;
+	category?: string | null;
+	points?: number | null;
+	attachment?: {
+		filename: string;
+		index: number;
+		total: number;
+	};
+};
+
 export type ChallengeSyncResult = {
 	syncedAt: string;
-	results: Array<{
-		remoteId: string;
-		status: "created" | "updated" | "failed";
-		challengeId?: string;
-		error?: string;
-	}>;
+	results: ChallengeSyncItem[];
 };
 
 export type EventPlatform = {

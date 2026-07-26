@@ -139,9 +139,23 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
           const result = await service.syncChallenges(
             c.req.param("eventId"),
             c.req.valid("json").remoteIds,
-            async (item, completed, total) => {
+            async (event) => {
+              if (event.type === "progress") {
+                await stream.writeln(
+                  JSON.stringify({
+                    type: "progress",
+                    progress: event.progress,
+                  })
+                )
+                return
+              }
               await stream.writeln(
-                JSON.stringify({ type: "item", item, completed, total })
+                JSON.stringify({
+                  type: "item",
+                  item: event.item,
+                  completed: event.completed,
+                  total: event.total,
+                })
               )
             }
           )

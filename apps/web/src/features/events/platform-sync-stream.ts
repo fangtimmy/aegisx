@@ -1,9 +1,18 @@
-import { type ChallengeSyncResult, jsonRequest } from "@/api"
+import {
+  type ChallengeSyncItem,
+  type ChallengeSyncProgress,
+  type ChallengeSyncResult,
+  jsonRequest,
+} from "@/api"
 
-type SyncStreamEvent =
+export type SyncStreamEvent =
+  | {
+      type: "progress"
+      progress: ChallengeSyncProgress
+    }
   | {
       type: "item"
-      item: ChallengeSyncResult["results"][number]
+      item: ChallengeSyncItem
       completed: number
       total: number
     }
@@ -14,9 +23,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function isResult(
-  value: unknown
-): value is ChallengeSyncResult["results"][number] {
+function isAttachment(value: unknown) {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.filename === "string" &&
+    typeof value.size === "number" &&
+    (value.status === "downloaded" || value.status === "updated")
+  )
+}
+
+function isResult(value: unknown): value is ChallengeSyncItem {
   if (!isRecord(value) || typeof value.remoteId !== "string") return false
   if (
     value.status !== "created" &&
@@ -25,11 +41,67 @@ function isResult(
   ) {
     return false
   }
-  return (
-    (value.challengeId === undefined ||
-      typeof value.challengeId === "string") &&
-    (value.error === undefined || typeof value.error === "string")
-  )
+  if (
+    value.challengeId !== undefined &&
+    typeof value.challengeId !== "string"
+  ) {
+    return false
+  }
+  if (value.error !== undefined && typeof value.error !== "string") return false
+  if (value.name !== undefined && typeof value.name !== "string") return false
+  if (
+    value.category !== undefined &&
+    value.category !== null &&
+    typeof value.category !== "string"
+  ) {
+    return false
+  }
+  if (
+    value.points !== undefined &&
+    value.points !== null &&
+    typeof value.points !== "number"
+  ) {
+    return false
+  }
+  if (value.attachments !== undefined) {
+    if (!Array.isArray(value.attachments)) return false
+    if (!value.attachments.every(isAttachment)) return false
+  }
+  return true
+}
+
+function isProgress(value: unknown): value is ChallengeSyncProgress {
+  if (!isRecord(value) || typeof value.remoteId !== "string") return false
+  if (
+    value.phase !== "fetching" &&
+    value.phase !== "metadata" &&
+    value.phase !== "attachment"
+  ) {
+    return false
+  }
+  if (typeof value.message !== "string") return false
+  if (value.name !== undefined && typeof value.name !== "string") return false
+  if (
+    value.category !== undefined &&
+    value.category !== null &&
+    typeof value.category !== "string"
+  ) {
+    return false
+  }
+  if (
+    value.points !== undefined &&
+    value.points !== null &&
+    typeof value.points !== "number"
+  ) {
+    return false
+  }
+  if (value.attachment !== undefined) {
+    if (!isRecord(value.attachment)) return false
+    if (typeof value.attachment.filename !== "string") return false
+    if (typeof value.attachment.index !== "number") return false
+    if (typeof value.attachment.total !== "number") return false
+  }
+  return true
 }
 
 export function parseSyncStreamLine(line: string): SyncStreamEvent | undefined {
@@ -42,6 +114,12 @@ export function parseSyncStreamLine(line: string): SyncStreamEvent | undefined {
   }
   if (!isRecord(value) || typeof value.type !== "string") {
     throw new Error("Invalid challenge sync event")
+  }
+  if (value.type === "progress") {
+    if (!isProgress(value.progress)) {
+      throw new Error("Invalid challenge sync event")
+    }
+    return { type: "progress", progress: value.progress }
   }
   if (value.type === "item") {
     if (
@@ -70,10 +148,8 @@ export function parseSyncStreamLine(line: string): SyncStreamEvent | undefined {
 export async function syncChallengeStream(
   eventId: string,
   remoteIds: string[],
-  onItem: (
-    item: ChallengeSyncResult["results"][number],
-    completed: number,
-    total: number
+  onEvent: (
+    event: Extract<SyncStreamEvent, { type: "progress" | "item" }>
   ) => void
 ) {
   const response = await fetch(
@@ -96,8 +172,10 @@ export async function syncChallengeStream(
       syncedAt = event.syncedAt
       return
     }
-    results.push(event.item)
-    onItem(event.item, event.completed, event.total)
+    if (event.type === "item") {
+      results.push(event.item)
+    }
+    onEvent(event)
   }
 
   while (true) {

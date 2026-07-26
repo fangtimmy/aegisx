@@ -306,17 +306,35 @@ describe("CTF platform integration", () => {
     )
     expect(synced.status).toBe(200)
     expect((await synced.json()).results).toEqual([
-      expect.objectContaining({ remoteId: "7", status: "created" }),
-      {
+      expect.objectContaining({
+        remoteId: "7",
+        status: "created",
+        name: "Remote Pwn",
+        category: "pwn",
+        points: 500,
+        attachments: [
+          expect.objectContaining({
+            filename: "challenge.bin",
+            status: "downloaded",
+          }),
+        ],
+      }),
+      expect.objectContaining({
         remoteId: "8",
         status: "failed",
         error: "detail unavailable",
-      },
-      {
+        name: "Broken Web",
+        category: "web",
+        points: 300,
+      }),
+      expect.objectContaining({
         remoteId: "9",
         status: "failed",
         error: "Platform request failed (500)",
-      },
+        name: "Broken Attachment",
+        category: "forensics",
+        points: 200,
+      }),
     ])
     expect(detailRequests).toBe(2)
     const detail = await (
@@ -395,15 +413,23 @@ describe("CTF platform integration", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line))
-    expect(streamed).toEqual([
-      expect.objectContaining({
-        type: "item",
-        completed: 1,
-        total: 1,
-        item: expect.objectContaining({ remoteId: "7", status: "updated" }),
-      }),
-      expect.objectContaining({ type: "complete", total: 1 }),
-    ])
+    expect(streamed.some((event) => event.type === "progress")).toBe(true)
+    expect(streamed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "item",
+          completed: 1,
+          total: 1,
+          item: expect.objectContaining({
+            remoteId: "7",
+            status: "updated",
+            name: "Remote Pwn",
+            attachments: expect.any(Array),
+          }),
+        }),
+        expect.objectContaining({ type: "complete", total: 1 }),
+      ])
+    )
     const localChallenge = await instance.app.request(
       `/api/events/${event.id}/challenges`,
       json("POST", { name: "Local", description: "Local challenge" })
