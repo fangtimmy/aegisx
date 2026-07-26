@@ -194,7 +194,7 @@ function toolIcon(name: string) {
 }
 
 const activityTriggerClass =
-  "flex w-full cursor-pointer items-center justify-start gap-2 rounded-sm py-1 text-left text-muted-foreground text-sm hover:text-foreground data-panel-open:[&>svg:last-child]:rotate-90"
+  "flex w-full cursor-pointer items-center justify-start gap-2 rounded-sm py-1 text-left text-muted-foreground text-sm hover:text-foreground data-panel-open:sticky data-panel-open:top-0 data-panel-open:z-10 data-panel-open:bg-card data-panel-open:[&>svg:last-child]:rotate-90"
 
 function terminalLabel(tool: ToolBlock): string | null {
   switch (tool.terminal) {

@@ -320,7 +320,7 @@ export function RunWorkspace({
                           </AlertDescription>
                         </Alert>
                       ) : (
-                        <ScrollArea className="relative h-full pr-1" scrollFade>
+                        <ScrollArea className="relative h-full pr-1">
                           <Conversation
                             agentId={selectedAgent.id}
                             agentStatus={selectedAgent.status}
