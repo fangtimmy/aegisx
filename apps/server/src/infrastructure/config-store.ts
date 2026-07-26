@@ -96,6 +96,7 @@ export const defaultSettings: SettingsPublic = {
   defaultToolTimeoutMs: 30_000,
   toolTimeouts: { ...defaultToolTimeouts },
   renderUserMessagesAsMarkdown: false,
+  renderReasoningAsMarkdown: false,
   conversationToolExpand: { ...defaultConversationToolExpand },
   // Derived display-only fields; populated for type completeness.
   defaultMainSystemPromptTemplate: "",
@@ -133,6 +134,7 @@ const SettingsSchema = Type.Object(
     defaultToolTimeoutMs: Type.Number(),
     toolTimeouts: Type.Record(Type.String(), Type.Number()),
     renderUserMessagesAsMarkdown: Type.Boolean(),
+    renderReasoningAsMarkdown: Type.Boolean(),
     conversationToolExpand: Type.Optional(
       Type.Object(
         {
@@ -364,6 +366,7 @@ function normalizeSettings(raw: unknown): SettingsPublic {
     ),
     toolTimeouts: normalizeToolTimeouts(cleaned.toolTimeouts),
     renderUserMessagesAsMarkdown: cleaned.renderUserMessagesAsMarkdown === true,
+    renderReasoningAsMarkdown: cleaned.renderReasoningAsMarkdown === true,
     conversationToolExpand: normalizeConversationToolExpand(
       cleaned.conversationToolExpand
     ),

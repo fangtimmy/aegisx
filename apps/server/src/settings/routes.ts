@@ -82,6 +82,7 @@ const runtimeSettingsInput = Type.Object(
       )
     ),
     renderUserMessagesAsMarkdown: Type.Optional(Type.Boolean()),
+    renderReasoningAsMarkdown: Type.Optional(Type.Boolean()),
     conversationToolExpand: Type.Optional(
       Type.Object(
         {
@@ -352,6 +353,8 @@ export function registerSettingsRoutes(
       patch.toolTimeouts = input.toolTimeouts
     if (input.renderUserMessagesAsMarkdown !== undefined)
       patch.renderUserMessagesAsMarkdown = input.renderUserMessagesAsMarkdown
+    if (input.renderReasoningAsMarkdown !== undefined)
+      patch.renderReasoningAsMarkdown = input.renderReasoningAsMarkdown
     if (input.conversationToolExpand !== undefined)
       patch.conversationToolExpand = input.conversationToolExpand
     configStore.updateSettings(patch)

@@ -60,6 +60,7 @@ type RuntimeSettingsInput = Pick<
   defaultToolTimeoutMs: number
   toolTimeouts: Record<string, number>
   renderUserMessagesAsMarkdown: boolean
+  renderReasoningAsMarkdown: boolean
   conversationToolExpand: ConversationToolExpandPrefs
 }
 
@@ -87,6 +88,7 @@ type RuntimeFormValues = {
   defaultToolTimeoutMs: number
   toolTimeouts: Record<string, number>
   renderUserMessagesAsMarkdown: boolean
+  renderReasoningAsMarkdown: boolean
   conversationToolExpand: ConversationToolExpandPrefs
 }
 
@@ -157,6 +159,7 @@ export function RuntimeDefaults({
       defaultToolTimeoutMs: settings.defaultToolTimeoutMs,
       toolTimeouts: { ...settings.toolTimeouts },
       renderUserMessagesAsMarkdown: settings.renderUserMessagesAsMarkdown,
+      renderReasoningAsMarkdown: settings.renderReasoningAsMarkdown,
       conversationToolExpand: { ...settings.conversationToolExpand },
     },
   })
@@ -197,6 +200,7 @@ export function RuntimeDefaults({
           defaultToolTimeoutMs: values.defaultToolTimeoutMs,
           toolTimeouts: values.toolTimeouts,
           renderUserMessagesAsMarkdown: values.renderUserMessagesAsMarkdown,
+          renderReasoningAsMarkdown: values.renderReasoningAsMarkdown,
           conversationToolExpand: values.conversationToolExpand,
         })
       )}
@@ -491,6 +495,23 @@ export function RuntimeDefaults({
           <Controller
             control={form.control}
             name="renderUserMessagesAsMarkdown"
+            render={({ field }) => (
+              <Switch checked={field.value} onCheckedChange={field.onChange} />
+            )}
+          />
+        </Field>
+        <Field className="flex flex-row items-start justify-between gap-3">
+          <div className="min-w-0">
+            <FieldLabel className="font-normal">
+              Render reasoning as Markdown
+            </FieldLabel>
+            <p className="text-muted-foreground text-xs">
+              Enable rich Markdown rendering for model reasoning blocks.
+            </p>
+          </div>
+          <Controller
+            control={form.control}
+            name="renderReasoningAsMarkdown"
             render={({ field }) => (
               <Switch checked={field.value} onCheckedChange={field.onChange} />
             )}

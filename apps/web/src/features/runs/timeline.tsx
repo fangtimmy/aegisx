@@ -350,11 +350,13 @@ const ConversationRow = memo(function ConversationRow({
   expandPrefs,
   isAnimating = false,
   renderUserMessagesAsMarkdown,
+  renderReasoningAsMarkdown,
 }: {
   item: ConversationItem
   expandPrefs: ConversationToolExpandPrefs
   isAnimating?: boolean
   renderUserMessagesAsMarkdown: boolean
+  renderReasoningAsMarkdown: boolean
 }) {
   const time = item.timestamp ? formatConversationTime(item.timestamp) : null
   if (item.type === "user") {
@@ -435,7 +437,15 @@ const ConversationRow = memo(function ConversationRow({
                 </CollapsibleTrigger>
                 <CollapsiblePanel>
                   <div className="mt-1 ml-5 min-w-0 pb-2 text-muted-foreground">
-                    <Markdown isAnimating={isAnimating}>{block.body}</Markdown>
+                    {renderReasoningAsMarkdown ? (
+                      <Markdown isAnimating={isAnimating}>
+                        {block.body}
+                      </Markdown>
+                    ) : (
+                      <p className="whitespace-pre-wrap break-words text-sm leading-6">
+                        {block.body}
+                      </p>
+                    )}
                   </div>
                 </CollapsiblePanel>
               </Collapsible>
@@ -476,12 +486,14 @@ export function Conversation({
   expandPrefs,
   agentStatus,
   renderUserMessagesAsMarkdown,
+  renderReasoningAsMarkdown,
 }: {
   agentId: string
   stream: ConversationStore
   expandPrefs: ConversationToolExpandPrefs
   agentStatus?: AgentStatus
   renderUserMessagesAsMarkdown: boolean
+  renderReasoningAsMarkdown: boolean
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -619,6 +631,7 @@ export function Conversation({
           item={item}
           key={item.key}
           renderUserMessagesAsMarkdown={renderUserMessagesAsMarkdown}
+          renderReasoningAsMarkdown={renderReasoningAsMarkdown}
         />
       ))}
       <div aria-live="polite" className="sr-only">

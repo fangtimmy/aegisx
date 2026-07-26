@@ -330,6 +330,9 @@ export function RunWorkspace({
                               settings.data?.renderUserMessagesAsMarkdown ??
                               false
                             }
+                            renderReasoningAsMarkdown={
+                              settings.data?.renderReasoningAsMarkdown ?? false
+                            }
                             stream={streamStore}
                           />
                         </ScrollArea>
