@@ -56,7 +56,7 @@ RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked
     find /opt/solver/knowledges -name .git -type d -prune -exec rm -rf {} +
 
 # === GitHub Release Binary + outguess ===
-# ghidra · wsrx · katana · naabu · dalfox · cloudfox · kerbrute · bkcrack · outguess(src)
+# ghidra · wsrx · katana · naabu · dalfox · cloudfox · kerbrute · bkcrack · dddd · fscan
 RUN --mount=type=cache,id=solver-downloads,target=/var/cache/solver/downloads,sharing=locked \
     D=/var/cache/solver/downloads && \
     python3 /usr/local/bin/solver-cache.py sync-downloads && \
@@ -69,6 +69,8 @@ RUN --mount=type=cache,id=solver-downloads,target=/var/cache/solver/downloads,sh
     unzip -q "$D/cloudfox.zip" cloudfox/cloudfox -d /tmp && mv /tmp/cloudfox/cloudfox /usr/local/bin/cloudfox && \
     install -m755 "$D/kerbrute" /usr/local/bin/kerbrute && \
     tar -xzf "$D/bkcrack.tar.gz" -C /tmp && install -m755 /tmp/bkcrack-*/bkcrack /usr/local/bin/bkcrack && \
+    install -m755 "$D/dddd" /usr/local/bin/dddd && \
+    install -m755 "$D/fscan" /usr/local/bin/fscan && \
     rm -rf /tmp/cloudfox /tmp/bkcrack-*
 
 # === pwndbg ===

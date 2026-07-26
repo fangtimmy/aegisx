@@ -146,6 +146,7 @@ export function applyExactEdit(
   let next = content
   let replacements = 0
   let matchedOld = oldText
+  let matchIndex = content.indexOf(oldText)
 
   const exactCount = countOccurrences(content, oldText)
   if (exactCount > 0) {
@@ -158,6 +159,7 @@ export function applyExactEdit(
       ? content.split(oldText).join(newText)
       : content.replace(oldText, newText)
     replacements = replaceAll ? exactCount : 1
+    matchIndex = content.indexOf(oldText)
   } else {
     const ranges = fuzzyRanges(content, oldText)
     if (ranges.length === 0) {
@@ -181,11 +183,14 @@ export function applyExactEdit(
     // Apply from end so earlier offsets stay valid.
     const ordered = [...applyRanges].sort((a, b) => b.start - a.start)
     const firstInFile = ordered[ordered.length - 1] ?? first
+    matchIndex = firstInFile.start
     matchedOld = content.slice(firstInFile.start, firstInFile.end)
     for (const range of ordered) {
       matchedOld = content.slice(range.start, range.end)
       next = next.slice(0, range.start) + newText + next.slice(range.end)
     }
+    // Prefer the first occurrence in file for line numbers.
+    matchedOld = content.slice(firstInFile.start, firstInFile.end)
     replacements = applyRanges.length
   }
 
@@ -195,25 +200,50 @@ export function applyExactEdit(
     )
   }
 
+  const startLine = lineNumberAt(content, Math.max(0, matchIndex))
   const restored = bom + restoreLineEndings(next, ending)
   return {
     content: restored,
     replacements,
     usedFuzzyMatch,
-    diff: formatReplacementDiff(filePath, matchedOld, newText, replacements),
+    diff: formatReplacementDiff(
+      filePath,
+      matchedOld,
+      newText,
+      startLine,
+      replacements
+    ),
   }
+}
+
+function lineNumberAt(content: string, index: number) {
+  if (index <= 0) return 1
+  return content.slice(0, index).split("\n").length
+}
+
+function patchPath(filePath: string) {
+  return filePath.replace(/^\/+/, "") || filePath
+}
+
+function countLines(text: string) {
+  if (text.length === 0) return 0
+  return text.split("\n").length
 }
 
 function formatReplacementDiff(
   filePath: string,
   oldText: string,
   newText: string,
+  startLine: number,
   replacements: number
 ) {
+  const path = patchPath(filePath)
+  const oldCount = countLines(oldText)
+  const newCount = countLines(newText)
   const lines = [
-    `--- a/${filePath}`,
-    `+++ b/${filePath}`,
-    `@@ ${replacements} replacement${replacements === 1 ? "" : "s"} @@`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -${startLine},${oldCount} +${startLine},${newCount} @@ ${replacements} replacement${replacements === 1 ? "" : "s"}`,
   ]
   for (const line of oldText.split("\n")) lines.push(`-${line}`)
   for (const line of newText.split("\n")) lines.push(`+${line}`)

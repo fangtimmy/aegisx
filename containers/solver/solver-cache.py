@@ -20,6 +20,8 @@ DOWNLOADS = {
     "kerbrute": "https://github.com/ropnop/kerbrute/releases/download/v1.0.3/kerbrute_linux_amd64",
     "ysoserial.jar": "https://github.com/frohoff/ysoserial/releases/download/v0.0.6/ysoserial-all.jar",
     "bkcrack.tar.gz": "https://github.com/kimci86/bkcrack/releases/download/v1.8.1/bkcrack-1.8.1-Linux-x86_64.tar.gz",
+    "dddd": "https://github.com/SleepingBag945/dddd/releases/download/v2.0.1/dddd_linux64",
+    "fscan": "https://github.com/shadow1ng/fscan/releases/download/v2.2.0/fscan_2.2.0_linux_x64",
     # "outguess.tar.gz": "https://github.com/crorvick/outguess/archive/refs/heads/master.tar.gz",
 }
 
@@ -43,12 +45,18 @@ def download(url: str, destination: str) -> None:
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file() and path.stat().st_size:
+        print(f"[solver-cache] download hit {path.name} ({path.stat().st_size} bytes)", flush=True)
         return
 
+    print(f"[solver-cache] downloading {path.name} <- {url}", flush=True)
     temporary = path.with_name(path.name + ".tmp")
     try:
         urllib.request.urlretrieve(url, temporary)
         temporary.replace(path)
+        print(f"[solver-cache] download ok {path.name} ({path.stat().st_size} bytes)", flush=True)
+    except Exception as e:
+        print(f"[solver-cache] download fail {path.name}: {e}", flush=True)
+        raise
     finally:
         temporary.unlink(missing_ok=True)
 

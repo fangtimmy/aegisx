@@ -74,10 +74,16 @@ describe("workspace tools", () => {
       replaceAll: true,
     })
     expect(readFileSync(join(root, "e.txt"), "utf8")).toBe("AA bb AA\n")
-    expect(ok.details).toMatchObject({ replacements: 2, replaceAll: true })
+    expect(ok.details).toMatchObject({
+      replacements: 2,
+      replaceAll: true,
+      oldString: "aa",
+      newString: "AA",
+    })
     const text = ok.content.find((part) => part.type === "text")?.text ?? ""
     expect(text).toContain("-aa")
     expect(text).toContain("+AA")
+    expect(text.startsWith("--- ")).toBe(true)
   })
 
   test("write uses filePath", async () => {

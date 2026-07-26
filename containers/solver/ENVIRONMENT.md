@@ -36,7 +36,7 @@ python3 script.py
 
 不是完整列表, 用 `which <tool>` / `ls /usr/local/bin` / `compgen -c` 自行探.
 
-- **Web**: nmap, ffuf, dirsearch, feroxbuster, httpx, nuclei, katana, naabu, dalfox, seclists, wsrx
+- **Web**: nmap, ffuf, dirsearch, feroxbuster, httpx, nuclei, katana, naabu, dalfox, seclists, wsrx, dddd, fscan
 - **Binary/Pwn**: gdb(+pwndbg), ropper, ropgadget, rizin, jadx, apktool, checksec, qemu-user, one_gadget, patchelf, strace, upx, bkcrack
 - **Forensics/Stego**: binwalk, foremost, steghide, zsteg, outguess, pngcheck, exiftool, ffmpeg, imagemagick (`convert`/`identify`), tshark, volatility3 (venv)
 - **OCR/Docs/QR**: tesseract, pdfinfo/pdftotext (poppler), zbarimg; pillow/pyzbar/pypdf/pdfminer (venv)

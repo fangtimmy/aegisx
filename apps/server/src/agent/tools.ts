@@ -823,7 +823,9 @@ export function createWorkspaceTools(
           content: [
             {
               type: "text" as const,
-              text: `Edited ${params.filePath} (${applied.replacements} replacement${applied.replacements === 1 ? "" : "s"})\n\n${applied.diff}`,
+              // Keep the full unified-style diff in content so UIs that only
+              // read toolResult text can still render the change.
+              text: applied.diff,
             },
           ],
           details: {
@@ -832,6 +834,8 @@ export function createWorkspaceTools(
             replaceAll: params.replaceAll ?? false,
             usedFuzzyMatch: applied.usedFuzzyMatch,
             diff: applied.diff,
+            oldString: params.oldString,
+            newString: params.newString,
           },
         }
       })

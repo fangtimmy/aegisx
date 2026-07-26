@@ -13,6 +13,7 @@ describe("applyExactEdit", () => {
     expect(result.replacements).toBe(1)
     expect(result.diff).toContain("-beta")
     expect(result.diff).toContain("+BETA")
+    expect(result.diff).toContain("@@ -2,1 +2,1 @@")
   })
 
   test("fails when oldString is not unique without replaceAll", () => {
