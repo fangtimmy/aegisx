@@ -25,71 +25,122 @@ function truncateLabel(value: string, limit = 100): string {
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
 }
 
+/** First-line `# comment` (not shebang) for bash tool titles. */
+export function extractBashCommentLabel(command: string): string | undefined {
+  const nl = command.indexOf("\n")
+  const firstLine = (nl === -1 ? command : command.slice(0, nl)).trim()
+  if (!firstLine.startsWith("#") || firstLine.startsWith("#!")) return undefined
+  return firstLine.replace(/^#+\s*/, "") || undefined
+}
+
+/** Path from tool args (`filePath` preferred, legacy `path` fallback). */
+export function toolFilePath(args: unknown): string {
+  if (!isRecord(args)) return ""
+  return text(args.filePath || args.path).trim()
+}
+
+export type ToolSubjectKind = "path" | "text"
+
+export type ToolStatusParts = {
+  verb: string
+  subject: string
+  subjectKind: ToolSubjectKind
+}
+
+const FILE_VERBS: Record<string, [running: string, done: string]> = {
+  read: ["Reading", "Read"],
+  write: ["Writing", "Wrote"],
+  edit: ["Editing", "Edited"],
+  ls: ["Listing", "Listed"],
+  grep: ["Searching for", "Searched for"],
+  find: ["Finding", "Found"],
+}
+
+const SIMPLE_VERBS: Record<string, [running: string, done: string]> = {
+  submit_flag: ["Submitting flag", "Submitted flag"],
+  finish_run: ["Finishing run", "Completed run"],
+  spawn_agent: ["Spawning agent", "Started agent"],
+  inspect_agent: ["Inspecting agent", "Inspected agent"],
+  get_target: ["Checking target", "Checked target"],
+  start_target: ["Starting target", "Started target"],
+  extend_target: ["Extending target", "Extended target lifetime"],
+  stop_target: ["Stopping target", "Stopped target"],
+}
+
+function pickVerb(
+  table: Record<string, [string, string]>,
+  name: string,
+  running: boolean
+) {
+  const pair = table[name]
+  if (!pair) return null
+  return running ? pair[0] : pair[1]
+}
+
+export function toolStatusParts(
+  name: string,
+  args: unknown,
+  running: boolean
+): ToolStatusParts {
+  const a = isRecord(args) ? args : null
+
+  if (name === "bash") {
+    const command = text(a?.command)
+    const comment = extractBashCommentLabel(command)
+    return {
+      verb: a?.background
+        ? running
+          ? "Background"
+          : "Backgrounded"
+        : running
+          ? "Running"
+          : "Ran",
+      subject: truncateLabel(comment ?? command, 80),
+      subjectKind: "text",
+    }
+  }
+
+  if (name === "read" || name === "write" || name === "edit" || name === "ls") {
+    return {
+      verb: pickVerb(FILE_VERBS, name, running) ?? name,
+      subject: toolFilePath(a) || (name === "ls" ? text(a?.path).trim() : ""),
+      subjectKind: "path",
+    }
+  }
+
+  if (name === "grep" || name === "find") {
+    const pattern = text(a?.pattern)
+    return {
+      verb: pickVerb(FILE_VERBS, name, running) ?? name,
+      subject: pattern ? `“${pattern}”` : "",
+      subjectKind: "text",
+    }
+  }
+
+  if (name === "spawn_agent") {
+    return {
+      verb: pickVerb(SIMPLE_VERBS, name, running) ?? name,
+      subject: truncateLabel(text(a?.name)),
+      subjectKind: "text",
+    }
+  }
+
+  return {
+    verb:
+      pickVerb(SIMPLE_VERBS, name, running) ??
+      (running ? `Running ${name}` : name),
+    subject: "",
+    subjectKind: "text",
+  }
+}
+
 export function toolStatusLabel(
   name: string,
   args: unknown,
   running: boolean
 ): string {
-  const a = isRecord(args) ? args : null
-  const subject = (() => {
-    switch (name) {
-      case "bash":
-        return truncateLabel(text(a?.command), 80)
-      case "read":
-      case "write":
-      case "edit":
-        return truncateLabel(text(a?.path))
-      case "grep":
-      case "find": {
-        const pattern = text(a?.pattern)
-        return pattern ? `“${pattern}”` : ""
-      }
-      case "ls":
-        return truncateLabel(text(a?.path)) || ""
-      case "spawn_agent":
-        return truncateLabel(text(a?.name))
-      default:
-        return ""
-    }
-  })()
-  const verb = (() => {
-    switch (name) {
-      case "bash":
-        return running ? "Running" : "Ran"
-      case "read":
-        return running ? "Reading" : "Read"
-      case "write":
-        return running ? "Writing" : "Wrote"
-      case "edit":
-        return running ? "Editing" : "Edited"
-      case "grep":
-        return running ? "Searching for" : "Searched for"
-      case "find":
-        return running ? "Finding" : "Found"
-      case "ls":
-        return running ? "Listing" : "Listed"
-      case "submit_flag":
-        return running ? "Submitting flag" : "Submitted flag"
-      case "finish_run":
-        return running ? "Finishing run" : "Completed run"
-      case "spawn_agent":
-        return running ? "Spawning agent" : "Started agent"
-      case "inspect_agent":
-        return running ? "Inspecting agent" : "Inspected agent"
-      case "get_target":
-        return running ? "Checking target" : "Checked target"
-      case "start_target":
-        return running ? "Starting target" : "Started target"
-      case "extend_target":
-        return running ? "Extending target" : "Extended target lifetime"
-      case "stop_target":
-        return running ? "Stopping target" : "Stopped target"
-      default:
-        return running ? `Running ${name}` : name
-    }
-  })()
-  const label = subject ? `${verb} ${subject}` : verb
-  return label.length > 100 ? `${label.slice(0, 99)}…` : label
+  const { verb, subject } = toolStatusParts(name, args, running)
+  return subject ? `${verb} ${subject}` : verb
 }
 
 function handoffFromNotice(message: NoticeMessage) {
@@ -136,6 +187,7 @@ export type ToolBlock = {
   name: string
   args: unknown
   output: string
+  details?: unknown
   status: "pending" | "running" | "done" | "error"
   /** True while the LLM is still generating tool-call arguments (not yet executing). */
   streaming?: boolean
@@ -280,6 +332,7 @@ function applyToolResult(
       status: "pending",
     } satisfies ToolBlock)
   block.output = contentText(message.content) || resultText(message.details)
+  if (message.details !== undefined) block.details = message.details
   block.status = message.isError ? "error" : "done"
   if (!existing) {
     currentAgent(timestamp).blocks.push(block)
@@ -436,7 +489,13 @@ export function buildConversation(
           status: "pending",
         } satisfies ToolBlock)
       block.args = entry.args ?? block.args
-      block.output = resultText(entry.result)
+      if (isRecord(entry.result) && "content" in entry.result) {
+        const content = contentText(entry.result.content)
+        if (content) block.output = content
+        if ("details" in entry.result) block.details = entry.result.details
+      } else {
+        block.output = resultText(entry.result)
+      }
       block.status = entry.isError
         ? "error"
         : entry.status === "done"

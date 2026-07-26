@@ -46,9 +46,10 @@ import {
   type ConversationItem,
   isRecord,
   type ToolBlock,
-  toolStatusLabel,
+  toolStatusParts,
 } from "./timeline-model"
 import { shouldAutoExpandTool } from "./tool-expand"
+import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
 
 export function formatTime(value: string | number | null | undefined) {
   if (!value) return "Not available"
@@ -72,11 +73,39 @@ function formatDuration(durationMs: number) {
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
 }
 
-function toolSummary(tool: ToolBlock) {
-  return toolStatusLabel(
+function ToolSummaryLine({ tool }: { tool: ToolBlock }) {
+  const running = tool.status === "pending" || tool.status === "running"
+  if (tool.streaming) {
+    return (
+      <span className="min-w-0 flex-1 truncate">Generating {tool.name}…</span>
+    )
+  }
+  const { verb, subject, subjectKind } = toolStatusParts(
     tool.name,
     tool.args,
-    tool.status === "pending" || tool.status === "running"
+    running
+  )
+  if (!subject) {
+    return <span className="min-w-0 flex-1 truncate">{verb}</span>
+  }
+  if (subjectKind === "path") {
+    return (
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+        <span className="shrink-0">{verb}</span>
+        <span
+          className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
+          dir="rtl"
+          title={subject}
+        >
+          <bdi dir="ltr">{subject}</bdi>
+        </span>
+      </span>
+    )
+  }
+  return (
+    <span className="min-w-0 flex-1 truncate" title={`${verb} ${subject}`}>
+      {verb} {subject}
+    </span>
   )
 }
 
@@ -220,7 +249,7 @@ function ToolActivity({
     }, 1000)
     return () => clearInterval(id)
   }, [tool.status])
-  const summary = isStreaming ? `Generating ${tool.name}…` : toolSummary(tool)
+  const custom = usesCustomToolBody(tool.name)
   return (
     <Collapsible
       className={separated ? "mt-3" : undefined}
@@ -237,7 +266,7 @@ function ToolActivity({
                 : "size-3.5 shrink-0 text-muted-foreground"
           }
         />
-        <span className="min-w-0 flex-1 truncate">{summary}</span>
+        <ToolSummaryLine tool={tool} />
         {elapsed !== null && (
           <span className="shrink-0 text-muted-foreground text-xs">
             {formatDuration(elapsed)}
@@ -255,35 +284,45 @@ function ToolActivity({
       </CollapsibleTrigger>
       <CollapsiblePanel>
         <div className="mt-1 ml-5 min-w-0 pb-2">
-          <div
-            className={cn(
-              "overflow-hidden rounded-md border bg-muted/30",
-              tool.status === "error" &&
-                "border-destructive/30 bg-destructive/5"
-            )}
-          >
-            {tool.args !== null && tool.args !== undefined && (
-              <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)]">
-                <div className="flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs">
-                  I
+          {custom ? (
+            <div
+              className={cn(
+                "overflow-hidden rounded-md border bg-muted/30",
+                isError && "border-destructive/30 bg-destructive/5"
+              )}
+            >
+              <ToolCustomBody tool={tool} />
+            </div>
+          ) : (
+            <div
+              className={cn(
+                "overflow-hidden rounded-md border bg-muted/30",
+                isError && "border-destructive/30 bg-destructive/5"
+              )}
+            >
+              {tool.args !== null && tool.args !== undefined && (
+                <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)]">
+                  <div className="flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs">
+                    I
+                  </div>
+                  <ToolData value={tool.args} />
                 </div>
-                <ToolData value={tool.args} />
-              </div>
-            )}
-            {tool.output && (
-              <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] border-t">
-                <div
-                  className={cn(
-                    "flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs",
-                    tool.status === "error" && "text-destructive"
-                  )}
-                >
-                  O
+              )}
+              {tool.output && (
+                <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] border-t">
+                  <div
+                    className={cn(
+                      "flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs",
+                      isError && "text-destructive"
+                    )}
+                  >
+                    O
+                  </div>
+                  <ToolData value={tool.output} />
                 </div>
-                <ToolData value={tool.output} />
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </CollapsiblePanel>
     </Collapsible>
