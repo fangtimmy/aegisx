@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
+  DialogClose,
   DialogFooter,
   DialogHeader,
   DialogPanel,
@@ -81,7 +82,10 @@ export function ProviderDialog({
         <DialogHeader>
           <DialogTitle>Add provider</DialogTitle>
         </DialogHeader>
-        <form onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
+        <form
+          className="contents"
+          onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+        >
           <DialogPanel className="grid gap-4">
             <Controller
               control={form.control}
@@ -157,6 +161,9 @@ export function ProviderDialog({
             )}
           </DialogPanel>
           <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" />}>
+              Cancel
+            </DialogClose>
             <Button loading={mutation.isPending} type="submit">
               Add provider
             </Button>

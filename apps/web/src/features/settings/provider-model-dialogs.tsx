@@ -349,6 +349,8 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
 
 export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
   const { addModels, discovered, selected, setDiscovered, setSelected } = editor
+  const items = discovered ?? []
+  const allSelected = items.length > 0 && selected.length === items.length
 
   return (
     <Dialog
@@ -360,7 +362,7 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
       }}
       open={discovered !== null}
     >
-      <DialogPopup>
+      <DialogPopup className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add fetched models</DialogTitle>
           <DialogDescription>
@@ -368,22 +370,41 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          {discovered?.length ? (
-            <CheckboxGroup
-              aria-label="Models to add"
-              className="grid grid-cols-2 gap-2"
-              onValueChange={setSelected}
-              value={selected}
-            >
-              {discovered.map((id) => (
-                <Label className="min-w-0" key={id}>
-                  <Checkbox value={id} />
-                  <span className="min-w-0 break-all font-mono text-xs">
-                    {id}
-                  </span>
-                </Label>
-              ))}
-            </CheckboxGroup>
+          {items.length > 0 ? (
+            <>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <span className="text-muted-foreground text-xs">
+                  {selected.length} of {items.length} selected
+                </span>
+                <Button
+                  disabled={addModels.isPending}
+                  onClick={() => setSelected(allSelected ? [] : [...items])}
+                  type="button"
+                  variant="ghost"
+                >
+                  {allSelected ? "Clear all" : "Select all"}
+                </Button>
+              </div>
+              <CheckboxGroup
+                aria-label="Models to add"
+                className="max-h-80 w-full gap-0 overflow-y-auto border-y"
+                disabled={addModels.isPending}
+                onValueChange={setSelected}
+                value={selected}
+              >
+                {items.map((id) => (
+                  <Label
+                    className="flex w-full min-w-0 items-center gap-2 px-2 py-2 last:border-b-0"
+                    key={id}
+                  >
+                    <Checkbox value={id} />
+                    <span className="min-w-0 flex-1 break-all font-mono text-xs">
+                      {id}
+                    </span>
+                  </Label>
+                ))}
+              </CheckboxGroup>
+            </>
           ) : (
             <Empty className="py-8">
               <EmptyHeader>
@@ -403,9 +424,9 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="ghost" />}>
-            {discovered?.length ? "Cancel" : "Close"}
+            {items.length > 0 ? "Cancel" : "Close"}
           </DialogClose>
-          {Boolean(discovered?.length) && (
+          {items.length > 0 && (
             <Button
               disabled={selected.length === 0}
               loading={addModels.isPending}
