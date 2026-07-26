@@ -29,6 +29,12 @@ export type LiveEvent =
 			detail?: string
 	  }
 	| {
+			type: "agent.context"
+			agentId: string
+			usedTokens: number
+			contextWindow: number
+	  }
+	| {
 			type: "message.progress"
 			agentId: string
 			messageId: string

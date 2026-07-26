@@ -218,6 +218,12 @@ export type ConversationItem =
     }
   | {
       key: string
+      type: "system"
+      body: string
+      timestamp?: string | number
+    }
+  | {
+      key: string
       type: "user"
       body: string
       timestamp?: string | number
@@ -302,6 +308,15 @@ function applyNotice(
     return
   }
   if (!message.text.trim()) return
+  if (message.source === "compaction") {
+    items.push({
+      key: stableKey ?? `system:${items.length}`,
+      type: "system",
+      body: message.text,
+      timestamp,
+    })
+    return
+  }
   items.push({
     key: stableKey ?? `notice:${items.length}`,
     type: "user",

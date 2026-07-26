@@ -374,6 +374,13 @@ const ConversationRow = memo(function ConversationRow({
       </article>
     )
   }
+  if (item.type === "system") {
+    return (
+      <article className="py-3">
+        <p className="text-center text-muted-foreground text-xs">{item.body}</p>
+      </article>
+    )
+  }
   if (item.type === "handoff") {
     return (
       <article className="py-4">

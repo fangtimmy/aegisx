@@ -82,7 +82,7 @@ export type NoticeMessage = {
 	seq: number
 	agentId: string
 	createdAt: string
-	source: "child_result"
+	source: "child_result" | "compaction"
 	text: string
 	handoff?: ChildHandoff
 	timestamp?: number

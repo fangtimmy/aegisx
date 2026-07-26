@@ -103,6 +103,24 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
       ...(typeof value.detail === "string" ? { detail: value.detail } : {}),
     }
   }
+  if (value.type === "agent.context") {
+    const usedTokens = numberValue(value.usedTokens)
+    const contextWindow = numberValue(value.contextWindow)
+    if (
+      typeof value.agentId !== "string" ||
+      usedTokens === undefined ||
+      contextWindow === undefined ||
+      contextWindow <= 0
+    ) {
+      return undefined
+    }
+    return {
+      type: "agent.context",
+      agentId: value.agentId,
+      usedTokens,
+      contextWindow,
+    }
+  }
   if (value.type === "message.committed") {
     if (typeof value.agentId !== "string" || !isMessage(value.message)) {
       return undefined

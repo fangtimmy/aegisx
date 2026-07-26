@@ -9,7 +9,10 @@ import type {
 
 /** Convert stored Message rows into pi-agent AgentMessage history. */
 export function toAgentMessages(rows: Message[]): AgentMessage[] {
-  return rows.map((row) => toAgentMessage(row))
+  return rows.flatMap((row) => {
+    if (row.role === "notice" && row.source !== "child_result") return []
+    return [toAgentMessage(row)]
+  })
 }
 
 export function toAgentMessage(row: Message): AgentMessage {

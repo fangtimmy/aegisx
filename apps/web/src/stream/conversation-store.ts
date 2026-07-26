@@ -58,6 +58,10 @@ export class ConversationStore {
     string,
     { activity: "retrying" | "compacting"; detail?: string }
   >()
+  private readonly context = new Map<
+    string,
+    { usedTokens: number; contextWindow: number }
+  >()
   private readonly views = new Map<string, AgentView>()
   private readonly snapshots = new Map<string, ConversationItem[]>()
   private readonly listeners = new Map<string, Set<Listener>>()
@@ -98,6 +102,13 @@ export class ConversationStore {
     }
     if (!latest) return null
     return { toolName: latest.toolName, args: latest.args }
+  }
+
+  getContext(agentId: string): {
+    usedTokens: number
+    contextWindow: number
+  } | null {
+    return this.context.get(agentId) ?? null
   }
 
   private rebuildCommitted(agentId: string) {
@@ -265,6 +276,14 @@ export class ConversationStore {
         })
         this.notify(event.agentId)
       }
+      return
+    }
+    if (event.type === "agent.context") {
+      this.context.set(event.agentId, {
+        usedTokens: event.usedTokens,
+        contextWindow: event.contextWindow,
+      })
+      this.notify(event.agentId)
     }
   }
 
@@ -295,6 +314,7 @@ export class ConversationStore {
     this.messageProgress.clear()
     this.toolProgress.clear()
     this.activity.clear()
+    // Keep last context snapshot; it is refreshed by the next agent.context event.
     for (const agentId of agentIds) this.rebuildLiveNow(agentId)
   }
 
@@ -306,6 +326,7 @@ export class ConversationStore {
       ...this.messageProgress.keys(),
       ...this.toolProgress.keys(),
       ...this.activity.keys(),
+      ...this.context.keys(),
       ...this.views.keys(),
       ...this.snapshots.keys(),
       ...this.listeners.keys(),
@@ -315,6 +336,7 @@ export class ConversationStore {
     this.toolProgress.clear()
     this.completedTools.clear()
     this.activity.clear()
+    this.context.clear()
     this.views.clear()
     this.snapshots.clear()
     for (const agentId of agentIds) this.notify(agentId)
@@ -334,6 +356,7 @@ export class ConversationStore {
     }
     this.toolProgress.clear()
     this.activity.clear()
+    // Preserve context across reconnect so the badge does not flash empty.
     for (const agentId of agentIds) this.rebuildLiveNow(agentId)
   }
 

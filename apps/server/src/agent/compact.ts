@@ -6,6 +6,8 @@ export type CompactResult = {
   summary: string
   through: number
   usage: UsageSummary | null
+  beforeChars: number
+  afterChars: number
 }
 
 function textMessage(text: string): Message {
@@ -64,8 +66,9 @@ export async function maybeCompact(options: {
   const effective = options.contextSummary
     ? [summaryMessage(options.contextSummary), ...tail]
     : tail
+  const beforeChars = contextSize(effective)
   const threshold = options.model.contextWindow * 3
-  if (contextSize(effective) < threshold) {
+  if (beforeChars < threshold) {
     return { effective }
   }
 
@@ -119,12 +122,15 @@ export async function maybeCompact(options: {
         }
       : null
 
+    const nextEffective = [summaryMessage(summary), ...tail.slice(keepAt)]
     return {
-      effective: [summaryMessage(summary), ...tail.slice(keepAt)],
+      effective: nextEffective,
       compact: {
         summary,
         through: through + keepAt,
         usage,
+        beforeChars,
+        afterChars: contextSize(nextEffective),
       },
     }
   } finally {

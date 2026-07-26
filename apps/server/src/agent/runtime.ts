@@ -12,7 +12,7 @@ import type {
 } from "@earendil-works/pi-ai"
 import { isRetryableAssistantError } from "@earendil-works/pi-ai"
 import { eq } from "drizzle-orm"
-import type { LiveEvent, Message } from "../../../shared"
+import type { LiveEvent, Message, NoticeMessage } from "../../../shared"
 import type { createDatabase } from "../db"
 import { agents, agentUsage } from "../db/schema"
 import { redactSecrets } from "../infrastructure/redaction"
@@ -122,6 +122,37 @@ export function createAgentRuntime(options: CreateRuntimeOptions) {
 
   const history = toAgentMessages(options.callbacks.loadMessages())
 
+  function publishContext(usedTokens: number) {
+    options.callbacks.onLiveEvent({
+      type: "agent.context",
+      agentId: options.agentId,
+      usedTokens: Math.max(0, Math.round(usedTokens)),
+      contextWindow: options.model.contextWindow,
+    })
+  }
+
+  /**
+   * Provider-reported prompt size (context currently in use for the request).
+   * input + cacheRead + cacheWrite; never estimated locally.
+   */
+  function promptTokensFromUsage(usage: {
+    input?: unknown
+    cacheRead?: unknown
+    cacheWrite?: unknown
+  }) {
+    const input = Number(usage.input ?? 0) || 0
+    const cacheRead = Number(usage.cacheRead ?? 0) || 0
+    const cacheWrite = Number(usage.cacheWrite ?? 0) || 0
+    return Math.max(0, input + cacheRead + cacheWrite)
+  }
+
+  function publishContextFromMessage(message: AgentMessage) {
+    const usage = assistantUsage(message)
+    if (!usage) return
+    const used = promptTokensFromUsage(usage)
+    if (used > 0) publishContext(used)
+  }
+
   async function transformContext(
     allMessages: AgentMessage[],
     signal?: AbortSignal
@@ -151,6 +182,23 @@ export function createAgentRuntime(options: CreateRuntimeOptions) {
       if (result.compact.usage) {
         options.callbacks.recordUsage("compaction", result.compact.usage)
       }
+      const now = new Date().toISOString()
+      const noticePayload: NoticeMessage = {
+        role: "notice",
+        id: crypto.randomUUID(),
+        seq: 0,
+        agentId: options.agentId,
+        createdAt: now,
+        source: "compaction",
+        text: "Context compacted",
+        timestamp: Date.parse(now) || Date.now(),
+      }
+      const notice = options.callbacks.commitMessage(noticePayload)
+      options.callbacks.onLiveEvent({
+        type: "message.committed",
+        agentId: options.agentId,
+        message: notice,
+      })
     }
     return result.effective
   }
@@ -250,8 +298,11 @@ export function createAgentRuntime(options: CreateRuntimeOptions) {
               createdAt,
             })
           )
-          const usage = assistantUsage(event.message)
-          if (usage) options.callbacks.recordUsage("message", usage)
+          if (event.message.role === "assistant") {
+            const usage = assistantUsage(event.message)
+            if (usage) options.callbacks.recordUsage("message", usage)
+            publishContextFromMessage(event.message)
+          }
           options.callbacks.onLiveEvent({
             type: "message.committed",
             agentId: options.agentId,
@@ -259,6 +310,10 @@ export function createAgentRuntime(options: CreateRuntimeOptions) {
           })
           return
         }
+      }
+      // Provider usage (e.g. Anthropic message_start) — publish as soon as present.
+      if (event.message.role === "assistant") {
+        publishContextFromMessage(event.message)
       }
       options.callbacks.onLiveEvent({
         type: "message.progress",
