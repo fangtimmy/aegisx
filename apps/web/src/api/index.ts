@@ -7,5 +7,13 @@ export * as providersApi from "./providers"
 export * as runsApi from "./runs"
 export * as settingsApi from "./settings"
 export type * from "./types"
-export type { AgentMessages, RunDetail } from "./types"
-export { isMessage } from "./types"
+export type { AgentMessages, RunDetail, SettingsResponse } from "./types"
+export {
+  conversationToolExpand,
+  defaultSettings,
+  get,
+  isMessage,
+  isSettingModified,
+  SETTINGS_DEFS,
+  settingDef,
+} from "./types"

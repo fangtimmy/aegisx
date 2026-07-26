@@ -13,8 +13,13 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { Link, useSearchParams } from "react-router"
-import type { Challenge, ConversationToolExpandPrefs } from "@/api"
-import { keys, settingsApi } from "@/api"
+import {
+  type Challenge,
+  type ConversationToolExpandPrefs,
+  conversationToolExpand,
+  keys,
+  settingsApi,
+} from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -87,8 +92,9 @@ export function RunWorkspace({
     queryFn: () => settingsApi.getSettings(),
     staleTime: 60_000,
   })
-  const expandPrefs =
-    settings.data?.conversationToolExpand ?? defaultExpandPrefs
+  const expandPrefs = settings.data
+    ? conversationToolExpand(settings.data.settings)
+    : defaultExpandPrefs
   const controller = useRunController({
     eventId,
     onMessageSent: () => setDraft(""),
@@ -327,11 +333,14 @@ export function RunWorkspace({
                             expandPrefs={expandPrefs}
                             key={selectedAgent.id}
                             renderUserMessagesAsMarkdown={
-                              settings.data?.renderUserMessagesAsMarkdown ??
-                              false
+                              settings.data?.settings[
+                                "ui.renderUserMessagesAsMarkdown"
+                              ] ?? false
                             }
                             renderReasoningAsMarkdown={
-                              settings.data?.renderReasoningAsMarkdown ?? false
+                              settings.data?.settings[
+                                "ui.renderReasoningAsMarkdown"
+                              ] ?? false
                             }
                             stream={streamStore}
                           />

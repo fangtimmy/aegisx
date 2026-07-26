@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
-import type { RunPublic } from "../../../shared"
+import { get, type RunPublic } from "../../../shared"
 import type { createDatabase } from "../db"
 import { attachments, challenges, events, runs } from "../db/schema"
 import { jsonError, notFound } from "../infrastructure/http-errors"
@@ -46,7 +46,7 @@ export function registerEventRoutes(
     storage: Storage
     platformService: PlatformService
     runManager: RunList
-    getSettings(): { maxAttachmentMb: number }
+    getSettings(): { "runtime.maxAttachmentMb": number }
     catalog: Pick<
       ReturnType<typeof createCatalogReader>,
       "getEvent" | "getChallenge" | "listEvents" | "listChallengesForEvent"
@@ -337,7 +337,7 @@ export function registerEventRoutes(
       metadata = await storage.write(
         storageKey,
         c.req.raw.body,
-        getSettings().maxAttachmentMb * 1024 * 1024
+        get(getSettings(), "runtime.maxAttachmentMb") * 1024 * 1024
       )
     } catch (error) {
       if (error instanceof StorageLimitError) {

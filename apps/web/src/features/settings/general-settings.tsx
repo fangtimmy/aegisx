@@ -1,5 +1,5 @@
 import { Download, Monitor, Moon, Sun, Upload } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { settingsApi } from "@/api"
 import { useTheme } from "@/components/shell/theme-provider"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -12,17 +12,6 @@ import {
   CardFrameTitle,
   CardPanel,
 } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogClose,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Radio, RadioGroup } from "@/components/ui/radio-group"
 
@@ -32,43 +21,10 @@ const themes = [
   { label: "Dark", value: "dark" },
 ] as const
 
-const transferSections = [
-  { label: "Appearance", value: "appearance" },
-  { label: "Runtime defaults", value: "runtime" },
-  { label: "Agent prompts", value: "prompts" },
-  { label: "Model providers", value: "providers" },
-] as const
-
-type TransferSection = (typeof transferSections)[number]["value"]
-type TransferMode = "export" | "import"
 type Theme = (typeof themes)[number]["value"]
 
 function isTheme(value: unknown): value is Theme {
   return value === "light" || value === "dark" || value === "system"
-}
-
-const allSections = transferSections.map((item) => item.value)
-const runtimeKeys = [
-  "defaultModelId",
-  "environment",
-  "containerImage",
-  "cpus",
-  "memoryMb",
-  "pidsLimit",
-  "maxConcurrency",
-] as const
-const promptKeys = [
-  "mainSystemPromptTemplate",
-  "childSystemPromptTemplate",
-  "initialPromptTemplate",
-] as const
-
-type TransferDocument = {
-  version: 1
-  included?: TransferSection[]
-  appearance?: { theme?: Theme }
-  settings: Record<string, unknown>
-  providers: unknown[]
 }
 
 function themePreview(theme: Theme) {
@@ -172,222 +128,82 @@ function ThemeSelector({
   )
 }
 
-function transferSettings(
-  document: TransferDocument,
-  sections: TransferSection[],
-  theme: Theme
-) {
-  const settings: Record<string, unknown> = {}
-  if (sections.includes("runtime")) {
-    for (const key of runtimeKeys) settings[key] = document.settings[key]
-  }
-  if (sections.includes("prompts")) {
-    for (const key of promptKeys) settings[key] = document.settings[key]
-  }
-  return {
-    version: 1 as const,
-    included: sections,
-    appearance: sections.includes("appearance") ? { theme } : undefined,
-    settings,
-    providers: sections.includes("providers") ? document.providers : [],
-  }
-}
-
-function ImportExportDialog({
-  file,
-  mode,
-  open,
-  onOpenChange,
-  onComplete,
-  setTheme,
+function SettingsTransfer({
   theme,
+  setTheme,
 }: {
-  file: TransferDocument | null
-  mode: TransferMode
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  onComplete: (message: string) => void
-  setTheme: (theme: Theme) => void
   theme: Theme
+  setTheme: (theme: Theme) => void
 }) {
-  const [selected, setSelected] = useState<TransferSection[]>(allSections)
-  const [pending, setPending] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
 
-  useEffect(() => {
-    if (!open) return
-    const included =
-      mode === "import"
-        ? file?.included?.filter((value) => allSections.includes(value))
-        : undefined
-    setSelected(included?.length ? included : allSections)
-    setError(null)
-  }, [file, mode, open])
-
-  function toggle(section: TransferSection, checked: boolean) {
-    setSelected((current) =>
-      checked
-        ? [...new Set([...current, section])]
-        : current.filter((item) => item !== section)
-    )
-  }
-
-  async function submit() {
-    if (selected.length === 0) {
-      setError("Select at least one item")
-      return
-    }
+  async function exportSettings() {
     setPending(true)
     setError(null)
+    setMessage(null)
     try {
-      if (mode === "export") {
-        const response = await fetch("/api/settings/export")
-        if (!response.ok) throw new Error("Unable to export settings")
-        const data = (await response.json()) as TransferDocument
-        const content = JSON.stringify(
-          transferSettings(data, selected, theme),
-          null,
-          2
-        )
-        const url = URL.createObjectURL(
-          new Blob([content], { type: "application/json" })
-        )
-        const link = window.document.createElement("a")
-        link.href = url
-        link.download = "aegisx-settings.json"
-        link.click()
-        URL.revokeObjectURL(url)
-        onComplete("Settings exported.")
-      } else {
-        if (!file) throw new Error("Choose a settings file first")
-        const current = (await (
-          await fetch("/api/settings/export")
-        ).json()) as TransferDocument
-        const merged = {
-          ...current,
-          settings: { ...current.settings, ...file.settings },
-          providers: selected.includes("providers")
-            ? file.providers
-            : current.providers,
-        }
-        if (!selected.includes("runtime")) {
-          for (const key of runtimeKeys) delete merged.settings[key]
-          for (const key of runtimeKeys)
-            merged.settings[key] = current.settings[key]
-        }
-        if (!selected.includes("prompts")) {
-          for (const key of promptKeys) delete merged.settings[key]
-          for (const key of promptKeys)
-            merged.settings[key] = current.settings[key]
-        }
-        await settingsApi.importSettingsPayload({
-          version: 2,
-          settings: merged.settings,
-          providers: merged.providers,
-        })
-        if (selected.includes("appearance") && file.appearance?.theme) {
-          if (!isTheme(file.appearance.theme)) {
-            throw new Error("Invalid appearance setting")
-          }
-          setTheme(file.appearance.theme)
-        }
-        onComplete("Settings imported.")
-        window.location.reload()
-      }
-      onOpenChange(false)
+      const response = await fetch("/api/settings/export")
+      if (!response.ok) throw new Error("Unable to export settings")
+      const data = await response.json()
+      const content = JSON.stringify(
+        {
+          ...data,
+          appearance: { theme },
+        },
+        null,
+        2
+      )
+      const url = URL.createObjectURL(
+        new Blob([content], { type: "application/json" })
+      )
+      const link = window.document.createElement("a")
+      link.href = url
+      link.download = "aegisx-settings.json"
+      link.click()
+      URL.revokeObjectURL(url)
+      setMessage("Settings exported.")
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Transfer failed")
+      setError(cause instanceof Error ? cause.message : "Export failed")
     } finally {
       setPending(false)
     }
   }
 
-  return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>
-            {mode === "export" ? "Export settings" : "Import settings"}
-          </DialogTitle>
-          <DialogDescription>
-            Choose which settings to{" "}
-            {mode === "export" ? "include in the JSON file" : "replace"}.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="grid gap-3">
-          {transferSections.map((item) => (
-            <Label
-              className="items-start gap-3 rounded-md border p-3"
-              key={item.value}
-            >
-              <Checkbox
-                checked={selected.includes(item.value)}
-                onCheckedChange={(checked) =>
-                  toggle(item.value, checked === true)
-                }
-              />
-              <span>
-                <span className="block font-medium text-sm">{item.label}</span>
-                <span className="block text-muted-foreground text-xs">
-                  {item.value === "appearance"
-                    ? "Theme preference"
-                    : item.value === "providers"
-                      ? "Provider API keys and models"
-                      : item.label}
-                </span>
-              </span>
-            </Label>
-          ))}
-          {error && (
-            <Alert variant="error">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button type="button" variant="ghost" />}>
-            Cancel
-          </DialogClose>
-          <Button disabled={pending} onClick={submit} type="button">
-            {mode === "export" ? <Download /> : <Upload />}
-            {mode === "export" ? "Export" : "Import"}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
-  )
-}
-
-function SettingsTransfer({
-  setTheme,
-  theme,
-}: {
-  setTheme: (theme: Theme) => void
-  theme: Theme
-}) {
-  const inputRef = useRef<HTMLInputElement>(null)
-  const [mode, setMode] = useState<TransferMode>("export")
-  const [open, setOpen] = useState(false)
-  const [file, setFile] = useState<TransferDocument | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
-
-  async function chooseImport(nextFile: File) {
+  async function importSettings(file: File) {
+    setPending(true)
+    setError(null)
+    setMessage(null)
     try {
-      const document = JSON.parse(await nextFile.text()) as TransferDocument
+      const document = JSON.parse(await file.text()) as {
+        version?: number
+        settings?: unknown
+        providers?: unknown
+        appearance?: { theme?: unknown }
+      }
       if (
         document.version !== 1 ||
         !document.settings ||
         !Array.isArray(document.providers)
       ) {
-        throw new Error("Unsupported settings file")
+        throw new Error("Unsupported settings file (expected version 1)")
       }
-      setFile(document)
-      setMode("import")
-      setOpen(true)
+      await settingsApi.importSettingsPayload({
+        version: 1,
+        settings: document.settings,
+        providers: document.providers,
+      })
+      if (document.appearance?.theme && isTheme(document.appearance.theme)) {
+        setTheme(document.appearance.theme)
+      }
+      setMessage("Settings imported.")
+      window.location.reload()
     } catch (cause) {
-      setMessage(
-        cause instanceof Error ? cause.message : "Invalid settings file"
-      )
+      setError(cause instanceof Error ? cause.message : "Import failed")
+    } finally {
+      setPending(false)
     }
   }
 
@@ -395,17 +211,15 @@ function SettingsTransfer({
     <>
       <div className="flex flex-wrap gap-2">
         <Button
-          onClick={() => {
-            setMode("export")
-            setFile(null)
-            setOpen(true)
-          }}
+          disabled={pending}
+          onClick={() => void exportSettings()}
           type="button"
           variant="outline"
         >
           <Download /> Export
         </Button>
         <Button
+          disabled={pending}
           onClick={() => inputRef.current?.click()}
           type="button"
           variant="outline"
@@ -417,7 +231,7 @@ function SettingsTransfer({
           className="sr-only"
           onChange={(event) => {
             const nextFile = event.target.files?.[0]
-            if (nextFile) void chooseImport(nextFile)
+            if (nextFile) void importSettings(nextFile)
             event.target.value = ""
           }}
           ref={inputRef}
@@ -425,19 +239,15 @@ function SettingsTransfer({
         />
       </div>
       {message && (
-        <Alert className="mt-3" variant="error">
+        <Alert className="mt-3">
           <AlertDescription>{message}</AlertDescription>
         </Alert>
       )}
-      <ImportExportDialog
-        file={file}
-        mode={mode}
-        open={open}
-        onComplete={setMessage}
-        onOpenChange={setOpen}
-        setTheme={setTheme}
-        theme={theme}
-      />
+      {error && (
+        <Alert className="mt-3" variant="error">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
     </>
   )
 }
@@ -464,7 +274,7 @@ export function GeneralSettings() {
         <CardFrameHeader>
           <CardFrameTitle>Configuration transfer</CardFrameTitle>
           <CardFrameDescription>
-            Export or import selected settings.
+            Export or import settings and providers (version 1 JSON).
           </CardFrameDescription>
         </CardFrameHeader>
         <Card>

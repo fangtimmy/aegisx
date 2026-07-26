@@ -1,26 +1,12 @@
 import { apiRequest, jsonRequest } from "./client"
-import type { SettingsPublic } from "./types"
+import type { FlatSettings, SettingsResponse } from "./types"
 
 export function getSettings() {
-  return apiRequest<SettingsPublic>("/settings")
+  return apiRequest<SettingsResponse>("/settings")
 }
 
-export function updateSettings(input: Partial<SettingsPublic>) {
-  return apiRequest<SettingsPublic>("/settings", jsonRequest("PATCH", input))
-}
-
-export function updatePrompts(
-  input: Pick<
-    SettingsPublic,
-    | "mainSystemPromptTemplate"
-    | "childSystemPromptTemplate"
-    | "initialPromptTemplate"
-  >
-) {
-  return apiRequest<SettingsPublic>(
-    "/settings/prompts",
-    jsonRequest("PATCH", input)
-  )
+export function updateSettings(input: Partial<FlatSettings>) {
+  return apiRequest<SettingsResponse>("/settings", jsonRequest("PATCH", input))
 }
 
 export type PromptPreviewSegment = {

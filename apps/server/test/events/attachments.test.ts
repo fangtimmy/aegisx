@@ -136,19 +136,10 @@ describe("event, challenge, and attachment API", () => {
     const { app } = createTestApp()
     const event = await createEvent(app)
     const challenge = await createChallenge(app, event.id)
-    const settings = await (await app.request("/api/settings")).json()
     const updated = await app.request(
       "/api/settings",
       json("PATCH", {
-        defaultModelId: settings.defaultModelId,
-        defaultThinkingLevel: settings.defaultThinkingLevel,
-        environment: settings.environment,
-        containerImage: settings.containerImage,
-        cpus: settings.cpus,
-        memoryMb: settings.memoryMb,
-        pidsLimit: settings.pidsLimit,
-        maxConcurrency: settings.maxConcurrency,
-        maxAttachmentMb: 1,
+        "runtime.maxAttachmentMb": 1,
       })
     )
     expect(updated.status).toBe(200)

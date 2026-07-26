@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import type { AgentTool } from "@earendil-works/pi-agent-core"
 import { Type } from "typebox"
+import { defaultSettings } from "../../../shared"
 import {
   clearToolTerminals,
   createToolTimeoutResolver,
@@ -62,8 +63,10 @@ test("cancels a tool even when its promise ignores abort", async () => {
 
 test("resolveToolTimeoutMs honors settings overrides and the bash arg budget", () => {
   const settings = {
-    defaultToolTimeoutMs: 30_000,
-    toolTimeouts: { bash: 120_000, submit_flag: 90_000 },
+    ...defaultSettings(),
+    "tools.defaultTimeoutMs": 30_000,
+    "tools.timeout.bash": 120_000,
+    "tools.timeout.submit_flag": 90_000,
   }
   expect(resolveToolTimeoutMs("read", {}, settings)).toBe(30_000)
   expect(resolveToolTimeoutMs("bash", {}, settings)).toBe(120_000)

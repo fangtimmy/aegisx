@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
+import { defaultSettings } from "../../../shared"
 import { resolveToolTimeoutMs } from "./managed-tools"
 
 describe("resolveToolTimeoutMs", () => {
   const settings = {
-    defaultToolTimeoutMs: 60_000,
-    toolTimeouts: {} as Record<string, number>,
+    ...defaultSettings(),
+    "tools.defaultTimeoutMs": 60_000,
   }
 
   test("bash timeout seconds map to ms with slack", () => {

@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm"
-import type { EventPlatform } from "../../../shared"
+import { type EventPlatform, get } from "../../../shared"
 import type { createDatabase } from "../db"
 import {
   challengeRemote,
@@ -113,7 +113,7 @@ export function createPlatformService(
           .run()
       },
       logPlatformRequest,
-      configStore.getSettings().platformRequestTimeoutMs
+      get(configStore.getSettings(), "runtime.platformRequestTimeoutMs")
     )
   }
 
@@ -186,7 +186,7 @@ export function createPlatformService(
           config.credential = credential
         },
         logPlatformRequest,
-        configStore.getSettings().platformRequestTimeoutMs
+        get(configStore.getSettings(), "runtime.platformRequestTimeoutMs")
       ).listEvents()
       if (!remoteEvents.some((remote) => remote.id === config.remoteEventId)) {
         throw new PlatformActionError("not_found", "Remote event not found")
@@ -266,7 +266,7 @@ export function createPlatformService(
         },
         undefined,
         logPlatformRequest,
-        configStore.getSettings().platformRequestTimeoutMs
+        get(configStore.getSettings(), "runtime.platformRequestTimeoutMs")
       ).listEvents()
     } catch (error) {
       throw platformError(error)
@@ -290,7 +290,7 @@ export function createPlatformService(
           config.credential = credential
         },
         logPlatformRequest,
-        configStore.getSettings().platformRequestTimeoutMs
+        get(configStore.getSettings(), "runtime.platformRequestTimeoutMs")
       ).testConnection()
       return {
         credential:

@@ -6,21 +6,20 @@ import {
   writeFileSync,
 } from "node:fs"
 import { join } from "node:path"
-import { type Static, Type } from "typebox"
+import { Type } from "typebox"
 import { Value } from "typebox/value"
-import type {
-  Environment,
-  ProviderType,
-  SettingsPublic,
-  ThinkingLevel,
-} from "../../../shared"
 import {
-  EnvironmentSchema,
-  ProviderTypeSchema,
-  ThinkingLevelSchema,
-} from "../lib/schemas"
+  CONFIG_DOCUMENT_VERSION,
+  defaultSettings,
+  type FlatSettings,
+  type ProviderType,
+  migrateLegacySettings,
+  parseSettings,
+  patchSettings,
+} from "../../../shared"
+import { ProviderTypeSchema } from "../lib/schemas"
 
-export type { Environment, ProviderType, SettingsPublic, ThinkingLevel }
+export type { FlatSettings, ProviderType }
 
 export type ProviderModelData = {
   id: string
@@ -43,116 +42,13 @@ export type ProviderData = {
 }
 
 export type ConfigData = {
-  settings: SettingsPublic
+  version: typeof CONFIG_DOCUMENT_VERSION
+  settings: FlatSettings
   providers: ProviderData[]
+  updatedAt: string
 }
 
 const now = () => new Date().toISOString()
-
-export const defaultToolTimeouts: Record<string, number> = {
-  bash: 120_000,
-  submit_flag: 90_000,
-  get_target: 30_000,
-  start_target: 120_000,
-  extend_target: 30_000,
-  stop_target: 30_000,
-}
-
-export const defaultConversationToolExpand: SettingsPublic["conversationToolExpand"] =
-  {
-    fileRead: false,
-    fileEdit: false,
-    bash: false,
-    target: false,
-    flag: false,
-    agent: false,
-    errors: false,
-  }
-
-export const defaultSettings: SettingsPublic = {
-  defaultModelId: null,
-  defaultThinkingLevel: "off",
-  environment: "local",
-  containerImage: "alpine:3.22",
-  cpus: 2,
-  memoryMb: 2048,
-  pidsLimit: 256,
-  maxConcurrency: 2,
-  maxAttachmentMb: 512,
-  mainSystemPromptTemplate: "",
-  childSystemPromptTemplate: "",
-  initialPromptTemplate: "",
-  maxRetryAttempts: 3,
-  retryBaseDelayMs: 2_000,
-  retryMaxDelayMs: 30_000,
-  maxToolOutputBytes: 64_000,
-  maxInlineShellOutputBytes: 12_000,
-  maxCapturedShellOutputBytes: 1_000_000,
-  containerWorkspace: "/workspace",
-  dockerTimeoutMs: 30_000,
-  tmpfsSize: "64m",
-  platformRequestTimeoutMs: 30_000,
-  providerDiscoverTimeoutMs: 10_000,
-  defaultToolTimeoutMs: 30_000,
-  toolTimeouts: { ...defaultToolTimeouts },
-  renderUserMessagesAsMarkdown: false,
-  renderReasoningAsMarkdown: false,
-  conversationToolExpand: { ...defaultConversationToolExpand },
-  // Derived display-only fields; populated for type completeness.
-  defaultMainSystemPromptTemplate: "",
-  defaultChildSystemPromptTemplate: "",
-  defaultInitialPromptTemplate: "",
-  promptTemplateVariables: [],
-  updatedAt: "",
-}
-
-const SettingsSchema = Type.Object(
-  {
-    defaultModelId: Type.Union([Type.String(), Type.Null()]),
-    defaultThinkingLevel: ThinkingLevelSchema,
-    environment: EnvironmentSchema,
-    containerImage: Type.String(),
-    cpus: Type.Number(),
-    memoryMb: Type.Number(),
-    pidsLimit: Type.Number(),
-    maxConcurrency: Type.Number(),
-    maxAttachmentMb: Type.Number(),
-    mainSystemPromptTemplate: Type.String(),
-    childSystemPromptTemplate: Type.String(),
-    initialPromptTemplate: Type.String(),
-    maxRetryAttempts: Type.Number(),
-    retryBaseDelayMs: Type.Number(),
-    retryMaxDelayMs: Type.Number(),
-    maxToolOutputBytes: Type.Number(),
-    maxInlineShellOutputBytes: Type.Number(),
-    maxCapturedShellOutputBytes: Type.Number(),
-    containerWorkspace: Type.String(),
-    dockerTimeoutMs: Type.Number(),
-    tmpfsSize: Type.String(),
-    platformRequestTimeoutMs: Type.Number(),
-    providerDiscoverTimeoutMs: Type.Number(),
-    defaultToolTimeoutMs: Type.Number(),
-    toolTimeouts: Type.Record(Type.String(), Type.Number()),
-    renderUserMessagesAsMarkdown: Type.Boolean(),
-    renderReasoningAsMarkdown: Type.Boolean(),
-    conversationToolExpand: Type.Optional(
-      Type.Object(
-        {
-          fileRead: Type.Boolean(),
-          fileEdit: Type.Boolean(),
-          bash: Type.Boolean(),
-          target: Type.Boolean(),
-          flag: Type.Boolean(),
-          agent: Type.Boolean(),
-          errors: Type.Boolean(),
-        },
-        { additionalProperties: false }
-      )
-    ),
-    updatedAt: Type.String(),
-  },
-  { additionalProperties: true }
-)
 
 const ProviderModelSchema = Type.Object(
   {
@@ -205,178 +101,13 @@ function defaultProviders(): ProviderData[] {
 }
 
 function defaultConfig(): ConfigData {
+  const settings = defaultSettings()
+  settings["agent.defaultModelId"] = "default-model"
   return {
-    settings: {
-      ...defaultSettings,
-      defaultModelId: "default-model",
-      updatedAt: now(),
-    },
+    version: CONFIG_DOCUMENT_VERSION,
+    settings,
     providers: defaultProviders(),
-  }
-}
-
-function finite(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback
-}
-
-function normalizeToolTimeouts(raw: unknown): Record<string, number> {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ...defaultToolTimeouts }
-  }
-  const merged: Record<string, number> = { ...defaultToolTimeouts }
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      merged[key] = value
-    }
-  }
-  return merged
-}
-
-function normalizeConversationToolExpand(
-  raw: unknown
-): SettingsPublic["conversationToolExpand"] {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ...defaultConversationToolExpand }
-  }
-  const value = raw as Record<string, unknown>
-  const bool = (key: keyof SettingsPublic["conversationToolExpand"]) =>
-    typeof value[key] === "boolean"
-      ? value[key]
-      : defaultConversationToolExpand[key]
-  return {
-    fileRead: bool("fileRead"),
-    fileEdit: bool("fileEdit"),
-    bash: bool("bash"),
-    target: bool("target"),
-    flag: bool("flag"),
-    agent: bool("agent"),
-    errors: bool("errors"),
-  }
-}
-
-function normalizeSettings(raw: unknown): SettingsPublic {
-  const source =
-    raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {}
-  // One-time migration: legacy config.json stored cpuLimit (millicores).
-  // New schema stores cpus (cores) directly.
-  const legacyCpuLimit = source.cpuLimit
-  const migrated: Record<string, unknown> = { ...source }
-  if (
-    typeof legacyCpuLimit === "number" &&
-    Number.isFinite(legacyCpuLimit) &&
-    source.cpus === undefined
-  ) {
-    migrated.cpus = legacyCpuLimit / 1000
-    delete migrated.cpuLimit
-  }
-  const base = { ...defaultSettings, ...migrated }
-  const cleaned = Value.Clean(SettingsSchema, base) as Static<
-    typeof SettingsSchema
-  >
-  return {
-    defaultModelId:
-      typeof cleaned.defaultModelId === "string"
-        ? cleaned.defaultModelId
-        : null,
-    defaultThinkingLevel: Value.Check(
-      ThinkingLevelSchema,
-      cleaned.defaultThinkingLevel
-    )
-      ? cleaned.defaultThinkingLevel
-      : "off",
-    environment: Value.Check(EnvironmentSchema, cleaned.environment)
-      ? cleaned.environment
-      : "local",
-    containerImage:
-      typeof cleaned.containerImage === "string"
-        ? cleaned.containerImage
-        : defaultSettings.containerImage,
-    cpus: finite(cleaned.cpus, defaultSettings.cpus),
-    memoryMb: finite(cleaned.memoryMb, defaultSettings.memoryMb),
-    pidsLimit: finite(cleaned.pidsLimit, defaultSettings.pidsLimit),
-    maxConcurrency: finite(
-      cleaned.maxConcurrency,
-      defaultSettings.maxConcurrency
-    ),
-    maxAttachmentMb: finite(
-      cleaned.maxAttachmentMb,
-      defaultSettings.maxAttachmentMb
-    ),
-    mainSystemPromptTemplate:
-      typeof cleaned.mainSystemPromptTemplate === "string"
-        ? cleaned.mainSystemPromptTemplate
-        : "",
-    childSystemPromptTemplate:
-      typeof cleaned.childSystemPromptTemplate === "string"
-        ? cleaned.childSystemPromptTemplate
-        : "",
-    initialPromptTemplate:
-      typeof cleaned.initialPromptTemplate === "string"
-        ? cleaned.initialPromptTemplate
-        : "",
-    maxRetryAttempts: finite(
-      cleaned.maxRetryAttempts,
-      defaultSettings.maxRetryAttempts
-    ),
-    retryBaseDelayMs: finite(
-      cleaned.retryBaseDelayMs,
-      defaultSettings.retryBaseDelayMs
-    ),
-    retryMaxDelayMs: finite(
-      cleaned.retryMaxDelayMs,
-      defaultSettings.retryMaxDelayMs
-    ),
-    maxToolOutputBytes: finite(
-      cleaned.maxToolOutputBytes,
-      defaultSettings.maxToolOutputBytes
-    ),
-    maxInlineShellOutputBytes: finite(
-      cleaned.maxInlineShellOutputBytes,
-      defaultSettings.maxInlineShellOutputBytes
-    ),
-    maxCapturedShellOutputBytes: finite(
-      cleaned.maxCapturedShellOutputBytes,
-      defaultSettings.maxCapturedShellOutputBytes
-    ),
-    containerWorkspace:
-      typeof cleaned.containerWorkspace === "string"
-        ? cleaned.containerWorkspace
-        : defaultSettings.containerWorkspace,
-    dockerTimeoutMs: finite(
-      cleaned.dockerTimeoutMs,
-      defaultSettings.dockerTimeoutMs
-    ),
-    tmpfsSize:
-      typeof cleaned.tmpfsSize === "string"
-        ? cleaned.tmpfsSize
-        : defaultSettings.tmpfsSize,
-    platformRequestTimeoutMs: finite(
-      cleaned.platformRequestTimeoutMs,
-      defaultSettings.platformRequestTimeoutMs
-    ),
-    providerDiscoverTimeoutMs: finite(
-      cleaned.providerDiscoverTimeoutMs,
-      defaultSettings.providerDiscoverTimeoutMs
-    ),
-    defaultToolTimeoutMs: finite(
-      cleaned.defaultToolTimeoutMs,
-      defaultSettings.defaultToolTimeoutMs
-    ),
-    toolTimeouts: normalizeToolTimeouts(cleaned.toolTimeouts),
-    renderUserMessagesAsMarkdown: cleaned.renderUserMessagesAsMarkdown === true,
-    renderReasoningAsMarkdown: cleaned.renderReasoningAsMarkdown === true,
-    conversationToolExpand: normalizeConversationToolExpand(
-      cleaned.conversationToolExpand
-    ),
-    // Derived display-only fields; publicSettings() fills real values.
-    defaultMainSystemPromptTemplate: "",
-    defaultChildSystemPromptTemplate: "",
-    defaultInitialPromptTemplate: "",
-    promptTemplateVariables: [],
-    updatedAt:
-      typeof cleaned.updatedAt === "string" ? cleaned.updatedAt : now(),
+    updatedAt: now(),
   }
 }
 
@@ -412,43 +143,98 @@ function normalizeProvider(raw: unknown): ProviderData | undefined {
   }
 }
 
-function normalizeConfig(raw: unknown): ConfigData {
-  const r =
-    raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {}
-  const providers = Array.isArray(r.providers)
-    ? r.providers
-        .map(normalizeProvider)
-        .filter((provider): provider is ProviderData => provider !== undefined)
-    : []
-  return {
-    settings: normalizeSettings(r.settings),
-    providers: providers.length > 0 ? providers : defaultProviders(),
-  }
+function normalizeProviders(raw: unknown): ProviderData[] {
+  if (!Array.isArray(raw)) return defaultProviders()
+  const providers = raw
+    .map(normalizeProvider)
+    .filter((provider): provider is ProviderData => provider !== undefined)
+  return providers.length > 0 ? providers : defaultProviders()
+}
+
+function isCurrentDocument(raw: unknown): raw is {
+  version: 1
+  settings: unknown
+  providers: unknown
+  updatedAt?: unknown
+} {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
+  const doc = raw as Record<string, unknown>
+  return doc.version === CONFIG_DOCUMENT_VERSION
 }
 
 export function createConfigStore(dataDir: string) {
   const path = join(dataDir, "config.json")
   mkdirSync(dataDir, { recursive: true })
 
-  function load(): ConfigData {
-    if (existsSync(path)) {
-      try {
-        return normalizeConfig(JSON.parse(readFileSync(path, "utf8")))
-      } catch {
-        // corrupt file — fall through to defaults
-      }
-    }
-    const defaults = defaultConfig()
-    save(defaults)
-    return defaults
-  }
-
   function save(data: ConfigData) {
     const tmp = `${path}.tmp`
-    writeFileSync(tmp, JSON.stringify(data, null, 2))
+    writeFileSync(
+      tmp,
+      JSON.stringify(
+        {
+          version: data.version,
+          settings: data.settings,
+          providers: data.providers,
+          updatedAt: data.updatedAt,
+        },
+        null,
+        2
+      )
+    )
     renameSync(tmp, path)
+  }
+
+  function load(): ConfigData {
+    if (!existsSync(path)) {
+      const defaults = defaultConfig()
+      save(defaults)
+      return defaults
+    }
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as unknown
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new Error("invalid config root")
+      }
+      const doc = raw as Record<string, unknown>
+
+      // Current flat document
+      if (isCurrentDocument(raw)) {
+        return {
+          version: CONFIG_DOCUMENT_VERSION,
+          settings: parseSettings(doc.settings),
+          providers: normalizeProviders(doc.providers),
+          updatedAt:
+            typeof doc.updatedAt === "string" && doc.updatedAt
+              ? doc.updatedAt
+              : now(),
+        }
+      }
+
+      // Legacy unversioned { settings, providers } — migrate in place
+      if (doc.settings !== undefined && Array.isArray(doc.providers)) {
+        const migrated: ConfigData = {
+          version: CONFIG_DOCUMENT_VERSION,
+          settings: migrateLegacySettings(doc.settings),
+          providers: normalizeProviders(doc.providers),
+          updatedAt: now(),
+        }
+        save(migrated)
+        return migrated
+      }
+
+      throw new Error("unsupported config shape")
+    } catch {
+      try {
+        if (existsSync(path)) {
+          renameSync(path, `${path}.bak.${Date.now()}`)
+        }
+      } catch {
+        // ignore backup failure
+      }
+      const defaults = defaultConfig()
+      save(defaults)
+      return defaults
+    }
   }
 
   let data: ConfigData = load()
@@ -457,27 +243,43 @@ export function createConfigStore(dataDir: string) {
     get(): ConfigData {
       return data
     },
-    getSettings(): SettingsPublic {
+    getSettings(): FlatSettings {
       return data.settings
+    },
+    getUpdatedAt(): string {
+      return data.updatedAt
     },
     getProviders(): ProviderData[] {
       return data.providers
     },
-    updateSettings(patch: Partial<SettingsPublic>): SettingsPublic {
+    updateSettings(patch: Partial<FlatSettings> | unknown): FlatSettings {
       data = {
         ...data,
-        settings: { ...data.settings, ...patch, updatedAt: now() },
+        settings: patchSettings(data.settings, patch),
+        updatedAt: now(),
       }
       save(data)
       return data.settings
     },
     updateProviders(providers: ProviderData[]): void {
-      data = { ...data, providers }
+      data = { ...data, providers, updatedAt: now() }
       save(data)
     },
-    replaceAll(settings: SettingsPublic, providers: ProviderData[]): void {
-      data = { settings: { ...settings, updatedAt: now() }, providers }
+    replaceAll(settings: FlatSettings, providers: ProviderData[]): void {
+      data = {
+        version: CONFIG_DOCUMENT_VERSION,
+        settings: parseSettings(settings),
+        providers,
+        updatedAt: now(),
+      }
       save(data)
+    },
+    exportDocument() {
+      return {
+        version: CONFIG_DOCUMENT_VERSION,
+        settings: data.settings,
+        providers: data.providers,
+      }
     },
     get path() {
       return path

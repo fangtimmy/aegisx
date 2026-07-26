@@ -138,28 +138,29 @@ export function CreateRunDialog({
   const isThinkingLevelSupported = supportedThinkingLevelsKey
     .split(",")
     .includes(thinkingLevel)
-  const initialModelId = settings.data?.defaultModelId
+  const defaults = settings.data?.settings
+  const initialModelId = defaults?.["agent.defaultModelId"]
     ? (availableModels.find(
-        (model) => model.id === settings.data?.defaultModelId
+        (model) => model.id === defaults["agent.defaultModelId"]
       )?.id ??
       availableModels[0]?.id ??
       "")
     : (availableModels[0]?.id ?? "")
 
   useEffect(() => {
-    if (open && settings.data) {
+    if (open && defaults) {
       form.reset({
         challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
         modelId: initialModelId,
-        thinkingLevel: settings.data.defaultThinkingLevel,
-        environment: settings.data.environment,
-        image: settings.data.containerImage,
+        thinkingLevel: defaults["agent.defaultThinkingLevel"],
+        environment: defaults["runtime.environment"],
+        image: defaults["container.image"],
       })
     }
     // ponytail: availableModels derived from providers query; reset only on open/settings change
   }, [
     open,
-    settings.data,
+    defaults,
     challenges?.[0]?.id,
     form.reset,
     challenge?.id,

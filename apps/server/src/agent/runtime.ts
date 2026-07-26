@@ -71,10 +71,7 @@ export type CreateRuntimeOptions = {
   secrets: Iterable<string>
   thinkingLevel: ModelThinkingLevel
   retryConfig?: RetryConfig
-  getToolTimeoutSettings?: () => {
-    defaultToolTimeoutMs: number
-    toolTimeouts: Record<string, number>
-  }
+  getToolTimeoutSettings?: () => import("../../../shared").FlatSettings
   callbacks: RuntimeCallbacks
 }
 

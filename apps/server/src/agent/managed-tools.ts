@@ -1,15 +1,13 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core"
 import {
   defaultSettings,
-  type SettingsPublic,
-} from "../infrastructure/config-store"
+  type FlatSettings,
+  toolTimeoutMs,
+} from "../../../shared"
 
 export type ToolTerminal = "timed_out" | "cancelled" | "failed"
 
-export type ToolTimeoutSettings = Pick<
-  SettingsPublic,
-  "defaultToolTimeoutMs" | "toolTimeouts"
->
+export type ToolTimeoutSettings = FlatSettings
 
 export type ToolCallMeta = {
   toolCallId: string
@@ -46,7 +44,7 @@ export function resolveToolTimeoutMs(
       return args.timeout * 1000 + 1000
     }
   }
-  return settings.toolTimeouts[toolName] ?? settings.defaultToolTimeoutMs
+  return toolTimeoutMs(settings, toolName)
 }
 
 export function createToolTimeoutResolver(
@@ -95,7 +93,7 @@ export function manageAgentTools(
   agentId: string,
   tools: AgentTool[],
   resolve: (toolName: string, args: unknown) => number = (name, args) =>
-    resolveToolTimeoutMs(name, args, defaultSettings)
+    resolveToolTimeoutMs(name, args, defaultSettings())
 ): AgentTool[] {
   return tools.map((tool) => ({
     ...tool,

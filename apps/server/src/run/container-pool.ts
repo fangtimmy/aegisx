@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import type { EnvironmentConfig } from "../../../shared"
 import { createLocalBackend, type WorkspaceBackend } from "../agent/tools"
-import type { SettingsPublic } from "../infrastructure/config-store"
+import type { FlatSettings } from "../infrastructure/config-store"
 import {
   containerName,
   containerRunningAsync,
@@ -24,13 +24,7 @@ export function createContainerPool(options: {
     runId: string,
     workspacePath: string | null,
     environment: EnvironmentConfig,
-    settings: Pick<
-      SettingsPublic,
-      | "containerWorkspace"
-      | "dockerTimeoutMs"
-      | "tmpfsSize"
-      | "maxCapturedShellOutputBytes"
-    >
+    settings: FlatSettings
   ): Promise<WorkspaceBackend> {
     if (environment.type !== "container") {
       if (!workspacePath)
@@ -55,9 +49,9 @@ export function createContainerPool(options: {
           environment.image,
           environment,
           {
-            containerWorkspace: settings.containerWorkspace,
-            dockerTimeoutMs: settings.dockerTimeoutMs,
-            tmpfsSize: settings.tmpfsSize,
+            containerWorkspace: settings["container.workspace"],
+            dockerTimeoutMs: settings["container.dockerTimeoutMs"],
+            tmpfsSize: settings["container.tmpfsSize"],
           }
         )
       } catch {
@@ -68,8 +62,8 @@ export function createContainerPool(options: {
     return createContainerBackend(
       name,
       {
-        cwd: settings.containerWorkspace,
-        maxCapturedShellOutput: settings.maxCapturedShellOutputBytes,
+        cwd: settings["container.workspace"],
+        maxCapturedShellOutput: settings["runtime.maxCapturedShellOutputBytes"],
       },
       () => {
         if (active.get(runId) === name) {

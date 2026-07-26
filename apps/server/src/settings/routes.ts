@@ -1,15 +1,18 @@
 import type { Hono } from "hono"
 import { Type } from "typebox"
-import { normalizeThinkingLevel } from "../../../shared"
+import {
+  type FlatSettings,
+  get,
+  isConfigDocumentV1,
+  parseSettings,
+  patchSettings,
+} from "../../../shared"
 import type {
   ConfigStore,
   ProviderData,
   ProviderModelData,
-  SettingsPublic,
 } from "../infrastructure/config-store"
-import { notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
-import { ThinkingLevelSchema as thinkingLevelUnion } from "../lib/schemas"
 import {
   builtinModelProfile,
   normalizeModelMetadata,
@@ -22,99 +25,8 @@ import {
   PROMPT_TEMPLATE_VARIABLES,
   previewInitialPrompt,
   previewSystemPrompt,
-  resolvePromptTemplates,
   samplePromptContext,
 } from "./prompt-templates"
-
-const runtimeSettingsInput = Type.Object(
-  {
-    defaultModelId: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
-    defaultThinkingLevel: thinkingLevelUnion,
-    environment: Type.Union([Type.Literal("local"), Type.Literal("container")]),
-    containerImage: Type.String({
-      minLength: 1,
-      maxLength: 300,
-      pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
-    }),
-    cpus: Type.Number({ minimum: 0.1, maximum: 16 }),
-    memoryMb: Type.Integer({ minimum: 128, maximum: 32_768 }),
-    pidsLimit: Type.Integer({ minimum: 16, maximum: 4_096 }),
-    maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
-    maxAttachmentMb: Type.Optional(
-      Type.Integer({ minimum: 1, maximum: 10_240 })
-    ),
-    maxRetryAttempts: Type.Optional(Type.Integer({ minimum: 0, maximum: 20 })),
-    retryBaseDelayMs: Type.Optional(
-      Type.Integer({ minimum: 0, maximum: 120_000 })
-    ),
-    retryMaxDelayMs: Type.Optional(
-      Type.Integer({ minimum: 0, maximum: 600_000 })
-    ),
-    maxToolOutputBytes: Type.Optional(
-      Type.Integer({ minimum: 1_000, maximum: 1_000_000 })
-    ),
-    maxInlineShellOutputBytes: Type.Optional(
-      Type.Integer({ minimum: 1_000, maximum: 500_000 })
-    ),
-    maxCapturedShellOutputBytes: Type.Optional(
-      Type.Integer({ minimum: 10_000, maximum: 50_000_000 })
-    ),
-    containerWorkspace: Type.Optional(
-      Type.String({ minLength: 1, maxLength: 500 })
-    ),
-    dockerTimeoutMs: Type.Optional(
-      Type.Integer({ minimum: 1_000, maximum: 300_000 })
-    ),
-    tmpfsSize: Type.Optional(Type.String({ minLength: 1, maxLength: 20 })),
-    platformRequestTimeoutMs: Type.Optional(
-      Type.Integer({ minimum: 1_000, maximum: 300_000 })
-    ),
-    providerDiscoverTimeoutMs: Type.Optional(
-      Type.Integer({ minimum: 1_000, maximum: 120_000 })
-    ),
-    defaultToolTimeoutMs: Type.Optional(
-      Type.Integer({ minimum: 1_000, maximum: 600_000 })
-    ),
-    toolTimeouts: Type.Optional(
-      Type.Record(
-        Type.String(),
-        Type.Integer({ minimum: 1_000, maximum: 600_000 })
-      )
-    ),
-    renderUserMessagesAsMarkdown: Type.Optional(Type.Boolean()),
-    renderReasoningAsMarkdown: Type.Optional(Type.Boolean()),
-    conversationToolExpand: Type.Optional(
-      Type.Object(
-        {
-          fileRead: Type.Boolean(),
-          fileEdit: Type.Boolean(),
-          bash: Type.Boolean(),
-          target: Type.Boolean(),
-          flag: Type.Boolean(),
-          agent: Type.Boolean(),
-          errors: Type.Boolean(),
-        },
-        { additionalProperties: false }
-      )
-    ),
-  },
-  { additionalProperties: false }
-)
-
-const providerType = Type.Union([
-  Type.Literal("openai-compatible"),
-  Type.Literal("openai-responses"),
-  Type.Literal("anthropic-messages"),
-])
-
-const promptTemplatesInput = Type.Object(
-  {
-    mainSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
-    childSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
-    initialPromptTemplate: Type.String({ maxLength: 100_000 }),
-  },
-  { additionalProperties: false }
-)
 
 const promptPreviewInput = Type.Object(
   {
@@ -128,77 +40,28 @@ const promptPreviewInput = Type.Object(
   { additionalProperties: false }
 )
 
-const settingsTransferInput = Type.Object(
-  {
-    version: Type.Literal(2),
-    settings: Type.Object(
-      {
-        defaultModelId: Type.Union([
-          Type.String({ minLength: 1 }),
-          Type.Null(),
-        ]),
-        defaultThinkingLevel: thinkingLevelUnion,
-        environment: Type.Union([
-          Type.Literal("local"),
-          Type.Literal("container"),
-        ]),
-        containerImage: Type.String({
-          minLength: 1,
-          maxLength: 300,
-          pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
-        }),
-        cpus: Type.Number({ minimum: 0.1, maximum: 16 }),
-        memoryMb: Type.Integer({ minimum: 128, maximum: 32_768 }),
-        pidsLimit: Type.Integer({ minimum: 16, maximum: 4_096 }),
-        maxConcurrency: Type.Integer({ minimum: 1, maximum: 32 }),
-        maxAttachmentMb: Type.Optional(
-          Type.Integer({ minimum: 1, maximum: 10_240 })
-        ),
-        mainSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
-        childSystemPromptTemplate: Type.String({ maxLength: 100_000 }),
-        initialPromptTemplate: Type.String({ maxLength: 100_000 }),
+function normalizeBaseUrl(value: string) {
+  const url = new URL(value.trim())
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Provider endpoint must use HTTP or HTTPS")
+  }
+  return url.toString().replace(/\/$/, "")
+}
+
+export function settingsResponse(configStore: ConfigStore) {
+  return {
+    settings: configStore.getSettings(),
+    updatedAt: configStore.getUpdatedAt(),
+    meta: {
+      promptDefaults: {
+        "prompts.mainSystem": DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+        "prompts.childSystem": DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+        "prompts.initial": DEFAULT_INITIAL_PROMPT_TEMPLATE,
       },
-      { additionalProperties: false }
-    ),
-    providers: Type.Array(
-      Type.Object(
-        {
-          id: Type.String({ minLength: 1, maxLength: 200 }),
-          label: Type.String({ minLength: 1, maxLength: 100 }),
-          type: providerType,
-          baseUrl: Type.String({ minLength: 1, maxLength: 2_000 }),
-          apiKey: Type.String({ maxLength: 10_000 }),
-          enabled: Type.Boolean(),
-          models: Type.Array(
-            Type.Object(
-              {
-                id: Type.String({ minLength: 1, maxLength: 200 }),
-                modelId: Type.String({ minLength: 1, maxLength: 200 }),
-                label: Type.String({ minLength: 1, maxLength: 200 }),
-                enabled: Type.Boolean(),
-                metadata: Type.Optional(Type.Unknown()),
-                piBinding: Type.Optional(
-                  Type.Union([
-                    Type.Object({
-                      providerId: Type.String({ minLength: 1, maxLength: 200 }),
-                      modelId: Type.String({ minLength: 1, maxLength: 200 }),
-                    }),
-                    Type.Null(),
-                  ])
-                ),
-                reasoning: Type.Optional(Type.Boolean()),
-                thinkingLevelMap: Type.Optional(Type.Unknown()),
-              },
-              { additionalProperties: false }
-            )
-          ),
-        },
-        { additionalProperties: false }
-      )
-    ),
-  },
-  { additionalProperties: false }
-)
+      promptVariables: [...PROMPT_TEMPLATE_VARIABLES],
+    },
+  }
+}
 
 export function registerSettingsRoutes(
   app: Hono,
@@ -230,27 +93,11 @@ export function registerSettingsRoutes(
     }
     return previewInitialPrompt(template, samplePromptContext)
   }
-  const validatePrompts = (input: {
-    mainSystemPromptTemplate: string
-    childSystemPromptTemplate: string
-    initialPromptTemplate: string
-  }) => {
-    previewPrompt("mainSystemPrompt", input.mainSystemPromptTemplate)
-    previewPrompt("childSystemPrompt", input.childSystemPromptTemplate)
-    previewPrompt("initialPrompt", input.initialPromptTemplate)
-  }
 
-  const publicSettings = (): SettingsPublic => {
-    const value = configStore.getSettings()
-    const promptTemplates = resolvePromptTemplates(value)
-    return {
-      ...value,
-      ...promptTemplates,
-      defaultMainSystemPromptTemplate: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-      defaultChildSystemPromptTemplate: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
-      defaultInitialPromptTemplate: DEFAULT_INITIAL_PROMPT_TEMPLATE,
-      promptTemplateVariables: [...PROMPT_TEMPLATE_VARIABLES],
-    }
+  const validatePromptKeys = (settings: FlatSettings) => {
+    previewPrompt("mainSystemPrompt", get(settings, "prompts.mainSystem"))
+    previewPrompt("childSystemPrompt", get(settings, "prompts.childSystem"))
+    previewPrompt("initialPrompt", get(settings, "prompts.initial"))
   }
 
   const transferModel = (model: ProviderModelData) => ({
@@ -264,40 +111,30 @@ export function registerSettingsRoutes(
         ? { providerId: model.piProviderId, modelId: model.piModelId }
         : null,
   })
-  const transferData = () => {
-    const value = configStore.getSettings()
-    return {
-      version: 2 as const,
-      settings: {
-        defaultModelId: value.defaultModelId,
-        defaultThinkingLevel: normalizeThinkingLevel(
-          value.defaultThinkingLevel
-        ),
-        environment: value.environment,
-        containerImage: value.containerImage,
-        cpus: value.cpus,
-        memoryMb: value.memoryMb,
-        pidsLimit: value.pidsLimit,
-        maxConcurrency: value.maxConcurrency,
-        maxAttachmentMb: value.maxAttachmentMb,
-        ...resolvePromptTemplates(value),
-      },
-      providers: configStore.getProviders().map((provider) => ({
-        id: provider.id,
-        label: provider.label,
-        type: provider.type,
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        enabled: provider.enabled,
-        models: provider.models.map(transferModel),
-      })),
-    }
-  }
 
-  app.get("/api/settings", (c) => c.json(publicSettings()))
+  const transferProviders = () =>
+    configStore.getProviders().map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      type: provider.type,
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      enabled: provider.enabled,
+      models: provider.models.map(transferModel),
+    }))
+
+  app.get("/api/settings", (c) => c.json(settingsResponse(configStore)))
 
   app.get("/api/settings/export", () => {
-    const content = JSON.stringify(transferData(), null, 2)
+    const content = JSON.stringify(
+      {
+        version: 1,
+        settings: configStore.getSettings(),
+        providers: transferProviders(),
+      },
+      null,
+      2
+    )
     return new Response(content, {
       headers: {
         "content-type": "application/json; charset=utf-8",
@@ -306,60 +143,83 @@ export function registerSettingsRoutes(
     })
   })
 
-  app.patch("/api/settings", validateJson(runtimeSettingsInput), (c) => {
-    const input = c.req.valid("json")
-    if (input.defaultModelId) {
-      const exists = configStore
-        .getProviders()
-        .some((p) => p.models.some((m) => m.id === input.defaultModelId))
-      if (!exists) return notFound(c, "Default model not found")
+  app.patch("/api/settings", async (c) => {
+    let body: unknown
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json(
+        {
+          error: {
+            code: "invalid_json",
+            message: "Request body must be JSON",
+          },
+        },
+        400
+      )
     }
-    const current = configStore.getSettings()
-    const patch: Partial<SettingsPublic> = {
-      defaultModelId: input.defaultModelId,
-      defaultThinkingLevel: input.defaultThinkingLevel,
-      environment: input.environment,
-      containerImage: input.containerImage.trim(),
-      cpus: input.cpus,
-      memoryMb: input.memoryMb,
-      pidsLimit: input.pidsLimit,
-      maxConcurrency: input.maxConcurrency,
-      maxAttachmentMb: input.maxAttachmentMb ?? current.maxAttachmentMb,
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return c.json(
+        {
+          error: {
+            code: "invalid_settings",
+            message: "Settings patch must be an object of flat keys",
+          },
+        },
+        400
+      )
     }
-    if (input.maxRetryAttempts !== undefined)
-      patch.maxRetryAttempts = input.maxRetryAttempts
-    if (input.retryBaseDelayMs !== undefined)
-      patch.retryBaseDelayMs = input.retryBaseDelayMs
-    if (input.retryMaxDelayMs !== undefined)
-      patch.retryMaxDelayMs = input.retryMaxDelayMs
-    if (input.maxToolOutputBytes !== undefined)
-      patch.maxToolOutputBytes = input.maxToolOutputBytes
-    if (input.maxInlineShellOutputBytes !== undefined)
-      patch.maxInlineShellOutputBytes = input.maxInlineShellOutputBytes
-    if (input.maxCapturedShellOutputBytes !== undefined)
-      patch.maxCapturedShellOutputBytes = input.maxCapturedShellOutputBytes
-    if (input.containerWorkspace !== undefined)
-      patch.containerWorkspace = input.containerWorkspace
-    if (input.dockerTimeoutMs !== undefined)
-      patch.dockerTimeoutMs = input.dockerTimeoutMs
-    if (input.tmpfsSize !== undefined) patch.tmpfsSize = input.tmpfsSize
-    if (input.platformRequestTimeoutMs !== undefined)
-      patch.platformRequestTimeoutMs = input.platformRequestTimeoutMs
-    if (input.providerDiscoverTimeoutMs !== undefined)
-      patch.providerDiscoverTimeoutMs = input.providerDiscoverTimeoutMs
-    if (input.defaultToolTimeoutMs !== undefined)
-      patch.defaultToolTimeoutMs = input.defaultToolTimeoutMs
-    if (input.toolTimeouts !== undefined)
-      patch.toolTimeouts = input.toolTimeouts
-    if (input.renderUserMessagesAsMarkdown !== undefined)
-      patch.renderUserMessagesAsMarkdown = input.renderUserMessagesAsMarkdown
-    if (input.renderReasoningAsMarkdown !== undefined)
-      patch.renderReasoningAsMarkdown = input.renderReasoningAsMarkdown
-    if (input.conversationToolExpand !== undefined)
-      patch.conversationToolExpand = input.conversationToolExpand
+    const patch = body as Record<string, unknown>
+    if ("agent.defaultModelId" in patch) {
+      const modelId = patch["agent.defaultModelId"]
+      if (modelId !== null && modelId !== undefined) {
+        if (typeof modelId !== "string" || modelId.length === 0) {
+          return c.json(
+            {
+              error: {
+                code: "invalid_settings",
+                message: "Default model id is invalid",
+              },
+            },
+            400
+          )
+        }
+        const exists = configStore
+          .getProviders()
+          .some((p) => p.models.some((m) => m.id === modelId))
+        if (!exists) {
+          return c.json(
+            {
+              error: {
+                code: "not_found",
+                message: "Default model not found",
+              },
+            },
+            404
+          )
+        }
+      }
+    }
+    const next = patchSettings(configStore.getSettings(), patch)
+    try {
+      validatePromptKeys(next)
+    } catch (error) {
+      return c.json(
+        {
+          error: {
+            code: "invalid_prompt_template",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Prompt template is invalid",
+          },
+        },
+        400
+      )
+    }
     configStore.updateSettings(patch)
-    setMaxConcurrency(input.maxConcurrency)
-    return c.json(publicSettings())
+    setMaxConcurrency(get(next, "runtime.maxConcurrency"))
+    return c.json(settingsResponse(configStore))
   })
 
   app.post(
@@ -386,74 +246,117 @@ export function registerSettingsRoutes(
     }
   )
 
-  app.patch(
-    "/api/settings/prompts",
-    validateJson(promptTemplatesInput),
-    (c) => {
-      const input = c.req.valid("json")
-      try {
-        validatePrompts(input)
-      } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_prompt_template",
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Prompt template is invalid",
-            },
-          },
-          400
-        )
-      }
-      configStore.updateSettings(input)
-      return c.json(publicSettings())
-    }
-  )
-
-  app.post("/api/settings/import", validateJson(settingsTransferInput), (c) => {
-    const input = c.req.valid("json")
-    const providerIds = new Set<string>()
-    const modelIds = new Set<string>()
-    const providerModelIds = new Set<string>()
-    const newProviders: ProviderData[] = []
+  app.post("/api/settings/import", async (c) => {
+    let body: unknown
     try {
-      for (const provider of input.providers) {
+      body = await c.req.json()
+    } catch {
+      return c.json(
+        {
+          error: {
+            code: "invalid_json",
+            message: "Request body must be JSON",
+          },
+        },
+        400
+      )
+    }
+    if (!isConfigDocumentV1(body)) {
+      return c.json(
+        {
+          error: {
+            code: "invalid_settings_import",
+            message: "Unsupported settings file (expected version 1)",
+          },
+        },
+        400
+      )
+    }
+    try {
+      const settings = parseSettings(body.settings)
+      validatePromptKeys(settings)
+      const providerIds = new Set<string>()
+      const modelIds = new Set<string>()
+      const providerModelIds = new Set<string>()
+      const newProviders: ProviderData[] = []
+      for (const raw of body.providers) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          throw new Error("Invalid provider entry")
+        }
+        const provider = raw as Record<string, unknown>
+        if (typeof provider.id !== "string" || !provider.id) {
+          throw new Error("Provider id is required")
+        }
         if (providerIds.has(provider.id))
           throw new Error("Duplicate provider ID")
         providerIds.add(provider.id)
+        if (typeof provider.label !== "string" || !provider.label.trim()) {
+          throw new Error("Provider name is required")
+        }
+        if (
+          provider.type !== "openai-compatible" &&
+          provider.type !== "openai-responses" &&
+          provider.type !== "anthropic-messages"
+        ) {
+          throw new Error("Invalid provider type")
+        }
+        if (typeof provider.baseUrl !== "string") {
+          throw new Error("Provider endpoint is required")
+        }
         const baseUrl = normalizeBaseUrl(provider.baseUrl)
-        const label = provider.label.trim()
-        if (!label) throw new Error("Provider name is required")
+        const modelsRaw = Array.isArray(provider.models) ? provider.models : []
         const models: ProviderModelData[] = []
-        for (const model of provider.models) {
+        for (const rawModel of modelsRaw) {
+          if (
+            !rawModel ||
+            typeof rawModel !== "object" ||
+            Array.isArray(rawModel)
+          ) {
+            throw new Error("Invalid model entry")
+          }
+          const model = rawModel as Record<string, unknown>
+          if (typeof model.id !== "string" || !model.id) {
+            throw new Error("Model id is required")
+          }
           if (modelIds.has(model.id)) throw new Error("Duplicate model ID")
           modelIds.add(model.id)
-          const modelId = model.modelId.trim()
-          const modelLabel = model.label.trim()
-          if (!modelId || !modelLabel) {
+          if (typeof model.modelId !== "string" || !model.modelId.trim()) {
             throw new Error("Model ID and name are required")
           }
-          const providerModelKey = `${provider.id}\u0000${modelId}`
+          if (typeof model.label !== "string" || !model.label.trim()) {
+            throw new Error("Model ID and name are required")
+          }
+          const providerModelKey = `${provider.id}\u0000${model.modelId.trim()}`
           if (providerModelIds.has(providerModelKey)) {
             throw new Error("Duplicate model ID for provider")
           }
           providerModelIds.add(providerModelKey)
-          if (
+          const piBinding =
             model.piBinding &&
-            !builtinModelProfile(
-              model.piBinding.providerId,
-              model.piBinding.modelId
-            )
+            typeof model.piBinding === "object" &&
+            !Array.isArray(model.piBinding)
+              ? (model.piBinding as Record<string, unknown>)
+              : null
+          const piProviderId =
+            piBinding && typeof piBinding.providerId === "string"
+              ? piBinding.providerId
+              : null
+          const piModelId =
+            piBinding && typeof piBinding.modelId === "string"
+              ? piBinding.modelId
+              : null
+          if (
+            piProviderId &&
+            piModelId &&
+            !builtinModelProfile(piProviderId, piModelId)
           ) {
             throw new Error("Pi model binding is unavailable")
           }
           models.push({
             id: model.id,
-            modelId,
-            label: modelLabel,
-            enabled: model.enabled,
+            modelId: model.modelId.trim(),
+            label: model.label.trim(),
+            enabled: model.enabled !== false,
             metadata: JSON.stringify(
               normalizeModelMetadata(
                 model.metadata ?? {
@@ -462,50 +365,32 @@ export function registerSettingsRoutes(
                 }
               )
             ),
-            piProviderId: model.piBinding?.providerId ?? null,
-            piModelId: model.piBinding?.modelId ?? null,
+            piProviderId,
+            piModelId,
           })
         }
         newProviders.push({
           id: provider.id,
-          label,
+          label: provider.label.trim(),
           type: provider.type,
           baseUrl,
-          apiKey: provider.apiKey,
-          enabled: provider.enabled,
+          apiKey: typeof provider.apiKey === "string" ? provider.apiKey : "",
+          enabled: provider.enabled !== false,
           models,
         })
       }
-      if (
-        input.settings.defaultModelId !== null &&
-        !modelIds.has(input.settings.defaultModelId)
-      ) {
+      const defaultModelId = get(settings, "agent.defaultModelId")
+      if (defaultModelId !== null && !modelIds.has(defaultModelId)) {
         throw new Error("Default model not found in imported configuration")
       }
-      validatePrompts(input.settings)
-      const current = configStore.getSettings()
-      configStore.replaceAll(
-        {
-          ...current,
-          defaultModelId: input.settings.defaultModelId,
-          defaultThinkingLevel: input.settings.defaultThinkingLevel,
-          environment: input.settings.environment,
-          containerImage: input.settings.containerImage.trim(),
-          cpus: input.settings.cpus,
-          memoryMb: input.settings.memoryMb,
-          pidsLimit: input.settings.pidsLimit,
-          maxConcurrency: input.settings.maxConcurrency,
-          maxAttachmentMb:
-            input.settings.maxAttachmentMb ?? current.maxAttachmentMb,
-          mainSystemPromptTemplate: input.settings.mainSystemPromptTemplate,
-          childSystemPromptTemplate: input.settings.childSystemPromptTemplate,
-          initialPromptTemplate: input.settings.initialPromptTemplate,
-        },
-        newProviders
-      )
-      setMaxConcurrency(input.settings.maxConcurrency)
+      configStore.replaceAll(settings, newProviders)
+      setMaxConcurrency(get(settings, "runtime.maxConcurrency"))
       syncModels()
-      return c.json(transferData())
+      return c.json({
+        version: 1,
+        settings: configStore.getSettings(),
+        providers: transferProviders(),
+      })
     } catch (error) {
       return c.json(
         {
@@ -519,12 +404,4 @@ export function registerSettingsRoutes(
       )
     }
   })
-}
-
-function normalizeBaseUrl(value: string) {
-  const url = new URL(value.trim())
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Provider endpoint must use HTTP or HTTPS")
-  }
-  return url.toString().replace(/\/$/, "")
 }

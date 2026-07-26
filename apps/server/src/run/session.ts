@@ -17,7 +17,7 @@ import {
 } from "../agent/runtime"
 import type { createDatabase } from "../db"
 import { agents, challenges } from "../db/schema"
-import type { SettingsPublic } from "../infrastructure/config-store"
+import type { FlatSettings } from "../infrastructure/config-store"
 import { redactSecrets, replaceText } from "../infrastructure/redaction"
 import {
   getChallengeRemote,
@@ -123,7 +123,7 @@ export type SessionHost = {
   sessions: SessionRegistry
   containers: ContainerPool
   modelService: ModelService
-  getSettings(): SettingsPublic
+  getSettings(): FlatSettings
   getApiKeys?: (provider: string) => Iterable<string>
   onLiveEvent(runId: string, event: LiveEvent): void
   onSettled(
@@ -233,9 +233,9 @@ export function createSessionRuntime(host: SessionHost): RuntimePort {
       },
       backend,
       toolLimits: {
-        maxOutput: settings.maxToolOutputBytes,
-        maxShellOutput: settings.maxInlineShellOutputBytes,
-        maxCapturedShellOutput: settings.maxCapturedShellOutputBytes,
+        maxOutput: settings["runtime.maxToolOutputBytes"],
+        maxShellOutput: settings["runtime.maxInlineShellOutputBytes"],
+        maxCapturedShellOutput: settings["runtime.maxCapturedShellOutputBytes"],
       },
       getRun: () => store().loadAggregate(runId),
       requestFinish: (summary) => {
@@ -256,7 +256,7 @@ export function createSessionRuntime(host: SessionHost): RuntimePort {
     const secrets = new Set(getApiKeys?.(modelConfig.provider))
     const logicalCwd =
       environment.type === "container"
-        ? settings.containerWorkspace
+        ? settings["container.workspace"]
         : "$WORKSPACE"
     const thinkingLevel = clampThinkingLevel(model, modelConfig.thinkingLevel)
     const systemPrompt = renderSystemPrompt(
@@ -371,17 +371,11 @@ export function createSessionRuntime(host: SessionHost): RuntimePort {
       secrets,
       thinkingLevel,
       retryConfig: {
-        maxAttempts: settings.maxRetryAttempts,
-        baseDelayMs: settings.retryBaseDelayMs,
-        maxDelayMs: settings.retryMaxDelayMs,
+        maxAttempts: settings["runtime.maxRetryAttempts"],
+        baseDelayMs: settings["runtime.retryBaseDelayMs"],
+        maxDelayMs: settings["runtime.retryMaxDelayMs"],
       },
-      getToolTimeoutSettings: () => {
-        const live = getSettings()
-        return {
-          defaultToolTimeoutMs: live.defaultToolTimeoutMs,
-          toolTimeouts: live.toolTimeouts,
-        }
-      },
+      getToolTimeoutSettings: () => getSettings(),
       callbacks: {
         ...persistence,
         canRunTool: () => {
@@ -448,7 +442,7 @@ export function createLiveSessionStack(options: {
   dataDir: string
   store: RunStore
   modelService: ModelService
-  getSettings(): SettingsPublic
+  getSettings(): FlatSettings
   getApiKeys?: (provider: string) => Iterable<string>
   onLiveEvent(runId: string, event: LiveEvent): void
   onSettled: SessionHost["onSettled"]

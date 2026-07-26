@@ -18,6 +18,7 @@ export type {
   EventPlatform,
   EventStats,
   EventSummary,
+  FlatSettings,
   LiveEvent,
   Message,
   MessagesPage,
@@ -35,7 +36,10 @@ export type {
   RunFileEntry,
   RunPublic,
   RunStatus,
-  SettingsPublic,
+  SettingDef,
+  SettingGroup,
+  SettingKey,
+  SettingWidget,
   TargetState,
   ThinkingLevel,
   ToolResultMessage,
@@ -43,7 +47,30 @@ export type {
   UserMessage,
 } from "../../../shared"
 
-export { isMessage } from "../../../shared"
+export {
+  conversationToolExpand,
+  defaultSettings,
+  get,
+  isMessage,
+  isSettingModified,
+  SETTINGS_DEFS,
+  settingDef,
+} from "../../../shared"
+
+import type { FlatSettings } from "../../../shared"
+
+export type SettingsResponse = {
+  settings: FlatSettings
+  updatedAt: string
+  meta: {
+    promptDefaults: {
+      "prompts.mainSystem": string
+      "prompts.childSystem": string
+      "prompts.initial": string
+    }
+    promptVariables: string[]
+  }
+}
 
 import type { Message } from "../../../shared"
 

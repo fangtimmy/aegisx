@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
-import { normalizeThinkingLevel } from "../../../shared"
+import { get, normalizeThinkingLevel } from "../../../shared"
 import type { createDatabase } from "../db"
 import { challenges } from "../db/schema"
 import type { createCatalogReader } from "../events/catalog"
@@ -81,7 +81,7 @@ const emptyInput = Type.Object({}, { additionalProperties: false })
 type Database = ReturnType<typeof createDatabase>["db"]
 type RunService = ReturnType<typeof createLiveRunService>
 type Catalog = ReturnType<typeof createCatalogReader>
-type SettingsPublic = ReturnType<ConfigStore["getSettings"]>
+type FlatSettings = ReturnType<ConfigStore["getSettings"]>
 
 export function registerRunRoutes(
   app: Hono,
@@ -89,7 +89,7 @@ export function registerRunRoutes(
     db: Database
     dataDir: string
     runService: RunService
-    getSettings(): SettingsPublic
+    getSettings(): FlatSettings
     configStore: ConfigStore
     catalog: Pick<Catalog, "getChallenge" | "getEvent">
   }
@@ -99,7 +99,7 @@ export function registerRunRoutes(
   const prompts = createPromptContextBuilder({
     db,
     dataDir,
-    getContainerWorkspace: () => getSettings().containerWorkspace,
+    getContainerWorkspace: () => get(getSettings(), "container.workspace"),
   })
 
   app.post(
@@ -109,7 +109,8 @@ export function registerRunRoutes(
       const input = c.req.valid("json")
       try {
         const defaults = getSettings()
-        const selectedModelId = input.modelId ?? defaults.defaultModelId
+        const selectedModelId =
+          input.modelId ?? get(defaults, "agent.defaultModelId")
         const selected = selectedModelId
           ? (() => {
               for (const provider of configStore.getProviders()) {
@@ -152,15 +153,16 @@ export function registerRunRoutes(
           .get()
         if (!challenge) return notFound(c, "Challenge not found")
 
-        const environmentType = input.environment ?? defaults.environment
+        const environmentType =
+          input.environment ?? get(defaults, "runtime.environment")
         const environment =
           environmentType === "container"
             ? {
                 type: "container" as const,
-                image: input.image?.trim() || defaults.containerImage,
-                cpus: defaults.cpus,
-                memoryMb: defaults.memoryMb,
-                pidsLimit: defaults.pidsLimit,
+                image: input.image?.trim() || get(defaults, "container.image"),
+                cpus: get(defaults, "container.cpus"),
+                memoryMb: get(defaults, "container.memoryMb"),
+                pidsLimit: get(defaults, "container.pidsLimit"),
               }
             : ({ type: "local" } as const)
 
@@ -172,7 +174,7 @@ export function registerRunRoutes(
           costKnown: parseModelMetadata(selected.model.metadata).costKnown,
           thinkingLevel:
             input.thinkingLevel ??
-            normalizeThinkingLevel(defaults.defaultThinkingLevel),
+            normalizeThinkingLevel(get(defaults, "agent.defaultThinkingLevel")),
         }
 
         const runId = crypto.randomUUID()

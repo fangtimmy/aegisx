@@ -1,14 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
-  Boxes,
-  Braces,
-  CircleAlert,
-  Settings2,
-  SlidersHorizontal,
-} from "lucide-react"
+import { Boxes, CircleAlert, Settings2, SlidersHorizontal } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
-import { keys, providersApi, type SettingsPublic, settingsApi } from "@/api"
+import { keys, providersApi, settingsApi } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -32,18 +26,16 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { GeneralSettings } from "./general-settings"
-import { PromptSettings } from "./prompt-settings"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
-import { RuntimeDefaults } from "./runtime-defaults"
+import { SchemaSettingsForm } from "./schema-form"
 
-type SettingsSection = "general" | "models" | "prompts" | "runtime"
+type SettingsSection = "general" | "models" | "settings"
 
 const sectionPaths: Record<SettingsSection, string> = {
   general: "/settings/general",
   models: "/settings/models",
-  prompts: "/settings/prompts",
-  runtime: "/settings/runtime",
+  settings: "/settings/settings",
 }
 
 export function SettingsScreen() {
@@ -127,11 +119,8 @@ export function SettingsScreen() {
           <TabsTab value="models">
             <Boxes aria-hidden="true" /> Model providers
           </TabsTab>
-          <TabsTab value="prompts">
-            <Braces aria-hidden="true" /> Agent prompts
-          </TabsTab>
-          <TabsTab value="runtime">
-            <Settings2 aria-hidden="true" /> Runtime defaults
+          <TabsTab value="settings">
+            <Settings2 aria-hidden="true" /> Settings
           </TabsTab>
         </TabsList>
       </div>
@@ -139,38 +128,19 @@ export function SettingsScreen() {
         <TabsPanel value="general">
           <GeneralSettings />
         </TabsPanel>
-        <TabsPanel value="prompts">
+        <TabsPanel value="settings">
           <CardFrame className="min-w-0">
             <CardFrameHeader>
-              <CardFrameTitle>Agent prompts</CardFrameTitle>
+              <CardFrameTitle>Settings</CardFrameTitle>
               <CardFrameDescription>
-                Templates used when new Runs and Agents start.
+                Searchable configuration. Changes save automatically.
               </CardFrameDescription>
             </CardFrameHeader>
             <Card>
               <CardPanel>
-                <PromptSettings
-                  key={settings.data?.updatedAt}
-                  settings={settings.data as SettingsPublic}
-                />
-              </CardPanel>
-            </Card>
-          </CardFrame>
-        </TabsPanel>
-        <TabsPanel value="runtime">
-          <CardFrame className="min-w-0">
-            <CardFrameHeader>
-              <CardFrameTitle>Runtime defaults</CardFrameTitle>
-              <CardFrameDescription>
-                Used for every new run.
-              </CardFrameDescription>
-            </CardFrameHeader>
-            <Card>
-              <CardPanel>
-                <RuntimeDefaults
-                  providers={items}
-                  settings={settings.data as SettingsPublic}
-                />
+                {settings.data && (
+                  <SchemaSettingsForm data={settings.data} providers={items} />
+                )}
               </CardPanel>
             </Card>
           </CardFrame>

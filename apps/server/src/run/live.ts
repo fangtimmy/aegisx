@@ -1,6 +1,6 @@
 import type { LiveEvent } from "../../../shared"
 import type { createDatabase } from "../db"
-import type { SettingsPublic } from "../infrastructure/config-store"
+import type { FlatSettings } from "../infrastructure/config-store"
 import type { TargetState } from "../platforms/core"
 import type { ModelService } from "../providers/models"
 import { createContainerPool } from "./container-pool"
@@ -27,7 +27,7 @@ export function createLiveRunService(options: {
   dataDir: string
   maxConcurrency: number
   modelService: ModelService
-  getSettings(): SettingsPublic
+  getSettings(): FlatSettings
   getApiKeys?: (provider: string) => Iterable<string>
   onLiveEvent?: (runId: string, event: LiveEvent) => void
   resolveChallenge?: RunServiceOptions["resolveChallenge"]

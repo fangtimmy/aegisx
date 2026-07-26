@@ -52,13 +52,13 @@ async function createChallenge(app: ReturnType<typeof createApp>["app"]) {
 }
 
 const runtimeSettings = {
-  defaultThinkingLevel: "off",
-  environment: "container",
-  containerImage: "alpine:3.22",
-  cpus: 0.5,
-  memoryMb: 256,
-  pidsLimit: 64,
-  maxConcurrency: 3,
+  "agent.defaultThinkingLevel": "off",
+  "runtime.environment": "container",
+  "container.image": "alpine:3.22",
+  "container.cpus": 0.5,
+  "container.memoryMb": 256,
+  "container.pidsLimit": 64,
+  "runtime.maxConcurrency": 3,
 }
 
 function usageMessage(usage: {
@@ -310,9 +310,9 @@ describe("providers, models, and usage", () => {
     const instance = setup()
     const { challenge } = await createChallenge(instance.app)
     const initial = await (await instance.app.request("/api/settings")).json()
-    expect(initial).toMatchObject({
-      environment: "local",
-      defaultModelId: "default-model",
+    expect(initial.settings).toMatchObject({
+      "runtime.environment": "local",
+      "agent.defaultModelId": "default-model",
     })
 
     const providerResponse = await instance.app.request(
@@ -336,10 +336,10 @@ describe("providers, models, and usage", () => {
     const model = await modelResponse.json()
     const saved = await instance.app.request(
       "/api/settings",
-      json("PATCH", { ...runtimeSettings, defaultModelId: model.id })
+      json("PATCH", { ...runtimeSettings, "agent.defaultModelId": model.id })
     )
     expect(saved.status).toBe(200)
-    expect((await saved.json()).defaultModelId).toBe(model.id)
+    expect((await saved.json()).settings["agent.defaultModelId"]).toBe(model.id)
     const providers = await (
       await instance.app.request("/api/providers")
     ).json()
@@ -454,8 +454,9 @@ describe("providers, models, and usage", () => {
       ).status
     ).toBe(204)
     expect(
-      (await (await instance.app.request("/api/settings")).json())
-        .defaultModelId
+      (await (await instance.app.request("/api/settings")).json()).settings[
+        "agent.defaultModelId"
+      ]
     ).toBeNull()
   }, 30_000)
 
@@ -557,7 +558,7 @@ describe("providers, models, and usage", () => {
     ).json()
     await instance.app.request(
       "/api/settings",
-      json("PATCH", { ...runtimeSettings, defaultModelId: model.id })
+      json("PATCH", { ...runtimeSettings, "agent.defaultModelId": model.id })
     )
 
     const exportedResponse = await instance.app.request("/api/settings/export")
@@ -570,10 +571,10 @@ describe("providers, models, and usage", () => {
       (item: { id: string }) => item.id === provider.id
     )
     expect(exportedProvider.apiKey).toBe("export-secret")
-    expect(exported.settings.defaultModelId).toBe(model.id)
-    expect(exported.settings.defaultThinkingLevel).toBe("off")
+    expect(exported.settings["agent.defaultModelId"]).toBe(model.id)
+    expect(exported.settings["agent.defaultThinkingLevel"]).toBe("off")
 
-    exported.settings.maxConcurrency = 7
+    exported.settings["runtime.maxConcurrency"] = 7
     exportedProvider.apiKey = "imported-secret"
     const imported = await instance.app.request(
       "/api/settings/import",
@@ -584,8 +585,8 @@ describe("providers, models, and usage", () => {
     const providers = await (
       await instance.app.request("/api/providers")
     ).json()
-    expect(settings.maxConcurrency).toBe(7)
-    expect(settings.defaultModelId).toBe(model.id)
+    expect(settings.settings["runtime.maxConcurrency"]).toBe(7)
+    expect(settings.settings["agent.defaultModelId"]).toBe(model.id)
     const importedProvider = providers.items.find(
       (item: { id: string }) => item.id === provider.id
     )
@@ -598,7 +599,7 @@ describe("providers, models, and usage", () => {
     const response = await instance.app.request(
       "/api/settings/import",
       json("POST", {
-        version: 1,
+        version: 2,
         settings: {},
         providers: [],
       })

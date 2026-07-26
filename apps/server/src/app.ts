@@ -1,5 +1,6 @@
 import type { Api, Model, MutableModels } from "@earendil-works/pi-ai"
 import { Hono } from "hono"
+import { get } from "../../shared"
 import { createDatabase } from "./db"
 import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
@@ -48,7 +49,7 @@ export function createApp(options: {
   const platformService = createPlatformService(
     db,
     storage,
-    () => getSettings().maxAttachmentMb * 1024 * 1024,
+    () => get(getSettings(), "runtime.maxAttachmentMb") * 1024 * 1024,
     configStore
   )
   const initialSettings = getSettings()
@@ -58,7 +59,7 @@ export function createApp(options: {
   const configuredConcurrency =
     options.maxConcurrency ??
     environmentConcurrency ??
-    initialSettings.maxConcurrency
+    get(initialSettings, "runtime.maxConcurrency")
   const maxConcurrency =
     Number.isInteger(configuredConcurrency) && configuredConcurrency > 0
       ? configuredConcurrency

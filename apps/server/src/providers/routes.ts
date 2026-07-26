@@ -247,11 +247,12 @@ export function registerProviderRoutes(
     if (idx === -1) return notFound(c, "Provider not found")
     const provider = providers[idx]
     const settings = configStore.getSettings()
+    const defaultModelId = settings["agent.defaultModelId"]
     if (
-      settings.defaultModelId &&
-      provider.models.some((m) => m.id === settings.defaultModelId)
+      defaultModelId &&
+      provider.models.some((m) => m.id === defaultModelId)
     ) {
-      configStore.updateSettings({ defaultModelId: null })
+      configStore.updateSettings({ "agent.defaultModelId": null })
     }
     providers.splice(idx, 1)
     configStore.updateProviders(providers)
@@ -472,8 +473,8 @@ export function registerProviderRoutes(
     )
     if (!provider || !model) return notFound(c, "Model not found")
     const settings = configStore.getSettings()
-    if (settings.defaultModelId === model.id) {
-      configStore.updateSettings({ defaultModelId: null })
+    if (settings["agent.defaultModelId"] === model.id) {
+      configStore.updateSettings({ "agent.defaultModelId": null })
     }
     provider.models = provider.models.filter((m) => m.id !== model.id)
     configStore.updateProviders(providers)
@@ -487,7 +488,8 @@ export function registerProviderRoutes(
       c.req.param("providerId")
     )
     if (!provider) return notFound(c, "Provider not found")
-    const timeout = configStore.getSettings().providerDiscoverTimeoutMs
+    const timeout =
+      configStore.getSettings()["runtime.providerDiscoverTimeoutMs"]
     try {
       const headers: Record<string, string> =
         provider.type === "anthropic-messages"
