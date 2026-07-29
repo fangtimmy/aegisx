@@ -1,13 +1,11 @@
-import { mkdirSync } from "node:fs"
-import { join, relative } from "node:path"
 import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
-import { streamSSE } from "hono/streaming"
+import { upgradeWebSocket } from "hono/bun"
 import { Type } from "typebox"
+import type { FlatSettings } from "../../../shared"
 import { get, normalizeThinkingLevel } from "../../../shared"
 import type { createDatabase } from "../db"
 import { challenges } from "../db/schema"
-import type { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
@@ -16,24 +14,16 @@ import {
   WorkspaceFileError,
   workspaceDownload,
 } from "../infrastructure/workspace-files"
-import { getChallengeRemote } from "../platforms/challenge-state"
-import { parseModelMetadata } from "../providers/models"
-import { providerName } from "../providers/routes"
-import {
-  renderInitialPrompt,
-  resolvePromptTemplates,
-} from "../settings/prompt-templates"
+import { PlatformActionError } from "../platforms/service"
+import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
-import type { createLiveRunService } from "./live"
-import { createPromptContextBuilder } from "./prompt"
-import { eventStatistics } from "./stats"
+import type { RunService } from "./service"
+
+type Database = ReturnType<typeof createDatabase>["db"]
 
 const runInput = Type.Object(
   {
     modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-    environment: Type.Optional(
-      Type.Union([Type.Literal("local"), Type.Literal("container")])
-    ),
     image: Type.Optional(
       Type.String({
         minLength: 1,
@@ -56,32 +46,17 @@ const runInput = Type.Object(
   { additionalProperties: false }
 )
 
-const messageInput = Type.Object(
-  {
-    message: Type.String({ minLength: 1, maxLength: 100_000 }),
-    clientMessageId: Type.Optional(
-      Type.String({ minLength: 1, maxLength: 100 })
-    ),
-  },
+const finishInput = Type.Object(
+  { summary: Type.Optional(Type.String({ maxLength: 20_000 })) },
   { additionalProperties: false }
 )
 
-const resumeInput = Type.Object(
-  {
-    message: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000 })),
-    clientMessageId: Type.Optional(
-      Type.String({ minLength: 1, maxLength: 100 })
-    ),
-  },
+const flagInput = Type.Object(
+  { flag: Type.String({ minLength: 1, maxLength: 10_000 }) },
   { additionalProperties: false }
 )
 
 const emptyInput = Type.Object({}, { additionalProperties: false })
-
-type Database = ReturnType<typeof createDatabase>["db"]
-type RunService = ReturnType<typeof createLiveRunService>
-type Catalog = ReturnType<typeof createCatalogReader>
-type FlatSettings = ReturnType<ConfigStore["getSettings"]>
 
 export function registerRunRoutes(
   app: Hono,
@@ -91,29 +66,25 @@ export function registerRunRoutes(
     runService: RunService
     getSettings(): FlatSettings
     configStore: ConfigStore
-    catalog: Pick<Catalog, "getChallenge" | "getEvent">
   }
 ) {
-  const { db, dataDir, runService, getSettings, configStore, catalog } = options
-  const { getChallenge, getEvent } = catalog
-  const prompts = createPromptContextBuilder({
-    db,
-    dataDir,
-    getContainerWorkspace: () => get(getSettings(), "container.workspace"),
-  })
+  const { db, runService, getSettings, configStore } = options
+  const port = process.env.PORT ?? "3000"
+  const apiUrl = `http://host.docker.internal:${port}`
 
   app.post(
     "/api/challenges/:challengeId/runs",
     validateJson(runInput),
     async (c) => {
-      const input = c.req.valid("json")
       try {
+        const input = c.req.valid("json")
         const defaults = getSettings()
+        const providers = getProviderConnections(configStore)
         const selectedModelId =
-          input.modelId ?? get(defaults, "agent.defaultModelId")
+          input.modelId ?? get(defaults, "agent.defaultModelId") ?? undefined
         const selected = selectedModelId
           ? (() => {
-              for (const provider of configStore.getProviders()) {
+              for (const provider of providers) {
                 const model = provider.models.find(
                   (m) => m.id === selectedModelId
                 )
@@ -153,63 +124,22 @@ export function registerRunRoutes(
           .get()
         if (!challenge) return notFound(c, "Challenge not found")
 
-        const environmentType =
-          input.environment ?? get(defaults, "runtime.environment")
-        const environment =
-          environmentType === "container"
-            ? {
-                type: "container" as const,
-                image: input.image?.trim() || get(defaults, "container.image"),
-                cpus: get(defaults, "container.cpus"),
-                memoryMb: get(defaults, "container.memoryMb"),
-                pidsLimit: get(defaults, "container.pidsLimit"),
-              }
-            : ({ type: "local" } as const)
-
-        const model = {
-          provider: providerName(selected.provider.id),
-          providerLabel: selected.provider.label,
-          modelId: selected.model.modelId,
-          modelLabel: selected.model.label,
-          costKnown: parseModelMetadata(selected.model.metadata).costKnown,
+        const run = await runService.create({
+          challengeId,
+          provider: selected.provider,
+          modelId: selected.model.id,
           thinkingLevel:
             input.thinkingLevel ??
             normalizeThinkingLevel(get(defaults, "agent.defaultThinkingLevel")),
-        }
-
-        const runId = crypto.randomUUID()
-        const mainAgentId = crypto.randomUUID()
-        const workspaceAbs = join(dataDir, "workspaces", runId)
-        mkdirSync(workspaceAbs, { recursive: true })
-        const remote = getChallengeRemote(db, challengeId)
-        const challengeAttachments = prompts.copyAttachments(
-          challengeId,
-          workspaceAbs
-        )
-        const promptTemplates = resolvePromptTemplates(getSettings())
-        const promptContext = prompts.buildPromptContext(
-          runId,
-          challenge,
-          remote,
-          challengeAttachments,
-          environment,
-          model,
-          { name: "Main agent", task: null, isMain: true }
-        )
-        const bootstrapText = renderInitialPrompt(
-          promptTemplates.initialPromptTemplate,
-          promptContext
-        )
-
-        const run = await runService.create({
-          runId,
-          mainAgentId,
-          challengeId,
-          model,
-          env: environment,
-          prompt: { ...promptTemplates, context: promptContext },
-          workspacePath: relative(dataDir, workspaceAbs),
-          bootstrapText,
+          container: {
+            image: input.image?.trim() || get(defaults, "container.image"),
+            cpus: get(defaults, "container.cpus"),
+            memoryMb: get(defaults, "container.memoryMb"),
+            pidsLimit: get(defaults, "container.pidsLimit"),
+            tmpfsSize: get(defaults, "container.tmpfsSize"),
+            workspace: get(defaults, "container.workspace"),
+            apiUrl,
+          },
         })
         return c.json(run, 202)
       } catch (error) {
@@ -221,107 +151,7 @@ export function registerRunRoutes(
   app.get("/api/runs/:runId", (c) => {
     const run = runService.get(c.req.param("runId"))
     if (!run) return notFound(c, "Run not found")
-    const agents = runService.agents(run.id)
-    return c.json({
-      run,
-      agents,
-      usage: runService.usage(run.id),
-    })
-  })
-
-  app.get("/api/runs/:runId/messages", (c) => {
-    const run = runService.get(c.req.param("runId"))
-    if (!run) return notFound(c, "Run not found")
-    const agentId = c.req.query("agentId")
-    const after = Number(c.req.query("after") ?? 0)
-    const afterSeq = Number.isSafeInteger(after) && after >= 0 ? after : 0
-    if (agentId) {
-      const agent = runService.getAgent(run.id, agentId)
-      if (!agent) return notFound(c, "Agent not found")
-      return c.json({
-        runId: run.id,
-        agentId,
-        messages: runService.store.listMessages(agentId, afterSeq),
-      })
-    }
-    return c.json({
-      runId: run.id,
-      messages: runService.store.listRunMessages(run.id, afterSeq),
-    })
-  })
-
-  app.get("/api/runs/:runId/agents/:agentId", (c) => {
-    const run = runService.get(c.req.param("runId"))
-    const agent = runService.getAgent(
-      c.req.param("runId"),
-      c.req.param("agentId")
-    )
-    if (!run || !agent) return notFound(c, "Agent not found")
-    return c.json({
-      agent,
-      messages: runService.store.listMessages(agent.id),
-      stats: runService.agentUsage(agent.id),
-    })
-  })
-
-  app.get("/api/runs/:runId/agents/:agentId/inspector", (c) => {
-    const value = runService.inspector(
-      c.req.param("runId"),
-      c.req.param("agentId")
-    )
-    if (!value) return notFound(c, "Agent not found")
-    return c.json(value)
-  })
-
-  app.get("/api/runs/:runId/stats", (c) => {
-    const run = runService.get(c.req.param("runId"))
-    if (!run) return notFound(c, "Run not found")
-    return c.json({ runId: run.id, usage: runService.usage(run.id) })
-  })
-
-  app.get("/api/challenges/:challengeId/stats", (c) => {
-    const challenge = getChallenge(c.req.param("challengeId"))
-    if (!challenge) return notFound(c, "Challenge not found")
-    const items = runService.listForChallenge(challenge.id).map((run) => ({
-      run,
-      usage: runService.usage(run.id),
-    }))
-    return c.json({
-      challengeId: challenge.id,
-      runCount: items.length,
-      usage: items.reduce(
-        (acc, item) => ({
-          input: acc.input + item.usage.input,
-          output: acc.output + item.usage.output,
-          cacheRead: acc.cacheRead + item.usage.cacheRead,
-          cacheWrite: acc.cacheWrite + item.usage.cacheWrite,
-          totalTokens: acc.totalTokens + item.usage.totalTokens,
-          cost:
-            acc.cost === null || item.usage.cost === null
-              ? null
-              : (acc.cost ?? 0) + item.usage.cost,
-        }),
-        {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: 0 as number | null,
-        }
-      ),
-      runs: items,
-    })
-  })
-
-  app.get("/api/events/:eventId/stats", (c) => {
-    const event = getEvent(c.req.param("eventId"))
-    if (!event) return notFound(c, "Event not found")
-    const eventRuns = runService.listForEvent(event.id)
-    const usageByRun = new Map(
-      eventRuns.map((run) => [run.id, runService.usage(run.id)])
-    )
-    return c.json(eventStatistics(db, event.id, eventRuns, usageByRun))
+    return c.json({ run })
   })
 
   app.get("/api/runs/:runId/files", (c) => {
@@ -350,137 +180,37 @@ export function registerRunRoutes(
     }
   })
 
-  app.get("/api/runs/:runId/stream", (c) => {
-    const runId = c.req.param("runId")
-    const run = runService.get(runId)
-    if (!run) return notFound(c, "Run not found")
-    return streamSSE(c, async (stream) => {
-      let finished = false
-      let unsubscribe = () => {}
-      let heartbeat: ReturnType<typeof setInterval> | undefined
-      // Serialize all SSE writes (snapshot + live) so events cannot reorder.
-      let writeChain: Promise<void> = Promise.resolve()
-      const finish = () => {
-        if (finished) return
-        finished = true
-        if (heartbeat !== undefined) clearInterval(heartbeat)
-        unsubscribe()
-      }
-      const enqueue = (write: () => Promise<void>) => {
-        if (finished) return writeChain
-        writeChain = writeChain
-          .then(async () => {
-            if (finished) return
-            await write()
-          })
-          .catch(() => {
-            finish()
-          })
-        return writeChain
-      }
-      const sendData = (data: string) =>
-        enqueue(() => stream.writeSSE({ data }))
-      // SSE comment frames are ignored by EventSource and keep proxies awake.
-      const sendPing = () =>
-        enqueue(async () => {
-          await stream.write(":ping\n\n")
-        })
-      // Subscribe before snapshot so live events that arrive mid-snapshot stay ordered.
-      unsubscribe = runService.subscribe(runId, (event) => {
-        void sendData(JSON.stringify(event))
-      })
-      c.req.raw.signal.addEventListener("abort", finish, { once: true })
-      try {
-        await sendData(JSON.stringify({ type: "ready", runId }))
-        await sendData(
-          JSON.stringify({
-            type: "run.updated",
-            run: runService.get(runId),
-          })
-        )
-        for (const agent of runService.agents(runId)) {
-          await sendData(JSON.stringify({ type: "agent.updated", agent }))
-        }
-        if (finished) return
-        // Keep proxies awake; Bun idleTimeout is disabled in index.ts.
-        heartbeat = setInterval(() => {
-          void sendPing()
-        }, 15_000)
-        await new Promise<void>((resolve) => {
-          if (c.req.raw.signal.aborted) {
-            resolve()
+  // PTY bridge: binary frames = stdin/stdout bytes; text frame = JSON control
+  // ({type:'resize',cols,rows} | {type:'ping'}).
+  app.get(
+    "/api/runs/:runId/pty",
+    upgradeWebSocket((c) => {
+      const runId = c.req.param("runId") ?? ""
+      return {
+        onOpen: (_evt, ws) => {
+          const bridge = runService.ptyBridge(runId)
+          if (!bridge) {
+            ws.close(1008, "Run is not running")
             return
           }
-          c.req.raw.signal.addEventListener("abort", () => resolve(), {
-            once: true,
-          })
-        })
-        await writeChain
-      } catch {
-        finish()
-      } finally {
-        finish()
+          bridge.addConnection(ws)
+        },
+        onMessage: (evt, ws) => {
+          const bridge = runService.ptyBridge(runId)
+          if (!bridge) return
+          const data = evt.data
+          if (typeof data === "string") {
+            bridge.onMessage(ws, data)
+          } else if (data instanceof ArrayBuffer) {
+            bridge.onMessage(ws, data)
+          }
+        },
+        onClose: (_evt, ws) => {
+          runService.ptyBridge(runId)?.removeConnection(ws)
+        },
       }
     })
-  })
-
-  app.post(
-    "/api/runs/:runId/message",
-    validateJson(messageInput),
-    async (c) => {
-      try {
-        return c.json(
-          await runService.postMessage(
-            c.req.param("runId"),
-            c.req.valid("json").message.trim(),
-            c.req.valid("json").clientMessageId
-          )
-        )
-      } catch (error) {
-        return runError(c, error)
-      }
-    }
   )
-
-  app.post(
-    "/api/runs/:runId/messages",
-    validateJson(messageInput),
-    async (c) => {
-      try {
-        return c.json(
-          await runService.postMessage(
-            c.req.param("runId"),
-            c.req.valid("json").message.trim(),
-            c.req.valid("json").clientMessageId
-          )
-        )
-      } catch (error) {
-        return runError(c, error)
-      }
-    }
-  )
-
-  app.post("/api/runs/:runId/pause", validateJson(emptyInput), async (c) => {
-    try {
-      return c.json(await runService.pause(c.req.param("runId")))
-    } catch (error) {
-      return runError(c, error)
-    }
-  })
-
-  app.post("/api/runs/:runId/resume", validateJson(resumeInput), async (c) => {
-    try {
-      return c.json(
-        await runService.resume(
-          c.req.param("runId"),
-          c.req.valid("json").message,
-          c.req.valid("json").clientMessageId
-        )
-      )
-    } catch (error) {
-      return runError(c, error)
-    }
-  })
 
   app.post("/api/runs/:runId/stop", validateJson(emptyInput), async (c) => {
     try {
@@ -489,6 +219,78 @@ export function registerRunRoutes(
       return runError(c, error)
     }
   })
+
+  app.post("/api/runs/:runId/resume", validateJson(emptyInput), async (c) => {
+    try {
+      return c.json(await runService.resume(c.req.param("runId")))
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  app.post("/api/runs/:runId/finish", validateJson(finishInput), async (c) => {
+    try {
+      const summary = c.req.valid("json").summary?.trim() ?? ""
+      return c.json(await runService.finish(c.req.param("runId"), summary))
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  app.post("/api/runs/:runId/flag", validateJson(flagInput), async (c) => {
+    const runId = c.req.param("runId")
+    const run = runService.get(runId)
+    if (!run) return notFound(c, "Run not found")
+    try {
+      const result = await runService.submitFlag(
+        runId,
+        run.challengeId,
+        c.req.valid("json").flag
+      )
+      // Refresh so the accepted flag is reflected on the run row.
+      runService.refresh(runId)
+      if (!result) {
+        return c.json(
+          {
+            error: {
+              code: "not_bound",
+              message: "Challenge is not managed by a platform",
+            },
+          },
+          400
+        )
+      }
+      return c.json({ result })
+    } catch (error) {
+      return platformError(c, error)
+    }
+  })
+
+  app.get("/api/runs/:runId/target", async (c) => {
+    const run = runService.get(c.req.param("runId"))
+    if (!run) return notFound(c, "Run not found")
+    try {
+      return c.json(await runService.targetAction(run.challengeId, "get"))
+    } catch (error) {
+      return platformError(c, error)
+    }
+  })
+
+  for (const action of ["start", "extend", "stop"] as const) {
+    app.post(
+      `/api/runs/:runId/target/${action}`,
+      validateJson(emptyInput),
+      async (c) => {
+        const run = runService.get(c.req.param("runId"))
+        if (!run) return notFound(c, "Run not found")
+        try {
+          return c.json(await runService.targetAction(run.challengeId, action))
+        } catch (error) {
+          return platformError(c, error)
+        }
+      }
+    )
+  }
 
   app.delete("/api/runs/:runId", async (c) => {
     try {
@@ -508,7 +310,11 @@ function runError(
   return jsonError(
     c,
     { code: error.code, message: error.message },
-    error.code === "not_found" ? 404 : 409
+    error.code === "not_found"
+      ? 404
+      : error.code === "launch_failed"
+        ? 500
+        : 409
   )
 }
 
@@ -522,4 +328,20 @@ function workspaceFileError(
     { code: error.code, message: error.message },
     error.code === "not_found" ? 404 : 400
   )
+}
+
+function platformError(
+  c: Parameters<Parameters<Hono["onError"]>[0]>[1],
+  error: unknown
+) {
+  if (!(error instanceof PlatformActionError)) throw error
+  const status =
+    error.code === "not_found"
+      ? 404
+      : error.code === "invalid_state"
+        ? 409
+        : error.code === "not_bound"
+          ? 400
+          : 502
+  return jsonError(c, { code: error.code, message: error.message }, status)
 }

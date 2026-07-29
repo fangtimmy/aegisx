@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Box, CircleAlert, Monitor, Play, Plus } from "lucide-react"
+import { Box, CircleAlert, Play, Plus } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
@@ -52,7 +52,6 @@ type RunFormValues = {
   challengeId: string
   modelId: string
   thinkingLevel: ThinkingLevel
-  environment: "local" | "container"
   image: string
 }
 
@@ -90,9 +89,7 @@ export function CreateRunDialog({
     mutationFn: (values: RunFormValues) =>
       runsApi.createRun(challenge?.id ?? values.challengeId, {
         modelId: values.modelId,
-        environment: values.environment,
-        image:
-          values.environment === "container" ? values.image.trim() : undefined,
+        image: values.image.trim(),
         thinkingLevel: values.thinkingLevel,
       }),
     onSuccess: async (run) => {
@@ -123,11 +120,9 @@ export function CreateRunDialog({
       challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
       modelId: "",
       thinkingLevel: "off",
-      environment: "local",
       image: "",
     },
   })
-  const environment = form.watch("environment")
   const modelId = form.watch("modelId")
   const selectedModel = availableModels.find((model) => model.id === modelId)
   const supportedThinkingLevels =
@@ -153,25 +148,16 @@ export function CreateRunDialog({
         challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
         modelId: initialModelId,
         thinkingLevel: defaults["agent.defaultThinkingLevel"],
-        environment: defaults["runtime.environment"],
         image: defaults["container.image"],
       })
     }
-    // ponytail: availableModels derived from providers query; reset only on open/settings change
-  }, [
-    open,
-    defaults,
-    challenges?.[0]?.id,
-    form.reset,
-    challenge?.id,
-    initialModelId,
-  ])
+  }, [open, defaults, challenges?.[0]?.id, form, challenge?.id, initialModelId])
 
   useEffect(() => {
     if (!isThinkingLevelSupported) {
       form.setValue("thinkingLevel", firstSupportedThinkingLevel)
     }
-  }, [isThinkingLevelSupported, firstSupportedThinkingLevel, form.setValue])
+  }, [isThinkingLevelSupported, firstSupportedThinkingLevel, form])
 
   const available = challenge ? [challenge] : (challenges ?? [])
 
@@ -363,68 +349,31 @@ export function CreateRunDialog({
                 />
               </Field>
               <Field>
-                <FieldLabel>Environment</FieldLabel>
+                <FieldLabel htmlFor="run-image">Container image</FieldLabel>
                 <Controller
                   control={form.control}
-                  name="environment"
+                  name="image"
                   render={({ field }) => (
-                    <Select
-                      items={{ container: "Container", local: "Local" }}
-                      onValueChange={(value) =>
-                        field.onChange(value as "local" | "container")
-                      }
+                    <Input
+                      id="run-image"
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      required
+                      type="text"
                       value={field.value}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectPopup>
-                        <SelectItem value="local">Local</SelectItem>
-                        <SelectItem value="container">Container</SelectItem>
-                      </SelectPopup>
-                    </Select>
+                    />
                   )}
+                  rules={{ required: true }}
                 />
               </Field>
-              {environment === "container" && (
-                <Field>
-                  <FieldLabel htmlFor="run-image">Container image</FieldLabel>
-                  <Controller
-                    control={form.control}
-                    name="image"
-                    render={({ field }) => (
-                      <Input
-                        id="run-image"
-                        onBlur={field.onBlur}
-                        onChange={field.onChange}
-                        required
-                        type="text"
-                        value={field.value}
-                      />
-                    )}
-                    rules={{ required: true }}
-                  />
-                </Field>
-              )}
-              {environment === "local" ? (
-                <Alert variant="warning">
-                  <Monitor />
-                  <AlertTitle>Local execution is not sandboxed</AlertTitle>
-                  <AlertDescription>
-                    The agent can access the local runtime and challenge
-                    workspace. Review the challenge before starting.
-                  </AlertDescription>
-                </Alert>
-              ) : (
-                <Alert>
-                  <Box />
-                  <AlertTitle>Isolated container</AlertTitle>
-                  <AlertDescription>
-                    The agent runs in an isolated container with its workspace
-                    at /workspace.
-                  </AlertDescription>
-                </Alert>
-              )}
+              <Alert>
+                <Box />
+                <AlertTitle>Isolated container</AlertTitle>
+                <AlertDescription>
+                  pi runs as the container's main process with its workspace at
+                  /workspace. Watch and steer it from the Terminal tab.
+                </AlertDescription>
+              </Alert>
               {mutation.error && (
                 <Alert variant="error">
                   <CircleAlert />

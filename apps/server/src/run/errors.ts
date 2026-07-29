@@ -1,10 +1,6 @@
 export class RunActionError extends Error {
   constructor(
-    readonly code:
-      | "capacity"
-      | "not_found"
-      | "invalid_state"
-      | "message_id_conflict",
+    readonly code: "capacity" | "not_found" | "invalid_state" | "launch_failed",
     message: string
   ) {
     super(message)

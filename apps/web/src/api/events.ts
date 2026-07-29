@@ -3,7 +3,6 @@ import type {
   Challenge,
   ChallengeInput,
   EventInput,
-  EventStats,
   EventSummary,
 } from "./types"
 
@@ -30,10 +29,6 @@ export function updateEvent(eventId: string, input: Partial<EventInput>) {
 
 export function deleteEvent(eventId: string) {
   return apiRequest<void>(`/events/${eventId}`, { method: "DELETE" })
-}
-
-export function getEventStats(eventId: string) {
-  return apiRequest<EventStats>(`/events/${eventId}/stats`)
 }
 
 export function createChallenge(eventId: string, input: ChallengeInput) {

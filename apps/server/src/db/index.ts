@@ -60,8 +60,9 @@ function tableNames(sqlite: Database): Set<string> {
 }
 
 /**
- * v1 used agent_inbox / run_agents / run_events.
- * Refuse to open so operators wipe data/ instead of silent corruption.
+ * v3 is a full data wipe (single container-per-run architecture).
+ * Refuse to open any older schema (v1 agent_inbox/run_agents, v2 agents/messages)
+ * or a user_version below 3 so operators wipe data/ instead of silent corruption.
  */
 function assertCompatibleSchema(sqlite: Database) {
   const tables = tableNames(sqlite)
@@ -73,23 +74,25 @@ function assertCompatibleSchema(sqlite: Database) {
     "run_events",
     "agent_messages",
   ]
-  const hasV1 = v1Markers.some((name) => tables.has(name))
-  const hasV2 = tables.has("messages") && tables.has("agents")
+  const v2Markers = ["agents", "messages", "agent_usage"]
 
-  if (hasV1 && !hasV2) {
+  if (v1Markers.some((name) => tables.has(name))) {
     throw new Error(
       [
-        "AegisX v2 cannot open a v1 database.",
+        "AegisX v3 cannot open a v1 database.",
         "Delete the data directory (or only aegisx.sqlite) and restart.",
         `Example: rm -rf ${"data/"}  # or remove AEGISX_DATA_DIR contents`,
-        "See docs/architecture-v2.md.",
       ].join(" ")
     )
   }
 
-  if (tables.has("agents") && !tables.has("messages")) {
+  if (v2Markers.some((name) => tables.has(name))) {
     throw new Error(
-      "AegisX database is incomplete or corrupted (agents without messages). Wipe data/ and restart."
+      [
+        "AegisX v3 cannot open a v2 database (incompatible run/agent schema).",
+        "v3 is a full data wipe. Delete the data directory and restart.",
+        `Example: rm -rf ${"data/"}  # or remove AEGISX_DATA_DIR contents`,
+      ].join(" ")
     )
   }
 
@@ -99,6 +102,15 @@ function assertCompatibleSchema(sqlite: Database) {
   if (userVersion > SCHEMA_VERSION) {
     throw new Error(
       `Database schema version ${userVersion} is newer than this binary (${SCHEMA_VERSION}). Upgrade AegisX.`
+    )
+  }
+  if (userVersion !== 0 && userVersion < SCHEMA_VERSION) {
+    throw new Error(
+      [
+        `AegisX database schema version ${userVersion} is older than v${SCHEMA_VERSION}.`,
+        "v3 is a full data wipe. Delete the data directory and restart.",
+        `Example: rm -rf ${"data/"}  # or remove AEGISX_DATA_DIR contents`,
+      ].join(" ")
     )
   }
 }

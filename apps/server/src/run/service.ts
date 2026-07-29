@@ -1,181 +1,173 @@
-import { rmSync } from "node:fs"
-import { join } from "node:path"
+import { mkdirSync, rmSync } from "node:fs"
+import { join, relative } from "node:path"
 import { eq } from "drizzle-orm"
 import type {
   EnvironmentConfig,
-  FrozenPromptConfig,
-  LiveEvent,
+  FlatSettings,
   ModelConfig,
   RunPublic,
 } from "../../../shared"
-import { isTerminalRunStatus } from "../../../shared"
+import type { ProviderConnection } from "../../../shared/provider"
+import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
-import { challenges } from "../db/schema"
-import { createLiveBus } from "./bus"
+import { challenges, runs } from "../db/schema"
+import type { ConfigStore } from "../infrastructure/config-store"
+import { getChallengeRemote } from "../platforms/challenge-state"
+import type { createPlatformService } from "../platforms/service"
+import { getProviderConnections } from "../providers/public"
+import {
+  renderInitialPrompt,
+  renderSystemPrompt,
+  resolvePromptTemplates,
+} from "../settings/prompt-templates"
+import type { ContainerManager } from "./container-manager"
+import { discoverPiSessionId } from "./container-manager"
 import { RunActionError } from "./errors"
-import { activeAgentCount, pausedAgentCount, reduce } from "./machine"
+import {
+  buildContainerEnv,
+  buildPiCmd,
+  generatePiAgentVolume,
+  piModelRefFor,
+} from "./pi-launch"
+import { buildPromptContext, copyAttachments } from "./prompt"
+import { createPtyBridge, type PtyBridge } from "./pty-bridge"
 import { createRunQueries } from "./queries"
-import type { RuntimePort } from "./runtime-port"
-import { createRunStore } from "./store"
-import type { AgentOutcome, Cmd, Effect, RunAggregate } from "./types"
-import { mainAgent } from "./types"
 
 type Database = ReturnType<typeof createDatabase>["db"]
+type PlatformService = ReturnType<typeof createPlatformService>
 
-const DEFAULT_RESUME = "Continue solving the challenge from the current state."
+const RUNS_SUBDIR = "runs"
 
 export type RunServiceOptions = {
   db: Database
-  dataDir?: string
-  maxConcurrency: number
-  runtime: RuntimePort
-  now?: () => string
-  newId?: () => string
-  onLiveEvent?: (runId: string, event: LiveEvent) => void
-  /** Challenge display fields for public mapping (optional in Phase 2). */
-  resolveChallenge?: (challengeId: string) =>
-    | {
-        name: string
-        eventId: string
-        targetSupported: boolean
-      }
-    | undefined
-  /** Live session count; optional for fake runtime tests. */
-  activeSessionCount?: () => number
+  dataDir: string
+  containerManager: ContainerManager
+  platformService: PlatformService
+  configStore: ConfigStore
+  getSettings(): FlatSettings
 }
 
-export function createRunService(options: RunServiceOptions) {
-  const store = createRunStore(options.db)
-  const bus = createLiveBus()
-  const queries = createRunQueries({
-    store,
-    dataDir: options.dataDir,
-    resolveChallenge: options.resolveChallenge,
-  })
-  const locks = new Map<string, Promise<unknown>>()
-  const aborting = new Set<string>()
-  let maxConcurrency = options.maxConcurrency
-  let closed = false
-  const now = () => options.now?.() ?? new Date().toISOString()
-  const newId = () => options.newId?.() ?? crypto.randomUUID()
+type PendingOutcome = { mode: "finish"; summary: string } | { mode: "stop" }
 
-  function withLock<T>(runId: string, operation: () => T | Promise<T>) {
+export type CreateRunInput = {
+  challengeId: string
+  provider: ProviderConnection
+  /** ProviderModel.id */
+  modelId: string
+  thinkingLevel: ThinkingLevel
+  container: {
+    image: string
+    cpus: number
+    memoryMb: number
+    pidsLimit: number
+    tmpfsSize: string
+    workspace: string
+    apiUrl: string
+  }
+}
+
+export type RunService = ReturnType<typeof createRunService>
+
+export function createRunService(options: RunServiceOptions) {
+  const { db, dataDir, containerManager, platformService, configStore } =
+    options
+  const queries = createRunQueries({ db, dataDir })
+  const bridges = new Map<string, PtyBridge>()
+  const locks = new Map<string, Promise<unknown>>()
+  const pending = new Map<string, PendingOutcome>()
+  let closed = false
+  const now = () => new Date().toISOString()
+
+  function withLock<T>(runId: string, op: () => T | Promise<T>): Promise<T> {
     if (closed) {
       return Promise.reject(
-        new RunActionError("invalid_state", "Run manager is closed")
+        new RunActionError("invalid_state", "Run service is closed")
       )
     }
     const previous = locks.get(runId) ?? Promise.resolve()
-    const next = previous.catch(() => undefined).then(operation)
+    const next = previous.catch(() => undefined).then(op)
     locks.set(runId, next)
     return next.finally(() => {
       if (locks.get(runId) === next) locks.delete(runId)
     }) as Promise<T>
   }
 
-  function requireCapacity(extra: number) {
-    if (store.globalActiveAgentCount() + extra > maxConcurrency) {
-      throw new RunActionError("capacity", "Run capacity reached")
-    }
+  const runDir = (runId: string) => join(dataDir, RUNS_SUBDIR, runId)
+  const workspaceAbs = (runId: string) => join(runDir(runId), "workspace")
+  const piAgentAbs = (runId: string) => join(runDir(runId), "pi-agent")
+  const containerName = (runId: string) => `aegisx-run-${runId}`
+
+  function requireRun(runId: string) {
+    const run = queries.get(runId)
+    if (!run) throw new RunActionError("not_found", "Run not found")
+    return run
   }
 
-  function emit(runId: string, event: LiveEvent) {
-    bus.emit(runId, event)
-    options.onLiveEvent?.(runId, event)
+  function updateRow(runId: string, patch: Record<string, unknown>) {
+    db.update(runs).set(patch).where(eq(runs.id, runId)).run()
   }
 
-  /** Publish a live event from the agent runtime (progress / committed / activity). */
-  function publish(runId: string, event: LiveEvent) {
-    emit(runId, event)
+  /** Watch a launched/reattached container; finalize the run when pi exits. */
+  function watchExit(runId: string) {
+    const name = containerName(runId)
+    void containerManager
+      .wait(name)
+      .then((result) => finalize(runId, result.StatusCode))
+      .catch(() => finalize(runId, -1))
   }
 
-  async function applyEffects(runId: string, effects: Effect[]): Promise<void> {
-    for (const effect of effects) {
-      switch (effect.t) {
-        case "insert_message": {
-          const message = store.insertMessage(effect.message)
-          emit(runId, {
-            type: "message.committed",
-            agentId: message.agentId,
-            message,
-          })
-          break
-        }
-        case "abort_all":
-          aborting.add(runId)
-          try {
-            await options.runtime.abort(runId, effect.exceptAgentId)
-          } finally {
-            aborting.delete(runId)
-          }
-          break
-        case "release_all":
-          await options.runtime.releaseRun(runId)
-          break
-        case "release_agent":
-          options.runtime.release(effect.agentId)
-          break
-        case "attach":
-          await options.runtime.attach(runId, effect.agentId)
-          break
-        case "dispatch":
-          options.runtime.dispatch({
-            runId,
-            agentId: effect.agentId,
-            kind: effect.kind,
-            text: effect.text,
-            messageId: effect.messageId,
-            clientMessageId: effect.clientMessageId,
-            handoff: effect.handoff,
-          })
-          break
+  function attachBridge(runId: string, stream: NodeJS.ReadWriteStream) {
+    const bridge = createPtyBridge({
+      runId,
+      containerName: containerName(runId),
+      stream,
+      manager: containerManager,
+    })
+    bridges.set(runId, bridge)
+  }
+
+  function finalize(runId: string, exitCode: number) {
+    void withLock(runId, () => {
+      const row = queries.getRow(runId)
+      if (row?.status !== "running") return
+      const outcome = pending.get(runId)
+      pending.delete(runId)
+      const ts = now()
+      let status: string
+      let summary: string | null = row.summary
+      let error: string | null = null
+      if (outcome?.mode === "finish") {
+        status = "completed"
+        summary = outcome.summary || summary
+      } else if (outcome?.mode === "stop") {
+        status = "stopped"
+      } else if (exitCode === 0) {
+        status = "completed"
+      } else {
+        status = "failed"
+        error = `pi exited with code ${exitCode}`
       }
-    }
-  }
-
-  function emitState(state: RunAggregate) {
-    const run = queries.mapPublic(state)
-    emit(state.id, { type: "run.updated", run })
-    for (const agent of state.agents) {
-      emit(state.id, {
-        type: "agent.updated",
-        agent: {
-          ...agent,
-          usage: store.usageForAgent(agent.id),
-        },
+      updateRow(runId, {
+        status,
+        summary,
+        error,
+        completedAt: ts,
+        updatedAt: ts,
       })
-    }
+      const bridge = bridges.get(runId)
+      if (bridge) {
+        bridge.dispose()
+        bridges.delete(runId)
+      }
+    })
   }
 
-  async function apply(
-    runId: string,
-    cmd: Cmd,
-    existing?: RunAggregate | null
-  ): Promise<RunAggregate> {
-    const current =
-      existing === undefined ? store.loadAggregate(runId) : existing
-    const result = reduce(current, cmd)
-    if (!result.ok) {
-      throw new RunActionError(result.code, result.message)
-    }
-    store.saveAggregate(result.state)
-    await applyEffects(runId, result.effects)
-    emitState(result.state)
-    return result.state
+  function providers(): ProviderConnection[] {
+    return getProviderConnections(configStore)
   }
 
-  async function create(input: {
-    challengeId: string
-    model: ModelConfig
-    env?: EnvironmentConfig
-    prompt: FrozenPromptConfig
-    workspacePath: string
-    bootstrapText: string
-    /** Optional fixed ids (HTTP layer aligns workspace path with run id). */
-    runId?: string
-    mainAgentId?: string
-  }): Promise<RunPublic> {
-    const challenge = options.db
+  async function create(input: CreateRunInput): Promise<RunPublic> {
+    const challenge = db
       .select()
       .from(challenges)
       .where(eq(challenges.id, input.challengeId))
@@ -183,267 +175,330 @@ export function createRunService(options: RunServiceOptions) {
     if (!challenge) {
       throw new RunActionError("not_found", "Challenge not found")
     }
-    requireCapacity(1)
-    const runId = input.runId ?? newId()
-    const mainAgentId = input.mainAgentId ?? newId()
-    const bootstrapMessageId = newId()
-    const timestamp = now()
+    const model = input.provider.models.find((m) => m.id === input.modelId)
+    if (!model?.enabled || !input.provider.enabled) {
+      throw new RunActionError("invalid_state", "Model is unavailable")
+    }
+    if (!input.provider.apiKey) {
+      throw new RunActionError("invalid_state", "Provider API key is required")
+    }
+
+    const runId = crypto.randomUUID()
     return withLock(runId, async () => {
-      if (store.loadAggregate(runId)) {
-        throw new RunActionError("invalid_state", "Run already exists")
+      const name = containerName(runId)
+      const wsAbs = workspaceAbs(runId)
+      const piAbs = piAgentAbs(runId)
+      mkdirSync(wsAbs, { recursive: true })
+      mkdirSync(piAbs, { recursive: true })
+      mkdirSync(join(piAbs, "sessions"), { recursive: true })
+
+      const remote = getChallengeRemote(db, input.challengeId)
+      const challengeAttachments = copyAttachments(
+        db,
+        dataDir,
+        input.challengeId,
+        wsAbs
+      )
+
+      const env: EnvironmentConfig = {
+        type: "container",
+        image: input.container.image,
+        cpus: input.container.cpus,
+        memoryMb: input.container.memoryMb,
+        pidsLimit: input.container.pidsLimit,
       }
-      const state = await apply(
-        runId,
+      const modelConfig: ModelConfig = {
+        provider: input.provider.label,
+        providerLabel: input.provider.label,
+        modelId: model.modelId,
+        modelLabel: model.label,
+        thinkingLevel: input.thinkingLevel,
+      }
+
+      const promptContext = buildPromptContext(
         {
-          t: "create",
           runId,
-          mainAgentId,
-          challengeId: input.challengeId,
-          model: input.model,
-          env: input.env ?? { type: "local" },
-          prompt: input.prompt,
-          workspacePath: input.workspacePath,
-          bootstrapText: input.bootstrapText,
-          bootstrapMessageId,
-          now: timestamp,
+          challenge,
+          remote,
+          challengeAttachments,
+          environment: env,
+          model: modelConfig,
         },
-        null
+        db,
+        input.container.workspace
       )
-      return queries.mapPublic(state)
-    })
-  }
+      const templates = resolvePromptTemplates(options.getSettings())
+      const appendSystem = renderSystemPrompt(
+        templates.mainSystemPromptTemplate,
+        promptContext
+      )
+      const initialPrompt = renderInitialPrompt(
+        templates.initialPromptTemplate,
+        promptContext
+      )
 
-  function pause(runId: string) {
-    return withLock(runId, () =>
-      apply(runId, { t: "pause", now: now() }).then(queries.mapPublic)
-    )
-  }
+      generatePiAgentVolume({
+        piAgentDir: piAbs,
+        providers: providers(),
+        appendSystem,
+      })
 
-  function resume(runId: string, message?: string, clientMessageId?: string) {
-    return withLock(runId, async () => {
-      const current = store.loadAggregate(runId)
-      if (!current) {
-        throw new RunActionError("not_found", "Run not found")
-      }
-      if (clientMessageId) {
-        const main = mainAgent(current)
-        if (main) {
-          const existing = store.findByClientMessageId(main.id, clientMessageId)
-          if (existing) return queries.mapPublic(current)
-        }
-      }
-      requireCapacity(pausedAgentCount(current))
-      const text = message?.trim() || DEFAULT_RESUME
-      const state = await apply(
+      const modelRef = piModelRefFor(input.provider, input.modelId)
+      const cmd = buildPiCmd({
+        modelRef: modelRef.ref,
+        thinkingLevel: input.thinkingLevel,
+        challengeName: challenge.name,
+        initialPrompt,
+      })
+      const containerEnv = buildContainerEnv({
         runId,
-        {
-          t: "resume",
-          text,
-          messageId: newId(),
-          clientMessageId,
-          now: now(),
-        },
-        current
-      )
-      return queries.mapPublic(state)
+        challengeId: challenge.id,
+        challengeName: challenge.name,
+        apiUrl: input.container.apiUrl,
+      })
+
+      const ts = now()
+      db.insert(runs)
+        .values({
+          id: runId,
+          challengeId: challenge.id,
+          status: "running",
+          launcher: "pi",
+          provider: modelConfig.provider,
+          providerLabel: modelConfig.providerLabel ?? null,
+          modelId: modelConfig.modelId,
+          modelLabel: modelConfig.modelLabel ?? null,
+          piModelRef: modelRef.ref,
+          thinkingLevel: modelConfig.thinkingLevel,
+          image: env.image,
+          cpus: env.cpus,
+          memoryMb: env.memoryMb,
+          pidsLimit: env.pidsLimit,
+          containerName: name,
+          workspacePath: relative(dataDir, wsAbs),
+          createdAt: ts,
+          startedAt: ts,
+          updatedAt: ts,
+        })
+        .run()
+
+      let launched: { id: string; stream: NodeJS.ReadWriteStream }
+      try {
+        launched = await containerManager.launch({
+          name,
+          image: env.image,
+          cmd,
+          env: containerEnv,
+          workingDir: input.container.workspace,
+          binds: [
+            `${wsAbs}:${input.container.workspace}`,
+            `${piAbs}:/root/.pi/agent`,
+          ],
+          limits: {
+            cpus: env.cpus,
+            memoryMb: env.memoryMb,
+            pidsLimit: env.pidsLimit,
+          },
+          tmpfsSize: input.container.tmpfsSize,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        updateRow(runId, {
+          status: "failed",
+          error: `Failed to start container: ${message}`,
+          completedAt: now(),
+          updatedAt: now(),
+        })
+        throw new RunActionError("launch_failed", message)
+      }
+
+      attachBridge(runId, launched.stream)
+      watchExit(runId)
+      discoverSessionLater(runId, piAbs)
+      return requireRun(runId)
     })
+  }
+
+  function discoverSessionLater(runId: string, piAbs: string) {
+    let attempts = 0
+    const timer = setInterval(() => {
+      attempts += 1
+      const { sessionId, sessionFile } = discoverPiSessionId(piAbs)
+      if (sessionId) {
+        clearInterval(timer)
+        updateRow(runId, {
+          piSessionId: sessionId,
+          piSessionFile: sessionFile,
+          updatedAt: now(),
+        })
+      } else if (attempts > 30) {
+        clearInterval(timer)
+      }
+    }, 2000)
   }
 
   function stop(runId: string) {
-    return withLock(runId, () =>
-      apply(runId, { t: "stop", now: now() }).then(queries.mapPublic)
-    )
-  }
-
-  function postMessage(runId: string, text: string, clientMessageId?: string) {
     return withLock(runId, async () => {
-      const current = store.loadAggregate(runId)
-      if (!current) {
-        throw new RunActionError("not_found", "Run not found")
+      const run = requireRun(runId)
+      if (run.status !== "running") {
+        throw new RunActionError("invalid_state", "Run is not running")
       }
-      const main = mainAgent(current)
-      if (!main) {
-        throw new RunActionError("invalid_state", "Main agent is unavailable")
-      }
-      if (clientMessageId) {
-        const existing = store.findByClientMessageId(main.id, clientMessageId)
-        if (existing) return queries.mapPublic(current)
-      }
-      const state = await apply(
-        runId,
-        {
-          t: "user_message",
-          text,
-          messageId: newId(),
-          clientMessageId,
-          now: now(),
-        },
-        current
-      )
-      return queries.mapPublic(state)
+      pending.set(runId, { mode: "stop" })
+      await containerManager.kill(containerName(runId), "SIGTERM")
+      return requireRun(runId)
     })
   }
 
-  function requestFinish(runId: string, summary: string) {
-    return withLock(runId, () =>
-      apply(runId, { t: "request_finish", summary }).then(queries.mapPublic)
-    )
-  }
-
-  function spawn(runId: string, parentId: string, name: string, task: string) {
+  function finish(runId: string, summary: string) {
     return withLock(runId, async () => {
-      requireCapacity(1)
-      const agentId = newId()
-      const state = await apply(runId, {
-        t: "spawn",
-        agentId,
-        parentId,
-        name,
-        task,
-        taskMessageId: newId(),
-        now: now(),
-      })
-      const child = state.agents.find((agent) => agent.id === agentId)
-      if (!child) throw new Error("spawn failed")
-      return child
+      const run = requireRun(runId)
+      if (run.status !== "running") {
+        throw new RunActionError("invalid_state", "Run is not running")
+      }
+      pending.set(runId, { mode: "finish", summary })
+      await containerManager.kill(containerName(runId), "SIGTERM")
+      return requireRun(runId)
     })
   }
 
-  function onSettled(runId: string, agentId: string, outcome: AgentOutcome) {
-    if (closed || aborting.has(runId)) return Promise.resolve()
+  function resume(runId: string) {
     return withLock(runId, async () => {
-      if (closed || aborting.has(runId)) return
-      const current = store.loadAggregate(runId)
-      if (!current) return
-      const agent = current.agents.find((row) => row.id === agentId)
-      if (!agent) return
-      if (agent.parentAgentId === null) {
-        await apply(runId, { t: "main_settled", outcome, now: now() }, current)
-      } else {
-        await apply(
-          runId,
-          {
-            t: "child_settled",
-            agentId,
-            outcome,
-            noticeMessageId: newId(),
-            now: now(),
-          },
-          current
+      const row = queries.getRow(runId)
+      if (!row) throw new RunActionError("not_found", "Run not found")
+      if (row.status === "running") {
+        throw new RunActionError("invalid_state", "Run is already running")
+      }
+      if (!row.piSessionId || !row.piModelRef) {
+        throw new RunActionError(
+          "invalid_state",
+          "Run has no pi session to resume"
         )
       }
+      const settings = options.getSettings()
+      const run = requireRun(runId)
+      const cmd = buildPiCmd({
+        modelRef: row.piModelRef,
+        thinkingLevel: row.thinkingLevel as ThinkingLevel,
+        challengeName: run.challengeName,
+        session: row.piSessionId,
+      })
+      const containerEnv = buildContainerEnv({
+        runId,
+        challengeId: row.challengeId,
+        challengeName: run.challengeName,
+        apiUrl: defaultApiUrl(),
+      })
+      const launched = await containerManager.launch({
+        name: row.containerName,
+        image: row.image,
+        cmd,
+        env: containerEnv,
+        workingDir: settings["container.workspace"],
+        binds: [
+          `${workspaceAbs(runId)}:${settings["container.workspace"]}`,
+          `${piAgentAbs(runId)}:/root/.pi/agent`,
+        ],
+        limits: {
+          cpus: row.cpus,
+          memoryMb: row.memoryMb,
+          pidsLimit: row.pidsLimit,
+        },
+        tmpfsSize: settings["container.tmpfsSize"],
+      })
+      attachBridge(runId, launched.stream)
+      const ts = now()
+      updateRow(runId, {
+        status: "running",
+        startedAt: ts,
+        completedAt: null,
+        error: null,
+        updatedAt: ts,
+      })
+      watchExit(runId)
+      return requireRun(runId)
     })
-  }
-
-  function containerFailed(runId: string, error: string) {
-    return withLock(runId, () =>
-      apply(runId, {
-        t: "container_failed",
-        error,
-        now: now(),
-      }).then(queries.mapPublic)
-    )
-  }
-
-  async function recoverOnBoot() {
-    for (const runId of store.listRunningRunIds()) {
-      await withLock(runId, () =>
-        apply(runId, { t: "recover_on_boot", now: now() })
-      )
-    }
-  }
-
-  function get(runId: string): RunPublic | undefined {
-    return queries.get(runId)
-  }
-
-  function agents(runId: string) {
-    const state = store.loadAggregate(runId)
-    if (!state) throw new RunActionError("not_found", "Run not found")
-    return queries.agents(runId)
-  }
-
-  function usage(runId: string) {
-    const state = store.loadAggregate(runId)
-    if (!state) throw new RunActionError("not_found", "Run not found")
-    return queries.usage(runId)
   }
 
   async function deleteRun(runId: string) {
-    const state = store.loadAggregate(runId)
-    if (!state) throw new RunActionError("not_found", "Run not found")
-    if (!isTerminalRunStatus(state.status)) {
-      throw new RunActionError(
-        "invalid_state",
-        "Only completed, failed, or stopped runs can be deleted"
-      )
-    }
-    await options.runtime.releaseRun(runId)
-    if (state.workspacePath && options.dataDir) {
-      rmSync(join(options.dataDir, state.workspacePath), {
-        recursive: true,
-        force: true,
-      })
-    }
-    store.deleteRun(runId)
-    bus.clearRun(runId)
+    await withLock(runId, async () => {
+      const row = queries.getRow(runId)
+      if (!row) throw new RunActionError("not_found", "Run not found")
+      if (row.status === "running") {
+        throw new RunActionError(
+          "invalid_state",
+          "Stop the run before deleting it"
+        )
+      }
+      await containerManager.remove(row.containerName)
+      const bridge = bridges.get(runId)
+      if (bridge) {
+        bridge.dispose()
+        bridges.delete(runId)
+      }
+      rmSync(runDir(runId), { recursive: true, force: true })
+      db.delete(runs).where(eq(runs.id, runId)).run()
+    })
   }
 
-  /** Re-read DB aggregate and broadcast (e.g. after platform writes flag). */
   function refresh(runId: string): RunPublic | undefined {
-    const state = store.loadAggregate(runId)
-    if (!state) return undefined
-    emitState(state)
-    return queries.mapPublic(state)
+    return queries.get(runId)
+  }
+
+  async function recoverOnBoot() {
+    const rows = db.select().from(runs).all()
+    for (const row of rows) {
+      if (row.status !== "running") continue
+      const name = row.containerName
+      if (await containerManager.isRunning(name)) {
+        try {
+          const stream = await containerManager.reattach(name)
+          attachBridge(row.id, stream)
+          watchExit(row.id)
+        } catch {
+          updateRow(row.id, {
+            status: "failed",
+            error: "Container was running but could not be reattached",
+            completedAt: now(),
+            updatedAt: now(),
+          })
+        }
+      } else {
+        updateRow(row.id, {
+          status: "stopped",
+          completedAt: now(),
+          updatedAt: now(),
+        })
+      }
+    }
   }
 
   async function close() {
     closed = true
     await Promise.allSettled([...locks.values()])
     locks.clear()
-    bus.clear()
+    for (const bridge of bridges.values()) bridge.dispose()
+    bridges.clear()
+  }
+
+  function defaultApiUrl() {
+    return `http://host.docker.internal:${process.env.PORT ?? 3000}`
   }
 
   return {
     create,
-    pause,
-    resume,
     stop,
-    postMessage,
-    requestFinish,
-    spawn,
-    onSettled,
-    containerFailed,
+    finish,
+    resume,
+    delete: deleteRun,
+    refresh,
     recoverOnBoot,
-    get,
-    getAggregate: queries.getAggregate,
-    getAgent: queries.getAgent,
-    agents,
-    inspector: queries.inspector,
-    usage,
-    agentUsage: queries.agentUsage,
+    close,
+    get: queries.get,
     listForEvent: queries.listForEvent,
     listForChallenge: queries.listForChallenge,
     workspacePath: queries.workspacePath,
-    delete: deleteRun,
-    refresh,
-    publish,
-    subscribe: bus.subscribe,
-    store,
-    setMaxConcurrency(value: number) {
-      if (Number.isInteger(value) && value > 0) maxConcurrency = value
-    },
-    get maxConcurrency() {
-      return maxConcurrency
-    },
-    close,
-    activeAgentCount: (runId: string) => {
-      const state = store.loadAggregate(runId)
-      return state ? activeAgentCount(state) : 0
-    },
-    globalActiveAgentCount: () => store.globalActiveAgentCount(),
-    activeSessionCount: () => options.activeSessionCount?.() ?? 0,
+    ptyBridge: (runId: string) => bridges.get(runId),
+    submitFlag: platformService.submitFlag,
+    targetAction: platformService.targetAction,
   }
 }
-
-export type RunService = ReturnType<typeof createRunService>

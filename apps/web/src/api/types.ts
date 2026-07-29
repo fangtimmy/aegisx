@@ -1,11 +1,4 @@
 export type {
-  AgentInspector,
-  AgentPublic,
-  AgentRuntimeSnapshot,
-  AgentStatus,
-  AgentSummary,
-  AgentToolStats,
-  AssistantMessage,
   Attachment,
   Challenge,
   ChallengeInput,
@@ -13,17 +6,11 @@ export type {
   ChallengeSyncItem,
   ChallengeSyncProgress,
   ChallengeSyncResult,
-  ConversationToolExpandPrefs,
   EventInput,
   EventPlatform,
-  EventStats,
   EventSummary,
   FlatSettings,
-  LiveEvent,
-  Message,
-  MessagesPage,
   ModelMetadata,
-  NoticeMessage,
   PiModelProfile,
   PlatformType,
   ProviderConnection,
@@ -42,16 +29,11 @@ export type {
   SettingWidget,
   TargetState,
   ThinkingLevel,
-  ToolResultMessage,
-  UsageSummary,
-  UserMessage,
 } from "../../../shared"
 
 export {
-  conversationToolExpand,
   defaultSettings,
   get,
-  isMessage,
   isSettingModified,
   SETTINGS_DEFS,
   settingDef,
@@ -70,13 +52,4 @@ export type SettingsResponse = {
     }
     promptVariables: string[]
   }
-}
-
-import type { Message } from "../../../shared"
-
-/** Agent message page from REST. */
-export type AgentMessages = {
-  runId: string
-  agentId: string
-  messages: Message[]
 }

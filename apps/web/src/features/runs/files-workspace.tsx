@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
-import { formatTime } from "./timeline"
+import { formatTime } from "@/lib/format"
 
 const SIDEBAR_STORAGE_KEY = "aegisx:files-sidebar-width"
 const SIDEBAR_DEFAULT = 288

@@ -1,5 +1,7 @@
-import type { EnvironmentConfig, ModelConfig, RunPublic } from "../../../shared"
-import type { RunAggregate } from "./types"
+import type { RunPublic } from "../../../shared"
+import type { runs } from "../db/schema"
+
+export type RunRow = typeof runs.$inferSelect
 
 export type ChallengeMeta = {
   name: string
@@ -7,47 +9,33 @@ export type ChallengeMeta = {
   targetSupported: boolean
 }
 
-export function toRunPublic(
-  state: RunAggregate,
-  challenge?: ChallengeMeta
-): RunPublic {
-  let model: ModelConfig
-  let env: EnvironmentConfig
-  try {
-    model = JSON.parse(state.modelJson) as ModelConfig
-    env = JSON.parse(state.envJson) as EnvironmentConfig
-  } catch {
-    model = {
-      provider: "unknown",
-      modelId: "unknown",
-      thinkingLevel: "off",
-    }
-    env = { type: "local" }
-  }
+export function toRunPublic(row: RunRow, challenge?: ChallengeMeta): RunPublic {
   return {
-    id: state.id,
-    mainAgentId: state.mainAgentId,
-    challengeId: state.challengeId,
+    id: row.id,
+    challengeId: row.challengeId,
     challengeName: challenge?.name ?? "",
     eventId: challenge?.eventId ?? "",
-    status: state.status,
-    provider: model.providerLabel ?? model.provider,
-    modelId: model.modelId,
-    modelName: model.modelLabel ?? model.modelId,
-    thinkingLevel: model.thinkingLevel,
-    environment: env.type,
+    status: row.status as RunPublic["status"],
     targetSupported: challenge?.targetSupported ?? false,
-    image: env.type === "container" ? env.image : null,
-    cpus: env.type === "container" ? env.cpus : undefined,
-    memoryMb: env.type === "container" ? env.memoryMb : undefined,
-    pidsLimit: env.type === "container" ? env.pidsLimit : undefined,
-    createdAt: state.createdAt,
-    startedAt: state.startedAt,
-    updatedAt: state.updatedAt,
-    completedAt: state.completedAt,
-    error: state.error,
-    summary: state.summary,
-    hasFlag: Boolean(state.flag),
-    flag: state.flag,
+    launcher: (row.launcher ?? "pi") as "pi",
+    provider: row.provider,
+    modelId: row.modelId,
+    modelName: row.modelLabel ?? row.modelId,
+    thinkingLevel: row.thinkingLevel as RunPublic["thinkingLevel"],
+    environment: "container",
+    image: row.image,
+    cpus: row.cpus,
+    memoryMb: row.memoryMb,
+    pidsLimit: row.pidsLimit,
+    containerName: row.containerName,
+    piSessionId: row.piSessionId,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    updatedAt: row.updatedAt,
+    completedAt: row.completedAt,
+    error: row.error,
+    summary: row.summary,
+    flag: row.flag,
+    hasFlag: Boolean(row.flag),
   }
 }

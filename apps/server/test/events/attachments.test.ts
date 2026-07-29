@@ -86,11 +86,11 @@ describe("event, challenge, and attachment API", () => {
       [challenge.id, "2099-01-01T00:00:00.000Z"]
     )
     sqlite.run(
-      "insert into runs (id, challenge_id, status, model_json, env_json, prompt_json, created_at, updated_at) values (?, ?, ?, '{}', '{\"type\":\"local\"}', '{}', ?, ?)",
+      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', ?, ?)",
       [
-        "paused-run",
+        "active-run-1",
         challenge.id,
-        "paused",
+        "running",
         "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
       ]
@@ -114,7 +114,7 @@ describe("event, challenge, and attachment API", () => {
     const challenge = await createChallenge(app, event.id)
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, model_json, env_json, prompt_json, created_at, updated_at) values (?, ?, 'completed', '{}', '{\"type\":\"local\"}', '{}', ?, ?)",
+      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at) values (?, ?, 'completed', 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', ?, ?)",
       [
         "completed-local-run",
         challenge.id,
@@ -195,7 +195,7 @@ describe("event, challenge, and attachment API", () => {
 
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, model_json, env_json, prompt_json, created_at, updated_at) values (?, ?, ?, '{}', '{\"type\":\"local\"}', '{}', ?, ?)",
+      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', ?, ?)",
       [
         "active-run",
         challenge.id,

@@ -5,14 +5,13 @@ import {
   Cloud,
   HardDrive,
   Paperclip,
-  Pause,
   Play,
   Server,
   Trash2,
   TriangleAlert,
   X,
 } from "lucide-react"
-import { type AgentStatus, type Challenge, challengesApi, keys } from "@/api"
+import { type Challenge, challengesApi, keys, type RunStatus } from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -231,12 +230,11 @@ export function ChallengeCard({
                 <Badge
                   key={status}
                   size="sm"
-                  variant={statusVariant(status as AgentStatus)}
+                  variant={statusVariant(status as RunStatus)}
                 >
                   {count}
                   {status === "completed" && <Check className="size-3" />}
                   {status === "failed" && <X className="size-3" />}
-                  {status === "paused" && <Pause className="size-3" />}
                   {status === "stopped" && <CircleSlash className="size-3" />}
                   {status === "running" && <Play className="size-3" />}
                   <span className="sr-only"> {status}</span>

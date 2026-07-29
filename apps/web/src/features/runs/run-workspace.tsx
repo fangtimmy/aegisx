@@ -1,25 +1,14 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  Bot,
-  BotMessageSquare,
   CircleAlert,
   Files,
-  GitFork,
   Info,
-  Pause,
   Play,
-  Send,
   Square,
+  TerminalSquare,
 } from "lucide-react"
-import { useState } from "react"
-import { Link, useSearchParams } from "react-router"
-import {
-  type Challenge,
-  type ConversationToolExpandPrefs,
-  conversationToolExpand,
-  keys,
-  settingsApi,
-} from "@/api"
+import { useSearchParams } from "react-router"
+import { type Challenge, keys, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -38,7 +27,6 @@ import {
   CardFrame,
   CardFrameAction,
   CardFrameDescription,
-  CardFrameFooter,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -49,31 +37,14 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { AgentActivityBadge } from "./agent-activity-badge"
-import { AgentInspectorButton } from "./agent-inspector"
-import { AgentStatusIcon } from "./agent-status-icon"
+import { toast } from "@/lib/toast"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
-import { Conversation } from "./timeline"
-import { useRunController } from "./use-run-controller"
-
-const defaultResumeMessage =
-  "Continue solving the challenge from the current state."
-
-const defaultExpandPrefs: ConversationToolExpandPrefs = {
-  fileRead: false,
-  fileEdit: false,
-  bash: false,
-  target: false,
-  flag: false,
-  agent: false,
-  errors: false,
-}
+import { RunTerminal } from "./terminal"
 
 export function RunWorkspace({
   eventId,
@@ -85,32 +56,32 @@ export function RunWorkspace({
   challenges: Challenge[]
 }) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [draft, setDraft] = useState("")
-  const requestedAgentId = searchParams.get("agent")
-  const settings = useQuery({
-    queryKey: keys.settings.all,
-    queryFn: () => settingsApi.getSettings(),
-    staleTime: 60_000,
+  const queryClient = useQueryClient()
+
+  const detail = useQuery({
+    enabled: Boolean(runId),
+    queryKey: keys.runs.detail(runId ?? ""),
+    refetchOnWindowFocus: false,
+    queryFn: () => runsApi.getRun(runId ?? ""),
   })
-  const expandPrefs = settings.data
-    ? conversationToolExpand(settings.data.settings)
-    : defaultExpandPrefs
-  const controller = useRunController({
-    eventId,
-    onMessageSent: () => setDraft(""),
-    requestedAgentId,
-    runId,
+
+  const stop = useMutation({
+    mutationFn: () => runsApi.stopRun(runId ?? ""),
+    onSuccess: () => {
+      toast.success("Run stopping")
+      void invalidate(queryClient, eventId, runId ?? "")
+    },
+    onError: (error) => toast.error("Failed to stop run", error.message),
   })
-  const {
-    agentDetail,
-    control,
-    detail,
-    retryMessage,
-    selectedAgent,
-    streamClosed,
-    streamDisconnected,
-    streamStore,
-  } = controller
+
+  const resume = useMutation({
+    mutationFn: () => runsApi.resumeRun(runId ?? ""),
+    onSuccess: () => {
+      toast.success("Run resumed")
+      void invalidate(queryClient, eventId, runId ?? "")
+    },
+    onError: (error) => toast.error("Failed to resume run", error.message),
+  })
 
   if (!runId) {
     return (
@@ -126,16 +97,12 @@ export function RunWorkspace({
           </EmptyHeader>
           {challenges.length > 0 ? (
             <CreateRunDialog challenges={challenges} />
-          ) : (
-            <Button render={<Link to={`/events/${eventId}`} />}>
-              Add challenge
-            </Button>
-          )}
+          ) : null}
         </Empty>
       </div>
     )
   }
-  if (detail.isPending)
+  if (detail.isPending) {
     return (
       <div
         className="flex items-center gap-2 p-6 text-muted-foreground text-sm"
@@ -145,7 +112,8 @@ export function RunWorkspace({
         Loading run...
       </div>
     )
-  if (detail.error)
+  }
+  if (detail.error) {
     return (
       <Alert className="m-4 w-auto" variant="error">
         <CircleAlert />
@@ -153,65 +121,19 @@ export function RunWorkspace({
         <AlertDescription>{detail.error.message}</AlertDescription>
       </Alert>
     )
+  }
   if (!detail.data) return null
-  const { run, agents, usage: stats } = detail.data
-  const active = run.status === "running" || run.status === "paused"
-  const mainSelected = selectedAgent?.parentAgentId === null
+
+  const { run } = detail.data
+  const running = run.status === "running"
+  const canResume =
+    !running && Boolean(run.piSessionId) && run.status !== "failed"
+
   const requestedView = searchParams.get("view")
   const view =
-    requestedView === "overview" ||
-    requestedView === "conversation" ||
-    requestedView === "files"
+    requestedView === "overview" || requestedView === "files"
       ? requestedView
-      : "conversation"
-  const showComposer = view === "conversation" && active && mainSelected
-  const canSubmit =
-    showComposer &&
-    !control.isPending &&
-    (run.status === "paused" || Boolean(draft.trim()))
-
-  function send(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const message = draft.trim()
-    const outgoingMessage = message || defaultResumeMessage
-    const clientMessageId =
-      retryMessage.current?.text === outgoingMessage
-        ? retryMessage.current.id
-        : crypto.randomUUID()
-    retryMessage.current = { id: clientMessageId, text: outgoingMessage }
-    if (selectedAgent && (message || run.status === "paused")) {
-      const createdAt = new Date().toISOString()
-      streamStore.addPendingMessage({
-        id: clientMessageId,
-        agentId: selectedAgent.id,
-        seq: Number.MAX_SAFE_INTEGER,
-        createdAt,
-        role: "user",
-        source: "user",
-        clientMessageId,
-        timestamp: Date.parse(createdAt),
-        content: [
-          {
-            type: "text",
-            text: outgoingMessage,
-          },
-        ],
-      })
-    }
-    if (run.status === "paused") {
-      control.mutate({
-        action: "resume",
-        body: { message: message || undefined, clientMessageId },
-        agentId: selectedAgent?.id,
-      })
-    } else if (message) {
-      control.mutate({
-        action: "message",
-        body: { message, clientMessageId },
-        agentId: selectedAgent?.id,
-      })
-    }
-  }
+      : "terminal"
 
   return (
     <CardFrame className="h-full min-h-0 min-w-0">
@@ -225,7 +147,57 @@ export function RunWorkspace({
         <CardFrameDescription className="truncate font-mono text-xs">
           {run.provider} / {run.modelId}
         </CardFrameDescription>
-        <CardFrameAction>
+        <CardFrameAction className="gap-2">
+          {canResume && (
+            <Button
+              loading={resume.isPending}
+              onClick={() => resume.mutate()}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Play /> Resume
+            </Button>
+          )}
+          {running && (
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={
+                  <Button
+                    size="sm"
+                    type="button"
+                    variant="destructive-outline"
+                  />
+                }
+              >
+                <Square /> Stop
+              </AlertDialogTrigger>
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Stop this run?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    pi receives SIGTERM, saves its session, and the container
+                    stops. You can resume the run later from the same session.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose
+                    render={<Button type="button" variant="ghost" />}
+                  >
+                    Cancel
+                  </AlertDialogClose>
+                  <Button
+                    loading={stop.isPending}
+                    onClick={() => stop.mutate()}
+                    type="button"
+                    variant="destructive"
+                  >
+                    Stop run
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
+          )}
           <CreateRunDialog
             challenge={{ id: run.challengeId, name: run.challengeName }}
           />
@@ -233,290 +205,74 @@ export function RunWorkspace({
       </CardFrameHeader>
       <Card className="min-h-0 flex-1">
         <CardPanel className="h-full min-h-0 p-0">
-          <div className="flex h-full min-h-0 min-w-0 flex-col">
-            <Tabs
-              className="flex min-h-0 flex-1 flex-col"
-              onValueChange={(value) => {
-                const next = new URLSearchParams(searchParams)
-                next.set("view", value)
-                setSearchParams(next, { replace: true })
-              }}
-              value={view}
+          <Tabs
+            className="flex h-full min-h-0 min-w-0 flex-col"
+            onValueChange={(value) => {
+              const next = new URLSearchParams(searchParams)
+              next.set("view", value)
+              setSearchParams(next, { replace: true })
+            }}
+            value={view}
+          >
+            <TabsList
+              className="mx-6 w-auto shrink-0 justify-start border-b"
+              variant="underline"
             >
-              <TabsList
-                className="mx-6 w-auto shrink-0 justify-start border-b"
-                variant="underline"
-              >
-                <TabsTab className="gap-2" value="overview">
-                  <Info /> Overview
-                </TabsTab>
-                <TabsTab className="gap-2" value="conversation">
-                  <BotMessageSquare /> Conversation
-                </TabsTab>
-                <TabsTab className="gap-2" value="files">
-                  <Files /> Files
-                </TabsTab>
-              </TabsList>
-              <TabsPanel className="min-h-0 overflow-hidden" value="overview">
-                <ScrollArea className="h-full" scrollFade>
-                  <RunOverview agents={agents} run={run} stats={stats} />
-                </ScrollArea>
-              </TabsPanel>
-              <TabsPanel
-                className="min-h-0 overflow-hidden"
-                value="conversation"
-              >
-                {selectedAgent && (
-                  <Tabs
-                    className="h-full min-h-0 gap-0"
-                    onValueChange={(value) => {
-                      const next = new URLSearchParams(searchParams)
-                      next.set("agent", value)
-                      setSearchParams(next, { replace: true })
-                    }}
-                    value={selectedAgent.id}
-                  >
-                    <div className="mx-6 flex min-w-0 shrink-0 items-center gap-2 border-b">
-                      <TabsList
-                        className="min-w-0 max-w-[calc(100%-2.5rem)] justify-start overflow-x-auto"
-                        variant="underline"
-                      >
-                        {agents.map((agent) => (
-                          <TabsTab
-                            className="px-2"
-                            key={agent.id}
-                            value={agent.id}
-                          >
-                            {agent.parentAgentId === null ? (
-                              <Bot aria-hidden="true" />
-                            ) : (
-                              <GitFork aria-hidden="true" />
-                            )}
-                            <span className="max-w-40 truncate">
-                              {agent.name}
-                            </span>
-                            <AgentStatusIcon status={agent.status} />
-                          </TabsTab>
-                        ))}
-                      </TabsList>
-                      <div className="ml-auto shrink-0">
-                        <AgentInspectorButton
-                          agent={selectedAgent}
-                          runId={runId}
-                        />
-                      </div>
-                    </div>
-                    <TabsPanel
-                      className="min-h-0 overflow-hidden"
-                      value={selectedAgent.id}
-                    >
-                      {!mainSelected && agentDetail.isPending ? (
-                        <div
-                          className="flex items-center gap-2 p-6 text-muted-foreground text-sm"
-                          role="status"
-                        >
-                          <Spinner aria-hidden="true" />
-                          Loading conversation...
-                        </div>
-                      ) : !mainSelected && agentDetail.error ? (
-                        <Alert className="m-4 w-auto" variant="error">
-                          <CircleAlert />
-                          <AlertDescription>
-                            {agentDetail.error.message}
-                          </AlertDescription>
-                        </Alert>
-                      ) : (
-                        <ScrollArea className="relative h-full pr-1">
-                          <Conversation
-                            agentId={selectedAgent.id}
-                            agentStatus={selectedAgent.status}
-                            expandPrefs={expandPrefs}
-                            key={selectedAgent.id}
-                            renderUserMessagesAsMarkdown={
-                              settings.data?.settings[
-                                "ui.renderUserMessagesAsMarkdown"
-                              ] ?? false
-                            }
-                            renderReasoningAsMarkdown={
-                              settings.data?.settings[
-                                "ui.renderReasoningAsMarkdown"
-                              ] ?? false
-                            }
-                            stream={streamStore}
-                          />
-                        </ScrollArea>
-                      )}
-                    </TabsPanel>
-                  </Tabs>
-                )}
-              </TabsPanel>
-              <TabsPanel className="min-h-0 overflow-hidden" value="files">
-                <FilesWorkspace
-                  enabled={view === "files"}
-                  key={runId}
-                  runId={runId}
-                />
-              </TabsPanel>
-            </Tabs>
-            {streamClosed && (
-              <Alert className="mx-6 mb-3 w-auto" variant="error">
-                <CircleAlert />
-                <AlertDescription>
-                  Live connection closed permanently. Reload the page to
-                  reconnect.
-                </AlertDescription>
-              </Alert>
-            )}
-            {streamDisconnected && !streamClosed && (
-              <Alert className="mx-6 mb-3 w-auto" variant="warning">
-                <CircleAlert />
-                <AlertDescription>
-                  Live updates are disconnected. Reconnecting...
-                </AlertDescription>
-              </Alert>
-            )}
-            {(showComposer || active || control.error) && (
-              <div className="bg-card px-3 pb-3">
-                {showComposer && (
-                  <CardFrame className="mx-auto max-w-3xl">
-                    <Card>
-                      <CardPanel className="p-2">
-                        <form
-                          className="flex w-full items-center gap-2"
-                          onSubmit={send}
-                        >
-                          <Input
-                            aria-label="Message to agent"
-                            className="flex-1 text-sm text-foreground"
-                            disabled={control.isPending}
-                            id="run-message"
-                            onChange={(event) => setDraft(event.target.value)}
-                            placeholder={
-                              run.status === "paused"
-                                ? "Optional guidance when resuming"
-                                : "Send guidance to the agent"
-                            }
-                            value={draft}
-                            unstyled
-                          />
-                          <Button
-                            aria-label={
-                              run.status === "paused"
-                                ? "Resume run"
-                                : "Send message"
-                            }
-                            disabled={!canSubmit}
-                            loading={
-                              control.isPending &&
-                              (control.variables?.action === "message" ||
-                                control.variables?.action === "resume")
-                            }
-                            size="icon"
-                            variant="secondary"
-                            title={
-                              run.status === "paused"
-                                ? "Resume run"
-                                : "Send message"
-                            }
-                            type="submit"
-                          >
-                            {run.status === "paused" ? <Play /> : <Send />}
-                          </Button>
-                        </form>
-                      </CardPanel>
-                    </Card>
-                    <CardFrameFooter className="py-2 px-4">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {(active || control.isPending) && (
-                          <span
-                            className="text-muted-foreground text-xs"
-                            role="status"
-                          >
-                            Run is {run.status}
-                            {control.isPending
-                              ? ` · ${control.variables?.action} pending`
-                              : ""}
-                          </span>
-                        )}
-                        {active && selectedAgent && (
-                          <AgentActivityBadge
-                            agentId={selectedAgent.id}
-                            agentStatus={selectedAgent.status}
-                            stream={streamStore}
-                          />
-                        )}
-                        {run.status === "running" && (
-                          <Button
-                            loading={
-                              control.isPending &&
-                              control.variables?.action === "pause"
-                            }
-                            onClick={() =>
-                              control.mutate({ action: "pause", body: {} })
-                            }
-                            variant="outline"
-                            size="sm"
-                          >
-                            <Pause /> Pause
-                          </Button>
-                        )}
-                        {active && (
-                          <AlertDialog>
-                            <AlertDialogTrigger
-                              render={<Button variant="destructive-outline" size="sm"/>}
-                            >
-                              <Square /> Stop
-                            </AlertDialogTrigger>
-                            <AlertDialogPopup>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>
-                                  Stop this run?
-                                </AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  The active agent process will be terminated
-                                  and cannot be resumed.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogClose
-                                  render={
-                                    <Button type="button" variant="ghost" />
-                                  }
-                                >
-                                  Cancel
-                                </AlertDialogClose>
-                                <Button
-                                  loading={
-                                    control.isPending &&
-                                    control.variables?.action === "stop"
-                                  }
-                                  onClick={() =>
-                                    control.mutate({ action: "stop", body: {} })
-                                  }
-                                  type="button"
-                                  variant="destructive"
-                                >
-                                  Stop run
-                                </Button>
-                              </AlertDialogFooter>
-                            </AlertDialogPopup>
-                          </AlertDialog>
-                        )}
-                      </div>
-                    </CardFrameFooter>
-                  </CardFrame>
-                )}
-                {control.error && (
-                  <Alert className="mx-auto mt-2 max-w-3xl" variant="error">
-                    <CircleAlert />
-                    <AlertDescription>{control.error.message}</AlertDescription>
-                  </Alert>
-                )}
-              </div>
-            )}
-          </div>
+              <TabsTab className="gap-2" value="terminal">
+                <TerminalSquare /> Terminal
+              </TabsTab>
+              <TabsTab className="gap-2" value="overview">
+                <Info /> Overview
+              </TabsTab>
+              <TabsTab className="gap-2" value="files">
+                <Files /> Files
+              </TabsTab>
+            </TabsList>
+            <TabsPanel
+              className="min-h-0 flex-1 overflow-hidden"
+              value="terminal"
+            >
+              {running ? (
+                <RunTerminal active={view === "terminal"} runId={runId} />
+              ) : (
+                <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground text-sm">
+                  {canResume
+                    ? "Run is stopped. Resume to reconnect the terminal."
+                    : "Run is not running."}
+                </div>
+              )}
+            </TabsPanel>
+            <TabsPanel
+              className="min-h-0 flex-1 overflow-hidden"
+              value="overview"
+            >
+              <ScrollArea className="h-full" scrollFade>
+                <RunOverview run={run} />
+              </ScrollArea>
+            </TabsPanel>
+            <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="files">
+              <FilesWorkspace
+                enabled={view === "files"}
+                key={runId}
+                runId={runId}
+              />
+            </TabsPanel>
+          </Tabs>
         </CardPanel>
       </Card>
     </CardFrame>
   )
+}
+
+async function invalidate(
+  queryClient: ReturnType<typeof useQueryClient>,
+  eventId: string,
+  runId: string
+) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
+    queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) }),
+    queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
+    queryClient.invalidateQueries({ queryKey: keys.events.all }),
+  ])
 }

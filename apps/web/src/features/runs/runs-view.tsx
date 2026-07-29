@@ -42,9 +42,15 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/lib/toast"
-import { AgentStatusIcon } from "./agent-status-icon"
 import { CreateRunDialog } from "./create-run-dialog"
 import { RunWorkspace } from "./run-workspace"
+
+function runDotClass(status: string) {
+  if (status === "running") return "bg-info"
+  if (status === "completed") return "bg-success"
+  if (status === "failed") return "bg-destructive"
+  return "bg-muted-foreground"
+}
 
 const runTimeFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -64,7 +70,7 @@ function RunItem({
 }) {
   const queryClient = useQueryClient()
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const active = run.status === "running" || run.status === "paused"
+  const active = run.status === "running"
   const deleteMutation = useMutation({
     mutationFn: () => runsApi.deleteRun(run.id),
     onSuccess: () => {
@@ -81,7 +87,10 @@ function RunItem({
         render={<Link to={`/events/${eventId}/runs/${run.id}`} />}
         variant={run.id === runId ? "secondary" : "ghost"}
       >
-        <AgentStatusIcon className="mt-0.5" status={run.status} />
+        <span
+          aria-hidden="true"
+          className={`mt-1 size-2 shrink-0 rounded-full ${runDotClass(run.status)}`}
+        />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 flex-1 truncate font-medium text-sm">
@@ -236,11 +245,9 @@ export function RunsView({
     challenges.map((challenge, index) => [challenge.id, index])
   )
   const activeRuns = runs.data.items
-    .filter((run) => run.status === "running" || run.status === "paused")
+    .filter((run) => run.status === "running")
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  const historyRuns = runs.data.items.filter(
-    (run) => run.status !== "running" && run.status !== "paused"
-  )
+  const historyRuns = runs.data.items.filter((run) => run.status !== "running")
   if (sort === "name") {
     historyRuns.sort((left, right) =>
       left.challengeName.localeCompare(right.challengeName, undefined, {

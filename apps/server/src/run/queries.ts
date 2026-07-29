@@ -1,190 +1,85 @@
 import { join } from "node:path"
-import type { AgentSummary, RunPublic, UsageSummary } from "../../../shared"
-import type { ChallengeMeta } from "./public"
-import { toRunPublic } from "./public"
-import type { RunStore } from "./store"
-import type { RunAggregate } from "./types"
+import { and, desc, eq, inArray } from "drizzle-orm"
+import type { RunPublic } from "../../../shared"
+import type { createDatabase } from "../db"
+import { challengeRemote, challenges, runs } from "../db/schema"
+import { isTargetCapable } from "../platforms/challenge-state"
+import { type ChallengeMeta, toRunPublic } from "./public"
+
+type Database = ReturnType<typeof createDatabase>["db"]
 
 export type RunQueries = ReturnType<typeof createRunQueries>
 
-export function createRunQueries(options: {
-  store: RunStore
-  dataDir?: string
-  resolveChallenge?: (challengeId: string) => ChallengeMeta | undefined
-}) {
-  const { store } = options
+export function createRunQueries(options: { db: Database; dataDir: string }) {
+  const { db, dataDir } = options
 
-  function resolveChallenge(challengeId: string) {
-    return (
-      options.resolveChallenge?.(challengeId) ??
-      store.challengeMeta(challengeId)
-    )
+  function challengeMeta(challengeId: string): ChallengeMeta | undefined {
+    const row = db
+      .select({ challenge: challenges, remote: challengeRemote })
+      .from(challenges)
+      .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
+      .where(eq(challenges.id, challengeId))
+      .get()
+    if (!row) return undefined
+    return {
+      name: row.challenge.name,
+      eventId: row.challenge.eventId,
+      targetSupported: isTargetCapable(row.remote ?? undefined),
+    }
   }
 
-  function mapPublic(state: RunAggregate): RunPublic {
-    return toRunPublic(state, resolveChallenge(state.challengeId))
+  function mapRow(row: typeof runs.$inferSelect): RunPublic {
+    return toRunPublic(row, challengeMeta(row.challengeId))
   }
 
   function get(runId: string): RunPublic | undefined {
-    const state = store.loadAggregate(runId)
-    return state ? mapPublic(state) : undefined
+    const row = db.select().from(runs).where(eq(runs.id, runId)).get()
+    return row ? mapRow(row) : undefined
   }
 
-  function getAggregate(runId: string) {
-    return store.loadAggregate(runId)
-  }
-
-  function agents(runId: string): AgentSummary[] {
-    const state = store.loadAggregate(runId)
-    if (!state) return []
-    return state.agents.map((agent) => ({
-      ...agent,
-      usage: store.usageForAgent(agent.id),
-    }))
-  }
-
-  function getAgent(runId: string, agentId: string): AgentSummary | undefined {
-    const state = store.loadAggregate(runId)
-    const row = state?.agents.find((a) => a.id === agentId)
-    if (!row) return undefined
-    return { ...row, usage: store.usageForAgent(agentId) }
-  }
-
-  function agentUsage(agentId: string): UsageSummary {
-    return store.usageForAgent(agentId)
-  }
-
-  function usage(runId: string): UsageSummary {
-    const state = store.loadAggregate(runId)
-    if (!state) {
-      return {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: null,
-      }
-    }
-    return state.agents
-      .map((a) => store.usageForAgent(a.id))
-      .reduce(
-        (acc, item) => ({
-          input: acc.input + item.input,
-          output: acc.output + item.output,
-          cacheRead: acc.cacheRead + item.cacheRead,
-          cacheWrite: acc.cacheWrite + item.cacheWrite,
-          totalTokens: acc.totalTokens + item.totalTokens,
-          cost:
-            acc.cost === null || item.cost === null
-              ? null
-              : (acc.cost ?? 0) + item.cost,
-        }),
-        {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: 0 as number | null,
-        }
-      )
+  function getRow(runId: string) {
+    return db.select().from(runs).where(eq(runs.id, runId)).get()
   }
 
   function listForEvent(eventId: string): RunPublic[] {
-    return store
-      .listRunIdsForEvent(eventId)
-      .map((id) => get(id))
-      .filter((run): run is RunPublic => Boolean(run))
+    return db
+      .select()
+      .from(runs)
+      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+      .where(eq(challenges.eventId, eventId))
+      .orderBy(desc(runs.updatedAt))
+      .all()
+      .map(({ runs: run }) => mapRow(run))
   }
 
   function listForChallenge(challengeId: string): RunPublic[] {
-    return store
-      .listRunIdsForChallenge(challengeId)
-      .map((id) => get(id))
-      .filter((run): run is RunPublic => Boolean(run))
+    return db
+      .select()
+      .from(runs)
+      .where(eq(runs.challengeId, challengeId))
+      .orderBy(desc(runs.updatedAt))
+      .all()
+      .map(mapRow)
   }
 
   function workspacePath(runId: string): string | undefined {
-    const state = store.loadAggregate(runId)
-    if (!state?.workspacePath || !options.dataDir) return undefined
-    return join(options.dataDir, state.workspacePath)
+    const row = getRow(runId)
+    if (!row) return undefined
+    return join(dataDir, row.workspacePath)
   }
 
-  function inspector(runId: string, agentId: string) {
-    const state = store.loadAggregate(runId)
-    const row = state?.agents.find((a) => a.id === agentId)
-    if (!state || !row) return undefined
-    let runtime: {
-      capturedAt?: string
-      systemPrompt?: string
-      cwd?: string
-      model?: unknown
-      tools: Array<{ name: string; description?: string; parameters?: unknown }>
-    } = { tools: [] }
-    try {
-      const snapshotText = store.getRuntimeSnapshot(agentId)
-      if (snapshotText) {
-        const parsed = JSON.parse(snapshotText) as {
-          capturedAt?: string
-          systemPrompt?: string
-          cwd?: string
-          model?: unknown
-          tools?: Array<{
-            name: string
-            description?: string
-            parameters?: unknown
-          }>
-        }
-        runtime = {
-          capturedAt: parsed.capturedAt,
-          systemPrompt: parsed.systemPrompt ?? "",
-          cwd: parsed.cwd ?? "",
-          model: parsed.model,
-          tools: Array.isArray(parsed.tools)
-            ? parsed.tools.map((tool) => ({
-                name: String(tool?.name ?? "unknown"),
-                description: tool?.description,
-                parameters: tool?.parameters ?? {},
-              }))
-            : [],
-        }
-      }
-    } catch {
-      runtime = { tools: [], systemPrompt: "" }
-    }
-    return {
-      agent: {
-        id: row.id,
-        runId: row.runId,
-        parentAgentId: row.parentAgentId,
-        name: row.name,
-        status: row.status,
-        summary: row.summary,
-        error: row.error,
-        createdAt: row.createdAt,
-        startedAt: row.startedAt,
-        updatedAt: row.updatedAt,
-        completedAt: row.completedAt,
-      },
-      task: row.task,
-      runtime,
-      usage: store.usageForAgent(agentId),
-      toolStats: [],
-    }
-  }
+  return { get, getRow, listForEvent, listForChallenge, workspacePath }
+}
 
-  return {
-    mapPublic,
-    get,
-    getAggregate,
-    agents,
-    getAgent,
-    agentUsage,
-    usage,
-    listForEvent,
-    listForChallenge,
-    workspacePath,
-    inspector,
-  }
+/** Active (running) run ids for an event — used by delete guards. */
+export function findActiveRunIdsForEvent(db: Database, eventId: string) {
+  return db
+    .select({ id: runs.id })
+    .from(runs)
+    .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+    .where(
+      and(eq(challenges.eventId, eventId), inArray(runs.status, ["running"]))
+    )
+    .all()
+    .map((row) => row.id)
 }

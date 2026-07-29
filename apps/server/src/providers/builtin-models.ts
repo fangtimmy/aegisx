@@ -1,34 +1,18 @@
 import {
   type Api,
-  createModels,
-  createProvider,
   getSupportedThinkingLevels,
   type Model,
   type ModelCost,
-  type Models,
   type ModelThinkingLevel,
-  type MutableModels,
-  type ProviderStreams,
   type ThinkingLevelMap,
 } from "@earendil-works/pi-ai"
-import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy"
-import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy"
-import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy"
 import {
   getBuiltinModels,
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all"
-import type { ConfigStore } from "../infrastructure/config-store"
+import type { ProviderType } from "../../../shared/platform"
 
-const thinkingLevels: ModelThinkingLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]
+export type { ModelThinkingLevel, ThinkingLevelMap }
 
 export type ModelMetadata = {
   reasoning: boolean
@@ -48,6 +32,16 @@ export type BuiltinModelProfile = {
   name: string
   metadata: ModelMetadata
 }
+
+const thinkingLevels: ModelThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]
 
 const defaultModelMetadata: ModelMetadata = {
   reasoning: false,
@@ -233,10 +227,9 @@ export function supportedThinkingLevels(metadata: ModelMetadata) {
   } as Model<Api>)
 }
 
-const providerName = (id: string) => `aegisx-${id}`
-
+/** Map AegisX ProviderType → pi api stream identifier. */
 export const providerApi = (
-  type: string
+  type: ProviderType
 ): "openai-completions" | "openai-responses" | "anthropic-messages" =>
   type === "openai-compatible"
     ? "openai-completions"
@@ -268,6 +261,11 @@ function metadataFromModel(model: Model<Api>): ModelMetadata {
   })
 }
 
+/**
+ * Read pi's built-in model catalog (read-only). Used by the settings UI to list
+ * bindable pi built-in models and to source their metadata. v3 keeps pi-ai only
+ * for this read-only metadata lookup; the agent loop runs inside the container.
+ */
 export function builtinModelProfiles(): BuiltinModelProfile[] {
   return getBuiltinProviders().flatMap((providerId) =>
     getBuiltinModels(providerId).map((model) => ({
@@ -284,90 +282,3 @@ export function builtinModelProfile(providerId: string, modelId: string) {
     (model) => model.providerId === providerId && model.modelId === modelId
   )
 }
-
-const streams: Record<
-  "openai-completions" | "openai-responses" | "anthropic-messages",
-  ProviderStreams
-> = {
-  "openai-completions": openAICompletionsApi(),
-  "openai-responses": openAIResponsesApi(),
-  "anthropic-messages": anthropicMessagesApi(),
-}
-
-export function createModelService(
-  configStore: ConfigStore,
-  collection: MutableModels = createModels(),
-  resolveModel?: (provider: string, modelId: string) => Model<Api> | undefined
-) {
-  const registered = new Set<string>()
-
-  function sync() {
-    const providers = configStore.getProviders()
-    const active = new Set<string>()
-    for (const provider of providers) {
-      const models = provider.models.filter((model) => model.enabled)
-      if (!provider.enabled || !provider.apiKey || models.length === 0) continue
-
-      const id = providerName(provider.id)
-      const api = providerApi(provider.type)
-      active.add(id)
-      collection.setProvider(
-        createProvider({
-          id,
-          name: provider.label,
-          baseUrl: provider.baseUrl,
-          auth: {
-            apiKey: {
-              name: `${provider.label} API key`,
-              resolve: async () => {
-                const current = configStore
-                  .getProviders()
-                  .find((p) => p.id === provider.id)
-                return current?.enabled && current.apiKey
-                  ? {
-                      auth: { apiKey: current.apiKey },
-                      source: "AegisX provider settings",
-                    }
-                  : undefined
-              },
-            },
-          },
-          models: models.map((model): Model<Api> => {
-            const {
-              compat,
-              costKnown: _,
-              ...metadata
-            } = parseModelMetadata(model.metadata)
-            return {
-              id: model.modelId,
-              name: model.label,
-              api,
-              provider: id,
-              baseUrl: provider.baseUrl,
-              ...metadata,
-              ...(compat ? { compat: compat as never } : {}),
-            } as Model<Api>
-          }),
-          api: streams[api],
-        })
-      )
-      registered.add(id)
-    }
-    for (const id of registered) {
-      if (!active.has(id)) {
-        collection.deleteProvider(id)
-        registered.delete(id)
-      }
-    }
-  }
-
-  return {
-    models: collection as Models,
-    sync,
-    find: (provider: string, modelId: string) =>
-      resolveModel?.(provider, modelId) ??
-      collection.getModel(provider, modelId),
-  }
-}
-
-export type ModelService = ReturnType<typeof createModelService>

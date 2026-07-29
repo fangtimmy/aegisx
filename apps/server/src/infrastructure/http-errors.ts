@@ -1,7 +1,7 @@
 import type { Hono } from "hono"
 
 type ErrorContext = Parameters<Parameters<Hono["onError"]>[0]>[1]
-type ErrorStatus = 400 | 404 | 409 | 502
+type ErrorStatus = 400 | 404 | 409 | 500 | 502
 
 export function jsonError(
   c: ErrorContext,

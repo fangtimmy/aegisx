@@ -32,7 +32,7 @@ export function createCatalogReader(
         challengeCount: count(challenges.id),
         solvedCount: sql<number>`coalesce(sum(case when ${challengeRemote.solved} = 1 or exists (select 1 from ${runs} where ${runs.challengeId} = ${challenges.id} and ${runs.status} = 'completed') then 1 else 0 end), 0)`,
         lastChallengeAt: max(challenges.updatedAt),
-        activeRunCount: sql<number>`coalesce((select sum(case when r.status in ('running', 'paused') then 1 else 0 end) from runs r inner join challenges rc on r.challenge_id = rc.id where rc.event_id = events.id), 0)`,
+        activeRunCount: sql<number>`coalesce((select sum(case when r.status in ('running') then 1 else 0 end) from runs r inner join challenges rc on r.challenge_id = rc.id where rc.event_id = events.id), 0)`,
         lastRunAt: sql<
           string | null
         >`(select max(r.updated_at) from runs r inner join challenges rc on r.challenge_id = rc.id where rc.event_id = events.id)`,
@@ -97,7 +97,6 @@ export function createCatalogReader(
     runSummary?: {
       runCount: number
       runningCount: number
-      pausedCount: number
       completedCount: number
       failedCount: number
       stoppedCount: number
@@ -105,7 +104,6 @@ export function createCatalogReader(
   ): ChallengePublic => {
     const runCount = Number(runSummary?.runCount ?? 0)
     const runningCount = Number(runSummary?.runningCount ?? 0)
-    const pausedCount = Number(runSummary?.pausedCount ?? 0)
     const completedCount = Number(runSummary?.completedCount ?? 0)
     const failedCount = Number(runSummary?.failedCount ?? 0)
     const stoppedCount = Number(runSummary?.stoppedCount ?? 0)
@@ -123,7 +121,6 @@ export function createCatalogReader(
       runCount,
       runStatusCounts: {
         running: runningCount,
-        paused: pausedCount,
         completed: completedCount,
         failed: failedCount,
         stopped: stoppedCount,
@@ -157,7 +154,6 @@ export function createCatalogReader(
       .select({
         runCount: count(),
         runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
-        pausedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'paused' then 1 else 0 end), 0)`,
         completedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
         failedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'failed' then 1 else 0 end), 0)`,
         stoppedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'stopped' then 1 else 0 end), 0)`,
@@ -190,7 +186,6 @@ export function createCatalogReader(
               challengeId: runs.challengeId,
               runCount: count(),
               runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
-              pausedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'paused' then 1 else 0 end), 0)`,
               completedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
               failedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'failed' then 1 else 0 end), 0)`,
               stoppedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'stopped' then 1 else 0 end), 0)`,

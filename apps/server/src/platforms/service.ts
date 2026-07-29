@@ -230,10 +230,7 @@ export function createPlatformService(
       .from(runs)
       .innerJoin(challenges, eq(runs.challengeId, challenges.id))
       .where(
-        and(
-          eq(challenges.eventId, eventId),
-          inArray(runs.status, ["running", "paused"])
-        )
+        and(eq(challenges.eventId, eventId), inArray(runs.status, ["running"]))
       )
       .get()
     if (activeRun) {

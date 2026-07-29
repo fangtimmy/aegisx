@@ -1,14 +1,13 @@
 import type { ThinkingLevel } from "./thinking";
 
-export type EnvironmentConfig =
-	| { type: "local" }
-	| {
-			type: "container";
-			image: string;
-			cpus: number;
-			memoryMb: number;
-			pidsLimit: number;
-	  };
+/** v3 is container-only; every run is a Docker container running pi. */
+export type EnvironmentConfig = {
+	type: "container";
+	image: string;
+	cpus: number;
+	memoryMb: number;
+	pidsLimit: number;
+};
 
 export type ModelConfig = {
 	provider: string;
@@ -26,6 +25,13 @@ export type PromptAttachment = {
 	size: number;
 };
 
+/**
+ * Prompt template context (handlebars). The shape is preserved across v2→v3
+ * so existing user-saved templates keep resolving. v3 sets:
+ *  - run.environment always "container", run.isContainer always true
+ *  - agent.role always "main", agent.isMain always true (single agent)
+ *  - capabilities.canSpawnAgent always false (no multi-agent)
+ */
 export type PromptTemplateContext = {
 	agent: {
 		role: "main" | "child";

@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm"
 import {
-  type AnySQLiteColumn,
   check,
   index,
   integer,
@@ -10,7 +9,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -103,6 +102,7 @@ export const attachments = sqliteTable(
   ]
 )
 
+/** v3 runs: one run = one Docker container running pi (interactive TUI). */
 export const runs = sqliteTable(
   "runs",
   {
@@ -111,103 +111,42 @@ export const runs = sqliteTable(
       .notNull()
       .references(() => challenges.id, { onDelete: "cascade" }),
     status: text("status").notNull(),
-    modelJson: text("model_json").notNull(),
-    envJson: text("env_json").notNull(),
-    promptJson: text("prompt_json").notNull(),
-    workspacePath: text("workspace_path"),
+    /** Main process launcher ("pi" in MVP; parameterizes container-manager). */
+    launcher: text("launcher").notNull().default("pi"),
+    // Model snapshot (selected at run creation)
+    provider: text("provider").notNull(),
+    providerLabel: text("provider_label"),
+    modelId: text("model_id").notNull(),
+    modelLabel: text("model_label"),
+    /** pi models.json provider key + model id, e.g. "aegisx-x/claude" or builtin. */
+    piModelRef: text("pi_model_ref"),
+    thinkingLevel: text("thinking_level").notNull().default("off"),
+    // Container resource snapshot
+    image: text("image").notNull(),
+    cpus: integer("cpus").notNull(),
+    memoryMb: integer("memory_mb").notNull(),
+    pidsLimit: integer("pids_limit").notNull(),
+    containerName: text("container_name").notNull(),
+    /** workspace dir relative to dataDir (data/runs/<id>/workspace). */
+    workspacePath: text("workspace_path").notNull(),
+    // pi session identity (for resume)
+    piSessionId: text("pi_session_id"),
+    piSessionFile: text("pi_session_file"),
     createdAt: text("created_at").notNull(),
     startedAt: text("started_at"),
     updatedAt: text("updated_at").notNull(),
     completedAt: text("completed_at"),
     error: text("error"),
     summary: text("summary"),
-    pendingFinishSummary: text("pending_finish_summary"),
     flag: text("flag"),
   },
   (table) => [
     index("runs_challenge_id_idx").on(table.challengeId),
     check(
       "runs_status_check",
-      sql`${table.status} in ('running', 'paused', 'completed', 'failed', 'stopped')`
+      sql`${table.status} in ('running', 'completed', 'failed', 'stopped')`
     ),
   ]
-)
-
-export const agents = sqliteTable(
-  "agents",
-  {
-    id: text("id").primaryKey(),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
-    parentAgentId: text("parent_agent_id").references(
-      (): AnySQLiteColumn => agents.id,
-      { onDelete: "cascade" }
-    ),
-    name: text("name").notNull(),
-    task: text("task"),
-    status: text("status").notNull(),
-    runtimeSnapshot: text("runtime_snapshot"),
-    contextSummary: text("context_summary"),
-    contextThroughSeq: integer("context_through_seq"),
-    summary: text("summary"),
-    error: text("error"),
-    createdAt: text("created_at").notNull(),
-    startedAt: text("started_at"),
-    updatedAt: text("updated_at").notNull(),
-    completedAt: text("completed_at"),
-  },
-  (table) => [
-    index("agents_run_id_idx").on(table.runId),
-    index("agents_parent_agent_id_idx").on(table.parentAgentId),
-    uniqueIndex("agents_main_unique")
-      .on(table.runId)
-      .where(sql`${table.parentAgentId} is null`),
-    check(
-      "agents_status_check",
-      sql`${table.status} in ('running', 'idle', 'paused', 'completed', 'failed', 'stopped')`
-    ),
-  ]
-)
-
-export const messages = sqliteTable(
-  "messages",
-  {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
-    seq: integer("seq").notNull(),
-    role: text("role").notNull(),
-    body: text("body").notNull(),
-    clientMessageId: text("client_message_id"),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [
-    uniqueIndex("messages_agent_seq_unique").on(table.agentId, table.seq),
-    uniqueIndex("messages_agent_client_unique")
-      .on(table.agentId, table.clientMessageId)
-      .where(sql`${table.clientMessageId} is not null`),
-    index("messages_agent_id_idx").on(table.agentId),
-    check(
-      "messages_role_check",
-      sql`${table.role} in ('user', 'assistant', 'toolResult', 'notice')`
-    ),
-  ]
-)
-
-export const agentUsage = sqliteTable(
-  "agent_usage",
-  {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
-    kind: text("kind").notNull(),
-    usage: text("usage").notNull(),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [index("agent_usage_agent_id_idx").on(table.agentId)]
 )
 
 export const submissions = sqliteTable(

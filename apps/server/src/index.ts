@@ -23,5 +23,6 @@ export default {
   // Bun.serve default idleTimeout is 10s; quiet SSE (thinking / long tools) is idle
   // and gets reset mid-stream. 0 disables. See bun docs: guides/http/sse.
   idleTimeout: 0,
+  websocket: instance.websocket,
   fetch: instance.app.fetch,
 }

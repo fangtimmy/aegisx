@@ -17,7 +17,7 @@ import {
   builtinModelProfile,
   normalizeModelMetadata,
   parseModelMetadata,
-} from "../providers/models"
+} from "../providers/builtin-models"
 import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,

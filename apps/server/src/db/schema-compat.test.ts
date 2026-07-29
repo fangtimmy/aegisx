@@ -1,13 +1,13 @@
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createDatabase } from "./index"
-import { agents, messages, runs, SCHEMA_VERSION } from "./schema"
+import { runs, SCHEMA_VERSION } from "./schema"
 
-describe("schema v2 bootstrap", () => {
-  test("fresh database migrates and sets user_version", () => {
+describe("schema v3 bootstrap", () => {
+  test("fresh database migrates and sets user_version=3", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
       const { db, sqlite, releaseLock } = createDatabase(dir)
@@ -15,21 +15,24 @@ describe("schema v2 bootstrap", () => {
         sqlite.query("PRAGMA user_version").get() as { user_version: number }
       ).user_version
       expect(version).toBe(SCHEMA_VERSION)
+      expect(version).toBe(3)
       const tables = sqlite
         .query(
           `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`
         )
         .all() as Array<{ name: string }>
       const names = new Set(tables.map((row) => row.name))
-      expect(names.has("agents")).toBe(true)
-      expect(names.has("messages")).toBe(true)
       expect(names.has("runs")).toBe(true)
+      expect(names.has("submissions")).toBe(true)
+      // v2 tables are gone
+      expect(names.has("agents")).toBe(false)
+      expect(names.has("messages")).toBe(false)
+      expect(names.has("agent_usage")).toBe(false)
+      // v1 tables are gone
       expect(names.has("agent_inbox")).toBe(false)
       expect(names.has("run_events")).toBe(false)
       // drizzle table symbols resolve
       expect(runs).toBeDefined()
-      expect(agents).toBeDefined()
-      expect(messages).toBeDefined()
       expect(db).toBeDefined()
       sqlite.close()
       releaseLock()
@@ -43,15 +46,7 @@ describe("schema v2 bootstrap", () => {
     try {
       const path = join(dir, "aegisx.sqlite")
       const sqlite = new Database(path, { create: true })
-      sqlite.run(`
-        CREATE TABLE agent_inbox (
-          id text PRIMARY KEY NOT NULL,
-          agent_id text NOT NULL,
-          kind text NOT NULL,
-          content text NOT NULL,
-          created_at text NOT NULL
-        )
-      `)
+      sqlite.run(`CREATE TABLE agent_inbox (id text PRIMARY KEY NOT NULL)`)
       sqlite.close()
       expect(() => createDatabase(dir)).toThrow(/v1 database/i)
     } finally {
@@ -59,14 +54,15 @@ describe("schema v2 bootstrap", () => {
     }
   })
 
-  test("rejects incomplete agents-without-messages database", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-bad-"))
+  test("rejects v2 database with agents/messages", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v2-"))
     try {
       const path = join(dir, "aegisx.sqlite")
       const sqlite = new Database(path, { create: true })
       sqlite.run(`CREATE TABLE agents (id text PRIMARY KEY NOT NULL)`)
+      sqlite.run(`CREATE TABLE messages (id text PRIMARY KEY NOT NULL)`)
       sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/incomplete|corrupted/i)
+      expect(() => createDatabase(dir)).toThrow(/v2 database/i)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

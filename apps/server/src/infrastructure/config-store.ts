@@ -12,8 +12,8 @@ import {
   CONFIG_DOCUMENT_VERSION,
   defaultSettings,
   type FlatSettings,
-  type ProviderType,
   migrateLegacySettings,
+  type ProviderType,
   parseSettings,
   patchSettings,
 } from "../../../shared"

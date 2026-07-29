@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowUpDown,
-  BarChart3,
   Flag,
   LayoutPanelTop,
   ListFilter,
@@ -41,7 +40,6 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { RunsView } from "@/features/runs"
-import { EventStatistics } from "@/features/statistics/event-statistics"
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
 import { EventSettings } from "./event-settings"
@@ -54,11 +52,10 @@ import {
 } from "./event-shared"
 import { ImportChallengesDialog } from "./platform-binding"
 
-type EventTab = "overview" | "run" | "statistics" | "settings"
+type EventTab = "overview" | "run" | "settings"
 
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
-  if (pathname === `/events/${eventId}/statistics`) return "statistics"
   if (
     pathname === `/events/${eventId}/run` ||
     pathname.startsWith(`/events/${eventId}/runs/`)
@@ -72,7 +69,6 @@ function pathForTab(eventId: string, tab: EventTab, runId?: string) {
   if (tab === "run") {
     return runId ? `/events/${eventId}/runs/${runId}` : `/events/${eventId}/run`
   }
-  if (tab === "statistics") return `/events/${eventId}/statistics`
   if (tab === "settings") return `/events/${eventId}/settings`
   return `/events/${eventId}`
 }
@@ -272,9 +268,6 @@ export function EventPage() {
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="run">
                 <Play /> Run
-              </TabsTab>
-              <TabsTab className="justify-start gap-2" value="statistics">
-                <BarChart3 /> Statistics
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="settings">
                 <Settings /> Settings
@@ -530,9 +523,6 @@ export function EventPage() {
                 eventId={eventId}
                 runId={runId}
               />
-            </TabsPanel>
-            <TabsPanel className="pt-0" value="statistics">
-              <EventStatistics eventId={eventId} />
             </TabsPanel>
             <TabsPanel className="pt-0" value="settings">
               <EventSettings event={eventQuery.data.event} />

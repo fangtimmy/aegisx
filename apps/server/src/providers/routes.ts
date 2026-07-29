@@ -13,7 +13,7 @@ import {
   normalizeModelMetadata,
   parseModelMetadata,
   supportedThinkingLevels,
-} from "./models"
+} from "./builtin-models"
 
 const providerType = Type.Union([
   Type.Literal("openai-compatible"),

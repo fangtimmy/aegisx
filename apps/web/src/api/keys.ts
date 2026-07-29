@@ -2,15 +2,10 @@ export const keys = {
   events: {
     all: ["events"] as const,
     detail: (id: string) => ["events", id] as const,
-    stats: (id: string) => ["events", id, "stats"] as const,
   },
   runs: {
     byEvent: (eventId: string) => ["runs", "event", eventId] as const,
     detail: (runId: string) => ["runs", runId] as const,
-    messages: (runId: string, agentId: string) =>
-      ["runs", runId, "agents", agentId, "messages"] as const,
-    inspector: (runId: string, agentId: string) =>
-      ["runs", runId, "agents", agentId, "inspector"] as const,
     files: (runId: string, path: string) =>
       ["runs", runId, "files", path] as const,
   },
