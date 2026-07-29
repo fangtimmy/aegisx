@@ -119,6 +119,12 @@ RUN PWNDBG_GDBINIT=$(find / -name "gdbinit.py" -path "*pwndbg*" 2>/dev/null | he
     printf 'set follow-fork-mode child\nset pagination off\n' >> /root/.gdbinit && \
     printf 'alias ll="ls -la"\nexport PWNLIB_NOTES=true\n' >> /root/.bashrc
 
+# === Pi Coding Agent ===
+RUN --mount=type=cache,id=solver-npm,target=/root/.npm,sharing=locked \
+    npm config set registry https://registry.npmmirror.com && \
+    npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.80.7 && \
+    mkdir -p /root/.pi/agent/skills
+
 WORKDIR /workspace
 
 CMD ["sleep", "infinity"]

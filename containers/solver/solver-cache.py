@@ -1,9 +1,9 @@
-from pathlib import Path
 import os
 import shutil
 import subprocess
 import sys
 import urllib.request
+from pathlib import Path
 
 DOWNLOAD_CACHE = "/var/cache/solver/downloads"
 GIT_CACHE = "/var/cache/solver/git"
