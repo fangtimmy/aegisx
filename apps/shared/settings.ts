@@ -1,6 +1,5 @@
 export type {
 	ConfigDocumentV1,
-	ConversationToolExpandPrefs,
 	Environment,
 	FlatSettings,
 	SettingDef,
@@ -12,7 +11,6 @@ export {
 	CONFIG_DOCUMENT_VERSION,
 	SETTINGS_DEFS,
 	SETTING_KEYS,
-	conversationToolExpand,
 	defaultSettings,
 	get,
 	isConfigDocumentV1,

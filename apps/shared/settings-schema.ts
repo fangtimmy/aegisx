@@ -21,7 +21,6 @@ export type SettingGroup =
 	| "Runtime"
 	| "Container"
 	| "Tools"
-	| "UI"
 	| "Prompts"
 
 type BaseDef = {
@@ -98,31 +97,12 @@ export type FlatSettings = {
 	"tools.timeout.start_target": number
 	"tools.timeout.extend_target": number
 	"tools.timeout.stop_target": number
-	"ui.renderUserMessagesAsMarkdown": boolean
-	"ui.renderReasoningAsMarkdown": boolean
-	"ui.expand.fileRead": boolean
-	"ui.expand.fileEdit": boolean
-	"ui.expand.bash": boolean
-	"ui.expand.target": boolean
-	"ui.expand.flag": boolean
-	"ui.expand.agent": boolean
-	"ui.expand.errors": boolean
 	"prompts.mainSystem": string
 	"prompts.childSystem": string
 	"prompts.initial": string
 }
 
 export type SettingKey = keyof FlatSettings
-
-export type ConversationToolExpandPrefs = {
-	fileRead: boolean
-	fileEdit: boolean
-	bash: boolean
-	target: boolean
-	flag: boolean
-	agent: boolean
-	errors: boolean
-}
 
 const THINKING_OPTIONS: { value: ThinkingLevel; label: string }[] = [
 	{ value: "off", label: "Off" },
@@ -439,93 +419,6 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		order: 70,
 	},
 	{
-		key: "ui.renderUserMessagesAsMarkdown",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Render user messages as Markdown",
-		widget: "boolean",
-		order: 10,
-	},
-	{
-		key: "ui.renderReasoningAsMarkdown",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Render reasoning as Markdown",
-		widget: "boolean",
-		order: 20,
-	},
-	{
-		key: "ui.expand.fileRead",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Auto-expand file read tools",
-		description: "read, ls, find, grep while running",
-		widget: "boolean",
-		order: 30,
-	},
-	{
-		key: "ui.expand.fileEdit",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Auto-expand file edit tools",
-		description: "write, edit while running",
-		widget: "boolean",
-		order: 40,
-	},
-	{
-		key: "ui.expand.bash",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Auto-expand bash",
-		widget: "boolean",
-		order: 50,
-	},
-	{
-		key: "ui.expand.target",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Auto-expand target tools",
-		description: "start/stop/extend remote targets",
-		widget: "boolean",
-		order: 60,
-	},
-	{
-		key: "ui.expand.flag",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Auto-expand flag tools",
-		description: "submit_flag, finish_run",
-		widget: "boolean",
-		order: 70,
-	},
-	{
-		key: "ui.expand.agent",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Auto-expand agent tools",
-		description: "spawn_agent, inspect_agent, other tools",
-		widget: "boolean",
-		order: 80,
-	},
-	{
-		key: "ui.expand.errors",
-		type: "boolean",
-		default: false,
-		group: "UI",
-		title: "Auto-expand failed tools",
-		description: "Expand tools that end in error",
-		widget: "boolean",
-		order: 90,
-	},
-	{
 		key: "prompts.mainSystem",
 		type: "string",
 		default: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
@@ -631,8 +524,6 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
 		dockerTimeoutMs: "container.dockerTimeoutMs",
 		tmpfsSize: "container.tmpfsSize",
 		defaultToolTimeoutMs: "tools.defaultTimeoutMs",
-		renderUserMessagesAsMarkdown: "ui.renderUserMessagesAsMarkdown",
-		renderReasoningAsMarkdown: "ui.renderReasoningAsMarkdown",
 		mainSystemPromptTemplate: "prompts.mainSystem",
 		childSystemPromptTemplate: "prompts.childSystem",
 		initialPromptTemplate: "prompts.initial",
@@ -657,24 +548,6 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
 		)) {
 			const key = `tools.timeout.${tool}`
 			if (isSettingKey(key)) flat[key] = value
-		}
-	}
-
-	const expand = source.conversationToolExpand
-	if (expand && typeof expand === "object" && !Array.isArray(expand)) {
-		const expandMap: Record<string, SettingKey> = {
-			fileRead: "ui.expand.fileRead",
-			fileEdit: "ui.expand.fileEdit",
-			bash: "ui.expand.bash",
-			target: "ui.expand.target",
-			flag: "ui.expand.flag",
-			agent: "ui.expand.agent",
-			errors: "ui.expand.errors",
-		}
-		for (const [from, to] of Object.entries(expandMap)) {
-			if (from in (expand as Record<string, unknown>)) {
-				flat[to] = (expand as Record<string, unknown>)[from]
-			}
 		}
 	}
 
@@ -778,20 +651,6 @@ export function patchSettings(
 		}
 	}
 	return out
-}
-
-export function conversationToolExpand(
-	settings: FlatSettings,
-): ConversationToolExpandPrefs {
-	return {
-		fileRead: get(settings, "ui.expand.fileRead"),
-		fileEdit: get(settings, "ui.expand.fileEdit"),
-		bash: get(settings, "ui.expand.bash"),
-		target: get(settings, "ui.expand.target"),
-		flag: get(settings, "ui.expand.flag"),
-		agent: get(settings, "ui.expand.agent"),
-		errors: get(settings, "ui.expand.errors"),
-	}
 }
 
 const TOOL_TIMEOUT_KEYS = new Set([

@@ -69,7 +69,6 @@ describe("settings schema", () => {
       mainSystemPromptTemplate: "custom main",
       childSystemPromptTemplate: "",
       toolTimeouts: { bash: 99_000 },
-      conversationToolExpand: { bash: true, errors: true },
     })
     expect(migrated["agent.defaultModelId"]).toBe("m1")
     expect(migrated["runtime.maxConcurrency"]).toBe(20)
@@ -81,7 +80,5 @@ describe("settings schema", () => {
       defaultSettings()["prompts.childSystem"]
     )
     expect(migrated["tools.timeout.bash"]).toBe(99_000)
-    expect(migrated["ui.expand.bash"]).toBe(true)
-    expect(migrated["ui.expand.errors"]).toBe(true)
   })
 })
