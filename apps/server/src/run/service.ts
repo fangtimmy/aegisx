@@ -241,6 +241,7 @@ export function createRunService(options: RunServiceOptions) {
         piAgentDir: piAbs,
         providers: providers(),
         appendSystem,
+        targetSupported: promptContext.run.targetSupported,
       })
 
       const modelRef = piModelRefFor(input.provider, input.modelId)

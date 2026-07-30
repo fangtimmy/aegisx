@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { ThinkingLevel } from "../../../shared/thinking"
@@ -47,7 +47,7 @@ export function buildPiCmd(options: PiCmdOptions): string[] {
   return cmd
 }
 
-/** Container env injected into every run (skill scripts read these). */
+/** Container env injected into every run (the aegisx skill curl commands read these). */
 export function buildContainerEnv(input: {
   runId: string
   challengeId: string
@@ -67,12 +67,19 @@ export function buildContainerEnv(input: {
 /**
  * Generate the per-run pi-agent volume: models.json (apiKey literal), the
  * rendered main system prompt as APPEND_SYSTEM.md (System Prompt File, not
- * affected by --no-context-files), settings.json, and the aegisx skill.
+ * affected by --no-context-files), settings.json, and the aegisx skills.
+ *
+ * Skills are pure documentation: they teach the agent the curl commands to call
+ * AegisX's run-level HTTP API. No helper scripts are generated, so nothing has
+ * to be placed on PATH — `curl`/`jq` already live in the solver image PATH.
+ * `aegisx` (flag submit + finish) is always generated; `aegisx-target` only
+ * when the challenge actually has a remote target.
  */
 export function generatePiAgentVolume(input: {
   piAgentDir: string
   providers: ProviderConnection[]
   appendSystem: string
+  targetSupported: boolean
 }): void {
   mkdirSync(input.piAgentDir, { recursive: true })
   writeFileSync(
@@ -94,7 +101,13 @@ export function generatePiAgentVolume(input: {
       2
     )}\n`
   )
-  writeSkillFiles(join(input.piAgentDir, "skills", "aegisx"))
+  writeSkillMd(join(input.piAgentDir, "skills", "aegisx"), AEGISX_SKILL_MD)
+  if (input.targetSupported) {
+    writeSkillMd(
+      join(input.piAgentDir, "skills", "aegisx-target"),
+      AEGISX_TARGET_SKILL_MD
+    )
+  }
 }
 
 /** Resolve the pi model ref for the selected provider/model. */
@@ -108,83 +121,57 @@ export function piModelRefFor(
   return { ...ref, ref: `${ref.providerKey}/${ref.modelId}` }
 }
 
-const SKILL_BIN_DIR = "bin"
-
-function writeSkillFiles(skillDir: string) {
-  mkdirSync(join(skillDir, SKILL_BIN_DIR), { recursive: true })
-  writeFileSync(join(skillDir, "SKILL.md"), SKILL_MD)
-  for (const [name, content] of Object.entries(SKILL_SCRIPTS)) {
-    const path = join(skillDir, SKILL_BIN_DIR, name)
-    writeFileSync(path, content)
-    chmodSync(path, 0o755)
-  }
+function writeSkillMd(skillDir: string, content: string) {
+  mkdirSync(skillDir, { recursive: true })
+  writeFileSync(join(skillDir, "SKILL.md"), content)
 }
 
-const SKILL_MD = `# AegisX integration
+const AEGISX_SKILL_MD = `---
+name: aegisx
+description: Submits CTF flags and finishes the run by calling AegisX's HTTP API with curl. Use when you have a high-confidence flag to submit, or have completed the solution and want to end the run.
+---
 
-You are running inside an AegisX CTF run. Use these helper commands to talk back
-to AegisX. They use the \`AEGISX_API_URL\` and \`AEGISX_RUN_ID\` environment
-variables already set in the container.
+# AegisX run integration
+
+You are inside an AegisX CTF run. \`AEGISX_API_URL\` and \`AEGISX_RUN_ID\` are set
+in the environment; \`curl\` and \`jq\` are on PATH.
 
 ## Submit a flag
 \`\`\`sh
-aegisx-submit-flag "<flag>"
+curl -fsS -X POST -H 'content-type: application/json' \\
+  -d "$(jq -n --arg f 'FLAG{...}' '{flag:$f}')" \\
+  "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/flag"
 \`\`\`
-Returns the platform verdict (accepted / rejected / ...). Submit only
-high-confidence candidates derived from evidence.
-
-## Control the challenge target
-\`\`\`sh
-aegisx-target get       # inspect current state
-aegisx-target start     # bring the target up
-aegisx-target extend    # extend its lifetime before it expires
-aegisx-target stop      # stop it when done
-\`\`\`
-Only available when the challenge has a remote target.
+Returns the platform verdict (accepted / rejected / ...). Use \`jq -n --arg\` so
+special characters in the flag are escaped safely. Submit only high-confidence
+candidates derived from evidence.
 
 ## Finish the run
 \`\`\`sh
-aegisx-finish "<one-paragraph summary>"
+curl -fsS -X POST -H 'content-type: application/json' \\
+  -d "$(jq -n --arg s 'one-paragraph summary' '{summary:$s}')" \\
+  "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/finish"
 \`\`\`
-Records your summary and gracefully stops the run. Call this once the solution
-is supported by reproducible evidence (and, where the platform is integrated, an
-accepted flag). Do not continue after it succeeds — AegisX will stop pi.
+Records your summary and gracefully stops pi. Call once the solution is backed
+by reproducible evidence (and an accepted flag where the platform is integrated).
+Do not continue after it succeeds — AegisX will stop pi.
 `
 
-const SKILL_SCRIPTS: Record<string, string> = {
-  "aegisx-submit-flag": `#!/usr/bin/env bash
-# Submit a flag to AegisX. Usage: aegisx-submit-flag "<flag>"
-set -euo pipefail
-flag="\${1-}"
-if [ -z "$flag" ]; then
-  echo "usage: aegisx-submit-flag <flag>" >&2
-  exit 2
-fi
-exec curl -fsS -X POST \\
-  -H 'content-type: application/json' \\
-  -d "$(printf '%s' "$flag" | jq -Rs '{flag: .}')" \\
-  "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/flag"
-`,
-  "aegisx-target": `#!/usr/bin/env bash
-# Manage the challenge target. Usage: aegisx-target get|start|extend|stop
-set -euo pipefail
-action="\${1-}"
-case "$action" in
-  get)    method="GET"  ; path="target" ;;
-  start)  method="POST" ; path="target/start" ;;
-  extend) method="POST" ; path="target/extend" ;;
-  stop)   method="POST" ; path="target/stop" ;;
-  *) echo "usage: aegisx-target get|start|extend|stop" >&2; exit 2 ;;
-esac
-exec curl -fsS -X "$method" "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/$path"
-`,
-  "aegisx-finish": `#!/usr/bin/env bash
-# Finish the run. Usage: aegisx-finish "<summary>"
-set -euo pipefail
-summary="\${1-}"
-exec curl -fsS -X POST \\
-  -H 'content-type: application/json' \\
-  -d "$(printf '%s' "$summary" | jq -Rs '{summary: .}')" \\
-  "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/finish"
-`,
-}
+const AEGISX_TARGET_SKILL_MD = `---
+name: aegisx-target
+description: Controls the challenge's remote target (inspect/start/extend/stop) via AegisX's HTTP API with curl. Use only when this challenge has a remote target to manage.
+---
+
+# AegisX target control
+
+Manage the remote target with curl (\`AEGISX_API_URL\` and \`AEGISX_RUN_ID\` are
+set; \`curl\` is on PATH):
+\`\`\`sh
+curl -fsS "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/target"          # inspect
+curl -fsS -X POST "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/target/start"
+curl -fsS -X POST "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/target/extend"
+curl -fsS -X POST "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/target/stop"
+\`\`\`
+Inspect before starting; extend before expiry to preserve session/state; stop
+before finishing the run.
+`

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "check": "biome check --write . && tsc --noEmit",
+    "check": "biome check --write . && tsc -b",
     "test": "bun test",
     "preview": "vite preview"
   },

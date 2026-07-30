@@ -72,14 +72,40 @@ export function RunTerminal({
         }
       })
 
+      // ghostty-web forces scroll-to-bottom on every write when the viewport is
+      // scrolled back (writeInternal runs `viewportY !== 0 && scrollToBottom()`).
+      // pi emits continuously, so browsing history is impossible unless we honor
+      // the user's position: only re-stick to the bottom when already there.
+      // Overriding the instance method works because writeInternal calls
+      // `this.scrollToBottom()` and JS resolves own-instance props before proto.
+      let stickToBottom = true
+      term.onScroll((viewportY) => {
+        stickToBottom = viewportY <= 0
+      })
+      const origScrollToBottom = term.scrollToBottom.bind(term)
+      term.scrollToBottom = () => {
+        if (stickToBottom) origScrollToBottom()
+      }
+
       const connect = () => {
         setStatus((s) => (s === "open" ? "reconnecting" : "connecting"))
         ws = new WebSocket(ptyUrl(runId))
         ws.binaryType = "arraybuffer"
         ws.onopen = () => {
           setStatus("open")
-          // Send the current size once attached.
+          // Send the current size once attached. term.open() already fired
+          // onResize before the WS existed (lost); fit() won't re-fire it when
+          // the size is unchanged, so push the current cols/rows explicitly.
           fit?.fit()
+          if (term) {
+            ws?.send(
+              JSON.stringify({
+                type: "resize",
+                cols: term.cols,
+                rows: term.rows,
+              })
+            )
+          }
         }
         ws.onmessage = (event) => {
           if (event.data instanceof ArrayBuffer) {
