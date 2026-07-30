@@ -1,3 +1,5 @@
+> **ARCHIVED.** Describes the deleted v2 in-process agent system (spawn_agent, messages table, SSE). The current architecture is [../architecture.md](../architecture.md).
+
 # AegisX Architecture v2
 
 Status: **complete** (Phases 0–6 + post-cut stats/tests/queries)  

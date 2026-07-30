@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises"
-import { and, desc, eq, inArray } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import {
   challengeRemote,
@@ -139,28 +139,7 @@ export function createPlatformSubmissions(
     }
   }
 
-  function canFinishRun(runId: string, challengeId: string) {
-    const remote = getChallengeRemote(db, challengeId)
-    if (!isPlatformIntegrated(remote) || remote.solved) {
-      return true
-    }
-    return Boolean(
-      db
-        .select({ id: submissions.id })
-        .from(submissions)
-        .innerJoin(runs, eq(submissions.runId, runs.id))
-        .where(
-          and(
-            eq(submissions.runId, runId),
-            eq(runs.challengeId, challengeId),
-            inArray(submissions.status, ["accepted", "already_solved"])
-          )
-        )
-        .get()
-    )
-  }
-
-  return { canFinishRun, submitFlag }
+  return { submitFlag }
 }
 
 function storedSubmissionResult(

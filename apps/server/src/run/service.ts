@@ -41,6 +41,7 @@ const RUNS_SUBDIR = "runs"
 export type RunServiceOptions = {
   db: Database
   dataDir: string
+  apiUrl: string
   containerManager: ContainerManager
   platformService: PlatformService
   configStore: ConfigStore
@@ -62,17 +63,24 @@ export type CreateRunInput = {
     pidsLimit: number
     tmpfsSize: string
     workspace: string
-    apiUrl: string
   }
 }
 
 export type RunService = ReturnType<typeof createRunService>
 
 export function createRunService(options: RunServiceOptions) {
-  const { db, dataDir, containerManager, platformService, configStore } =
-    options
+  const {
+    db,
+    dataDir,
+    apiUrl,
+    containerManager,
+    platformService,
+    configStore,
+  } = options
   const queries = createRunQueries({ db, dataDir })
   const bridges = new Map<string, PtyBridge>()
+  const sessionTimers = new Map<string, NodeJS.Timeout>()
+  const forceKillTimers = new Map<string, NodeJS.Timeout>()
   const locks = new Map<string, Promise<unknown>>()
   const pending = new Map<string, PendingOutcome>()
   let closed = false
@@ -113,7 +121,47 @@ export function createRunService(options: RunServiceOptions) {
     void containerManager
       .wait(name)
       .then((result) => finalize(runId, result.StatusCode))
-      .catch(() => finalize(runId, -1))
+      .catch((error) => {
+        console.error("Container wait failed", {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        finalize(runId, -1)
+      })
+  }
+
+  function clearSessionTimer(runId: string) {
+    const timer = sessionTimers.get(runId)
+    if (timer) {
+      clearInterval(timer)
+      sessionTimers.delete(runId)
+    }
+  }
+
+  function clearForceKillTimer(runId: string) {
+    const timer = forceKillTimers.get(runId)
+    if (timer) {
+      clearTimeout(timer)
+      forceKillTimers.delete(runId)
+    }
+  }
+
+  /** SIGTERM first; force SIGKILL after a grace period if pi hasn't exited. */
+  function terminateContainer(runId: string) {
+    const name = containerName(runId)
+    clearForceKillTimer(runId)
+    const timer = setTimeout(() => {
+      forceKillTimers.delete(runId)
+      void containerManager
+        .isRunning(name)
+        .then((running) =>
+          running
+            ? containerManager.kill(name, "SIGKILL").catch(() => undefined)
+            : undefined
+        )
+        .catch(() => undefined)
+    }, 10_000)
+    forceKillTimers.set(runId, timer)
   }
 
   function attachBridge(runId: string, stream: NodeJS.ReadWriteStream) {
@@ -154,6 +202,8 @@ export function createRunService(options: RunServiceOptions) {
         completedAt: ts,
         updatedAt: ts,
       })
+      clearSessionTimer(runId)
+      clearForceKillTimer(runId)
       const bridge = bridges.get(runId)
       if (bridge) {
         bridge.dispose()
@@ -232,6 +282,19 @@ export function createRunService(options: RunServiceOptions) {
         templates.mainSystemPromptTemplate,
         promptContext
       )
+      const childContext = {
+        ...promptContext,
+        agent: {
+          role: "child" as const,
+          isMain: false,
+          name: "Child agent",
+          task: null,
+        },
+      }
+      const appendChildSystem = renderSystemPrompt(
+        templates.childSystemPromptTemplate,
+        childContext
+      )
       const initialPrompt = renderInitialPrompt(
         templates.initialPromptTemplate,
         promptContext
@@ -241,6 +304,7 @@ export function createRunService(options: RunServiceOptions) {
         piAgentDir: piAbs,
         providers: providers(),
         appendSystem,
+        appendChildSystem,
         targetSupported: promptContext.run.targetSupported,
       })
 
@@ -255,7 +319,8 @@ export function createRunService(options: RunServiceOptions) {
         runId,
         challengeId: challenge.id,
         challengeName: challenge.name,
-        apiUrl: input.container.apiUrl,
+        apiUrl,
+        modelRef: modelRef.ref,
       })
 
       const ts = now()
@@ -322,20 +387,22 @@ export function createRunService(options: RunServiceOptions) {
 
   function discoverSessionLater(runId: string, piAbs: string) {
     let attempts = 0
+    clearSessionTimer(runId)
     const timer = setInterval(() => {
       attempts += 1
       const { sessionId, sessionFile } = discoverPiSessionId(piAbs)
       if (sessionId) {
-        clearInterval(timer)
+        clearSessionTimer(runId)
         updateRow(runId, {
           piSessionId: sessionId,
           piSessionFile: sessionFile,
           updatedAt: now(),
         })
       } else if (attempts > 30) {
-        clearInterval(timer)
+        clearSessionTimer(runId)
       }
     }, 2000)
+    sessionTimers.set(runId, timer)
   }
 
   function stop(runId: string) {
@@ -346,6 +413,7 @@ export function createRunService(options: RunServiceOptions) {
       }
       pending.set(runId, { mode: "stop" })
       await containerManager.kill(containerName(runId), "SIGTERM")
+      terminateContainer(runId)
       return requireRun(runId)
     })
   }
@@ -358,6 +426,7 @@ export function createRunService(options: RunServiceOptions) {
       }
       pending.set(runId, { mode: "finish", summary })
       await containerManager.kill(containerName(runId), "SIGTERM")
+      terminateContainer(runId)
       return requireRun(runId)
     })
   }
@@ -387,7 +456,8 @@ export function createRunService(options: RunServiceOptions) {
         runId,
         challengeId: row.challengeId,
         challengeName: run.challengeName,
-        apiUrl: defaultApiUrl(),
+        apiUrl,
+        modelRef: row.piModelRef ?? "",
       })
       const launched = await containerManager.launch({
         name: row.containerName,
@@ -477,12 +547,12 @@ export function createRunService(options: RunServiceOptions) {
     closed = true
     await Promise.allSettled([...locks.values()])
     locks.clear()
+    for (const timer of sessionTimers.values()) clearInterval(timer)
+    sessionTimers.clear()
+    for (const timer of forceKillTimers.values()) clearTimeout(timer)
+    forceKillTimers.clear()
     for (const bridge of bridges.values()) bridge.dispose()
     bridges.clear()
-  }
-
-  function defaultApiUrl() {
-    return `http://host.docker.internal:${process.env.PORT ?? 3000}`
   }
 
   return {
@@ -496,7 +566,6 @@ export function createRunService(options: RunServiceOptions) {
     close,
     get: queries.get,
     listForEvent: queries.listForEvent,
-    listForChallenge: queries.listForChallenge,
     workspacePath: queries.workspacePath,
     ptyBridge: (runId: string) => bridges.get(runId),
     submitFlag: platformService.submitFlag,

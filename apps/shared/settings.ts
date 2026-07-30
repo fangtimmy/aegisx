@@ -1,6 +1,5 @@
 export type {
 	ConfigDocumentV1,
-	Environment,
 	FlatSettings,
 	SettingDef,
 	SettingGroup,
@@ -21,7 +20,6 @@ export {
 	parseSettings,
 	patchSettings,
 	settingDef,
-	toolTimeoutMs,
 } from "./settings-schema"
 export {
 	DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,

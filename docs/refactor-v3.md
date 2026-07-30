@@ -1,6 +1,6 @@
 # AegisX v3 重构方案
 
-Status: **规划定稿，待实施确认**
+Status: **已实施（v3 现状见 [architecture.md](./architecture.md)）**
 Last updated: 2026-07-29
 相关：[architecture-v2.md](architecture-v2.md)（v2，将被本版替换）
 

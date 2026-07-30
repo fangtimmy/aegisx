@@ -3,7 +3,7 @@
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, and token usage.
 
 > **Schema v2** — wipe any old `data/` directory before first start.  
-> Design notes: [docs/architecture-v2.md](docs/architecture-v2.md), [docs/agent-orchestration.md](docs/agent-orchestration.md).
+> Design notes: [docs/architecture.md](docs/architecture.md) (current). Historical: [docs/refactor-v3.md](docs/refactor-v3.md); v2 docs live in [docs/archive/](docs/archive/).
 
 ## Requirements
 

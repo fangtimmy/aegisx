@@ -6,8 +6,6 @@ import {
 import type { ThinkingLevel } from "./thinking"
 import { isThinkingLevel } from "./thinking"
 
-export type Environment = "local" | "container"
-
 export type SettingWidget =
 	| "boolean"
 	| "number"
@@ -20,7 +18,6 @@ export type SettingGroup =
 	| "Agent"
 	| "Runtime"
 	| "Container"
-	| "Tools"
 	| "Prompts"
 
 type BaseDef = {
@@ -69,18 +66,15 @@ export type SettingDef =
 			enum: { value: string; label: string }[]
 	  })
 
+// v3 is container-only; every run runs in a Docker container. The only knobs
+// that matter for a run are the agent defaults, the platform/provider timeouts,
+// the container resources, and the prompt templates. Earlier "local" mode,
+// concurrency, retry, tool-output, and per-tool-timeout settings belonged to
+// the deleted v2 in-process agent loop and had no effect here.
 export type FlatSettings = {
 	"agent.defaultModelId": string | null
 	"agent.defaultThinkingLevel": ThinkingLevel
-	"runtime.environment": Environment
-	"runtime.maxConcurrency": number
 	"runtime.maxAttachmentMb": number
-	"runtime.maxRetryAttempts": number
-	"runtime.retryBaseDelayMs": number
-	"runtime.retryMaxDelayMs": number
-	"runtime.maxToolOutputBytes": number
-	"runtime.maxInlineShellOutputBytes": number
-	"runtime.maxCapturedShellOutputBytes": number
 	"runtime.platformRequestTimeoutMs": number
 	"runtime.providerDiscoverTimeoutMs": number
 	"container.image": string
@@ -88,15 +82,7 @@ export type FlatSettings = {
 	"container.memoryMb": number
 	"container.pidsLimit": number
 	"container.workspace": string
-	"container.dockerTimeoutMs": number
 	"container.tmpfsSize": string
-	"tools.defaultTimeoutMs": number
-	"tools.timeout.bash": number
-	"tools.timeout.submit_flag": number
-	"tools.timeout.get_target": number
-	"tools.timeout.start_target": number
-	"tools.timeout.extend_target": number
-	"tools.timeout.stop_target": number
 	"prompts.mainSystem": string
 	"prompts.childSystem": string
 	"prompts.initial": string
@@ -138,32 +124,6 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		order: 20,
 	},
 	{
-		key: "runtime.environment",
-		type: "enum",
-		default: "local",
-		enum: [
-			{ value: "local", label: "Local" },
-			{ value: "container", label: "Container" },
-		],
-		group: "Runtime",
-		title: "Environment",
-		description: "Default execution environment for new runs.",
-		widget: "select",
-		order: 10,
-	},
-	{
-		key: "runtime.maxConcurrency",
-		type: "integer",
-		default: 2,
-		minimum: 1,
-		maximum: 32,
-		group: "Runtime",
-		title: "Max concurrency",
-		description: "Agents in running ∪ idle.",
-		widget: "number",
-		order: 20,
-	},
-	{
 		key: "runtime.maxAttachmentMb",
 		type: "integer",
 		default: 512,
@@ -173,72 +133,6 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		title: "Max attachment size (MB)",
 		widget: "number",
 		order: 30,
-	},
-	{
-		key: "runtime.maxRetryAttempts",
-		type: "integer",
-		default: 3,
-		minimum: 0,
-		maximum: 20,
-		group: "Runtime",
-		title: "Max retry attempts",
-		widget: "number",
-		order: 40,
-	},
-	{
-		key: "runtime.retryBaseDelayMs",
-		type: "integer",
-		default: 2_000,
-		minimum: 0,
-		maximum: 120_000,
-		group: "Runtime",
-		title: "Retry base delay (ms)",
-		widget: "number",
-		order: 50,
-	},
-	{
-		key: "runtime.retryMaxDelayMs",
-		type: "integer",
-		default: 30_000,
-		minimum: 0,
-		maximum: 600_000,
-		group: "Runtime",
-		title: "Retry max delay (ms)",
-		widget: "number",
-		order: 60,
-	},
-	{
-		key: "runtime.maxToolOutputBytes",
-		type: "integer",
-		default: 64_000,
-		minimum: 1_000,
-		maximum: 1_000_000,
-		group: "Runtime",
-		title: "Max tool output (bytes)",
-		widget: "number",
-		order: 70,
-	},
-	{
-		key: "runtime.maxInlineShellOutputBytes",
-		type: "integer",
-		default: 12_000,
-		minimum: 1_000,
-		maximum: 500_000,
-		group: "Runtime",
-		title: "Max inline shell output (bytes)",
-		widget: "number",
-		order: 80,
-	},
-	{
-		key: "runtime.maxCapturedShellOutputBytes",
-		type: "integer",
-		default: 1_000_000,
-		minimum: 10_000,
-		maximum: 50_000_000,
-		group: "Runtime",
-		title: "Max captured shell output (bytes)",
-		widget: "number",
-		order: 90,
 	},
 	{
 		key: "runtime.platformRequestTimeoutMs",
@@ -320,17 +214,6 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		order: 50,
 	},
 	{
-		key: "container.dockerTimeoutMs",
-		type: "integer",
-		default: 30_000,
-		minimum: 1_000,
-		maximum: 300_000,
-		group: "Container",
-		title: "Docker timeout (ms)",
-		widget: "number",
-		order: 60,
-	},
-	{
 		key: "container.tmpfsSize",
 		type: "string",
 		default: "64m",
@@ -339,83 +222,6 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		group: "Container",
 		title: "tmpfs size",
 		widget: "text",
-		order: 70,
-	},
-	{
-		key: "tools.defaultTimeoutMs",
-		type: "integer",
-		default: 30_000,
-		minimum: 1_000,
-		maximum: 600_000,
-		group: "Tools",
-		title: "Default tool timeout (ms)",
-		widget: "number",
-		order: 10,
-	},
-	{
-		key: "tools.timeout.bash",
-		type: "integer",
-		default: 120_000,
-		minimum: 1_000,
-		maximum: 600_000,
-		group: "Tools",
-		title: "Bash timeout (ms)",
-		widget: "number",
-		order: 20,
-	},
-	{
-		key: "tools.timeout.submit_flag",
-		type: "integer",
-		default: 90_000,
-		minimum: 1_000,
-		maximum: 600_000,
-		group: "Tools",
-		title: "Submit flag timeout (ms)",
-		widget: "number",
-		order: 30,
-	},
-	{
-		key: "tools.timeout.get_target",
-		type: "integer",
-		default: 30_000,
-		minimum: 1_000,
-		maximum: 600_000,
-		group: "Tools",
-		title: "Get target timeout (ms)",
-		widget: "number",
-		order: 40,
-	},
-	{
-		key: "tools.timeout.start_target",
-		type: "integer",
-		default: 120_000,
-		minimum: 1_000,
-		maximum: 600_000,
-		group: "Tools",
-		title: "Start target timeout (ms)",
-		widget: "number",
-		order: 50,
-	},
-	{
-		key: "tools.timeout.extend_target",
-		type: "integer",
-		default: 30_000,
-		minimum: 1_000,
-		maximum: 600_000,
-		group: "Tools",
-		title: "Extend target timeout (ms)",
-		widget: "number",
-		order: 60,
-	},
-	{
-		key: "tools.timeout.stop_target",
-		type: "integer",
-		default: 30_000,
-		minimum: 1_000,
-		maximum: 600_000,
-		group: "Tools",
-		title: "Stop target timeout (ms)",
-		widget: "number",
 		order: 70,
 	},
 	{
@@ -436,7 +242,8 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		maxLength: 100_000,
 		group: "Prompts",
 		title: "Child system prompt",
-		description: "Blank is blank — not the built-in default.",
+		description:
+			"Base system prompt for delegated child pi processes launched by the main agent (see the aegisx-child skill). Blank is blank — not the built-in default.",
 		widget: "prompt",
 		order: 20,
 	},
@@ -505,15 +312,7 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
 	const map: Record<string, SettingKey> = {
 		defaultModelId: "agent.defaultModelId",
 		defaultThinkingLevel: "agent.defaultThinkingLevel",
-		environment: "runtime.environment",
-		maxConcurrency: "runtime.maxConcurrency",
 		maxAttachmentMb: "runtime.maxAttachmentMb",
-		maxRetryAttempts: "runtime.maxRetryAttempts",
-		retryBaseDelayMs: "runtime.retryBaseDelayMs",
-		retryMaxDelayMs: "runtime.retryMaxDelayMs",
-		maxToolOutputBytes: "runtime.maxToolOutputBytes",
-		maxInlineShellOutputBytes: "runtime.maxInlineShellOutputBytes",
-		maxCapturedShellOutputBytes: "runtime.maxCapturedShellOutputBytes",
 		platformRequestTimeoutMs: "runtime.platformRequestTimeoutMs",
 		providerDiscoverTimeoutMs: "runtime.providerDiscoverTimeoutMs",
 		containerImage: "container.image",
@@ -521,9 +320,7 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
 		memoryMb: "container.memoryMb",
 		pidsLimit: "container.pidsLimit",
 		containerWorkspace: "container.workspace",
-		dockerTimeoutMs: "container.dockerTimeoutMs",
 		tmpfsSize: "container.tmpfsSize",
-		defaultToolTimeoutMs: "tools.defaultTimeoutMs",
 		mainSystemPromptTemplate: "prompts.mainSystem",
 		childSystemPromptTemplate: "prompts.childSystem",
 		initialPromptTemplate: "prompts.initial",
@@ -539,16 +336,6 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
 		"prompts.initial",
 	] as const) {
 		if (flat[key] === "") delete flat[key]
-	}
-
-	const timeouts = source.toolTimeouts
-	if (timeouts && typeof timeouts === "object" && !Array.isArray(timeouts)) {
-		for (const [tool, value] of Object.entries(
-			timeouts as Record<string, unknown>,
-		)) {
-			const key = `tools.timeout.${tool}`
-			if (isSettingKey(key)) flat[key] = value
-		}
 	}
 
 	// cpuLimit millicores → cpus
@@ -651,25 +438,6 @@ export function patchSettings(
 		}
 	}
 	return out
-}
-
-const TOOL_TIMEOUT_KEYS = new Set([
-	"bash",
-	"submit_flag",
-	"get_target",
-	"start_target",
-	"extend_target",
-	"stop_target",
-])
-
-export function toolTimeoutMs(
-	settings: FlatSettings,
-	toolName: string,
-): number {
-	if (TOOL_TIMEOUT_KEYS.has(toolName)) {
-		return get(settings, `tools.timeout.${toolName}` as SettingKey) as number
-	}
-	return get(settings, "tools.defaultTimeoutMs")
 }
 
 export const CONFIG_DOCUMENT_VERSION = 1 as const

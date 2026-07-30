@@ -1,3 +1,5 @@
+> **ARCHIVED.** v2 frontend notes; superseded by [../architecture.md](../architecture.md).
+
 # Frontend notes (v2)
 
 See [architecture-v2.md](./architecture-v2.md) for the current contract.

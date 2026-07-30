@@ -28,9 +28,11 @@ export function createApp(options: { dataDir: string }) {
   )
 
   const containerManager = createContainerManager()
+  const apiUrl = `http://host.docker.internal:${process.env.PORT ?? 3000}`
   const runService = createRunService({
     db,
     dataDir: options.dataDir,
+    apiUrl,
     containerManager,
     platformService,
     configStore,
@@ -68,7 +70,6 @@ export function createApp(options: { dataDir: string }) {
   registerProviderRoutes(app, { configStore, syncModels: noopSync })
   registerSettingsRoutes(app, {
     configStore,
-    setMaxConcurrency: () => undefined,
     syncModels: noopSync,
   })
   registerPlatformRoutes(app, platformService)

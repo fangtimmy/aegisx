@@ -69,8 +69,6 @@ export function registerRunRoutes(
   }
 ) {
   const { db, runService, getSettings, configStore } = options
-  const port = process.env.PORT ?? "3000"
-  const apiUrl = `http://host.docker.internal:${port}`
 
   app.post(
     "/api/challenges/:challengeId/runs",
@@ -138,7 +136,6 @@ export function registerRunRoutes(
             pidsLimit: get(defaults, "container.pidsLimit"),
             tmpfsSize: get(defaults, "container.tmpfsSize"),
             workspace: get(defaults, "container.workspace"),
-            apiUrl,
           },
         })
         return c.json(run, 202)

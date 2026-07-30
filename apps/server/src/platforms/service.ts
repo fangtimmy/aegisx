@@ -312,7 +312,6 @@ export function createPlatformService(
 
   return {
     bind,
-    canFinishRun: platformSubmissions.canFinishRun,
     detach,
     discoverChallenges: platformSync.discoverChallenges,
     getPublic: publicPlatform,

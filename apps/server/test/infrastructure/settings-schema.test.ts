@@ -6,35 +6,32 @@ import {
   migrateLegacySettings,
   parseSettings,
   patchSettings,
-  toolTimeoutMs,
 } from "../../../shared"
 
 describe("settings schema", () => {
   test("get falls back to defaults", () => {
-    expect(get({}, "runtime.maxConcurrency")).toBe(2)
-    expect(get(defaultSettings(), "runtime.maxConcurrency")).toBe(2)
+    expect(get({}, "runtime.maxAttachmentMb")).toBe(512)
+    expect(get(defaultSettings(), "runtime.maxAttachmentMb")).toBe(512)
   })
 
   test("parseSettings drops unknown keys and invalid values", () => {
     const parsed = parseSettings({
-      "runtime.maxConcurrency": 99,
-      "runtime.environment": "nope",
+      "runtime.maxAttachmentMb": 99_999,
       unknown: true,
     })
-    // out of range / invalid enum → defaults
-    expect(parsed["runtime.maxConcurrency"]).toBe(2)
-    expect(parsed["runtime.environment"]).toBe("local")
+    // out of range → default
+    expect(parsed["runtime.maxAttachmentMb"]).toBe(512)
     expect(Object.hasOwn(parsed, "unknown")).toBe(false)
   })
 
   test("parseSettings accepts valid values including blank prompts", () => {
     const parsed = parseSettings({
-      "runtime.maxConcurrency": 7,
+      "runtime.maxAttachmentMb": 1024,
       "agent.defaultModelId": "m1",
       "container.cpus": 1.5,
       "prompts.mainSystem": "",
     })
-    expect(parsed["runtime.maxConcurrency"]).toBe(7)
+    expect(parsed["runtime.maxAttachmentMb"]).toBe(1024)
     expect(parsed["agent.defaultModelId"]).toBe("m1")
     expect(parsed["container.cpus"]).toBe(1.5)
     expect(parsed["prompts.mainSystem"]).toBe("")
@@ -43,42 +40,36 @@ describe("settings schema", () => {
 
   test("patchSettings merges partial updates", () => {
     const base = defaultSettings()
-    const next = patchSettings(base, { "runtime.maxConcurrency": 4 })
-    expect(next["runtime.maxConcurrency"]).toBe(4)
-    expect(next["runtime.environment"]).toBe(base["runtime.environment"])
-    expect(isSettingModified(next, "runtime.maxConcurrency")).toBe(true)
-    expect(isSettingModified(base, "runtime.maxConcurrency")).toBe(false)
+    const next = patchSettings(base, { "runtime.maxAttachmentMb": 2048 })
+    expect(next["runtime.maxAttachmentMb"]).toBe(2048)
+    expect(next["container.image"]).toBe(base["container.image"])
+    expect(isSettingModified(next, "runtime.maxAttachmentMb")).toBe(true)
+    expect(isSettingModified(base, "runtime.maxAttachmentMb")).toBe(false)
   })
 
-  test("toolTimeoutMs resolves per-tool keys", () => {
-    const settings = {
-      ...defaultSettings(),
-      "tools.defaultTimeoutMs": 30_000,
-      "tools.timeout.bash": 120_000,
-    }
-    expect(toolTimeoutMs(settings, "bash")).toBe(120_000)
-    expect(toolTimeoutMs(settings, "read")).toBe(30_000)
-  })
-
-  test("migrateLegacySettings maps old keys", () => {
+  test("migrateLegacySettings maps old keys and drops removed ones", () => {
     const migrated = migrateLegacySettings({
       defaultModelId: "m1",
+      // v2-only keys with no v3 equivalent are dropped silently.
       maxConcurrency: 20,
       environment: "container",
+      toolTimeouts: { bash: 99_000 },
+      maxAttachmentMb: 256,
       containerImage: "aegisx/solver:kali",
       mainSystemPromptTemplate: "custom main",
       childSystemPromptTemplate: "",
-      toolTimeouts: { bash: 99_000 },
     })
     expect(migrated["agent.defaultModelId"]).toBe("m1")
-    expect(migrated["runtime.maxConcurrency"]).toBe(20)
-    expect(migrated["runtime.environment"]).toBe("container")
+    expect(migrated["runtime.maxAttachmentMb"]).toBe(256)
     expect(migrated["container.image"]).toBe("aegisx/solver:kali")
     expect(migrated["prompts.mainSystem"]).toBe("custom main")
     // legacy empty prompt → materialize schema default
     expect(migrated["prompts.childSystem"]).toBe(
       defaultSettings()["prompts.childSystem"]
     )
-    expect(migrated["tools.timeout.bash"]).toBe(99_000)
+    // removed v2 settings are absent from the flat shape
+    expect(Object.hasOwn(migrated, "runtime.maxConcurrency")).toBe(false)
+    expect(Object.hasOwn(migrated, "runtime.environment")).toBe(false)
+    expect(Object.hasOwn(migrated, "tools.timeout.bash")).toBe(false)
   })
 })

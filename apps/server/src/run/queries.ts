@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { and, desc, eq, inArray } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import type { RunPublic } from "../../../shared"
 import type { createDatabase } from "../db"
 import { challengeRemote, challenges, runs } from "../db/schema"
@@ -52,34 +52,11 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       .map(({ runs: run }) => mapRow(run))
   }
 
-  function listForChallenge(challengeId: string): RunPublic[] {
-    return db
-      .select()
-      .from(runs)
-      .where(eq(runs.challengeId, challengeId))
-      .orderBy(desc(runs.updatedAt))
-      .all()
-      .map(mapRow)
-  }
-
   function workspacePath(runId: string): string | undefined {
     const row = getRow(runId)
     if (!row) return undefined
     return join(dataDir, row.workspacePath)
   }
 
-  return { get, getRow, listForEvent, listForChallenge, workspacePath }
-}
-
-/** Active (running) run ids for an event — used by delete guards. */
-export function findActiveRunIdsForEvent(db: Database, eventId: string) {
-  return db
-    .select({ id: runs.id })
-    .from(runs)
-    .innerJoin(challenges, eq(runs.challengeId, challenges.id))
-    .where(
-      and(eq(challenges.eventId, eventId), inArray(runs.status, ["running"]))
-    )
-    .all()
-    .map((row) => row.id)
+  return { get, getRow, listForEvent, workspacePath }
 }

@@ -53,12 +53,15 @@ export function buildContainerEnv(input: {
   challengeId: string
   challengeName: string
   apiUrl: string
+  /** pi model ref "<providerKey>/<modelId>", exposed so the child skill can reuse it. */
+  modelRef: string
 }): string[] {
   return [
     `AEGISX_API_URL=${input.apiUrl}`,
     `AEGISX_RUN_ID=${input.runId}`,
     `AEGISX_CHALLENGE_ID=${input.challengeId}`,
     `AEGISX_CHALLENGE_NAME=${input.challengeName}`,
+    `AEGISX_PI_MODEL=${input.modelRef}`,
     "PI_OFFLINE=1",
     "PI_SKIP_VERSION_CHECK=1",
   ]
@@ -79,6 +82,8 @@ export function generatePiAgentVolume(input: {
   piAgentDir: string
   providers: ProviderConnection[]
   appendSystem: string
+  /** Rendered child-agent system prompt, exposed for delegated child pi processes. */
+  appendChildSystem: string
   targetSupported: boolean
 }): void {
   mkdirSync(input.piAgentDir, { recursive: true })
@@ -87,6 +92,10 @@ export function generatePiAgentVolume(input: {
     `${JSON.stringify(generateModelsJson(input.providers), null, 2)}\n`
   )
   writeFileSync(join(input.piAgentDir, "APPEND_SYSTEM.md"), input.appendSystem)
+  writeFileSync(
+    join(input.piAgentDir, "CHILD_SYSTEM.md"),
+    input.appendChildSystem
+  )
   writeFileSync(
     join(input.piAgentDir, "settings.json"),
     `${JSON.stringify(
@@ -102,6 +111,10 @@ export function generatePiAgentVolume(input: {
     )}\n`
   )
   writeSkillMd(join(input.piAgentDir, "skills", "aegisx"), AEGISX_SKILL_MD)
+  writeSkillMd(
+    join(input.piAgentDir, "skills", "aegisx-child"),
+    AEGISX_CHILD_SKILL_MD
+  )
   if (input.targetSupported) {
     writeSkillMd(
       join(input.piAgentDir, "skills", "aegisx-target"),
@@ -174,4 +187,74 @@ curl -fsS -X POST "\${AEGISX_API_URL%/}/api/runs/\${AEGISX_RUN_ID}/target/stop"
 \`\`\`
 Inspect before starting; extend before expiry to preserve session/state; stop
 before finishing the run.
+`
+
+const AEGISX_CHILD_SKILL_MD = `---
+name: aegisx-child
+description: Delegate a bounded sub-task to a child pi process launched from bash. Use when a self-contained investigation (recon, decompile, fuzz, solve a sub-component) can run in parallel and report back a result you integrate.
+---
+
+# Delegate to a child pi
+
+You can spawn a **child pi** to work on a bounded sub-task. It shares your
+workspace and model credentials, runs non-interactively, prints a result to
+stdout, and exits. It cannot submit flags, finish the run, manage targets, or
+spawn more agents — only you can.
+
+## When to use
+- A self-contained investigation that yields an artifact plus a short conclusion.
+- Work parallelizable enough to justify a fresh focused agent.
+
+Do not use it for one-off commands (just run \`bash\`). Reserve it for tasks heavy
+enough to deserve a dedicated turn.
+
+## Command
+The child base system prompt is pre-rendered at
+\`/root/.pi/agent/CHILD_SYSTEM.md\` (from your \`prompts.childSystem\` template).
+\`AEGISX_PI_MODEL\` holds this run's model ref. Launch from your workspace:
+
+\`\`\`sh
+pi -p --approve --no-skills --no-session --no-context-files \\
+  --model "\${AEGISX_PI_MODEL}:medium" \\
+  --tools read,bash,edit,write,grep,find,ls \\
+  --system-prompt "$(cat /root/.pi/agent/CHILD_SYSTEM.md)" \\
+  "<one concrete, self-contained task>"
+\`\`\`
+
+Flags:
+- \`-p\` — non-interactive (print and exit); no TTY is attached.
+- \`--approve\` — auto-trust workspace files so it never blocks on confirmation.
+- \`--no-skills\` — do NOT load the \`aegisx\` / \`aegisx-target\` skills. A child must
+  not submit flags, finish the run, manage targets, or spawn further agents.
+- \`--no-session\` — ephemeral; do not persist a session file (keeps this run's own
+  session discovery clean). Drop it only if you need to resume the child later.
+- \`--no-context-files\` — ignore workspace AGENTS.md so the child stays scoped.
+- \`--model "\${AEGISX_PI_MODEL}:<level>"\` — reuse this run's model; choose a
+  thinking level (off/minimal/low/medium/high/xhigh/max).
+- \`--system-prompt "$(cat ...)"\` — the rendered child system prompt (replaces the
+  default). The positional argument is the task: one concrete instruction with
+  clear acceptance criteria.
+
+## Running it
+A child turn can take minutes. Run it in the background and capture its output:
+
+\`\`\`sh
+mkdir -p .aegisx
+pi -p --approve --no-skills --no-session --no-context-files \\
+  --model "\${AEGISX_PI_MODEL}:medium" \\
+  --system-prompt "$(cat /root/.pi/agent/CHILD_SYSTEM.md)" \\
+  "<task>" > .aegisx/child-1.log 2>&1 &
+echo $! > .aegisx/child-1.pid
+\`\`\`
+
+Poll \`cat .aegisx/child-1.log\` until the process exits; \`kill $(cat
+.aegisx/child-1.pid)\` if you abandon it. Prefer pi's \`bash\` \`background:true\`
+mode over manual \`&\` when it is available.
+
+## Conventions
+- Give each child a distinct artifact prefix so outputs do not collide.
+- Have the child write findings to a file (e.g. \`recon.md\`) and print only a short
+  summary; read the summary, then read the file.
+- You own flag submission and run completion — integrate the child's result
+  yourself. Do not let a child call the \`aegisx\` / \`aegisx-target\` endpoints.
 `

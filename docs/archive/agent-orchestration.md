@@ -1,3 +1,5 @@
+> **ARCHIVED.** Describes the deleted v2 multi-agent model. The current architecture is [../architecture.md](../architecture.md).
+
 # Multi-agent orchestration (v2)
 
 Authoritative design: [architecture-v2.md](./architecture-v2.md).  

@@ -67,11 +67,10 @@ export function registerSettingsRoutes(
   app: Hono,
   options: {
     configStore: ConfigStore
-    setMaxConcurrency(value: number): void
     syncModels(): void
   }
 ) {
-  const { configStore, setMaxConcurrency, syncModels } = options
+  const { configStore, syncModels } = options
   const childSampleContext = {
     ...samplePromptContext,
     agent: {
@@ -218,7 +217,6 @@ export function registerSettingsRoutes(
       )
     }
     configStore.updateSettings(patch)
-    setMaxConcurrency(get(next, "runtime.maxConcurrency"))
     return c.json(settingsResponse(configStore))
   })
 
@@ -384,7 +382,6 @@ export function registerSettingsRoutes(
         throw new Error("Default model not found in imported configuration")
       }
       configStore.replaceAll(settings, newProviders)
-      setMaxConcurrency(get(settings, "runtime.maxConcurrency"))
       syncModels()
       return c.json({
         version: 1,
