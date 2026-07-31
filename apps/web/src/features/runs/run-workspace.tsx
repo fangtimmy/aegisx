@@ -60,22 +60,19 @@ export function RunWorkspace({
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
 
-  const detail = useQuery({
-    enabled: Boolean(runId),
-    queryKey: keys.runs.detail(runId ?? ""),
-    refetchOnWindowFocus: false,
-    // Poll while running so the UI reflects the finalized status (and unlocks
-    // session replay) without a manual refresh. Stops once it is not running.
-    refetchInterval: (query) =>
-      query.state.data?.run.status === "running" ? 5000 : false,
-    queryFn: () => runsApi.getRun(runId ?? ""),
+  // The run list is the single source of truth — RunsView polls it while any
+  // run is active. The selected run is derived from it so list and detail
+  // never drift, and status sync needs no WS coupling.
+  const runs = useQuery({
+    queryKey: keys.runs.byEvent(eventId),
+    queryFn: () => runsApi.listEventRuns(eventId),
   })
 
   const stop = useMutation({
     mutationFn: () => runsApi.stopRun(runId ?? ""),
     onSuccess: () => {
       toast.success("Run stopping")
-      void invalidate(queryClient, eventId, runId ?? "")
+      void invalidate(queryClient, eventId)
     },
     onError: (error) => toast.error("Failed to stop run", error.message),
   })
@@ -84,7 +81,7 @@ export function RunWorkspace({
     mutationFn: () => runsApi.resumeRun(runId ?? ""),
     onSuccess: () => {
       toast.success("Run resumed")
-      void invalidate(queryClient, eventId, runId ?? "")
+      void invalidate(queryClient, eventId)
     },
     onError: (error) => toast.error("Failed to resume run", error.message),
   })
@@ -108,7 +105,8 @@ export function RunWorkspace({
       </div>
     )
   }
-  if (detail.isPending) {
+  const run = runs.data?.items.find((item) => item.id === runId)
+  if (runs.isPending) {
     return (
       <div
         className="flex items-center gap-2 p-6 text-muted-foreground text-sm"
@@ -119,18 +117,27 @@ export function RunWorkspace({
       </div>
     )
   }
-  if (detail.error) {
+  if (runs.error) {
     return (
       <Alert className="m-4 w-auto" variant="error">
         <CircleAlert />
-        <AlertTitle>Unable to load run</AlertTitle>
-        <AlertDescription>{detail.error.message}</AlertDescription>
+        <AlertTitle>Unable to load runs</AlertTitle>
+        <AlertDescription>{runs.error.message}</AlertDescription>
       </Alert>
     )
   }
-  if (!detail.data) return null
+  if (!run) {
+    return (
+      <Alert className="m-4 w-auto" variant="error">
+        <CircleAlert />
+        <AlertTitle>Run not found</AlertTitle>
+        <AlertDescription>
+          This run may have been deleted. Select another from the list.
+        </AlertDescription>
+      </Alert>
+    )
+  }
 
-  const { run } = detail.data
   const running = run.status === "running"
   const canResume = !running && run.status !== "failed"
 
@@ -243,13 +250,7 @@ export function RunWorkspace({
               value="terminal"
             >
               {running ? (
-                <RunTerminal
-                  active={view === "terminal"}
-                  onClosed={() =>
-                    void invalidate(queryClient, eventId, runId ?? "")
-                  }
-                  runId={runId}
-                />
+                <RunTerminal active={view === "terminal"} runId={runId} />
               ) : (
                 <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground text-sm">
                   {canResume
@@ -292,11 +293,9 @@ export function RunWorkspace({
 
 async function invalidate(
   queryClient: ReturnType<typeof useQueryClient>,
-  eventId: string,
-  runId: string
+  eventId: string
 ) {
   await Promise.all([
-    queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
     queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) }),
     queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
     queryClient.invalidateQueries({ queryKey: keys.events.all }),

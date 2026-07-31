@@ -26,19 +26,13 @@ export type TerminalStatus = "connecting" | "open" | "reconnecting" | "closed"
 export function RunTerminal({
   runId,
   active,
-  onClosed,
 }: {
   runId: string
   /** Whether the terminal tab is visible (controls WS lifecycle). */
   active: boolean
-  /** Fired when the PTY socket closes (the run has likely ended). */
-  onClosed?: () => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<TerminalStatus>("connecting")
-  // Keep the latest onClosed without re-running the WS effect on every render.
-  const onClosedRef = useRef(onClosed)
-  onClosedRef.current = onClosed
 
   useEffect(() => {
     if (!active) return
@@ -123,7 +117,6 @@ export function RunTerminal({
         ws.onclose = () => {
           if (disposed) return
           setStatus("closed")
-          onClosedRef.current?.()
         }
         ws.onerror = () => {
           setStatus("closed")

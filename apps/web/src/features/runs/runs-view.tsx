@@ -9,7 +9,7 @@ import {
   Trash2,
 } from "lucide-react"
 import { useState } from "react"
-import { Link } from "react-router"
+import { Link, useNavigate } from "react-router"
 import { type Challenge, keys, type RunPublic, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -69,6 +69,7 @@ function RunItem({
   runId?: string
 }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const active = run.status === "running"
   const deleteMutation = useMutation({
@@ -76,6 +77,9 @@ function RunItem({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) })
       toast.success("Run deleted")
+      if (run.id === runId) {
+        navigate(`/events/${eventId}/runs`)
+      }
     },
     onError: (error) => toast.error("Failed to delete run", error.message),
   })
@@ -222,6 +226,12 @@ export function RunsView({
   const runs = useQuery({
     queryKey: keys.runs.byEvent(eventId),
     queryFn: () => runsApi.listEventRuns(eventId),
+    // Central status sync: poll the list while any run is active so every
+    // consumer (list + derived detail) stays current with no WS coupling.
+    refetchInterval: (query) =>
+      (query.state.data?.items ?? []).some((run) => run.status === "running")
+        ? 5000
+        : false,
   })
   if (runs.isPending)
     return (
