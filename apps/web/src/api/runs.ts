@@ -1,5 +1,11 @@
 import { apiRequest, jsonRequest } from "./client"
-import type { RunDetail, RunFile, RunPublic, ThinkingLevel } from "./types"
+import type {
+  RunDetail,
+  RunFile,
+  RunPublic,
+  RunSessionList,
+  ThinkingLevel,
+} from "./types"
 
 export type CreateRunInput = {
   modelId?: string
@@ -38,4 +44,8 @@ export function getRunFile(runId: string, path: string) {
   return apiRequest<RunFile>(
     `/runs/${runId}/files?path=${encodeURIComponent(path)}`
   )
+}
+
+export function listRunSessions(runId: string) {
+  return apiRequest<RunSessionList>(`/runs/${runId}/sessions`)
 }

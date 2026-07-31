@@ -174,6 +174,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       AttachStdout: true,
       AttachStderr: true,
       HostConfig: {
+        AutoRemove: true,
         Binds: opts.binds,
         NanoCpus: Math.round(opts.limits.cpus * 1e9),
         Memory: opts.limits.memoryMb * 1024 * 1024,
@@ -237,23 +238,32 @@ export function createContainerManager(options?: { socketPath?: string }) {
   }
 }
 
+export type PiSessionFile = {
+  /** UUID portion of the filename (pi --export / --session match on this). */
+  sessionId: string
+  /** Absolute path to the .jsonl on the host (bind-mount source). */
+  sessionPath: string
+  /** Basename, e.g. "<timestamp>_<uuid>.jsonl". */
+  file: string
+  /** File mtime in ms. */
+  mtime: number
+}
+
 /**
- * Discover the pi session id for a run by scanning its pi-agent volume.
+ * Enumerate every pi session jsonl under a run's pi-agent volume, newest first.
  *
  * pi stores sessions under a per-project subdirectory:
  *   sessions/<project-slug>/<timestamp>_<uuid>.jsonl
  * (the slug derives from the working directory, e.g. "/workspace" → "--workspace--").
- * Each run has an exclusive mounted volume, so the newest jsonl wins. The id is
- * the UUID portion of the filename (pi --session does partial-UUID matching).
+ * Each run has an exclusive mounted volume, so every jsonl found belongs to it.
+ * The id is the UUID portion of the filename.
  */
-export function discoverPiSessionId(piAgentDir: string): {
-  sessionId: string | null
-  sessionFile: string | null
-} {
+export function listPiSessions(piAgentDir: string): PiSessionFile[] {
   const sessionsDir = join(piAgentDir, "sessions")
-  if (!existsSync(sessionsDir)) return { sessionId: null, sessionFile: null }
+  if (!existsSync(sessionsDir)) return []
   const candidates: Array<{
     file: string
+    path: string
     mtime: number
     uuid: string | null
   }> = []
@@ -269,6 +279,7 @@ export function discoverPiSessionId(piAgentDir: string): {
           )
           candidates.push({
             file: entry.name,
+            path: full,
             mtime: statSync(full).mtimeMs,
             uuid: match ? match[0] : null,
           })
@@ -277,13 +288,13 @@ export function discoverPiSessionId(piAgentDir: string): {
     }
     walk(sessionsDir)
   } catch {
-    return { sessionId: null, sessionFile: null }
+    return []
   }
-  if (candidates.length === 0) return { sessionId: null, sessionFile: null }
   candidates.sort((a, b) => b.mtime - a.mtime)
-  const newest = candidates[0]
-  return {
-    sessionId: newest.uuid ?? newest.file.replace(/\.jsonl$/, ""),
-    sessionFile: newest.file,
-  }
+  return candidates.map((c) => ({
+    sessionId: c.uuid ?? c.file.replace(/\.jsonl$/, ""),
+    sessionPath: c.path,
+    file: c.file,
+    mtime: c.mtime,
+  }))
 }

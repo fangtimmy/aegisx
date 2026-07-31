@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { join, relative } from "node:path"
 import { eq } from "drizzle-orm"
 import type {
@@ -6,6 +6,7 @@ import type {
   FlatSettings,
   ModelConfig,
   RunPublic,
+  RunSession,
 } from "../../../shared"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { ThinkingLevel } from "../../../shared/thinking"
@@ -21,7 +22,7 @@ import {
   resolvePromptTemplates,
 } from "../settings/prompt-templates"
 import type { ContainerManager } from "./container-manager"
-import { discoverPiSessionId } from "./container-manager"
+import { listPiSessions, type PiSessionFile } from "./container-manager"
 import { RunActionError } from "./errors"
 import {
   buildContainerEnv,
@@ -79,7 +80,6 @@ export function createRunService(options: RunServiceOptions) {
   } = options
   const queries = createRunQueries({ db, dataDir })
   const bridges = new Map<string, PtyBridge>()
-  const sessionTimers = new Map<string, NodeJS.Timeout>()
   const forceKillTimers = new Map<string, NodeJS.Timeout>()
   const locks = new Map<string, Promise<unknown>>()
   const pending = new Map<string, PendingOutcome>()
@@ -128,14 +128,6 @@ export function createRunService(options: RunServiceOptions) {
         })
         finalize(runId, -1)
       })
-  }
-
-  function clearSessionTimer(runId: string) {
-    const timer = sessionTimers.get(runId)
-    if (timer) {
-      clearInterval(timer)
-      sessionTimers.delete(runId)
-    }
   }
 
   function clearForceKillTimer(runId: string) {
@@ -202,13 +194,19 @@ export function createRunService(options: RunServiceOptions) {
         completedAt: ts,
         updatedAt: ts,
       })
-      clearSessionTimer(runId)
       clearForceKillTimer(runId)
       const bridge = bridges.get(runId)
       if (bridge) {
         bridge.dispose()
         bridges.delete(runId)
       }
+      // Pre-warm session HTML for replay (pi has flushed its jsonl on exit).
+      void exportSessionHtml(runId).catch((error) => {
+        console.error("Session export failed", {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
     })
   }
 
@@ -380,29 +378,8 @@ export function createRunService(options: RunServiceOptions) {
 
       attachBridge(runId, launched.stream)
       watchExit(runId)
-      discoverSessionLater(runId, piAbs)
       return requireRun(runId)
     })
-  }
-
-  function discoverSessionLater(runId: string, piAbs: string) {
-    let attempts = 0
-    clearSessionTimer(runId)
-    const timer = setInterval(() => {
-      attempts += 1
-      const { sessionId, sessionFile } = discoverPiSessionId(piAbs)
-      if (sessionId) {
-        clearSessionTimer(runId)
-        updateRow(runId, {
-          piSessionId: sessionId,
-          piSessionFile: sessionFile,
-          updatedAt: now(),
-        })
-      } else if (attempts > 30) {
-        clearSessionTimer(runId)
-      }
-    }, 2000)
-    sessionTimers.set(runId, timer)
   }
 
   function stop(runId: string) {
@@ -438,7 +415,12 @@ export function createRunService(options: RunServiceOptions) {
       if (row.status === "running") {
         throw new RunActionError("invalid_state", "Run is already running")
       }
-      if (!row.piSessionId || !row.piModelRef) {
+      if (!row.piModelRef) {
+        throw new RunActionError("invalid_state", "Run has no model to resume")
+      }
+      // `pi -c` continues the most recent session in this run's exclusive
+      // pi-agent volume; require at least one session jsonl to exist.
+      if (listPiSessions(piAgentAbs(runId)).length === 0) {
         throw new RunActionError(
           "invalid_state",
           "Run has no pi session to resume"
@@ -450,14 +432,14 @@ export function createRunService(options: RunServiceOptions) {
         modelRef: row.piModelRef,
         thinkingLevel: row.thinkingLevel as ThinkingLevel,
         challengeName: run.challengeName,
-        session: row.piSessionId,
+        continue: true,
       })
       const containerEnv = buildContainerEnv({
         runId,
         challengeId: row.challengeId,
         challengeName: run.challengeName,
         apiUrl,
-        modelRef: row.piModelRef ?? "",
+        modelRef: row.piModelRef,
       })
       const launched = await containerManager.launch({
         name: row.containerName,
@@ -477,6 +459,8 @@ export function createRunService(options: RunServiceOptions) {
         tmpfsSize: settings["container.tmpfsSize"],
       })
       attachBridge(runId, launched.stream)
+      // Drop cached replay HTML; the session keeps writing and is re-exported.
+      rmSync(sessionsHtmlDir(runId), { recursive: true, force: true })
       const ts = now()
       updateRow(runId, {
         status: "running",
@@ -509,6 +493,96 @@ export function createRunService(options: RunServiceOptions) {
       rmSync(runDir(runId), { recursive: true, force: true })
       db.delete(runs).where(eq(runs.id, runId)).run()
     })
+  }
+
+  const sessionsHtmlDir = (runId: string) =>
+    join(runDir(runId), "sessions-html")
+
+  /** Parse a session jsonl header + count messages for the session list. */
+  function parseSessionMeta(session: PiSessionFile): RunSession {
+    let name: string | null = null
+    let createdAt: string | null = null
+    let messageCount = 0
+    try {
+      const text = readFileSync(session.sessionPath, "utf8")
+      for (const line of text.split("\n")) {
+        if (!line) continue
+        let entry: { type?: string; name?: string; timestamp?: string }
+        try {
+          entry = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (entry.type === "session" && entry.timestamp) {
+          createdAt = entry.timestamp
+        } else if (entry.type === "session_info" && entry.name) {
+          name = entry.name
+        } else if (entry.type === "message") {
+          messageCount += 1
+        }
+      }
+    } catch {
+      /* unreadable jsonl — fall back to file metadata */
+    }
+    return {
+      id: session.sessionId,
+      name: name ?? session.file,
+      createdAt: createdAt ?? new Date(session.mtime).toISOString(),
+      modifiedAt: new Date(session.mtime).toISOString(),
+      messageCount,
+    }
+  }
+
+  function listSessions(runId: string): RunSession[] {
+    return listPiSessions(piAgentAbs(runId)).map(parseSessionMeta)
+  }
+
+  /** Export every session jsonl to sessions-html/<id>.html (pre-warm). */
+  async function exportSessionHtml(runId: string) {
+    const sessions = listPiSessions(piAgentAbs(runId))
+    if (sessions.length === 0) return
+    const outDir = sessionsHtmlDir(runId)
+    mkdirSync(outDir, { recursive: true })
+    await Promise.allSettled(
+      sessions.map(async (session) => {
+        const out = join(outDir, `${session.sessionId}.html`)
+        const proc = Bun.spawn(["pi", "--export", session.sessionPath, out], {
+          stdout: "ignore",
+          stderr: "pipe",
+        })
+        const exitCode = await proc.exited
+        if (exitCode !== 0) {
+          const stderr = await new Response(proc.stderr).text()
+          console.error("Session export failed", {
+            runId,
+            sessionId: session.sessionId,
+            exitCode,
+            stderr,
+          })
+        }
+      })
+    )
+  }
+
+  /** Return the cached replay HTML path, exporting on demand if missing. */
+  async function sessionHtmlPath(
+    runId: string,
+    sessionId: string
+  ): Promise<string | null> {
+    const out = join(sessionsHtmlDir(runId), `${sessionId}.html`)
+    if (existsSync(out)) return out
+    const session = listPiSessions(piAgentAbs(runId)).find(
+      (s) => s.sessionId === sessionId
+    )
+    if (!session) return null
+    mkdirSync(sessionsHtmlDir(runId), { recursive: true })
+    const proc = Bun.spawn(["pi", "--export", session.sessionPath, out], {
+      stdout: "ignore",
+      stderr: "pipe",
+    })
+    const exitCode = await proc.exited
+    if (exitCode !== 0) return null
+    return existsSync(out) ? out : null
   }
 
   function refresh(runId: string): RunPublic | undefined {
@@ -547,8 +621,6 @@ export function createRunService(options: RunServiceOptions) {
     closed = true
     await Promise.allSettled([...locks.values()])
     locks.clear()
-    for (const timer of sessionTimers.values()) clearInterval(timer)
-    sessionTimers.clear()
     for (const timer of forceKillTimers.values()) clearTimeout(timer)
     forceKillTimers.clear()
     for (const bridge of bridges.values()) bridge.dispose()
@@ -567,6 +639,9 @@ export function createRunService(options: RunServiceOptions) {
     get: queries.get,
     listForEvent: queries.listForEvent,
     workspacePath: queries.workspacePath,
+    runDirPath: queries.runDirPath,
+    listSessions,
+    sessionHtmlPath,
     ptyBridge: (runId: string) => bridges.get(runId),
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,

@@ -22,6 +22,8 @@ export type {
   RunFile,
   RunFileEntry,
   RunPublic,
+  RunSession,
+  RunSessionList,
   RunStatus,
   SettingDef,
   SettingGroup,

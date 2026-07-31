@@ -52,13 +52,15 @@ function DirectoryEntry({
   runId,
   onSelect,
   depth = 0,
+  defaultExpanded = false,
 }: {
   entry: RunFileEntry
   runId: string
   onSelect: (path: string) => void
   depth?: number
+  defaultExpanded?: boolean
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const directory = useQuery({
     enabled: entry.type === "directory" && expanded,
     queryKey: keys.runs.files(runId, entry.path),
@@ -199,7 +201,7 @@ export function FilesWorkspace({
         className="flex min-h-0 shrink-0 flex-col pr-2"
         style={{ width: sidebarWidth }}
       >
-        <h3 className="mb-2 font-medium text-sm">Workspace files</h3>
+        <h3 className="mb-2 font-medium text-sm">Run files</h3>
         <ScrollArea className="flex-1" scrollFade>
           {root.isPending && (
             <div
@@ -218,12 +220,13 @@ export function FilesWorkspace({
           {root.data?.type === "directory" &&
             root.data.entries.length === 0 && (
               <p className="text-muted-foreground text-xs">
-                Workspace is empty.
+                Run directory is empty.
               </p>
             )}
           {root.data?.type === "directory" &&
             root.data.entries.map((entry) => (
               <DirectoryEntry
+                defaultExpanded={entry.name === "workspace"}
                 entry={entry}
                 key={entry.path}
                 onSelect={setSelectedPath}

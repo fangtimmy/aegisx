@@ -152,20 +152,20 @@ export function registerRunRoutes(
   })
 
   app.get("/api/runs/:runId/files", (c) => {
-    const workspacePath = runService.workspacePath(c.req.param("runId"))
-    if (!workspacePath) return notFound(c, "Run not found")
+    const root = runService.runDirPath(c.req.param("runId"))
+    if (!root) return notFound(c, "Run not found")
     try {
-      return c.json(readWorkspacePath(workspacePath, c.req.query("path") ?? ""))
+      return c.json(readWorkspacePath(root, c.req.query("path") ?? ""))
     } catch (error) {
       return workspaceFileError(c, error)
     }
   })
 
   app.get("/api/runs/:runId/files/download", (c) => {
-    const workspacePath = runService.workspacePath(c.req.param("runId"))
-    if (!workspacePath) return notFound(c, "Run not found")
+    const root = runService.runDirPath(c.req.param("runId"))
+    if (!root) return notFound(c, "Run not found")
     try {
-      const file = workspaceDownload(workspacePath, c.req.query("path") ?? "")
+      const file = workspaceDownload(root, c.req.query("path") ?? "")
       return new Response(file.stream as unknown as ReadableStream, {
         headers: {
           "content-type": "application/octet-stream",
@@ -175,6 +175,23 @@ export function registerRunRoutes(
     } catch (error) {
       return workspaceFileError(c, error)
     }
+  })
+
+  app.get("/api/runs/:runId/sessions", (c) => {
+    const runId = c.req.param("runId")
+    if (!runService.get(runId)) return notFound(c, "Run not found")
+    return c.json({ items: runService.listSessions(runId) })
+  })
+
+  app.get("/api/runs/:runId/sessions/:sessionId", async (c) => {
+    const runId = c.req.param("runId")
+    const sessionId = c.req.param("sessionId")
+    if (!runService.get(runId)) return notFound(c, "Run not found")
+    const htmlPath = await runService.sessionHtmlPath(runId, sessionId)
+    if (!htmlPath) return notFound(c, "Session not found")
+    return new Response(Bun.file(htmlPath), {
+      headers: { "content-type": "text/html; charset=utf-8" },
+    })
   })
 
   // PTY bridge: binary frames = stdin/stdout bytes; text frame = JSON control

@@ -58,5 +58,12 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return join(dataDir, row.workspacePath)
   }
 
-  return { get, getRow, listForEvent, workspacePath }
+  /** Absolute path to the run directory (data/runs/<id>), the files root. */
+  function runDirPath(runId: string): string | undefined {
+    const row = getRow(runId)
+    if (!row) return undefined
+    return join(dataDir, row.workspacePath, "..")
+  }
+
+  return { get, getRow, listForEvent, workspacePath, runDirPath }
 }

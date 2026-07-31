@@ -28,7 +28,6 @@ export function toRunPublic(row: RunRow, challenge?: ChallengeMeta): RunPublic {
     memoryMb: row.memoryMb,
     pidsLimit: row.pidsLimit,
     containerName: row.containerName,
-    piSessionId: row.piSessionId,
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     updatedAt: row.updatedAt,

@@ -17,15 +17,15 @@ export type PiCmdOptions = {
   thinkingLevel: ThinkingLevel
   challengeName: string
   initialPrompt?: string
-  /** When set, resume this pi session instead of bootstrapping a new one. */
-  session?: string
+  /** When set, continue the most recent session (`pi -c`) instead of bootstrapping. */
+  continue?: boolean
 }
 
 /**
  * Build the pi argv (exec style, no shell). The rendered initial prompt is the
  * positional argument (Interactive-with-initial-prompt). dockerode passes argv
- * directly so multi-line prompts need no escaping. Resume omits the positional
- * prompt and passes --session instead.
+ * directly so multi-line prompts need no escaping. Resume continues the most
+ * recent session in the run's exclusive pi-agent volume via `pi -c`.
  */
 export function buildPiCmd(options: PiCmdOptions): string[] {
   const cmd = [
@@ -39,8 +39,8 @@ export function buildPiCmd(options: PiCmdOptions): string[] {
     "--name",
     options.challengeName,
   ]
-  if (options.session) {
-    cmd.push("--session", options.session)
+  if (options.continue) {
+    cmd.push("-c")
   } else if (options.initialPrompt !== undefined) {
     cmd.push(options.initialPrompt)
   }

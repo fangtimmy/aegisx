@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   CircleAlert,
   Files,
+  History,
   Info,
   Play,
   Square,
@@ -44,6 +45,7 @@ import { toast } from "@/lib/toast"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
+import { SessionPanel } from "./session-panel"
 import { RunTerminal } from "./terminal"
 
 export function RunWorkspace({
@@ -126,12 +128,13 @@ export function RunWorkspace({
 
   const { run } = detail.data
   const running = run.status === "running"
-  const canResume =
-    !running && Boolean(run.piSessionId) && run.status !== "failed"
+  const canResume = !running && run.status !== "failed"
 
   const requestedView = searchParams.get("view")
   const view =
-    requestedView === "overview" || requestedView === "files"
+    requestedView === "overview" ||
+    requestedView === "files" ||
+    requestedView === "session"
       ? requestedView
       : "terminal"
 
@@ -227,6 +230,9 @@ export function RunWorkspace({
               <TabsTab className="gap-2" value="files">
                 <Files /> Files
               </TabsTab>
+              <TabsTab className="gap-2" value="session">
+                <History /> Session
+              </TabsTab>
             </TabsList>
             <TabsPanel
               className="min-h-0 flex-1 overflow-hidden"
@@ -255,6 +261,16 @@ export function RunWorkspace({
                 enabled={view === "files"}
                 key={runId}
                 runId={runId}
+              />
+            </TabsPanel>
+            <TabsPanel
+              className="min-h-0 flex-1 overflow-hidden"
+              value="session"
+            >
+              <SessionPanel
+                enabled={view === "session"}
+                runId={runId}
+                running={running}
               />
             </TabsPanel>
           </Tabs>

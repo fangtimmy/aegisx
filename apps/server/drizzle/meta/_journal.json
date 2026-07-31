@@ -8,6 +8,13 @@
       "when": 1785335770409,
       "tag": "0000_cooing_zarda",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785495295636,
+      "tag": "0001_bizarre_chat",
+      "breakpoints": true
     }
   ]
 }

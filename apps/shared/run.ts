@@ -21,8 +21,6 @@ export type RunPublic = {
 	memoryMb: number;
 	pidsLimit: number;
 	containerName: string;
-	/** pi jsonl session id (for resume); null until discovered. */
-	piSessionId: string | null;
 	createdAt: string;
 	startedAt: string | null;
 	updatedAt: string;
@@ -36,6 +34,19 @@ export type RunPublic = {
 /** REST snapshot for a run. v3 has no agents/usage. */
 export type RunDetail = {
 	run: RunPublic;
+};
+
+/** A pi session jsonl belonging to a run (for session replay). */
+export type RunSession = {
+	id: string;
+	name: string;
+	createdAt: string;
+	modifiedAt: string;
+	messageCount: number;
+};
+
+export type RunSessionList = {
+	items: RunSession[];
 };
 
 export type RunFileEntry = {

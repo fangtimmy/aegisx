@@ -129,9 +129,6 @@ export const runs = sqliteTable(
     containerName: text("container_name").notNull(),
     /** workspace dir relative to dataDir (data/runs/<id>/workspace). */
     workspacePath: text("workspace_path").notNull(),
-    // pi session identity (for resume)
-    piSessionId: text("pi_session_id"),
-    piSessionFile: text("pi_session_file"),
     createdAt: text("created_at").notNull(),
     startedAt: text("started_at"),
     updatedAt: text("updated_at").notNull(),
