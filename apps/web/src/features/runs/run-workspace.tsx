@@ -64,6 +64,10 @@ export function RunWorkspace({
     enabled: Boolean(runId),
     queryKey: keys.runs.detail(runId ?? ""),
     refetchOnWindowFocus: false,
+    // Poll while running so the UI reflects the finalized status (and unlocks
+    // session replay) without a manual refresh. Stops once it is not running.
+    refetchInterval: (query) =>
+      query.state.data?.run.status === "running" ? 5000 : false,
     queryFn: () => runsApi.getRun(runId ?? ""),
   })
 
@@ -239,7 +243,13 @@ export function RunWorkspace({
               value="terminal"
             >
               {running ? (
-                <RunTerminal active={view === "terminal"} runId={runId} />
+                <RunTerminal
+                  active={view === "terminal"}
+                  onClosed={() =>
+                    void invalidate(queryClient, eventId, runId ?? "")
+                  }
+                  runId={runId}
+                />
               ) : (
                 <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground text-sm">
                   {canResume
