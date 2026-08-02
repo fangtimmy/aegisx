@@ -8,7 +8,8 @@ export const keys = {
     detail: (runId: string) => ["runs", runId] as const,
     files: (runId: string, path: string) =>
       ["runs", runId, "files", path] as const,
-    sessions: (runId: string) => ["runs", runId, "sessions"] as const,
+    messages: (runId: string, agentId?: string) =>
+      ["runs", runId, "messages", agentId ?? "all"] as const,
   },
   challenges: {
     target: (challengeId: string) =>

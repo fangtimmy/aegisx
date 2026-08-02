@@ -1,9 +1,10 @@
 import { eq } from "drizzle-orm"
 import type { Hono } from "hono"
-import { upgradeWebSocket } from "hono/bun"
+import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 import type { FlatSettings } from "../../../shared"
 import { get, normalizeThinkingLevel } from "../../../shared"
+import type { LiveEvent } from "../../../shared/live-event"
 import type { createDatabase } from "../db"
 import { challenges } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
@@ -53,6 +54,16 @@ const finishInput = Type.Object(
 
 const flagInput = Type.Object(
   { flag: Type.String({ minLength: 1, maxLength: 10_000 }) },
+  { additionalProperties: false }
+)
+
+const messageInput = Type.Object(
+  {
+    text: Type.String({ minLength: 1, maxLength: 20_000 }),
+    deliverAs: Type.Optional(
+      Type.Union([Type.Literal("steer"), Type.Literal("followUp")])
+    ),
+  },
   { additionalProperties: false }
 )
 
@@ -146,9 +157,9 @@ export function registerRunRoutes(
   )
 
   app.get("/api/runs/:runId", (c) => {
-    const run = runService.get(c.req.param("runId"))
-    if (!run) return notFound(c, "Run not found")
-    return c.json({ run })
+    const detail = runService.detail(c.req.param("runId"))
+    if (!detail) return notFound(c, "Run not found")
+    return c.json(detail)
   })
 
   app.get("/api/runs/:runId/files", (c) => {
@@ -177,53 +188,87 @@ export function registerRunRoutes(
     }
   })
 
-  app.get("/api/runs/:runId/sessions", (c) => {
+  app.get("/api/runs/:runId/messages", (c) => {
     const runId = c.req.param("runId")
     if (!runService.get(runId)) return notFound(c, "Run not found")
-    return c.json({ items: runService.listSessions(runId) })
+    const afterRaw = Number.parseInt(c.req.query("after") ?? "0", 10)
+    const after = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0
+    const agentId = c.req.query("agentId") || undefined
+    return c.json(runService.listMessages(runId, { after, agentId }))
   })
 
-  app.get("/api/runs/:runId/sessions/:sessionId", async (c) => {
+  // Live event stream (EventSource). Ephemeral progress; reconnect re-reads
+  // committed messages via GET .../messages.
+  app.get("/api/runs/:runId/stream", (c) => {
     const runId = c.req.param("runId")
-    const sessionId = c.req.param("sessionId")
-    if (!runService.get(runId)) return notFound(c, "Run not found")
-    const htmlPath = await runService.sessionHtmlPath(runId, sessionId)
-    if (!htmlPath) return notFound(c, "Session not found")
-    return new Response(Bun.file(htmlPath), {
-      headers: { "content-type": "text/html; charset=utf-8" },
-    })
-  })
+    const detail = runService.detail(runId)
+    if (!detail) return notFound(c, "Run not found")
+    const mainAgent = detail.agents.find((a) => a.role === "main")
+    const bus = runService.bus
 
-  // PTY bridge: binary frames = stdin/stdout bytes; text frame = JSON control
-  // ({type:'resize',cols,rows} | {type:'ping'}).
-  app.get(
-    "/api/runs/:runId/pty",
-    upgradeWebSocket((c) => {
-      const runId = c.req.param("runId") ?? ""
-      return {
-        onOpen: (_evt, ws) => {
-          const bridge = runService.ptyBridge(runId)
-          if (!bridge) {
-            ws.close(1008, "Run is not running")
-            return
+    return streamSSE(c, async (stream) => {
+      let aborted = false
+      stream.onAbort(() => {
+        aborted = true
+      })
+
+      const queue: LiveEvent[] = []
+      let resolveNext: (() => void) | null = null
+      const drain = () => {
+        if (resolveNext) {
+          const fn = resolveNext
+          resolveNext = null
+          fn()
+        }
+      }
+      const unsubscribe = bus.subscribe(runId, (event) => {
+        queue.push(event)
+        drain()
+      })
+
+      // Initial snapshot so a fresh connection sees current state immediately.
+      queue.push({ type: "ready", runId, agentId: mainAgent?.id ?? "" })
+      queue.push({ type: "run.updated", run: detail.run })
+      for (const agent of detail.agents) {
+        queue.push({ type: "agent.updated", agent })
+      }
+
+      try {
+        while (!aborted) {
+          if (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              resolveNext = resolve
+            })
+            if (aborted) break
           }
-          bridge.addConnection(ws)
-        },
-        onMessage: (evt, ws) => {
-          const bridge = runService.ptyBridge(runId)
-          if (!bridge) return
-          const data = evt.data
-          if (typeof data === "string") {
-            bridge.onMessage(ws, data)
-          } else if (data instanceof ArrayBuffer) {
-            bridge.onMessage(ws, data)
+          while (queue.length > 0) {
+            const event = queue.shift() as LiveEvent
+            await stream.writeSSE({ data: JSON.stringify(event) })
           }
-        },
-        onClose: (_evt, ws) => {
-          runService.ptyBridge(runId)?.removeConnection(ws)
-        },
+        }
+      } catch {
+        // client gone
+      } finally {
+        unsubscribe()
       }
     })
+  })
+
+  app.post(
+    "/api/runs/:runId/message",
+    validateJson(messageInput),
+    async (c) => {
+      try {
+        const body = c.req.valid("json")
+        const run = await runService.steer(c.req.param("runId"), {
+          text: body.text,
+          deliverAs: body.deliverAs ?? "steer",
+        })
+        return c.json(run)
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
   )
 
   app.post("/api/runs/:runId/stop", validateJson(emptyInput), async (c) => {
@@ -261,7 +306,6 @@ export function registerRunRoutes(
         run.challengeId,
         c.req.valid("json").flag
       )
-      // Refresh so the accepted flag is reflected on the run row.
       runService.refresh(runId)
       if (!result) {
         return c.json(

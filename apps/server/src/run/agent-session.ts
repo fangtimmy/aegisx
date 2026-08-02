@@ -1,0 +1,126 @@
+import type { Model } from "@earendil-works/pi-ai"
+import {
+  type AgentSession,
+  createAgentSession,
+  createExtensionRuntime,
+  type ResourceLoader,
+  SessionManager,
+  SettingsManager,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent"
+import type { ThinkingLevel } from "../../../shared/thinking"
+import type { createDatabase } from "../db"
+import { createRunEventPipeline } from "./events"
+import type { LiveBus } from "./live"
+
+type Database = ReturnType<typeof createDatabase>["db"]
+
+export type CreateAgentSessionInput = {
+  runId: string
+  agentId: string
+  /** Host workspace path (file tools operate here; bind target is /workspace). */
+  workspaceHostPath: string
+  /** SessionManager root dir for this run (data/runs/<id>/sessions). */
+  sessionsDir: string
+  /** Existing session file to resume; omit for a new session. */
+  sessionFile?: string
+  modelRuntime: import("@earendil-works/pi-coding-agent").ModelRuntime
+  model: Model<any>
+  thinkingLevel: ThinkingLevel
+  /** Fully rendered system prompt (replaces pi defaults; no AGENTS.md loaded). */
+  systemPrompt: string
+  /** Tool allowlist (builtin names + any custom tool names to enable). */
+  toolNames: string[]
+  /** Custom tools (container bash override, native CTF tools, ...). */
+  customTools: ToolDefinition[]
+  db: Database
+  bus: LiveBus
+}
+
+export type RunAgentSession = {
+  session: AgentSession
+  sessionFile: string | undefined
+  pipeline: ReturnType<typeof createRunEventPipeline>
+  dispose(): Promise<void>
+}
+
+/**
+ * Create a pi SDK AgentSession for a run agent (main or child), wire its event
+ * pipeline (committed messages → run_events, progress → SSE bus), and return
+ * handles for the service to drive prompt/steer/abort lifecycle.
+ *
+ * Resource loading is a zero-discovery minimal loader: only the rendered system
+ * prompt is exposed, so challenge workspace files and global pi resources never
+ * leak into the agent context.
+ */
+export async function createRunAgentSession(
+  input: CreateAgentSessionInput
+): Promise<RunAgentSession> {
+  const sessionManager = input.sessionFile
+    ? SessionManager.open(
+        input.sessionFile,
+        input.sessionsDir,
+        input.workspaceHostPath
+      )
+    : SessionManager.create(input.workspaceHostPath, input.sessionsDir)
+
+  const settingsManager = SettingsManager.inMemory({
+    // Long CTF runs need compaction to survive context overflow; retry absorbs
+    // transient provider errors. Not exposed in the settings UI (constants).
+    compaction: { enabled: true },
+    retry: { enabled: true, maxRetries: 3 },
+  })
+
+  const resourceLoader = minimalResourceLoader(input.systemPrompt)
+
+  const pipeline = createRunEventPipeline({
+    runId: input.runId,
+    agentId: input.agentId,
+    db: input.db,
+    bus: input.bus,
+  })
+
+  const { session } = await createAgentSession({
+    cwd: input.workspaceHostPath,
+    model: input.model,
+    thinkingLevel: input.thinkingLevel,
+    modelRuntime: input.modelRuntime,
+    sessionManager,
+    settingsManager,
+    resourceLoader,
+    tools: input.toolNames,
+    customTools: input.customTools,
+  })
+
+  const unsubscribe = session.subscribe((event) => pipeline.handle(event))
+
+  return {
+    session,
+    sessionFile: session.sessionFile,
+    pipeline,
+    async dispose() {
+      unsubscribe()
+      session.dispose()
+    },
+  }
+}
+
+function minimalResourceLoader(systemPrompt: string): ResourceLoader {
+  return {
+    getExtensions: () => ({
+      extensions: [],
+      errors: [],
+      runtime: createExtensionRuntime(),
+    }),
+    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getPrompts: () => ({ prompts: [], diagnostics: [] }),
+    getThemes: () => ({ themes: [], diagnostics: [] }),
+    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getSystemPrompt: () => systemPrompt,
+    getSystemPromptSource: () => undefined,
+    getAppendSystemPrompt: () => [],
+    getAppendSystemPromptSources: () => [],
+    extendResources: () => {},
+    reload: async () => {},
+  }
+}

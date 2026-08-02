@@ -1,153 +1,182 @@
 # AegisX Architecture
 
-Status: **current** (v3)
-Related: [refactor-v3.md](./refactor-v3.md) is the historical v2→v3 transition plan.
+Status: **current** (v4)
+Related: [refactor-v4.md](./refactor-v4.md) is the v3→v4 transition plan (host-side SDK agent).
 
-## What v3 is
+## What v4 is
 
-A run is **one Docker container whose main process is `pi`** (the interactive
-coding-agent TUI). The browser renders that TTY live (ghostty-web) and can type
-into it to steer the agent mid-run. There is no in-process agent loop, no SSE
-message timeline, no multi-agent table — a run is `1 run = 1 container = 1 pi`.
+A run is driven by a **host-side pi SDK `AgentSession`** (in-process). The agent
+loop, visibility, compaction, retry, and child agents are first-party SDK
+features. The Docker container is a **long-lived Kali tool box** (`sleep
+infinity`); `bash` is forwarded into it over `docker exec`, and the file tools
+operate on the host workspace (bind-mounted into the container so both sides
+share one tree).
 
-Server responsibilities are intentionally narrow:
+There is no PTY, no in-container `pi` process, no `ghostty-web`. The browser
+shows a **Conversation** (structured message timeline + streaming) and steers
+the agent with `steer` / `followUp` messages.
 
-1. Orchestrate container lifecycle (create/start/wait/kill/resize/reattach).
-2. Generate the per-run pi-agent volume (`models.json`, `APPEND_SYSTEM.md`,
-   `CHILD_SYSTEM.md`, `settings.json`, skills).
-3. Expose the run-level HTTP API the agent calls back over (`/flag`, `/finish`,
-   `/target`, `/files`, `/pty`).
-4. Bridge the container PTY to N browser WebSocket connections (ring-buffer
-   replay, resize control).
-5. Persist run state + pi session identity in SQLite (the source of truth).
+Server responsibilities:
+
+1. Build an isolated host-side pi `ModelRuntime` + `AgentSession` per run (main
+   agent), and child sessions on `spawn_agent`.
+2. Orchestrate the tool-box container (create/start/kill/remove) and forward
+   bash over `docker exec`.
+3. Register native CTF tools (`submit_flag`, `finish_run`, `target_*`,
+   `spawn_agent`) that call the platform service in-process.
+4. Project SDK events → committed messages (SQLite `run_events`) + ephemeral
+   live progress (SSE) for the Conversation UI.
+5. Persist run + agent state in SQLite (schema v4).
 
 ## Data flow
 
 ```
-┌─────────────── Browser ───────────────┐
-│  ghostty-web  ⇄  WS (/api/runs/:id/pty)│   binary frames = stdin/stdout bytes;
-└───────────────┬────────────────────────┘   text frame = {resize|ping} control
-┌───────────────▼────────────────────────┐
-│        AegisX server (Hono / Bun)       │
-│  run-service · container-manager        │
-│  pty-bridge · models-json/skills gens   │
-│  platform service · run HTTP API        │
-└───────────────┬────────────────────────┘
-                │ dockerode: create/start/wait/kill/resize; raw-socket PTY attach
-┌───────────────▼────────────────────────┐
-│   Docker container (solver image)       │
-│   main process: pi (interactive TUI)     │
-│   /workspace       ← run workspace vol   │
-│   /root/.pi/agent  ← pi-agent vol        │
-│     models.json · APPEND_SYSTEM.md       │
-│     CHILD_SYSTEM.md · settings.json      │
-│     skills/{aegisx,aegisx-target,...}    │
-│   env: AEGISX_API_URL/RUN_ID/CHALLENGE_* │
-│        AEGISX_PI_MODEL                   │
-└──────────────────────────────────────────┘
+┌─────────────── Browser ───────────────────┐
+│  Conversation (SSE) · Files · Overview     │
+│  message box → steer / followUp            │
+└──────────────────┬─────────────────────────┘
+                   │ GET /messages (durable) + GET /stream (SSE)
+                   │ POST /message
+┌──────────────────▼─────────────────────────┐
+│         AegisX server (Hono / Bun)          │
+│                                            │
+│  ┌─ Run AgentSession (main, per run) ──────┐ │
+│  │  tools: read/bash/edit/write/grep/find/ls │
+│  │         submit_flag / target_* / finish   │
+│  │         spawn_agent (child session)       │
+│  │  session.subscribe → events.ts →          │
+│  │     run_events (committed) + SSE (live)   │
+│  └───────────────┬──────────────────────────┘ │
+│                  │ docker exec (bash)         │
+│                  │ host fs (file tools)       │
+┌──────────────────▼──────────────────────────┐
+│   Docker container (solver image)            │
+│   main process: sleep infinity (tool box)     │
+│   /workspace ← bind (shared with host)        │
+│   Kali toolchain: python/pwntools/gdb/...     │
+└──────────────────────────────────────────────┘
 ```
-
-The agent talks back to AegisX over `AEGISX_API_URL=http://host.docker.internal:<port>`
-(`host.docker.internal:host-gateway` is added to the container). Skills are pure
-documentation that teach the agent the `curl` commands for the run HTTP API.
 
 ## Layout
 
 ```
 apps/server/src/
-  app.ts            composition root; recoverOnBoot; run hooks
-  index.ts          Bun.serve entry (port = PORT ?? 3000)
+  app.ts            composition root; recoverOnBoot; route registration
+  index.ts          Bun.serve entry (idleTimeout 0 for quiet SSE)
   run/
-    service.ts        lifecycle: create/stop/finish/resume/delete/recover/close
-    routes.ts         /api/runs/** + /api/challenges/:id/runs + PTY WS
-    container-manager.ts  dockerode lifecycle + raw-socket PTY hijack (Bun-safe)
-    pty-bridge.ts     ring buffer + multi-connection PTY fan-out
-    pi-launch.ts      buildPiCmd · buildContainerEnv · generatePiAgentVolume
+    service.ts        lifecycle: create/stop/finish/resume/delete/recover/spawnChild
+    agent-session.ts  createAgentSession wrapper + event pipeline wiring
+    container-tools.ts BashOperations → docker exec
+    events.ts         SDK AgentSessionEvent → committed Message + live progress
+    live.ts           in-memory SSE fan-out bus
+    tools.ts          native tools: submit_flag/target_*/finish_run/spawn_agent
+    model-runtime.ts  ProviderConnection → pi ModelRuntime + Model (models.json)
+    routes.ts         /api/runs/** + /messages + /stream + /message
+    container-manager.ts dockerode lifecycle + exec() (no PTY)
     prompt.ts         handlebars PromptTemplateContext + attachment copy
-    queries.ts        run reads
+    queries.ts        run/agent reads; messages from run_events
+    public.ts         RunPublic + AgentSummary projections
   platforms/        adapters (ctfd/ret2shell/a1ctf) + sync/submit/targets
   providers/        model registry + pi models.json generation
   settings/         prompt templates + settings routes
   events/           event/challenge/attachment routes + catalog
-  db/               drizzle schema v3 + compat guard + migrations
-  infrastructure/   config-store · storage · workspace-files · http-errors
-apps/shared/        wire types (Run/Challenge/Event/Platform/Settings/...)
-apps/web/           React + Vite; ghostty-web terminal; coss UI
-containers/solver/  Kali-based solver image (pi runs here)
+  db/               drizzle schema v4 + compat guard + migrations
+apps/shared/        wire types (Run/Agent/Message/LiveEvent/Settings/...)
+apps/web/           React + Vite; Conversation timeline; coss UI
+containers/solver/  Kali-based solver image (sleep infinity CMD)
 ```
 
 ## Run lifecycle
 
 - **create** (`service.create`): copy attachments into the workspace, render the
-  main + child + initial prompts, generate the pi-agent volume, `INSERT runs`,
-  `containerManager.launch` (create+start+attach), `attachBridge`, `watchExit`,
-  then poll for the pi session id (`discoverSessionLater`).
-- **watchExit → finalize**: when pi exits, the run is finalized under a per-run
-  lock. Outcome priority: explicit `finish`/`stop` > exit code 0 (`completed`) >
-  non-zero (`failed`).
-- **stop / finish**: set a pending outcome, send `SIGTERM`; if pi does not exit
-  within a grace window, escalate to `SIGKILL` (see `terminateContainer`).
-- **resume**: a new container re-runs `pi --session <id>` against the same
-  pi-agent volume so it continues the same conversation.
-- **recoverOnBoot**: on startup, `running` rows whose container is still up are
-  reattached; others are marked `stopped`. No model call is made automatically.
+  main/child/initial prompts, build an isolated `ModelRuntime` (per-run
+  `models.json`), start the tool-box container (`sleep infinity`, bind workspace
+  only), build the native tools, `createAgentSession`, insert `runs` + the main
+  `agents` row, subscribe the event pipeline, then `session.prompt(initial)`.
+- **driveRun → finalize**: `prompt()` resolves on natural idle, after
+  `finish_run` (tool returns `terminate`), or after an abort (`stop`). Finalize
+  is the single completion point: it writes the terminal status, marks the main
+  agent, stops the container, disposes the session, and emits `run.updated`.
+- **stop**: sets a pending `stop` outcome and `session.abort()`; finalize marks
+  `stopped`.
+- **finish**: `finish_run` tool schedules a pending `finish` outcome and returns
+  `terminate`; finalize marks `completed` with the summary. The HTTP `/finish`
+  endpoint force-aborts.
+- **resume**: a new container + `SessionManager.open(sessionFile)` +
+  `createAgentSession` continues the same session, then `prompt("Continue…")`.
+- **recoverOnBoot**: on startup, any `running` row is marked `stopped` (the
+  host-side session is gone after a crash). No model call is made automatically.
+- **compaction / retry**: handled by the SDK via `SettingsManager.inMemory`
+  (enabled; not exposed in the settings UI yet).
 
-## Agent integration (skills)
+## Visibility & data flow
 
-Generated into `/root/.pi/agent/skills/` per run:
+```
+session.subscribe(event)
+  → events.ts normalizes SDK events
+  → committed messages (message_end/turn_end/agent_end) → SQLite run_events
+  → live progress (text_delta / tool_execution_* / compaction / retry) → SSE bus
+```
 
-| Skill | When | Purpose |
-|-------|------|---------|
-| `aegisx` | always | submit a flag + finish the run (curl `/flag`, `/finish`) |
-| `aegisx-target` | challenge has a remote target | inspect/start/extend/stop the target |
-| `aegisx-child` | always | delegate a bounded sub-task to a child `pi` process |
+`GET /api/runs/:id/messages?after=&agentId=` returns durable committed messages
+(projected from `run_events`, deduped by message id). `GET /api/runs/:id/stream`
+is the ephemeral SSE channel. The frontend `ConversationStore` merges committed
+history with live progress, splitting at the last user message so only the
+active turn rebuilds on streaming.
 
-The main agent runs interactively with `read,bash,edit,write,grep,find,ls`.
-Submitting flags, finishing, target control, and delegation are **not** built-in
-tools — they are skills the agent loads and calls via curl / bash. The child
-agent is launched by the main agent over bash (`pi -p --no-skills
---system-prompt "$(cat …/CHILD_SYSTEM.md)" …`); it shares the workspace and
-credentials but cannot finish/submit/manage targets/spawn.
+## Native tools
 
-## Data model (schema v3)
+| Tool | Purpose | Registered when |
+|------|---------|-----------------|
+| `bash` | run inside the Kali container (`docker exec`) | always (overrides builtin) |
+| `read`/`edit`/`write`/`grep`/`find`/`ls` | host workspace (bind-shared) | always |
+| `submit_flag` | `platformService.submitFlag` (in-process) | platform integrated |
+| `target_get`/`start`/`extend`/`stop` | `platformService.targetAction` | challenge has a target |
+| `finish_run` | summary → finalize → `completed` | main only |
+| `spawn_agent` | child `AgentSession` (coding tools only) | main only |
 
-`events` → `event_platforms` (one platform binding per event) → `challenges` →
-(`attachments`, `challenge_remote`) → `runs` → `submissions`. Plus
-`platform_request_log` for adapter diagnostics. v1/v2 databases are refused at
-open (see `db/index.ts` `assertCompatibleSchema`); v3 is a full data wipe.
+Child agents share the workspace and model but cannot finish, submit, manage
+targets, or spawn further agents. Concurrent children per run are capped.
 
-## Settings
+## Data model (schema v4)
 
-Only settings that are actually read by the runtime are exposed
-(`apps/shared/settings-schema.ts`):
+`events` → `event_platforms` → `challenges` → (`attachments`, `challenge_remote`)
+→ `runs` → (`agents`, `run_events`, `submissions`). Plus
+`platform_request_log`. v1/v2/v3 databases are refused at open (full wipe);
+`SCHEMA_VERSION = 4`.
 
-- `agent.defaultModelId`, `agent.defaultThinkingLevel`
-- `runtime.maxAttachmentMb`, `runtime.platformRequestTimeoutMs`,
-  `runtime.providerDiscoverTimeoutMs`
-- `container.image/cpus/memoryMb/pidsLimit/workspace/tmpfsSize`
-- `prompts.mainSystem`, `prompts.childSystem`, `prompts.initial`
-
-Earlier "local mode", concurrency, retry, tool-output, and per-tool-timeout
-settings belonged to the deleted v2 in-process agent loop and have been removed.
+`runs` dropped the v3 `launcher`/`pi_model_ref` and gained `session_dir`.
+`agents` (main + child) and `run_events` (committed message log, monotonic `seq`
+per run) are new.
 
 ## API (run)
 
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/api/challenges/:id/runs` | create (model/image/thinking optional) |
-| GET | `/api/runs/:id` | `{ run }` |
-| GET | `/api/runs/:id/files` | workspace listing/preview (`?path=`) |
+| GET | `/api/runs/:id` | `{ run, agents }` |
+| GET | `/api/runs/:id/messages?after=&agentId=` | committed messages (paginated) |
+| GET | `/api/runs/:id/stream` | live SSE (EventSource) |
+| POST | `/api/runs/:id/message` | `{ text, deliverAs?: "steer"\|"followUp" }` |
+| GET | `/api/runs/:id/files` `[?path=]` | workspace listing/preview |
 | GET | `/api/runs/:id/files/download` | workspace file download |
-| GET | `/api/runs/:id/pty` | live PTY over WebSocket |
-| POST | `/api/runs/:id/message` | (reserved) |
 | POST | `/api/runs/:id/stop \| /resume \| /finish` | control |
 | POST | `/api/runs/:id/flag` | platform flag submission |
 | GET/POST | `/api/runs/:id/target[/:action]` | target inspect/start/extend/stop |
 | DELETE | `/api/runs/:id` | terminal runs only |
 
-## Known limitations
+The v3 `GET /api/runs/:id/pty` WebSocket is gone.
 
-- PTY streaming is live-only; reconnect replays the ring buffer, not a durable
-  event log.
-- Token/cost usage stats are not parsed from the pi session in this iteration.
-- Local (non-container) execution is not supported; v3 is Docker-only.
+## Settings
+
+Unchanged surface (`apps/shared/settings-schema.ts`): agent defaults, runtime
+timeouts, container resources, and the three prompt templates (now referencing
+native tool names). compaction/retry/timeout are SDK `inMemory` constants for
+now (not exposed).
+
+## Known limitations / deferred
+
+- No Orchestrator (multi-run scheduling) — explicitly out of v4 scope.
+- `bash` is one `docker exec` per call (no long-lived shell reuse yet).
+- Per-run timeout (`timed_out` status wired but no timer driving it yet).
+- Usage/cost Overview from SDK events — fields flow through; UI not added.

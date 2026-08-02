@@ -1,10 +1,17 @@
 import { join } from "node:path"
-import { desc, eq } from "drizzle-orm"
+import { and, count, eq } from "drizzle-orm"
 import type { RunPublic } from "../../../shared"
+import type { AgentSummary } from "../../../shared/agent"
 import type { createDatabase } from "../db"
-import { challengeRemote, challenges, runs } from "../db/schema"
+import {
+  agents,
+  challengeRemote,
+  challenges,
+  runEvents,
+  runs,
+} from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
-import { type ChallengeMeta, toRunPublic } from "./public"
+import { type ChallengeMeta, toAgentSummary, toRunPublic } from "./public"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
@@ -47,9 +54,41 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       .from(runs)
       .innerJoin(challenges, eq(runs.challengeId, challenges.id))
       .where(eq(challenges.eventId, eventId))
-      .orderBy(desc(runs.updatedAt))
+      .orderBy(runs.updatedAt)
       .all()
       .map(({ runs: run }) => mapRow(run))
+      .reverse()
+  }
+
+  function listAgents(runId: string): AgentSummary[] {
+    return db
+      .select()
+      .from(agents)
+      .where(eq(agents.runId, runId))
+      .orderBy(agents.createdAt)
+      .all()
+      .map((row) => toAgentSummary(row))
+  }
+
+  function mainAgent(runId: string): AgentSummary | undefined {
+    return listAgents(runId).find((agent) => agent.role === "main")
+  }
+
+  function messageCount(runId: string, agentId: string): number {
+    const row = db
+      .select({ value: count() })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.agentId, agentId)))
+      .get()
+    return row?.value ?? 0
+  }
+
+  function detail(
+    runId: string
+  ): { run: RunPublic; agents: AgentSummary[] } | undefined {
+    const run = get(runId)
+    if (!run) return undefined
+    return { run, agents: listAgents(runId) }
   }
 
   function workspacePath(runId: string): string | undefined {
@@ -65,5 +104,15 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return join(dataDir, row.workspacePath, "..")
   }
 
-  return { get, getRow, listForEvent, workspacePath, runDirPath }
+  return {
+    get,
+    getRow,
+    listForEvent,
+    listAgents,
+    mainAgent,
+    messageCount,
+    detail,
+    workspacePath,
+    runDirPath,
+  }
 }

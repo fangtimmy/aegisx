@@ -26,11 +26,10 @@ export type PromptAttachment = {
 };
 
 /**
- * Prompt template context (handlebars). The shape is preserved across v2→v3
- * so existing user-saved templates keep resolving. v3 sets:
- *  - run.environment always "container", run.isContainer always true
- *  - agent.role always "main", agent.isMain always true (single agent)
- *  - capabilities.canSpawnAgent always false (no multi-agent)
+ * Prompt template context (handlebars). v4 renders these host-side and feeds
+ * them to the pi SDK via a custom ResourceLoader (no APPEND_SYSTEM.md in the
+ * container). The main agent can spawn children; capabilities reflect the
+ * native tools registered for the run.
  */
 export type PromptTemplateContext = {
 	agent: {

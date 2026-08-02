@@ -7,7 +7,8 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.80.7",
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
     "@hono/typebox-validator": "^1.1.0",
     "dockerode": "^5.0.1",
     "drizzle-orm": "^0.45.2",

@@ -9,7 +9,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -102,7 +102,12 @@ export const attachments = sqliteTable(
   ]
 )
 
-/** v3 runs: one run = one Docker container running pi (interactive TUI). */
+/**
+ * v4 runs: the agent loop runs host-side in-process via the pi SDK. The
+ * container is a long-lived tool box (sleep infinity); bash is forwarded into
+ * it over `docker exec`. File tools operate on the host workspace, which is
+ * bind-mounted into the container so both sides share one tree.
+ */
 export const runs = sqliteTable(
   "runs",
   {
@@ -111,15 +116,11 @@ export const runs = sqliteTable(
       .notNull()
       .references(() => challenges.id, { onDelete: "cascade" }),
     status: text("status").notNull(),
-    /** Main process launcher ("pi" in MVP; parameterizes container-manager). */
-    launcher: text("launcher").notNull().default("pi"),
-    // Model snapshot (selected at run creation)
+    // Model snapshot (resolved at run creation from a ProviderConnection)
     provider: text("provider").notNull(),
     providerLabel: text("provider_label"),
     modelId: text("model_id").notNull(),
     modelLabel: text("model_label"),
-    /** pi models.json provider key + model id, e.g. "aegisx-x/claude" or builtin. */
-    piModelRef: text("pi_model_ref"),
     thinkingLevel: text("thinking_level").notNull().default("off"),
     // Container resource snapshot
     image: text("image").notNull(),
@@ -129,6 +130,8 @@ export const runs = sqliteTable(
     containerName: text("container_name").notNull(),
     /** workspace dir relative to dataDir (data/runs/<id>/workspace). */
     workspacePath: text("workspace_path").notNull(),
+    /** SessionManager root dir relative to dataDir (data/runs/<id>/sessions). */
+    sessionDir: text("session_dir").notNull(),
     createdAt: text("created_at").notNull(),
     startedAt: text("started_at"),
     updatedAt: text("updated_at").notNull(),
@@ -141,7 +144,84 @@ export const runs = sqliteTable(
     index("runs_challenge_id_idx").on(table.challengeId),
     check(
       "runs_status_check",
+      sql`${table.status} in ('running', 'completed', 'failed', 'stopped', 'timed_out')`
+    ),
+  ]
+)
+
+/**
+ * Agents within a run: exactly one main AgentSession (created at run start) and
+ * zero or more child agents spawned via the spawn_agent tool.
+ */
+export const agents = sqliteTable(
+  "agents",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    /** null for the main agent; the main agent id for children. */
+    parentAgentId: text("parent_agent_id"),
+    status: text("status").notNull(),
+    /** SessionManager jsonl file for this agent (resume + audit). */
+    sessionFile: text("session_file"),
+    name: text("name"),
+    /** Delegated task text for child agents. */
+    task: text("task"),
+    createdAt: text("created_at").notNull(),
+    startedAt: text("started_at"),
+    updatedAt: text("updated_at").notNull(),
+    completedAt: text("completed_at"),
+    error: text("error"),
+  },
+  (table) => [
+    index("agents_run_id_idx").on(table.runId),
+    check("agents_role_check", sql`${table.role} in ('main', 'child')`),
+    check(
+      "agents_status_check",
       sql`${table.status} in ('running', 'completed', 'failed', 'stopped')`
+    ),
+  ]
+)
+
+/**
+ * Durable, normalized event log. One row per committed message (user /
+ * assistant / toolResult / notice). Streaming progress is ephemeral (SSE only)
+ * and never written here; reconnect re-reads committed rows via the messages
+ * API. `seq` is monotonic per run and is the pagination cursor.
+ */
+export const runEvents = sqliteTable(
+  "run_events",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    role: text("role").notNull(),
+    /** JSON-encoded wire Message content (string for user/notice, array otherwise). */
+    content: text("content").notNull(),
+    toolName: text("tool_name"),
+    toolCallId: text("tool_call_id"),
+    isError: integer("is_error", { mode: "boolean" }),
+    /** JSON summary (stopReason, errorMessage, usage, etc.). */
+    payload: text("payload"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("run_events_run_seq_idx").on(table.runId, table.seq),
+    index("run_events_run_agent_seq_idx").on(
+      table.runId,
+      table.agentId,
+      table.seq
+    ),
+    check(
+      "run_events_role_check",
+      sql`${table.role} in ('user', 'assistant', 'toolResult', 'notice')`
     ),
   ]
 )

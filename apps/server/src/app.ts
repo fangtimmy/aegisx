@@ -1,5 +1,4 @@
 import { Hono } from "hono"
-import { websocket } from "hono/bun"
 import { get } from "../../shared"
 import { createDatabase } from "./db"
 import { createCatalogReader } from "./events/catalog"
@@ -28,11 +27,9 @@ export function createApp(options: { dataDir: string }) {
   )
 
   const containerManager = createContainerManager()
-  const apiUrl = `http://host.docker.internal:${process.env.PORT ?? 3000}`
   const runService = createRunService({
     db,
     dataDir: options.dataDir,
-    apiUrl,
     containerManager,
     platformService,
     configStore,
@@ -62,7 +59,7 @@ export function createApp(options: { dataDir: string }) {
     )
   })
 
-  app.get("/", (c) => c.json({ name: "AegisX", status: "ok", version: 3 }))
+  app.get("/", (c) => c.json({ name: "AegisX", status: "ok", version: 4 }))
 
   // syncModels is a v2 artifact (pi-ai registry); kept as a no-op so the
   // provider/settings routes persist config without a live model registry.
@@ -95,7 +92,6 @@ export function createApp(options: { dataDir: string }) {
 
   return {
     app,
-    websocket,
     close: async () => {
       await runService.close()
       sqlite.close()

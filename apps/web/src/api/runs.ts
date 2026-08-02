@@ -1,9 +1,9 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
+  MessageList,
   RunDetail,
   RunFile,
   RunPublic,
-  RunSessionList,
   ThinkingLevel,
 } from "./types"
 
@@ -11,6 +11,11 @@ export type CreateRunInput = {
   modelId?: string
   image?: string
   thinkingLevel?: ThinkingLevel
+}
+
+export type SteerInput = {
+  text: string
+  deliverAs?: "steer" | "followUp"
 }
 
 export function listEventRuns(eventId: string) {
@@ -40,12 +45,30 @@ export function deleteRun(runId: string) {
   return apiRequest<void>(`/runs/${runId}`, { method: "DELETE" })
 }
 
+export function steerRun(runId: string, input: SteerInput) {
+  return apiRequest<RunPublic>(
+    `/runs/${runId}/message`,
+    jsonRequest("POST", input)
+  )
+}
+
+export function finishRun(runId: string, summary: string) {
+  return apiRequest<RunPublic>(
+    `/runs/${runId}/finish`,
+    jsonRequest("POST", { summary })
+  )
+}
+
+export function listMessages(runId: string, after = 0, agentId?: string) {
+  const params = new URLSearchParams()
+  if (after > 0) params.set("after", String(after))
+  if (agentId) params.set("agentId", agentId)
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<MessageList>(`/runs/${runId}/messages${query}`)
+}
+
 export function getRunFile(runId: string, path: string) {
   return apiRequest<RunFile>(
     `/runs/${runId}/files?path=${encodeURIComponent(path)}`
   )
-}
-
-export function listRunSessions(runId: string) {
-  return apiRequest<RunSessionList>(`/runs/${runId}/sessions`)
 }

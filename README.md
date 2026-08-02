@@ -2,8 +2,8 @@
 
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, and token usage.
 
-> **Schema v2** — wipe any old `data/` directory before first start.  
-> Design notes: [docs/architecture.md](docs/architecture.md) (current). Historical: [docs/refactor-v3.md](docs/refactor-v3.md); v2 docs live in [docs/archive/](docs/archive/).
+> **Schema v4** — wipe any old `data/` directory (or just `data/aegisx.sqlite*`) before first start; older databases are refused.
+> Design notes: [docs/architecture.md](docs/architecture.md) (current). Transitions: [docs/refactor-v4.md](docs/refactor-v4.md) (v3→v4), [docs/refactor-v3.md](docs/refactor-v3.md) (v2→v3); v2 docs live in [docs/archive/](docs/archive/).
 
 ## Requirements
 
@@ -34,13 +34,13 @@ Open the URL printed by Vite. The web development server proxies `/api` to `http
 
 The API stores its SQLite database, attachments, and run workspaces under `data/`. Set `AEGISX_DATA_DIR` to use another directory.
 
-Local runs execute commands with the API process permissions and are not sandboxed. Container runs use a dedicated Docker container with the run workspace mounted at `/workspace` and configurable CPU, memory, and PID limits.
+The agent loop runs **host-side in-process** via the pi SDK. `bash` and the CTF toolchain execute inside a dedicated Kali container (a long-lived `sleep infinity` tool box, workspace bind-mounted at `/workspace`) over `docker exec`; the file tools (`read`/`edit`/`write`/`grep`/`find`/`ls`) operate on the host workspace, which is shared with the container. Container resources (CPU, memory, PIDs) are configurable.
 
-Each run has one main agent and may have multiple background child agents.
+Each run has one main agent and may spawn background child agents (`spawn_agent`).
 
 ## Solve container image
 
-`containers/solver` defines the Kali-based solver image used for container Runs.
+`containers/solver` defines the Kali-based solver image used as the per-run tool box (main process `sleep infinity`).
 
 ## Checks
 

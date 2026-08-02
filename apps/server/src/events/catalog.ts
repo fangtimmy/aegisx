@@ -100,6 +100,7 @@ export function createCatalogReader(
       completedCount: number
       failedCount: number
       stoppedCount: number
+      timedOutCount: number
     }
   ): ChallengePublic => {
     const runCount = Number(runSummary?.runCount ?? 0)
@@ -107,6 +108,7 @@ export function createCatalogReader(
     const completedCount = Number(runSummary?.completedCount ?? 0)
     const failedCount = Number(runSummary?.failedCount ?? 0)
     const stoppedCount = Number(runSummary?.stoppedCount ?? 0)
+    const timedOutCount = Number(runSummary?.timedOutCount ?? 0)
     const ignored = remote?.targetIgnored ?? false
     return {
       id: challenge.id,
@@ -124,6 +126,7 @@ export function createCatalogReader(
         completed: completedCount,
         failed: failedCount,
         stopped: stoppedCount,
+        timed_out: timedOutCount,
       },
       remoteId: remote?.remoteId ?? null,
       remoteAvailable: remote ? remote.available : true,
@@ -157,6 +160,7 @@ export function createCatalogReader(
         completedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
         failedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'failed' then 1 else 0 end), 0)`,
         stoppedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'stopped' then 1 else 0 end), 0)`,
+        timedOutCount: sql<number>`coalesce(sum(case when ${runs.status} = 'timed_out' then 1 else 0 end), 0)`,
       })
       .from(runs)
       .where(eq(runs.challengeId, challengeId))
@@ -189,6 +193,7 @@ export function createCatalogReader(
               completedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'completed' then 1 else 0 end), 0)`,
               failedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'failed' then 1 else 0 end), 0)`,
               stoppedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'stopped' then 1 else 0 end), 0)`,
+              timedOutCount: sql<number>`coalesce(sum(case when ${runs.status} = 'timed_out' then 1 else 0 end), 0)`,
             })
             .from(runs)
             .where(inArray(runs.challengeId, ids))

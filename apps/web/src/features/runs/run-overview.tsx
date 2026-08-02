@@ -20,10 +20,12 @@ export function RunOverview({ run }: { run: RunPublic }) {
     <div className="flex flex-col gap-4 px-6 py-4">
       <Alert>
         <Box />
-        <AlertTitle>Container environment</AlertTitle>
+        <AlertTitle>Container tool box</AlertTitle>
         <AlertDescription>
-          The agent (pi) runs in an isolated container with its workspace at
-          /workspace. Open the Terminal tab to watch or steer it.
+          The agent runs host-side in-process; this container is a Kali tool
+          box. bash runs inside it with the full CTF toolchain, and its
+          workspace is shared with your host file tools. Watch and steer it in
+          the Conversation tab.
         </AlertDescription>
       </Alert>
       {run.targetSupported && <TargetPanel run={run} />}

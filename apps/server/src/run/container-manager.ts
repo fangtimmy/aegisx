@@ -1,19 +1,15 @@
-import { EventEmitter } from "node:events"
-import { existsSync, readdirSync, statSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync } from "node:fs"
 import Docker from "dockerode"
 
 /**
- * dockerode-backed container lifecycle for v3 runs. Each run is a single
- * container whose main process is the pi interactive TUI.
+ * dockerode-backed container lifecycle for v4 runs. The container is a
+ * long-lived tool box (Cmd `sleep infinity`); bash is forwarded into it over
+ * `docker exec`. There is no PTY attach — the agent loop runs host-side.
  *
- * NOTE on the PTY stream: dockerode's hijacked attach (`container.attach` with
- * `stdin:true`) hangs under Bun — Bun's node:http does not emit the `upgrade`
- * event docker-modem relies on (the same call resolves in ~2ms under Node, and
- * the daemon itself supports hijack via the CLI). Everything else (create /
- * start / wait / kill / resize / remove) is plain HTTP and works under Bun, so
- * only the PTY attach is reimplemented as a raw unix-socket hijack against the
- * Docker Engine `/containers/{id}/attach` endpoint.
+ * create/start/wait/kill/remove use plain dockerode HTTP (Bun-safe). Command
+ * execution uses the `docker exec` CLI via Bun.spawn: dockerode's exec.start
+ * hijack hits the same node:http upgrade hole as PTY attach under Bun, while
+ * the CLI streams cleanly.
  */
 
 export type ContainerLimits = {
@@ -22,100 +18,25 @@ export type ContainerLimits = {
   pidsLimit: number
 }
 
-export type LaunchOptions = {
+export type CreateOptions = {
   name: string
   image: string
-  /** argv array (exec style, no shell). */
-  cmd: string[]
-  env: string[]
+  /** Container-internal workspace path (bind target), e.g. "/workspace". */
   workingDir: string
-  /** host binds, e.g. ["<abs>:/workspace", "<abs>:/root/.pi/agent"]. */
+  /** host binds, e.g. ["<abs>:/workspace"]. */
   binds: string[]
   limits: ContainerLimits
   tmpfsSize: string
 }
 
-export type LaunchedContainer = {
-  id: string
-  /** Raw PTY duplex (Tty:true → stdout/stderr merged, stdin writes reach pi). */
-  stream: NodeJS.ReadWriteStream
-}
-
-/**
- * Bidirectional PTY stream over a raw unix-socket hijack of the Docker Engine
- * attach endpoint. Emits NodeJS.ReadWriteStream-style events ('data'/'close'/
- * 'end'/'error') so the pty-bridge can use it unchanged.
- */
-class HijackPtyStream extends EventEmitter {
-  private socket: import("bun").Socket | undefined
-  private headerDone = false
-  private buf = Buffer.alloc(0)
-  private ended = false
-
-  constructor(
-    private readonly socketPath: string,
-    private readonly container: string
-  ) {
-    super()
-  }
-
-  connect() {
-    Bun.connect({
-      unix: this.socketPath,
-      socket: {
-        data: (_socket, data) => this.onRaw(data as Buffer),
-        open: (socket) => {
-          this.socket = socket
-          socket.write(
-            `POST /containers/${this.container}/attach?stream=1&stdin=1&stdout=1&stderr=1 HTTP/1.1\r\n` +
-              "Host: docker\r\n" +
-              "Connection: Upgrade\r\n" +
-              "Upgrade: tcp\r\n" +
-              "\r\n"
-          )
-        },
-        close: () => this.onClose(),
-        error: (_socket, error) => {
-          this.emit("error", error)
-        },
-      },
-    })
-  }
-
-  private onRaw(data: Buffer) {
-    if (!this.headerDone) {
-      this.buf = Buffer.concat([this.buf, data])
-      const idx = this.buf.indexOf("\r\n\r\n")
-      if (idx === -1) return
-      const statusLine = this.buf.subarray(0, idx).toString().split("\r\n")[0]
-      if (!/\s101\s/.test(statusLine) && !/upgraded/i.test(statusLine)) {
-        this.emit(
-          "error",
-          new Error(`docker attach did not upgrade: ${statusLine}`)
-        )
-        this.onClose()
-        return
-      }
-      this.headerDone = true
-      const rest = this.buf.subarray(idx + 4)
-      this.buf = Buffer.alloc(0)
-      if (rest.length > 0) this.emit("data", rest)
-    } else {
-      this.emit("data", data)
-    }
-  }
-
-  private onClose() {
-    if (this.ended) return
-    this.ended = true
-    this.emit("close")
-    this.emit("end")
-  }
-
-  write(chunk: Uint8Array | string): boolean {
-    this.socket?.write(chunk)
-    return true
-  }
+export type ExecOptions = {
+  /** Container-internal working directory for the command (default /workspace). */
+  workdir?: string
+  /** Extra env (KEY=VALUE) injected into the exec. */
+  env?: string[]
+  onData: (data: Buffer) => void
+  signal?: AbortSignal
+  timeout?: number
 }
 
 export type ContainerManager = ReturnType<typeof createContainerManager>
@@ -126,13 +47,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
   const docker = existsSync(socketPath)
     ? new Docker({ socketPath })
     : new Docker()
-
-  /** Raw PTY stream for a running container (Bun-native hijack). */
-  function attachPty(container: string) {
-    const stream = new HijackPtyStream(socketPath, container)
-    stream.connect()
-    return stream as unknown as NodeJS.ReadWriteStream
-  }
 
   function get(name: string) {
     return docker.getContainer(name)
@@ -155,24 +69,17 @@ export function createContainerManager(options?: { socketPath?: string }) {
     }
   }
 
-  /**
-   * Create + start + attach. The PTY stream is attached AFTER start via a raw
-   * unix-socket hijack (dockerode's attach(stdin) hangs under Bun).
-   */
-  async function launch(opts: LaunchOptions): Promise<LaunchedContainer> {
+  /** Create + start a sleep-infinity tool-box container. */
+  async function create(opts: CreateOptions): Promise<{ id: string }> {
     await remove(opts.name)
-
     const container = await docker.createContainer({
       name: opts.name,
       Image: opts.image,
-      Cmd: opts.cmd,
-      Env: opts.env,
+      // The image CMD is already `sleep infinity`; state it explicitly so a
+      // misconfigured image cannot hijack the tool-box role.
+      Cmd: ["sleep", "infinity"],
       WorkingDir: opts.workingDir,
-      Tty: true,
-      OpenStdin: true,
-      AttachStdin: true,
-      AttachStdout: true,
-      AttachStderr: true,
+      Tty: false,
       HostConfig: {
         AutoRemove: true,
         Binds: opts.binds,
@@ -188,14 +95,8 @@ export function createContainerManager(options?: { socketPath?: string }) {
         ExtraHosts: ["host.docker.internal:host-gateway"],
       },
     })
-
     await container.start()
-    const stream = attachPty(container.id)
-    return { id: container.id, stream }
-  }
-
-  async function resize(name: string, cols: number, rows: number) {
-    await get(name).resize({ h: rows, w: cols })
+    return { id: container.id }
   }
 
   async function kill(name: string, signal: "SIGTERM" | "SIGKILL") {
@@ -211,11 +112,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     return get(name).wait() as Promise<{ StatusCode: number }>
   }
 
-  /** Attach to an already-running container (server restart resilience). */
-  async function reattach(name: string): Promise<NodeJS.ReadWriteStream> {
-    return attachPty(name)
-  }
-
   async function isRunning(name: string): Promise<boolean> {
     try {
       const info = await get(name).inspect()
@@ -225,76 +121,79 @@ export function createContainerManager(options?: { socketPath?: string }) {
     }
   }
 
+  /**
+   * Run a command inside a running container via `docker exec`, streaming
+   * merged stdout+stderr to onData. Resolves with the process exit code
+   * (null if killed by signal/timeout). Bun-safe (plain Bun.spawn).
+   */
+  async function exec(
+    name: string,
+    command: string,
+    opts: ExecOptions
+  ): Promise<{ exitCode: number | null }> {
+    const workdir = opts.workdir ?? "/workspace"
+    const argv = ["docker", "exec"]
+    if (opts.env) {
+      for (const entry of opts.env) argv.push("-e", entry)
+    }
+    argv.push("-w", workdir, name, "bash", "-lc", command)
+
+    const proc = Bun.spawn(argv, {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+    })
+
+    let timedOut = false
+    const onAbort = () => {
+      try {
+        proc.kill()
+      } catch {
+        // ignore
+      }
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true })
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (opts.timeout && opts.timeout > 0) {
+      timer = setTimeout(() => {
+        timedOut = true
+        try {
+          proc.kill()
+        } catch {
+          // ignore
+        }
+      }, opts.timeout)
+    }
+
+    const pump = async (stream: ReadableStream<Uint8Array> | null) => {
+      if (!stream) return
+      const reader = stream.getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value) opts.onData(Buffer.from(value))
+      }
+    }
+
+    try {
+      await Promise.all([pump(proc.stdout), pump(proc.stderr)])
+      const exitCode = await proc.exited
+      return { exitCode: timedOut ? null : exitCode }
+    } finally {
+      if (timer) clearTimeout(timer)
+      opts.signal?.removeEventListener("abort", onAbort)
+    }
+  }
+
   return {
-    launch,
-    reattach,
-    resize,
+    create,
     kill,
     wait,
     remove,
     exists,
     isRunning,
+    exec,
     get,
   }
-}
-
-export type PiSessionFile = {
-  /** UUID portion of the filename (pi --export / --session match on this). */
-  sessionId: string
-  /** Absolute path to the .jsonl on the host (bind-mount source). */
-  sessionPath: string
-  /** Basename, e.g. "<timestamp>_<uuid>.jsonl". */
-  file: string
-  /** File mtime in ms. */
-  mtime: number
-}
-
-/**
- * Enumerate every pi session jsonl under a run's pi-agent volume, newest first.
- *
- * pi stores sessions under a per-project subdirectory:
- *   sessions/<project-slug>/<timestamp>_<uuid>.jsonl
- * (the slug derives from the working directory, e.g. "/workspace" → "--workspace--").
- * Each run has an exclusive mounted volume, so every jsonl found belongs to it.
- * The id is the UUID portion of the filename.
- */
-export function listPiSessions(piAgentDir: string): PiSessionFile[] {
-  const sessionsDir = join(piAgentDir, "sessions")
-  if (!existsSync(sessionsDir)) return []
-  const candidates: Array<{
-    file: string
-    path: string
-    mtime: number
-    uuid: string | null
-  }> = []
-  try {
-    const walk = (dir: string) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const full = join(dir, entry.name)
-        if (entry.isDirectory()) {
-          walk(full)
-        } else if (entry.name.endsWith(".jsonl")) {
-          const match = entry.name.match(
-            /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
-          )
-          candidates.push({
-            file: entry.name,
-            path: full,
-            mtime: statSync(full).mtimeMs,
-            uuid: match ? match[0] : null,
-          })
-        }
-      }
-    }
-    walk(sessionsDir)
-  } catch {
-    return []
-  }
-  candidates.sort((a, b) => b.mtime - a.mtime)
-  return candidates.map((c) => ({
-    sessionId: c.uuid ?? c.file.replace(/\.jsonl$/, ""),
-    sessionPath: c.path,
-    file: c.file,
-    mtime: c.mtime,
-  }))
 }

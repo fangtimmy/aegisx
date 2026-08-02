@@ -2,11 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   CircleAlert,
   Files,
-  History,
   Info,
+  MessageSquare,
   Play,
   Square,
-  TerminalSquare,
 } from "lucide-react"
 import { useSearchParams } from "react-router"
 import { type Challenge, keys, runsApi } from "@/api"
@@ -42,11 +41,10 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { toast } from "@/lib/toast"
+import { Conversation } from "./conversation"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
 import { RunOverview, statusVariant } from "./run-overview"
-import { SessionPanel } from "./session-panel"
-import { RunTerminal } from "./terminal"
 
 export function RunWorkspace({
   eventId,
@@ -66,6 +64,16 @@ export function RunWorkspace({
   const runs = useQuery({
     queryKey: keys.runs.byEvent(eventId),
     queryFn: () => runsApi.listEventRuns(eventId),
+  })
+  // Agents come from the run detail endpoint (list rows carry no agents).
+  const detail = useQuery({
+    enabled: Boolean(runId),
+    queryKey: runId ? keys.runs.detail(runId) : ["runs", "none"],
+    queryFn: () => runsApi.getRun(runId ?? ""),
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.run.status === "running"
+        ? 5000
+        : false,
   })
 
   const stop = useMutation({
@@ -140,14 +148,15 @@ export function RunWorkspace({
 
   const running = run.status === "running"
   const canResume = !running && run.status !== "failed"
+  const agents = detail.data?.agents ?? []
 
   const requestedView = searchParams.get("view")
   const view =
     requestedView === "overview" ||
     requestedView === "files" ||
-    requestedView === "session"
+    requestedView === "conversation"
       ? requestedView
-      : "terminal"
+      : "conversation"
 
   return (
     <CardFrame className="h-full min-h-0 min-w-0">
@@ -190,8 +199,8 @@ export function RunWorkspace({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Stop this run?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    pi receives SIGTERM, saves its session, and the container
-                    stops. You can resume the run later from the same session.
+                    The agent is aborted and the container stops. You can resume
+                    the run later from the same session.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -232,8 +241,8 @@ export function RunWorkspace({
               className="mx-6 w-auto shrink-0 justify-start border-b"
               variant="underline"
             >
-              <TabsTab className="gap-2" value="terminal">
-                <TerminalSquare /> Terminal
+              <TabsTab className="gap-2" value="conversation">
+                <MessageSquare /> Conversation
               </TabsTab>
               <TabsTab className="gap-2" value="overview">
                 <Info /> Overview
@@ -241,23 +250,12 @@ export function RunWorkspace({
               <TabsTab className="gap-2" value="files">
                 <Files /> Files
               </TabsTab>
-              <TabsTab className="gap-2" value="session">
-                <History /> Session
-              </TabsTab>
             </TabsList>
             <TabsPanel
               className="min-h-0 flex-1 overflow-hidden"
-              value="terminal"
+              value="conversation"
             >
-              {running ? (
-                <RunTerminal active={view === "terminal"} runId={runId} />
-              ) : (
-                <div className="flex h-full items-center justify-center p-6 text-center text-muted-foreground text-sm">
-                  {canResume
-                    ? "Run is stopped. Resume to reconnect the terminal."
-                    : "Run is not running."}
-                </div>
-              )}
+              <Conversation agents={agents} run={run} runId={runId} />
             </TabsPanel>
             <TabsPanel
               className="min-h-0 flex-1 overflow-hidden"
@@ -272,16 +270,6 @@ export function RunWorkspace({
                 enabled={view === "files"}
                 key={runId}
                 runId={runId}
-              />
-            </TabsPanel>
-            <TabsPanel
-              className="min-h-0 flex-1 overflow-hidden"
-              value="session"
-            >
-              <SessionPanel
-                enabled={view === "session"}
-                runId={runId}
-                running={running}
               />
             </TabsPanel>
           </Tabs>

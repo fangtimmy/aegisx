@@ -1,3 +1,23 @@
+CREATE TABLE `agents` (
+	`id` text PRIMARY KEY NOT NULL,
+	`run_id` text NOT NULL,
+	`role` text NOT NULL,
+	`parent_agent_id` text,
+	`status` text NOT NULL,
+	`session_file` text,
+	`name` text,
+	`task` text,
+	`created_at` text NOT NULL,
+	`started_at` text,
+	`updated_at` text NOT NULL,
+	`completed_at` text,
+	`error` text,
+	FOREIGN KEY (`run_id`) REFERENCES `runs`(`id`) ON UPDATE no action ON DELETE cascade,
+	CONSTRAINT "agents_role_check" CHECK("agents"."role" in ('main', 'child')),
+	CONSTRAINT "agents_status_check" CHECK("agents"."status" in ('running', 'completed', 'failed', 'stopped'))
+);
+--> statement-breakpoint
+CREATE INDEX `agents_run_id_idx` ON `agents` (`run_id`);--> statement-breakpoint
 CREATE TABLE `attachments` (
 	`id` text PRIMARY KEY NOT NULL,
 	`challenge_id` text NOT NULL,
@@ -76,16 +96,33 @@ CREATE TABLE `platform_request_log` (
 );
 --> statement-breakpoint
 CREATE INDEX `platform_request_log_created_at_idx` ON `platform_request_log` (`created_at`);--> statement-breakpoint
+CREATE TABLE `run_events` (
+	`id` text PRIMARY KEY NOT NULL,
+	`run_id` text NOT NULL,
+	`agent_id` text NOT NULL,
+	`seq` integer NOT NULL,
+	`role` text NOT NULL,
+	`content` text NOT NULL,
+	`tool_name` text,
+	`tool_call_id` text,
+	`is_error` integer,
+	`payload` text,
+	`created_at` text NOT NULL,
+	FOREIGN KEY (`run_id`) REFERENCES `runs`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE cascade,
+	CONSTRAINT "run_events_role_check" CHECK("run_events"."role" in ('user', 'assistant', 'toolResult', 'notice'))
+);
+--> statement-breakpoint
+CREATE INDEX `run_events_run_seq_idx` ON `run_events` (`run_id`,`seq`);--> statement-breakpoint
+CREATE INDEX `run_events_run_agent_seq_idx` ON `run_events` (`run_id`,`agent_id`,`seq`);--> statement-breakpoint
 CREATE TABLE `runs` (
 	`id` text PRIMARY KEY NOT NULL,
 	`challenge_id` text NOT NULL,
 	`status` text NOT NULL,
-	`launcher` text DEFAULT 'pi' NOT NULL,
 	`provider` text NOT NULL,
 	`provider_label` text,
 	`model_id` text NOT NULL,
 	`model_label` text,
-	`pi_model_ref` text,
 	`thinking_level` text DEFAULT 'off' NOT NULL,
 	`image` text NOT NULL,
 	`cpus` integer NOT NULL,
@@ -93,8 +130,7 @@ CREATE TABLE `runs` (
 	`pids_limit` integer NOT NULL,
 	`container_name` text NOT NULL,
 	`workspace_path` text NOT NULL,
-	`pi_session_id` text,
-	`pi_session_file` text,
+	`session_dir` text NOT NULL,
 	`created_at` text NOT NULL,
 	`started_at` text,
 	`updated_at` text NOT NULL,
@@ -103,7 +139,7 @@ CREATE TABLE `runs` (
 	`summary` text,
 	`flag` text,
 	FOREIGN KEY (`challenge_id`) REFERENCES `challenges`(`id`) ON UPDATE no action ON DELETE cascade,
-	CONSTRAINT "runs_status_check" CHECK("runs"."status" in ('running', 'completed', 'failed', 'stopped'))
+	CONSTRAINT "runs_status_check" CHECK("runs"."status" in ('running', 'completed', 'failed', 'stopped', 'timed_out'))
 );
 --> statement-breakpoint
 CREATE INDEX `runs_challenge_id_idx` ON `runs` (`challenge_id`);--> statement-breakpoint

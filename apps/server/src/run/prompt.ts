@@ -35,8 +35,8 @@ export type RunPromptInputs = {
 
 /**
  * Build the handlebars PromptTemplateContext for a run.
- * v3: single agent, container-only. The context shape is preserved (canSpawnAgent
- * is always false now) so existing user templates keep resolving.
+ * v4: host-side pi SDK. The main agent can spawn children; capabilities mirror
+ * the native tools registered for the run.
  */
 export function buildPromptContext(
   inputs: RunPromptInputs,
@@ -99,7 +99,7 @@ export function buildPromptContext(
     },
     capabilities: {
       canFinishRun: true,
-      canSpawnAgent: false,
+      canSpawnAgent: true,
       canSubmitFlag: platformIntegrated,
       canManageTarget: targetSupported,
     },

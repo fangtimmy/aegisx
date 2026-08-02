@@ -86,7 +86,7 @@ describe("event, challenge, and attachment API", () => {
       [challenge.id, "2099-01-01T00:00:00.000Z"]
     )
     sqlite.run(
-      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', ?, ?)",
+      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?)",
       [
         "active-run-1",
         challenge.id,
@@ -114,7 +114,7 @@ describe("event, challenge, and attachment API", () => {
     const challenge = await createChallenge(app, event.id)
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at) values (?, ?, 'completed', 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', ?, ?)",
+      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir) values (?, ?, 'completed', 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?)",
       [
         "completed-local-run",
         challenge.id,
@@ -195,7 +195,7 @@ describe("event, challenge, and attachment API", () => {
 
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', ?, ?)",
+      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?)",
       [
         "active-run",
         challenge.id,
