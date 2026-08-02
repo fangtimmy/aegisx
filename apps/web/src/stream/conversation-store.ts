@@ -104,6 +104,41 @@ export class ConversationStore {
     return this.activity.get(agentId) ?? null
   }
 
+  /** Latest running tool for an agent, for the "Working…" activity badge. */
+  getRunningTool(agentId: string): { toolName: string; args: unknown } | null {
+    const tools = this.toolProgress.get(agentId)
+    if (!tools) return null
+    let latest: ToolProgress | null = null
+    for (const tool of tools.values()) {
+      if (tool.status === "running") latest = tool
+    }
+    if (!latest) return null
+    return { toolName: latest.toolName, args: latest.args }
+  }
+
+  /**
+   * Drop ephemeral live state that may be stale after an SSE disconnect.
+   * Keeps optimistic pending user messages; clears running tool/activity
+   * progress and non-pending streamed drafts so a reconnect re-derives them
+   * from the freshly re-fetched committed history + new live stream.
+   */
+  resetForReconnect() {
+    const agentIds = new Set([
+      ...this.messageProgress.keys(),
+      ...this.toolProgress.keys(),
+      ...this.activity.keys(),
+    ])
+    for (const [agentId, progress] of this.messageProgress) {
+      for (const [messageId, entry] of progress) {
+        if (!entry.pending) progress.delete(messageId)
+      }
+      if (progress.size === 0) this.messageProgress.delete(agentId)
+    }
+    this.toolProgress.clear()
+    this.activity.clear()
+    for (const agentId of agentIds) this.rebuildLive(agentId)
+  }
+
   private rebuildCommitted(agentId: string) {
     const messages = [...(this.messages.get(agentId)?.values() ?? [])].sort(
       (left, right) => left.seq - right.seq
@@ -290,7 +325,10 @@ export class ConversationStore {
       const reconnecting = opened
       opened = true
       onDisconnectedChange(false)
-      if (reconnecting) onReconnect()
+      if (reconnecting) {
+        this.resetForReconnect()
+        onReconnect()
+      }
     }
     source.onerror = () => {
       if (this.source !== source) return
