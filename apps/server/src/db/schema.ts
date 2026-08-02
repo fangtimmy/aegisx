@@ -9,7 +9,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -144,7 +144,7 @@ export const runs = sqliteTable(
     index("runs_challenge_id_idx").on(table.challengeId),
     check(
       "runs_status_check",
-      sql`${table.status} in ('running', 'completed', 'failed', 'stopped', 'timed_out')`
+      sql`${table.status} in ('running', 'idle', 'closed')`
     ),
   ]
 )
@@ -180,7 +180,7 @@ export const agents = sqliteTable(
     check("agents_role_check", sql`${table.role} in ('main', 'child')`),
     check(
       "agents_status_check",
-      sql`${table.status} in ('running', 'completed', 'failed', 'stopped')`
+      sql`${table.status} in ('running', 'idle', 'completed', 'failed')`
     ),
   ]
 )

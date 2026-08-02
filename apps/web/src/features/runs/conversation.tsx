@@ -75,16 +75,16 @@ export function Conversation({
     void loadMessages()
   }, [agents.length, loadMessages])
 
-  const steer = useMutation({
+  const send = useMutation({
     mutationFn: () =>
-      runsApi.steerRun(runId, { text: draft.trim(), deliverAs }),
+      runsApi.sendMessage(runId, { text: draft.trim(), deliverAs }),
     onSuccess: () => setDraft(""),
     onError: (error) => toast.error("Failed to send message", error.message),
   })
 
   const onSubmit = () => {
-    if (!draft.trim() || !running) return
-    steer.mutate()
+    if (!draft.trim()) return
+    send.mutate()
   }
 
   return (
@@ -132,22 +132,26 @@ export function Conversation({
           <LoaderCircle className="size-3 animate-spin" /> Reconnecting…
         </div>
       )}
-      {running && selectedAgent && (
+      {selectedAgent && (
         <div className="shrink-0 border-t bg-background/95 px-4 py-3">
-          <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2 pb-2">
-            <AgentActivityBadge
-              agentId={selectedAgent.id}
-              agentStatus={selectedAgent.status}
-              stream={store}
-            />
-          </div>
+          {running && (
+            <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2 pb-2">
+              <AgentActivityBadge
+                agentId={selectedAgent.id}
+                agentStatus={selectedAgent.status}
+                stream={store}
+              />
+            </div>
+          )}
           <MessageInput
-            busy={steer.isPending}
+            busy={send.isPending}
+            closed={run.status === "closed"}
             deliverAs={deliverAs}
             draft={draft}
             onDeliverAsChange={setDeliverAs}
             onDraftChange={setDraft}
             onSubmit={onSubmit}
+            running={running}
           />
         </div>
       )}
@@ -159,6 +163,8 @@ function MessageInput({
   draft,
   deliverAs,
   busy,
+  closed,
+  running,
   onDraftChange,
   onDeliverAsChange,
   onSubmit,
@@ -166,42 +172,51 @@ function MessageInput({
   draft: string
   deliverAs: "steer" | "followUp"
   busy: boolean
+  closed: boolean
+  running: boolean
   onDraftChange: (value: string) => void
   onDeliverAsChange: (value: "steer" | "followUp") => void
   onSubmit: () => void
 }) {
+  const placeholder = closed
+    ? "Send a message to reopen and continue (container will rebuild)"
+    : running
+      ? "Steer or follow up the agent…"
+      : "Send a message to the agent…"
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="flex items-center gap-1 pb-1.5 text-xs">
-        <span className="text-muted-foreground">Deliver as</span>
-        <button
-          className={cn(
-            "rounded px-1.5 py-0.5",
-            deliverAs === "steer"
-              ? "bg-secondary text-secondary-foreground"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => onDeliverAsChange("steer")}
-          type="button"
-        >
-          Steer
-        </button>
-        <button
-          className={cn(
-            "rounded px-1.5 py-0.5",
-            deliverAs === "followUp"
-              ? "bg-secondary text-secondary-foreground"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => onDeliverAsChange("followUp")}
-          type="button"
-        >
-          Follow-up
-        </button>
-        <span className="ml-auto text-muted-foreground">
-          Steer interrupts after current tools; follow-up waits until idle.
-        </span>
-      </div>
+      {running && (
+        <div className="flex items-center gap-1 pb-1.5 text-xs">
+          <span className="text-muted-foreground">Deliver as</span>
+          <button
+            className={cn(
+              "rounded px-1.5 py-0.5",
+              deliverAs === "steer"
+                ? "bg-secondary text-secondary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            onClick={() => onDeliverAsChange("steer")}
+            type="button"
+          >
+            Steer
+          </button>
+          <button
+            className={cn(
+              "rounded px-1.5 py-0.5",
+              deliverAs === "followUp"
+                ? "bg-secondary text-secondary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            onClick={() => onDeliverAsChange("followUp")}
+            type="button"
+          >
+            Follow-up
+          </button>
+          <span className="ml-auto text-muted-foreground">
+            Steer interrupts after current tools; follow-up waits until idle.
+          </span>
+        </div>
+      )}
       <div className="flex items-end gap-2">
         <Textarea
           className="min-h-[2.5rem] flex-1 resize-none"
@@ -212,7 +227,7 @@ function MessageInput({
               onSubmit()
             }
           }}
-          placeholder="Message the agent…"
+          placeholder={placeholder}
           rows={2}
           value={draft}
         />

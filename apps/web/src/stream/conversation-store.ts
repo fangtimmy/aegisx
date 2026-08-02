@@ -36,12 +36,6 @@ type AgentView = {
 }
 
 const emptyItems: ConversationItem[] = []
-const terminalStatuses = new Set<RunPublic["status"]>([
-  "completed",
-  "failed",
-  "stopped",
-  "timed_out",
-])
 
 function isUserLike(message: Message) {
   return message.role === "user" || message.role === "notice"
@@ -346,10 +340,6 @@ export class ConversationStore {
       if (event) this.applyEvent(event)
     }
     return () => this.close()
-  }
-
-  closeOnTerminal(status: RunPublic["status"]) {
-    return terminalStatuses.has(status)
   }
 
   close() {

@@ -139,7 +139,10 @@ export function registerEventRoutes(
       .from(runs)
       .innerJoin(challenges, eq(runs.challengeId, challenges.id))
       .where(
-        and(eq(challenges.eventId, eventId), inArray(runs.status, ["running"]))
+        and(
+          eq(challenges.eventId, eventId),
+          inArray(runs.status, ["running", "idle"])
+        )
       )
       .get()
     if (activeRun) {
@@ -147,7 +150,7 @@ export function registerEventRoutes(
         {
           error: {
             code: "active_run",
-            message: "Stop active runs before deleting this event",
+            message: "Close active runs before deleting this event",
           },
         },
         409
@@ -269,7 +272,7 @@ export function registerEventRoutes(
       .where(
         and(
           eq(runs.challengeId, challenge.id),
-          inArray(runs.status, ["running"])
+          inArray(runs.status, ["running", "idle"])
         )
       )
       .get()
@@ -278,7 +281,7 @@ export function registerEventRoutes(
         {
           error: {
             code: "active_run",
-            message: "Stop active runs before deleting this challenge",
+            message: "Close active runs before deleting this challenge",
           },
         },
         409

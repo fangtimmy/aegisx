@@ -10,8 +10,7 @@ import { toast } from "@/lib/toast"
 
 export function statusVariant(status: RunStatus) {
   if (status === "running") return "info" as const
-  if (status === "completed") return "success" as const
-  if (status === "failed") return "error" as const
+  if (status === "idle") return "success" as const
   return "secondary" as const
 }
 

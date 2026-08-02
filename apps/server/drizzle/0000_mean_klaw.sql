@@ -14,7 +14,7 @@ CREATE TABLE `agents` (
 	`error` text,
 	FOREIGN KEY (`run_id`) REFERENCES `runs`(`id`) ON UPDATE no action ON DELETE cascade,
 	CONSTRAINT "agents_role_check" CHECK("agents"."role" in ('main', 'child')),
-	CONSTRAINT "agents_status_check" CHECK("agents"."status" in ('running', 'completed', 'failed', 'stopped'))
+	CONSTRAINT "agents_status_check" CHECK("agents"."status" in ('running', 'idle', 'completed', 'failed'))
 );
 --> statement-breakpoint
 CREATE INDEX `agents_run_id_idx` ON `agents` (`run_id`);--> statement-breakpoint
@@ -139,7 +139,7 @@ CREATE TABLE `runs` (
 	`summary` text,
 	`flag` text,
 	FOREIGN KEY (`challenge_id`) REFERENCES `challenges`(`id`) ON UPDATE no action ON DELETE cascade,
-	CONSTRAINT "runs_status_check" CHECK("runs"."status" in ('running', 'completed', 'failed', 'stopped', 'timed_out'))
+	CONSTRAINT "runs_status_check" CHECK("runs"."status" in ('running', 'idle', 'closed'))
 );
 --> statement-breakpoint
 CREATE INDEX `runs_challenge_id_idx` ON `runs` (`challenge_id`);--> statement-breakpoint

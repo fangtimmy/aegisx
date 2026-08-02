@@ -18,7 +18,7 @@ export type RemoteChallengeStatus =
 export function localChallengeStatus(
   challenge: Challenge
 ): LocalChallengeStatus {
-  if (challenge.runStatusCounts.completed > 0) return "solved"
+  if (challenge.status === "solved") return "solved"
   if (challenge.runCount > 0) return "in_progress"
   return "not_started"
 }
@@ -33,7 +33,7 @@ export function remoteChallengeStatus(
 }
 
 export function isChallengeSolved(challenge: Challenge) {
-  return challenge.remoteSolved || challenge.runStatusCounts.completed > 0
+  return challenge.status === "solved"
 }
 
 export function ErrorState({

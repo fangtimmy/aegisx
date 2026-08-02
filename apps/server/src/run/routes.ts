@@ -260,9 +260,9 @@ export function registerRunRoutes(
     async (c) => {
       try {
         const body = c.req.valid("json")
-        const run = await runService.steer(c.req.param("runId"), {
+        const run = await runService.sendMessage(c.req.param("runId"), {
           text: body.text,
-          deliverAs: body.deliverAs ?? "steer",
+          deliverAs: body.deliverAs,
         })
         return c.json(run)
       } catch (error) {
@@ -279,9 +279,9 @@ export function registerRunRoutes(
     }
   })
 
-  app.post("/api/runs/:runId/resume", validateJson(emptyInput), async (c) => {
+  app.post("/api/runs/:runId/close", validateJson(emptyInput), async (c) => {
     try {
-      return c.json(await runService.resume(c.req.param("runId")))
+      return c.json(await runService.closeRun(c.req.param("runId")))
     } catch (error) {
       return runError(c, error)
     }

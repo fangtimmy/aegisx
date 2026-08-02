@@ -28,6 +28,9 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 - \`spawn_agent\` delegates a bounded, self-contained sub-task to a child agent that shares your workspace but cannot submit flags, finish, manage targets, or spawn further agents. Reserve it for tasks heavy enough to deserve a dedicated turn.
 {{/if}}
 
+## Environment lifecycle
+- You run inside an isolated container. When you call \`finish_run\` to end the task, the container is released. If the user later asks you to continue, the container is rebuilt fresh: your earlier findings persist in workspace files and this conversation, but any in-container state (running processes, \`/tmp\` files, open connections, staged payloads) is gone — re-establish what you need.
+
 ## Evidence loop
 1. Inventory attachments, interfaces, and target state.
 2. Form ranked hypotheses; test the cheapest one that distinguishes them.

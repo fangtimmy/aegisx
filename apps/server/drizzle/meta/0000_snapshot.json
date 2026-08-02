@@ -132,7 +132,7 @@
         },
         "agents_status_check": {
           "name": "agents_status_check",
-          "value": "\"agents\".\"status\" in ('running', 'completed', 'failed', 'stopped')"
+          "value": "\"agents\".\"status\" in ('running', 'idle', 'completed', 'failed')"
         }
       }
     },
@@ -983,7 +983,7 @@
       "checkConstraints": {
         "runs_status_check": {
           "name": "runs_status_check",
-          "value": "\"runs\".\"status\" in ('running', 'completed', 'failed', 'stopped', 'timed_out')"
+          "value": "\"runs\".\"status\" in ('running', 'idle', 'closed')"
         }
       }
     },

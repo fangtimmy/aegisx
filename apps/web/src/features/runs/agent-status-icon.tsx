@@ -1,11 +1,11 @@
-import { Check, CircleDashed, CircleSlash, LoaderCircle, X } from "lucide-react"
+import { Check, CircleDashed, LoaderCircle, X } from "lucide-react"
 import type { AgentStatus } from "@/api"
 import { cn } from "@/lib/utils"
 
 /**
  * Inline status glyph for an agent. Spins while running; uses the theme status
- * colors (info/success/destructive/muted). Sizes inherit from the parent unless
- * overridden via className (e.g. `[&_svg]:size-3.5`).
+ * colors (info/success/destructive/muted). The main agent uses running|idle;
+ * children use completed|failed. Sizes inherit unless overridden via className.
  */
 export function AgentStatusIcon({
   status,
@@ -21,9 +21,7 @@ export function AgentStatusIcon({
         ? Check
         : status === "failed"
           ? X
-          : status === "stopped"
-            ? CircleSlash
-            : CircleDashed
+          : CircleDashed // idle
   return (
     <span
       className={cn(
@@ -31,7 +29,7 @@ export function AgentStatusIcon({
         status === "running" && "text-info",
         status === "completed" && "text-success",
         status === "failed" && "text-destructive",
-        status === "stopped" && "text-muted-foreground",
+        status === "idle" && "text-muted-foreground",
         className
       )}
       title={status}

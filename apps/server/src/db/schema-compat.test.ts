@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { createDatabase } from "./index"
 import { agents, runEvents, runs, SCHEMA_VERSION } from "./schema"
 
-describe("schema v4 bootstrap", () => {
+describe("schema v5 bootstrap", () => {
   test("fresh database migrates and sets user_version=4", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
@@ -15,7 +15,6 @@ describe("schema v4 bootstrap", () => {
         sqlite.query("PRAGMA user_version").get() as { user_version: number }
       ).user_version
       expect(version).toBe(SCHEMA_VERSION)
-      expect(version).toBe(4)
       const tables = sqlite
         .query(
           `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`
@@ -80,7 +79,21 @@ describe("schema v4 bootstrap", () => {
       sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
       sqlite.run(`PRAGMA user_version = 3`)
       sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/older than v4/i)
+      expect(() => createDatabase(dir)).toThrow(/older than v5/i)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("rejects v4 database (user_version=4)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v4-"))
+    try {
+      const path = join(dir, "aegisx.sqlite")
+      const sqlite = new Database(path, { create: true })
+      sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
+      sqlite.run(`PRAGMA user_version = 4`)
+      sqlite.close()
+      expect(() => createDatabase(dir)).toThrow(/older than v5/i)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

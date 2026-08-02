@@ -164,12 +164,12 @@ export function ChallengeCard({
                   />
                   <HardDrive
                     aria-label={
-                      challenge.runStatusCounts.completed > 0
+                      challenge.status === "solved"
                         ? "Local solved"
                         : "Local unsolved"
                     }
                     className={
-                      challenge.runStatusCounts.completed > 0
+                      challenge.status === "solved"
                         ? "size-3 opacity-100"
                         : "size-3 opacity-35"
                     }

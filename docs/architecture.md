@@ -64,7 +64,7 @@ apps/server/src/
   app.ts            composition root; recoverOnBoot; route registration
   index.ts          Bun.serve entry (idleTimeout 0 for quiet SSE)
   run/
-    service.ts        lifecycle: create/stop/finish/resume/delete/recover/spawnChild
+    service.ts        lifecycle: create/sendMessage/stop/close/finish/delete/recover/spawnChild
     agent-session.ts  createAgentSession wrapper + event pipeline wiring
     container-tools.ts BashOperations → docker exec
     events.ts         SDK AgentSessionEvent → committed Message + live progress
@@ -86,26 +86,38 @@ apps/web/           React + Vite; Conversation timeline; coss UI
 containers/solver/  Kali-based solver image (sleep infinity CMD)
 ```
 
-## Run lifecycle
+## Run lifecycle (v5)
+
+A run is a **long-lived pi session + container**; the lifecycle revolves around
+the SDK's `isStreaming`, not around per-turn teardown. There is no `resume`
+concept: messaging a run always works. See
+[lifecycle-redesign.md](./lifecycle-redesign.md) for the full rationale.
+
+Statuses: `running` (turn in flight, container warm) · `idle` (between turns,
+container warm) · `closed` (container + in-process session released; jsonl
+retained, cold-restorable by messaging). `finish_run` releases the container
+(`closed`) but is **not** a dead terminal — the run can be re-opened.
 
 - **create** (`service.create`): copy attachments into the workspace, render the
-  main/child/initial prompts, build an isolated `ModelRuntime` (per-run
-  `models.json`), start the tool-box container (`sleep infinity`, bind workspace
-  only), build the native tools, `createAgentSession`, insert `runs` + the main
-  `agents` row, subscribe the event pipeline, then `session.prompt(initial)`.
-- **driveRun → finalize**: `prompt()` resolves on natural idle, after
-  `finish_run` (tool returns `terminate`), or after an abort (`stop`). Finalize
-  is the single completion point: it writes the terminal status, marks the main
-  agent, stops the container, disposes the session, and emits `run.updated`.
-- **stop**: sets a pending `stop` outcome and `session.abort()`; finalize marks
-  `stopped`.
-- **finish**: `finish_run` tool schedules a pending `finish` outcome and returns
-  `terminate`; finalize marks `completed` with the summary. The HTTP `/finish`
-  endpoint force-aborts.
-- **resume**: a new container + `SessionManager.open(sessionFile)` +
-  `createAgentSession` continues the same session, then `prompt("Continue…")`.
-- **recoverOnBoot**: on startup, any `running` row is marked `stopped` (the
-  host-side session is gone after a crash). No model call is made automatically.
+  prompts, build an isolated `ModelRuntime` (per-run `models.json`), start the
+  tool-box container, build the native tools, `createAgentSession`, insert the
+  run as `running`, then `driveRun(initial)`.
+- **driveRun → settleTurn**: `prompt()` resolves on natural idle, after
+  `finish_run` (tool returns `terminate`), or after an abort. `settleTurn` is the
+  single settle point; a generation guard makes a stale turn (superseded by a
+  newer one) no-op. finish/close → `freeRun` (release container + session →
+  `closed`, keep jsonl); otherwise → `idle` (container kept).
+- **sendMessage** (POST `/message`): streaming → `steer`/`followUp`; idle →
+  `prompt`; closed → `ensureWarm` (cold-restore: new container +
+  `SessionManager.open` + `createAgentSession`) then `prompt`.
+- **stop** (Esc): `session.abort()`; the turn settles to `idle` (container kept).
+- **finish** (tool or POST `/finish`): pending finish + abort → `freeRun` →
+  `closed` + summary (`completedAt`).
+- **close** (POST `/close`): manually release a warm run's container → `closed`.
+- **delete**: remove the container (if warm), dispose the session, delete jsonl
+  + workspace + row.
+- **recoverOnBoot**: on startup, any `running`/`idle` row is marked `closed`
+  (host-side session gone after a crash) and its orphan container reclaimed.
 - **compaction / retry**: handled by the SDK via `SettingsManager.inMemory`
   (enabled; not exposed in the settings UI yet).
 
@@ -143,7 +155,7 @@ targets, or spawn further agents. Concurrent children per run are capped.
 `events` → `event_platforms` → `challenges` → (`attachments`, `challenge_remote`)
 → `runs` → (`agents`, `run_events`, `submissions`). Plus
 `platform_request_log`. v1/v2/v3 databases are refused at open (full wipe);
-`SCHEMA_VERSION = 4`.
+`SCHEMA_VERSION = 5`.
 
 `runs` dropped the v3 `launcher`/`pi_model_ref` and gained `session_dir`.
 `agents` (main + child) and `run_events` (committed message log, monotonic `seq`
@@ -160,10 +172,10 @@ per run) are new.
 | POST | `/api/runs/:id/message` | `{ text, deliverAs?: "steer"\|"followUp" }` |
 | GET | `/api/runs/:id/files` `[?path=]` | workspace listing/preview |
 | GET | `/api/runs/:id/files/download` | workspace file download |
-| POST | `/api/runs/:id/stop \| /resume \| /finish` | control |
+| POST | `/api/runs/:id/stop \| /close \| /finish` | control |
 | POST | `/api/runs/:id/flag` | platform flag submission |
 | GET/POST | `/api/runs/:id/target[/:action]` | target inspect/start/extend/stop |
-| DELETE | `/api/runs/:id` | terminal runs only |
+| DELETE | `/api/runs/:id` | any run (frees container if warm) |
 
 The v3 `GET /api/runs/:id/pty` WebSocket is gone.
 
@@ -178,5 +190,5 @@ now (not exposed).
 
 - No Orchestrator (multi-run scheduling) — explicitly out of v4 scope.
 - `bash` is one `docker exec` per call (no long-lived shell reuse yet).
-- Per-run timeout (`timed_out` status wired but no timer driving it yet).
+- Per-run timeout: no `timed_out` status in v5 (lifecycle collapsed to running/idle/closed); a future timeout would abort the turn → `idle`.
 - Usage/cost Overview from SDK events — fields flow through; UI not added.

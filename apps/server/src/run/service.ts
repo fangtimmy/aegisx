@@ -63,7 +63,7 @@ export type RunServiceOptions = {
   getSettings(): import("../../../shared").FlatSettings
 }
 
-type PendingOutcome = { mode: "finish"; summary: string } | { mode: "stop" }
+type PendingOutcome = { mode: "finish"; summary: string } | { mode: "close" }
 
 type RunContext = {
   containerName: string
@@ -95,9 +95,10 @@ export type CreateRunInput = {
   }
 }
 
-export type SteerInput = {
+export type SendMessageInput = {
   text: string
-  deliverAs: "steer" | "followUp"
+  /** Only meaningful while the agent is streaming (steer/followUp). Ignored when starting a new turn. */
+  deliverAs?: "steer" | "followUp"
 }
 
 export type RunService = ReturnType<typeof createRunService>
@@ -113,6 +114,8 @@ export function createRunService(options: RunServiceOptions) {
   const contexts = new Map<string, RunContext>() // per-run reusable handles
   const locks = new Map<string, Promise<unknown>>()
   const pending = new Map<string, PendingOutcome>()
+  /** Monotonic per-run turn counter; stale turn settles no-op (generation guard). */
+  const turnGeneration = new Map<string, number>()
   const forceKillTimers = new Map<string, NodeJS.Timeout>()
   let closed = false
   const now = () => new Date().toISOString()
@@ -200,13 +203,27 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /**
-   * Drive one prompt() to completion, then finalize the run. The agent loop
-   * resolves on natural end, after a tool requests finish (terminate), or after
-   * an abort (stop). Finalize is the single completion point.
+   * Drive one prompt() turn to completion, then settle. The run is marked
+   * running for the turn; on resolve it goes idle (container kept) unless
+   * finish_run / a manual close requested resource release (→ closed).
    */
   function driveRun(runId: string, text: string) {
     const agentSession = sessions.get(runId)
     if (!agentSession) return
+    const gen = (turnGeneration.get(runId) ?? 0) + 1
+    turnGeneration.set(runId, gen)
+    const ts = now()
+    updateRun(runId, { status: "running", error: null, updatedAt: ts })
+    const mainAgent = queries.mainAgent(runId)
+    if (mainAgent) {
+      updateAgent(mainAgent.id, {
+        status: "running",
+        error: null,
+        updatedAt: ts,
+      })
+    }
+    emitRun(runId)
+    emitAgents(runId)
     void agentSession.session
       .prompt(text)
       .catch((error) => {
@@ -217,65 +234,79 @@ export function createRunService(options: RunServiceOptions) {
         return error instanceof Error ? error.message : String(error)
       })
       .then((error) =>
-        finalize(runId, typeof error === "string" ? error : null)
+        settleTurn(runId, typeof error === "string" ? error : null, gen)
       )
   }
 
-  function finalize(runId: string, runError: string | null) {
+  /**
+   * Turn resolved — the single settle point. A stale turn (a newer turn already
+   * started) no-ops via the generation guard. Otherwise: finish/close → free
+   * resources (closed); anything else → idle (container kept).
+   */
+  function settleTurn(runId: string, runError: string | null, gen: number) {
     void withLock(runId, () => {
+      if (turnGeneration.get(runId) !== gen) return
       const row = queries.getRow(runId)
       if (!row || row.status !== "running") return
       const outcome = pending.get(runId)
       pending.delete(runId)
-      const ts = now()
-      let status: string
-      let summary: string | null = row.summary
-      let error: string | null = null
       if (outcome?.mode === "finish") {
-        status = "completed"
-        if (outcome.summary) summary = outcome.summary
-      } else if (outcome?.mode === "stop") {
-        status = "stopped"
-      } else if (runError) {
-        status = "failed"
-        error = runError
+        freeRun(runId, { summary: outcome.summary, finished: true })
+      } else if (outcome?.mode === "close") {
+        freeRun(runId)
       } else {
-        // Agent went idle without an explicit finish — treat as completed.
-        status = "completed"
+        idleRun(runId, runError)
       }
-      updateRun(runId, {
-        status,
-        summary,
-        error,
-        completedAt: ts,
+    })
+  }
+
+  /** Turn ended without a finish/close: go idle, keep the container warm. */
+  function idleRun(runId: string, runError: string | null) {
+    const ts = now()
+    updateRun(runId, { status: "idle", error: runError, updatedAt: ts })
+    const mainAgent = queries.mainAgent(runId)
+    if (mainAgent) {
+      updateAgent(mainAgent.id, {
+        status: "idle",
+        error: runError,
         updatedAt: ts,
       })
-      // Mark the main agent row.
-      const mainAgent = queries.mainAgent(runId)
-      if (mainAgent) {
-        updateAgent(mainAgent.id, {
-          status:
-            status === "completed"
-              ? "completed"
-              : status === "stopped"
-                ? "stopped"
-                : "failed",
-          completedAt: ts,
-          updatedAt: ts,
-          error,
-        })
-      }
-      clearForceKill(runId)
-      terminateContainer(runId, containerName(runId))
-      const agentSession = sessions.get(runId)
-      if (agentSession) {
-        void agentSession.dispose()
-        sessions.delete(runId)
-      }
-      contexts.delete(runId)
-      emitRun(runId)
-      emitAgents(runId)
-    })
+    }
+    emitRun(runId)
+    emitAgents(runId)
+  }
+
+  /**
+   * Release a run's live resources (container + in-process session). The jsonl
+   * + workspace are kept so the run can be cold-restored by messaging it. Run
+   * becomes closed. `finished` stamps completedAt (finish_run / force finish).
+   */
+  function freeRun(
+    runId: string,
+    opts: { summary?: string; finished?: boolean } = {}
+  ) {
+    const ts = now()
+    const patch: Record<string, unknown> = {
+      status: "closed",
+      updatedAt: ts,
+    }
+    if (opts.summary !== undefined) patch.summary = opts.summary
+    if (opts.finished) patch.completedAt = ts
+    updateRun(runId, patch)
+    const mainAgent = queries.mainAgent(runId)
+    if (mainAgent) updateAgent(mainAgent.id, { status: "idle", updatedAt: ts })
+    clearForceKill(runId)
+    terminateContainer(runId, containerName(runId))
+    const agentSession = sessions.get(runId)
+    if (agentSession) {
+      void agentSession.dispose()
+      sessions.delete(runId)
+    }
+    contexts.delete(runId)
+    turnGeneration.delete(runId)
+    pending.delete(runId)
+    emitRun(runId)
+    emitAgents(runId)
   }
 
   function providers(): ProviderConnection[] {
@@ -463,11 +494,11 @@ export function createRunService(options: RunServiceOptions) {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        clearForceKill(runId)
         terminateContainer(runId, name)
         updateRun(runId, {
-          status: "failed",
+          status: "closed",
           error: `Failed to start agent: ${message}`,
-          completedAt: now(),
           updatedAt: now(),
         })
         throw new RunActionError("launch_failed", message)
@@ -505,236 +536,253 @@ export function createRunService(options: RunServiceOptions) {
       emitRun(runId)
       emitAgents(runId)
 
-      // Fire the bootstrap prompt; finalize on resolution.
+      // Fire the bootstrap prompt; the run settles (idle/closed) on resolution.
       driveRun(runId, initialPrompt)
       return requireRun(runId)
     })
   }
 
-  function stop(runId: string) {
+  /** Esc: abort the current turn. It settles to idle; the container is kept. */
+  function stop(runId: string): Promise<RunPublic> {
     return withLock(runId, async () => {
       const run = requireRun(runId)
       if (run.status !== "running") {
         throw new RunActionError("invalid_state", "Run is not running")
       }
-      pending.set(runId, { mode: "stop" })
       const agentSession = sessions.get(runId)
-      if (agentSession) void agentSession.session.abort().catch(() => undefined)
+      if (agentSession)
+        await agentSession.session.abort().catch(() => undefined)
       return requireRun(runId)
     })
   }
 
-  function finish(runId: string, summary: string) {
+  /** Force-finish (HTTP /finish): mark done + release resources. */
+  function finish(runId: string, summary: string): Promise<RunPublic> {
     return withLock(runId, async () => {
       const run = requireRun(runId)
-      if (run.status !== "running") {
-        throw new RunActionError("invalid_state", "Run is not running")
+      if (run.status === "closed") {
+        throw new RunActionError("invalid_state", "Run is already closed")
       }
       pending.set(runId, { mode: "finish", summary })
       const agentSession = sessions.get(runId)
-      if (agentSession) void agentSession.session.abort().catch(() => undefined)
+      if (agentSession?.session.isStreaming) {
+        await agentSession.session.abort().catch(() => undefined)
+      } else {
+        freeRun(runId, { summary, finished: true })
+        pending.delete(runId)
+      }
       return requireRun(runId)
     })
   }
 
-  function steer(runId: string, input: SteerInput): Promise<RunPublic> {
+  /**
+   * Ensure a run has a live session + warm container. No-op if already warm;
+   * cold-restores a closed run from its jsonl (SessionManager.open) with a
+   * fresh container. Does not drive a turn — the caller prompts afterwards.
+   */
+  async function ensureWarm(runId: string): Promise<void> {
+    if (sessions.has(runId)) return
+    const row = queries.getRow(runId)
+    if (!row) throw new RunActionError("not_found", "Run not found")
+    const mainAgent = queries.mainAgent(runId)
+    if (!mainAgent?.sessionFile) {
+      throw new RunActionError("invalid_state", "Run has no session to restore")
+    }
+    const settings = options.getSettings()
+    const wsAbs = workspaceAbs(runId)
+    const sessAbs = sessionsAbs(runId)
+    const rtAbs = runtimeAbs(runId)
+    mkdirSync(rtAbs, { recursive: true })
+
+    const modelRuntime = await createRunModelRuntime({
+      runtimeDir: rtAbs,
+      providers: providers(),
+    })
+    // Resolve the model from the snapshot stored on the run row.
+    const provider = providers().find((p) => p.label === row.providerLabel)
+    const sdkModel = provider
+      ? resolveRunModel(modelRuntime, provider, row.modelId)
+      : undefined
+    if (!sdkModel) {
+      throw new RunStartError("Could not resolve the run's model for restore")
+    }
+
+    try {
+      await containerManager.create({
+        name: row.containerName,
+        image: row.image,
+        workingDir: settings["container.workspace"],
+        binds: [`${wsAbs}:${settings["container.workspace"]}`],
+        limits: {
+          cpus: row.cpus,
+          memoryMb: row.memoryMb,
+          pidsLimit: row.pidsLimit,
+        },
+        tmpfsSize: settings["container.tmpfsSize"],
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new RunActionError("launch_failed", message)
+    }
+
+    const bashDef = createBashToolDefinition(wsAbs, {
+      operations: createContainerBashOperations(
+        row.containerName,
+        containerManager
+      ),
+    })
+    // Re-render prompts for the restored run (attachments + capabilities).
+    const challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, row.challengeId))
+      .get()
+    if (!challenge) throw new RunActionError("not_found", "Challenge not found")
+    const remote = getChallengeRemote(db, row.challengeId)
+    const templates = resolvePromptTemplates(settings)
+    const promptContext = buildPromptContext(
+      {
+        runId,
+        challenge,
+        remote,
+        challengeAttachments: [],
+        environment: {
+          type: "container",
+          image: row.image,
+          cpus: row.cpus,
+          memoryMb: row.memoryMb,
+          pidsLimit: row.pidsLimit,
+        },
+        model: {
+          provider: row.providerLabel ?? row.provider,
+          providerLabel: row.providerLabel ?? undefined,
+          modelId: row.modelId,
+          modelLabel: row.modelLabel ?? undefined,
+          thinkingLevel: row.thinkingLevel as ThinkingLevel,
+        },
+      },
+      db,
+      settings["container.workspace"]
+    )
+    const caps: ToolCapabilities = {
+      canSubmitFlag: promptContext.capabilities.canSubmitFlag,
+      canManageTarget: promptContext.capabilities.canManageTarget,
+      canSpawnAgent: true,
+    }
+    const toolCtx: RunToolContext = {
+      runId,
+      challengeId: row.challengeId,
+      submitFlag: (flag) =>
+        platformService
+          .submitFlag(runId, row.challengeId, flag)
+          .then((r) => r ?? null),
+      targetAction: (action) =>
+        platformService.targetAction(row.challengeId, action),
+      requestFinish: (summary) =>
+        pending.set(runId, { mode: "finish", summary }),
+      spawnChild: (childInput) => spawnChild(runId, mainAgent.id, childInput),
+    }
+    const nativeTools = createMainTools(toolCtx, caps)
+    const customTools = [bashDef, ...nativeTools] as ToolDefinition[]
+    const toolNames = [
+      "read",
+      "bash",
+      "edit",
+      "write",
+      "grep",
+      "find",
+      "ls",
+      ...nativeTools.map((tool) => tool.name),
+    ]
+
+    let agentSession: RunAgentSession
+    try {
+      agentSession = await createRunAgentSession({
+        runId,
+        agentId: mainAgent.id,
+        workspaceHostPath: wsAbs,
+        sessionsDir: sessAbs,
+        sessionFile: mainAgent.sessionFile,
+        modelRuntime,
+        model: sdkModel,
+        thinkingLevel: row.thinkingLevel as ThinkingLevel,
+        systemPrompt: renderSystemPrompt(
+          templates.mainSystemPromptTemplate,
+          promptContext
+        ),
+        toolNames,
+        customTools,
+        db,
+        bus,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      clearForceKill(runId)
+      terminateContainer(runId, row.containerName)
+      throw new RunActionError("launch_failed", message)
+    }
+
+    contexts.set(runId, {
+      containerName: row.containerName,
+      workspaceHostPath: wsAbs,
+      sessionsDir: sessAbs,
+      modelRuntime,
+      sdkModel,
+      thinkingLevel: row.thinkingLevel as ThinkingLevel,
+      childTemplate: templates.childSystemPromptTemplate,
+      promptContext,
+      caps,
+      challengeId: row.challengeId,
+    })
+    sessions.set(runId, agentSession)
+  }
+
+  /**
+   * Unified message entry. Streaming → steer/followUp (queue into the current
+   * turn). Idle/closed → drive a new turn (cold-restoring a closed run first).
+   */
+  function sendMessage(
+    runId: string,
+    input: SendMessageInput
+  ): Promise<RunPublic> {
     return withLock(runId, async () => {
       const run = requireRun(runId)
-      if (run.status !== "running") {
-        throw new RunActionError("invalid_state", "Run is not running")
-      }
+      if (run.status === "closed") await ensureWarm(runId)
       const agentSession = sessions.get(runId)
       if (!agentSession)
         throw new RunActionError("invalid_state", "Run has no active session")
-      if (input.deliverAs === "steer") {
-        await agentSession.session.steer(input.text)
-      } else {
-        await agentSession.session.followUp(input.text)
+      if (agentSession.session.isStreaming) {
+        if (input.deliverAs === "followUp") {
+          await agentSession.session.followUp(input.text)
+        } else {
+          await agentSession.session.steer(input.text)
+        }
+        return requireRun(runId)
       }
+      pending.delete(runId)
+      driveRun(runId, input.text)
       return requireRun(runId)
     })
   }
 
-  function resume(runId: string) {
+  /**
+   * Manually release a run's container + session (→ closed). Keeps jsonl so the
+   * run can be cold-restored by messaging it. A streaming turn is aborted first
+   * and freed when it settles.
+   */
+  function closeRun(runId: string): Promise<RunPublic> {
     return withLock(runId, async () => {
-      const row = queries.getRow(runId)
-      if (!row) throw new RunActionError("not_found", "Run not found")
-      if (row.status === "running") {
-        throw new RunActionError("invalid_state", "Run is already running")
+      const run = requireRun(runId)
+      if (run.status === "closed") {
+        throw new RunActionError("invalid_state", "Run is already closed")
       }
-      const mainAgent = queries.mainAgent(runId)
-      if (!mainAgent?.sessionFile) {
-        throw new RunActionError(
-          "invalid_state",
-          "Run has no session to resume"
-        )
+      const agentSession = sessions.get(runId)
+      if (agentSession?.session.isStreaming) {
+        pending.set(runId, { mode: "close" })
+        await agentSession.session.abort().catch(() => undefined)
+      } else {
+        freeRun(runId)
       }
-      const settings = options.getSettings()
-      const wsAbs = workspaceAbs(runId)
-      const sessAbs = sessionsAbs(runId)
-      const rtAbs = runtimeAbs(runId)
-      mkdirSync(rtAbs, { recursive: true })
-
-      const modelRuntime = await createRunModelRuntime({
-        runtimeDir: rtAbs,
-        providers: providers(),
-      })
-      // Resolve the model from the snapshot stored on the run row.
-      const provider = providers().find((p) => p.label === row.providerLabel)
-      const sdkModel = provider
-        ? resolveRunModel(modelRuntime, provider, row.modelId)
-        : undefined
-      if (!sdkModel) {
-        throw new RunStartError("Could not resolve the run's model for resume")
-      }
-
-      try {
-        await containerManager.create({
-          name: row.containerName,
-          image: row.image,
-          workingDir: settings["container.workspace"],
-          binds: [`${wsAbs}:${settings["container.workspace"]}`],
-          limits: {
-            cpus: row.cpus,
-            memoryMb: row.memoryMb,
-            pidsLimit: row.pidsLimit,
-          },
-          tmpfsSize: settings["container.tmpfsSize"],
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        throw new RunActionError("launch_failed", message)
-      }
-
-      const bashDef = createBashToolDefinition(wsAbs, {
-        operations: createContainerBashOperations(
-          row.containerName,
-          containerManager
-        ),
-      })
-      // Re-render prompts for the resumed run (attachments + capabilities).
-      const challenge = db
-        .select()
-        .from(challenges)
-        .where(eq(challenges.id, row.challengeId))
-        .get()
-      if (!challenge)
-        throw new RunActionError("not_found", "Challenge not found")
-      const remote = getChallengeRemote(db, row.challengeId)
-      const templates = resolvePromptTemplates(settings)
-      const promptContext = buildPromptContext(
-        {
-          runId,
-          challenge,
-          remote,
-          challengeAttachments: [],
-          environment: {
-            type: "container",
-            image: row.image,
-            cpus: row.cpus,
-            memoryMb: row.memoryMb,
-            pidsLimit: row.pidsLimit,
-          },
-          model: {
-            provider: row.providerLabel ?? row.provider,
-            providerLabel: row.providerLabel ?? undefined,
-            modelId: row.modelId,
-            modelLabel: row.modelLabel ?? undefined,
-            thinkingLevel: row.thinkingLevel as ThinkingLevel,
-          },
-        },
-        db,
-        settings["container.workspace"]
-      )
-      const caps: ToolCapabilities = {
-        canSubmitFlag: promptContext.capabilities.canSubmitFlag,
-        canManageTarget: promptContext.capabilities.canManageTarget,
-        canSpawnAgent: true,
-      }
-      const toolCtx: RunToolContext = {
-        runId,
-        challengeId: row.challengeId,
-        submitFlag: (flag) =>
-          platformService
-            .submitFlag(runId, row.challengeId, flag)
-            .then((r) => r ?? null),
-        targetAction: (action) =>
-          platformService.targetAction(row.challengeId, action),
-        requestFinish: (summary) =>
-          pending.set(runId, { mode: "finish", summary }),
-        spawnChild: (childInput) => spawnChild(runId, mainAgent.id, childInput),
-      }
-      const nativeTools = createMainTools(toolCtx, caps)
-      const customTools = [bashDef, ...nativeTools] as ToolDefinition[]
-      const toolNames = [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        "grep",
-        "find",
-        "ls",
-        ...nativeTools.map((tool) => tool.name),
-      ]
-
-      let agentSession: RunAgentSession
-      try {
-        agentSession = await createRunAgentSession({
-          runId,
-          agentId: mainAgent.id,
-          workspaceHostPath: wsAbs,
-          sessionsDir: sessAbs,
-          sessionFile: mainAgent.sessionFile,
-          modelRuntime,
-          model: sdkModel,
-          thinkingLevel: row.thinkingLevel as ThinkingLevel,
-          systemPrompt: renderSystemPrompt(
-            templates.mainSystemPromptTemplate,
-            promptContext
-          ),
-          toolNames,
-          customTools,
-          db,
-          bus,
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        terminateContainer(runId, row.containerName)
-        throw new RunActionError("launch_failed", message)
-      }
-
-      contexts.set(runId, {
-        containerName: row.containerName,
-        workspaceHostPath: wsAbs,
-        sessionsDir: sessAbs,
-        modelRuntime,
-        sdkModel,
-        thinkingLevel: row.thinkingLevel as ThinkingLevel,
-        childTemplate: templates.childSystemPromptTemplate,
-        promptContext,
-        caps,
-        challengeId: row.challengeId,
-      })
-      sessions.set(runId, agentSession)
-      const ts = now()
-      updateRun(runId, {
-        status: "running",
-        startedAt: ts,
-        completedAt: null,
-        error: null,
-        updatedAt: ts,
-      })
-      updateAgent(mainAgent.id, {
-        status: "running",
-        startedAt: ts,
-        completedAt: null,
-        error: null,
-        updatedAt: ts,
-      })
-      emitRun(runId)
-      emitAgents(runId)
-      // Continue the same session (empty nudge to pick up where it left off).
-      driveRun(runId, "Continue from where you left off.")
       return requireRun(runId)
     })
   }
@@ -743,19 +791,19 @@ export function createRunService(options: RunServiceOptions) {
     await withLock(runId, async () => {
       const row = queries.getRow(runId)
       if (!row) throw new RunActionError("not_found", "Run not found")
-      if (row.status === "running") {
-        throw new RunActionError(
-          "invalid_state",
-          "Stop the run before deleting it"
-        )
-      }
-      await containerManager.remove(row.containerName)
       const agentSession = sessions.get(runId)
+      if (agentSession?.session.isStreaming) {
+        await agentSession.session.abort().catch(() => undefined)
+      }
+      clearForceKill(runId)
+      await containerManager.remove(row.containerName).catch(() => undefined)
       if (agentSession) {
         void agentSession.dispose()
         sessions.delete(runId)
       }
       contexts.delete(runId)
+      turnGeneration.delete(runId)
+      pending.delete(runId)
       rmSync(runDir(runId), { recursive: true, force: true })
       db.delete(runs).where(eq(runs.id, runId)).run()
     })
@@ -932,27 +980,15 @@ export function createRunService(options: RunServiceOptions) {
   async function recoverOnBoot() {
     const rows = db.select().from(runs).all()
     for (const row of rows) {
-      if (row.status !== "running") continue
-      const running = await containerManager.isRunning(row.containerName)
-      // Never auto-call the model on recovery (single-user, explicit resume).
-      if (running)
-        await containerManager
-          .kill(row.containerName, "SIGKILL")
-          .catch(() => undefined)
+      if (row.status === "closed") continue
+      // running/idle held live resources that are gone after a crash. Reclaim
+      // any orphan container; the jsonl stays so the run is cold-restorable.
+      await containerManager.remove(row.containerName).catch(() => undefined)
       const ts = now()
-      updateRun(row.id, {
-        status: "stopped",
-        completedAt: ts,
-        updatedAt: ts,
-      })
+      updateRun(row.id, { status: "closed", updatedAt: ts })
       const mainAgent = queries.mainAgent(row.id)
-      if (mainAgent) {
-        updateAgent(mainAgent.id, {
-          status: "stopped",
-          completedAt: ts,
-          updatedAt: ts,
-        })
-      }
+      if (mainAgent)
+        updateAgent(mainAgent.id, { status: "idle", updatedAt: ts })
     }
   }
 
@@ -967,6 +1003,8 @@ export function createRunService(options: RunServiceOptions) {
       await childSession.dispose()
     sessions.clear()
     childSessions.clear()
+    pending.clear()
+    turnGeneration.clear()
     bus.close()
   }
 
@@ -974,8 +1012,8 @@ export function createRunService(options: RunServiceOptions) {
     create,
     stop,
     finish,
-    resume,
-    steer,
+    sendMessage,
+    closeRun,
     delete: deleteRun,
     refresh: queries.get,
     recoverOnBoot,

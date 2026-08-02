@@ -13,7 +13,7 @@ export type CreateRunInput = {
   thinkingLevel?: ThinkingLevel
 }
 
-export type SteerInput = {
+export type SendMessageInput = {
   text: string
   deliverAs?: "steer" | "followUp"
 }
@@ -37,15 +37,15 @@ export function stopRun(runId: string) {
   return apiRequest<RunPublic>(`/runs/${runId}/stop`, jsonRequest("POST", {}))
 }
 
-export function resumeRun(runId: string) {
-  return apiRequest<RunPublic>(`/runs/${runId}/resume`, jsonRequest("POST", {}))
+export function closeRun(runId: string) {
+  return apiRequest<RunPublic>(`/runs/${runId}/close`, jsonRequest("POST", {}))
 }
 
 export function deleteRun(runId: string) {
   return apiRequest<void>(`/runs/${runId}`, { method: "DELETE" })
 }
 
-export function steerRun(runId: string, input: SteerInput) {
+export function sendMessage(runId: string, input: SendMessageInput) {
   return apiRequest<RunPublic>(
     `/runs/${runId}/message`,
     jsonRequest("POST", input)

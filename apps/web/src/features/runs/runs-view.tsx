@@ -45,11 +45,25 @@ import { toast } from "@/lib/toast"
 import { CreateRunDialog } from "./create-run-dialog"
 import { RunWorkspace } from "./run-workspace"
 
-function runDotClass(status: string) {
-  if (status === "running") return "bg-info"
-  if (status === "completed") return "bg-success"
-  if (status === "failed") return "bg-destructive"
-  return "bg-muted-foreground"
+function RunStatusBadge({ status }: { status: RunPublic["status"] }) {
+  if (status === "running")
+    return (
+      <Badge size="sm" variant="info" className="gap-1">
+        <span className="size-1.5 animate-pulse rounded-full bg-info" />
+        running
+      </Badge>
+    )
+  if (status === "idle")
+    return (
+      <Badge size="sm" variant="success">
+        idle
+      </Badge>
+    )
+  return (
+    <Badge size="sm" variant="secondary">
+      shelved
+    </Badge>
+  )
 }
 
 const runTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -71,7 +85,6 @@ function RunItem({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const active = run.status === "running"
   const deleteMutation = useMutation({
     mutationFn: () => runsApi.deleteRun(run.id),
     onSuccess: () => {
@@ -91,10 +104,9 @@ function RunItem({
         render={<Link to={`/events/${eventId}/runs/${run.id}`} />}
         variant={run.id === runId ? "secondary" : "ghost"}
       >
-        <span
-          aria-hidden="true"
-          className={`mt-1 size-2 shrink-0 rounded-full ${runDotClass(run.status)}`}
-        />
+        <span className="mt-0.5 shrink-0">
+          <RunStatusBadge status={run.status} />
+        </span>
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
             <span className="min-w-0 flex-1 truncate font-medium text-sm">
@@ -136,7 +148,7 @@ function RunItem({
           </MenuTrigger>
           <MenuPopup align="end">
             <MenuItem
-              disabled={active || deleteMutation.isPending}
+              disabled={deleteMutation.isPending}
               onClick={() => setConfirmDelete(true)}
               variant="destructive"
             >
@@ -255,9 +267,9 @@ export function RunsView({
     challenges.map((challenge, index) => [challenge.id, index])
   )
   const activeRuns = runs.data.items
-    .filter((run) => run.status === "running")
+    .filter((run) => run.status !== "closed")
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  const historyRuns = runs.data.items.filter((run) => run.status !== "running")
+  const historyRuns = runs.data.items.filter((run) => run.status === "closed")
   if (sort === "name") {
     historyRuns.sort((left, right) =>
       left.challengeName.localeCompare(right.challengeName, undefined, {
@@ -351,7 +363,7 @@ export function RunsView({
                           eventId={eventId}
                           runId={runId}
                           runs={historyRuns}
-                          title="History"
+                          title="Shelved"
                         />
                       )}
                     </nav>

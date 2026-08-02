@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  Archive,
   CircleAlert,
   Files,
   Info,
   MessageSquare,
-  Play,
   Square,
 } from "lucide-react"
 import { useSearchParams } from "react-router"
@@ -85,13 +85,13 @@ export function RunWorkspace({
     onError: (error) => toast.error("Failed to stop run", error.message),
   })
 
-  const resume = useMutation({
-    mutationFn: () => runsApi.resumeRun(runId ?? ""),
+  const close = useMutation({
+    mutationFn: () => runsApi.closeRun(runId ?? ""),
     onSuccess: () => {
-      toast.success("Run resumed")
+      toast.success("Run closed")
       void invalidate(queryClient, eventId)
     },
-    onError: (error) => toast.error("Failed to resume run", error.message),
+    onError: (error) => toast.error("Failed to close run", error.message),
   })
 
   if (!runId) {
@@ -147,7 +147,6 @@ export function RunWorkspace({
   }
 
   const running = run.status === "running"
-  const canResume = !running && run.status !== "failed"
   const agents = detail.data?.agents ?? []
 
   const requestedView = searchParams.get("view")
@@ -171,15 +170,15 @@ export function RunWorkspace({
           {run.provider} / {run.modelId}
         </CardFrameDescription>
         <CardFrameAction className="gap-2">
-          {canResume && (
+          {(running || run.status === "idle") && (
             <Button
-              loading={resume.isPending}
-              onClick={() => resume.mutate()}
+              loading={close.isPending}
+              onClick={() => close.mutate()}
               size="sm"
               type="button"
               variant="outline"
             >
-              <Play /> Resume
+              <Archive /> Close
             </Button>
           )}
           {running && (
@@ -199,8 +198,8 @@ export function RunWorkspace({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Stop this run?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    The agent is aborted and the container stops. You can resume
-                    the run later from the same session.
+                    The current turn is cancelled (like pressing Esc). The
+                    container stays; send a message to continue.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
