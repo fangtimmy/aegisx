@@ -87,16 +87,63 @@ type ChallengeFormValues = {
   points: number | null
 }
 
+type ChallengeDialogProps = {
+  eventId: string
+  challenge?: Challenge
+  onUploadError: (message: string | null) => void
+}
+
 export function ChallengeDialog({
   eventId,
   challenge,
   onUploadError,
-}: {
-  eventId: string
-  challenge?: Challenge
-  onUploadError: (message: string | null) => void
-}) {
+}: ChallengeDialogProps) {
   const [open, setOpen] = useState(false)
+
+  return (
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogTrigger
+        render={
+          challenge ? (
+            <Button
+              aria-label={`View and edit ${challenge.name}`}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            />
+          ) : (
+            <Button type="button" />
+          )
+        }
+      >
+        {challenge ? (
+          <Pencil />
+        ) : (
+          <>
+            <Plus /> Add challenge
+          </>
+        )}
+      </DialogTrigger>
+      {open ? (
+        <ChallengeDialogContent
+          challenge={challenge}
+          eventId={eventId}
+          onClose={() => setOpen(false)}
+          onUploadError={onUploadError}
+        />
+      ) : null}
+    </Dialog>
+  )
+}
+
+function ChallengeDialogContent({
+  eventId,
+  challenge,
+  onUploadError,
+  onClose,
+}: ChallengeDialogProps & {
+  onClose: () => void
+}) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const uploadInput = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
@@ -163,318 +210,277 @@ export function ChallengeDialog({
           ? `${saved.name} was saved, but some attachments failed: ${uploadErrors.join("; ")}`
           : null
       )
-      setOpen(false)
+      onClose()
     },
   })
 
-  function handleOpenChange(nextOpen: boolean) {
-    setOpen(nextOpen)
-    if (nextOpen) {
-      setPendingFiles([])
-      mutation.reset()
-      removeAttachment.reset()
-      removeTarget.reset()
-      form.reset({
-        name: challenge?.name ?? "",
-        description: challenge?.description ?? "",
-        category: challenge?.category ?? "",
-        points: challenge?.points ?? null,
-      })
-    }
-  }
-
   return (
-    <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogTrigger
-        render={
-          challenge ? (
-            <Button
-              aria-label={`View and edit ${challenge.name}`}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-            />
-          ) : (
-            <Button type="button" />
-          )
-        }
+    <DialogPopup className="max-w-2xl overflow-hidden">
+      <DialogHeader>
+        <DialogTitle>{challenge?.name ?? "Create challenge"}</DialogTitle>
+        <DialogDescription>
+          {challenge
+            ? `${challenge.category || "Uncategorized"}${challenge.points === null ? "" : ` · ${challenge.points} pts`}`
+            : "Define the task details and add its attachments."}
+        </DialogDescription>
+      </DialogHeader>
+      <form
+        className="contents"
+        onSubmit={form.handleSubmit((values) => {
+          const files = pendingFiles.filter((file) => file.size > 0)
+          mutation.mutate({ values, files })
+        })}
       >
-        {challenge ? (
-          <Pencil />
-        ) : (
-          <>
-            <Plus /> Add challenge
-          </>
-        )}
-      </DialogTrigger>
-      <DialogPopup className="max-w-2xl overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>{challenge?.name ?? "Create challenge"}</DialogTitle>
-          <DialogDescription>
-            {challenge
-              ? `${challenge.category || "Uncategorized"}${challenge.points === null ? "" : ` · ${challenge.points} pts`}`
-              : "Define the task details and add its attachments."}
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="contents"
-          onSubmit={form.handleSubmit((values) => {
-            const files = pendingFiles.filter((file) => file.size > 0)
-            mutation.mutate({ values, files })
-          })}
-        >
-          <DialogPanel className="min-w-0 overflow-x-hidden p-0">
-            <section
-              aria-labelledby="challenge-details"
-              className="grid gap-4 px-6 pb-6"
-            >
-              <h3 className="font-medium text-sm" id="challenge-details">
-                Details
-              </h3>
+        <DialogPanel className="min-w-0 overflow-x-hidden p-0">
+          <section
+            aria-labelledby="challenge-details"
+            className="grid gap-4 px-6 pb-6"
+          >
+            <h3 className="font-medium text-sm" id="challenge-details">
+              Details
+            </h3>
+            <Field>
+              <FieldLabel>Name</FieldLabel>
+              <Controller
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <Input
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    type="text"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Description</FieldLabel>
+              <Controller
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <Textarea
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    rows={6}
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
+              />
+            </Field>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
               <Field>
-                <FieldLabel>Name</FieldLabel>
+                <FieldLabel>Category</FieldLabel>
                 <Controller
                   control={form.control}
-                  name="name"
+                  name="category"
                   render={({ field }) => (
                     <Input
-                      onBlur={field.onBlur}
                       onChange={field.onChange}
-                      required
+                      placeholder="Web, Crypto, Pwn..."
                       type="text"
                       value={field.value}
                     />
                   )}
-                  rules={{ required: true }}
                 />
               </Field>
               <Field>
-                <FieldLabel>Description</FieldLabel>
+                <FieldLabel>Points</FieldLabel>
                 <Controller
                   control={form.control}
-                  name="description"
+                  name="points"
                   render={({ field }) => (
-                    <Textarea
-                      onBlur={field.onBlur}
-                      onChange={field.onChange}
-                      required
-                      rows={6}
-                      value={field.value}
-                    />
+                    <NumberField
+                      min={0}
+                      onValueChange={(value) => field.onChange(value ?? null)}
+                      step={1}
+                      value={field.value ?? undefined}
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement />
+                        <NumberFieldInput />
+                        <NumberFieldIncrement />
+                      </NumberFieldGroup>
+                    </NumberField>
                   )}
-                  rules={{ required: true }}
                 />
               </Field>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
-                <Field>
-                  <FieldLabel>Category</FieldLabel>
-                  <Controller
-                    control={form.control}
-                    name="category"
-                    render={({ field }) => (
-                      <Input
-                        onChange={field.onChange}
-                        placeholder="Web, Crypto, Pwn..."
-                        type="text"
-                        value={field.value}
-                      />
-                    )}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel>Points</FieldLabel>
-                  <Controller
-                    control={form.control}
-                    name="points"
-                    render={({ field }) => (
-                      <NumberField
-                        min={0}
-                        onValueChange={(value) => field.onChange(value ?? null)}
-                        step={1}
-                        value={field.value ?? undefined}
-                      >
-                        <NumberFieldGroup>
-                          <NumberFieldDecrement />
-                          <NumberFieldInput />
-                          <NumberFieldIncrement />
-                        </NumberFieldGroup>
-                      </NumberField>
-                    )}
-                  />
-                </Field>
+            </div>
+          </section>
+          <section
+            aria-labelledby="challenge-attachments"
+            className="border-t px-6 py-5"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-medium text-sm" id="challenge-attachments">
+                Attachments
+              </h3>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground text-xs tabular-nums">
+                  {(challenge?.attachments.length ?? 0) + pendingFiles.length}
+                </span>
+                <Button
+                  aria-label="Upload attachments"
+                  onClick={() => uploadInput.current?.click()}
+                  size="icon-sm"
+                  title="Upload attachments"
+                  type="button"
+                  variant="outline"
+                >
+                  <Upload />
+                </Button>
+                <input
+                  className="sr-only"
+                  multiple
+                  name="attachments"
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? [])
+                    setPendingFiles((current) =>
+                      mergePendingFiles(current, files)
+                    )
+                    event.target.value = ""
+                  }}
+                  ref={uploadInput}
+                  tabIndex={-1}
+                  type="file"
+                />
               </div>
-            </section>
+            </div>
+            {(challenge?.attachments.length ?? 0) > 0 ||
+            pendingFiles.length > 0 ? (
+              <div className="mt-3 border-y">
+                {challenge?.attachments.map((attachment) => (
+                  <AttachmentRow
+                    attachment={attachment}
+                    deleting={
+                      removeAttachment.isPending &&
+                      removeAttachment.variables === attachment.id
+                    }
+                    key={attachment.id}
+                    onDelete={() => removeAttachment.mutate(attachment.id)}
+                  />
+                ))}
+                {pendingFiles.map((file) => (
+                  <PendingFileRow
+                    file={file}
+                    key={pendingFileKey(file)}
+                    onRemove={() =>
+                      setPendingFiles((current) =>
+                        current.filter(
+                          (item) =>
+                            pendingFileKey(item) !== pendingFileKey(file)
+                        )
+                      )
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-muted-foreground text-xs">
+                No attachments yet. Upload files to include with this challenge.
+              </p>
+            )}
+          </section>
+          {challenge?.remoteTarget && !challenge.remoteTargetIgnored && (
             <section
-              aria-labelledby="challenge-attachments"
+              aria-labelledby="challenge-target"
               className="border-t px-6 py-5"
             >
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-medium text-sm" id="challenge-attachments">
-                  Attachments
-                </h3>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground text-xs tabular-nums">
-                    {(challenge?.attachments.length ?? 0) + pendingFiles.length}
-                  </span>
-                  <Button
-                    aria-label="Upload attachments"
-                    onClick={() => uploadInput.current?.click()}
-                    size="icon-sm"
-                    title="Upload attachments"
-                    type="button"
-                    variant="outline"
+              <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <h3 className="font-medium text-sm" id="challenge-target">
+                    Platform target
+                  </h3>
+                  <p className="mt-1 text-muted-foreground text-xs">
+                    Imported targets cannot be edited. Removing this target
+                    disables platform target tools for future Runs.
+                  </p>
+                </div>
+                <AlertDialog>
+                  <AlertDialogTrigger
+                    render={
+                      <Button type="button" variant="destructive-outline" />
+                    }
                   >
-                    <Upload />
-                  </Button>
-                  <input
-                    className="sr-only"
-                    multiple
-                    name="attachments"
-                    onChange={(event) => {
-                      const files = Array.from(event.target.files ?? [])
-                      setPendingFiles((current) =>
-                        mergePendingFiles(current, files)
-                      )
-                      event.target.value = ""
-                    }}
-                    ref={uploadInput}
-                    tabIndex={-1}
-                    type="file"
-                  />
-                </div>
+                    <Trash2 /> Remove target
+                  </AlertDialogTrigger>
+                  <AlertDialogPopup>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>
+                        Remove platform target?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        The target must be stopped first. AegisX will keep it
+                        ignored after future platform syncs.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogClose
+                        render={<Button type="button" variant="ghost" />}
+                      >
+                        Cancel
+                      </AlertDialogClose>
+                      <Button
+                        loading={removeTarget.isPending}
+                        onClick={() => removeTarget.mutate()}
+                        type="button"
+                        variant="destructive"
+                      >
+                        Remove target
+                      </Button>
+                    </AlertDialogFooter>
+                  </AlertDialogPopup>
+                </AlertDialog>
               </div>
-              {(challenge?.attachments.length ?? 0) > 0 ||
-              pendingFiles.length > 0 ? (
+              {challenge.targets.length > 0 && (
                 <div className="mt-3 border-y">
-                  {challenge?.attachments.map((attachment) => (
-                    <AttachmentRow
-                      attachment={attachment}
-                      deleting={
-                        removeAttachment.isPending &&
-                        removeAttachment.variables === attachment.id
-                      }
-                      key={attachment.id}
-                      onDelete={() => removeAttachment.mutate(attachment.id)}
-                    />
-                  ))}
-                  {pendingFiles.map((file) => (
-                    <PendingFileRow
-                      file={file}
-                      key={pendingFileKey(file)}
-                      onRemove={() =>
-                        setPendingFiles((current) =>
-                          current.filter(
-                            (item) =>
-                              pendingFileKey(item) !== pendingFileKey(file)
-                          )
-                        )
-                      }
-                    />
+                  {challenge.targets.map((target) => (
+                    <div
+                      className="flex min-w-0 items-center justify-between gap-3 border-b py-2 last:border-b-0"
+                      key={`${target.name}:${target.services.join(",")}`}
+                    >
+                      <span className="min-w-0 truncate text-sm">
+                        {target.name}
+                      </span>
+                      <span className="min-w-0 break-all text-right text-muted-foreground text-xs">
+                        {target.services.join(", ") || "No exposed services"}
+                      </span>
+                    </div>
                   ))}
                 </div>
-              ) : (
-                <p className="mt-3 text-muted-foreground text-xs">
-                  No attachments yet. Upload files to include with this
-                  challenge.
-                </p>
               )}
             </section>
-            {challenge?.remoteTarget && !challenge.remoteTargetIgnored && (
-              <section
-                aria-labelledby="challenge-target"
-                className="border-t px-6 py-5"
-              >
-                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <h3 className="font-medium text-sm" id="challenge-target">
-                      Platform target
-                    </h3>
-                    <p className="mt-1 text-muted-foreground text-xs">
-                      Imported targets cannot be edited. Removing this target
-                      disables platform target tools for future Runs.
-                    </p>
-                  </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger
-                      render={
-                        <Button type="button" variant="destructive-outline" />
-                      }
-                    >
-                      <Trash2 /> Remove target
-                    </AlertDialogTrigger>
-                    <AlertDialogPopup>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>
-                          Remove platform target?
-                        </AlertDialogTitle>
-                        <AlertDialogDescription>
-                          The target must be stopped first. AegisX will keep it
-                          ignored after future platform syncs.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogClose
-                          render={<Button type="button" variant="ghost" />}
-                        >
-                          Cancel
-                        </AlertDialogClose>
-                        <Button
-                          loading={removeTarget.isPending}
-                          onClick={() => removeTarget.mutate()}
-                          type="button"
-                          variant="destructive"
-                        >
-                          Remove target
-                        </Button>
-                      </AlertDialogFooter>
-                    </AlertDialogPopup>
-                  </AlertDialog>
-                </div>
-                {challenge.targets.length > 0 && (
-                  <div className="mt-3 border-y">
-                    {challenge.targets.map((target) => (
-                      <div
-                        className="flex min-w-0 items-center justify-between gap-3 border-b py-2 last:border-b-0"
-                        key={`${target.name}:${target.services.join(",")}`}
-                      >
-                        <span className="min-w-0 truncate text-sm">
-                          {target.name}
-                        </span>
-                        <span className="min-w-0 break-all text-right text-muted-foreground text-xs">
-                          {target.services.join(", ") || "No exposed services"}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-            )}
-            {(removeAttachment.error || removeTarget.error) && (
-              <Alert className="mx-6 mb-4 w-auto" variant="error">
-                <TriangleAlert />
-                <AlertDescription className="break-words">
-                  {(removeAttachment.error ?? removeTarget.error)?.message}
-                </AlertDescription>
-              </Alert>
-            )}
-            {mutation.error && (
-              <Alert className="mx-6 mb-4 w-auto" variant="error">
-                <TriangleAlert />
-                <AlertDescription>{mutation.error.message}</AlertDescription>
-              </Alert>
-            )}
-          </DialogPanel>
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
-            </DialogClose>
-            <Button loading={mutation.isPending} type="submit">
-              {challenge ? "Save changes" : "Create challenge"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogPopup>
-    </Dialog>
+          )}
+          {(removeAttachment.error || removeTarget.error) && (
+            <Alert className="mx-6 mb-4 w-auto" variant="error">
+              <TriangleAlert />
+              <AlertDescription className="break-words">
+                {(removeAttachment.error ?? removeTarget.error)?.message}
+              </AlertDescription>
+            </Alert>
+          )}
+          {mutation.error && (
+            <Alert className="mx-6 mb-4 w-auto" variant="error">
+              <TriangleAlert />
+              <AlertDescription>{mutation.error.message}</AlertDescription>
+            </Alert>
+          )}
+        </DialogPanel>
+        <DialogFooter>
+          <DialogClose render={<Button type="button" variant="ghost" />}>
+            Cancel
+          </DialogClose>
+          <Button loading={mutation.isPending} type="submit">
+            {challenge ? "Save changes" : "Create challenge"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogPopup>
   )
 }
 

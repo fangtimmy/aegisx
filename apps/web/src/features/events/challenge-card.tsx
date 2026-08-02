@@ -11,6 +11,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react"
+import { useState } from "react"
 import { type Challenge, challengesApi, keys, type RunStatus } from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -49,6 +50,36 @@ function DeleteChallengeDialog({
   eventId: string
   challenge: Challenge
 }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <AlertDialog onOpenChange={setOpen} open={open}>
+      <AlertDialogTrigger
+        render={
+          <Button
+            aria-label={`Delete ${challenge.name}`}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          />
+        }
+      >
+        <Trash2 />
+      </AlertDialogTrigger>
+      {open ? (
+        <DeleteChallengeDialogContent challenge={challenge} eventId={eventId} />
+      ) : null}
+    </AlertDialog>
+  )
+}
+
+function DeleteChallengeDialogContent({
+  eventId,
+  challenge,
+}: {
+  eventId: string
+  challenge: Challenge
+}) {
   const queryClient = useQueryClient()
   const mutation = useMutation({
     mutationFn: () => challengesApi.deleteChallenge(challenge.id),
@@ -66,47 +97,33 @@ function DeleteChallengeDialog({
   })
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        render={
-          <Button
-            aria-label={`Delete ${challenge.name}`}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          />
-        }
-      >
-        <Trash2 />
-      </AlertDialogTrigger>
-      <AlertDialogPopup>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {challenge.name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This permanently deletes the challenge and its attachments.
-          </AlertDialogDescription>
-          {mutation.error && (
-            <Alert variant="error">
-              <TriangleAlert />
-              <AlertDescription>{mutation.error.message}</AlertDescription>
-            </Alert>
-          )}
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogClose render={<Button type="button" variant="ghost" />}>
-            Cancel
-          </AlertDialogClose>
-          <Button
-            loading={mutation.isPending}
-            onClick={() => mutation.mutate()}
-            type="button"
-            variant="destructive"
-          >
-            Delete challenge
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogPopup>
-    </AlertDialog>
+    <AlertDialogPopup>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Delete {challenge.name}?</AlertDialogTitle>
+        <AlertDialogDescription>
+          This permanently deletes the challenge and its attachments.
+        </AlertDialogDescription>
+        {mutation.error && (
+          <Alert variant="error">
+            <TriangleAlert />
+            <AlertDescription>{mutation.error.message}</AlertDescription>
+          </Alert>
+        )}
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+          Cancel
+        </AlertDialogClose>
+        <Button
+          loading={mutation.isPending}
+          onClick={() => mutation.mutate()}
+          type="button"
+          variant="destructive"
+        >
+          Delete challenge
+        </Button>
+      </AlertDialogFooter>
+    </AlertDialogPopup>
   )
 }
 

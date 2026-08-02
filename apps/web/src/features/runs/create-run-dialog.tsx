@@ -55,6 +55,16 @@ type RunFormValues = {
   image: string
 }
 
+type CreateRunDialogProps = {
+  challenges?: Challenge[]
+  challenge?: Pick<Challenge, "id" | "name">
+  trigger?: ReactNode
+  triggerLabel?: string
+  triggerSize?: ButtonProps["size"]
+  triggerVariant?: ButtonProps["variant"]
+  onCreated?: () => void
+}
+
 export function CreateRunDialog({
   challenges,
   challenge,
@@ -63,25 +73,64 @@ export function CreateRunDialog({
   triggerSize,
   triggerVariant,
   onCreated,
+}: CreateRunDialogProps) {
+  const [open, setOpen] = useState(false)
+  const available = challenge ? [challenge] : (challenges ?? [])
+
+  return (
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogTrigger
+        aria-label={
+          trigger
+            ? (triggerLabel ??
+              (challenge ? `Start run for ${challenge.name}` : "Start run"))
+            : undefined
+        }
+        render={
+          <Button
+            disabled={available.length === 0}
+            size={trigger ? (triggerSize ?? "icon-xs") : undefined}
+            type="button"
+            variant={trigger ? triggerVariant : undefined}
+          />
+        }
+      >
+        {trigger ?? (
+          <>
+            <Plus /> Start run
+          </>
+        )}
+      </DialogTrigger>
+      {open ? (
+        <CreateRunDialogContent
+          challenge={challenge}
+          challenges={challenges}
+          onClose={() => setOpen(false)}
+          onCreated={onCreated}
+        />
+      ) : null}
+    </Dialog>
+  )
+}
+
+function CreateRunDialogContent({
+  challenges,
+  challenge,
+  onCreated,
+  onClose,
 }: {
   challenges?: Challenge[]
   challenge?: Pick<Challenge, "id" | "name">
-  trigger?: ReactNode
-  triggerLabel?: string
-  triggerSize?: ButtonProps["size"]
-  triggerVariant?: ButtonProps["variant"]
   onCreated?: () => void
+  onClose: () => void
 }) {
-  const [open, setOpen] = useState(false)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const settings = useQuery({
-    enabled: open,
     queryKey: keys.settings.all,
     queryFn: () => settingsApi.getSettings(),
   })
   const providers = useQuery({
-    enabled: open,
     queryKey: keys.providers.all,
     queryFn: () => providersApi.listProviders(),
   })
@@ -102,7 +151,7 @@ export function CreateRunDialog({
         }),
         queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
-      setOpen(false)
+      onClose()
       onCreated?.()
       navigate(`/events/${run.eventId}/runs/${run.id}`)
     },
@@ -143,7 +192,7 @@ export function CreateRunDialog({
     : (availableModels[0]?.id ?? "")
 
   useEffect(() => {
-    if (open && defaults) {
+    if (defaults) {
       form.reset({
         challengeId: challenge?.id ?? challenges?.[0]?.id ?? "",
         modelId: initialModelId,
@@ -151,7 +200,7 @@ export function CreateRunDialog({
         image: defaults["container.image"],
       })
     }
-  }, [open, defaults, challenges?.[0]?.id, form, challenge?.id, initialModelId])
+  }, [defaults, challenges?.[0]?.id, form, challenge?.id, initialModelId])
 
   useEffect(() => {
     if (!isThinkingLevelSupported) {
@@ -162,240 +211,207 @@ export function CreateRunDialog({
   const available = challenge ? [challenge] : (challenges ?? [])
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next)
-        if (next) {
-          mutation.reset()
-          form.reset()
-        }
-      }}
-    >
-      <DialogTrigger
-        aria-label={
-          trigger
-            ? (triggerLabel ??
-              (challenge ? `Start run for ${challenge.name}` : "Start run"))
-            : undefined
-        }
-        render={
-          <Button
-            disabled={available.length === 0}
-            size={trigger ? (triggerSize ?? "icon-xs") : undefined}
-            type="button"
-            variant={trigger ? triggerVariant : undefined}
-          />
-        }
-      >
-        {trigger ?? (
-          <>
-            <Plus /> Start run
-          </>
-        )}
-      </DialogTrigger>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>Start run</DialogTitle>
-          <DialogDescription>
-            {challenge
-              ? `Configure a run for ${challenge.name}.`
-              : "Choose a challenge and model for this run."}
-          </DialogDescription>
-        </DialogHeader>
-        {(settings.isPending || providers.isPending) && (
-          <DialogPanel>
-            <div
-              className="flex items-center gap-2 text-muted-foreground text-sm"
-              role="status"
-            >
-              <Spinner aria-hidden="true" />
-              Loading defaults...
-            </div>
-          </DialogPanel>
-        )}
-        {(settings.error || providers.error) && (
-          <DialogPanel>
-            <Alert variant="error">
-              <CircleAlert />
-              <AlertTitle>Unable to load run configuration</AlertTitle>
-              <AlertDescription>
-                {(settings.error ?? providers.error)?.message}
-              </AlertDescription>
-              <Button
-                onClick={() => {
-                  settings.refetch()
-                  providers.refetch()
-                }}
-                type="button"
-                variant="outline"
-              >
-                Try again
-              </Button>
-            </Alert>
-          </DialogPanel>
-        )}
-        {settings.data && providers.data && (
-          <form
-            className="contents"
-            key={settings.data.updatedAt}
-            onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+    <DialogPopup>
+      <DialogHeader>
+        <DialogTitle>Start run</DialogTitle>
+        <DialogDescription>
+          {challenge
+            ? `Configure a run for ${challenge.name}.`
+            : "Choose a challenge and model for this run."}
+        </DialogDescription>
+      </DialogHeader>
+      {(settings.isPending || providers.isPending) && (
+        <DialogPanel>
+          <div
+            className="flex items-center gap-2 text-muted-foreground text-sm"
+            role="status"
           >
-            <DialogPanel className="grid gap-4">
-              {!challenge && (
-                <Field>
-                  <FieldLabel>Challenge</FieldLabel>
-                  <Controller
-                    control={form.control}
-                    name="challengeId"
-                    render={({ field }) => (
-                      <Select
-                        items={Object.fromEntries(
-                          available.map((item) => [item.id, item.name])
-                        )}
-                        onValueChange={field.onChange}
-                        value={field.value}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a challenge" />
-                        </SelectTrigger>
-                        <SelectPopup>
-                          {available.map((item) => (
-                            <SelectItem key={item.id} value={item.id}>
-                              {item.name}
-                            </SelectItem>
-                          ))}
-                        </SelectPopup>
-                      </Select>
-                    )}
-                    rules={{ required: true }}
-                  />
-                </Field>
-              )}
+            <Spinner aria-hidden="true" />
+            Loading defaults...
+          </div>
+        </DialogPanel>
+      )}
+      {(settings.error || providers.error) && (
+        <DialogPanel>
+          <Alert variant="error">
+            <CircleAlert />
+            <AlertTitle>Unable to load run configuration</AlertTitle>
+            <AlertDescription>
+              {(settings.error ?? providers.error)?.message}
+            </AlertDescription>
+            <Button
+              onClick={() => {
+                settings.refetch()
+                providers.refetch()
+              }}
+              type="button"
+              variant="outline"
+            >
+              Try again
+            </Button>
+          </Alert>
+        </DialogPanel>
+      )}
+      {settings.data && providers.data && (
+        <form
+          className="contents"
+          key={settings.data.updatedAt}
+          onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+        >
+          <DialogPanel className="grid gap-4">
+            {!challenge && (
               <Field>
-                <FieldLabel>Model</FieldLabel>
+                <FieldLabel>Challenge</FieldLabel>
                 <Controller
                   control={form.control}
-                  name="modelId"
+                  name="challengeId"
                   render={({ field }) => (
                     <Select
                       items={Object.fromEntries(
-                        availableModels.map((model) => [
-                          model.id,
-                          `${model.provider.label} / ${model.label}`,
-                        ])
+                        available.map((item) => [item.id, item.name])
                       )}
                       onValueChange={field.onChange}
                       value={field.value}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="No enabled models" />
+                        <SelectValue placeholder="Select a challenge" />
                       </SelectTrigger>
                       <SelectPopup>
-                        {(providers.data?.items ?? []).map((provider) => {
-                          const models = availableModels.filter(
-                            (model) => model.provider.id === provider.id
-                          )
-                          if (models.length === 0) return null
-                          return (
-                            <SelectGroup key={provider.id}>
-                              <SelectGroupLabel>
-                                {provider.label}
-                              </SelectGroupLabel>
-                              {models.map((model) => (
-                                <SelectItem key={model.id} value={model.id}>
-                                  {model.label}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          )
-                        })}
-                      </SelectPopup>
-                    </Select>
-                  )}
-                  rules={{ required: true }}
-                />
-              </Field>
-              <Field>
-                <FieldLabel>Reasoning</FieldLabel>
-                <Controller
-                  control={form.control}
-                  name="thinkingLevel"
-                  render={({ field }) => (
-                    <Select
-                      items={Object.fromEntries(
-                        supportedThinkingLevels.map((level) => [
-                          level,
-                          thinkingLevelLabels[level],
-                        ])
-                      )}
-                      onValueChange={(value) =>
-                        field.onChange(value as ThinkingLevel)
-                      }
-                      value={field.value}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectPopup>
-                        {supportedThinkingLevels.map((level) => (
-                          <SelectItem key={level} value={level}>
-                            {thinkingLevelLabels[level]}
+                        {available.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.name}
                           </SelectItem>
                         ))}
                       </SelectPopup>
                     </Select>
                   )}
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="run-image">Container image</FieldLabel>
-                <Controller
-                  control={form.control}
-                  name="image"
-                  render={({ field }) => (
-                    <Input
-                      id="run-image"
-                      onBlur={field.onBlur}
-                      onChange={field.onChange}
-                      required
-                      type="text"
-                      value={field.value}
-                    />
-                  )}
                   rules={{ required: true }}
                 />
               </Field>
-              <Alert>
-                <Box />
-                <AlertTitle>Isolated container</AlertTitle>
-                <AlertDescription>
-                  pi runs as the container's main process with its workspace at
-                  /workspace. Watch and steer it from the Terminal tab.
-                </AlertDescription>
+            )}
+            <Field>
+              <FieldLabel>Model</FieldLabel>
+              <Controller
+                control={form.control}
+                name="modelId"
+                render={({ field }) => (
+                  <Select
+                    items={Object.fromEntries(
+                      availableModels.map((model) => [
+                        model.id,
+                        `${model.provider.label} / ${model.label}`,
+                      ])
+                    )}
+                    onValueChange={field.onChange}
+                    value={field.value}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="No enabled models" />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {(providers.data?.items ?? []).map((provider) => {
+                        const models = availableModels.filter(
+                          (model) => model.provider.id === provider.id
+                        )
+                        if (models.length === 0) return null
+                        return (
+                          <SelectGroup key={provider.id}>
+                            <SelectGroupLabel>
+                              {provider.label}
+                            </SelectGroupLabel>
+                            {models.map((model) => (
+                              <SelectItem key={model.id} value={model.id}>
+                                {model.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        )
+                      })}
+                    </SelectPopup>
+                  </Select>
+                )}
+                rules={{ required: true }}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Reasoning</FieldLabel>
+              <Controller
+                control={form.control}
+                name="thinkingLevel"
+                render={({ field }) => (
+                  <Select
+                    items={Object.fromEntries(
+                      supportedThinkingLevels.map((level) => [
+                        level,
+                        thinkingLevelLabels[level],
+                      ])
+                    )}
+                    onValueChange={(value) =>
+                      field.onChange(value as ThinkingLevel)
+                    }
+                    value={field.value}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {supportedThinkingLevels.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {thinkingLevelLabels[level]}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                )}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="run-image">Container image</FieldLabel>
+              <Controller
+                control={form.control}
+                name="image"
+                render={({ field }) => (
+                  <Input
+                    id="run-image"
+                    onBlur={field.onBlur}
+                    onChange={field.onChange}
+                    required
+                    type="text"
+                    value={field.value}
+                  />
+                )}
+                rules={{ required: true }}
+              />
+            </Field>
+            <Alert>
+              <Box />
+              <AlertTitle>Isolated container</AlertTitle>
+              <AlertDescription>
+                pi runs as the container's main process with its workspace at
+                /workspace. Watch and steer it from the Terminal tab.
+              </AlertDescription>
+            </Alert>
+            {mutation.error && (
+              <Alert variant="error">
+                <CircleAlert />
+                <AlertDescription>{mutation.error.message}</AlertDescription>
               </Alert>
-              {mutation.error && (
-                <Alert variant="error">
-                  <CircleAlert />
-                  <AlertDescription>{mutation.error.message}</AlertDescription>
-                </Alert>
-              )}
-            </DialogPanel>
-            <DialogFooter>
-              <DialogClose render={<Button type="button" variant="ghost" />}>
-                Cancel
-              </DialogClose>
-              <Button
-                disabled={!modelId}
-                loading={mutation.isPending}
-                type="submit"
-              >
-                <Play /> Start run
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
-      </DialogPopup>
-    </Dialog>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" />}>
+              Cancel
+            </DialogClose>
+            <Button
+              disabled={!modelId}
+              loading={mutation.isPending}
+              type="submit"
+            >
+              <Play /> Start run
+            </Button>
+          </DialogFooter>
+        </form>
+      )}
+    </DialogPopup>
   )
 }
