@@ -9,6 +9,7 @@ import {
   challenges,
   runEvents,
   runs,
+  submissions,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { type ChallengeMeta, toAgentSummary, toRunPublic } from "./public"
@@ -159,6 +160,18 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return typeof value === "number" && Number.isFinite(value) ? value : 0
   }
 
+  /** Whether this run has an accepted flag submission (gate for finish_run). */
+  function hasAcceptedFlag(runId: string): boolean {
+    const row = db
+      .select({ id: submissions.id })
+      .from(submissions)
+      .where(
+        and(eq(submissions.runId, runId), eq(submissions.status, "accepted"))
+      )
+      .get()
+    return Boolean(row)
+  }
+
   return {
     get,
     getRow,
@@ -170,5 +183,6 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     workspacePath,
     runDirPath,
     usageTotals,
+    hasAcceptedFlag,
   }
 }

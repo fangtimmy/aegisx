@@ -148,14 +148,14 @@ function ToolData({ value }: { value: unknown }) {
 function toolIcon(name: string) {
   if (name === "bash") return Terminal
   if (name === "read") return FileText
-  if (name === "grep" || name === "find" || name === "target_get") return Search
+  if (name === "grep" || name === "find" || name === "get_target") return Search
   if (name === "edit" || name === "write") return Pencil
   if (name === "ls") return FolderOpen
-  if (name === "target_start") return Play
-  if (name === "target_stop") return Square
-  if (name === "target_extend") return Clock
+  if (name === "start_target") return Play
+  if (name === "stop_target") return Square
+  if (name === "extend_target") return Clock
   if (name === "finish_run" || name === "submit_flag") return Flag
-  if (name === "spawn_agent") return GitFork
+  if (name === "spawn_agent" || name === "inspect_agent") return GitFork
   return Wrench
 }
 

@@ -49,6 +49,8 @@ export function toolStatusLabel(
         return truncateLabel(text(a?.path)) || ""
       case "spawn_agent":
         return truncateLabel(text(a?.name)) || truncateLabel(text(a?.task), 60)
+      case "inspect_agent":
+        return truncateLabel(text(a?.agent_id)) || ""
       default:
         return ""
     }
@@ -75,13 +77,15 @@ export function toolStatusLabel(
         return running ? "Finishing run" : "Finished run"
       case "spawn_agent":
         return running ? "Spawning agent" : "Spawned agent"
-      case "target_get":
+      case "inspect_agent":
+        return running ? "Inspecting agent" : "Inspected agent"
+      case "get_target":
         return running ? "Checking target" : "Checked target"
-      case "target_start":
+      case "start_target":
         return running ? "Starting target" : "Started target"
-      case "target_extend":
+      case "extend_target":
         return running ? "Extending target" : "Extended target"
-      case "target_stop":
+      case "stop_target":
         return running ? "Stopping target" : "Stopped target"
       default:
         return running ? `Running ${name}` : name

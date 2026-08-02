@@ -298,6 +298,7 @@ export function createRunService(options: RunServiceOptions) {
     if (mainAgent) updateAgent(mainAgent.id, { status: "idle", updatedAt: ts })
     clearForceKill(runId)
     terminateContainer(runId, containerName(runId))
+    abortChildSessions(runId)
     const agentSession = sessions.get(runId)
     if (agentSession) {
       void agentSession.dispose()
@@ -463,6 +464,7 @@ export function createRunService(options: RunServiceOptions) {
       const ctx: RunToolContext = {
         runId,
         challengeId: challenge.id,
+        agentId: mainAgentId,
         submitFlag: (flag) =>
           platformService
             .submitFlag(runId, challenge.id, flag)
@@ -472,6 +474,10 @@ export function createRunService(options: RunServiceOptions) {
         requestFinish: (summary) =>
           pending.set(runId, { mode: "finish", summary }),
         spawnChild: (childInput) => spawnChild(runId, mainAgentId, childInput),
+        hasAcceptedFlag: () => Promise.resolve(queries.hasAcceptedFlag(runId)),
+        getAgent: (agentId) =>
+          queries.listAgents(runId).find((a) => a.id === agentId),
+        lastAssistantText: (agentId) => lastAssistantText(runId, agentId),
       }
       const nativeTools = createMainTools(ctx, caps)
       const bashDef = createBashToolDefinition(wsAbs, {
@@ -686,6 +692,7 @@ export function createRunService(options: RunServiceOptions) {
     const toolCtx: RunToolContext = {
       runId,
       challengeId: row.challengeId,
+      agentId: mainAgent.id,
       submitFlag: (flag) =>
         platformService
           .submitFlag(runId, row.challengeId, flag)
@@ -695,6 +702,10 @@ export function createRunService(options: RunServiceOptions) {
       requestFinish: (summary) =>
         pending.set(runId, { mode: "finish", summary }),
       spawnChild: (childInput) => spawnChild(runId, mainAgent.id, childInput),
+      hasAcceptedFlag: () => Promise.resolve(queries.hasAcceptedFlag(runId)),
+      getAgent: (agentId) =>
+        queries.listAgents(runId).find((a) => a.id === agentId),
+      lastAssistantText: (agentId) => lastAssistantText(runId, agentId),
     }
     const nativeTools = createMainTools(toolCtx, caps)
     const customTools = [bashDef, ...nativeTools] as ToolDefinition[]
@@ -812,6 +823,7 @@ export function createRunService(options: RunServiceOptions) {
       }
       clearForceKill(runId)
       await containerManager.remove(row.containerName).catch(() => undefined)
+      abortChildSessions(runId)
       if (agentSession) {
         void agentSession.dispose()
         sessions.delete(runId)
@@ -859,35 +871,30 @@ export function createRunService(options: RunServiceOptions) {
     return sessions.get(runId)
   }
 
-  /** Create + run a child agent for spawn_agent. Blocks the calling tool. */
+  /**
+   * Start a background child agent for spawn_agent. Resolves immediately with
+   * the new agent; the child runs to completion in the background and its
+   * result is delivered to the parent (steer while streaming, else a new turn).
+   */
   async function spawnChild(
     runId: string,
     parentAgentId: string,
-    input: { task: string; name?: string }
-  ): Promise<{
-    summary: string
-    agentId: string
-    status: string
-    messageCount: number
-    error?: string
-  }> {
+    input: { name: string; task: string }
+  ): Promise<{ agentId: string; name: string; status: string }> {
     const ctx = contexts.get(runId)
     if (!ctx) throw new RunActionError("invalid_state", "Run context missing")
     const activeChildren = queries
       .listAgents(runId)
       .filter((a) => a.role === "child" && a.status === "running").length
     if (activeChildren >= MAX_CHILDREN_PER_RUN) {
-      return {
-        summary: `A child agent is already running for this run (limit ${MAX_CHILDREN_PER_RUN}). Wait for it to finish before spawning another.`,
-        agentId: "",
-        status: "rejected",
-        messageCount: 0,
-        error: "concurrency_limit",
-      }
+      throw new RunActionError(
+        "invalid_state",
+        `A child agent is already running for this run (limit ${MAX_CHILDREN_PER_RUN}). Wait for it to finish before spawning another.`
+      )
     }
 
     const childAgentId = crypto.randomUUID()
-    const childName = input.name?.trim() || "Child agent"
+    const childName = input.name.trim() || "Child agent"
     const ts = now()
     db.insert(agents)
       .values({
@@ -950,31 +957,45 @@ export function createRunService(options: RunServiceOptions) {
         updatedAt: now(),
       })
       emitAgents(runId)
-      return {
-        summary: `Failed to start child agent: ${message}`,
-        agentId: childAgentId,
-        status: "failed",
-        messageCount: 0,
-        error: message,
-      }
+      throw new RunActionError("launch_failed", message)
     }
     childSessions.set(childAgentId, childSession)
     updateAgent(childAgentId, { sessionFile: childSession.sessionFile ?? null })
     emitAgents(runId)
 
+    // Run to completion in the background; deliver the result to the parent.
+    void runChildInBackground(
+      runId,
+      parentAgentId,
+      childAgentId,
+      childName,
+      input.task,
+      childSession
+    )
+
+    return { agentId: childAgentId, name: childName, status: "running" }
+  }
+
+  /** Drive a child agent to completion, then deliver its result to the parent. */
+  async function runChildInBackground(
+    runId: string,
+    parentAgentId: string,
+    childAgentId: string,
+    childName: string,
+    task: string,
+    childSession: RunAgentSession
+  ): Promise<void> {
     let runError: string | null = null
     try {
-      await childSession.session.prompt(input.task)
+      await childSession.session.prompt(task)
     } catch (error) {
       runError = error instanceof Error ? error.message : String(error)
     }
-
     const settled = now()
     const summary =
-      (await childSession.session.getLastAssistantText()) ??
+      childSession.session.getLastAssistantText() ??
       (runError ? `Child failed: ${runError}` : "Child completed.")
     const status = runError ? "failed" : "completed"
-    const messageCount = queries.messageCount(runId, childAgentId)
     updateAgent(childAgentId, {
       status,
       completedAt: settled,
@@ -984,12 +1005,77 @@ export function createRunService(options: RunServiceOptions) {
     void childSession.dispose()
     childSessions.delete(childAgentId)
     emitAgents(runId)
-    return {
-      summary,
-      agentId: childAgentId,
+    deliverChildResult(
+      runId,
+      parentAgentId,
+      childAgentId,
+      childName,
       status,
-      messageCount,
-      ...(runError ? { error: runError } : {}),
+      summary,
+      runError
+    )
+  }
+
+  /**
+   * Deliver a finished child's result to its parent agent. While the parent is
+   * streaming, steer into the current turn; when idle, drive a fresh turn
+   * (steer is queue-only and never starts a loop on its own).
+   */
+  function deliverChildResult(
+    runId: string,
+    parentAgentId: string,
+    childAgentId: string,
+    childName: string,
+    status: string,
+    summary: string,
+    error: string | null
+  ): void {
+    const mainSession = sessions.get(runId)
+    if (!mainSession) return // run closed/gone
+    const text = [
+      `Background agent ${childName} (${childAgentId}) ${status}.`,
+      "",
+      "Final output:",
+      summary,
+      ...(error ? ["", `Error: ${error}`] : []),
+    ].join("\n")
+    if (mainSession.session.isStreaming) {
+      void mainSession.session.steer(text).catch(() => undefined)
+    } else {
+      driveRun(runId, text)
+    }
+  }
+
+  /** Latest assistant text for an agent (inspect_agent). */
+  function lastAssistantText(runId: string, agentId: string): string | null {
+    const list = listMessages(runId, { agentId })
+    for (let index = list.items.length - 1; index >= 0; index -= 1) {
+      const message = list.items[index]
+      if (message.role !== "assistant") continue
+      const body = message.content
+        .flatMap((part) =>
+          typeof part === "string"
+            ? [part]
+            : part && part.type === "text"
+              ? [part.text]
+              : []
+        )
+        .join("\n")
+        .trim()
+      if (body) return body.slice(0, 50_000)
+    }
+    return null
+  }
+
+  /** Abort + dispose any in-flight child sessions belonging to a run. */
+  function abortChildSessions(runId: string): void {
+    for (const child of queries.listAgents(runId)) {
+      if (child.role !== "child") continue
+      const session = childSessions.get(child.id)
+      if (!session) continue
+      void session.session.abort().catch(() => undefined)
+      void session.dispose()
+      childSessions.delete(child.id)
     }
   }
 

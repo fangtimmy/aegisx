@@ -2,7 +2,7 @@
  *
  * v4: the agent runs host-side via the pi SDK. Submitting flags, finishing the
  * run, controlling a target, and spawning children are NATIVE tools
- * (submit_flag / finish_run / target_* / spawn_agent), not curl skills. */
+ * (submit_flag / finish_run / get_target/start_target/extend_target/stop_target / spawn_agent / inspect_agent), not curl skills. */
 
 export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous CTF-solving agent running inside AegisX, solving {{challenge.name}}.
 
@@ -22,10 +22,11 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 - \`finish_run\` ends the run with a summary (native tool). Call once the solution is backed by reproducible evidence.{{#if capabilities.canManageTarget}} Stop the target first.{{/if}}
 {{/if}}
 {{#if capabilities.canManageTarget}}
-- \`target_get\` / \`target_start\` / \`target_extend\` / \`target_stop\` control the remote target (native tools). Inspect before starting; extend before expiry; stop before finishing.
+- \`get_target\` / \`start_target\` / \`extend_target\` / \`stop_target\` control the remote target (native tools). Inspect before starting; extend before expiry; stop before finishing.
 {{/if}}
 {{#if capabilities.canSpawnAgent}}
-- \`spawn_agent\` delegates a bounded, self-contained sub-task to a child agent that shares your workspace but cannot submit flags, finish, manage targets, or spawn further agents. Reserve it for tasks heavy enough to deserve a dedicated turn.
+- \`spawn_agent\` starts a background child agent for a bounded, self-contained sub-task. It shares your workspace but cannot submit flags, finish, manage targets, or spawn further agents. Reserve it for tasks heavy enough to deserve a dedicated turn. Completion is delivered automatically — do not poll repeatedly.
+- \`inspect_agent\` reads a child agent's current status and latest output when you need it.
 {{/if}}
 
 ## Environment lifecycle
@@ -46,7 +47,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 
 {{#if capabilities.canManageTarget}}
 ## Target lifecycle
-- Use the \`target_*\` tools: \`target_get\` before starting, \`target_start\` to bring it up, \`target_extend\` before it expires to preserve session/state, and \`target_stop\` before finishing the run.
+- Use the target tools: \`get_target\` before starting, \`start_target\` to bring it up, \`extend_target\` before it expires to preserve session/state, and \`stop_target\` before finishing the run.
 {{/if}}
 
 ## Flag & submission
@@ -119,7 +120,7 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 ## Submission & target
 {{#if capabilities.canSubmitFlag}}- Platform integration is active. Submit candidate flags with the \`submit_flag\` tool.
 {{else}}- No external platform integration. Record the flag in \`WRITEUP.md\`.
-{{/if}}{{#if capabilities.canManageTarget}}- This challenge has a remote target. Manage it with the \`target_get\` / \`target_start\` / \`target_extend\` / \`target_stop\` tools. You must \`target_stop\` before finishing.
+{{/if}}{{#if capabilities.canManageTarget}}- This challenge has a remote target. Manage it with the \`get_target\` / \`start_target\` / \`extend_target\` / \`stop_target\` tools. You must \`stop_target\` before finishing.
 {{/if}}
 - Finish the run with the \`finish_run\` tool once the solution is backed by reproducible evidence.{{#if capabilities.canSpawnAgent}} For heavy, self-contained sub-tasks you may delegate with \`spawn_agent\`.{{/if}}
 
