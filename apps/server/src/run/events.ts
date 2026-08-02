@@ -133,8 +133,15 @@ export function createRunEventPipeline(options: {
   let revision = 0
   const nextRevision = () => (revision += 1)
 
+  /**
+   * Persist a message and emit `message.committed` exactly once. Duplicate
+   * commits (the same id re-emitted by turn_end/agent_end reconciliation) are
+   * no-ops: they neither insert nor emit, so the emitted wire `seq` is never
+   * overwritten with the placeholder 0 from normalizeMessage.
+   */
   function commit(msg: WireMessage): void {
     const finalized: WireMessage = { ...msg }
+    let inserted = false
     db.transaction((tx) => {
       const existing = tx
         .select({ id: runEvents.id })
@@ -168,8 +175,15 @@ export function createRunEventPipeline(options: {
           createdAt: msg.createdAt,
         })
         .run()
+      inserted = true
     })
-    bus.emit(runId, { type: "message.committed", agentId, message: finalized })
+    if (inserted) {
+      bus.emit(runId, {
+        type: "message.committed",
+        agentId,
+        message: finalized,
+      })
+    }
   }
 
   /** Persist + emit a committed message from a raw SDK AgentMessage. */
