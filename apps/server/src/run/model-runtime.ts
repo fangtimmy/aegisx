@@ -33,13 +33,20 @@ export async function createRunModelRuntime(options: {
   })
 }
 
-/** Resolve the SDK Model for a (provider, modelId) selection. */
+/** Resolve the SDK Model for a (provider, modelId) selection.
+ *
+ * `modelId` may be either the provider-model UUID `id` (as the create flow
+ * receives from the API) or the underlying `modelId` string stored on the run
+ * row (as cold-restore / ensureWarm receives). Match either so both paths
+ * resolve the same model. */
 export function resolveRunModel(
   modelRuntime: RunModelRuntime,
   provider: ProviderConnection,
   modelId: string
 ): Model<any> | undefined {
-  const model = provider.models.find((m) => m.id === modelId)
+  const model = provider.models.find(
+    (m) => m.id === modelId || m.modelId === modelId
+  )
   if (!model) return undefined
   const { providerKey, modelId: piModelId } = resolvePiModelRef(provider, model)
   return modelRuntime.getModel(providerKey, piModelId)
