@@ -74,6 +74,9 @@ export type SettingDef =
 export type FlatSettings = {
 	"agent.defaultModelId": string | null
 	"agent.defaultThinkingLevel": ThinkingLevel
+	"agent.compactionEnabled": boolean
+	"agent.retryEnabled": boolean
+	"agent.retryMaxRetries": number
 	"runtime.maxAttachmentMb": number
 	"runtime.platformRequestTimeoutMs": number
 	"runtime.providerDiscoverTimeoutMs": number
@@ -122,6 +125,39 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		title: "Default reasoning level",
 		widget: "select",
 		order: 20,
+	},
+	{
+		key: "agent.compactionEnabled",
+		type: "boolean",
+		default: true,
+		group: "Agent",
+		title: "Context compaction",
+		description:
+			"Compact the conversation when it nears the context window so long CTF runs survive. Applied to new runs.",
+		widget: "boolean",
+		order: 25,
+	},
+	{
+		key: "agent.retryEnabled",
+		type: "boolean",
+		default: true,
+		group: "Agent",
+		title: "Auto-retry provider errors",
+		description:
+			"Retry transient provider errors automatically. Applied to new runs.",
+		widget: "boolean",
+		order: 30,
+	},
+	{
+		key: "agent.retryMaxRetries",
+		type: "integer",
+		default: 3,
+		minimum: 0,
+		maximum: 10,
+		group: "Agent",
+		title: "Max retries",
+		widget: "number",
+		order: 35,
 	},
 	{
 		key: "runtime.maxAttachmentMb",

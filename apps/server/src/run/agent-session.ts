@@ -27,6 +27,11 @@ export type CreateAgentSessionInput = {
   modelRuntime: import("@earendil-works/pi-coding-agent").ModelRuntime
   model: Model<any>
   thinkingLevel: ThinkingLevel
+  /** SDK agent-loop settings (compaction/retry) resolved from AegisX settings. */
+  agentSettings: {
+    compaction: { enabled: boolean }
+    retry: { enabled: boolean; maxRetries: number }
+  }
   /** Fully rendered system prompt (replaces pi defaults; no AGENTS.md loaded). */
   systemPrompt: string
   /** Tool allowlist (builtin names + any custom tool names to enable). */
@@ -66,9 +71,12 @@ export async function createRunAgentSession(
 
   const settingsManager = SettingsManager.inMemory({
     // Long CTF runs need compaction to survive context overflow; retry absorbs
-    // transient provider errors. Not exposed in the settings UI (constants).
-    compaction: { enabled: true },
-    retry: { enabled: true, maxRetries: 3 },
+    // transient provider errors. Configurable via the settings UI.
+    compaction: { enabled: input.agentSettings.compaction.enabled },
+    retry: {
+      enabled: input.agentSettings.retry.enabled,
+      maxRetries: input.agentSettings.retry.maxRetries,
+    },
   })
 
   const resourceLoader = minimalResourceLoader(input.systemPrompt)

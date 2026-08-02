@@ -13,6 +13,7 @@ import type {
   PromptTemplateContext,
   RunPublic,
 } from "../../../shared"
+import { get } from "../../../shared"
 import type { Message } from "../../../shared/message"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { TargetState } from "../../../shared/target"
@@ -313,6 +314,18 @@ export function createRunService(options: RunServiceOptions) {
     return getProviderConnections(configStore)
   }
 
+  /** Resolve SDK agent-loop settings (compaction/retry) from AegisX settings. */
+  function agentSettings() {
+    const s = options.getSettings()
+    return {
+      compaction: { enabled: get(s, "agent.compactionEnabled") },
+      retry: {
+        enabled: get(s, "agent.retryEnabled"),
+        maxRetries: get(s, "agent.retryMaxRetries"),
+      },
+    }
+  }
+
   async function create(input: CreateRunInput): Promise<RunPublic> {
     const challenge = db
       .select()
@@ -486,6 +499,7 @@ export function createRunService(options: RunServiceOptions) {
           modelRuntime,
           model: sdkModel,
           thinkingLevel: input.thinkingLevel,
+          agentSettings: agentSettings(),
           systemPrompt: mainSystemPrompt,
           toolNames,
           customTools,
@@ -706,6 +720,7 @@ export function createRunService(options: RunServiceOptions) {
         modelRuntime,
         model: sdkModel,
         thinkingLevel: row.thinkingLevel as ThinkingLevel,
+        agentSettings: agentSettings(),
         systemPrompt: renderSystemPrompt(
           templates.mainSystemPromptTemplate,
           promptContext
@@ -919,6 +934,7 @@ export function createRunService(options: RunServiceOptions) {
         modelRuntime: ctx.modelRuntime,
         model: ctx.sdkModel,
         thinkingLevel: ctx.thinkingLevel,
+        agentSettings: agentSettings(),
         systemPrompt: childSystemPrompt,
         toolNames,
         customTools: [bashDef] as ToolDefinition[],
