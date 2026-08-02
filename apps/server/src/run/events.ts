@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent"
 import { eq, max } from "drizzle-orm"
 import type {
+  MessageUsage,
   AssistantMessage as WireAssistant,
   Message as WireMessage,
   ToolResultMessage as WireToolResult,
@@ -19,6 +20,35 @@ export function messageIdOf(agentId: string, msg: AgentMessage): string {
     return `${agentId}:toolResult:${msg.toolCallId}`
   }
   return `${agentId}:${msg.role}:${msg.timestamp}`
+}
+
+/** Map an SDK `Usage` into the wire `MessageUsage` (guards missing fields). */
+function toMessageUsage(usage: unknown): MessageUsage | undefined {
+  if (!usage || typeof usage !== "object") return undefined
+  const u = usage as Record<string, unknown>
+  const cost = (u.cost && typeof u.cost === "object" ? u.cost : {}) as Record<
+    string,
+    unknown
+  >
+  return {
+    input: toNum(u.input),
+    output: toNum(u.output),
+    cacheRead: toNum(u.cacheRead),
+    cacheWrite: toNum(u.cacheWrite),
+    reasoning: typeof u.reasoning === "number" ? u.reasoning : undefined,
+    totalTokens: toNum(u.totalTokens),
+    cost: {
+      input: toNum(cost.input),
+      output: toNum(cost.output),
+      cacheRead: toNum(cost.cacheRead),
+      cacheWrite: toNum(cost.cacheWrite),
+      total: toNum(cost.total),
+    },
+  }
+}
+
+function toNum(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
 /** Normalize an SDK AgentMessage into the wire Message (seq assigned at commit). */
@@ -58,6 +88,7 @@ export function normalizeMessage(
       api: msg.api,
       provider: msg.provider,
       model: msg.model,
+      usage: toMessageUsage(msg.usage),
       timestamp,
     }
     return message
@@ -291,6 +322,7 @@ function extras(msg: WireMessage): Record<string, unknown> {
       api: msg.api,
       provider: msg.provider,
       model: msg.model,
+      usage: msg.usage,
       timestamp: msg.timestamp,
     }
   }
@@ -343,6 +375,7 @@ export function rowToMessage(
       api: payload.api as string | undefined,
       provider: payload.provider as string | undefined,
       model: payload.model as string | undefined,
+      usage: payload.usage as WireAssistant["usage"],
       timestamp: payload.timestamp as number | undefined,
     }
   }

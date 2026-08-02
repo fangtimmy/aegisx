@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { and, count, eq } from "drizzle-orm"
-import type { RunPublic } from "../../../shared"
+import type { RunPublic, RunUsage } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
 import type { createDatabase } from "../db"
 import {
@@ -41,7 +41,9 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
 
   function get(runId: string): RunPublic | undefined {
     const row = db.select().from(runs).where(eq(runs.id, runId)).get()
-    return row ? mapRow(row) : undefined
+    return row
+      ? toRunPublic(row, challengeMeta(row.challengeId), usageTotals(runId))
+      : undefined
   }
 
   function getRow(runId: string) {
@@ -104,6 +106,59 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return join(dataDir, row.workspacePath, "..")
   }
 
+  /** Sum token usage + cost across a run's committed assistant messages. */
+  function usageTotals(runId: string): RunUsage | undefined {
+    const rows = db
+      .select({ payload: runEvents.payload })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), eq(runEvents.role, "assistant")))
+      .all()
+    let input = 0
+    let output = 0
+    let cacheRead = 0
+    let cacheWrite = 0
+    let reasoning = 0
+    let totalTokens = 0
+    let cost = 0
+    let turns = 0
+    for (const row of rows) {
+      if (!row.payload) continue
+      let payload: Record<string, unknown>
+      try {
+        payload = JSON.parse(row.payload)
+      } catch {
+        continue
+      }
+      const u = payload.usage
+      if (!u || typeof u !== "object") continue
+      const usage = u as Record<string, unknown>
+      const c = (usage.cost ?? {}) as Record<string, unknown>
+      input += num(usage.input)
+      output += num(usage.output)
+      cacheRead += num(usage.cacheRead)
+      cacheWrite += num(usage.cacheWrite)
+      if (typeof usage.reasoning === "number") reasoning += usage.reasoning
+      totalTokens += num(usage.totalTokens)
+      cost += num(c.total)
+      turns += 1
+    }
+    if (turns === 0) return undefined
+    return {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      reasoning,
+      totalTokens,
+      cost,
+      turns,
+    }
+  }
+
+  function num(value: unknown): number {
+    return typeof value === "number" && Number.isFinite(value) ? value : 0
+  }
+
   return {
     get,
     getRow,
@@ -114,5 +169,6 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     detail,
     workspacePath,
     runDirPath,
+    usageTotals,
   }
 }

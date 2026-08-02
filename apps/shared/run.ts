@@ -2,6 +2,19 @@ import type { AgentSummary } from "./agent"
 import type { RunStatus } from "./run-status"
 import type { ThinkingLevel } from "./thinking"
 
+/** Aggregated token usage + cost across a run's assistant messages. `turns` is
+ * the number of assistant messages that reported usage. */
+export type RunUsage = {
+	input: number
+	output: number
+	cacheRead: number
+	cacheWrite: number
+	reasoning: number
+	totalTokens: number
+	cost: number
+	turns: number
+}
+
 export type RunPublic = {
 	id: string
 	challengeId: string
@@ -27,6 +40,7 @@ export type RunPublic = {
 	summary: string | null
 	flag: string | null
 	hasFlag: boolean
+	usage?: RunUsage
 }
 
 /** REST snapshot for a run, including its main + child agents. */

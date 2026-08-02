@@ -330,5 +330,5 @@ close(inner) / listMessages / get / detail / ...`；**移除 `resume`、`steer`*
 - **per-run timeout**（`timed_out`）：仍延后；若加，等同 abort → idle。
 - **idle 超时自动 close**（回收闲置容器）：本轮不做；现靠手动 close + finish_run 释放。
   日后可加可配 idle 超时 → 自动 close（留 jsonl）。
-- **usage/cost 回填 Overview**：仍延后。
+- **usage/cost 回填 Overview**：✅ 已实施（assistant 消息存 usage，run 聚合，Overview 展示 token/cost；设置 UI 暴露 compaction/retry）。
 - **agent inspector**：不做（无后端端点）。

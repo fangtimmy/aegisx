@@ -1,4 +1,4 @@
-import type { RunPublic } from "../../../shared"
+import type { RunPublic, RunUsage } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
 import type { agents, runs } from "../db/schema"
 
@@ -11,7 +11,11 @@ export type ChallengeMeta = {
   targetSupported: boolean
 }
 
-export function toRunPublic(row: RunRow, challenge?: ChallengeMeta): RunPublic {
+export function toRunPublic(
+  row: RunRow,
+  challenge?: ChallengeMeta,
+  usage?: RunUsage
+): RunPublic {
   return {
     id: row.id,
     challengeId: row.challengeId,
@@ -37,6 +41,7 @@ export function toRunPublic(row: RunRow, challenge?: ChallengeMeta): RunPublic {
     summary: row.summary,
     flag: row.flag,
     hasFlag: Boolean(row.flag),
+    usage,
   }
 }
 

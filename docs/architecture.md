@@ -191,4 +191,3 @@ now (not exposed).
 - No Orchestrator (multi-run scheduling) — explicitly out of v4 scope.
 - `bash` is one `docker exec` per call (no long-lived shell reuse yet).
 - Per-run timeout: no `timed_out` status in v5 (lifecycle collapsed to running/idle/closed); a future timeout would abort the turn → `idle`.
-- Usage/cost Overview from SDK events — fields flow through; UI not added.

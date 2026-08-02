@@ -14,6 +14,18 @@ export function statusVariant(status: RunStatus) {
   return "secondary" as const
 }
 
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
+  return String(value)
+}
+
+function formatCost(usd: number): string {
+  if (usd <= 0) return "$0"
+  if (usd < 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(2)}`
+}
+
 export function RunOverview({ run }: { run: RunPublic }) {
   return (
     <div className="flex flex-col gap-4 px-6 py-4">
@@ -66,6 +78,48 @@ export function RunOverview({ run }: { run: RunPublic }) {
           <dd className="mt-1">{formatTime(run.completedAt)}</dd>
         </div>
       </dl>
+      {run.usage && (
+        <section className="border-t pt-4">
+          <h3 className="mb-2 font-medium text-sm">Token usage &amp; cost</h3>
+          <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
+            <div>
+              <dt className="text-muted-foreground text-xs">Input</dt>
+              <dd className="mt-0.5 font-mono text-xs">
+                {formatTokens(run.usage.input)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground text-xs">Output</dt>
+              <dd className="mt-0.5 font-mono text-xs">
+                {formatTokens(run.usage.output)}
+                {run.usage.reasoning > 0 && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({formatTokens(run.usage.reasoning)} reasoning)
+                  </span>
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground text-xs">Cache</dt>
+              <dd className="mt-0.5 font-mono text-xs">
+                {formatTokens(run.usage.cacheRead)} read /{" "}
+                {formatTokens(run.usage.cacheWrite)} write
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground text-xs">Turns</dt>
+              <dd className="mt-0.5 font-mono text-xs">{run.usage.turns}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground text-xs">Cost</dt>
+              <dd className="mt-0.5 font-mono text-xs">
+                {formatCost(run.usage.cost)}
+              </dd>
+            </div>
+          </dl>
+        </section>
+      )}
       {(run.summary || run.flag) && (
         <section className="border-t pt-4">
           <h3 className="mb-2 font-medium text-sm">Result</h3>

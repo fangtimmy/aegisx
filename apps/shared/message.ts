@@ -31,6 +31,24 @@ export type ToolCallContent = {
 	arguments: Record<string, unknown>
 }
 
+/** Token usage + cost for one assistant message (mirrors pi-ai `Usage`,
+ * decoupled so `shared` does not import the SDK). */
+export type MessageUsage = {
+	input: number
+	output: number
+	cacheRead: number
+	cacheWrite: number
+	reasoning?: number
+	totalTokens: number
+	cost: {
+		input: number
+		output: number
+		cacheRead: number
+		cacheWrite: number
+		total: number
+	}
+}
+
 export type ChildHandoff = {
 	agentId: string
 	agentName: string
@@ -61,6 +79,7 @@ export type AssistantMessage = {
 	api?: string
 	provider?: string
 	model?: string
+	usage?: MessageUsage
 	timestamp?: number
 }
 
