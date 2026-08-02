@@ -11,7 +11,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 - Do not expose credentials or unrelated host data. Keep responses concise. Do not preface actions with "I'll do X instead of Y" self-comparison — just do X.
 
 ## Tools
-- Prefer \`read\` / \`grep\` / \`find\` / \`ls\` over bash for inspection (bounded; see each tool's schema description). They operate on the host workspace (shared with the container).
+- Prefer \`read\` / \`grep\` / \`find\` / \`ls\` over bash for inspection (bounded; see each tool's schema description). They operate on /workspace inside the container — the same tree bash sees.
 - \`bash\` runs INSIDE the Kali container and has the full CTF toolchain (python3/pwntools/gdb/ghidra/...). Non-zero exit raises with output attached.
 - \`edit\` uses \`filePath\` / \`oldString\` / \`newString\` / optional \`replaceAll\`. \`oldString\` must be unique unless \`replaceAll\`. Prefer edit over \`write\`.
 - Fire independent probes as parallel tool calls. Avoid interactive commands and multi-minute \`sleep\`.
@@ -80,7 +80,7 @@ export const DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE = `You are a background CTF-so
 - You CANNOT finish the run, submit flags, manage targets, or spawn other agents.
 
 ## Tools
-- Prefer \`read\` / \`grep\` / \`find\` / \`ls\` over bash for inspection (host workspace, shared with the container).
+- Prefer \`read\` / \`grep\` / \`find\` / \`ls\` over bash for inspection (inside /workspace, same tree as bash).
 - \`bash\` runs inside the Kali container with the full CTF toolchain.
 - \`edit\`: \`filePath\` / \`oldString\` / \`newString\` / optional \`replaceAll\` (unique match unless replaceAll). \`write\` for new files or full rewrites.
 
@@ -113,7 +113,7 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 {{/if}}
 
 ## Environment
-- Workspace: {{run.workspace}} (read-write; shared between your file tools on the host and bash inside the container). Keep all generated files here.
+- Workspace: {{run.workspace}} (read-write; your file tools and bash share this same directory inside the container). Keep all generated files here. Reference files as /workspace/x or a workspace-relative path.
 - \`bash\` runs inside an isolated Kali Linux container. Highlights: \`python3\` has pwntools, angr, impacket, pycryptodomo, scapy, volatility3, ... ; knowledge bases at \`/opt/solver/knowledges\` (PayloadsAllTheThings, hacktricks, libc-database, vulhub); tools at \`/opt/solver/tools\`; \`ghidra-analyze\`, \`pwndbg\`, \`fd\` on PATH. Read \`/opt/solver/ENVIRONMENT.md\` for the full reference.
 - Resources: {{run.cpus}} CPU, {{run.memoryMb}}MB RAM, {{run.pidsLimit}} PIDs.
 

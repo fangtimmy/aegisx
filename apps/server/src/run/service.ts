@@ -47,6 +47,8 @@ import {
   type RunToolContext,
   type ToolCapabilities,
 } from "./tools"
+import { createDockerExecBackend } from "./workspace/backend"
+import { createWorkspaceTools } from "./workspace/tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -483,7 +485,14 @@ export function createRunService(options: RunServiceOptions) {
       const bashDef = createBashToolDefinition(wsAbs, {
         operations: createContainerBashOperations(name, containerManager),
       })
-      const customTools = [bashDef, ...nativeTools] as ToolDefinition[]
+      const workspaceTools = createWorkspaceTools(
+        createDockerExecBackend(name, containerManager)
+      )
+      const customTools = [
+        bashDef,
+        ...workspaceTools,
+        ...nativeTools,
+      ] as ToolDefinition[]
       const toolNames = [
         "read",
         "bash",
@@ -708,7 +717,14 @@ export function createRunService(options: RunServiceOptions) {
       lastAssistantText: (agentId) => lastAssistantText(runId, agentId),
     }
     const nativeTools = createMainTools(toolCtx, caps)
-    const customTools = [bashDef, ...nativeTools] as ToolDefinition[]
+    const workspaceTools = createWorkspaceTools(
+      createDockerExecBackend(row.containerName, containerManager)
+    )
+    const customTools = [
+      bashDef,
+      ...workspaceTools,
+      ...nativeTools,
+    ] as ToolDefinition[]
     const toolNames = [
       "read",
       "bash",
@@ -928,6 +944,9 @@ export function createRunService(options: RunServiceOptions) {
         containerManager
       ),
     })
+    const workspaceTools = createWorkspaceTools(
+      createDockerExecBackend(ctx.containerName, containerManager)
+    )
     // Children: coding tools only (no finish/flag/target/spawn).
     const toolNames = ["read", "bash", "edit", "write", "grep", "find", "ls"]
 
@@ -944,7 +963,7 @@ export function createRunService(options: RunServiceOptions) {
         agentSettings: agentSettings(),
         systemPrompt: childSystemPrompt,
         toolNames,
-        customTools: [bashDef] as ToolDefinition[],
+        customTools: [bashDef, ...workspaceTools] as ToolDefinition[],
         db,
         bus,
       })

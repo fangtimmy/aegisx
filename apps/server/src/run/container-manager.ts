@@ -186,6 +186,86 @@ export function createContainerManager(options?: { socketPath?: string }) {
     }
   }
 
+  async function readStream(stream: ReadableStream<Uint8Array> | null) {
+    if (!stream) return Buffer.alloc(0)
+    const reader = stream.getReader()
+    const chunks: Buffer[] = []
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) chunks.push(Buffer.from(value))
+    }
+    return Buffer.concat(chunks)
+  }
+
+  /**
+   * Run a command inside a running container, capturing stdout and stderr
+   * separately (stdin optional). Used by workspace file tools (read/write/grep/
+   * find/ls) which need structured output, unlike the streaming bash tool.
+   */
+  async function capture(
+    name: string,
+    command: string,
+    opts?: {
+      workdir?: string
+      env?: string[]
+      signal?: AbortSignal
+      timeout?: number
+      stdin?: Uint8Array | string
+    }
+  ): Promise<{ stdout: Buffer; stderr: string; exitCode: number | null }> {
+    const workdir = opts?.workdir ?? "/workspace"
+    const argv = ["docker", "exec"]
+    if (opts?.env) {
+      for (const entry of opts.env) argv.push("-e", entry)
+    }
+    argv.push("-i", "-w", workdir, name, "bash", "-lc", command)
+    const proc = Bun.spawn(argv, {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: opts?.stdin !== undefined ? "pipe" : "ignore",
+    })
+    if (opts?.stdin !== undefined && proc.stdin) {
+      proc.stdin.write(opts.stdin)
+      await proc.stdin.end()
+    }
+    let timedOut = false
+    const onAbort = () => {
+      try {
+        proc.kill()
+      } catch {
+        // ignore
+      }
+    }
+    opts?.signal?.addEventListener("abort", onAbort, { once: true })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (opts?.timeout && opts.timeout > 0) {
+      timer = setTimeout(() => {
+        timedOut = true
+        try {
+          proc.kill()
+        } catch {
+          // ignore
+        }
+      }, opts.timeout)
+    }
+    try {
+      const [stdout, stderr] = await Promise.all([
+        readStream(proc.stdout),
+        readStream(proc.stderr),
+      ])
+      const exitCode = await proc.exited
+      return {
+        stdout,
+        stderr: stderr.toString("utf8"),
+        exitCode: timedOut ? null : exitCode,
+      }
+    } finally {
+      if (timer) clearTimeout(timer)
+      opts?.signal?.removeEventListener("abort", onAbort)
+    }
+  }
+
   return {
     create,
     kill,
@@ -194,6 +274,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
     exists,
     isRunning,
     exec,
+    capture,
     get,
   }
 }
