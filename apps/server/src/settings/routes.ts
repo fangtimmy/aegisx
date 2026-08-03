@@ -12,6 +12,8 @@ import type {
   ProviderData,
   ProviderModelData,
 } from "../infrastructure/config-store"
+import { badRequest, notFound } from "../infrastructure/http-errors"
+import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
 import {
   builtinModelProfile,
@@ -39,14 +41,6 @@ const promptPreviewInput = Type.Object(
   },
   { additionalProperties: false }
 )
-
-function normalizeBaseUrl(value: string) {
-  const url = new URL(value.trim())
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Provider endpoint must use HTTP or HTTPS")
-  }
-  return url.toString().replace(/\/$/, "")
-}
 
 export function settingsResponse(configStore: ConfigStore) {
   return {
@@ -147,25 +141,13 @@ export function registerSettingsRoutes(
     try {
       body = await c.req.json()
     } catch {
-      return c.json(
-        {
-          error: {
-            code: "invalid_json",
-            message: "Request body must be JSON",
-          },
-        },
-        400
-      )
+      return badRequest(c, "invalid_json", "Request body must be JSON")
     }
     if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_settings",
-            message: "Settings patch must be an object of flat keys",
-          },
-        },
-        400
+      return badRequest(
+        c,
+        "invalid_settings",
+        "Settings patch must be an object of flat keys"
       )
     }
     const patch = body as Record<string, unknown>
@@ -173,29 +155,17 @@ export function registerSettingsRoutes(
       const modelId = patch["agent.defaultModelId"]
       if (modelId !== null && modelId !== undefined) {
         if (typeof modelId !== "string" || modelId.length === 0) {
-          return c.json(
-            {
-              error: {
-                code: "invalid_settings",
-                message: "Default model id is invalid",
-              },
-            },
-            400
+          return badRequest(
+            c,
+            "invalid_settings",
+            "Default model id is invalid"
           )
         }
         const exists = configStore
           .getProviders()
           .some((p) => p.models.some((m) => m.id === modelId))
         if (!exists) {
-          return c.json(
-            {
-              error: {
-                code: "not_found",
-                message: "Default model not found",
-              },
-            },
-            404
-          )
+          return notFound(c, "Default model not found")
         }
       }
     }
@@ -203,17 +173,10 @@ export function registerSettingsRoutes(
     try {
       validatePromptKeys(next)
     } catch (error) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_prompt_template",
-            message:
-              error instanceof Error
-                ? error.message
-                : "Prompt template is invalid",
-          },
-        },
-        400
+      return badRequest(
+        c,
+        "invalid_prompt_template",
+        error instanceof Error ? error.message : "Prompt template is invalid"
       )
     }
     configStore.updateSettings(patch)
@@ -228,17 +191,10 @@ export function registerSettingsRoutes(
         const input = c.req.valid("json")
         return c.json({ segments: previewPrompt(input.kind, input.template) })
       } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_prompt_template",
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Prompt template is invalid",
-            },
-          },
-          400
+        return badRequest(
+          c,
+          "invalid_prompt_template",
+          error instanceof Error ? error.message : "Prompt template is invalid"
         )
       }
     }
@@ -249,25 +205,13 @@ export function registerSettingsRoutes(
     try {
       body = await c.req.json()
     } catch {
-      return c.json(
-        {
-          error: {
-            code: "invalid_json",
-            message: "Request body must be JSON",
-          },
-        },
-        400
-      )
+      return badRequest(c, "invalid_json", "Request body must be JSON")
     }
     if (!isConfigDocumentV1(body)) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_settings_import",
-            message: "Unsupported settings file (expected version 1)",
-          },
-        },
-        400
+      return badRequest(
+        c,
+        "invalid_settings_import",
+        "Unsupported settings file (expected version 1)"
       )
     }
     try {
@@ -301,7 +245,7 @@ export function registerSettingsRoutes(
         if (typeof provider.baseUrl !== "string") {
           throw new Error("Provider endpoint is required")
         }
-        const baseUrl = normalizeBaseUrl(provider.baseUrl)
+        const baseUrl = normalizeHttpBaseUrl(provider.baseUrl)
         const modelsRaw = Array.isArray(provider.models) ? provider.models : []
         const models: ProviderModelData[] = []
         for (const rawModel of modelsRaw) {
@@ -389,15 +333,10 @@ export function registerSettingsRoutes(
         providers: transferProviders(),
       })
     } catch (error) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_settings_import",
-            message:
-              error instanceof Error ? error.message : "Settings import failed",
-          },
-        },
-        400
+      return badRequest(
+        c,
+        "invalid_settings_import",
+        error instanceof Error ? error.message : "Settings import failed"
       )
     }
   })

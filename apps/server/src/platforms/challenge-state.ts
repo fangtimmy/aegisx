@@ -19,16 +19,13 @@ export function getChallengeRemote(
 export function isPlatformIntegrated(
   remote: ChallengeRemote | null | undefined
 ): remote is ChallengeRemote {
-  return Boolean(remote && remote.remoteId && remote.available)
+  return Boolean(remote?.remoteId && remote?.available)
 }
 
 export function isTargetCapable(
   remote: ChallengeRemote | null | undefined
 ): remote is ChallengeRemote {
   return Boolean(
-    remote &&
-      remote.available &&
-      remote.targetSupported &&
-      !remote.targetIgnored
+    remote?.available && remote?.targetSupported && !remote?.targetIgnored
   )
 }

@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync } from "node:fs"
 import { join, relative } from "node:path"
-import type { Model } from "@earendil-works/pi-ai"
+import type { Api, Model } from "@earendil-works/pi-ai"
 import {
   createBashToolDefinition,
   type ToolDefinition,
@@ -16,7 +16,6 @@ import type {
 import { get } from "../../../shared"
 import type { Message } from "../../../shared/message"
 import type { ProviderConnection } from "../../../shared/provider"
-import type { TargetState } from "../../../shared/target"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
 import { agents, challenges, runEvents, runs } from "../db/schema"
@@ -73,7 +72,7 @@ type RunContext = {
   workspaceHostPath: string
   sessionsDir: string
   modelRuntime: RunModelRuntime
-  sdkModel: Model<any>
+  sdkModel: Model<Api>
   thinkingLevel: ThinkingLevel
   /** Raw child system-prompt template (rendered per child with its name/task). */
   childTemplate: string
@@ -149,11 +148,14 @@ export function createRunService(options: RunServiceOptions) {
     return run
   }
 
-  function updateRun(runId: string, patch: Record<string, unknown>) {
+  function updateRun(runId: string, patch: Partial<typeof runs.$inferInsert>) {
     db.update(runs).set(patch).where(eq(runs.id, runId)).run()
   }
 
-  function updateAgent(agentId: string, patch: Record<string, unknown>) {
+  function updateAgent(
+    agentId: string,
+    patch: Partial<typeof agents.$inferInsert>
+  ) {
     db.update(agents).set(patch).where(eq(agents.id, agentId)).run()
   }
 
@@ -250,7 +252,7 @@ export function createRunService(options: RunServiceOptions) {
     void withLock(runId, () => {
       if (turnGeneration.get(runId) !== gen) return
       const row = queries.getRow(runId)
-      if (!row || row.status !== "running") return
+      if (row?.status !== "running") return
       const outcome = pending.get(runId)
       pending.delete(runId)
       if (outcome?.mode === "finish") {
@@ -289,7 +291,7 @@ export function createRunService(options: RunServiceOptions) {
     opts: { summary?: string; finished?: boolean } = {}
   ) {
     const ts = now()
-    const patch: Record<string, unknown> = {
+    const patch: Partial<typeof runs.$inferInsert> = {
       status: "closed",
       updatedAt: ts,
     }
@@ -326,6 +328,74 @@ export function createRunService(options: RunServiceOptions) {
         enabled: get(s, "agent.retryEnabled"),
         maxRetries: get(s, "agent.retryMaxRetries"),
       },
+    }
+  }
+
+  /** Capabilities granted to a main agent (children get none). */
+  function resolveCaps(promptContext: PromptTemplateContext): ToolCapabilities {
+    return {
+      canSubmitFlag: promptContext.capabilities.canSubmitFlag,
+      canManageTarget: promptContext.capabilities.canManageTarget,
+      canSpawnAgent: true,
+    }
+  }
+
+  /** Wire the per-run callbacks the native tools delegate to. */
+  function buildMainToolContext(
+    runId: string,
+    challengeId: string,
+    mainAgentId: string
+  ): RunToolContext {
+    return {
+      runId,
+      challengeId,
+      agentId: mainAgentId,
+      submitFlag: (flag) =>
+        platformService
+          .submitFlag(runId, challengeId, flag)
+          .then((r) => r ?? null),
+      targetAction: (action) =>
+        platformService.targetAction(challengeId, action),
+      requestFinish: (summary) =>
+        pending.set(runId, { mode: "finish", summary }),
+      spawnChild: (childInput) => spawnChild(runId, mainAgentId, childInput),
+      hasAcceptedFlag: () => Promise.resolve(queries.hasAcceptedFlag(runId)),
+      getAgent: (agentId) =>
+        queries.listAgents(runId).find((a) => a.id === agentId),
+      lastAssistantText: (agentId) => lastAssistantText(runId, agentId),
+    }
+  }
+
+  /** Build the main agent's tool set: container bash + file tools + CTF tools. */
+  function buildMainAgentTools(
+    workspaceHostPath: string,
+    name: string,
+    ctx: RunToolContext,
+    caps: ToolCapabilities
+  ) {
+    const bashDef = createBashToolDefinition(workspaceHostPath, {
+      operations: createContainerBashOperations(name, containerManager),
+    })
+    const workspaceTools = createWorkspaceTools(
+      createDockerExecBackend(name, containerManager)
+    )
+    const nativeTools = createMainTools(ctx, caps)
+    return {
+      customTools: [
+        bashDef,
+        ...workspaceTools,
+        ...nativeTools,
+      ] as ToolDefinition[],
+      toolNames: [
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "grep",
+        "find",
+        "ls",
+        ...nativeTools.map((tool) => tool.name),
+      ],
     }
   }
 
@@ -413,11 +483,7 @@ export function createRunService(options: RunServiceOptions) {
         throw new RunStartError("Could not resolve the selected model")
       }
 
-      const caps: ToolCapabilities = {
-        canSubmitFlag: promptContext.capabilities.canSubmitFlag,
-        canManageTarget: promptContext.capabilities.canManageTarget,
-        canSpawnAgent: true,
-      }
+      const caps = resolveCaps(promptContext)
 
       // Tool-box container (sleep infinity) + bash forwarded via docker exec.
       try {
@@ -463,46 +529,13 @@ export function createRunService(options: RunServiceOptions) {
         .run()
 
       const mainAgentId = crypto.randomUUID()
-      const ctx: RunToolContext = {
-        runId,
-        challengeId: challenge.id,
-        agentId: mainAgentId,
-        submitFlag: (flag) =>
-          platformService
-            .submitFlag(runId, challenge.id, flag)
-            .then((r) => r ?? null),
-        targetAction: (action) =>
-          platformService.targetAction(challenge.id, action),
-        requestFinish: (summary) =>
-          pending.set(runId, { mode: "finish", summary }),
-        spawnChild: (childInput) => spawnChild(runId, mainAgentId, childInput),
-        hasAcceptedFlag: () => Promise.resolve(queries.hasAcceptedFlag(runId)),
-        getAgent: (agentId) =>
-          queries.listAgents(runId).find((a) => a.id === agentId),
-        lastAssistantText: (agentId) => lastAssistantText(runId, agentId),
-      }
-      const nativeTools = createMainTools(ctx, caps)
-      const bashDef = createBashToolDefinition(wsAbs, {
-        operations: createContainerBashOperations(name, containerManager),
-      })
-      const workspaceTools = createWorkspaceTools(
-        createDockerExecBackend(name, containerManager)
+      const ctx = buildMainToolContext(runId, challenge.id, mainAgentId)
+      const { customTools, toolNames } = buildMainAgentTools(
+        wsAbs,
+        name,
+        ctx,
+        caps
       )
-      const customTools = [
-        bashDef,
-        ...workspaceTools,
-        ...nativeTools,
-      ] as ToolDefinition[]
-      const toolNames = [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        "grep",
-        "find",
-        "ls",
-        ...nativeTools.map((tool) => tool.name),
-      ]
 
       let agentSession: RunAgentSession
       try {
@@ -654,12 +687,6 @@ export function createRunService(options: RunServiceOptions) {
       throw new RunActionError("launch_failed", message)
     }
 
-    const bashDef = createBashToolDefinition(wsAbs, {
-      operations: createContainerBashOperations(
-        row.containerName,
-        containerManager
-      ),
-    })
     // Re-render prompts for the restored run (attachments + capabilities).
     const challenge = db
       .select()
@@ -693,48 +720,14 @@ export function createRunService(options: RunServiceOptions) {
       db,
       settings["container.workspace"]
     )
-    const caps: ToolCapabilities = {
-      canSubmitFlag: promptContext.capabilities.canSubmitFlag,
-      canManageTarget: promptContext.capabilities.canManageTarget,
-      canSpawnAgent: true,
-    }
-    const toolCtx: RunToolContext = {
-      runId,
-      challengeId: row.challengeId,
-      agentId: mainAgent.id,
-      submitFlag: (flag) =>
-        platformService
-          .submitFlag(runId, row.challengeId, flag)
-          .then((r) => r ?? null),
-      targetAction: (action) =>
-        platformService.targetAction(row.challengeId, action),
-      requestFinish: (summary) =>
-        pending.set(runId, { mode: "finish", summary }),
-      spawnChild: (childInput) => spawnChild(runId, mainAgent.id, childInput),
-      hasAcceptedFlag: () => Promise.resolve(queries.hasAcceptedFlag(runId)),
-      getAgent: (agentId) =>
-        queries.listAgents(runId).find((a) => a.id === agentId),
-      lastAssistantText: (agentId) => lastAssistantText(runId, agentId),
-    }
-    const nativeTools = createMainTools(toolCtx, caps)
-    const workspaceTools = createWorkspaceTools(
-      createDockerExecBackend(row.containerName, containerManager)
+    const caps = resolveCaps(promptContext)
+    const toolCtx = buildMainToolContext(runId, row.challengeId, mainAgent.id)
+    const { customTools, toolNames } = buildMainAgentTools(
+      wsAbs,
+      row.containerName,
+      toolCtx,
+      caps
     )
-    const customTools = [
-      bashDef,
-      ...workspaceTools,
-      ...nativeTools,
-    ] as ToolDefinition[]
-    const toolNames = [
-      "read",
-      "bash",
-      "edit",
-      "write",
-      "grep",
-      "find",
-      "ls",
-      ...nativeTools.map((tool) => tool.name),
-    ]
 
     let agentSession: RunAgentSession
     try {
@@ -985,7 +978,6 @@ export function createRunService(options: RunServiceOptions) {
     // Run to completion in the background; deliver the result to the parent.
     void runChildInBackground(
       runId,
-      parentAgentId,
       childAgentId,
       childName,
       input.task,
@@ -998,7 +990,6 @@ export function createRunService(options: RunServiceOptions) {
   /** Drive a child agent to completion, then deliver its result to the parent. */
   async function runChildInBackground(
     runId: string,
-    parentAgentId: string,
     childAgentId: string,
     childName: string,
     task: string,
@@ -1026,7 +1017,6 @@ export function createRunService(options: RunServiceOptions) {
     emitAgents(runId)
     deliverChildResult(
       runId,
-      parentAgentId,
       childAgentId,
       childName,
       status,
@@ -1042,7 +1032,6 @@ export function createRunService(options: RunServiceOptions) {
    */
   function deliverChildResult(
     runId: string,
-    parentAgentId: string,
     childAgentId: string,
     childName: string,
     status: string,

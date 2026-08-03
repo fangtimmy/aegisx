@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai"
+import type { Api, Model } from "@earendil-works/pi-ai"
 import {
   type AgentSession,
   createAgentSession,
@@ -25,7 +25,7 @@ export type CreateAgentSessionInput = {
   /** Existing session file to resume; omit for a new session. */
   sessionFile?: string
   modelRuntime: import("@earendil-works/pi-coding-agent").ModelRuntime
-  model: Model<any>
+  model: Model<Api>
   thinkingLevel: ThinkingLevel
   /** SDK agent-loop settings (compaction/retry) resolved from AegisX settings. */
   agentSettings: {

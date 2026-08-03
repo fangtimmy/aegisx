@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm"
-import type { Hono } from "hono"
+import type { Context, Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 import type { FlatSettings } from "../../../shared"
@@ -8,14 +8,15 @@ import type { LiveEvent } from "../../../shared/live-event"
 import type { createDatabase } from "../db"
 import { challenges } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
-import { jsonError, notFound } from "../infrastructure/http-errors"
+import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import {
   readWorkspacePath,
   WorkspaceFileError,
   workspaceDownload,
 } from "../infrastructure/workspace-files"
-import { PlatformActionError } from "../platforms/service"
+import { EmptyInputSchema, ThinkingLevelSchema } from "../lib/schemas"
+import { platformActionHttpError } from "../platforms/errors"
 import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
 import type { RunService } from "./service"
@@ -32,17 +33,7 @@ const runInput = Type.Object(
         pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
       })
     ),
-    thinkingLevel: Type.Optional(
-      Type.Union([
-        Type.Literal("off"),
-        Type.Literal("minimal"),
-        Type.Literal("low"),
-        Type.Literal("medium"),
-        Type.Literal("high"),
-        Type.Literal("xhigh"),
-        Type.Literal("max"),
-      ])
-    ),
+    thinkingLevel: Type.Optional(ThinkingLevelSchema),
   },
   { additionalProperties: false }
 )
@@ -67,7 +58,7 @@ const messageInput = Type.Object(
   { additionalProperties: false }
 )
 
-const emptyInput = Type.Object({}, { additionalProperties: false })
+const emptyInput = EmptyInputSchema
 
 export function registerRunRoutes(
   app: Hono,
@@ -103,25 +94,17 @@ export function registerRunRoutes(
             })()
           : undefined
         if (!selected?.model.enabled || !selected.provider.enabled) {
-          return c.json(
-            {
-              error: {
-                code: "model_unavailable",
-                message: "Choose an enabled model and provider",
-              },
-            },
-            400
+          return badRequest(
+            c,
+            "model_unavailable",
+            "Choose an enabled model and provider"
           )
         }
         if (!selected.provider.apiKey) {
-          return c.json(
-            {
-              error: {
-                code: "credentials_unavailable",
-                message: "Enter an API key for the selected provider",
-              },
-            },
-            400
+          return badRequest(
+            c,
+            "credentials_unavailable",
+            "Enter an API key for the selected provider"
           )
         }
 
@@ -308,19 +291,15 @@ export function registerRunRoutes(
       )
       runService.refresh(runId)
       if (!result) {
-        return c.json(
-          {
-            error: {
-              code: "not_bound",
-              message: "Challenge is not managed by a platform",
-            },
-          },
-          400
+        return badRequest(
+          c,
+          "not_bound",
+          "Challenge is not managed by a platform"
         )
       }
       return c.json({ result })
     } catch (error) {
-      return platformError(c, error)
+      return platformActionHttpError(c, error)
     }
   })
 
@@ -330,7 +309,7 @@ export function registerRunRoutes(
     try {
       return c.json(await runService.targetAction(run.challengeId, "get"))
     } catch (error) {
-      return platformError(c, error)
+      return platformActionHttpError(c, error)
     }
   })
 
@@ -344,7 +323,7 @@ export function registerRunRoutes(
         try {
           return c.json(await runService.targetAction(run.challengeId, action))
         } catch (error) {
-          return platformError(c, error)
+          return platformActionHttpError(c, error)
         }
       }
     )
@@ -360,10 +339,7 @@ export function registerRunRoutes(
   })
 }
 
-function runError(
-  c: Parameters<Parameters<Hono["onError"]>[0]>[1],
-  error: unknown
-) {
+function runError(c: Context, error: unknown) {
   if (!(error instanceof RunActionError)) throw error
   return jsonError(
     c,
@@ -376,30 +352,11 @@ function runError(
   )
 }
 
-function workspaceFileError(
-  c: Parameters<Parameters<Hono["onError"]>[0]>[1],
-  error: unknown
-) {
+function workspaceFileError(c: Context, error: unknown) {
   if (!(error instanceof WorkspaceFileError)) throw error
   return jsonError(
     c,
     { code: error.code, message: error.message },
     error.code === "not_found" ? 404 : 400
   )
-}
-
-function platformError(
-  c: Parameters<Parameters<Hono["onError"]>[0]>[1],
-  error: unknown
-) {
-  if (!(error instanceof PlatformActionError)) throw error
-  const status =
-    error.code === "not_found"
-      ? 404
-      : error.code === "invalid_state"
-        ? 409
-        : error.code === "not_bound"
-          ? 400
-          : 502
-  return jsonError(c, { code: error.code, message: error.message }, status)
 }

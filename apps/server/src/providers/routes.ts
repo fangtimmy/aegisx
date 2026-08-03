@@ -5,7 +5,13 @@ import type {
   ProviderData,
   ProviderModelData,
 } from "../infrastructure/config-store"
-import { notFound } from "../infrastructure/http-errors"
+import {
+  badRequest,
+  conflict,
+  jsonError,
+  notFound,
+} from "../infrastructure/http-errors"
+import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
 import {
   builtinModelProfile,
@@ -67,14 +73,6 @@ const modelUpdateInput = Type.Partial(
 )
 
 export const providerName = (id: string) => `aegisx-${id}`
-
-function normalizeBaseUrl(value: string) {
-  const url = new URL(value.trim())
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Provider endpoint must use HTTP or HTTPS")
-  }
-  return url.toString().replace(/\/$/, "")
-}
 
 function cloneProviders(store: ConfigStore): ProviderData[] {
   return store.getProviders().map((p) => ({
@@ -164,21 +162,13 @@ export function registerProviderRoutes(
         id: crypto.randomUUID(),
         label: input.label.trim(),
         type: input.type,
-        baseUrl: normalizeBaseUrl(input.baseUrl),
+        baseUrl: normalizeHttpBaseUrl(input.baseUrl),
         apiKey: input.apiKey,
         enabled: input.enabled,
         models: [],
       }
       if (!provider.label) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_provider",
-              message: "Provider name is required",
-            },
-          },
-          400
-        )
+        return badRequest(c, "invalid_provider", "Provider name is required")
       }
       const providers = cloneProviders(configStore)
       providers.push(provider)
@@ -186,15 +176,7 @@ export function registerProviderRoutes(
       syncModels()
       return c.json(publicProvider(provider), 201)
     } catch {
-      return c.json(
-        {
-          error: {
-            code: "invalid_base_url",
-            message: "Invalid provider endpoint",
-          },
-        },
-        400
-      )
+      return badRequest(c, "invalid_base_url", "Invalid provider endpoint")
     }
   })
 
@@ -210,33 +192,17 @@ export function registerProviderRoutes(
         if (input.label !== undefined) existing.label = input.label.trim()
         if (input.type !== undefined) existing.type = input.type
         if (input.baseUrl !== undefined)
-          existing.baseUrl = normalizeBaseUrl(input.baseUrl)
+          existing.baseUrl = normalizeHttpBaseUrl(input.baseUrl)
         if (input.apiKey !== undefined) existing.apiKey = input.apiKey
         if (input.enabled !== undefined) existing.enabled = input.enabled
         if (!existing.label) {
-          return c.json(
-            {
-              error: {
-                code: "invalid_provider",
-                message: "Provider name is required",
-              },
-            },
-            400
-          )
+          return badRequest(c, "invalid_provider", "Provider name is required")
         }
         configStore.updateProviders(providers)
         syncModels()
         return c.json(publicProvider(existing))
       } catch {
-        return c.json(
-          {
-            error: {
-              code: "invalid_base_url",
-              message: "Invalid provider endpoint",
-            },
-          },
-          400
-        )
+        return badRequest(c, "invalid_base_url", "Invalid provider endpoint")
       }
     }
   )
@@ -272,26 +238,14 @@ export function registerProviderRoutes(
         const modelId = input.modelId.trim()
         const label = input.label.trim()
         if (!modelId || !label) {
-          return c.json(
-            {
-              error: {
-                code: "invalid_model",
-                message: "Model ID and name are required",
-              },
-            },
-            400
+          return badRequest(
+            c,
+            "invalid_model",
+            "Model ID and name are required"
           )
         }
         if (provider.models.some((m) => m.modelId === modelId)) {
-          return c.json(
-            {
-              error: {
-                code: "duplicate_model",
-                message: "Model already exists",
-              },
-            },
-            409
-          )
+          return conflict(c, "duplicate_model", "Model already exists")
         }
         const model: ProviderModelData = {
           id: crypto.randomUUID(),
@@ -309,17 +263,10 @@ export function registerProviderRoutes(
         syncModels()
         return c.json({ ...publicModel(model), providerId: provider.id }, 201)
       } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_model_metadata",
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Invalid model metadata",
-            },
-          },
-          400
+        return badRequest(
+          c,
+          "invalid_model_metadata",
+          error instanceof Error ? error.message : "Invalid model metadata"
         )
       }
     }
@@ -340,80 +287,42 @@ export function registerProviderRoutes(
         if (input.label !== undefined) {
           model.label = input.label.trim()
           if (!model.label) {
-            return c.json(
-              {
-                error: {
-                  code: "invalid_model",
-                  message: "Model name is required",
-                },
-              },
-              400
-            )
+            return badRequest(c, "invalid_model", "Model name is required")
           }
         }
         if (input.enabled !== undefined) model.enabled = input.enabled
-        if (input.metadata !== undefined) {
-          const profile = input.binding
-            ? builtinModelProfile(
-                input.binding.providerId,
-                input.binding.modelId
-              )
-            : undefined
-          if (input.binding && !profile) {
-            return c.json(
-              {
-                error: {
-                  code: "invalid_pi_model",
-                  message: "Pi model binding is unavailable",
-                },
-              },
-              400
-            )
-          }
+
+        // A pi model binding, when set, locks metadata to its builtin profile.
+        const profile =
+          input.binding &&
+          builtinModelProfile(input.binding.providerId, input.binding.modelId)
+        if (input.binding && !profile) {
+          return badRequest(
+            c,
+            "invalid_pi_model",
+            "Pi model binding is unavailable"
+          )
+        }
+        if (profile) {
+          model.metadata = JSON.stringify(profile.metadata)
+        } else if (input.metadata !== undefined) {
           model.metadata = JSON.stringify(
-            profile?.metadata ?? normalizeModelMetadata(input.metadata)
+            normalizeModelMetadata(input.metadata)
           )
         }
         if (input.binding !== undefined) {
-          if (input.binding) {
-            const profile = builtinModelProfile(
-              input.binding.providerId,
-              input.binding.modelId
-            )
-            if (!profile) {
-              return c.json(
-                {
-                  error: {
-                    code: "invalid_pi_model",
-                    message: "Pi model binding is unavailable",
-                  },
-                },
-                400
-              )
-            }
-            model.metadata = JSON.stringify(profile.metadata)
-            model.piProviderId = profile.providerId
-            model.piModelId = profile.modelId
-          } else {
-            model.piProviderId = null
-            model.piModelId = null
-          }
+          model.piProviderId = profile ? profile.providerId : null
+          model.piModelId = profile ? profile.modelId : null
         }
+
         configStore.updateProviders(providers)
         syncModels()
         return c.json({ ...publicModel(model), providerId: provider.id })
       } catch (error) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_model_metadata",
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Invalid model metadata",
-            },
-          },
-          400
+        return badRequest(
+          c,
+          "invalid_model_metadata",
+          error instanceof Error ? error.message : "Invalid model metadata"
         )
       }
     }
@@ -432,14 +341,10 @@ export function registerProviderRoutes(
       const binding = c.req.valid("json")
       const profile = builtinModelProfile(binding.providerId, binding.modelId)
       if (!profile) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_pi_model",
-              message: "Pi model binding is unavailable",
-            },
-          },
-          400
+        return badRequest(
+          c,
+          "invalid_pi_model",
+          "Pi model binding is unavailable"
         )
       }
       model.metadata = JSON.stringify(profile.metadata)
@@ -513,12 +418,11 @@ export function registerProviderRoutes(
         .filter((model): model is string => Boolean(model))
       return c.json({ models: [...new Set(models)].sort() })
     } catch {
-      return c.json(
+      return jsonError(
+        c,
         {
-          error: {
-            code: "provider_unavailable",
-            message: "Could not fetch provider models",
-          },
+          code: "provider_unavailable",
+          message: "Could not fetch provider models",
         },
         502
       )

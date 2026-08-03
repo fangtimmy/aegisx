@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import type { Model } from "@earendil-works/pi-ai"
+import type { Api, Model } from "@earendil-works/pi-ai"
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import type { ProviderConnection } from "../../../shared/provider"
 import { generateModelsJson, resolvePiModelRef } from "../providers/models-json"
@@ -43,7 +43,7 @@ export function resolveRunModel(
   modelRuntime: RunModelRuntime,
   provider: ProviderConnection,
   modelId: string
-): Model<any> | undefined {
+): Model<Api> | undefined {
   const model = provider.models.find(
     (m) => m.id === modelId || m.modelId === modelId
   )

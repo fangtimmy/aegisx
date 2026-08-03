@@ -105,9 +105,8 @@ export function createPlatformTargets(
     const platform = platformForChallenge(challengeId)
     const remote = getChallengeRemote(db, challengeId)
     if (
-      !remote ||
-      !remote.available ||
-      !remote.targetSupported ||
+      !remote?.available ||
+      !remote?.targetSupported ||
       !platform ||
       remote.sourceKey !== platform.sourceKey
     ) {

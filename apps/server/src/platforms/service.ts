@@ -11,6 +11,7 @@ import {
 } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import type { createStorage } from "../infrastructure/storage"
+import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { A1CtfAdapter } from "./adapters/a1ctf"
 import { CtfdAdapter } from "./adapters/ctfd"
 import { Ret2ShellAdapter } from "./adapters/ret2shell"
@@ -331,14 +332,14 @@ export function createPlatformService(
 }
 
 function normalizeBaseUrl(value: string) {
-  const url = new URL(value.trim())
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
+  try {
+    return normalizeHttpBaseUrl(value)
+  } catch {
     throw new PlatformActionError(
       "invalid_state",
       "Platform URL must use HTTP or HTTPS"
     )
   }
-  return url.toString().replace(/\/$/, "")
 }
 
 function platformSourceKey(config: PlatformConfig) {

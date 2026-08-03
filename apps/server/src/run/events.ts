@@ -51,6 +51,15 @@ function toNum(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
+/**
+ * JSON content column for a committed message. user/assistant/toolResult carry
+ * `content`; a notice carries `text`. (Notices are not committed today, but the
+ * branch keeps the writer correct for the full union.)
+ */
+function serializeContent(msg: WireMessage): string {
+  return JSON.stringify(msg.role === "notice" ? msg.text : msg.content)
+}
+
 /** Normalize an SDK AgentMessage into the wire Message (seq assigned at commit). */
 export function normalizeMessage(
   agentId: string,
@@ -163,11 +172,7 @@ export function createRunEventPipeline(options: {
           agentId,
           seq,
           role: msg.role,
-          content: JSON.stringify(
-            msg.role === "user" || msg.role === "notice"
-              ? (msg as { content: unknown }).content
-              : (msg as { content: unknown }).content
-          ),
+          content: serializeContent(msg),
           toolName: msg.role === "toolResult" ? msg.toolName : null,
           toolCallId: msg.role === "toolResult" ? msg.toolCallId : null,
           isError: msg.role === "toolResult" ? msg.isError === true : null,

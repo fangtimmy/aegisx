@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 import type { AgentSummary } from "../../../shared/agent"
 import type { TargetState } from "../../../shared/target"
 import {
@@ -40,11 +41,19 @@ const allCaps: ToolCapabilities = {
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
   (result.content[0] as { text: string }).text
 
-/** SDK tool.execute takes 5 args; supply the trailing three as no-ops. */
-const invoke = (
-  tool: { execute: (...args: any[]) => Promise<any> },
-  params: any
-) => tool.execute("id", params, undefined, undefined, undefined as never)
+/** Find a tool by name, failing loudly if it is missing. */
+const findTool = (tools: ToolDefinition[], name: string): ToolDefinition => {
+  const tool = tools.find((t) => t.name === name)
+  if (!tool) throw new Error(`Tool not found: ${name}`)
+  return tool
+}
+
+/**
+ * Invoke a tool's execute with the trailing SDK args stubbed out. The generic
+ * param schema is erased (`as never`) since tests pass ad-hoc objects.
+ */
+const invoke = (tool: ToolDefinition, params: object) =>
+  tool.execute("id", params as never, undefined, undefined, undefined as never)
 
 describe("createMainTools", () => {
   test("tool names use v2 verb_noun targets and include inspect_agent", () => {
@@ -92,7 +101,7 @@ describe("createMainTools", () => {
         canSpawnAgent: false,
       }
     )
-    const finish = tools.find((t) => t.name === "finish_run")!
+    const finish = findTool(tools, "finish_run")
     await expect(invoke(finish, { summary: "s" })).rejects.toThrow(
       /accepted flag/
     )
@@ -110,7 +119,7 @@ describe("createMainTools", () => {
       }),
       { canSubmitFlag: true, canManageTarget: true, canSpawnAgent: false }
     )
-    const finish = tools.find((t) => t.name === "finish_run")!
+    const finish = findTool(tools, "finish_run")
     await expect(invoke(finish, { summary: "s" })).rejects.toThrow(
       /Stop the remote target/
     )
@@ -132,7 +141,7 @@ describe("createMainTools", () => {
       }),
       { canSubmitFlag: true, canManageTarget: true, canSpawnAgent: false }
     )
-    const finish = tools.find((t) => t.name === "finish_run")!
+    const finish = findTool(tools, "finish_run")
     const result = await invoke(finish, { summary: "  done  " })
     expect(finished as string | null).toBe("done")
     expect(result.terminate).toBe(true)
@@ -158,7 +167,7 @@ describe("createMainTools", () => {
       mockCtx({ targetAction: async () => state }),
       { canSubmitFlag: false, canManageTarget: true, canSpawnAgent: false }
     )
-    const getTarget = tools.find((t) => t.name === "get_target")!
+    const getTarget = findTool(tools, "get_target")
     const result = await invoke(getTarget, {})
     expect(textOf(result)).toContain("wsrx connect")
   })
@@ -184,7 +193,7 @@ describe("createMainTools", () => {
       canManageTarget: false,
       canSpawnAgent: true,
     })
-    const inspect = tools.find((t) => t.name === "inspect_agent")!
+    const inspect = findTool(tools, "inspect_agent")
     await expect(invoke(inspect, { agent_id: "child" })).rejects.toThrow(
       /not found/
     )
@@ -210,7 +219,7 @@ describe("createMainTools", () => {
       mockCtx({ getAgent: () => child, lastAssistantText: () => "flag found" }),
       { canSubmitFlag: false, canManageTarget: false, canSpawnAgent: true }
     )
-    const inspect = tools.find((t) => t.name === "inspect_agent")!
+    const inspect = findTool(tools, "inspect_agent")
     const result = await invoke(inspect, { agent_id: "child" })
     const body = JSON.parse(textOf(result))
     expect(body).toMatchObject({
@@ -231,7 +240,7 @@ describe("createMainTools", () => {
       }),
       { canSubmitFlag: false, canManageTarget: false, canSpawnAgent: true }
     )
-    const spawn = tools.find((t) => t.name === "spawn_agent")!
+    const spawn = findTool(tools, "spawn_agent")
     const result = await invoke(spawn, { name: "Probe", task: "scan" })
     expect(spawned as { name: string; task: string } | null).toEqual({
       name: "Probe",

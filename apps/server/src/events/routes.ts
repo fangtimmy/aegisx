@@ -5,12 +5,18 @@ import { Type } from "typebox"
 import { get, type RunPublic } from "../../../shared"
 import type { createDatabase } from "../db"
 import { attachments, challenges, events, runs } from "../db/schema"
-import { jsonError, notFound } from "../infrastructure/http-errors"
+import {
+  badRequest,
+  conflict,
+  notFound,
+  payloadTooLarge,
+  unsupportedMediaType,
+} from "../infrastructure/http-errors"
 import type { createStorage } from "../infrastructure/storage"
 import { isSafeFilename, StorageLimitError } from "../infrastructure/storage"
 import { validateJson } from "../infrastructure/validation"
+import { platformActionHttpError } from "../platforms/errors"
 import type { createPlatformService } from "../platforms/service"
-import { PlatformActionError } from "../platforms/service"
 import type { createCatalogReader } from "./catalog"
 
 const eventInput = Type.Object(
@@ -70,10 +76,7 @@ export function registerEventRoutes(
       updatedAt: now,
     }
     if (!event.name) {
-      return c.json(
-        { error: { code: "invalid_name", message: "Event name is required" } },
-        400
-      )
+      return badRequest(c, "invalid_name", "Event name is required")
     }
     db.insert(events).values(event).run()
     return c.json(
@@ -113,10 +116,7 @@ export function registerEventRoutes(
     const input = c.req.valid("json")
     const name = input.name.trim()
     if (!name) {
-      return c.json(
-        { error: { code: "invalid_name", message: "Event name is required" } },
-        400
-      )
+      return badRequest(c, "invalid_name", "Event name is required")
     }
     const updates: { name: string; promptHint?: string; updatedAt: string } = {
       name,
@@ -146,25 +146,16 @@ export function registerEventRoutes(
       )
       .get()
     if (activeRun) {
-      return c.json(
-        {
-          error: {
-            code: "active_run",
-            message: "Close active runs before deleting this event",
-          },
-        },
-        409
+      return conflict(
+        c,
+        "active_run",
+        "Close active runs before deleting this event"
       )
     }
     try {
       await platformService.assertNoActiveTargets(eventId)
     } catch (error) {
-      if (!(error instanceof PlatformActionError)) throw error
-      return jsonError(
-        c,
-        { code: error.code, message: error.message },
-        error.code === "platform_error" ? 502 : 409
-      )
+      return platformActionHttpError(c, error)
     }
     const path = storage.eventPath(eventId)
     const trashedPath = storage.moveToTrash(path)
@@ -189,14 +180,10 @@ export function registerEventRoutes(
       const input = c.req.valid("json")
       const name = input.name.trim()
       if (!name || !input.description.trim()) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_challenge",
-              message: "Challenge name and description are required",
-            },
-          },
-          400
+        return badRequest(
+          c,
+          "invalid_challenge",
+          "Challenge name and description are required"
         )
       }
       const now = new Date().toISOString()
@@ -226,14 +213,10 @@ export function registerEventRoutes(
       const input = c.req.valid("json")
       const name = input.name.trim()
       if (!name || !input.description.trim()) {
-        return c.json(
-          {
-            error: {
-              code: "invalid_challenge",
-              message: "Challenge name and description are required",
-            },
-          },
-          400
+        return badRequest(
+          c,
+          "invalid_challenge",
+          "Challenge name and description are required"
         )
       }
       db.update(challenges)
@@ -256,14 +239,10 @@ export function registerEventRoutes(
       return notFound(c, "Challenge not found")
     }
     if (challenge.remoteId && platformService.isBoundEvent(challenge.eventId)) {
-      return c.json(
-        {
-          error: {
-            code: "platform_managed",
-            message: "Platform-managed challenges must be synchronized",
-          },
-        },
-        409
+      return conflict(
+        c,
+        "platform_managed",
+        "Platform-managed challenges must be synchronized"
       )
     }
     const activeRun = db
@@ -277,14 +256,10 @@ export function registerEventRoutes(
       )
       .get()
     if (activeRun) {
-      return c.json(
-        {
-          error: {
-            code: "active_run",
-            message: "Close active runs before deleting this challenge",
-          },
-        },
-        409
+      return conflict(
+        c,
+        "active_run",
+        "Close active runs before deleting this challenge"
       )
     }
     const path = storage.challengePath(challenge.eventId, challenge.id)
@@ -304,14 +279,10 @@ export function registerEventRoutes(
       c.req.header("content-type")?.split(";", 1)[0] !==
       "application/octet-stream"
     ) {
-      return c.json(
-        {
-          error: {
-            code: "unsupported_media_type",
-            message: "Attachment must use application/octet-stream",
-          },
-        },
-        415
+      return unsupportedMediaType(
+        c,
+        "unsupported_media_type",
+        "Attachment must use application/octet-stream"
       )
     }
     const challenge = getChallenge(c.req.param("challengeId"))
@@ -320,14 +291,10 @@ export function registerEventRoutes(
     }
     const filename = c.req.query("filename") ?? ""
     if (!isSafeFilename(filename)) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_filename",
-            message: "Attachment filename is not allowed",
-          },
-        },
-        400
+      return badRequest(
+        c,
+        "invalid_filename",
+        "Attachment filename is not allowed"
       )
     }
     const id = crypto.randomUUID()
@@ -341,10 +308,7 @@ export function registerEventRoutes(
       )
     } catch (error) {
       if (error instanceof StorageLimitError) {
-        return c.json(
-          { error: { code: "attachment_too_large", message: error.message } },
-          413
-        )
+        return payloadTooLarge(c, "attachment_too_large", error.message)
       }
       throw error
     }

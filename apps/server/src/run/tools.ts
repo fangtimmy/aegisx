@@ -210,11 +210,7 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
         }),
         execute: async (_id, params) => {
           const child = ctx.getAgent(params.agent_id)
-          if (
-            !child ||
-            child.role !== "child" ||
-            child.parentAgentId !== ctx.agentId
-          ) {
+          if (child?.role !== "child" || child?.parentAgentId !== ctx.agentId) {
             throw new Error("Child agent was not found")
           }
           const summary = ctx.lastAssistantText(child.id) ?? "(no output yet)"

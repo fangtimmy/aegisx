@@ -5,6 +5,7 @@ import type {
   TargetState,
 } from "../../../shared"
 import { isActiveTarget } from "../../../shared/target"
+import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { isRecord, nullableNumber, nullableString } from "../lib/guards"
 
 export type { PlatformType, RemoteEvent, RemoteTargetInfo, TargetState }
@@ -111,12 +112,13 @@ export class PlatformHttp {
     private readonly onError?: (info: PlatformRequestError) => void,
     private readonly timeoutMs = 30_000
   ) {
-    const url = new URL(baseUrl.trim())
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
+    try {
+      const normalized = normalizeHttpBaseUrl(baseUrl)
+      this.origin = new URL(normalized).origin
+      this.baseUrl = normalized
+    } catch {
       throw new PlatformError("Platform URL must use HTTP or HTTPS")
     }
-    this.origin = url.origin
-    this.baseUrl = url.toString().replace(/\/$/, "")
   }
 
   async request(path: string, init: RequestInit = {}, authenticated = true) {

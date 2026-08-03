@@ -1,10 +1,10 @@
 import type { Hono } from "hono"
 import { streamText } from "hono/streaming"
 import { Type } from "typebox"
-import { jsonError } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
+import { EmptyInputSchema } from "../lib/schemas"
+import { PlatformActionError, platformActionHttpError } from "./errors"
 import type { createPlatformService } from "./service"
-import { PlatformActionError } from "./service"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
@@ -33,7 +33,7 @@ const bindingInput = Type.Object(
   { additionalProperties: false }
 )
 
-const emptyInput = Type.Object({}, { additionalProperties: false })
+const emptyInput = EmptyInputSchema
 const importInput = Type.Object(
   {
     remoteIds: Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
@@ -54,7 +54,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
           items: await service.listRemoteEvents(c.req.valid("json")),
         })
       } catch (error) {
-        return platformError(c, error)
+        return platformActionHttpError(c, error)
       }
     }
   )
@@ -66,7 +66,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
       try {
         return c.json(await service.testConnection(c.req.valid("json")))
       } catch (error) {
-        return platformError(c, error)
+        return platformActionHttpError(c, error)
       }
     }
   )
@@ -82,7 +82,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
         )
         return c.json(result)
       } catch (error) {
-        return platformError(c, error)
+        return platformActionHttpError(c, error)
       }
     }
   )
@@ -92,7 +92,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
       await service.testBoundConnection(c.req.param("eventId"))
       return c.json({ ok: true })
     } catch (error) {
-      return platformError(c, error)
+      return platformActionHttpError(c, error)
     }
   })
 
@@ -101,7 +101,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
       await service.detach(c.req.param("eventId"))
       return c.body(null, 204)
     } catch (error) {
-      return platformError(c, error)
+      return platformActionHttpError(c, error)
     }
   })
 
@@ -109,7 +109,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
     try {
       return c.json(await service.discoverChallenges(c.req.param("eventId")))
     } catch (error) {
-      return platformError(c, error)
+      return platformActionHttpError(c, error)
     }
   })
 
@@ -125,7 +125,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
           )
         )
       } catch (error) {
-        return platformError(c, error)
+        return platformActionHttpError(c, error)
       }
     }
   )
@@ -186,7 +186,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
         await service.targetAction(c.req.param("challengeId"), "get")
       )
     } catch (error) {
-      return platformError(c, error)
+      return platformActionHttpError(c, error)
     }
   })
 
@@ -195,7 +195,7 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
       await service.ignoreTarget(c.req.param("challengeId"))
       return c.body(null, 204)
     } catch (error) {
-      return platformError(c, error)
+      return platformActionHttpError(c, error)
     }
   })
 
@@ -209,25 +209,9 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
             await service.targetAction(c.req.param("challengeId"), action)
           )
         } catch (error) {
-          return platformError(c, error)
+          return platformActionHttpError(c, error)
         }
       }
     )
   }
-}
-
-function platformError(
-  c: Parameters<Parameters<Hono["onError"]>[0]>[1],
-  error: unknown
-) {
-  if (!(error instanceof PlatformActionError)) throw error
-  const status =
-    error.code === "not_found"
-      ? 404
-      : error.code === "invalid_state"
-        ? 409
-        : error.code === "not_bound"
-          ? 400
-          : 502
-  return jsonError(c, { code: error.code, message: error.message }, status)
 }

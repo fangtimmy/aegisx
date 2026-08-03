@@ -15,6 +15,9 @@ export const EnvironmentSchema = Type.Union([
   Type.Literal("container"),
 ])
 
+/** No body allowed (action endpoints that only take path params). */
+export const EmptyInputSchema = Type.Object({}, { additionalProperties: false })
+
 export const ProviderTypeSchema = Type.Union([
   Type.Literal("openai-compatible"),
   Type.Literal("openai-responses"),
