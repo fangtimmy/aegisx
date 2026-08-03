@@ -4,8 +4,8 @@
  * - `running`: a prompt() turn is in flight (pi isStreaming); container warm.
  * - `idle`: between turns; container warm — promptable instantly.
  * - `closed`: container + in-process session released (after finish_run, a
- *   manual close, or crash recovery); jsonl retained, cold-restorable by
- *   messaging the run. Not a dead terminal. */
+ *   manual close, or crash recovery); the DB session is retained,
+ *   cold-restorable by messaging the run. Not a dead terminal. */
 export type RunStatus = "running" | "idle" | "closed"
 
 /** A run holds live resources (container + in-process session). */

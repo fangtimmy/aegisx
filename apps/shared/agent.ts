@@ -13,7 +13,7 @@ export type AgentSummary = {
 	/** Delegated task text for child agents; null for main. */
 	task: string | null
 	status: AgentStatus
-	/** SessionManager jsonl path (resume + audit). */
+	/** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
 	sessionFile: string | null
 	createdAt: string
 	startedAt: string | null

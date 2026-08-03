@@ -282,8 +282,8 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /**
-   * Release a run's live resources (container + in-process session). The jsonl
-   * + workspace are kept so the run can be cold-restored by messaging it. Run
+   * Release a run's live resources (container + in-process session). The DB
+   * session + workspace are kept so the run can be cold-restored by messaging it. Run
    * becomes closed. `finished` stamps completedAt (finish_run / force finish).
    */
   function freeRun(
@@ -653,7 +653,7 @@ export function createRunService(options: RunServiceOptions) {
 
   /**
    * Ensure a run has a live session + warm container. No-op if already warm;
-   * cold-restores a closed run from its jsonl (SessionManager.open) with a
+   * cold-restores a closed run from its DB session (DbSessionManager.open) with a
    * fresh container. Does not drive a turn — the caller prompts afterwards.
    */
   async function ensureWarm(runId: string): Promise<void> {
@@ -841,8 +841,8 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /**
-   * Manually release a run's container + session (→ closed). Keeps jsonl so the
-   * run can be cold-restored by messaging it. A streaming turn is aborted first
+   * Manually release a run's container + session (→ closed). Keeps the DB
+   * session so the run can be cold-restored by messaging it. A streaming turn is aborted first
    * and freed when it settles.
    */
   function closeRun(runId: string): Promise<RunPublic> {
@@ -1156,7 +1156,7 @@ export function createRunService(options: RunServiceOptions) {
     for (const row of rows) {
       if (row.status === "closed") continue
       // running/idle held live resources that are gone after a crash. Reclaim
-      // any orphan container; the jsonl stays so the run is cold-restorable.
+      // any orphan container; the DB session stays so the run is cold-restorable.
       await containerManager.remove(row.containerName).catch(() => undefined)
       const ts = now()
       updateRun(row.id, { status: "closed", updatedAt: ts })

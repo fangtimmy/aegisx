@@ -164,7 +164,7 @@ export const agents = sqliteTable(
     /** null for the main agent; the main agent id for children. */
     parentAgentId: text("parent_agent_id"),
     status: text("status").notNull(),
-    /** SessionManager jsonl file for this agent (resume + audit). */
+    /** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
     sessionFile: text("session_file"),
     name: text("name"),
     /** Delegated task text for child agents. */

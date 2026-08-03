@@ -67,7 +67,7 @@ apps/server/src/
     service.ts        lifecycle: create/sendMessage/stop/close/finish/delete/recover/spawnChild
     agent-session.ts  createAgentSession wrapper + event pipeline wiring
     container-tools.ts BashOperations → docker exec
-    events.ts         SDK AgentSessionEvent → committed Message + live progress
+    events.ts         SDK AgentSessionEvent → committed SessionEntry + live progress
     live.ts           in-memory SSE fan-out bus
     tools.ts          native tools: submit_flag/target_*/finish_run/spawn_agent
     model-runtime.ts  ProviderConnection → pi ModelRuntime + Model (models.json)
@@ -94,8 +94,8 @@ concept: messaging a run always works. See
 [lifecycle-redesign.md](./lifecycle-redesign.md) for the full rationale.
 
 Statuses: `running` (turn in flight, container warm) · `idle` (between turns,
-container warm) · `closed` (container + in-process session released; jsonl
-retained, cold-restorable by messaging). `finish_run` releases the container
+container warm) · `closed` (container + in-process session released; the DB
+session is retained, cold-restorable by messaging). `finish_run` releases the container
 (`closed`) but is **not** a dead terminal — the run can be re-opened.
 
 - **create** (`service.create`): copy attachments into the workspace, render the
@@ -106,27 +106,27 @@ retained, cold-restorable by messaging). `finish_run` releases the container
   `finish_run` (tool returns `terminate`), or after an abort. `settleTurn` is the
   single settle point; a generation guard makes a stale turn (superseded by a
   newer one) no-op. finish/close → `freeRun` (release container + session →
-  `closed`, keep jsonl); otherwise → `idle` (container kept).
+  `closed`, keeping the DB session); otherwise → `idle` (container kept).
 - **sendMessage** (POST `/message`): streaming → `steer`/`followUp`; idle →
   `prompt`; closed → `ensureWarm` (cold-restore: new container +
-  `SessionManager.open` + `createAgentSession`) then `prompt`.
+  `DbSessionManager.open` + `createAgentSession`) then `prompt`.
 - **stop** (Esc): `session.abort()`; the turn settles to `idle` (container kept).
 - **finish** (tool or POST `/finish`): pending finish + abort → `freeRun` →
   `closed` + summary (`completedAt`).
 - **close** (POST `/close`): manually release a warm run's container → `closed`.
-- **delete**: remove the container (if warm), dispose the session, delete jsonl
-  + workspace + row.
+- **delete**: remove the container (if warm), dispose the session, delete the
+  DB session + workspace + row.
 - **recoverOnBoot**: on startup, any `running`/`idle` row is marked `closed`
   (host-side session gone after a crash) and its orphan container reclaimed.
-- **compaction / retry**: handled by the SDK via `SettingsManager.inMemory`
-  (enabled; not exposed in the settings UI yet).
+- **compaction / retry**: handled by the SDK via `SettingsManager.inMemory`,
+  configurable in the settings UI.
 
 ## Visibility & data flow
 
 ```
 session.subscribe(event)
   → events.ts normalizes SDK events
-  → committed entries (entry_appended) → SQLite session_entries
+  → committed entries (DbSessionManager.onAppend) → SQLite session_entries
   → live progress (text_delta / tool_execution_* / compaction / retry) → SSE bus
 ```
 
@@ -184,8 +184,8 @@ The v3 `GET /api/runs/:id/pty` WebSocket is gone.
 
 Unchanged surface (`apps/shared/settings-schema.ts`): agent defaults, runtime
 timeouts, container resources, and the three prompt templates (now referencing
-native tool names). compaction/retry/timeout are SDK `inMemory` constants for
-now (not exposed).
+native tool names). compaction/retry are wired to the SDK via
+`SettingsManager.inMemory` and configurable in the settings UI.
 
 ## Known limitations / deferred
 
