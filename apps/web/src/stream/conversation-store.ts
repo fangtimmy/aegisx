@@ -1,9 +1,10 @@
 import type {
   AgentSummary,
   ContextSnapshot,
+  EntryItem,
   LiveEvent,
-  Message,
   RunPublic,
+  SessionEntry,
 } from "@/api"
 import {
   buildConversation,
@@ -16,9 +17,9 @@ type Listener = () => void
 
 type MessageProgress = {
   agentId: string
-  messageId: string
+  key: string
   revision: number
-  message: Message
+  entry: SessionEntry
   pending: boolean
 }
 
@@ -54,29 +55,38 @@ type QueueState = {
 }
 
 type AgentView = {
-  stableThroughId: string | null
+  stableThroughKey: string | null
   stable: ConversationItem[]
-  tail: Message[]
+  tail: EntryItem[]
 }
 
 const emptyItems: ConversationItem[] = []
 
-function isUserLike(message: Message) {
-  return message.role === "user" || message.role === "notice"
+/** A user message entry — a turn boundary for the stable/tail split. */
+function isUserTurn(item: EntryItem): boolean {
+  return item.entry.type === "message" && item.entry.message.role === "user"
+}
+
+/** Tool-call id of a toolResult entry, if any. */
+function toolCallIdOf(entry: SessionEntry): string | null {
+  if (entry.type === "message" && entry.message.role === "toolResult") {
+    return entry.message.toolCallId
+  }
+  return null
 }
 
 /**
- * Merges durable committed messages (from GET /messages) with ephemeral live
+ * Merges durable committed entries (from GET /messages) with ephemeral live
  * progress (from the SSE stream) into ConversationItem[] snapshots.
  *
- * Optimization: the committed history is split at the last user-like message.
+ * Optimization: the committed history is split at the last user-turn boundary.
  * Everything up to that boundary is memoized ("stable") and only the tail
  * (boundary onwards + live) is rebuilt on each event — so high-frequency
  * text_delta streaming only re-renders the active turn, not the whole history.
  * Notifications are rAF-batched so a burst of deltas collapses into one frame.
  */
 export class ConversationStore {
-  private readonly messages = new Map<string, Map<string, Message>>()
+  private readonly messages = new Map<string, Map<string, EntryItem>>()
   private readonly messageProgress = new Map<
     string,
     Map<string, MessageProgress>
@@ -156,8 +166,8 @@ export class ConversationStore {
       ...this.activity.keys(),
     ])
     for (const [agentId, progress] of this.messageProgress) {
-      for (const [messageId, entry] of progress) {
-        if (!entry.pending) progress.delete(messageId)
+      for (const [key, entry] of progress) {
+        if (!entry.pending) progress.delete(key)
       }
       if (progress.size === 0) this.messageProgress.delete(agentId)
     }
@@ -172,19 +182,19 @@ export class ConversationStore {
     )
     let boundary = -1
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index] && isUserLike(messages[index])) {
+      if (messages[index] && isUserTurn(messages[index])) {
         boundary = index
         break
       }
     }
-    const stableThroughId = messages[boundary]?.id ?? null
+    const stableThroughKey = messages[boundary]?.key ?? null
     const previous = this.views.get(agentId)
     const stable =
-      previous && previous.stableThroughId === stableThroughId
+      previous && previous.stableThroughKey === stableThroughKey
         ? previous.stable
         : buildConversation(messages.slice(0, boundary + 1), [])
     this.views.set(agentId, {
-      stableThroughId,
+      stableThroughKey,
       stable,
       tail: messages.slice(boundary + 1),
     })
@@ -193,16 +203,16 @@ export class ConversationStore {
 
   private rebuildLive(agentId: string) {
     const view = this.views.get(agentId) ?? {
-      stableThroughId: null,
+      stableThroughKey: null,
       stable: [],
       tail: [],
     }
     const live: LiveEntry[] = [
       ...[...(this.messageProgress.get(agentId)?.values() ?? [])].map(
         (entry) => ({
-          key: `message:${entry.messageId}`,
+          key: `message:${entry.key}`,
           type: "message" as const,
-          message: entry.message,
+          entry: entry.entry,
         })
       ),
       ...[...(this.toolProgress.get(agentId)?.values() ?? [])].map((entry) => ({
@@ -228,22 +238,21 @@ export class ConversationStore {
     this.notify(agentId)
   }
 
-  applySnapshot(agentId: string, messages: Message[]) {
+  applySnapshot(agentId: string, items: EntryItem[]) {
     const stored = this.messages.get(agentId) ?? new Map()
-    const committedIds = new Set<string>()
+    const committedKeys = new Set<string>()
     const completedTools = this.completedTools.get(agentId) ?? new Set<string>()
-    for (const message of messages) {
-      stored.set(message.id, message)
-      committedIds.add(message.id)
-      if (message.role === "toolResult") {
-        completedTools.add(message.toolCallId)
-      }
+    for (const item of items) {
+      stored.set(item.key, item)
+      committedKeys.add(item.key)
+      const toolCallId = toolCallIdOf(item.entry)
+      if (toolCallId) completedTools.add(toolCallId)
     }
     this.messages.set(agentId, stored)
     this.completedTools.set(agentId, completedTools)
     const progress = this.messageProgress.get(agentId)
     if (progress) {
-      for (const messageId of committedIds) progress.delete(messageId)
+      for (const key of committedKeys) progress.delete(key)
     }
     const tools = this.toolProgress.get(agentId)
     if (tools) {
@@ -270,25 +279,26 @@ export class ConversationStore {
     }
     if (event.type === "message.committed") {
       const stored = this.messages.get(event.agentId) ?? new Map()
-      stored.set(event.message.id, event.message)
+      stored.set(event.item.key, event.item)
       this.messages.set(event.agentId, stored)
-      this.messageProgress.get(event.agentId)?.delete(event.message.id)
-      if (event.message.role === "toolResult") {
+      this.messageProgress.get(event.agentId)?.delete(event.item.key)
+      const toolCallId = toolCallIdOf(event.item.entry)
+      if (toolCallId) {
         const completedTools =
           this.completedTools.get(event.agentId) ?? new Set<string>()
-        completedTools.add(event.message.toolCallId)
+        completedTools.add(toolCallId)
         this.completedTools.set(event.agentId, completedTools)
-        this.toolProgress.get(event.agentId)?.delete(event.message.toolCallId)
+        this.toolProgress.get(event.agentId)?.delete(toolCallId)
       }
       this.rebuildCommitted(event.agentId)
       return
     }
     if (event.type === "message.progress") {
-      if (this.messages.get(event.agentId)?.has(event.messageId)) return
+      if (this.messages.get(event.agentId)?.has(event.key)) return
       const progress = this.messageProgress.get(event.agentId) ?? new Map()
-      const existing = progress.get(event.messageId)
+      const existing = progress.get(event.key)
       if (!existing || event.revision > existing.revision) {
-        progress.set(event.messageId, { ...event, pending: false })
+        progress.set(event.key, { ...event, pending: false })
         this.messageProgress.set(event.agentId, progress)
         this.rebuildLive(event.agentId)
       }
@@ -367,7 +377,7 @@ export class ConversationStore {
 
   /**
    * Connect the SSE stream for a run. On (re)connect, `onReconnect` is called
-   * so the caller can re-fetch durable committed messages from the API.
+   * so the caller can re-fetch durable committed entries from the API.
    */
   connect(
     runId: string,

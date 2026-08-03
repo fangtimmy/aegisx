@@ -2,7 +2,7 @@ export * from "./agent";
 export * from "./challenge";
 export * from "./event";
 export * from "./live-event";
-export * from "./message";
+export * from "./session-entry";
 export * from "./platform";
 export * from "./provider";
 export * from "./run";

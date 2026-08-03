@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import type { RunPublic, RunUsage } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
 import type { createDatabase } from "../db"
@@ -7,7 +7,6 @@ import {
   agents,
   challengeRemote,
   challenges,
-  runEvents,
   runs,
   sessionEntries,
   submissions,
@@ -99,69 +98,34 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return join(dataDir, row.workspacePath, "..")
   }
 
-  /** Whether the run's main agent persists to session_entries (db) vs a legacy
-   * jsonl file — decides which table holds its usage + message history. */
-  function isDbRun(runId: string): boolean {
-    const row = db
-      .select({ sessionFile: agents.sessionFile })
-      .from(agents)
-      .where(and(eq(agents.runId, runId), eq(agents.role, "main")))
-      .get()
-    const sessionFile = row?.sessionFile
-    return sessionFile != null && !sessionFile.endsWith(".jsonl")
-  }
-
-  /** Sum token usage + cost across a run: assistant turns + compaction usage.
-   * db runs read session_entries; legacy runs read the frozen run_events
-   * history. Parity with the pi-TUI footer (sums all session entries). */
+  /** Sum token usage + cost across a run from session_entries: assistant
+   * turns + compaction usage. Parity with the pi-TUI footer (sums all session
+   * entries). */
   function usageTotals(runId: string): RunUsage | undefined {
-    if (isDbRun(runId)) {
-      const rows = db
-        .select({ type: sessionEntries.type, data: sessionEntries.data })
-        .from(sessionEntries)
-        .where(eq(sessionEntries.runId, runId))
-        .all()
-      return accumulateUsage(
-        rows.map((row) => {
-          let entry: {
-            type?: string
-            message?: { role?: string; usage?: unknown }
-            usage?: unknown
-          }
-          try {
-            entry = JSON.parse(row.data)
-          } catch {
-            return { usage: undefined, assistant: false }
-          }
-          const assistant =
-            entry.type === "message" && entry.message?.role === "assistant"
-          return {
-            usage:
-              entry.type === "compaction" ? entry.usage : entry.message?.usage,
-            assistant,
-          }
-        })
-      )
-    }
     const rows = db
-      .select({ role: runEvents.role, payload: runEvents.payload })
-      .from(runEvents)
-      .where(
-        and(
-          eq(runEvents.runId, runId),
-          inArray(runEvents.role, ["assistant", "notice"])
-        )
-      )
+      .select({ type: sessionEntries.type, data: sessionEntries.data })
+      .from(sessionEntries)
+      .where(eq(sessionEntries.runId, runId))
       .all()
     return accumulateUsage(
       rows.map((row) => {
-        let payload: Record<string, unknown>
-        try {
-          payload = row.payload ? JSON.parse(row.payload) : {}
-        } catch {
-          payload = {}
+        let entry: {
+          type?: string
+          message?: { role?: string; usage?: unknown }
+          usage?: unknown
         }
-        return { usage: payload.usage, assistant: row.role === "assistant" }
+        try {
+          entry = JSON.parse(row.data)
+        } catch {
+          return { usage: undefined, assistant: false }
+        }
+        const assistant =
+          entry.type === "message" && entry.message?.role === "assistant"
+        return {
+          usage:
+            entry.type === "compaction" ? entry.usage : entry.message?.usage,
+          assistant,
+        }
       })
     )
   }

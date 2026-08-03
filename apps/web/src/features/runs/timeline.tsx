@@ -27,7 +27,6 @@ import {
   useSyncExternalStore,
 } from "react"
 import { createPortal } from "react-dom"
-import type { AgentStatus } from "@/api"
 import { Markdown } from "@/components/markdown"
 import { Button } from "@/components/ui/button"
 import {
@@ -50,7 +49,6 @@ import {
 } from "@/domain/conversation"
 import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
-import { AgentStatusIcon } from "./agent-status-icon"
 
 function formatConversationTime(value: string | number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -284,32 +282,6 @@ const ConversationRow = memo(function ConversationRow({
       <article className="flex justify-end py-5">
         <div className="max-w-[90%] rounded-lg border bg-muted/45 px-4 py-3">
           <Markdown>{item.body}</Markdown>
-        </div>
-      </article>
-    )
-  }
-  if (item.type === "handoff") {
-    return (
-      <article className="py-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <GitFork
-            aria-hidden="true"
-            className="mt-1 size-4 shrink-0 text-muted-foreground"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center gap-2 text-muted-foreground text-xs">
-              <span className="font-medium text-foreground">
-                {item.agentName}
-              </span>
-              <AgentStatusIcon
-                className="[&_svg]:size-3.5"
-                status={item.status as AgentStatus}
-              />
-              <span className="capitalize">{item.status}</span>
-              {time && <time className="ml-auto">{time}</time>}
-            </div>
-            <Markdown>{item.body}</Markdown>
-          </div>
         </div>
       </article>
     )

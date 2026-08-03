@@ -186,47 +186,6 @@ export const agents = sqliteTable(
 )
 
 /**
- * Durable, normalized event log. One row per committed message (user /
- * assistant / toolResult / notice). Streaming progress is ephemeral (SSE only)
- * and never written here; reconnect re-reads committed rows via the messages
- * API. `seq` is monotonic per run and is the pagination cursor.
- */
-export const runEvents = sqliteTable(
-  "run_events",
-  {
-    id: text("id").primaryKey(),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
-    seq: integer("seq").notNull(),
-    role: text("role").notNull(),
-    /** JSON-encoded wire Message content (string for user/notice, array otherwise). */
-    content: text("content").notNull(),
-    toolName: text("tool_name"),
-    toolCallId: text("tool_call_id"),
-    isError: integer("is_error", { mode: "boolean" }),
-    /** JSON summary (stopReason, errorMessage, usage, etc.). */
-    payload: text("payload"),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [
-    index("run_events_run_seq_idx").on(table.runId, table.seq),
-    index("run_events_run_agent_seq_idx").on(
-      table.runId,
-      table.agentId,
-      table.seq
-    ),
-    check(
-      "run_events_role_check",
-      sql`${table.role} in ('user', 'assistant', 'toolResult', 'notice')`
-    ),
-  ]
-)
-
-/**
  * Database-backed session tree (replaces per-agent jsonl files for new runs).
  *
  * One `sessions` row = one pi session (one agent's conversation). Each
@@ -234,9 +193,6 @@ export const runEvents = sqliteTable(
  * the JSON pi would have written to a jsonl line. Driven by `DbSessionManager`,
  * which pi writes through transparently via the injected `sessionManager`, so
  * the database is the single source of truth and no jsonl file is created.
- *
- * Legacy runs (created before this change) keep their `agents.session_file`
- * pointing at a `.jsonl`; those still open via pi's file-backed SessionManager.
  */
 export const sessions = sqliteTable(
   "sessions",

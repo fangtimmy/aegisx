@@ -1,5 +1,5 @@
 import type { AgentSummary } from "./agent"
-import type { Message } from "./message"
+import type { EntryItem, SessionEntry } from "./session-entry"
 import type { RunPublic } from "./run"
 
 export type TransientActivity = "retrying" | "compacting"
@@ -30,7 +30,7 @@ export type ContextSnapshot = {
 
 /**
  * Live-only SSE events pushed over `GET /api/runs/:id/stream` (EventSource).
- * Ephemeral: reconnect re-fetches durable messages from `GET .../messages` and
+ * Ephemeral: reconnect re-fetches durable entries from `GET .../messages` and
  * re-applies progress from the current stream.
  */
 export type LiveEvent =
@@ -75,9 +75,13 @@ export type LiveEvent =
 	| {
 			type: "message.progress"
 			agentId: string
-			messageId: string
+			/** Match key: identical to the eventual `message.committed` item.key,
+			 * so the store swaps the streaming draft for the committed entry. */
+			key: string
 			revision: number
-			message: Message
+			/** Synthetic message entry (not yet persisted): {type:"message", ...,
+			 * message: <partial AgentMessage>}. No seq (assigned on commit). */
+			entry: SessionEntry
 	  }
 	| {
 			type: "tool.progress"
@@ -95,5 +99,5 @@ export type LiveEvent =
 	| {
 			type: "message.committed"
 			agentId: string
-			message: Message
+			item: EntryItem
 	  }

@@ -9,22 +9,16 @@ import { and, eq, gt } from "drizzle-orm"
 import type {
   EnvironmentConfig,
   MessageList,
+  MessageListItem,
   ModelConfig,
   PromptTemplateContext,
   RunPublic,
 } from "../../../shared"
 import { get } from "../../../shared"
-import type { Message } from "../../../shared/message"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
-import {
-  agents,
-  challenges,
-  runEvents,
-  runs,
-  sessionEntries,
-} from "../db/schema"
+import { agents, challenges, runs, sessionEntries } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
@@ -38,7 +32,7 @@ import { createRunAgentSession, type RunAgentSession } from "./agent-session"
 import type { ContainerManager } from "./container-manager"
 import { createContainerBashOperations } from "./container-tools"
 import { RunActionError, RunStartError } from "./errors"
-import { entryToWireMessage, rowToMessage } from "./events"
+import { entryKeyOf } from "./events"
 import { createLiveBus, type LiveBus } from "./live"
 import {
   createRunModelRuntime,
@@ -896,68 +890,41 @@ export function createRunService(options: RunServiceOptions) {
     opts: { after?: number; agentId?: string }
   ): MessageList {
     const after = opts.after ?? 0
-    const mainAgent = db
-      .select()
-      .from(agents)
-      .where(and(eq(agents.runId, runId), eq(agents.role, "main")))
-      .get()
-    const sessionFile = mainAgent?.sessionFile
-    const isDb = sessionFile != null && !sessionFile.endsWith(".jsonl")
-    if (isDb) {
-      const conditions = [
-        eq(sessionEntries.runId, runId),
-        gt(sessionEntries.seq, after),
-      ] as const
-      const rows = opts.agentId
-        ? db
-            .select()
-            .from(sessionEntries)
-            .where(and(...conditions, eq(sessionEntries.agentId, opts.agentId)))
-            .orderBy(sessionEntries.seq)
-            .all()
-        : db
-            .select()
-            .from(sessionEntries)
-            .where(and(...conditions))
-            .orderBy(sessionEntries.seq)
-            .all()
-      const items: Message[] = []
-      for (const row of rows) {
-        try {
-          const wire = entryToWireMessage(
-            row.agentId,
-            JSON.parse(row.data),
-            row.seq
-          )
-          if (wire) items.push(wire)
-        } catch {}
-      }
-      return {
-        items,
-        nextAfter: items.length > 0 ? items[items.length - 1].seq : after,
-      }
-    }
-    // Legacy runs (jsonl session): read the frozen run_events history.
     const conditions = [
-      eq(runEvents.runId, runId),
-      gt(runEvents.seq, after),
+      eq(sessionEntries.runId, runId),
+      gt(sessionEntries.seq, after),
     ] as const
     const rows = opts.agentId
       ? db
           .select()
-          .from(runEvents)
-          .where(and(...conditions, eq(runEvents.agentId, opts.agentId)))
-          .orderBy(runEvents.seq)
+          .from(sessionEntries)
+          .where(and(...conditions, eq(sessionEntries.agentId, opts.agentId)))
+          .orderBy(sessionEntries.seq)
           .all()
       : db
           .select()
-          .from(runEvents)
+          .from(sessionEntries)
           .where(and(...conditions))
-          .orderBy(runEvents.seq)
+          .orderBy(sessionEntries.seq)
           .all()
-    const items = rows
-      .map(rowToMessage)
-      .filter((message): message is Message => message !== null)
+    const items: MessageListItem[] = []
+    for (const row of rows) {
+      let entry: import("@earendil-works/pi-coding-agent").SessionEntry
+      try {
+        entry = JSON.parse(row.data)
+      } catch {
+        continue
+      }
+      // Only message + compaction entries are renderable; skip the rest but
+      // they still count toward seq (positional cursor).
+      if (entry.type !== "message" && entry.type !== "compaction") continue
+      items.push({
+        entry,
+        seq: row.seq,
+        key: entryKeyOf(row.agentId, entry),
+        agentId: row.agentId,
+      })
+    }
     return {
       items,
       nextAfter: items.length > 0 ? items[items.length - 1].seq : after,
@@ -1147,7 +1114,9 @@ export function createRunService(options: RunServiceOptions) {
   function lastAssistantText(runId: string, agentId: string): string | null {
     const list = listMessages(runId, { agentId })
     for (let index = list.items.length - 1; index >= 0; index -= 1) {
-      const message = list.items[index]
+      const item = list.items[index]
+      if (item.entry.type !== "message") continue
+      const message = item.entry.message
       if (message.role !== "assistant") continue
       const body = message.content
         .flatMap((part) =>

@@ -11,7 +11,7 @@ export type { RunDetail, SettingsResponse } from "./types"
 export {
   defaultSettings,
   get,
-  isMessage,
+  isSessionEntry,
   isSettingModified,
   SETTINGS_DEFS,
   settingDef,

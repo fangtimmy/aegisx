@@ -11,8 +11,8 @@ import type { LiveBus } from "../../src/run/live"
 type Committed = Extract<LiveEvent, { type: "message.committed" }>
 
 /** A pipeline wired to a recording bus with a controllable session entry
- * source. 2A: persistence is owned by the SessionManager, so the pipeline only
- * translates events → SSE; committed messages come from diffing the session
+ * source. Persistence is owned by the SessionManager, so the pipeline only
+ * translates events → SSE; committed entries come from diffing the session
  * tree (getSessionEntries) against already-emitted entry ids. */
 function setup() {
   let entries: SessionEntry[] = []
@@ -60,8 +60,11 @@ describe("createRunEventPipeline committed emission", () => {
 
     const committed = committedOf(emitted)
     expect(committed.length).toBe(1)
-    expect(committed[0].message.seq).toBe(1)
-    expect(committed[0].message.role).toBe("user")
+    expect(committed[0].item.seq).toBe(1)
+    const entry = committed[0].item.entry
+    expect(entry.type).toBe("message")
+    if (entry.type !== "message") throw new Error("expected message entry")
+    expect(entry.message.role).toBe("user")
   })
 
   test("re-handling does not re-emit already-emitted entries (dedup)", () => {
@@ -96,15 +99,15 @@ describe("createRunEventPipeline committed emission", () => {
     } as AgentSessionEvent)
 
     const committed = committedOf(emitted)
-    expect(committed.map((e) => e.message.seq)).toEqual([1, 2, 3])
-    expect(committed.map((e) => e.message.role)).toEqual([
-      "user",
-      "assistant",
-      "toolResult",
-    ])
+    expect(committed.map((e) => e.item.seq)).toEqual([1, 2, 3])
+    expect(
+      committed.map(
+        (e) => (e.item.entry as { message: { role: string } }).message.role
+      )
+    ).toEqual(["user", "assistant", "toolResult"])
   })
 
-  test("compaction entry is emitted as a system notice", () => {
+  test("compaction entry is emitted as its native compaction entry", () => {
     const { pipeline, emitted, setEntries } = setup()
     setEntries([
       messageEntry("assistant", 1000, "e1"),
@@ -127,9 +130,11 @@ describe("createRunEventPipeline committed emission", () => {
 
     const committed = committedOf(emitted)
     expect(committed.length).toBe(2)
-    const notice = committed[1].message
-    expect(notice.role).toBe("notice")
-    expect(notice.seq).toBe(2)
+    expect(committed[1].item.seq).toBe(2)
+    expect(committed[1].item.entry.type).toBe("compaction")
+    expect(
+      (committed[1].item.entry as { tokensBefore: number }).tokensBefore
+    ).toBe(180000)
   })
 
   test("non-message entries (model_change) are skipped but still count toward seq", () => {
@@ -153,7 +158,9 @@ describe("createRunEventPipeline committed emission", () => {
 
     const committed = committedOf(emitted)
     expect(committed.length).toBe(1)
-    expect(committed[0].message.seq).toBe(2)
-    expect(committed[0].message.role).toBe("user")
+    expect(committed[0].item.seq).toBe(2)
+    const entry = committed[0].item.entry
+    if (entry.type !== "message") throw new Error("expected message entry")
+    expect(entry.message.role).toBe("user")
   })
 })

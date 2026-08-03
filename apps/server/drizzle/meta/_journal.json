@@ -15,6 +15,13 @@
       "when": 1785754878640,
       "tag": "0001_illegal_roland_deschain",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785758076259,
+      "tag": "0002_stiff_sunfire",
+      "breakpoints": true
     }
   ]
 }

@@ -1,10 +1,8 @@
 import type {
-  AssistantMessage,
-  Message,
-  NoticeMessage,
-  NoticeSystemKind,
-  ToolResultMessage,
-  UserMessage,
+  CompactionEntry,
+  EntryItem,
+  SessionEntry,
+  SessionMessageEntry,
 } from "@/api"
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,24 +94,11 @@ export function toolStatusLabel(
   return label.length > 100 ? `${label.slice(0, 99)}…` : label
 }
 
-function handoffFromNotice(message: NoticeMessage) {
-  if (!message.handoff) return null
-  const marker = "\n\nFinal output:\n\n"
-  return {
-    agentId: message.handoff.agentId,
-    agentName: message.handoff.agentName,
-    status: message.handoff.status,
-    body: message.text.includes(marker)
-      ? message.text.slice(message.text.indexOf(marker) + marker.length)
-      : message.text,
-  }
-}
-
 export type LiveEntry =
   | {
       key: string
       type: "message"
-      message: Message
+      entry: SessionEntry
     }
   | {
       key: string
@@ -154,17 +139,8 @@ type AgentBlock =
 export type ConversationItem =
   | {
       key: string
-      type: "handoff"
-      agentId: string
-      agentName: string
-      status: string
-      body: string
-      timestamp?: string | number
-    }
-  | {
-      key: string
       type: "system"
-      kind?: NoticeSystemKind
+      kind?: "compact_start" | "compact_end"
       title: string
       detail?: string
       timestamp?: string | number
@@ -203,73 +179,54 @@ function resultText(value: unknown) {
   return text(value)
 }
 
-function messageTimestamp(message: Message, fallback?: string | number) {
-  return typeof message.timestamp === "number" ? message.timestamp : fallback
-}
+type ConversationAgentItem = Extract<ConversationItem, { type: "agent" }>
 
 function applyUser(
-  message: UserMessage,
+  entry: SessionMessageEntry,
   items: ConversationItem[],
-  fallback?: string | number,
-  stableKey?: string
+  stableKey: string
 ) {
+  const message = entry.message
+  if (message.role !== "user") return
   const body = contentText(message.content)
   if (!body) return
-  const timestamp = messageTimestamp(message, fallback)
   items.push({
-    key: stableKey ?? `user:${items.length}`,
+    key: stableKey,
     type: "user",
     body,
-    timestamp,
+    timestamp: entry.timestamp,
   })
 }
 
-function applyNotice(
-  message: NoticeMessage,
+/** Format a token count like the pi-TUI compaction marker. */
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count)
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
+  return `${(count / 1_000_000).toFixed(1)}M`
+}
+
+function applyCompaction(
+  entry: CompactionEntry,
   items: ConversationItem[],
-  fallback?: string | number,
-  stableKey?: string
+  stableKey: string
 ) {
-  const timestamp = messageTimestamp(message, fallback)
-  if (message.source === "system") {
-    items.push({
-      key: stableKey ?? `system:${items.length}`,
-      type: "system",
-      kind: message.kind,
-      title: message.title ?? message.text,
-      ...(message.detail !== undefined ? { detail: message.detail } : {}),
-      timestamp,
-    })
-    return
-  }
-  const handoff = handoffFromNotice(message)
-  if (handoff) {
-    items.push({
-      key: stableKey ?? `handoff:${items.length}`,
-      type: "handoff",
-      agentName: handoff.agentName,
-      agentId: handoff.agentId,
-      status: handoff.status,
-      body: handoff.body,
-      timestamp,
-    })
-    return
-  }
-  if (!message.text.trim()) return
+  const title = `Compacted ${formatTokens(entry.tokensBefore)} tokens`
   items.push({
-    key: stableKey ?? `notice:${items.length}`,
-    type: "user",
-    body: message.text,
-    timestamp,
+    key: stableKey,
+    type: "system",
+    kind: "compact_end",
+    title,
+    timestamp: entry.timestamp,
   })
 }
 
 function applyToolResult(
-  message: ToolResultMessage,
+  entry: SessionMessageEntry,
   tools: Map<string, ToolBlock>,
-  currentAgent: (timestamp?: string | number) => ConversationAgentItem,
-  timestamp?: string | number
+  currentAgent: (timestamp?: string | number) => ConversationAgentItem
 ) {
+  const message = entry.message
+  if (message.role !== "toolResult") return
   const id = message.toolCallId
   const existing = tools.get(id)
   const block =
@@ -286,33 +243,24 @@ function applyToolResult(
   block.output = contentText(message.content) || resultText(message.details)
   block.status = message.isError ? "error" : "done"
   if (!existing) {
-    currentAgent(timestamp).blocks.push(block)
+    currentAgent(entry.timestamp).blocks.push(block)
     tools.set(id, block)
   }
 }
 
-type ConversationAgentItem = Extract<ConversationItem, { type: "agent" }>
-
 function applyAssistant(
-  message: AssistantMessage,
+  entry: SessionMessageEntry,
   tools: Map<string, ToolBlock>,
   currentAgent: (timestamp?: string | number) => ConversationAgentItem,
-  itemsLength: number,
-  fallback?: string | number,
-  stableKey?: string
+  stableKey: string
 ) {
-  const timestamp = messageTimestamp(message, fallback)
+  const message = entry.message
+  if (message.role !== "assistant") return
+  const timestamp = entry.timestamp
   const blocks = currentAgent(timestamp).blocks
-  const blockPrefix = stableKey ?? `message:${timestamp ?? itemsLength}`
-  const content = Array.isArray(message.content)
-    ? message.content
-    : [message.content]
-  for (const [index, part] of content.entries()) {
+  const blockPrefix = stableKey
+  for (const [index, part] of message.content.entries()) {
     const key = `${blockPrefix}:${index}`
-    if (typeof part === "string") {
-      if (part.trim()) blocks.push({ key, type: "text", body: part })
-      continue
-    }
     if (!isRecord(part)) continue
     if (part.type === "text") {
       const body = text(part.text)
@@ -345,7 +293,7 @@ function applyAssistant(
 }
 
 export function buildConversation(
-  history: Message[],
+  history: EntryItem[],
   live: LiveEntry[]
 ): ConversationItem[] {
   const items: ConversationItem[] = []
@@ -364,49 +312,40 @@ export function buildConversation(
     return agent
   }
 
-  const applyMessage = (
-    message: Message,
-    fallback?: string | number,
-    stableKey?: string
-  ) => {
-    if (message.role === "user") {
-      applyUser(message, items, fallback, stableKey)
+  const applyEntry = (entry: SessionEntry, stableKey: string) => {
+    if (entry.type === "message") {
+      const message = entry.message
+      if (message.role === "user") {
+        applyUser(entry, items, stableKey)
+        agent = null
+        return
+      }
+      if (message.role === "assistant") {
+        applyAssistant(entry, tools, currentAgent, stableKey)
+        return
+      }
+      if (message.role === "toolResult") {
+        applyToolResult(entry, tools, currentAgent)
+        return
+      }
+      // bashExecution / custom / branchSummary / compactionSummary roles are
+      // not produced by AegisX's zero-extension agent; ignore if seen.
+      return
+    }
+    if (entry.type === "compaction") {
+      applyCompaction(entry, items, stableKey)
       agent = null
       return
-    }
-    if (message.role === "notice") {
-      applyNotice(message, items, fallback, stableKey)
-      agent = null
-      return
-    }
-    if (message.role === "toolResult") {
-      applyToolResult(
-        message,
-        tools,
-        currentAgent,
-        messageTimestamp(message, fallback)
-      )
-      return
-    }
-    if (message.role === "assistant") {
-      applyAssistant(
-        message,
-        tools,
-        currentAgent,
-        items.length,
-        fallback,
-        stableKey
-      )
     }
   }
 
-  for (const entry of history) {
-    applyMessage(entry, entry.createdAt, entry.id)
+  for (const item of history) {
+    applyEntry(item.entry, item.key)
   }
 
   for (const entry of live) {
     if (entry.type === "message") {
-      applyMessage(entry.message, entry.message.createdAt, entry.key)
+      applyEntry(entry.entry, `message:${entry.key}`)
     } else if (entry.type === "tool") {
       const existing = tools.get(entry.toolCallId)
       const block =

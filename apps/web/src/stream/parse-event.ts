@@ -1,8 +1,7 @@
 import {
   type AgentSummary,
-  isMessage,
+  isSessionEntry,
   type LiveEvent,
-  type Message,
   type RunPublic,
 } from "@/api"
 
@@ -66,18 +65,18 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
     const revision = numberValue(value.revision)
     if (
       typeof value.agentId !== "string" ||
-      typeof value.messageId !== "string" ||
+      typeof value.key !== "string" ||
       revision === undefined ||
-      !isMessage(value.message)
+      !isSessionEntry(value.entry)
     ) {
       return undefined
     }
     return {
       type: "message.progress",
       agentId: value.agentId,
-      messageId: value.messageId,
+      key: value.key,
       revision,
-      message: value.message,
+      entry: value.entry,
     }
   }
   if (value.type === "tool.progress") {
@@ -191,19 +190,22 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
     }
   }
   if (value.type === "message.committed") {
-    if (typeof value.agentId !== "string" || !isMessage(value.message)) {
+    if (typeof value.agentId !== "string" || !isRecord(value.item))
       return undefined
-    }
-    const message = value.message as Message
+    const item = value.item
+    const seq = numberValue(item.seq)
     if (
-      typeof message.id !== "string" ||
-      typeof message.agentId !== "string" ||
-      typeof message.seq !== "number" ||
-      typeof message.createdAt !== "string"
+      typeof item.key !== "string" ||
+      seq === undefined ||
+      !isSessionEntry(item.entry)
     ) {
       return undefined
     }
-    return { type: "message.committed", agentId: value.agentId, message }
+    return {
+      type: "message.committed",
+      agentId: value.agentId,
+      item: { entry: item.entry, seq, key: item.key },
+    }
   }
   return undefined
 }

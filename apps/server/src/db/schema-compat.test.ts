@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createDatabase } from "./index"
-import { agents, runEvents, runs, SCHEMA_VERSION } from "./schema"
+import { agents, runs, SCHEMA_VERSION } from "./schema"
 
 describe("schema v5 bootstrap", () => {
   test("fresh database migrates and sets user_version=4", () => {
@@ -23,8 +23,9 @@ describe("schema v5 bootstrap", () => {
       const names = new Set(tables.map((row) => row.name))
       expect(names.has("runs")).toBe(true)
       expect(names.has("agents")).toBe(true)
-      expect(names.has("run_events")).toBe(true)
       expect(names.has("submissions")).toBe(true)
+      // the legacy normalized event log is gone (session_entries is the source)
+      expect(names.has("run_events")).toBe(false)
       // v2-only tables are gone
       expect(names.has("messages")).toBe(false)
       expect(names.has("agent_usage")).toBe(false)
@@ -35,7 +36,6 @@ describe("schema v5 bootstrap", () => {
       // drizzle table symbols resolve
       expect(runs).toBeDefined()
       expect(agents).toBeDefined()
-      expect(runEvents).toBeDefined()
       expect(db).toBeDefined()
       sqlite.close()
       releaseLock()

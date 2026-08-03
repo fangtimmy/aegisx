@@ -63,9 +63,7 @@ function tableNames(sqlite: Database): Set<string> {
  * v5 is a full data wipe (run lifecycle redesign: a run is a long-lived pi
  * session + container; statuses collapsed to running/idle/closed).
  * Refuse to open any older schema so operators wipe data/ instead of silent
- * corruption. Note: v4/v5 keep `agents` and `run_events` tables (they existed
- * in v1/v2 with incompatible shapes), so they are NOT used as markers; v1/v2
- * are detected by their other unique tables, v3/v4 by user_version.
+ * corruption. v1/v2 are detected by their unique tables; v3/v4 by user_version.
  */
 function assertCompatibleSchema(sqlite: Database) {
   const tables = tableNames(sqlite)
