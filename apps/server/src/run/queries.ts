@@ -1,7 +1,12 @@
 import { join } from "node:path"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { and, eq } from "drizzle-orm"
-import type { RunPublic, RunUsage } from "../../../shared"
+import { and, eq, gt } from "drizzle-orm"
+import type {
+  MessageList,
+  MessageListItem,
+  RunPublic,
+  RunUsage,
+} from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
 import type { createDatabase } from "../db"
 import {
@@ -13,8 +18,9 @@ import {
   submissions,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
-import { accumulateEntryUsage } from "./entry-usage"
 import { type ChallengeMeta, toAgentSummary, toRunPublic } from "./public"
+import { accumulateEntryUsage } from "./session/entry-usage"
+import { entryKeyOf } from "./session/events"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
@@ -144,6 +150,59 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return Boolean(row)
   }
 
+  /** Durable committed entries for a run, paginated by `seq`. Only renderable
+   * kinds (message / compaction / branch_summary) are returned; others
+   * (model_change, custom, ...) are skipped but still count toward seq
+   * (positional cursor). `after` is the highest seq already seen. */
+  function listMessages(
+    runId: string,
+    opts: { after?: number; agentId?: string }
+  ): MessageList {
+    const after = opts.after ?? 0
+    const conditions = [
+      eq(sessionEntries.runId, runId),
+      gt(sessionEntries.seq, after),
+    ] as const
+    const rows = opts.agentId
+      ? db
+          .select()
+          .from(sessionEntries)
+          .where(and(...conditions, eq(sessionEntries.agentId, opts.agentId)))
+          .orderBy(sessionEntries.seq)
+          .all()
+      : db
+          .select()
+          .from(sessionEntries)
+          .where(and(...conditions))
+          .orderBy(sessionEntries.seq)
+          .all()
+    const items: MessageListItem[] = []
+    for (const row of rows) {
+      let entry: SessionEntry
+      try {
+        entry = JSON.parse(row.data) as SessionEntry
+      } catch {
+        continue
+      }
+      if (
+        entry.type !== "message" &&
+        entry.type !== "compaction" &&
+        entry.type !== "branch_summary"
+      )
+        continue
+      items.push({
+        entry,
+        seq: row.seq,
+        key: entryKeyOf(row.agentId, entry),
+        agentId: row.agentId,
+      })
+    }
+    return {
+      items,
+      nextAfter: items.length > 0 ? items[items.length - 1].seq : after,
+    }
+  }
+
   return {
     get,
     getRow,
@@ -155,5 +214,6 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     runDirPath,
     usageTotals,
     hasAcceptedFlag,
+    listMessages,
   }
 }

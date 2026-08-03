@@ -11,8 +11,8 @@ import {
   type SessionTreeNode,
 } from "@earendil-works/pi-coding-agent"
 import { asc, eq } from "drizzle-orm"
-import type { createDatabase } from "../db"
-import { sessionEntries, sessions } from "../db/schema"
+import type { createDatabase } from "../../db"
+import { sessionEntries, sessions } from "../../db/schema"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 

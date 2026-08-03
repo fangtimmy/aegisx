@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { execTimeoutMs } from "../../src/run/container-manager"
+import { execTimeoutMs } from "../../src/run/container/container-manager"
 
 /**
  * Regression guard for the seconds→ms timeout contract. exec/capture receive a

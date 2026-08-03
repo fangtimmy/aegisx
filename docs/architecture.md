@@ -64,18 +64,27 @@ apps/server/src/
   app.ts            composition root; recoverOnBoot; route registration
   index.ts          Bun.serve entry (idleTimeout 0 for quiet SSE)
   run/
-    service.ts        lifecycle: create/sendMessage/stop/close/finish/delete/recover/spawnChild
-    agent-session.ts  createAgentSession wrapper + event pipeline wiring
-    container-tools.ts BashOperations → docker exec
-    events.ts         SDK AgentSessionEvent → committed SessionEntry + live progress
-    live.ts           in-memory SSE fan-out bus
+    service.ts        lifecycle state machine + facade (create/send/stop/close/finish/delete/recover)
+    provision.ts      main-agent assembly shared by create + ensureWarm (dedup)
+    child-agents.ts   background child-agent orchestration (spawn_agent)
+    queries.ts        run/agent reads; durable messages from session_entries
+    routes.ts         /api/runs/** + /messages + /stream + /message
     tools.ts          native tools: submit_flag/target_*/finish_run/spawn_agent
     model-runtime.ts  ProviderConnection → pi ModelRuntime + Model (models.json)
-    routes.ts         /api/runs/** + /messages + /stream + /message
-    container-manager.ts dockerode lifecycle + exec() (no PTY)
     prompt.ts         handlebars PromptTemplateContext + attachment copy
-    queries.ts        run/agent reads; messages from session_entries
     public.ts         RunPublic + AgentSummary projections
+    errors.ts         RunActionError / RunStartError
+    session/          pi-facing layer
+      agent-session.ts    createAgentSession wrapper + pipeline wiring
+      db-session-manager.ts DB-backed SessionManager drop-in (single source of truth)
+      events.ts           SDK AgentSessionEvent → committed entry + live progress
+      live.ts             in-memory SSE fan-out bus
+      entry-usage.ts      token/cost accumulator (pi-TUI footer parity)
+    container/        docker layer
+      container-manager.ts dockerode lifecycle + exec() (no PTY)
+      container-tools.ts   BashOperations → docker exec
+    workspace/        host-fs file tools (bind-shared with the container)
+      backend.ts · tools.ts · edit-apply.ts · tool-prompts.ts · tar-stream.d.ts
   platforms/        adapters (ctfd/ret2shell/a1ctf) + sync/submit/targets
   providers/        model registry + pi models.json generation
   settings/         prompt templates + settings routes

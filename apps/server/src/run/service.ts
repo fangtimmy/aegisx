@@ -1,15 +1,9 @@
 import { mkdirSync, rmSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import {
-  createBashToolDefinition,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent"
-import { and, eq, gt } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import type {
   EnvironmentConfig,
-  MessageList,
-  MessageListItem,
   ModelConfig,
   PromptTemplateContext,
   RunPublic,
@@ -18,7 +12,7 @@ import { get } from "../../../shared"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
-import { agents, challenges, runs, sessionEntries } from "../db/schema"
+import { agents, challenges, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
@@ -28,26 +22,20 @@ import {
   renderSystemPrompt,
   resolvePromptTemplates,
 } from "../settings/prompt-templates"
-import { createRunAgentSession, type RunAgentSession } from "./agent-session"
-import type { ContainerManager } from "./container-manager"
-import { createContainerBashOperations } from "./container-tools"
+import { createChildAgentRuntime } from "./child-agents"
+import type { ContainerManager } from "./container/container-manager"
 import { RunActionError, RunStartError } from "./errors"
-import { entryKeyOf } from "./events"
-import { createLiveBus, type LiveBus } from "./live"
 import {
   createRunModelRuntime,
   type RunModelRuntime,
   resolveRunModel,
 } from "./model-runtime"
 import { buildPromptContext, copyAttachments } from "./prompt"
+import { type AgentLoopSettings, provisionRunSession } from "./provision"
 import { createRunQueries } from "./queries"
-import {
-  createMainTools,
-  type RunToolContext,
-  type ToolCapabilities,
-} from "./tools"
-import { createDockerExecBackend } from "./workspace/backend"
-import { createWorkspaceTools } from "./workspace/tools"
+import type { RunAgentSession } from "./session/agent-session"
+import { createLiveBus, type LiveBus } from "./session/live"
+import type { RunToolContext, ToolCapabilities } from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -67,7 +55,7 @@ export type RunServiceOptions = {
 
 type PendingOutcome = { mode: "finish"; summary: string } | { mode: "close" }
 
-type RunContext = {
+export type RunContext = {
   containerName: string
   workspaceHostPath: string
   sessionsDir: string
@@ -302,7 +290,7 @@ export function createRunService(options: RunServiceOptions) {
     if (mainAgent) updateAgent(mainAgent.id, { status: "idle", updatedAt: ts })
     clearForceKill(runId)
     terminateContainer(runId, containerName(runId))
-    abortChildSessions(runId)
+    childRuntime.abortAll(runId)
     const agentSession = sessions.get(runId)
     if (agentSession) {
       void agentSession.dispose()
@@ -320,7 +308,7 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Resolve SDK agent-loop settings (compaction/retry) from AegisX settings. */
-  function agentSettings() {
+  function agentSettings(): AgentLoopSettings {
     const s = options.getSettings()
     return {
       compaction: { enabled: get(s, "agent.compactionEnabled") },
@@ -358,7 +346,8 @@ export function createRunService(options: RunServiceOptions) {
         platformService.targetAction(challengeId, action),
       requestFinish: (summary) =>
         pending.set(runId, { mode: "finish", summary }),
-      spawnChild: (childInput) => spawnChild(runId, mainAgentId, childInput),
+      spawnChild: (childInput) =>
+        childRuntime.spawn(runId, mainAgentId, childInput),
       hasAcceptedFlag: () => Promise.resolve(queries.hasAcceptedFlag(runId)),
       getAgent: (agentId) =>
         queries.listAgents(runId).find((a) => a.id === agentId),
@@ -366,38 +355,43 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
-  /** Build the main agent's tool set: container bash + file tools + CTF tools. */
-  function buildMainAgentTools(
-    workspaceHostPath: string,
-    name: string,
-    ctx: RunToolContext,
-    caps: ToolCapabilities
-  ) {
-    const bashDef = createBashToolDefinition(workspaceHostPath, {
-      operations: createContainerBashOperations(name, containerManager),
-    })
-    const workspaceTools = createWorkspaceTools(
-      createDockerExecBackend(name, containerManager)
-    )
-    const nativeTools = createMainTools(ctx, caps)
-    return {
-      customTools: [
-        bashDef,
-        ...workspaceTools,
-        ...nativeTools,
-      ] as ToolDefinition[],
-      toolNames: [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        "grep",
-        "find",
-        "ls",
-        ...nativeTools.map((tool) => tool.name),
-      ],
+  /** Hand a finished child's result text to its parent: steer into the current
+   * turn if streaming, otherwise drive a fresh turn (steer never starts a loop). */
+  const deliverToParent = (runId: string, text: string): void => {
+    const mainSession = sessions.get(runId)
+    if (!mainSession) return // run closed/gone
+    if (mainSession.session.isStreaming) {
+      void mainSession.session.steer(text).catch(() => undefined)
+    } else {
+      driveRun(runId, text)
     }
   }
+
+  /** Deps shared by create/ensureWarm (main-agent provisioning). */
+  const provisionDeps = {
+    db,
+    bus,
+    containerManager,
+    agentSettings,
+    buildMainToolContext,
+    onUsageMaybeChanged: emitRun,
+  }
+
+  /** Background child-agent orchestration (spawn_agent). */
+  const childRuntime = createChildAgentRuntime({
+    db,
+    bus,
+    containerManager,
+    contexts,
+    childSessions,
+    maxChildrenPerRun: MAX_CHILDREN_PER_RUN,
+    agentSettings,
+    listAgents: queries.listAgents,
+    updateAgent,
+    emitRun,
+    emitAgents,
+    deliverToParent,
+  })
 
   async function create(input: CreateRunInput): Promise<RunPublic> {
     const challenge = db
@@ -529,17 +523,10 @@ export function createRunService(options: RunServiceOptions) {
         .run()
 
       const mainAgentId = crypto.randomUUID()
-      const ctx = buildMainToolContext(runId, challenge.id, mainAgentId)
-      const { customTools, toolNames } = buildMainAgentTools(
-        wsAbs,
-        name,
-        ctx,
-        caps
-      )
 
-      // The agent row must exist before createRunAgentSession: DbSessionManager
-      // writes a `sessions` row (FK → agents) at create time. sessionFile is
-      // back-filled once the session exists (same pattern as child agents).
+      // The agent row must exist before the session: DbSessionManager writes a
+      // `sessions` row (FK → agents) at create time. sessionFile is back-filled
+      // once the session exists (same pattern as child agents).
       db.insert(agents)
         .values({
           id: mainAgentId,
@@ -558,22 +545,23 @@ export function createRunService(options: RunServiceOptions) {
 
       let agentSession: RunAgentSession
       try {
-        agentSession = await createRunAgentSession({
-          runId,
-          agentId: mainAgentId,
-          workspaceHostPath: wsAbs,
-          sessionsDir: sessAbs,
-          modelRuntime,
-          model: sdkModel,
-          thinkingLevel: input.thinkingLevel,
-          agentSettings: agentSettings(),
-          systemPrompt: mainSystemPrompt,
-          toolNames,
-          customTools,
-          onUsageMaybeChanged: () => emitRun(runId),
-          db,
-          bus,
-        })
+        agentSession = await provisionRunSession(
+          {
+            runId,
+            agentId: mainAgentId,
+            workspaceHostPath: wsAbs,
+            sessionsDir: sessAbs,
+            modelRuntime,
+            sdkModel,
+            thinkingLevel: input.thinkingLevel,
+            systemPrompt: mainSystemPrompt,
+            containerName: name,
+            challengeId: challenge.id,
+            promptContext,
+            caps,
+          },
+          provisionDeps
+        )
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         updateAgent(mainAgentId, {
@@ -735,36 +723,30 @@ export function createRunService(options: RunServiceOptions) {
       settings["container.workspace"]
     )
     const caps = resolveCaps(promptContext)
-    const toolCtx = buildMainToolContext(runId, row.challengeId, mainAgent.id)
-    const { customTools, toolNames } = buildMainAgentTools(
-      wsAbs,
-      row.containerName,
-      toolCtx,
-      caps
-    )
 
     let agentSession: RunAgentSession
     try {
-      agentSession = await createRunAgentSession({
-        runId,
-        agentId: mainAgent.id,
-        workspaceHostPath: wsAbs,
-        sessionsDir: sessAbs,
-        sessionFile: mainAgent.sessionFile,
-        modelRuntime,
-        model: sdkModel,
-        thinkingLevel: row.thinkingLevel as ThinkingLevel,
-        agentSettings: agentSettings(),
-        systemPrompt: renderSystemPrompt(
-          templates.mainSystemPromptTemplate,
-          promptContext
-        ),
-        toolNames,
-        customTools,
-        onUsageMaybeChanged: () => emitRun(runId),
-        db,
-        bus,
-      })
+      agentSession = await provisionRunSession(
+        {
+          runId,
+          agentId: mainAgent.id,
+          workspaceHostPath: wsAbs,
+          sessionsDir: sessAbs,
+          sessionFile: mainAgent.sessionFile,
+          modelRuntime,
+          sdkModel,
+          thinkingLevel: row.thinkingLevel as ThinkingLevel,
+          systemPrompt: renderSystemPrompt(
+            templates.mainSystemPromptTemplate,
+            promptContext
+          ),
+          containerName: row.containerName,
+          challengeId: row.challengeId,
+          promptContext,
+          caps,
+        },
+        provisionDeps
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       clearForceKill(runId)
@@ -872,7 +854,7 @@ export function createRunService(options: RunServiceOptions) {
       }
       clearForceKill(runId)
       await containerManager.remove(row.containerName).catch(() => undefined)
-      abortChildSessions(runId)
+      childRuntime.abortAll(runId)
       if (agentSession) {
         void agentSession.dispose()
         sessions.delete(runId)
@@ -885,240 +867,13 @@ export function createRunService(options: RunServiceOptions) {
     })
   }
 
-  function listMessages(
-    runId: string,
-    opts: { after?: number; agentId?: string }
-  ): MessageList {
-    const after = opts.after ?? 0
-    const conditions = [
-      eq(sessionEntries.runId, runId),
-      gt(sessionEntries.seq, after),
-    ] as const
-    const rows = opts.agentId
-      ? db
-          .select()
-          .from(sessionEntries)
-          .where(and(...conditions, eq(sessionEntries.agentId, opts.agentId)))
-          .orderBy(sessionEntries.seq)
-          .all()
-      : db
-          .select()
-          .from(sessionEntries)
-          .where(and(...conditions))
-          .orderBy(sessionEntries.seq)
-          .all()
-    const items: MessageListItem[] = []
-    for (const row of rows) {
-      let entry: import("@earendil-works/pi-coding-agent").SessionEntry
-      try {
-        entry = JSON.parse(row.data)
-      } catch {
-        continue
-      }
-      // Only renderable entries (message / compaction / branch_summary) are
-      // returned; others (model_change, custom, ...) are skipped but still
-      // count toward seq (positional cursor).
-      if (
-        entry.type !== "message" &&
-        entry.type !== "compaction" &&
-        entry.type !== "branch_summary"
-      )
-        continue
-      items.push({
-        entry,
-        seq: row.seq,
-        key: entryKeyOf(row.agentId, entry),
-        agentId: row.agentId,
-      })
-    }
-    return {
-      items,
-      nextAfter: items.length > 0 ? items[items.length - 1].seq : after,
-    }
-  }
-
   function mainSessionFor(runId: string) {
     return sessions.get(runId)
   }
 
-  /**
-   * Start a background child agent for spawn_agent. Resolves immediately with
-   * the new agent; the child runs to completion in the background and its
-   * result is delivered to the parent (steer while streaming, else a new turn).
-   */
-  async function spawnChild(
-    runId: string,
-    parentAgentId: string,
-    input: { name: string; task: string }
-  ): Promise<{ agentId: string; name: string; status: string }> {
-    const ctx = contexts.get(runId)
-    if (!ctx) throw new RunActionError("invalid_state", "Run context missing")
-    const activeChildren = queries
-      .listAgents(runId)
-      .filter((a) => a.role === "child" && a.status === "running").length
-    if (activeChildren >= MAX_CHILDREN_PER_RUN) {
-      throw new RunActionError(
-        "invalid_state",
-        `A child agent is already running for this run (limit ${MAX_CHILDREN_PER_RUN}). Wait for it to finish before spawning another.`
-      )
-    }
-
-    const childAgentId = crypto.randomUUID()
-    const childName = input.name.trim() || "Child agent"
-    const ts = now()
-    db.insert(agents)
-      .values({
-        id: childAgentId,
-        runId,
-        role: "child",
-        parentAgentId,
-        status: "running",
-        sessionFile: null,
-        name: childName,
-        task: input.task,
-        createdAt: ts,
-        startedAt: ts,
-        updatedAt: ts,
-      })
-      .run()
-    emitAgents(runId)
-
-    const childSystemPrompt = renderSystemPrompt(ctx.childTemplate, {
-      ...ctx.promptContext,
-      agent: {
-        role: "child",
-        isMain: false,
-        name: childName,
-        task: input.task,
-      },
-    })
-    const bashDef = createBashToolDefinition(ctx.workspaceHostPath, {
-      operations: createContainerBashOperations(
-        ctx.containerName,
-        containerManager
-      ),
-    })
-    const workspaceTools = createWorkspaceTools(
-      createDockerExecBackend(ctx.containerName, containerManager)
-    )
-    // Children: coding tools only (no finish/flag/target/spawn).
-    const toolNames = ["read", "bash", "edit", "write", "grep", "find", "ls"]
-
-    let childSession: RunAgentSession
-    try {
-      childSession = await createRunAgentSession({
-        runId,
-        agentId: childAgentId,
-        workspaceHostPath: ctx.workspaceHostPath,
-        sessionsDir: ctx.sessionsDir,
-        modelRuntime: ctx.modelRuntime,
-        model: ctx.sdkModel,
-        thinkingLevel: ctx.thinkingLevel,
-        agentSettings: agentSettings(),
-        systemPrompt: childSystemPrompt,
-        toolNames,
-        customTools: [bashDef, ...workspaceTools] as ToolDefinition[],
-        onUsageMaybeChanged: () => emitRun(runId),
-        db,
-        bus,
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      updateAgent(childAgentId, {
-        status: "failed",
-        error: message,
-        completedAt: now(),
-        updatedAt: now(),
-      })
-      emitAgents(runId)
-      throw new RunActionError("launch_failed", message)
-    }
-    childSessions.set(childAgentId, childSession)
-    updateAgent(childAgentId, { sessionFile: childSession.sessionFile ?? null })
-    emitAgents(runId)
-
-    // Run to completion in the background; deliver the result to the parent.
-    void runChildInBackground(
-      runId,
-      childAgentId,
-      childName,
-      input.task,
-      childSession
-    )
-
-    return { agentId: childAgentId, name: childName, status: "running" }
-  }
-
-  /** Drive a child agent to completion, then deliver its result to the parent. */
-  async function runChildInBackground(
-    runId: string,
-    childAgentId: string,
-    childName: string,
-    task: string,
-    childSession: RunAgentSession
-  ): Promise<void> {
-    let runError: string | null = null
-    try {
-      await childSession.session.prompt(task)
-    } catch (error) {
-      runError = error instanceof Error ? error.message : String(error)
-    }
-    const settled = now()
-    const summary =
-      childSession.session.getLastAssistantText() ??
-      (runError ? `Child failed: ${runError}` : "Child completed.")
-    const status = runError ? "failed" : "completed"
-    updateAgent(childAgentId, {
-      status,
-      completedAt: settled,
-      updatedAt: settled,
-      ...(runError ? { error: runError } : {}),
-    })
-    void childSession.dispose()
-    childSessions.delete(childAgentId)
-    emitAgents(runId)
-    deliverChildResult(
-      runId,
-      childAgentId,
-      childName,
-      status,
-      summary,
-      runError
-    )
-  }
-
-  /**
-   * Deliver a finished child's result to its parent agent. While the parent is
-   * streaming, steer into the current turn; when idle, drive a fresh turn
-   * (steer is queue-only and never starts a loop on its own).
-   */
-  function deliverChildResult(
-    runId: string,
-    childAgentId: string,
-    childName: string,
-    status: string,
-    summary: string,
-    error: string | null
-  ): void {
-    const mainSession = sessions.get(runId)
-    if (!mainSession) return // run closed/gone
-    const text = [
-      `Background agent ${childName} (${childAgentId}) ${status}.`,
-      "",
-      "Final output:",
-      summary,
-      ...(error ? ["", `Error: ${error}`] : []),
-    ].join("\n")
-    if (mainSession.session.isStreaming) {
-      void mainSession.session.steer(text).catch(() => undefined)
-    } else {
-      driveRun(runId, text)
-    }
-  }
-
   /** Latest assistant text for an agent (inspect_agent). */
   function lastAssistantText(runId: string, agentId: string): string | null {
-    const list = listMessages(runId, { agentId })
+    const list = queries.listMessages(runId, { agentId })
     for (let index = list.items.length - 1; index >= 0; index -= 1) {
       const item = list.items[index]
       if (item.entry.type !== "message") continue
@@ -1137,18 +892,6 @@ export function createRunService(options: RunServiceOptions) {
       if (body) return body.slice(0, 50_000)
     }
     return null
-  }
-
-  /** Abort + dispose any in-flight child sessions belonging to a run. */
-  function abortChildSessions(runId: string): void {
-    for (const child of queries.listAgents(runId)) {
-      if (child.role !== "child") continue
-      const session = childSessions.get(child.id)
-      if (!session) continue
-      void session.session.abort().catch(() => undefined)
-      void session.dispose()
-      childSessions.delete(child.id)
-    }
   }
 
   async function recoverOnBoot() {
@@ -1193,7 +936,7 @@ export function createRunService(options: RunServiceOptions) {
     refresh: queries.get,
     recoverOnBoot,
     close,
-    listMessages,
+    listMessages: queries.listMessages,
     mainSessionFor,
     get: queries.get,
     detail: queries.detail,

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionManager } from "@earendil-works/pi-coding-agent"
 import { eq } from "drizzle-orm"
-import { createDatabase } from "../db"
-import { sessionEntries, sessions } from "../db/schema"
+import { createDatabase } from "../../db"
+import { sessionEntries, sessions } from "../../db/schema"
 import { DbSessionManager } from "./db-session-manager"
 
 /** Minimal AgentMessage factories (shapes match pi-ai Message). */

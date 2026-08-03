@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import type { LiveEvent } from "../../../shared/live-event"
-import { createRunEventPipeline } from "../../src/run/events"
-import type { LiveBus } from "../../src/run/live"
+import { createRunEventPipeline } from "../../src/run/session/events"
+import type { LiveBus } from "../../src/run/session/live"
 
 type Committed = Extract<LiveEvent, { type: "message.committed" }>
 

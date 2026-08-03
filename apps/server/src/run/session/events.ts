@@ -5,7 +5,7 @@ import type {
   SessionEntry,
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
-import type { ContextSnapshot } from "../../../shared/live-event"
+import type { ContextSnapshot } from "../../../../shared/live-event"
 import { accumulateEntryUsage } from "./entry-usage"
 import type { LiveBus } from "./live"
 

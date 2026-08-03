@@ -8,9 +8,9 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
-import type { ContextSnapshot } from "../../../shared/live-event"
-import type { ThinkingLevel } from "../../../shared/thinking"
-import type { createDatabase } from "../db"
+import type { ContextSnapshot } from "../../../../shared/live-event"
+import type { ThinkingLevel } from "../../../../shared/thinking"
+import type { createDatabase } from "../../db"
 import { DbSessionManager } from "./db-session-manager"
 import { computeContextSample, createRunEventPipeline } from "./events"
 import type { LiveBus } from "./live"
