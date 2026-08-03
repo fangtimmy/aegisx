@@ -24,7 +24,7 @@ Server responsibilities:
    bash over `docker exec`.
 3. Register native CTF tools (`submit_flag`, `finish_run`, `target_*`,
    `spawn_agent`) that call the platform service in-process.
-4. Project SDK events → committed messages (SQLite `run_events`) + ephemeral
+4. Project SDK events → committed entries (SQLite `session_entries`) + ephemeral
    live progress (SSE) for the Conversation UI.
 5. Persist run + agent state in SQLite (schema v4).
 
@@ -45,7 +45,7 @@ Server responsibilities:
 │  │         submit_flag / target_* / finish   │
 │  │         spawn_agent (child session)       │
 │  │  session.subscribe → events.ts →          │
-│  │     run_events (committed) + SSE (live)   │
+│  │     session_entries (committed) + SSE (live)   │
 │  └───────────────┬──────────────────────────┘ │
 │                  │ docker exec (bash)         │
 │                  │ host fs (file tools)       │
@@ -74,7 +74,7 @@ apps/server/src/
     routes.ts         /api/runs/** + /messages + /stream + /message
     container-manager.ts dockerode lifecycle + exec() (no PTY)
     prompt.ts         handlebars PromptTemplateContext + attachment copy
-    queries.ts        run/agent reads; messages from run_events
+    queries.ts        run/agent reads; messages from session_entries
     public.ts         RunPublic + AgentSummary projections
   platforms/        adapters (ctfd/ret2shell/a1ctf) + sync/submit/targets
   providers/        model registry + pi models.json generation
@@ -126,12 +126,12 @@ retained, cold-restorable by messaging). `finish_run` releases the container
 ```
 session.subscribe(event)
   → events.ts normalizes SDK events
-  → committed messages (message_end/turn_end/agent_end) → SQLite run_events
+  → committed entries (entry_appended) → SQLite session_entries
   → live progress (text_delta / tool_execution_* / compaction / retry) → SSE bus
 ```
 
-`GET /api/runs/:id/messages?after=&agentId=` returns durable committed messages
-(projected from `run_events`, deduped by message id). `GET /api/runs/:id/stream`
+`GET /api/runs/:id/messages?after=&agentId=` returns durable committed entries
+(from `session_entries`, ordered by `seq`). `GET /api/runs/:id/stream`
 is the ephemeral SSE channel. The frontend `ConversationStore` merges committed
 history with live progress, splitting at the last user message so only the
 active turn rebuilds on streaming.
@@ -153,13 +153,14 @@ targets, or spawn further agents. Concurrent children per run are capped.
 ## Data model (schema v4)
 
 `events` → `event_platforms` → `challenges` → (`attachments`, `challenge_remote`)
-→ `runs` → (`agents`, `run_events`, `submissions`). Plus
+→ `runs` → (`agents`, `sessions` → `session_entries`, `submissions`). Plus
 `platform_request_log`. v1/v2/v3 databases are refused at open (full wipe);
 `SCHEMA_VERSION = 5`.
 
 `runs` dropped the v3 `launcher`/`pi_model_ref` and gained `session_dir`.
-`agents` (main + child) and `run_events` (committed message log, monotonic `seq`
-per run) are new.
+`agents` (main + child), `sessions` + `session_entries` (committed
+SessionEntry log — one row per pi entry, byte-for-byte the jsonl line,
+monotonic `seq` per session) are new.
 
 ## API (run)
 

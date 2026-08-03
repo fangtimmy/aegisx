@@ -6,6 +6,7 @@ import type {
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
 import type { ContextSnapshot } from "../../../shared/live-event"
+import { accumulateEntryUsage } from "./entry-usage"
 import type { LiveBus } from "./live"
 
 /**
@@ -14,8 +15,8 @@ import type { LiveBus } from "./live"
  * For message entries it is derived from the AgentMessage so it is identical
  * before the entry is persisted (a streaming `message.progress` draft) and
  * after (`message.committed`), letting the frontend store swap the draft for
- * the committed entry. For other kinds (compaction, ...) it is the entry's own
- * id (those are never streamed in-progress).
+ * the committed entry. For other kinds (compaction, branch_summary, ...) it is
+ * the entry's own id (those are never streamed in-progress).
  */
 export function entryKeyOf(agentId: string, entry: SessionEntry): string {
   if (entry.type === "message") {
@@ -49,62 +50,25 @@ function syntheticMessageEntry(
   }
 }
 
-/** Port of the pi-TUI footer accumulation (footer.js): walk ALL session entries
- * (including history compacted away + compaction/branch-summary usage), sum
- * cumulative tokens/cost, and capture the latest assistant cache-hit rate.
- * Paired with `session.getContextUsage()` for the live context meter. */
+/** Per-agent context snapshot for the conversation stat strip (pi-TUI footer
+ * parity: cumulative usage from session entries via the shared accumulator +
+ * live context usage from `session.getContextUsage()`). */
 export function computeContextSample(session: AgentSession): ContextSnapshot {
-  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
-  let cacheHitRate: number | null = null
-  const entries = session.sessionManager.getEntries()
-  for (const entry of entries) {
-    const usage = entryUsage(entry)
-    if (!usage) continue
-    totals.input += toNum(usage.input)
-    totals.output += toNum(usage.output)
-    totals.cacheRead += toNum(usage.cacheRead)
-    totals.cacheWrite += toNum(usage.cacheWrite)
-    totals.cost += toNum(usage.cost?.total)
-    if (entry.type === "message" && entry.message.role === "assistant") {
-      const prompt =
-        toNum(usage.input) + toNum(usage.cacheRead) + toNum(usage.cacheWrite)
-      if (prompt > 0) cacheHitRate = (toNum(usage.cacheRead) / prompt) * 100
-    }
-  }
+  const sample = accumulateEntryUsage(session.sessionManager.getEntries())
   const cu = session.getContextUsage()
   return {
     tokens: cu?.tokens ?? null,
     contextWindow: cu?.contextWindow ?? 0,
     percent: cu?.percent ?? null,
-    cacheHitRate,
-    totals,
+    cacheHitRate: sample.cacheHitRate,
+    totals: {
+      input: sample.input,
+      output: sample.output,
+      cacheRead: sample.cacheRead,
+      cacheWrite: sample.cacheWrite,
+      cost: sample.cost,
+    },
   }
-}
-
-type EntryUsage = {
-  input?: number
-  output?: number
-  cacheRead?: number
-  cacheWrite?: number
-  cost?: { total?: number }
-}
-
-function entryUsage(entry: SessionEntry): EntryUsage | undefined {
-  if (entry.type === "message") {
-    const msg = entry.message
-    if (msg.role === "assistant" || msg.role === "toolResult") {
-      return msg.usage as EntryUsage | undefined
-    }
-    return undefined
-  }
-  if (entry.type === "compaction" || entry.type === "branch_summary") {
-    return entry.usage as EntryUsage | undefined
-  }
-  return undefined
-}
-
-function toNum(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
 export type RunEventPipeline = ReturnType<typeof createRunEventPipeline>
@@ -115,28 +79,27 @@ export type RunEventPipeline = ReturnType<typeof createRunEventPipeline>
  * is owned by the injected SessionManager (DbSessionManager writes
  * session_entries as pi appends) — this pipeline never writes storage itself.
  *
- * `message.committed` is emitted by diffing the session tree (via
- * `getSessionEntries`) against already-emitted entry ids, so each item's `seq`
- * always matches the persisted append order. retry is intentionally transient
- * (SSE activity only); compaction surfaces as its own entry (a centered marker
- * on the timeline).
+ * `message.committed` is driven by the storage layer: DbSessionManager fires
+ * `onAppend(entry, seq)` from its `commit()` for every persisted entry (pi emits
+ * no equivalent event for regular messages — it `_emit`s `message_end` *before*
+ * calling `appendMessage`). That callback is the authoritative "entry just
+ * persisted" signal, carrying the entry's real `seq`. No tree diffing, no
+ * positional guess. retry is intentionally transient (SSE activity only);
+ * compaction / branch_summary surface as their own entries (centered markers).
  */
 export function createRunEventPipeline(options: {
   runId: string
   agentId: string
   bus: LiveBus
-  /** Live session entries (null before the session is wired up). */
-  getSessionEntries: () => SessionEntry[] | null
   /** Live context snapshot for the conversation stat strip. */
   sampleContext?: () => ContextSnapshot | null
-  /** Fired after a commit that may change run-wide usage (compaction), so the
-   * service can recompute + re-emit the run snapshot. */
+  /** Fired after a commit that may change run-wide usage (compaction /
+   * branch_summary), so the service can recompute + re-emit the run snapshot. */
   onUsageMaybeChanged?: () => void
 }) {
   const { runId, agentId, bus } = options
   let revision = 0
   const nextRevision = () => (revision += 1)
-  const emittedEntryIds = new Set<string>()
 
   function emitContext(): void {
     const sample = options.sampleContext?.()
@@ -144,26 +107,27 @@ export function createRunEventPipeline(options: {
     bus.emit(runId, { type: "context.updated", agentId, ...sample })
   }
 
-  /** Emit message.committed for every new message/compaction entry in the
-   * session tree. seq is the entry's append position (1-based), matching the
-   * persisted session_entries.seq / jsonl line number. */
-  function emitNewCommitted(): void {
-    const entries = options.getSessionEntries()
-    if (!entries) return
-    for (let i = 0; i < entries.length; i += 1) {
-      const entry = entries[i]
-      if (emittedEntryIds.has(entry.id)) continue
-      if (entry.type !== "message" && entry.type !== "compaction") continue
-      emittedEntryIds.add(entry.id)
-      bus.emit(runId, {
-        type: "message.committed",
-        agentId,
-        item: {
-          entry,
-          seq: i + 1,
-          key: entryKeyOf(agentId, entry),
-        },
-      })
+  /** Called by DbSessionManager.onAppend for every persisted entry. Emits
+   * message.committed for renderable kinds with the entry's real seq, and
+   * refreshes context/totals when a compaction/branch_summary lands (they carry
+   * their own usage). Non-renderable kinds (model_change, custom, ...) are
+   * skipped but still occupied a seq, so the gap matches `listMessages`. */
+  function commitEntry(entry: SessionEntry, seq: number): void {
+    if (
+      entry.type !== "message" &&
+      entry.type !== "compaction" &&
+      entry.type !== "branch_summary"
+    ) {
+      return
+    }
+    bus.emit(runId, {
+      type: "message.committed",
+      agentId,
+      item: { entry, seq, key: entryKeyOf(agentId, entry) },
+    })
+    if (entry.type === "compaction" || entry.type === "branch_summary") {
+      emitContext()
+      options.onUsageMaybeChanged?.()
     }
   }
 
@@ -202,9 +166,9 @@ export function createRunEventPipeline(options: {
         return
       }
       case "message_end": {
-        // pi appends the message to the session tree synchronously before
-        // emitting message_end, so the new entry (with its seq) is readable.
-        emitNewCommitted()
+        // The entry is committed via DbSessionManager.onAppend (pi appends the
+        // message right after emitting message_end). Here we only refresh the
+        // stat strip.
         emitContext()
         return
       }
@@ -214,7 +178,6 @@ export function createRunEventPipeline(options: {
       }
       case "agent_end": {
         if (event.willRetry) return
-        emitNewCommitted()
         emitContext()
         return
       }
@@ -275,6 +238,32 @@ export function createRunEventPipeline(options: {
         bus.emit(runId, { type: "agent.activity", agentId, activity: null })
         return
       }
+      case "summarization_retry_scheduled": {
+        // Retry of a compaction/branch-summary summarization call (shared pi
+        // retry budget). Transient SSE badge — mirrors auto_retry_start.
+        bus.emit(runId, {
+          type: "agent.activity",
+          agentId,
+          activity: "retrying",
+          detail: event.errorMessage,
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delayMs: event.delayMs,
+        })
+        return
+      }
+      case "summarization_retry_attempt_start": {
+        // source "branchSummary" → still a retry; "compaction" → re-entering
+        // compaction. Reflect it so the badge matches what pi is doing.
+        const activity =
+          event.source === "branchSummary" ? "retrying" : "compacting"
+        bus.emit(runId, { type: "agent.activity", agentId, activity })
+        return
+      }
+      case "summarization_retry_finished": {
+        bus.emit(runId, { type: "agent.activity", agentId, activity: null })
+        return
+      }
       case "compaction_start": {
         bus.emit(runId, {
           type: "agent.activity",
@@ -285,6 +274,9 @@ export function createRunEventPipeline(options: {
         return
       }
       case "compaction_end": {
+        // The compaction entry (with its usage) is committed via
+        // DbSessionManager.onAppend, which also refreshes context/totals. Here
+        // we only clear the activity badge (with a summary for the badge tail).
         bus.emit(runId, {
           type: "agent.activity",
           agentId,
@@ -297,11 +289,6 @@ export function createRunEventPipeline(options: {
             : {}),
           ...(event.aborted ? { aborted: true } : {}),
         })
-        // The compaction entry was appended to the session tree; emit it so the
-        // timeline marker appears + usage is folded into totals.
-        emitNewCommitted()
-        emitContext()
-        options.onUsageMaybeChanged?.()
         return
       }
       case "queue_update": {
@@ -318,5 +305,5 @@ export function createRunEventPipeline(options: {
     }
   }
 
-  return { handle }
+  return { handle, commitEntry }
 }

@@ -1,0 +1,102 @@
+import type { SessionEntry } from "@earendil-works/pi-coding-agent"
+
+/**
+ * Token/cost accumulation shared by the live stat strip (events.ts) and the
+ * persisted Overview (queries.ts). One definition of "session totals" so the
+ * two never drift.
+ *
+ * Parity target: the pi-TUI footer (modes/interactive/components/footer.js),
+ * which walks ALL `sessionManager.getEntries()` and folds in assistant +
+ * toolResult message usage plus compaction AND branch-summary usage. (pi's own
+ * `createUsageTotals`/`addUsageToTotals` helper is not part of the public
+ * package surface, so this mirrors it.)
+ */
+export type EntryUsage = {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  reasoning?: number
+  totalTokens?: number
+  cost?: { total?: number }
+}
+
+export type EntryUsageTotals = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  reasoning: number
+  totalTokens: number
+  cost: number
+}
+
+export type SessionUsageSample = EntryUsageTotals & {
+  /** Assistant messages that reported usage. */
+  turns: number
+  /** Latest assistant cache-hit rate (cacheRead / prompt tokens) * 100. */
+  cacheHitRate: number | null
+}
+
+function toNum(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
+}
+
+/** Per-entry usage, or undefined when the entry carries none. Mirrors the
+ * pi-TUI footer: assistant + toolResult message usage, plus compaction and
+ * branch-summary usage. */
+export function entryUsageOf(entry: SessionEntry): EntryUsage | undefined {
+  if (entry.type === "message") {
+    const message = entry.message as { role?: string; usage?: unknown }
+    if (message.role === "assistant" || message.role === "toolResult") {
+      return message.usage as EntryUsage | undefined
+    }
+    return undefined
+  }
+  if (entry.type === "compaction" || entry.type === "branch_summary") {
+    return entry.usage as EntryUsage | undefined
+  }
+  return undefined
+}
+
+/** Walk ALL session entries (including history compacted away, plus
+ * compaction/branch-summary usage) and accumulate tokens/cost + the latest
+ * assistant cache-hit rate. */
+export function accumulateEntryUsage(
+  entries: readonly SessionEntry[]
+): SessionUsageSample {
+  const totals: SessionUsageSample = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    totalTokens: 0,
+    cost: 0,
+    turns: 0,
+    cacheHitRate: null,
+  }
+  for (const entry of entries) {
+    const usage = entryUsageOf(entry)
+    if (!usage) continue
+    totals.input += toNum(usage.input)
+    totals.output += toNum(usage.output)
+    totals.cacheRead += toNum(usage.cacheRead)
+    totals.cacheWrite += toNum(usage.cacheWrite)
+    totals.reasoning += toNum(usage.reasoning)
+    totals.totalTokens += toNum(usage.totalTokens)
+    totals.cost += toNum(usage.cost?.total)
+    if (
+      entry.type === "message" &&
+      (entry.message as { role?: string }).role === "assistant"
+    ) {
+      totals.turns += 1
+      const prompt =
+        toNum(usage.input) + toNum(usage.cacheRead) + toNum(usage.cacheWrite)
+      if (prompt > 0) {
+        totals.cacheHitRate = (toNum(usage.cacheRead) / prompt) * 100
+      }
+    }
+  }
+  return totals
+}

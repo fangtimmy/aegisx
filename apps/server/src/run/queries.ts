@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { and, eq } from "drizzle-orm"
 import type { RunPublic, RunUsage } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
@@ -12,6 +13,7 @@ import {
   submissions,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
+import { accumulateEntryUsage } from "./entry-usage"
 import { type ChallengeMeta, toAgentSummary, toRunPublic } from "./public"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -98,77 +100,36 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return join(dataDir, row.workspacePath, "..")
   }
 
-  /** Sum token usage + cost across a run from session_entries: assistant
-   * turns + compaction usage. Parity with the pi-TUI footer (sums all session
-   * entries). */
+  /** Sum token usage + cost across a run from session_entries. Parity with the
+   * pi-TUI footer — shares one accumulator with the live stat strip
+   * (entry-usage.ts) so the two never drift (counts assistant + toolResult
+   * message usage + compaction + branch_summary usage). */
   function usageTotals(runId: string): RunUsage | undefined {
     const rows = db
-      .select({ type: sessionEntries.type, data: sessionEntries.data })
+      .select({ data: sessionEntries.data })
       .from(sessionEntries)
       .where(eq(sessionEntries.runId, runId))
       .all()
-    return accumulateUsage(
-      rows.map((row) => {
-        let entry: {
-          type?: string
-          message?: { role?: string; usage?: unknown }
-          usage?: unknown
-        }
-        try {
-          entry = JSON.parse(row.data)
-        } catch {
-          return { usage: undefined, assistant: false }
-        }
-        const assistant =
-          entry.type === "message" && entry.message?.role === "assistant"
-        return {
-          usage:
-            entry.type === "compaction" ? entry.usage : entry.message?.usage,
-          assistant,
-        }
-      })
-    )
-  }
-
-  function accumulateUsage(
-    items: Array<{ usage: unknown; assistant: boolean }>
-  ): RunUsage | undefined {
-    let input = 0
-    let output = 0
-    let cacheRead = 0
-    let cacheWrite = 0
-    let reasoning = 0
-    let totalTokens = 0
-    let cost = 0
-    let turns = 0
-    for (const item of items) {
-      if (!item.usage || typeof item.usage !== "object") continue
-      const usage = item.usage as Record<string, unknown>
-      const c = (usage.cost ?? {}) as Record<string, unknown>
-      input += num(usage.input)
-      output += num(usage.output)
-      cacheRead += num(usage.cacheRead)
-      cacheWrite += num(usage.cacheWrite)
-      if (typeof usage.reasoning === "number") reasoning += usage.reasoning
-      totalTokens += num(usage.totalTokens)
-      cost += num(c.total)
-      if (item.assistant) turns += 1
+    const entries: SessionEntry[] = []
+    for (const row of rows) {
+      try {
+        entries.push(JSON.parse(row.data) as SessionEntry)
+      } catch {}
     }
-    if (turns === 0 && cost === 0 && totalTokens === 0) return undefined
+    const sample = accumulateEntryUsage(entries)
+    if (sample.turns === 0 && sample.cost === 0 && sample.totalTokens === 0) {
+      return undefined
+    }
     return {
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      reasoning,
-      totalTokens,
-      cost,
-      turns,
+      input: sample.input,
+      output: sample.output,
+      cacheRead: sample.cacheRead,
+      cacheWrite: sample.cacheWrite,
+      reasoning: sample.reasoning,
+      totalTokens: sample.totalTokens,
+      cost: sample.cost,
+      turns: sample.turns,
     }
-  }
-
-  function num(value: unknown): number {
-    return typeof value === "number" && Number.isFinite(value) ? value : 0
   }
 
   /** Whether this run has an accepted flag submission (gate for finish_run). */

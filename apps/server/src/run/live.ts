@@ -4,8 +4,8 @@ type Listener = (event: LiveEvent) => void
 
 /**
  * In-memory SSE fan-out. One bus per server; subscribers per runId (browser
- * tabs). Events are ephemeral — durable history lives in run_events and is
- * served by the messages API. Reconnect re-reads committed messages there,
+ * tabs). Events are ephemeral — durable history lives in session_entries and
+ * is served by the messages API. Reconnect re-reads committed entries there,
  * then re-applies live progress from this stream.
  */
 export function createLiveBus() {

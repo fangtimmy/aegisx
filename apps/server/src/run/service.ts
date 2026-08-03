@@ -915,9 +915,15 @@ export function createRunService(options: RunServiceOptions) {
       } catch {
         continue
       }
-      // Only message + compaction entries are renderable; skip the rest but
-      // they still count toward seq (positional cursor).
-      if (entry.type !== "message" && entry.type !== "compaction") continue
+      // Only renderable entries (message / compaction / branch_summary) are
+      // returned; others (model_change, custom, ...) are skipped but still
+      // count toward seq (positional cursor).
+      if (
+        entry.type !== "message" &&
+        entry.type !== "compaction" &&
+        entry.type !== "branch_summary"
+      )
+        continue
       items.push({
         entry,
         seq: row.seq,

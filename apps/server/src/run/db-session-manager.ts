@@ -41,9 +41,13 @@ function nowIso(): string {
  * own exported pure functions, so tree/compaction semantics stay identical to
  * upstream.
  *
- * The public surface mirrors {@link SessionManager}. Methods AegisX never
- * reaches (file/fork/list) throw `unsupported` so an accidental call fails
- * loudly rather than silently no-op'ing.
+ * The public surface mirrors {@link SessionManager}. pi's class carries private
+ * state that defeats a TypeScript `implements` check, so the contract is locked
+ * at runtime instead: `db-session-manager.test` runs DbSessionManager
+ * side-by-side with `SessionManager.inMemory` on the same entry sequence and
+ * asserts identical tree/context output. Methods AegisX never reaches
+ * (file/fork/list) throw `unsupported` so an accidental call fails loudly
+ * rather than silently no-op'ing.
  */
 export class DbSessionManager {
   private readonly db: Database
@@ -57,6 +61,11 @@ export class DbSessionManager {
   private readonly labelsById = new Map<string, string>()
   private readonly labelTimestampsById = new Map<string, string>()
   private leafId: string | null = null
+  /** Fired at the end of commit() for every persisted entry (with its seq).
+   * The event pipeline uses this as the authoritative "entry just persisted"
+   * signal — pi emits no such event for regular messages, so the storage layer
+   * owns it. Set by the agent-session wiring. */
+  onAppend?: (entry: SessionEntry, seq: number) => void
 
   private constructor(opts: {
     sessionId: string
@@ -170,6 +179,7 @@ export class DbSessionManager {
     this.fileEntries.push(entry)
     this.byId.set(entry.id, entry)
     this.leafId = entry.id
+    const seq = this.fileEntries.length
     this.db
       .insert(sessionEntries)
       .values({
@@ -178,12 +188,13 @@ export class DbSessionManager {
         runId: this.runId,
         agentId: this.agentId,
         parentId: entry.parentId,
-        seq: this.fileEntries.length,
+        seq,
         type: entry.type,
         data: JSON.stringify(entry),
         createdAt: entry.timestamp,
       })
       .run()
+    this.onAppend?.(entry, seq)
     return entry
   }
 
@@ -219,7 +230,7 @@ export class DbSessionManager {
     }).id
   }
 
-  appendCustomEntry<T = unknown>(customType: string, data?: T): string {
+  appendCustomEntry(customType: string, data?: unknown): string {
     return this.commit("custom", { customType, data }).id
   }
 
@@ -392,10 +403,10 @@ export class DbSessionManager {
     this.leafId = null
   }
 
-  branchWithSummary<T = unknown>(
+  branchWithSummary(
     branchFromId: string | null,
     summary: string,
-    details?: T,
+    details?: unknown,
     fromHook?: boolean,
     usage?: Usage
   ): string {

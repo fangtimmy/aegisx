@@ -1,14 +1,23 @@
 import type {
+  BranchSummaryEntry,
   CompactionEntry,
   SessionEntry,
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
 
-export type { CompactionEntry, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent"
+export type {
+  BranchSummaryEntry,
+  CompactionEntry,
+  SessionEntry,
+  SessionMessageEntry,
+} from "@earendil-works/pi-coding-agent"
 
 /** Renderable session-entry kinds the timeline consumes. Other kinds
  * (model_change, label, session_info, ...) are persisted but not rendered. */
-export type RenderableEntry = SessionMessageEntry | CompactionEntry
+export type RenderableEntry =
+  | SessionMessageEntry
+  | CompactionEntry
+  | BranchSummaryEntry
 
 /**
  * One persisted session entry projected for the wire, with its append position.
@@ -77,4 +86,11 @@ export function isMessageEntry(
 /** Narrow to a compaction entry (rendered as a centered timeline marker). */
 export function isCompactionEntry(entry: SessionEntry): entry is CompactionEntry {
   return entry.type === "compaction"
+}
+
+/** Narrow to a branch-summary entry (rendered as a centered timeline marker). */
+export function isBranchSummaryEntry(
+  entry: SessionEntry
+): entry is BranchSummaryEntry {
+  return entry.type === "branch_summary"
 }

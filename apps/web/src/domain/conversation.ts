@@ -337,6 +337,17 @@ export function buildConversation(
       agent = null
       return
     }
+    if (entry.type === "branch_summary") {
+      items.push({
+        key: stableKey,
+        type: "system",
+        kind: "compact_end",
+        title: "Branched from an earlier point",
+        timestamp: entry.timestamp,
+      })
+      agent = null
+      return
+    }
   }
 
   for (const item of history) {

@@ -1,21 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
-import type {
-  AgentSessionEvent,
-  SessionEntry,
-} from "@earendil-works/pi-coding-agent"
+import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import type { LiveEvent } from "../../../shared/live-event"
 import { createRunEventPipeline } from "../../src/run/events"
 import type { LiveBus } from "../../src/run/live"
 
 type Committed = Extract<LiveEvent, { type: "message.committed" }>
 
-/** A pipeline wired to a recording bus with a controllable session entry
- * source. Persistence is owned by the SessionManager, so the pipeline only
- * translates events → SSE; committed entries come from diffing the session
- * tree (getSessionEntries) against already-emitted entry ids. */
+/** A pipeline wired to a recording bus. Persistence is owned by the
+ * SessionManager; the pipeline's `commitEntry` is driven by
+ * DbSessionManager.onAppend (the authoritative "entry just persisted" signal,
+ * since pi emits no equivalent event for regular messages). */
 function setup() {
-  let entries: SessionEntry[] = []
   const emitted: LiveEvent[] = []
   const bus = {
     emit: (_runId: string, event: LiveEvent) => emitted.push(event),
@@ -24,15 +20,8 @@ function setup() {
     runId: "run-1",
     agentId: "agent-1",
     bus,
-    getSessionEntries: () => entries,
   })
-  return {
-    pipeline,
-    emitted,
-    setEntries: (next: SessionEntry[]) => {
-      entries = next
-    },
-  }
+  return { pipeline, emitted }
 }
 
 const committedOf = (emitted: LiveEvent[]) =>
@@ -48,15 +37,10 @@ function messageEntry(role: string, ts: number, id: string): SessionEntry {
   } as SessionEntry
 }
 
-describe("createRunEventPipeline committed emission", () => {
-  test("message_end emits committed for new entries with positional seq", () => {
-    const { pipeline, emitted, setEntries } = setup()
-    setEntries([messageEntry("user", 1000, "e1")])
-
-    pipeline.handle({
-      type: "message_end",
-      message: {} as AgentMessage,
-    } as AgentSessionEvent)
+describe("createRunEventPipeline commitEntry", () => {
+  test("emits committed for a message with its real seq", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.commitEntry(messageEntry("user", 1000, "e1"), 1)
 
     const committed = committedOf(emitted)
     expect(committed.length).toBe(1)
@@ -67,50 +51,30 @@ describe("createRunEventPipeline committed emission", () => {
     expect(entry.message.role).toBe("user")
   })
 
-  test("re-handling does not re-emit already-emitted entries (dedup)", () => {
-    const { pipeline, emitted, setEntries } = setup()
-    setEntries([messageEntry("user", 1000, "e1")])
-
-    pipeline.handle({
-      type: "message_end",
-      message: {} as AgentMessage,
-    } as AgentSessionEvent)
-    pipeline.handle({
-      type: "agent_end",
-      messages: [],
-      willRetry: false,
-    } as AgentSessionEvent)
-
-    expect(committedOf(emitted).length).toBe(1)
-  })
-
-  test("multiple entries get monotonic seq matching their append order", () => {
-    const { pipeline, emitted, setEntries } = setup()
-    setEntries([
-      messageEntry("user", 1000, "e1"),
-      messageEntry("assistant", 2000, "e2"),
-      messageEntry("toolResult", 3000, "e3"),
-    ])
-
-    pipeline.handle({
-      type: "agent_end",
-      messages: [],
-      willRetry: false,
-    } as AgentSessionEvent)
+  test("skips non-renderable entries (model_change) but their seq gaps through", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.commitEntry(
+      {
+        type: "model_change",
+        id: "m1",
+        parentId: null,
+        timestamp: new Date(1000).toISOString(),
+        provider: "p",
+        modelId: "m",
+      } as SessionEntry,
+      1
+    )
+    pipeline.commitEntry(messageEntry("user", 2000, "e1"), 2)
 
     const committed = committedOf(emitted)
-    expect(committed.map((e) => e.item.seq)).toEqual([1, 2, 3])
-    expect(
-      committed.map(
-        (e) => (e.item.entry as { message: { role: string } }).message.role
-      )
-    ).toEqual(["user", "assistant", "toolResult"])
+    expect(committed.length).toBe(1)
+    expect(committed[0].item.seq).toBe(2) // gap at 1 (the model_change)
   })
 
   test("compaction entry is emitted as its native compaction entry", () => {
-    const { pipeline, emitted, setEntries } = setup()
-    setEntries([
-      messageEntry("assistant", 1000, "e1"),
+    const { pipeline, emitted } = setup()
+    pipeline.commitEntry(messageEntry("assistant", 1000, "e1"), 1)
+    pipeline.commitEntry(
       {
         type: "compaction",
         id: "c1",
@@ -120,13 +84,8 @@ describe("createRunEventPipeline committed emission", () => {
         firstKeptEntryId: "e1",
         tokensBefore: 180000,
       } as SessionEntry,
-    ])
-
-    pipeline.handle({
-      type: "agent_end",
-      messages: [],
-      willRetry: false,
-    } as AgentSessionEvent)
+      2
+    )
 
     const committed = committedOf(emitted)
     expect(committed.length).toBe(2)
@@ -137,30 +96,35 @@ describe("createRunEventPipeline committed emission", () => {
     ).toBe(180000)
   })
 
-  test("non-message entries (model_change) are skipped but still count toward seq", () => {
-    const { pipeline, emitted, setEntries } = setup()
-    setEntries([
+  test("branch_summary entry is emitted (renderable marker)", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.commitEntry(
       {
-        type: "model_change",
-        id: "m1",
+        type: "branch_summary",
+        id: "b1",
         parentId: null,
         timestamp: new Date(1000).toISOString(),
-        provider: "p",
-        modelId: "m",
+        fromId: "root",
+        summary: "abandoned branch",
       } as SessionEntry,
-      messageEntry("user", 2000, "e1"),
-    ])
+      1
+    )
+    const committed = committedOf(emitted)
+    expect(committed.length).toBe(1)
+    expect(committed[0].item.entry.type).toBe("branch_summary")
+  })
 
+  test("message_end / agent_end never emit committed (storage layer owns it)", () => {
+    const { pipeline, emitted } = setup()
     pipeline.handle({
       type: "message_end",
       message: {} as AgentMessage,
-    } as AgentSessionEvent)
-
-    const committed = committedOf(emitted)
-    expect(committed.length).toBe(1)
-    expect(committed[0].item.seq).toBe(2)
-    const entry = committed[0].item.entry
-    if (entry.type !== "message") throw new Error("expected message entry")
-    expect(entry.message.role).toBe("user")
+    } as never)
+    pipeline.handle({
+      type: "agent_end",
+      messages: [],
+      willRetry: false,
+    } as never)
+    expect(committedOf(emitted).length).toBe(0)
   })
 })
