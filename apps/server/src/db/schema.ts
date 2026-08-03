@@ -226,6 +226,70 @@ export const runEvents = sqliteTable(
   ]
 )
 
+/**
+ * Database-backed session tree (replaces per-agent jsonl files for new runs).
+ *
+ * One `sessions` row = one pi session (one agent's conversation). Each
+ * `session_entries` row is one append-only SessionTreeEntry — byte-for-byte
+ * the JSON pi would have written to a jsonl line. Driven by `DbSessionManager`,
+ * which pi writes through transparently via the injected `sessionManager`, so
+ * the database is the single source of truth and no jsonl file is created.
+ *
+ * Legacy runs (created before this change) keep their `agents.session_file`
+ * pointing at a `.jsonl`; those still open via pi's file-backed SessionManager.
+ */
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    cwd: text("cwd").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("sessions_run_id_idx").on(table.runId)]
+)
+
+export const sessionEntries = sqliteTable(
+  "session_entries",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    parentId: text("parent_id"),
+    /** Monotonic append order within the session (= jsonl line number). */
+    seq: integer("seq").notNull(),
+    type: text("type").notNull(),
+    /** Full SessionEntry JSON (byte-for-byte a pi jsonl line). */
+    data: text("data").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_entries_session_seq_unique").on(
+      table.sessionId,
+      table.seq
+    ),
+    index("session_entries_run_seq_idx").on(table.runId, table.seq),
+    index("session_entries_run_agent_seq_idx").on(
+      table.runId,
+      table.agentId,
+      table.seq
+    ),
+    index("session_entries_session_type_idx").on(table.sessionId, table.type),
+  ]
+)
+
 export const submissions = sqliteTable(
   "submissions",
   {

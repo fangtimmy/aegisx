@@ -4,6 +4,7 @@ import {
   createAgentSession,
   createExtensionRuntime,
   type ResourceLoader,
+  type SessionEntry,
   SessionManager,
   SettingsManager,
   type ToolDefinition,
@@ -11,6 +12,7 @@ import {
 import type { ContextSnapshot } from "../../../shared/live-event"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
+import { DbSessionManager } from "./db-session-manager"
 import { computeContextSample, createRunEventPipeline } from "./events"
 import type { LiveBus } from "./live"
 
@@ -65,13 +67,29 @@ export type RunAgentSession = {
 export async function createRunAgentSession(
   input: CreateAgentSessionInput
 ): Promise<RunAgentSession> {
-  const sessionManager = input.sessionFile
+  // Session backend selection:
+  //  - new run (no sessionFile)              -> DbSessionManager.create (database)
+  //  - resume, sessionFile ends in `.jsonl`  -> legacy file SessionManager.open
+  //    (pre-migration runs keep their jsonl; not migrated per design)
+  //  - resume, sessionFile is a db session id -> DbSessionManager.open (database)
+  const sessionManager = input.sessionFile?.endsWith(".jsonl")
     ? SessionManager.open(
         input.sessionFile,
         input.sessionsDir,
         input.workspaceHostPath
       )
-    : SessionManager.create(input.workspaceHostPath, input.sessionsDir)
+    : input.sessionFile
+      ? (DbSessionManager.open(input.sessionFile, {
+          runId: input.runId,
+          agentId: input.agentId,
+          db: input.db,
+        }) as unknown as SessionManager)
+      : (DbSessionManager.create({
+          cwd: input.workspaceHostPath,
+          runId: input.runId,
+          agentId: input.agentId,
+          db: input.db,
+        }) as unknown as SessionManager)
 
   const settingsManager = SettingsManager.inMemory({
     // Long CTF runs need compaction to survive context overflow; retry absorbs
@@ -85,17 +103,20 @@ export async function createRunAgentSession(
 
   const resourceLoader = minimalResourceLoader(input.systemPrompt)
 
-  // The session is created below; sampleContext reads it via this ref so the
-  // pipeline (built first) can emit context snapshots once it exists.
+  // The session is created below; sampleContext + getSessionEntries read it
+  // via this ref so the pipeline (built first) can emit context snapshots and
+  // committed messages once it exists.
   let sessionRef: AgentSession | null = null
   const sampleContext = (): ContextSnapshot | null =>
     sessionRef ? computeContextSample(sessionRef) : null
+  const getSessionEntries = (): SessionEntry[] | null =>
+    sessionRef ? sessionRef.sessionManager.getEntries() : null
 
   const pipeline = createRunEventPipeline({
     runId: input.runId,
     agentId: input.agentId,
-    db: input.db,
     bus: input.bus,
+    getSessionEntries,
     sampleContext,
     onUsageMaybeChanged: input.onUsageMaybeChanged,
   })

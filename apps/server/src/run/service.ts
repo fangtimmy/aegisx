@@ -18,7 +18,13 @@ import type { Message } from "../../../shared/message"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
-import { agents, challenges, runEvents, runs } from "../db/schema"
+import {
+  agents,
+  challenges,
+  runEvents,
+  runs,
+  sessionEntries,
+} from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
@@ -32,7 +38,7 @@ import { createRunAgentSession, type RunAgentSession } from "./agent-session"
 import type { ContainerManager } from "./container-manager"
 import { createContainerBashOperations } from "./container-tools"
 import { RunActionError, RunStartError } from "./errors"
-import { rowToMessage } from "./events"
+import { entryToWireMessage, rowToMessage } from "./events"
 import { createLiveBus, type LiveBus } from "./live"
 import {
   createRunModelRuntime,
@@ -537,6 +543,25 @@ export function createRunService(options: RunServiceOptions) {
         caps
       )
 
+      // The agent row must exist before createRunAgentSession: DbSessionManager
+      // writes a `sessions` row (FK → agents) at create time. sessionFile is
+      // back-filled once the session exists (same pattern as child agents).
+      db.insert(agents)
+        .values({
+          id: mainAgentId,
+          runId,
+          role: "main",
+          parentAgentId: null,
+          status: "running",
+          sessionFile: null,
+          name: null,
+          task: null,
+          createdAt: ts,
+          startedAt: ts,
+          updatedAt: ts,
+        })
+        .run()
+
       let agentSession: RunAgentSession
       try {
         agentSession = await createRunAgentSession({
@@ -557,6 +582,12 @@ export function createRunService(options: RunServiceOptions) {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        updateAgent(mainAgentId, {
+          status: "failed",
+          error: message,
+          completedAt: now(),
+          updatedAt: now(),
+        })
         clearForceKill(runId)
         terminateContainer(runId, name)
         updateRun(runId, {
@@ -567,21 +598,9 @@ export function createRunService(options: RunServiceOptions) {
         throw new RunActionError("launch_failed", message)
       }
 
-      db.insert(agents)
-        .values({
-          id: mainAgentId,
-          runId,
-          role: "main",
-          parentAgentId: null,
-          status: "running",
-          sessionFile: agentSession.sessionFile ?? null,
-          name: null,
-          task: null,
-          createdAt: ts,
-          startedAt: ts,
-          updatedAt: ts,
-        })
-        .run()
+      updateAgent(mainAgentId, {
+        sessionFile: agentSession.sessionFile ?? null,
+      })
 
       contexts.set(runId, {
         containerName: name,
@@ -877,6 +896,48 @@ export function createRunService(options: RunServiceOptions) {
     opts: { after?: number; agentId?: string }
   ): MessageList {
     const after = opts.after ?? 0
+    const mainAgent = db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.runId, runId), eq(agents.role, "main")))
+      .get()
+    const sessionFile = mainAgent?.sessionFile
+    const isDb = sessionFile != null && !sessionFile.endsWith(".jsonl")
+    if (isDb) {
+      const conditions = [
+        eq(sessionEntries.runId, runId),
+        gt(sessionEntries.seq, after),
+      ] as const
+      const rows = opts.agentId
+        ? db
+            .select()
+            .from(sessionEntries)
+            .where(and(...conditions, eq(sessionEntries.agentId, opts.agentId)))
+            .orderBy(sessionEntries.seq)
+            .all()
+        : db
+            .select()
+            .from(sessionEntries)
+            .where(and(...conditions))
+            .orderBy(sessionEntries.seq)
+            .all()
+      const items: Message[] = []
+      for (const row of rows) {
+        try {
+          const wire = entryToWireMessage(
+            row.agentId,
+            JSON.parse(row.data),
+            row.seq
+          )
+          if (wire) items.push(wire)
+        } catch {}
+      }
+      return {
+        items,
+        nextAfter: items.length > 0 ? items[items.length - 1].seq : after,
+      }
+    }
+    // Legacy runs (jsonl session): read the frozen run_events history.
     const conditions = [
       eq(runEvents.runId, runId),
       gt(runEvents.seq, after),

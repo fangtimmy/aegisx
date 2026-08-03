@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { and, count, eq, inArray } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import type { RunPublic, RunUsage } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
 import type { createDatabase } from "../db"
@@ -9,6 +9,7 @@ import {
   challenges,
   runEvents,
   runs,
+  sessionEntries,
   submissions,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
@@ -77,15 +78,6 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return listAgents(runId).find((agent) => agent.role === "main")
   }
 
-  function messageCount(runId: string, agentId: string): number {
-    const row = db
-      .select({ value: count() })
-      .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.agentId, agentId)))
-      .get()
-    return row?.value ?? 0
-  }
-
   function detail(
     runId: string
   ): { run: RunPublic; agents: AgentSummary[] } | undefined {
@@ -107,10 +99,50 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return join(dataDir, row.workspacePath, "..")
   }
 
-  /** Sum token usage + cost across a run's committed messages: assistant
-   * turns plus compaction/branch-summary usage persisted on system notices
-   * (parity with the pi-TUI footer, which sums all session entries). */
+  /** Whether the run's main agent persists to session_entries (db) vs a legacy
+   * jsonl file — decides which table holds its usage + message history. */
+  function isDbRun(runId: string): boolean {
+    const row = db
+      .select({ sessionFile: agents.sessionFile })
+      .from(agents)
+      .where(and(eq(agents.runId, runId), eq(agents.role, "main")))
+      .get()
+    const sessionFile = row?.sessionFile
+    return sessionFile != null && !sessionFile.endsWith(".jsonl")
+  }
+
+  /** Sum token usage + cost across a run: assistant turns + compaction usage.
+   * db runs read session_entries; legacy runs read the frozen run_events
+   * history. Parity with the pi-TUI footer (sums all session entries). */
   function usageTotals(runId: string): RunUsage | undefined {
+    if (isDbRun(runId)) {
+      const rows = db
+        .select({ type: sessionEntries.type, data: sessionEntries.data })
+        .from(sessionEntries)
+        .where(eq(sessionEntries.runId, runId))
+        .all()
+      return accumulateUsage(
+        rows.map((row) => {
+          let entry: {
+            type?: string
+            message?: { role?: string; usage?: unknown }
+            usage?: unknown
+          }
+          try {
+            entry = JSON.parse(row.data)
+          } catch {
+            return { usage: undefined, assistant: false }
+          }
+          const assistant =
+            entry.type === "message" && entry.message?.role === "assistant"
+          return {
+            usage:
+              entry.type === "compaction" ? entry.usage : entry.message?.usage,
+            assistant,
+          }
+        })
+      )
+    }
     const rows = db
       .select({ role: runEvents.role, payload: runEvents.payload })
       .from(runEvents)
@@ -121,6 +153,22 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
         )
       )
       .all()
+    return accumulateUsage(
+      rows.map((row) => {
+        let payload: Record<string, unknown>
+        try {
+          payload = row.payload ? JSON.parse(row.payload) : {}
+        } catch {
+          payload = {}
+        }
+        return { usage: payload.usage, assistant: row.role === "assistant" }
+      })
+    )
+  }
+
+  function accumulateUsage(
+    items: Array<{ usage: unknown; assistant: boolean }>
+  ): RunUsage | undefined {
     let input = 0
     let output = 0
     let cacheRead = 0
@@ -129,17 +177,9 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     let totalTokens = 0
     let cost = 0
     let turns = 0
-    for (const row of rows) {
-      if (!row.payload) continue
-      let payload: Record<string, unknown>
-      try {
-        payload = JSON.parse(row.payload)
-      } catch {
-        continue
-      }
-      const u = payload.usage
-      if (!u || typeof u !== "object") continue
-      const usage = u as Record<string, unknown>
+    for (const item of items) {
+      if (!item.usage || typeof item.usage !== "object") continue
+      const usage = item.usage as Record<string, unknown>
       const c = (usage.cost ?? {}) as Record<string, unknown>
       input += num(usage.input)
       output += num(usage.output)
@@ -148,9 +188,7 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       if (typeof usage.reasoning === "number") reasoning += usage.reasoning
       totalTokens += num(usage.totalTokens)
       cost += num(c.total)
-      // Only assistant turns count toward the `turns` meter; compaction usage is
-      // folded into the totals but is not a model turn the user drove.
-      if (row.role === "assistant") turns += 1
+      if (item.assistant) turns += 1
     }
     if (turns === 0 && cost === 0 && totalTokens === 0) return undefined
     return {
@@ -187,7 +225,6 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     listForEvent,
     listAgents,
     mainAgent,
-    messageCount,
     detail,
     workspacePath,
     runDirPath,
