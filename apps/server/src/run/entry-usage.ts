@@ -9,7 +9,12 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent"
  * which walks ALL `sessionManager.getEntries()` and folds in assistant +
  * toolResult message usage plus compaction AND branch-summary usage. (pi's own
  * `createUsageTotals`/`addUsageToTotals` helper is not part of the public
- * package surface, so this mirrors it.)
+ * package surface — the package `exports` map blocks deep imports — so this
+ * mirrors it; entry-usage.test pins the rules for upgrade cross-check.)
+ *
+ * `totalTokens` follows pi's `getSessionStats` formula
+ * (input + output + cacheRead + cacheWrite), NOT the provider-reported
+ * `usage.totalTokens` field, which can diverge across providers.
  */
 export type EntryUsage = {
   input?: number
@@ -77,20 +82,27 @@ export function accumulateEntryUsage(
     cacheHitRate: null,
   }
   for (const entry of entries) {
+    // pi getSessionStats counts EVERY assistant message as a turn, including
+    // aborted/error ones that carry no usage — count before the usage guard.
+    const isAssistant =
+      entry.type === "message" &&
+      (entry.message as { role?: string }).role === "assistant"
+    if (isAssistant) totals.turns += 1
+
     const usage = entryUsageOf(entry)
     if (!usage) continue
     totals.input += toNum(usage.input)
     totals.output += toNum(usage.output)
     totals.cacheRead += toNum(usage.cacheRead)
     totals.cacheWrite += toNum(usage.cacheWrite)
+    // reasoning is a SUBSET of output (see pi-ai `Usage`); tracked separately
+    // for the Overview breakdown only — it must NOT feed totalTokens, which
+    // follows pi's getSessionStats formula (input + output + cacheRead +
+    // cacheWrite) and so already includes it via output.
     totals.reasoning += toNum(usage.reasoning)
-    totals.totalTokens += toNum(usage.totalTokens)
     totals.cost += toNum(usage.cost?.total)
-    if (
-      entry.type === "message" &&
-      (entry.message as { role?: string }).role === "assistant"
-    ) {
-      totals.turns += 1
+
+    if (isAssistant) {
       const prompt =
         toNum(usage.input) + toNum(usage.cacheRead) + toNum(usage.cacheWrite)
       if (prompt > 0) {
@@ -98,5 +110,9 @@ export function accumulateEntryUsage(
       }
     }
   }
+  // pi getSessionStats total — not the provider-reported `usage.totalTokens`
+  // field, which can diverge across providers.
+  totals.totalTokens =
+    totals.input + totals.output + totals.cacheRead + totals.cacheWrite
   return totals
 }
