@@ -39,10 +39,23 @@ export type ExecOptions = {
   env?: string[]
   onData: (data: Buffer) => void
   signal?: AbortSignal
+  /** Timeout in seconds (matches the bash tool schema; converted to ms in exec). */
   timeout?: number
 }
 
 export type ContainerManager = ReturnType<typeof createContainerManager>
+
+/**
+ * Convert a per-call timeout (seconds, as exposed by the bash tool schema and
+ * the workspace file tools) into the milliseconds setTimeout expects. Returns
+ * undefined when no timeout applies. Centralized so the seconds→ms contract has
+ * a single definition (and a single test) — passing seconds straight into
+ * setTimeout used to be a 1000× off bug that silently dropped all output.
+ */
+export function execTimeoutMs(timeoutSec?: number): number | undefined {
+  if (!timeoutSec || timeoutSec <= 0) return undefined
+  return timeoutSec * 1000
+}
 
 export function createContainerManager(options?: { socketPath?: string }) {
   const socketPath =
@@ -196,11 +209,12 @@ export function createContainerManager(options?: { socketPath?: string }) {
     }
     opts.signal?.addEventListener("abort", destroyStream, { once: true })
     let timer: ReturnType<typeof setTimeout> | undefined
-    if (opts.timeout && opts.timeout > 0) {
+    const ms = execTimeoutMs(opts.timeout)
+    if (ms !== undefined) {
       timer = setTimeout(() => {
         timedOut = true
         destroyStream()
-      }, opts.timeout)
+      }, ms)
     }
 
     try {
@@ -236,6 +250,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       workdir?: string
       env?: string[]
       signal?: AbortSignal
+      /** Timeout in seconds (converted to ms in capture). */
       timeout?: number
     }
   ): Promise<{ stdout: Buffer; stderr: string; exitCode: number | null }> {
@@ -260,11 +275,12 @@ export function createContainerManager(options?: { socketPath?: string }) {
     }
     opts?.signal?.addEventListener("abort", destroyStream, { once: true })
     let timer: ReturnType<typeof setTimeout> | undefined
-    if (opts?.timeout && opts.timeout > 0) {
+    const ms = execTimeoutMs(opts?.timeout)
+    if (ms !== undefined) {
       timer = setTimeout(() => {
         timedOut = true
         destroyStream()
-      }, opts.timeout)
+      }, ms)
     }
 
     try {
