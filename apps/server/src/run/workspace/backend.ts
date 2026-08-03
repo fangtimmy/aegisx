@@ -1,4 +1,5 @@
 import { isAbsolute, join, relative } from "node:path"
+import tarStream from "tar-stream"
 import type { ContainerManager } from "../container-manager"
 
 /**
@@ -51,10 +52,34 @@ export function shellQuote(value: string) {
 }
 
 /**
+ * Build a single-file tar for Docker `putArchive`. The entry is the bare
+ * filename (putArchive extracts the archive at the target directory, supplied
+ * separately). Binary-safe — content is stored verbatim.
+ */
+export function buildSingleFileTar(
+  name: string,
+  content: string | Uint8Array,
+  mode = 0o644
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const pack = tarStream.pack()
+    const chunks: Buffer[] = []
+    pack.on("data", (chunk: Uint8Array) => chunks.push(Buffer.from(chunk)))
+    pack.on("end", () => resolve(Buffer.concat(chunks)))
+    pack.on("error", reject)
+    pack.entry(
+      { name, mode, mtime: new Date(), type: "file" },
+      Buffer.from(content)
+    )
+    pack.finalize()
+  })
+}
+
+/**
  * WorkspaceBackend whose every operation runs inside the run's tool-box
- * container over `docker exec` (read=cat, write=tee, list=ls, exec=bash).
- * Local and remote containers are identical here — the difference is only the
- * docker daemon the ContainerManager talks to.
+ * container over dockerode exec (read=cat, list=ls, exec=bash) and putArchive
+ * (write). Local and remote containers are identical here — the difference is
+ * only the docker daemon the ContainerManager talks to.
  */
 export function createDockerExecBackend(
   containerName: string,
@@ -75,15 +100,8 @@ export function createDockerExecBackend(
     return abs
   }
 
-  async function run(
-    command: string,
-    opts?: { signal?: AbortSignal; stdin?: Uint8Array | string }
-  ) {
-    const result = await manager.capture(containerName, command, {
-      signal: opts?.signal,
-      stdin: opts?.stdin,
-    })
-    return result
+  async function run(command: string, opts?: { signal?: AbortSignal }) {
+    return manager.capture(containerName, command, { signal: opts?.signal })
   }
 
   return {
@@ -102,15 +120,17 @@ export function createDockerExecBackend(
     },
     async write(path, content, signal) {
       const target = resolvePath(path, true)
-      const result = await run(
-        `mkdir -p ${shellQuote(dirnameShim(target))} && tee ${shellQuote(target)} > /dev/null`,
-        { signal, stdin: content }
-      )
-      if (result.exitCode !== 0) {
+      const dir = dirnameShim(target)
+      const name = target.slice(target.lastIndexOf("/") + 1)
+      // putArchive extracts the archive at `dir`, so ensure it exists first.
+      const mkdir = await run(`mkdir -p ${shellQuote(dir)}`, { signal })
+      if (mkdir.exitCode !== 0) {
         throw new Error(
-          result.stderr.trim() || `write failed (exit ${result.exitCode})`
+          mkdir.stderr.trim() || `write failed (exit ${mkdir.exitCode})`
         )
       }
+      const tar = await buildSingleFileTar(name, content)
+      await manager.putArchive(containerName, dir, tar)
     },
     async list(path, signal) {
       const target = resolvePath(path)

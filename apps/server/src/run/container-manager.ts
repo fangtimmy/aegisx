@@ -1,15 +1,18 @@
 import { existsSync } from "node:fs"
+import { type Readable, Writable } from "node:stream"
 import Docker from "dockerode"
 
 /**
- * dockerode-backed container lifecycle for v4 runs. The container is a
- * long-lived tool box (Cmd `sleep infinity`); bash is forwarded into it over
- * `docker exec`. There is no PTY attach — the agent loop runs host-side.
+ * dockerode-backed container lifecycle + execution for v4 runs. The container
+ * is a long-lived tool box (Cmd `sleep infinity`); bash and the workspace file
+ * tools run inside it over dockerode `exec` (hijacked stream, demuxed) and
+ * `putArchive`. No PTY attach, no `docker` CLI dependency — the agent loop runs
+ * host-side and every daemon call goes through dockerode.
  *
- * create/start/wait/kill/remove use plain dockerode HTTP (Bun-safe). Command
- * execution uses the `docker exec` CLI via Bun.spawn: dockerode's exec.start
- * hijack hits the same node:http upgrade hole as PTY attach under Bun, while
- * the CLI streams cleanly.
+ * Lifecycle (create/start/wait/kill/remove/inspect) is plain dockerode HTTP.
+ * Exec uses hijacked `exec.start` + `modem.demuxStream`, which works under Bun
+ * for reads. Writes go through `putArchive` rather than stdin, sidestepping the
+ * dockerode+stdin exec hang fixed only in Bun 1.4.0 (oven-sh/bun#29012).
  */
 
 export type ContainerLimits = {
@@ -121,10 +124,51 @@ export function createContainerManager(options?: { socketPath?: string }) {
     }
   }
 
+  /** Writable that collects every chunk into a buffer list. */
+  function collectSink(into: Buffer[]): NodeJS.WritableStream {
+    return new Writable({
+      write(chunk, _encoding, cb) {
+        into.push(Buffer.from(chunk))
+        cb()
+      },
+    })
+  }
+
+  /** Writable that forwards every chunk to onData (merged stdout+stderr). */
+  function onDataSink(onData: (chunk: Buffer) => void): NodeJS.WritableStream {
+    return new Writable({
+      write(chunk, _encoding, cb) {
+        onData(Buffer.from(chunk))
+        cb()
+      },
+    })
+  }
+
   /**
-   * Run a command inside a running container via `docker exec`, streaming
-   * merged stdout+stderr to onData. Resolves with the process exit code
-   * (null if killed by signal/timeout). Bun-safe (plain Bun.spawn).
+   * Resolve an exec's ExitCode after its hijacked stream closed. The daemon may
+   * briefly keep Running:true, so poll a few times.
+   */
+  async function pollExitCode(execInst: {
+    inspect(): Promise<{ Running?: boolean; ExitCode?: number | null }>
+  }): Promise<number | null> {
+    for (let i = 0; i < 10; i++) {
+      const info = await execInst.inspect()
+      if (info.Running === false && info.ExitCode != null) {
+        return info.ExitCode
+      }
+      await new Promise((r) => setTimeout(r, 30))
+    }
+    const info = await execInst.inspect()
+    return info.ExitCode ?? null
+  }
+
+  /**
+   * Run a command inside a running container over dockerode exec, streaming
+   * merged stdout+stderr onto onData. Docker multiplexes by frame in arrival
+   * order, so demuxing both streams onto the same sink preserves interleaving.
+   * Resolves with the exit code (null on timeout). Abort/timeout destroys the
+   * hijacked stream; closing it lets the daemon terminate the exec process —
+   * matching the old `docker exec` client-kill semantics.
    */
   async function exec(
     name: string,
@@ -132,76 +176,58 @@ export function createContainerManager(options?: { socketPath?: string }) {
     opts: ExecOptions
   ): Promise<{ exitCode: number | null }> {
     const workdir = opts.workdir ?? "/workspace"
-    const argv = ["docker", "exec"]
-    if (opts.env) {
-      for (const entry of opts.env) argv.push("-e", entry)
-    }
-    argv.push("-w", workdir, name, "bash", "-lc", command)
-
-    const proc = Bun.spawn(argv, {
-      stdout: "pipe",
-      stderr: "pipe",
-      stdin: "ignore",
+    const execInst = await get(name).exec({
+      Cmd: ["bash", "-lc", command],
+      WorkingDir: workdir,
+      AttachStdout: true,
+      AttachStderr: true,
+      Env: opts.env,
+      Tty: false,
     })
 
     let timedOut = false
-    const onAbort = () => {
+    let stream: Readable | undefined
+    const destroyStream = () => {
       try {
-        proc.kill()
+        stream?.destroy()
       } catch {
         // ignore
       }
     }
-    opts.signal?.addEventListener("abort", onAbort, { once: true })
-
+    opts.signal?.addEventListener("abort", destroyStream, { once: true })
     let timer: ReturnType<typeof setTimeout> | undefined
     if (opts.timeout && opts.timeout > 0) {
       timer = setTimeout(() => {
         timedOut = true
-        try {
-          proc.kill()
-        } catch {
-          // ignore
-        }
+        destroyStream()
       }, opts.timeout)
     }
 
-    const pump = async (stream: ReadableStream<Uint8Array> | null) => {
-      if (!stream) return
-      const reader = stream.getReader()
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (value) opts.onData(Buffer.from(value))
-      }
-    }
-
     try {
-      await Promise.all([pump(proc.stdout), pump(proc.stderr)])
-      const exitCode = await proc.exited
+      stream = await execInst.start({ Detach: false, Tty: false })
+      docker.modem.demuxStream(
+        stream,
+        onDataSink(opts.onData),
+        onDataSink(opts.onData)
+      )
+      await new Promise<void>((resolve, reject) => {
+        if (!stream) return resolve()
+        stream.on("end", resolve)
+        stream.on("close", resolve)
+        stream.on("error", reject)
+      })
+      const exitCode = await pollExitCode(execInst)
       return { exitCode: timedOut ? null : exitCode }
     } finally {
       if (timer) clearTimeout(timer)
-      opts.signal?.removeEventListener("abort", onAbort)
+      opts.signal?.removeEventListener("abort", destroyStream)
     }
-  }
-
-  async function readStream(stream: ReadableStream<Uint8Array> | null) {
-    if (!stream) return Buffer.alloc(0)
-    const reader = stream.getReader()
-    const chunks: Buffer[] = []
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (value) chunks.push(Buffer.from(value))
-    }
-    return Buffer.concat(chunks)
   }
 
   /**
    * Run a command inside a running container, capturing stdout and stderr
-   * separately (stdin optional). Used by workspace file tools (read/write/grep/
-   * find/ls) which need structured output, unlike the streaming bash tool.
+   * separately. Used by workspace file tools (read/grep/find/ls) which need
+   * structured output, unlike the streaming bash tool.
    */
   async function capture(
     name: string,
@@ -211,59 +237,78 @@ export function createContainerManager(options?: { socketPath?: string }) {
       env?: string[]
       signal?: AbortSignal
       timeout?: number
-      stdin?: Uint8Array | string
     }
   ): Promise<{ stdout: Buffer; stderr: string; exitCode: number | null }> {
     const workdir = opts?.workdir ?? "/workspace"
-    const argv = ["docker", "exec"]
-    if (opts?.env) {
-      for (const entry of opts.env) argv.push("-e", entry)
-    }
-    argv.push("-i", "-w", workdir, name, "bash", "-lc", command)
-    const proc = Bun.spawn(argv, {
-      stdout: "pipe",
-      stderr: "pipe",
-      stdin: opts?.stdin !== undefined ? "pipe" : "ignore",
+    const execInst = await get(name).exec({
+      Cmd: ["bash", "-lc", command],
+      WorkingDir: workdir,
+      AttachStdout: true,
+      AttachStderr: true,
+      Env: opts?.env,
+      Tty: false,
     })
-    if (opts?.stdin !== undefined && proc.stdin) {
-      proc.stdin.write(opts.stdin)
-      await proc.stdin.end()
-    }
+
     let timedOut = false
-    const onAbort = () => {
+    let stream: Readable | undefined
+    const destroyStream = () => {
       try {
-        proc.kill()
+        stream?.destroy()
       } catch {
         // ignore
       }
     }
-    opts?.signal?.addEventListener("abort", onAbort, { once: true })
+    opts?.signal?.addEventListener("abort", destroyStream, { once: true })
     let timer: ReturnType<typeof setTimeout> | undefined
     if (opts?.timeout && opts.timeout > 0) {
       timer = setTimeout(() => {
         timedOut = true
-        try {
-          proc.kill()
-        } catch {
-          // ignore
-        }
+        destroyStream()
       }, opts.timeout)
     }
+
     try {
-      const [stdout, stderr] = await Promise.all([
-        readStream(proc.stdout),
-        readStream(proc.stderr),
-      ])
-      const exitCode = await proc.exited
+      stream = await execInst.start({ Detach: false, Tty: false })
+      const outChunks: Buffer[] = []
+      const errChunks: Buffer[] = []
+      docker.modem.demuxStream(
+        stream,
+        collectSink(outChunks),
+        collectSink(errChunks)
+      )
+      await new Promise<void>((resolve, reject) => {
+        if (!stream) return resolve()
+        stream.on("end", resolve)
+        stream.on("close", resolve)
+        stream.on("error", reject)
+      })
+      const exitCode = await pollExitCode(execInst)
       return {
-        stdout,
-        stderr: stderr.toString("utf8"),
+        stdout: Buffer.concat(outChunks),
+        stderr: Buffer.concat(errChunks).toString("utf8"),
         exitCode: timedOut ? null : exitCode,
       }
     } finally {
       if (timer) clearTimeout(timer)
-      opts?.signal?.removeEventListener("abort", onAbort)
+      opts?.signal?.removeEventListener("abort", destroyStream)
     }
+  }
+
+  /** Extract a tar archive at `path` inside the container (Docker putArchive). */
+  async function putArchive(
+    name: string,
+    path: string,
+    tar: Buffer | NodeJS.ReadableStream
+  ): Promise<void> {
+    await get(name).putArchive(tar, { path })
+  }
+
+  /** Stream a tar archive of `path` out of the container (Docker getArchive). */
+  async function getArchive(
+    name: string,
+    path: string
+  ): Promise<NodeJS.ReadableStream> {
+    return get(name).getArchive({ path })
   }
 
   return {
@@ -275,6 +320,8 @@ export function createContainerManager(options?: { socketPath?: string }) {
     isRunning,
     exec,
     capture,
+    putArchive,
+    getArchive,
     get,
   }
 }
