@@ -24,20 +24,28 @@ export function AgentActivityBadge({
   const getSignature = useCallback(() => {
     const activity = stream.getActivity(agentId)
     const running = stream.getRunningTool(agentId)
-    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.detail ?? ""}|${running ? 1 : 0}`
+    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.attempt ?? ""}|${activity?.maxAttempts ?? ""}|${activity?.reason ?? ""}|${activity?.tokensBefore ?? ""}|${activity?.tokensAfter ?? ""}|${running ? 1 : 0}`
   }, [stream, agentId, agentStatus])
   useSyncExternalStore(subscribe, getSignature, getSignature)
 
   if (agentStatus !== "running") return null
   const activity = stream.getActivity(agentId)
-  const label =
-    activity?.activity === "compacting"
-      ? "Compacting context…"
-      : activity?.activity === "retrying"
-        ? "Retrying…"
-        : stream.getRunningTool(agentId)
-          ? "Working…"
-          : "Thinking…"
+  let label: string
+  if (activity?.activity === "compacting") {
+    const before = activity.tokensBefore
+    const after = activity.tokensAfter
+    label =
+      before !== undefined && after !== undefined
+        ? `Compacting ${formatBadgeTokens(before)} → ~${formatBadgeTokens(after)}…`
+        : "Compacting context…"
+  } else if (activity?.activity === "retrying") {
+    label =
+      activity.attempt !== undefined && activity.maxAttempts !== undefined
+        ? `Retry ${activity.attempt}/${activity.maxAttempts}…`
+        : "Retrying…"
+  } else {
+    label = stream.getRunningTool(agentId) ? "Working…" : "Thinking…"
+  }
   return (
     <span
       aria-live="polite"
@@ -48,4 +56,10 @@ export function AgentActivityBadge({
       {label}
     </span>
   )
+}
+
+function formatBadgeTokens(count: number): string {
+  if (count < 1000) return String(count)
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
+  return `${(count / 1_000_000).toFixed(1)}M`
 }

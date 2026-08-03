@@ -21,6 +21,7 @@ export type {
   MessageRole,
   ModelMetadata,
   NoticeMessage,
+  NoticeSystemKind,
   PiModelProfile,
   PlatformType,
   ProviderConnection,
@@ -53,6 +54,11 @@ export {
   SETTINGS_DEFS,
   settingDef,
 } from "../../../shared"
+
+export type {
+  CompactionReason,
+  ContextSnapshot,
+} from "../../../shared/live-event"
 
 import type { FlatSettings } from "../../../shared"
 

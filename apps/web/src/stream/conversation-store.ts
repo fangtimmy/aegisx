@@ -1,4 +1,10 @@
-import type { AgentSummary, LiveEvent, Message, RunPublic } from "@/api"
+import type {
+  AgentSummary,
+  ContextSnapshot,
+  LiveEvent,
+  Message,
+  RunPublic,
+} from "@/api"
 import {
   buildConversation,
   type ConversationItem,
@@ -27,6 +33,24 @@ type ToolProgress = {
   isError: boolean
   terminal?: "timed_out" | "cancelled" | "failed"
   terminalMessage?: string
+}
+
+type ActivityState = {
+  activity: "retrying" | "compacting"
+  detail?: string
+  attempt?: number
+  maxAttempts?: number
+  delayMs?: number
+  reason?: "manual" | "threshold" | "overflow"
+  tokensBefore?: number
+  tokensAfter?: number
+  aborted?: boolean
+  success?: boolean
+}
+
+type QueueState = {
+  steering: string[]
+  followUp: string[]
 }
 
 type AgentView = {
@@ -59,10 +83,9 @@ export class ConversationStore {
   >()
   private readonly toolProgress = new Map<string, Map<string, ToolProgress>>()
   private readonly completedTools = new Map<string, Set<string>>()
-  private readonly activity = new Map<
-    string,
-    { activity: "retrying" | "compacting"; detail?: string }
-  >()
+  private readonly activity = new Map<string, ActivityState>()
+  private readonly context = new Map<string, ContextSnapshot>()
+  private readonly queues = new Map<string, QueueState>()
   private readonly views = new Map<string, AgentView>()
   private readonly snapshots = new Map<string, ConversationItem[]>()
   private readonly listeners = new Map<string, Set<Listener>>()
@@ -96,6 +119,16 @@ export class ConversationStore {
 
   getActivity(agentId: string) {
     return this.activity.get(agentId) ?? null
+  }
+
+  /** Latest context snapshot for the stat strip (null until first sample). */
+  getContext(agentId: string): ContextSnapshot | null {
+    return this.context.get(agentId) ?? null
+  }
+
+  /** Latest steer/followUp queue for an agent (empty when none queued). */
+  getQueue(agentId: string): QueueState | null {
+    return this.queues.get(agentId) ?? null
   }
 
   /** Latest running tool for an agent, for the "Working…" activity badge. */
@@ -279,12 +312,43 @@ export class ConversationStore {
       if (event.activity === null) {
         if (this.activity.delete(event.agentId)) this.notify(event.agentId)
       } else {
-        this.activity.set(event.agentId, {
-          activity: event.activity,
-          ...(typeof event.detail === "string" ? { detail: event.detail } : {}),
-        })
+        const state: ActivityState = { activity: event.activity }
+        if (typeof event.detail === "string") state.detail = event.detail
+        if (typeof event.attempt === "number") state.attempt = event.attempt
+        if (typeof event.maxAttempts === "number")
+          state.maxAttempts = event.maxAttempts
+        if (typeof event.delayMs === "number") state.delayMs = event.delayMs
+        if (event.reason) state.reason = event.reason
+        if (typeof event.tokensBefore === "number")
+          state.tokensBefore = event.tokensBefore
+        if (typeof event.tokensAfter === "number")
+          state.tokensAfter = event.tokensAfter
+        if (typeof event.aborted === "boolean") state.aborted = event.aborted
+        if (typeof event.success === "boolean") state.success = event.success
+        this.activity.set(event.agentId, state)
         this.notify(event.agentId)
       }
+      return
+    }
+    if (event.type === "context.updated") {
+      this.context.set(event.agentId, {
+        tokens: event.tokens,
+        contextWindow: event.contextWindow,
+        percent: event.percent,
+        cacheHitRate: event.cacheHitRate,
+        totals: event.totals,
+      })
+      for (const listeners of this.listeners.values()) {
+        for (const listener of listeners) listener()
+      }
+      return
+    }
+    if (event.type === "queue.updated") {
+      this.queues.set(event.agentId, {
+        steering: event.steering,
+        followUp: event.followUp,
+      })
+      this.notify(event.agentId)
     }
   }
 

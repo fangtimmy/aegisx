@@ -551,6 +551,7 @@ export function createRunService(options: RunServiceOptions) {
           systemPrompt: mainSystemPrompt,
           toolNames,
           customTools,
+          onUsageMaybeChanged: () => emitRun(runId),
           db,
           bus,
         })
@@ -747,6 +748,7 @@ export function createRunService(options: RunServiceOptions) {
         ),
         toolNames,
         customTools,
+        onUsageMaybeChanged: () => emitRun(runId),
         db,
         bus,
       })
@@ -797,6 +799,31 @@ export function createRunService(options: RunServiceOptions) {
       pending.delete(runId)
       driveRun(runId, input.text)
       return requireRun(runId)
+    })
+  }
+
+  /**
+   * Replace the main agent's steer/followUp queue. The SDK only exposes
+   * clearQueue() (drains all), so an edit/remove is clear + re-queue the
+   * remaining messages. Each steer/followUp re-emits queue_update, which the
+   * UI reconciles against. No-op for runs without a live session.
+   */
+  function setQueue(
+    runId: string,
+    input: { steering: string[]; followUp: string[] }
+  ): Promise<void> {
+    return withLock(runId, async () => {
+      const agentSession = sessions.get(runId)
+      if (!agentSession) return
+      agentSession.session.clearQueue()
+      for (const text of input.steering) {
+        const trimmed = text.trim()
+        if (trimmed) await agentSession.session.steer(trimmed)
+      }
+      for (const text of input.followUp) {
+        const trimmed = text.trim()
+        if (trimmed) await agentSession.session.followUp(trimmed)
+      }
     })
   }
 
@@ -957,6 +984,7 @@ export function createRunService(options: RunServiceOptions) {
         systemPrompt: childSystemPrompt,
         toolNames,
         customTools: [bashDef, ...workspaceTools] as ToolDefinition[],
+        onUsageMaybeChanged: () => emitRun(runId),
         db,
         bus,
       })
@@ -1123,6 +1151,7 @@ export function createRunService(options: RunServiceOptions) {
     stop,
     finish,
     sendMessage,
+    setQueue,
     closeRun,
     delete: deleteRun,
     refresh: queries.get,

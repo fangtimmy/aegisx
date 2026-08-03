@@ -8,6 +8,26 @@ export type ToolProgressStatus = "running" | "done" | "error"
 
 export type ToolTerminal = "timed_out" | "cancelled" | "failed"
 
+/** Compaction trigger reason (mirrors the SDK compaction event). */
+export type CompactionReason = "manual" | "threshold" | "overflow"
+
+/** Per-agent context snapshot for the conversation stat strip (pi-TUI footer
+ * parity: cumulative usage from session entries + live context usage + latest
+ * cache-hit rate). */
+export type ContextSnapshot = {
+	tokens: number | null
+	contextWindow: number
+	percent: number | null
+	cacheHitRate: number | null
+	totals: {
+		input: number
+		output: number
+		cacheRead: number
+		cacheWrite: number
+		cost: number
+	}
+}
+
 /**
  * Live-only SSE events pushed over `GET /api/runs/:id/stream` (EventSource).
  * Ephemeral: reconnect re-fetches durable messages from `GET .../messages` and
@@ -32,6 +52,25 @@ export type LiveEvent =
 			agentId: string
 			activity: TransientActivity | null
 			detail?: string
+			/** Retry/compaction enrichment for the activity badge. */
+			attempt?: number
+			maxAttempts?: number
+			delayMs?: number
+			reason?: CompactionReason
+			tokensBefore?: number
+			tokensAfter?: number
+			aborted?: boolean
+			success?: boolean
+	  }
+	| {
+			type: "context.updated"
+			agentId: string
+		} & ContextSnapshot
+	| {
+			type: "queue.updated"
+			agentId: string
+			steering: string[]
+			followUp: string[]
 	  }
 	| {
 			type: "message.progress"

@@ -14,6 +14,10 @@ export function createLiveBus() {
   // EventSource connection immediately sees the current run/agent state.
   const lastRun = new Map<string, LiveEvent>()
   const lastAgent = new Map<string, LiveEvent>()
+  // Latest per-agent context + queue snapshots (keyed by agentId), replayed to
+  // new subscribers so the stat strip / steer queue render immediately.
+  const lastContext = new Map<string, LiveEvent>()
+  const lastQueue = new Map<string, LiveEvent>()
 
   function subscribe(runId: string, listener: Listener): () => void {
     let set = subscribers.get(runId)
@@ -33,6 +37,8 @@ export function createLiveBus() {
     if (event.type === "agent.updated") {
       lastAgent.set(event.agent.id, event)
     }
+    if (event.type === "context.updated") lastContext.set(event.agentId, event)
+    if (event.type === "queue.updated") lastQueue.set(event.agentId, event)
     const set = subscribers.get(runId)
     if (!set) return
     for (const listener of set) {
@@ -55,13 +61,25 @@ export function createLiveBus() {
     // filter by runId embedded in run.updated/agent.updated flows via the caller.
   }
 
+  /** Latest context snapshot for an agent (for SSE initial replay). */
+  function getContext(agentId: string): LiveEvent | undefined {
+    return lastContext.get(agentId)
+  }
+
+  /** Latest steer/followUp queue snapshot for an agent (for SSE initial replay). */
+  function getQueue(agentId: string): LiveEvent | undefined {
+    return lastQueue.get(agentId)
+  }
+
   function close() {
     subscribers.clear()
     lastRun.clear()
     lastAgent.clear()
+    lastContext.clear()
+    lastQueue.clear()
   }
 
-  return { subscribe, emit, replay, close }
+  return { subscribe, emit, replay, getContext, getQueue, close }
 }
 
 export type LiveBus = ReturnType<typeof createLiveBus>

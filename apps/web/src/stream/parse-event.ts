@@ -28,6 +28,24 @@ function isTransientActivity(
   return value === "retrying" || value === "compacting"
 }
 
+function isCompactionReason(
+  value: unknown
+): value is "manual" | "threshold" | "overflow" {
+  return value === "manual" || value === "threshold" || value === "overflow"
+}
+
+function optNum(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function optStr(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined
+}
+
+function optBool(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined
+}
+
 /** Parse one SSE data payload into a typed LiveEvent, or undefined if malformed. */
 export function parseLiveEvent(value: unknown): LiveEvent | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined
@@ -101,7 +119,75 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
       type: "agent.activity",
       agentId: value.agentId,
       activity: value.activity,
-      ...(typeof value.detail === "string" ? { detail: value.detail } : {}),
+      ...(optStr(value.detail) !== undefined
+        ? { detail: value.detail as string }
+        : {}),
+      ...(optNum(value.attempt) !== undefined
+        ? { attempt: value.attempt as number }
+        : {}),
+      ...(optNum(value.maxAttempts) !== undefined
+        ? { maxAttempts: value.maxAttempts as number }
+        : {}),
+      ...(optNum(value.delayMs) !== undefined
+        ? { delayMs: value.delayMs as number }
+        : {}),
+      ...(isCompactionReason(value.reason) ? { reason: value.reason } : {}),
+      ...(optNum(value.tokensBefore) !== undefined
+        ? { tokensBefore: value.tokensBefore as number }
+        : {}),
+      ...(optNum(value.tokensAfter) !== undefined
+        ? { tokensAfter: value.tokensAfter as number }
+        : {}),
+      ...(optBool(value.aborted) !== undefined
+        ? { aborted: value.aborted as boolean }
+        : {}),
+      ...(optBool(value.success) !== undefined
+        ? { success: value.success as boolean }
+        : {}),
+    }
+  }
+  if (value.type === "context.updated") {
+    if (typeof value.agentId !== "string") return undefined
+    const totals = value.totals
+    if (!isRecord(totals)) return undefined
+    return {
+      type: "context.updated",
+      agentId: value.agentId,
+      tokens:
+        typeof value.tokens === "number" || value.tokens === null
+          ? value.tokens
+          : null,
+      contextWindow: optNum(value.contextWindow) ?? 0,
+      percent:
+        typeof value.percent === "number" || value.percent === null
+          ? value.percent
+          : null,
+      cacheHitRate:
+        typeof value.cacheHitRate === "number" || value.cacheHitRate === null
+          ? value.cacheHitRate
+          : null,
+      totals: {
+        input: optNum(totals.input) ?? 0,
+        output: optNum(totals.output) ?? 0,
+        cacheRead: optNum(totals.cacheRead) ?? 0,
+        cacheWrite: optNum(totals.cacheWrite) ?? 0,
+        cost: optNum(totals.cost) ?? 0,
+      },
+    }
+  }
+  if (value.type === "queue.updated") {
+    if (typeof value.agentId !== "string") return undefined
+    if (!Array.isArray(value.steering) || !Array.isArray(value.followUp))
+      return undefined
+    return {
+      type: "queue.updated",
+      agentId: value.agentId,
+      steering: value.steering.filter(
+        (s): s is string => typeof s === "string"
+      ),
+      followUp: value.followUp.filter(
+        (s): s is string => typeof s === "string"
+      ),
     }
   }
   if (value.type === "message.committed") {

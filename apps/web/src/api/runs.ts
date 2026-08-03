@@ -52,6 +52,13 @@ export function sendMessage(runId: string, input: SendMessageInput) {
   )
 }
 
+export function setQueue(
+  runId: string,
+  input: { steering: string[]; followUp: string[] }
+) {
+  return apiRequest<void>(`/runs/${runId}/queue`, jsonRequest("PUT", input))
+}
+
 export function finishRun(runId: string, summary: string) {
   return apiRequest<RunPublic>(
     `/runs/${runId}/finish`,

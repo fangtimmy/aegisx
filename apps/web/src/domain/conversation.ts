@@ -2,6 +2,7 @@ import type {
   AssistantMessage,
   Message,
   NoticeMessage,
+  NoticeSystemKind,
   ToolResultMessage,
   UserMessage,
 } from "@/api"
@@ -162,6 +163,14 @@ export type ConversationItem =
     }
   | {
       key: string
+      type: "system"
+      kind?: NoticeSystemKind
+      title: string
+      detail?: string
+      timestamp?: string | number
+    }
+  | {
+      key: string
       type: "user"
       body: string
       timestamp?: string | number
@@ -222,6 +231,17 @@ function applyNotice(
   stableKey?: string
 ) {
   const timestamp = messageTimestamp(message, fallback)
+  if (message.source === "system") {
+    items.push({
+      key: stableKey ?? `system:${items.length}`,
+      type: "system",
+      kind: message.kind,
+      title: message.title ?? message.text,
+      ...(message.detail !== undefined ? { detail: message.detail } : {}),
+      timestamp,
+    })
+    return
+  }
   const handoff = handoffFromNotice(message)
   if (handoff) {
     items.push({

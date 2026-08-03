@@ -97,15 +97,29 @@ export type ToolResultMessage = {
 	timestamp?: number
 }
 
+/** Durable system-marker kinds persisted as notice rows and rendered as
+ * centered timeline markers (retry/compaction transparency). */
+export type NoticeSystemKind =
+	| "retry_start"
+	| "retry_end"
+	| "compact_start"
+	| "compact_end"
+
 export type NoticeMessage = {
 	role: "notice"
 	id: string
 	seq: number
 	agentId: string
 	createdAt: string
-	source: "child_result"
+	source: "child_result" | "system"
 	text: string
 	handoff?: ChildHandoff
+	/** System-marker fields (source === "system"). */
+	kind?: NoticeSystemKind
+	title?: string
+	detail?: string
+	/** Compaction summarization usage (compact_end only); folded into run totals. */
+	usage?: MessageUsage
 	timestamp?: number
 }
 

@@ -1,6 +1,13 @@
 import { useMutation } from "@tanstack/react-query"
-import { Bot, GitFork, LoaderCircle, Send } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Bot, GitFork, LoaderCircle, Send, X } from "lucide-react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import type { AgentSummary, RunPublic } from "@/api"
 import { runsApi } from "@/api"
 import { Button } from "@/components/ui/button"
@@ -134,15 +141,29 @@ export function Conversation({
       )}
       {selectedAgent && (
         <div className="shrink-0 border-t bg-background/95 px-4 py-3">
-          {running && (
-            <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2 pb-2">
-              <AgentActivityBadge
+          <div className="mx-auto max-w-3xl">
+            {running && selectedAgent.role === "main" && (
+              <SteerQueue
                 agentId={selectedAgent.id}
-                agentStatus={selectedAgent.status}
+                runId={runId}
+                stream={store}
+              />
+            )}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 text-xs">
+              {running && (
+                <AgentActivityBadge
+                  agentId={selectedAgent.id}
+                  agentStatus={selectedAgent.status}
+                  stream={store}
+                />
+              )}
+              <ContextStatStrip
+                agentId={selectedAgent.id}
+                className="ml-auto"
                 stream={store}
               />
             </div>
-          )}
+          </div>
           <MessageInput
             busy={send.isPending}
             closed={run.status === "closed"}
@@ -242,5 +263,205 @@ function MessageInput({
         </Button>
       </div>
     </div>
+  )
+}
+
+/** Format token counts for the stat strip, matching the pi-TUI footer rules. */
+function formatStatTokens(count: number): string {
+  if (count < 1000) return String(count)
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
+  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  return `${Math.round(count / 1_000_000)}M`
+}
+
+/** Live per-agent context meter for the message box (pi-TUI footer parity):
+ * ↑input ↓output RcacheRead WcacheWrite CH% $cost  percent%/window. */
+function ContextStatStrip({
+  agentId,
+  stream,
+  className,
+}: {
+  agentId: string
+  stream: ConversationStore
+  className?: string
+}) {
+  const subscribe = useCallback(
+    (listener: () => void) => stream.subscribe(agentId, listener),
+    [stream, agentId]
+  )
+  const snapshot = useSyncExternalStore(
+    subscribe,
+    () => stream.getContext(agentId),
+    () => stream.getContext(agentId)
+  )
+  if (!snapshot) return null
+  const t = snapshot.totals
+  const parts: Array<{ label: string; tone?: "warn" | "danger" }> = []
+  if (t.input) parts.push({ label: `↑${formatStatTokens(t.input)}` })
+  if (t.output) parts.push({ label: `↓${formatStatTokens(t.output)}` })
+  if (t.cacheRead) parts.push({ label: `R${formatStatTokens(t.cacheRead)}` })
+  if (t.cacheWrite) parts.push({ label: `W${formatStatTokens(t.cacheWrite)}` })
+  if (snapshot.cacheHitRate !== null && (t.cacheRead > 0 || t.cacheWrite > 0))
+    parts.push({ label: `CH${snapshot.cacheHitRate.toFixed(1)}%` })
+  if (t.cost > 0) parts.push({ label: `$${t.cost.toFixed(3)}` })
+  const percent = snapshot.percent
+  const ctxTone =
+    percent !== null && percent > 90
+      ? "danger"
+      : percent !== null && percent > 70
+        ? "warn"
+        : undefined
+  parts.push({
+    label:
+      percent === null
+        ? `?/${formatStatTokens(snapshot.contextWindow)}`
+        : `${percent.toFixed(1)}%/${formatStatTokens(snapshot.contextWindow)}`,
+    tone: ctxTone,
+  })
+  return (
+    <span className={cn("font-mono text-muted-foreground", className)}>
+      {parts.map((part) => (
+        <span
+          className={cn(
+            "ml-2.5 first:ml-0",
+            part.tone === "danger" && "text-destructive",
+            part.tone === "warn" && "text-warning"
+          )}
+          key={part.label}
+        >
+          {part.label}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+type QueueRow = { role: "steering" | "followUp"; index: number; text: string }
+
+/** Editable list of queued steer / follow-up messages above the input. The SDK
+ * only exposes clearQueue(), so an edit/remove commits clear + re-queue via
+ * PUT /queue; the server reconciles through queue.updated. */
+function SteerQueue({
+  runId,
+  agentId,
+  stream,
+}: {
+  runId: string
+  agentId: string
+  stream: ConversationStore
+}) {
+  const subscribe = useCallback(
+    (listener: () => void) => stream.subscribe(agentId, listener),
+    [stream, agentId]
+  )
+  const queue = useSyncExternalStore(
+    subscribe,
+    () => stream.getQueue(agentId),
+    () => stream.getQueue(agentId)
+  )
+  const [edit, setEdit] = useState<QueueRow | null>(null)
+  const put = useMutation({
+    mutationFn: (body: { steering: string[]; followUp: string[] }) =>
+      runsApi.setQueue(runId, body),
+    onError: (error) => toast.error("Failed to update queue", error.message),
+  })
+
+  const rows: QueueRow[] = [
+    ...(queue?.steering ?? []).map((text, index) => ({
+      role: "steering" as const,
+      index,
+      text,
+    })),
+    ...(queue?.followUp ?? []).map((text, index) => ({
+      role: "followUp" as const,
+      index,
+      text,
+    })),
+  ]
+  if (rows.length === 0) return null
+
+  const replace = (
+    role: "steering" | "followUp",
+    index: number,
+    text: string
+  ) => {
+    const base = {
+      steering: [...(queue?.steering ?? [])],
+      followUp: [...(queue?.followUp ?? [])],
+    }
+    base[role][index] = text
+    put.mutate(base)
+    setEdit(null)
+  }
+  const remove = (role: "steering" | "followUp", index: number) => {
+    const base = {
+      steering: [...(queue?.steering ?? [])],
+      followUp: [...(queue?.followUp ?? [])],
+    }
+    base[role].splice(index, 1)
+    put.mutate(base)
+    setEdit(null)
+  }
+
+  return (
+    <ul className="flex flex-col gap-1 pb-2">
+      {rows.map((row) => {
+        const editing = edit?.role === row.role && edit?.index === row.index
+        return (
+          <li
+            className="flex items-center gap-1.5"
+            key={`${row.role}:${row.index}`}
+          >
+            <span
+              className={cn(
+                "shrink-0 rounded px-1.5 py-0.5 font-medium text-xs",
+                row.role === "steering"
+                  ? "bg-info/15 text-info"
+                  : "bg-secondary text-secondary-foreground"
+              )}
+            >
+              {row.role === "steering" ? "Steer" : "Follow-up"}
+            </span>
+            {editing ? (
+              <input
+                className="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 font-mono text-xs"
+                onBlur={(e) => replace(row.role, row.index, e.target.value)}
+                onChange={(e) => setEdit({ ...row, text: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    replace(row.role, row.index, edit.text)
+                  } else if (e.key === "Escape") {
+                    e.preventDefault()
+                    setEdit(null)
+                  }
+                }}
+                ref={(el) => el?.focus()}
+                value={edit?.text ?? ""}
+              />
+            ) : (
+              <button
+                className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-muted-foreground text-xs hover:bg-secondary"
+                onClick={() => setEdit(row)}
+                title="Click to edit"
+                type="button"
+              >
+                {row.text}
+              </button>
+            )}
+            <Button
+              aria-label="Remove from queue"
+              onClick={() => remove(row.role, row.index)}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            >
+              <X />
+            </Button>
+          </li>
+        )
+      })}
+    </ul>
   )
 }

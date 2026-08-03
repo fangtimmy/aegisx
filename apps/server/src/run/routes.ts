@@ -58,6 +58,14 @@ const messageInput = Type.Object(
   { additionalProperties: false }
 )
 
+const queueInput = Type.Object(
+  {
+    steering: Type.Array(Type.String({ maxLength: 20_000 })),
+    followUp: Type.Array(Type.String({ maxLength: 20_000 })),
+  },
+  { additionalProperties: false }
+)
+
 const emptyInput = EmptyInputSchema
 
 export function registerRunRoutes(
@@ -214,6 +222,10 @@ export function registerRunRoutes(
       queue.push({ type: "run.updated", run: detail.run })
       for (const agent of detail.agents) {
         queue.push({ type: "agent.updated", agent })
+        const context = bus.getContext(agent.id)
+        if (context) queue.push(context)
+        const queueState = bus.getQueue(agent.id)
+        if (queueState) queue.push(queueState)
       }
 
       try {
@@ -253,6 +265,19 @@ export function registerRunRoutes(
       }
     }
   )
+
+  app.put("/api/runs/:runId/queue", validateJson(queueInput), async (c) => {
+    try {
+      const body = c.req.valid("json")
+      await runService.setQueue(c.req.param("runId"), {
+        steering: body.steering,
+        followUp: body.followUp,
+      })
+      return c.body(null, 204)
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
 
   app.post("/api/runs/:runId/stop", validateJson(emptyInput), async (c) => {
     try {

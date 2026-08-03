@@ -8,9 +8,10 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
+import type { ContextSnapshot } from "../../../shared/live-event"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
-import { createRunEventPipeline } from "./events"
+import { computeContextSample, createRunEventPipeline } from "./events"
 import type { LiveBus } from "./live"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -38,6 +39,9 @@ export type CreateAgentSessionInput = {
   toolNames: string[]
   /** Custom tools (container bash override, native CTF tools, ...). */
   customTools: ToolDefinition[]
+  /** Fired after a commit that may change run-wide usage (compaction), so the
+   * service can recompute + re-emit the run snapshot. */
+  onUsageMaybeChanged?: () => void
   db: Database
   bus: LiveBus
 }
@@ -81,11 +85,19 @@ export async function createRunAgentSession(
 
   const resourceLoader = minimalResourceLoader(input.systemPrompt)
 
+  // The session is created below; sampleContext reads it via this ref so the
+  // pipeline (built first) can emit context snapshots once it exists.
+  let sessionRef: AgentSession | null = null
+  const sampleContext = (): ContextSnapshot | null =>
+    sessionRef ? computeContextSample(sessionRef) : null
+
   const pipeline = createRunEventPipeline({
     runId: input.runId,
     agentId: input.agentId,
     db: input.db,
     bus: input.bus,
+    sampleContext,
+    onUsageMaybeChanged: input.onUsageMaybeChanged,
   })
 
   const { session } = await createAgentSession({
@@ -99,6 +111,7 @@ export async function createRunAgentSession(
     tools: input.toolNames,
     customTools: input.customTools,
   })
+  sessionRef = session
 
   const unsubscribe = session.subscribe((event) => pipeline.handle(event))
 

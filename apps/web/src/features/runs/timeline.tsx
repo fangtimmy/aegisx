@@ -11,7 +11,9 @@ import {
   LoaderCircle,
   Pencil,
   Play,
+  RotateCw,
   Search,
+  Shrink,
   Square,
   Terminal,
   Wrench,
@@ -309,6 +311,23 @@ const ConversationRow = memo(function ConversationRow({
             <Markdown>{item.body}</Markdown>
           </div>
         </div>
+      </article>
+    )
+  }
+  if (item.type === "system") {
+    const isCompaction =
+      item.kind === "compact_start" || item.kind === "compact_end"
+    const Icon = isCompaction ? Shrink : RotateCw
+    return (
+      <article className="flex items-center gap-2 py-3 text-muted-foreground text-xs">
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="font-medium">{item.title}</span>
+        {item.detail && (
+          <span className="min-w-0 max-w-[60%] truncate">{item.detail}</span>
+        )}
+        {time && <time className="shrink-0">{time}</time>}
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
       </article>
     )
   }

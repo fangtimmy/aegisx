@@ -1,18 +1,34 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent"
+import type {
+  AgentSession,
+  AgentSessionEvent,
+} from "@earendil-works/pi-coding-agent"
 import { eq, max } from "drizzle-orm"
 import type {
   MessageUsage,
+  NoticeSystemKind,
   AssistantMessage as WireAssistant,
   Message as WireMessage,
+  NoticeMessage as WireNotice,
   ToolResultMessage as WireToolResult,
   UserMessage as WireUser,
 } from "../../../shared"
+import type { ContextSnapshot } from "../../../shared/live-event"
 import type { createDatabase } from "../db"
 import { runEvents } from "../db/schema"
 import type { LiveBus } from "./live"
 
 type Database = ReturnType<typeof createDatabase>["db"]
+
+type UsageLike = {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  reasoning?: number
+  totalTokens?: number
+  cost?: { total?: number }
+}
 
 /** Deterministic, stable id for an SDK AgentMessage (it has none of its own). */
 export function messageIdOf(agentId: string, msg: AgentMessage): string {
@@ -51,10 +67,55 @@ function toNum(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0
 }
 
+function entryUsage(entry: unknown): UsageLike | undefined {
+  if (!entry || typeof entry !== "object") return undefined
+  const e = entry as { type?: string; message?: unknown; usage?: unknown }
+  if (e.type === "message") {
+    const m = e.message as { role?: string; usage?: unknown } | undefined
+    return m?.usage as UsageLike | undefined
+  }
+  if (e.type === "compaction" || e.type === "branch_summary") {
+    return e.usage as UsageLike | undefined
+  }
+  return undefined
+}
+
+/** Port of the pi-TUI footer accumulation (footer.js): walk ALL session entries
+ * (including history compacted away + compaction/branch-summary usage), sum
+ * cumulative tokens/cost, and capture the latest assistant cache-hit rate.
+ * Paired with `session.getContextUsage()` for the live context meter. */
+export function computeContextSample(session: AgentSession): ContextSnapshot {
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
+  let cacheHitRate: number | null = null
+  const entries = session.sessionManager.getEntries()
+  for (const entry of entries) {
+    const usage = entryUsage(entry)
+    if (!usage) continue
+    totals.input += toNum(usage.input)
+    totals.output += toNum(usage.output)
+    totals.cacheRead += toNum(usage.cacheRead)
+    totals.cacheWrite += toNum(usage.cacheWrite)
+    totals.cost += toNum(usage.cost?.total)
+    const e = entry as { type?: string; message?: { role?: string } }
+    if (e.type === "message" && e.message?.role === "assistant") {
+      const prompt =
+        toNum(usage.input) + toNum(usage.cacheRead) + toNum(usage.cacheWrite)
+      if (prompt > 0) cacheHitRate = (toNum(usage.cacheRead) / prompt) * 100
+    }
+  }
+  const cu = session.getContextUsage()
+  return {
+    tokens: cu?.tokens ?? null,
+    contextWindow: cu?.contextWindow ?? 0,
+    percent: cu?.percent ?? null,
+    cacheHitRate,
+    totals,
+  }
+}
+
 /**
  * JSON content column for a committed message. user/assistant/toolResult carry
- * `content`; a notice carries `text`. (Notices are not committed today, but the
- * branch keeps the writer correct for the full union.)
+ * `content`; a notice carries `text` (the marker title for system notices).
  */
 function serializeContent(msg: WireMessage): string {
   return JSON.stringify(msg.role === "notice" ? msg.text : msg.content)
@@ -137,10 +198,46 @@ export function createRunEventPipeline(options: {
   agentId: string
   db: Database
   bus: LiveBus
+  /** Live context snapshot for the conversation stat strip (null before the
+   * session is wired up or after disposal). */
+  sampleContext?: () => ContextSnapshot | null
+  /** Fired after a commit that may change run-wide usage (compaction), so the
+   * service can recompute + re-emit the run snapshot. */
+  onUsageMaybeChanged?: () => void
 }) {
   const { runId, agentId, db, bus } = options
   let revision = 0
   const nextRevision = () => (revision += 1)
+
+  function emitContext(): void {
+    const sample = options.sampleContext?.()
+    if (!sample) return
+    bus.emit(runId, { type: "context.updated", agentId, ...sample })
+  }
+
+  /** Persist a durable system-marker notice (retry/compaction transparency)
+   * so it survives reconnect and is reviewable in the timeline post-hoc. */
+  function commitSystemNotice(
+    kind: NoticeSystemKind,
+    fields: { title: string; detail?: string; usage?: MessageUsage }
+  ): void {
+    const timestamp = Date.now()
+    const notice: WireNotice = {
+      role: "notice",
+      id: `${agentId}:notice:${kind}:${nextRevision()}`,
+      seq: 0,
+      agentId,
+      createdAt: new Date(timestamp).toISOString(),
+      source: "system",
+      text: fields.title,
+      kind,
+      title: fields.title,
+      timestamp,
+      ...(fields.detail !== undefined ? { detail: fields.detail } : {}),
+      ...(fields.usage ? { usage: fields.usage } : {}),
+    }
+    commit(notice)
+  }
 
   /**
    * Persist a message and emit `message.committed` exactly once. Duplicate
@@ -237,22 +334,28 @@ export function createRunEventPipeline(options: {
             message: wire,
           })
         }
+        // Surface the context window as soon as a turn starts (tokens may be
+        // null before the first response; the window still renders).
+        emitContext()
         return
       }
       case "message_end": {
         commitAgentMessage(event.message)
+        emitContext()
         return
       }
       case "turn_end": {
         // Reconcile: commit the assistant message and any tool results.
         commitAgentMessage(event.message)
         for (const result of event.toolResults) commitAgentMessage(result)
+        emitContext()
         return
       }
       case "agent_end": {
         if (event.willRetry) return
         // Final reconciliation of every new message this run produced.
         for (const msg of event.messages) commitAgentMessage(msg)
+        emitContext()
         return
       }
       case "tool_execution_start": {
@@ -301,13 +404,25 @@ export function createRunEventPipeline(options: {
           agentId,
           activity: "retrying",
           detail: event.errorMessage,
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delayMs: event.delayMs,
+        })
+        commitSystemNotice("retry_start", {
+          title: `Retry ${event.attempt}/${event.maxAttempts}`,
+          detail:
+            event.delayMs > 0
+              ? `${event.errorMessage} (waiting ${Math.round(event.delayMs / 1000)}s)`
+              : event.errorMessage,
         })
         return
       }
       case "auto_retry_end": {
-        if (event.success) {
-          bus.emit(runId, { type: "agent.activity", agentId, activity: null })
-        }
+        bus.emit(runId, { type: "agent.activity", agentId, activity: null })
+        commitSystemNotice("retry_end", {
+          title: event.success ? "Retry succeeded" : "Retry failed",
+          detail: event.success ? undefined : event.finalError,
+        })
         return
       }
       case "compaction_start": {
@@ -315,16 +430,52 @@ export function createRunEventPipeline(options: {
           type: "agent.activity",
           agentId,
           activity: "compacting",
+          reason: event.reason,
+        })
+        commitSystemNotice("compact_start", {
+          title: `Compacting context · ${event.reason}`,
         })
         return
       }
       case "compaction_end": {
         bus.emit(runId, { type: "agent.activity", agentId, activity: null })
+        const result = event.result
+        const tokensBefore = result?.tokensBefore
+        const tokensAfter = result?.estimatedTokensAfter
+        commitSystemNotice("compact_end", {
+          title:
+            tokensBefore !== undefined && tokensAfter !== undefined
+              ? `Compacted ${formatTokensLabel(tokensBefore)} → ~${formatTokensLabel(tokensAfter)}`
+              : result
+                ? "Compacted context"
+                : event.aborted
+                  ? "Compaction aborted"
+                  : "Compaction ended",
+          detail: event.errorMessage,
+          usage: result?.usage ? toMessageUsage(result.usage) : undefined,
+        })
+        emitContext()
+        options.onUsageMaybeChanged?.()
+        return
+      }
+      case "queue_update": {
+        bus.emit(runId, {
+          type: "queue.updated",
+          agentId,
+          steering: [...event.steering],
+          followUp: [...event.followUp],
+        })
         return
       }
       default:
         return
     }
+  }
+
+  function formatTokensLabel(count: number): string {
+    if (count < 1000) return String(count)
+    if (count < 1_000_000) return `${Math.round(count / 1000)}k`
+    return `${(count / 1_000_000).toFixed(1)}M`
   }
 
   return { handle, commitAgentMessage, commit }
@@ -348,7 +499,17 @@ function extras(msg: WireMessage): Record<string, unknown> {
   if (msg.role === "toolResult") {
     return { details: msg.details, timestamp: msg.timestamp }
   }
-  return { timestamp: msg.timestamp }
+  // notice (child_result handoff or system marker)
+  const extra: Record<string, unknown> = {
+    source: msg.source,
+    timestamp: msg.timestamp,
+  }
+  if (msg.kind) extra.kind = msg.kind
+  if (msg.title) extra.title = msg.title
+  if (msg.detail !== undefined) extra.detail = msg.detail
+  if (msg.usage) extra.usage = msg.usage
+  if (msg.handoff) extra.handoff = msg.handoff
+  return extra
 }
 
 /** Reconstruct a wire Message from a run_events row (messages API). */
@@ -410,6 +571,28 @@ export function rowToMessage(
       content: content as WireToolResult["content"],
       isError: row.isError ? true : undefined,
       details: payload.details,
+      timestamp: payload.timestamp as number | undefined,
+    }
+  }
+  if (row.role === "notice") {
+    const text = typeof content === "string" ? content : ""
+    return {
+      role: "notice",
+      id: row.id,
+      seq: row.seq,
+      agentId: row.agentId,
+      createdAt: row.createdAt,
+      source: (payload.source as WireNotice["source"]) ?? "child_result",
+      text,
+      ...(payload.handoff
+        ? { handoff: payload.handoff as WireNotice["handoff"] }
+        : {}),
+      ...(payload.kind ? { kind: payload.kind as WireNotice["kind"] } : {}),
+      ...(payload.title ? { title: payload.title as string } : {}),
+      ...(payload.detail !== undefined
+        ? { detail: payload.detail as string }
+        : {}),
+      ...(payload.usage ? { usage: payload.usage as MessageUsage } : {}),
       timestamp: payload.timestamp as number | undefined,
     }
   }

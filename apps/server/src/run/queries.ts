@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { and, count, eq } from "drizzle-orm"
+import { and, count, eq, inArray } from "drizzle-orm"
 import type { RunPublic, RunUsage } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
 import type { createDatabase } from "../db"
@@ -107,12 +107,19 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return join(dataDir, row.workspacePath, "..")
   }
 
-  /** Sum token usage + cost across a run's committed assistant messages. */
+  /** Sum token usage + cost across a run's committed messages: assistant
+   * turns plus compaction/branch-summary usage persisted on system notices
+   * (parity with the pi-TUI footer, which sums all session entries). */
   function usageTotals(runId: string): RunUsage | undefined {
     const rows = db
-      .select({ payload: runEvents.payload })
+      .select({ role: runEvents.role, payload: runEvents.payload })
       .from(runEvents)
-      .where(and(eq(runEvents.runId, runId), eq(runEvents.role, "assistant")))
+      .where(
+        and(
+          eq(runEvents.runId, runId),
+          inArray(runEvents.role, ["assistant", "notice"])
+        )
+      )
       .all()
     let input = 0
     let output = 0
@@ -141,9 +148,11 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       if (typeof usage.reasoning === "number") reasoning += usage.reasoning
       totalTokens += num(usage.totalTokens)
       cost += num(c.total)
-      turns += 1
+      // Only assistant turns count toward the `turns` meter; compaction usage is
+      // folded into the totals but is not a model turn the user drove.
+      if (row.role === "assistant") turns += 1
     }
-    if (turns === 0) return undefined
+    if (turns === 0 && cost === 0 && totalTokens === 0) return undefined
     return {
       input,
       output,
