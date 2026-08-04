@@ -49,6 +49,7 @@ import {
 } from "@/domain/conversation"
 import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
+import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
 
 function formatConversationTime(value: string | number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -243,26 +244,32 @@ function ToolActivity({
                 "border-destructive/30 bg-destructive/5"
             )}
           >
-            {tool.args !== null && tool.args !== undefined && (
-              <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)]">
-                <div className="flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs">
-                  I
-                </div>
-                <ToolData value={tool.args} />
-              </div>
-            )}
-            {tool.output && (
-              <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] border-t">
-                <div
-                  className={cn(
-                    "flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs",
-                    tool.status === "error" && "text-destructive"
-                  )}
-                >
-                  O
-                </div>
-                <ToolData value={tool.output} />
-              </div>
+            {usesCustomToolBody(tool.name) ? (
+              <ToolCustomBody tool={tool} />
+            ) : (
+              <>
+                {tool.args !== null && tool.args !== undefined && (
+                  <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)]">
+                    <div className="flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs">
+                      I
+                    </div>
+                    <ToolData value={tool.args} />
+                  </div>
+                )}
+                {tool.output && (
+                  <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] border-t">
+                    <div
+                      className={cn(
+                        "flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs",
+                        tool.status === "error" && "text-destructive"
+                      )}
+                    >
+                      O
+                    </div>
+                    <ToolData value={tool.output} />
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

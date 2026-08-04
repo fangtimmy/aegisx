@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query"
-import { Bot, GitFork, LoaderCircle, Send, X } from "lucide-react"
+import { Bot, ChevronDown, GitFork, LoaderCircle, Send, X } from "lucide-react"
 import {
   useCallback,
   useEffect,
@@ -11,9 +11,24 @@ import {
 import type { AgentSummary, RunPublic } from "@/api"
 import { runsApi } from "@/api"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardFrame,
+  CardFrameFooter,
+  CardFrameHeader,
+  CardPanel,
+} from "@/components/ui/card"
+import { ButtonGroup, GroupSeparator } from "@/components/ui/group"
+import { Input } from "@/components/ui/input"
+import {
+  Menu,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuTrigger,
+} from "@/components/ui/menu"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsList, TabsTab } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
@@ -51,6 +66,21 @@ export function Conversation({
   const effectiveAgentId =
     agents.find((a) => a.id === selectedAgentId)?.id ?? mainAgent?.id ?? ""
   const selectedAgent = agents.find((a) => a.id === effectiveAgentId) ?? null
+
+  const queueAgentId = selectedAgent?.id ?? ""
+  const queuedMessages = useSyncExternalStore(
+    useCallback(
+      (listener) => store.subscribe(queueAgentId, listener),
+      [store, queueAgentId]
+    ),
+    useCallback(() => store.getQueue(queueAgentId), [store, queueAgentId]),
+    useCallback(() => store.getQueue(queueAgentId), [store, queueAgentId])
+  )
+  const showSteerQueue =
+    running &&
+    selectedAgent?.role === "main" &&
+    queuedMessages !== null &&
+    (queuedMessages.steering.length > 0 || queuedMessages.followUp.length > 0)
 
   const loadMessages = useCallback(async () => {
     try {
@@ -140,16 +170,32 @@ export function Conversation({
         </div>
       )}
       {selectedAgent && (
-        <div className="shrink-0 border-t bg-background/95 px-4 py-3">
-          <div className="mx-auto max-w-3xl">
-            {running && selectedAgent.role === "main" && (
-              <SteerQueue
-                agentId={selectedAgent.id}
-                runId={runId}
-                stream={store}
-              />
+        <div className="shrink-0 px-3 pb-3">
+          <CardFrame className="mx-auto max-w-3xl">
+            {showSteerQueue && (
+              <CardFrameHeader className="px-3 py-2">
+                <SteerQueue
+                  agentId={selectedAgent.id}
+                  runId={runId}
+                  stream={store}
+                />
+              </CardFrameHeader>
             )}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 text-xs">
+            <Card>
+              <CardPanel className="p-2">
+                <MessageInput
+                  busy={send.isPending}
+                  closed={run.status === "closed"}
+                  deliverAs={deliverAs}
+                  draft={draft}
+                  onDeliverAsChange={setDeliverAs}
+                  onDraftChange={setDraft}
+                  onSubmit={onSubmit}
+                  running={running}
+                />
+              </CardPanel>
+            </Card>
+            <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
               {running && (
                 <AgentActivityBadge
                   agentId={selectedAgent.id}
@@ -157,23 +203,9 @@ export function Conversation({
                   stream={store}
                 />
               )}
-              <ContextStatStrip
-                agentId={selectedAgent.id}
-                className="ml-auto"
-                stream={store}
-              />
-            </div>
-          </div>
-          <MessageInput
-            busy={send.isPending}
-            closed={run.status === "closed"}
-            deliverAs={deliverAs}
-            draft={draft}
-            onDeliverAsChange={setDeliverAs}
-            onDraftChange={setDraft}
-            onSubmit={onSubmit}
-            running={running}
-          />
+              <ContextStatStrip agentId={selectedAgent.id} stream={store} />
+            </CardFrameFooter>
+          </CardFrame>
         </div>
       )}
     </div>
@@ -205,64 +237,63 @@ function MessageInput({
       ? "Steer or follow up the agent…"
       : "Send a message to the agent…"
   return (
-    <div className="mx-auto max-w-3xl">
-      {running && (
-        <div className="flex items-center gap-1 pb-1.5 text-xs">
-          <span className="text-muted-foreground">Deliver as</span>
-          <button
-            className={cn(
-              "rounded px-1.5 py-0.5",
-              deliverAs === "steer"
-                ? "bg-secondary text-secondary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-            onClick={() => onDeliverAsChange("steer")}
-            type="button"
-          >
-            Steer
-          </button>
-          <button
-            className={cn(
-              "rounded px-1.5 py-0.5",
-              deliverAs === "followUp"
-                ? "bg-secondary text-secondary-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-            onClick={() => onDeliverAsChange("followUp")}
-            type="button"
-          >
-            Follow-up
-          </button>
-          <span className="ml-auto text-muted-foreground">
-            Steer interrupts after current tools; follow-up waits until idle.
-          </span>
-        </div>
-      )}
-      <div className="flex items-end gap-2">
-        <Textarea
-          className="min-h-[2.5rem] flex-1 resize-none"
-          onChange={(e) => onDraftChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault()
-              onSubmit()
-            }
-          }}
-          placeholder={placeholder}
-          rows={2}
-          value={draft}
-        />
+    <form
+      className="flex w-full items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSubmit()
+      }}
+    >
+      <Input
+        aria-label="Message to agent"
+        className="flex-1"
+        disabled={busy}
+        onChange={(e) => onDraftChange(e.target.value)}
+        placeholder={placeholder}
+        unstyled
+        value={draft}
+      />
+      <ButtonGroup>
         <Button
+          aria-label="Send message"
           disabled={!draft.trim() || busy}
           loading={busy}
-          onClick={onSubmit}
           size="icon"
-          type="button"
+          type="submit"
         >
           <Send />
         </Button>
-      </div>
-    </div>
+        {running && (
+          <>
+            <GroupSeparator />
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    aria-label="Delivery mode"
+                    size="icon"
+                    variant="outline"
+                  />
+                }
+              >
+                <ChevronDown />
+              </MenuTrigger>
+              <MenuPopup align="end">
+                <MenuRadioGroup
+                  onValueChange={(value) =>
+                    onDeliverAsChange(value as "steer" | "followUp")
+                  }
+                  value={deliverAs}
+                >
+                  <MenuRadioItem value="steer">Steer</MenuRadioItem>
+                  <MenuRadioItem value="followUp">Follow-up</MenuRadioItem>
+                </MenuRadioGroup>
+              </MenuPopup>
+            </Menu>
+          </>
+        )}
+      </ButtonGroup>
+    </form>
   )
 }
 
@@ -405,7 +436,7 @@ function SteerQueue({
   }
 
   return (
-    <ul className="flex flex-col gap-1 pb-2">
+    <ul className="flex flex-col gap-1">
       {rows.map((row) => {
         const editing = edit?.role === row.role && edit?.index === row.index
         return (

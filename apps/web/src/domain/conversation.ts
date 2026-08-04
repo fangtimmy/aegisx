@@ -19,6 +19,12 @@ export function text(value: unknown): string {
   }
 }
 
+/** Extract a file path from tool args (filePath preferred over path). */
+export function toolFilePath(args: unknown): string {
+  if (!isRecord(args)) return ""
+  return text(args.filePath || args.path).trim()
+}
+
 function truncateLabel(value: string, limit = 100): string {
   const line = value.split("\n", 1)[0].trim()
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
@@ -38,7 +44,7 @@ export function toolStatusLabel(
       case "read":
       case "write":
       case "edit":
-        return truncateLabel(text(a?.filePath ?? a?.path))
+        return truncateLabel(toolFilePath(a))
       case "grep":
       case "find": {
         const pattern = text(a?.pattern)
@@ -125,6 +131,7 @@ export type ToolBlock = {
   name: string
   args: unknown
   output: string
+  details?: unknown
   status: "pending" | "running" | "done" | "error"
   terminal?: "timed_out" | "cancelled" | "failed"
   terminalMessage?: string
@@ -241,6 +248,7 @@ function applyToolResult(
       status: "pending",
     } satisfies ToolBlock)
   block.output = contentText(message.content) || resultText(message.details)
+  if (message.details !== undefined) block.details = message.details
   block.status = message.isError ? "error" : "done"
   if (!existing) {
     currentAgent(entry.timestamp).blocks.push(block)
@@ -372,6 +380,8 @@ export function buildConversation(
         } satisfies ToolBlock)
       block.args = entry.args ?? block.args
       block.output = resultText(entry.result)
+      if (isRecord(entry.result) && "details" in entry.result)
+        block.details = entry.result.details
       block.status = entry.isError
         ? "error"
         : entry.status === "done"
