@@ -8,7 +8,7 @@ import {
   readSync,
   realpathSync,
 } from "node:fs"
-import { basename, isAbsolute, relative, resolve } from "node:path"
+import { basename, isAbsolute, relative, resolve, sep } from "node:path"
 import { Readable } from "node:stream"
 
 const previewLimit = 1024 * 1024
@@ -27,11 +27,7 @@ export class WorkspaceFileError extends Error {
 
 function isOutside(root: string, path: string) {
   const child = relative(root, path)
-  return (
-    child === ".." ||
-    child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    isAbsolute(child)
-  )
+  return child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)
 }
 
 function openPath(workspacePath: string, requestedPath: string) {
@@ -57,7 +53,7 @@ function openPath(workspacePath: string, requestedPath: string) {
       return {
         descriptor,
         path,
-        relativePath: relative(root, path).split("\\").join("/"),
+        relativePath: relative(root, path).split(sep).join("/"),
       }
     } catch (error) {
       closeSync(descriptor)

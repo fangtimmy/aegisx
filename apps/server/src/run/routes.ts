@@ -199,10 +199,6 @@ export function registerRunRoutes(
 
     return streamSSE(c, async (stream) => {
       let aborted = false
-      stream.onAbort(() => {
-        aborted = true
-      })
-
       const queue: LiveEvent[] = []
       let resolveNext: (() => void) | null = null
       const drain = () => {
@@ -212,6 +208,12 @@ export function registerRunRoutes(
           fn()
         }
       }
+      // Wake a pending idle wait on abort too — otherwise the await never
+      // resolves, the loop never exits, and the subscription leaks.
+      stream.onAbort(() => {
+        aborted = true
+        drain()
+      })
       const unsubscribe = bus.subscribe(runId, (event) => {
         queue.push(event)
         drain()

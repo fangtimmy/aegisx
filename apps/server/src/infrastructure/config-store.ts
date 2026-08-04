@@ -223,7 +223,10 @@ export function createConfigStore(dataDir: string) {
       }
 
       throw new Error("unsupported config shape")
-    } catch {
+    } catch (error) {
+      console.warn("Config load failed, resetting to defaults", {
+        error: error instanceof Error ? error.message : String(error),
+      })
       try {
         if (existsSync(path)) {
           renameSync(path, `${path}.bak.${Date.now()}`)

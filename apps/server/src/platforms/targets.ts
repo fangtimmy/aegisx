@@ -13,6 +13,10 @@ import { PlatformActionError, platformError } from "./errors"
 type Database = ReturnType<typeof createDatabase>["db"]
 type StoredPlatform = typeof eventPlatforms.$inferSelect
 
+/** Polling cadence while a target transitions starting → running. */
+const TARGET_READY_POLL_INTERVAL_MS = 1000
+const TARGET_READY_POLL_MAX_ATTEMPTS = 60
+
 export function createPlatformTargets(
   db: Database,
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
@@ -153,10 +157,10 @@ async function waitForTarget(
   let target = initial
   for (
     let attempt = 0;
-    target.status === "starting" && attempt < 60;
+    target.status === "starting" && attempt < TARGET_READY_POLL_MAX_ATTEMPTS;
     attempt += 1
   ) {
-    await sleep(1000, undefined, { signal })
+    await sleep(TARGET_READY_POLL_INTERVAL_MS, undefined, { signal })
     target = (await adapter.getTarget?.(remoteId, signal)) ?? target
   }
   if (target.status !== "running") {

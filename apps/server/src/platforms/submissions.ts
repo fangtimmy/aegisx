@@ -19,6 +19,10 @@ import { PlatformActionError, platformError } from "./errors"
 type Database = ReturnType<typeof createDatabase>["db"]
 type StoredPlatform = typeof eventPlatforms.$inferSelect
 
+/** Async-judge polling cadence (a1ctf/ret2 return a judge id then resolve). */
+const SUBMISSION_POLL_INTERVAL_MS = 1000
+const SUBMISSION_POLL_MAX_ATTEMPTS = 60
+
 export function createPlatformSubmissions(
   db: Database,
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
@@ -110,11 +114,11 @@ export function createPlatformSubmissions(
       persist(result)
       for (
         let attempt = 0;
-        result.status === "pending" && attempt < 60;
+        result.status === "pending" && attempt < SUBMISSION_POLL_MAX_ATTEMPTS;
         attempt += 1
       ) {
         if (!result.remoteId || !adapter.getSubmission) break
-        await sleep(1000, undefined, { signal })
+        await sleep(SUBMISSION_POLL_INTERVAL_MS, undefined, { signal })
         result = await adapter.getSubmission(
           remote.remoteId,
           result.remoteId,

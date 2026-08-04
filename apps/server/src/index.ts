@@ -7,15 +7,18 @@ const dataDir = process.env.AEGISX_DATA_DIR
 const instance = createApp({ dataDir })
 let closing = false
 
-async function shutdown() {
+async function shutdown(force = false) {
+  // A repeat signal (or an explicit force) tears the process down without
+  // waiting for graceful close — the first signal may be stuck in instance.close().
+  if (force) process.exit(1)
   if (closing) return
   closing = true
   await instance.close()
   process.exit(0)
 }
 
-process.once("SIGINT", shutdown)
-process.once("SIGTERM", shutdown)
+process.on("SIGINT", () => shutdown(closing))
+process.on("SIGTERM", () => shutdown(closing))
 
 export default {
   hostname: "127.0.0.1",

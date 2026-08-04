@@ -1,4 +1,4 @@
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { and, eq, gt } from "drizzle-orm"
 import type {
@@ -103,7 +103,10 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
   function runDirPath(runId: string): string | undefined {
     const row = getRow(runId)
     if (!row) return undefined
-    return join(dataDir, row.workspacePath, "..")
+    // workspacePath is "runs/<id>/workspace"; the run dir is its parent.
+    // Derive it from the stored value instead of ".." so the coupling is
+    // explicit and survives layout changes.
+    return join(dataDir, dirname(row.workspacePath))
   }
 
   /** Sum token usage + cost across a run from session_entries. Parity with the
@@ -162,20 +165,14 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     const conditions = [
       eq(sessionEntries.runId, runId),
       gt(sessionEntries.seq, after),
-    ] as const
-    const rows = opts.agentId
-      ? db
-          .select()
-          .from(sessionEntries)
-          .where(and(...conditions, eq(sessionEntries.agentId, opts.agentId)))
-          .orderBy(sessionEntries.seq)
-          .all()
-      : db
-          .select()
-          .from(sessionEntries)
-          .where(and(...conditions))
-          .orderBy(sessionEntries.seq)
-          .all()
+      ...(opts.agentId ? [eq(sessionEntries.agentId, opts.agentId)] : []),
+    ]
+    const rows = db
+      .select()
+      .from(sessionEntries)
+      .where(and(...conditions))
+      .orderBy(sessionEntries.seq)
+      .all()
     const items: MessageListItem[] = []
     for (const row of rows) {
       let entry: SessionEntry

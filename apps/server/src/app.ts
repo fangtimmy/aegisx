@@ -42,7 +42,11 @@ export function createApp(options: { dataDir: string }) {
       runService.refresh(runId)
     },
   })
-  void runService.recoverOnBoot()
+  void runService.recoverOnBoot().catch((error) => {
+    console.error("Boot recovery failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
 
   const app = new Hono()
   const catalog = createCatalogReader(db, platformService)

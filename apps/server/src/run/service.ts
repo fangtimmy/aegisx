@@ -166,21 +166,13 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
+  /** Grace period between SIGTERM and the forced SIGKILL. */
+  const FORCE_KILL_GRACE_MS = 10_000
+
   /** SIGTERM now; force SIGKILL after a grace period if still alive. */
   function terminateContainer(runId: string, name: string) {
     clearForceKill(runId)
-    void containerManager
-      .kill(name, "SIGTERM")
-      .catch(() => undefined)
-      .then(() =>
-        containerManager
-          .isRunning(name)
-          .then((running) =>
-            running
-              ? containerManager.kill(name, "SIGKILL").catch(() => undefined)
-              : undefined
-          )
-      )
+    void containerManager.kill(name, "SIGTERM").catch(() => undefined)
     const timer = setTimeout(() => {
       forceKillTimers.delete(runId)
       void containerManager
@@ -191,7 +183,7 @@ export function createRunService(options: RunServiceOptions) {
             : undefined
         )
         .catch(() => undefined)
-    }, 10_000)
+    }, FORCE_KILL_GRACE_MS)
     forceKillTimers.set(runId, timer)
   }
 
@@ -217,18 +209,16 @@ export function createRunService(options: RunServiceOptions) {
     }
     emitRun(runId)
     emitAgents(runId)
-    void agentSession.session
-      .prompt(text)
-      .catch((error) => {
-        console.error("Run prompt failed", {
-          runId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-        return error instanceof Error ? error.message : String(error)
-      })
-      .then((error) =>
-        settleTurn(runId, typeof error === "string" ? error : null, gen)
-      )
+    void (async () => {
+      let runError: string | null = null
+      try {
+        await agentSession.session.prompt(text)
+      } catch (error) {
+        runError = error instanceof Error ? error.message : String(error)
+        console.error("Run prompt failed", { runId, error: runError })
+      }
+      settleTurn(runId, runError, gen)
+    })()
   }
 
   /**

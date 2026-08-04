@@ -63,6 +63,18 @@ export type RunAgentSession = {
  * prompt is exposed, so challenge workspace files and global pi resources never
  * leak into the agent context.
  */
+/**
+ * pi's SessionManager carries private state that defeats a TypeScript
+ * `implements`/structural check, so DbSessionManager (validated against pi's
+ * SessionManager in db-session-manager.test) is bridged here. This is the
+ * single point that crosses the type boundary.
+ */
+function asSdkSessionManager(
+  sm: DbSessionManager | SessionManager
+): SessionManager {
+  return sm as unknown as SessionManager
+}
+
 export async function createRunAgentSession(
   input: CreateAgentSessionInput
 ): Promise<RunAgentSession> {
@@ -86,13 +98,13 @@ export async function createRunAgentSession(
           agentId: input.agentId,
           db: input.db,
         })
-  const sessionManager: SessionManager = dbSession
-    ? (dbSession as unknown as SessionManager)
-    : SessionManager.open(
-        input.sessionFile as string,
-        input.sessionsDir,
-        input.workspaceHostPath
-      )
+  const sessionManager =
+    dbSession ??
+    SessionManager.open(
+      input.sessionFile as string,
+      input.sessionsDir,
+      input.workspaceHostPath
+    )
 
   const settingsManager = SettingsManager.inMemory({
     // Long CTF runs need compaction to survive context overflow; retry absorbs
@@ -134,7 +146,7 @@ export async function createRunAgentSession(
     model: input.model,
     thinkingLevel: input.thinkingLevel,
     modelRuntime: input.modelRuntime,
-    sessionManager,
+    sessionManager: asSdkSessionManager(sessionManager),
     settingsManager,
     resourceLoader,
     tools: input.toolNames,

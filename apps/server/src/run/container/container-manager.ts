@@ -176,18 +176,25 @@ export function createContainerManager(options?: { socketPath?: string }) {
   }
 
   /**
-   * Run a command inside a running container over dockerode exec, streaming
-   * merged stdout+stderr onto onData. Docker multiplexes by frame in arrival
-   * order, so demuxing both streams onto the same sink preserves interleaving.
-   * Resolves with the exit code (null on timeout). Abort/timeout destroys the
-   * hijacked stream; closing it lets the daemon terminate the exec process —
-   * matching the old `docker exec` client-kill semantics.
+   * Drive a hijacked docker exec stream to completion, demuxing stdout/stderr
+   * onto the supplied sinks. Shared by {@link exec} (merged onto one onData
+   * sink) and {@link capture} (separate collected buffers). Resolves with the
+   * exit code (null on timeout). Abort/timeout destroys the hijacked stream;
+   * closing it lets the daemon terminate the exec process — matching the old
+   * `docker exec` client-kill semantics.
    */
-  async function exec(
+  async function runHijacked(
     name: string,
     command: string,
-    opts: ExecOptions
-  ): Promise<{ exitCode: number | null }> {
+    opts: {
+      workdir?: string
+      env?: string[]
+      signal?: AbortSignal
+      timeout?: number
+      stdoutSink: NodeJS.WritableStream
+      stderrSink: NodeJS.WritableStream
+    }
+  ): Promise<{ exitCode: number | null; timedOut: boolean }> {
     const workdir = opts.workdir ?? "/workspace"
     const execInst = await get(name).exec({
       Cmd: ["bash", "-lc", command],
@@ -219,11 +226,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
 
     try {
       stream = await execInst.start({ Detach: false, Tty: false })
-      docker.modem.demuxStream(
-        stream,
-        onDataSink(opts.onData),
-        onDataSink(opts.onData)
-      )
+      docker.modem.demuxStream(stream, opts.stdoutSink, opts.stderrSink)
       await new Promise<void>((resolve, reject) => {
         if (!stream) return resolve()
         stream.on("end", resolve)
@@ -231,11 +234,33 @@ export function createContainerManager(options?: { socketPath?: string }) {
         stream.on("error", reject)
       })
       const exitCode = await pollExitCode(execInst)
-      return { exitCode: timedOut ? null : exitCode }
+      return { exitCode: timedOut ? null : exitCode, timedOut }
     } finally {
       if (timer) clearTimeout(timer)
       opts.signal?.removeEventListener("abort", destroyStream)
     }
+  }
+
+  /**
+   * Run a command inside a running container, streaming merged stdout+stderr
+   * onto onData. Docker multiplexes by frame in arrival order, so demuxing both
+   * streams onto the same sink preserves interleaving.
+   */
+  async function exec(
+    name: string,
+    command: string,
+    opts: ExecOptions
+  ): Promise<{ exitCode: number | null }> {
+    const sink = onDataSink(opts.onData)
+    const { exitCode } = await runHijacked(name, command, {
+      workdir: opts.workdir,
+      env: opts.env,
+      signal: opts.signal,
+      timeout: opts.timeout,
+      stdoutSink: sink,
+      stderrSink: sink,
+    })
+    return { exitCode }
   }
 
   /**
@@ -250,63 +275,24 @@ export function createContainerManager(options?: { socketPath?: string }) {
       workdir?: string
       env?: string[]
       signal?: AbortSignal
-      /** Timeout in seconds (converted to ms in capture). */
+      /** Timeout in seconds (converted to ms in runHijacked). */
       timeout?: number
     }
   ): Promise<{ stdout: Buffer; stderr: string; exitCode: number | null }> {
-    const workdir = opts?.workdir ?? "/workspace"
-    const execInst = await get(name).exec({
-      Cmd: ["bash", "-lc", command],
-      WorkingDir: workdir,
-      AttachStdout: true,
-      AttachStderr: true,
-      Env: opts?.env,
-      Tty: false,
+    const outChunks: Buffer[] = []
+    const errChunks: Buffer[] = []
+    const { exitCode } = await runHijacked(name, command, {
+      workdir: opts?.workdir,
+      env: opts?.env,
+      signal: opts?.signal,
+      timeout: opts?.timeout,
+      stdoutSink: collectSink(outChunks),
+      stderrSink: collectSink(errChunks),
     })
-
-    let timedOut = false
-    let stream: Readable | undefined
-    const destroyStream = () => {
-      try {
-        stream?.destroy()
-      } catch {
-        // ignore
-      }
-    }
-    opts?.signal?.addEventListener("abort", destroyStream, { once: true })
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const ms = execTimeoutMs(opts?.timeout)
-    if (ms !== undefined) {
-      timer = setTimeout(() => {
-        timedOut = true
-        destroyStream()
-      }, ms)
-    }
-
-    try {
-      stream = await execInst.start({ Detach: false, Tty: false })
-      const outChunks: Buffer[] = []
-      const errChunks: Buffer[] = []
-      docker.modem.demuxStream(
-        stream,
-        collectSink(outChunks),
-        collectSink(errChunks)
-      )
-      await new Promise<void>((resolve, reject) => {
-        if (!stream) return resolve()
-        stream.on("end", resolve)
-        stream.on("close", resolve)
-        stream.on("error", reject)
-      })
-      const exitCode = await pollExitCode(execInst)
-      return {
-        stdout: Buffer.concat(outChunks),
-        stderr: Buffer.concat(errChunks).toString("utf8"),
-        exitCode: timedOut ? null : exitCode,
-      }
-    } finally {
-      if (timer) clearTimeout(timer)
-      opts?.signal?.removeEventListener("abort", destroyStream)
+    return {
+      stdout: Buffer.concat(outChunks),
+      stderr: Buffer.concat(errChunks).toString("utf8"),
+      exitCode,
     }
   }
 

@@ -129,30 +129,6 @@ function looksBinary(bytes: Uint8Array) {
   return false
 }
 
-// ── per-file serialization for write/edit ───────────────────────────────────
-
-const fileMutationQueues = new Map<string, Promise<void>>()
-
-async function withFileLock<T>(
-  key: string,
-  task: () => Promise<T>
-): Promise<T> {
-  const previous = fileMutationQueues.get(key) ?? Promise.resolve()
-  let release!: () => void
-  const gate = new Promise<void>((resolveGate) => {
-    release = resolveGate
-  })
-  const chain = previous.then(() => gate)
-  fileMutationQueues.set(key, chain)
-  await previous
-  try {
-    return await task()
-  } finally {
-    release()
-    if (fileMutationQueues.get(key) === chain) fileMutationQueues.delete(key)
-  }
-}
-
 // ── "did you mean" suggestions for read misses ──────────────────────────────
 
 function commonPrefixLength(a: string, b: string) {
@@ -349,6 +325,31 @@ export function createWorkspaceTools(
   limits: WorkspaceToolLimits = { maxOutput: defaultMaxOutput }
 ) {
   const { maxOutput } = limits
+
+  // Per-file write/edit serialization. Scoped to this backend instance (per
+  // run) so the lock map is reclaimed when the run's tools are discarded,
+  // instead of a process-global map that outlives every run.
+  const fileMutationQueues = new Map<string, Promise<void>>()
+
+  async function withFileLock<T>(
+    key: string,
+    task: () => Promise<T>
+  ): Promise<T> {
+    const previous = fileMutationQueues.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const gate = new Promise<void>((resolveGate) => {
+      release = resolveGate
+    })
+    const chain = previous.then(() => gate)
+    fileMutationQueues.set(key, chain)
+    await previous
+    try {
+      return await task()
+    } finally {
+      release()
+      if (fileMutationQueues.get(key) === chain) fileMutationQueues.delete(key)
+    }
+  }
 
   const read = defineTool({
     name: "read",
