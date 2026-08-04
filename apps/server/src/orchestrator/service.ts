@@ -12,6 +12,7 @@ import type {
   OrchestratorConfigInput,
   OrchestratorDetail,
   OrchestratorStatus,
+  SwitchModelInput,
 } from "../../../shared"
 import { get } from "../../../shared"
 import type { ProviderConnection } from "../../../shared/provider"
@@ -19,6 +20,7 @@ import type { ThinkingLevel } from "../../../shared/thinking"
 import type { HostAgentSession } from "../agents/host-session"
 import { createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
+import { resolveSwitchTarget, type SwitchTarget } from "../agents/model-switch"
 import type { createDatabase } from "../db"
 import {
   challengeRemote,
@@ -587,6 +589,56 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
     return getDetail(eventId) as OrchestratorDetail
   }
 
+  /** Switch the live orchestrator session's model (and optionally thinking
+   * level). Takes effect on the next turn (matches the run switch + pi-tui).
+   * Requires a running session. Persists the new model + clamped thinking level
+   * on the orchestrator row; the SDK persists the change entries. */
+  async function switchModel(
+    eventId: string,
+    input: SwitchModelInput
+  ): Promise<OrchestratorDetail> {
+    return withLock(eventId, async () => {
+      const orch = lifecycle.get(eventId)
+      if (!orch)
+        throw new OrchestratorActionError(
+          "invalid_state",
+          "Orchestrator is not running"
+        )
+      let target: SwitchTarget
+      try {
+        target = resolveSwitchTarget(
+          orch.session.modelRuntime,
+          providers(),
+          input.modelId
+        )
+      } catch (error) {
+        throw new OrchestratorActionError(
+          "invalid_state",
+          error instanceof Error ? error.message : String(error)
+        )
+      }
+      // Skip setModel when unchanged (thinking-only switch) to avoid a spurious
+      // model_change marker; setThinkingLevel short-circuits on no-change.
+      const row = queries.getRow(eventId)
+      const modelUnchanged = row?.modelId === target.model.id
+      try {
+        if (!modelUnchanged) await orch.session.setModel(target.sdkModel)
+        if (input.thinkingLevel)
+          orch.session.setThinkingLevel(input.thinkingLevel)
+      } catch (error) {
+        throw new OrchestratorActionError(
+          "invalid_state",
+          error instanceof Error ? error.message : String(error)
+        )
+      }
+      queries.update(eventId, {
+        modelId: target.model.id,
+        thinkingLevel: orch.session.thinkingLevel as ThinkingLevel,
+      })
+      return getDetail(eventId) as OrchestratorDetail
+    })
+  }
+
   async function closeOrchestrator(
     eventId: string
   ): Promise<OrchestratorDetail> {
@@ -651,6 +703,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
     listMessages,
     start,
     stop,
+    switchModel,
     closeOrchestrator,
     sendMessage,
     notify,

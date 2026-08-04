@@ -7,6 +7,7 @@ import type {
   ModelConfig,
   PromptTemplateContext,
   RunPublic,
+  SwitchModelInput,
 } from "../../../shared"
 import { get } from "../../../shared"
 import type { ProviderConnection } from "../../../shared/provider"
@@ -17,6 +18,7 @@ import type {
 } from "../agents/host-session"
 import { createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
+import { resolveSwitchTarget, type SwitchTarget } from "../agents/model-switch"
 import type { createDatabase } from "../db"
 import { agents, challenges, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
@@ -734,6 +736,65 @@ export function createRunService(options: RunServiceOptions) {
     })
   }
 
+  /** Switch the live main-agent session's model (and optionally thinking
+   * level) mid-run. Takes effect on the next turn — the current turn, if any,
+   * finishes on the old model (matches pi-tui). Requires a live session
+   * (rejects closed runs). Persists the new model + the possibly-clamped
+   * thinking level on the run row so cold-restore stays consistent; the SDK
+   * persists model_change / thinking_level_change entries automatically. */
+  function switchModel(
+    runId: string,
+    input: SwitchModelInput
+  ): Promise<RunPublic> {
+    return withLock(runId, async () => {
+      const agentSession = lifecycle.get(runId)
+      if (!agentSession)
+        throw new RunActionError(
+          "invalid_state",
+          "Run has no live session; start or reopen it first"
+        )
+      let target: SwitchTarget
+      try {
+        target = resolveSwitchTarget(
+          agentSession.session.modelRuntime,
+          providers(),
+          input.modelId
+        )
+      } catch (error) {
+        throw new RunActionError(
+          "invalid_state",
+          error instanceof Error ? error.message : String(error)
+        )
+      }
+      // Skip setModel when the model is unchanged (thinking-only switch) so we
+      // don't persist a spurious model_change marker. setThinkingLevel itself
+      // short-circuits when the level doesn't change.
+      const row = queries.getRow(runId)
+      const modelUnchanged = row?.modelId === target.model.modelId
+      try {
+        if (!modelUnchanged)
+          await agentSession.session.setModel(target.sdkModel)
+        if (input.thinkingLevel)
+          agentSession.session.setThinkingLevel(input.thinkingLevel)
+      } catch (error) {
+        throw new RunActionError(
+          "invalid_state",
+          error instanceof Error ? error.message : String(error)
+        )
+      }
+      updateRun(runId, {
+        provider: target.provider.label,
+        providerLabel: target.provider.label,
+        modelId: target.model.modelId,
+        modelLabel: target.model.label,
+        thinkingLevel: agentSession.session.thinkingLevel,
+        updatedAt: now(),
+      })
+      emitRun(runId)
+      return requireRun(runId)
+    })
+  }
+
   /** Force-finish (HTTP /finish): mark done + release resources. */
   function finish(runId: string, summary: string): Promise<RunPublic> {
     return withLock(runId, async () => {
@@ -1052,6 +1113,7 @@ export function createRunService(options: RunServiceOptions) {
   return {
     create,
     stop,
+    switchModel,
     finish,
     sendMessage,
     setQueue,

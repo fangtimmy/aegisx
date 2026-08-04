@@ -356,6 +356,26 @@ export function buildConversation(
       agent = null
       return
     }
+    if (entry.type === "model_change") {
+      items.push({
+        key: stableKey,
+        type: "system",
+        title: `Switched model → ${entry.provider} / ${entry.modelId}`,
+        timestamp: entry.timestamp,
+      })
+      agent = null
+      return
+    }
+    if (entry.type === "thinking_level_change") {
+      items.push({
+        key: stableKey,
+        type: "system",
+        title: `Reasoning → ${entry.thinkingLevel}`,
+        timestamp: entry.timestamp,
+      })
+      agent = null
+      return
+    }
   }
 
   for (const item of history) {

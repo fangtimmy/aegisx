@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Bot, ChevronDown, GitFork, LoaderCircle, Send, X } from "lucide-react"
 import {
   useCallback,
@@ -8,8 +8,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
-import type { AgentSummary, RunPublic } from "@/api"
-import { runsApi } from "@/api"
+import type { AgentSummary, RunPublic, ThinkingLevel } from "@/api"
+import { keys, runsApi } from "@/api"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
 import { AgentActivityBadge } from "./agent-activity-badge"
 import { AgentStatusIcon } from "./agent-status-icon"
+import { ModelThinkingSwitcher } from "./model-switcher"
 import { Timeline } from "./timeline"
 
 export function Conversation({
@@ -119,6 +120,15 @@ export function Conversation({
     onError: (error) => toast.error("Failed to send message", error.message),
   })
 
+  const queryClient = useQueryClient()
+  const switchModel = useMutation({
+    mutationFn: (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
+      runsApi.switchModel(runId, input),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
+    onError: (error) => toast.error("Failed to switch model", error.message),
+  })
+
   const onSubmit = () => {
     if (!draft.trim()) return
     send.mutate()
@@ -196,6 +206,21 @@ export function Conversation({
               </CardPanel>
             </Card>
             <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
+              {selectedAgent.role === "main" && (
+                <ModelThinkingSwitcher
+                  findCurrentModelId={(ms) =>
+                    ms.find(
+                      (m) =>
+                        m.modelId === run.modelId &&
+                        m.providerLabel === run.provider
+                    )?.id
+                  }
+                  thinkingLevel={run.thinkingLevel}
+                  disabled={run.status === "closed"}
+                  streaming={running}
+                  onSwitch={(input) => switchModel.mutate(input)}
+                />
+              )}
               {running && (
                 <AgentActivityBadge
                   agentId={selectedAgent.id}

@@ -154,8 +154,9 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
   }
 
   /** Durable committed entries for a run, paginated by `seq`. Only renderable
-   * kinds (message / compaction / branch_summary) are returned; others
-   * (model_change, custom, ...) are skipped but still count toward seq
+   * kinds (message / compaction / branch_summary / model_change /
+   * thinking_level_change) are returned; others (custom, ...) are skipped
+   * but still count toward seq
    * (positional cursor). `after` is the highest seq already seen. */
   function listMessages(
     runId: string,
@@ -184,7 +185,9 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       if (
         entry.type !== "message" &&
         entry.type !== "compaction" &&
-        entry.type !== "branch_summary"
+        entry.type !== "branch_summary" &&
+        entry.type !== "model_change" &&
+        entry.type !== "thinking_level_change"
       )
         continue
       items.push({

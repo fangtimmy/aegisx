@@ -3,6 +3,7 @@ export * from "./challenge";
 export * from "./orchestrator";
 export * from "./event";
 export * from "./live-event";
+export * from "./model-switch";
 export * from "./session-entry";
 export * from "./platform";
 export * from "./provider";

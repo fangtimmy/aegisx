@@ -321,11 +321,12 @@ apps/server/src/
 
 ## 十四、Future（明确不做，记录待日后）
 
-- **idle 时切模型**：pi 支持，AegisX 目前未实现（solver 和 orchestrator 都没做）。
-  未来给 orchestrator 加"中途换脑子"（调度用快模型、复杂 review 切强模型）。
 - **steer_run 工具**：让 orchestrator 中途给 solver 注入消息纠偏，而非 stop+重来。
 - **动态难度估算**：本地多 run 数据自动估题难度，反哺 orchestrator 决策。
 - **长驻 shell 复用**：降 solver 的 docker exec 开销（与 orchestrator 无关，run 侧债）。
+
+> 运行时切模型/思考强度已落地（run 主 agent + orchestrator 的 composer footer 选择器，
+> 下一轮生效，见 §六工具表与 `agents/model-switch.ts`）。
 
 ## 十五、风险与缓解
 

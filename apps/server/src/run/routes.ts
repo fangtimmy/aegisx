@@ -43,6 +43,14 @@ const finishInput = Type.Object(
   { additionalProperties: false }
 )
 
+const switchModelInput = Type.Object(
+  {
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+    thinkingLevel: Type.Optional(ThinkingLevelSchema),
+  },
+  { additionalProperties: false }
+)
+
 const flagInput = Type.Object(
   { flag: Type.String({ minLength: 1, maxLength: 10_000 }) },
   { additionalProperties: false }
@@ -288,6 +296,26 @@ export function registerRunRoutes(
       return runError(c, error)
     }
   })
+
+  app.post(
+    "/api/runs/:runId/switch-model",
+    validateJson(switchModelInput),
+    async (c) => {
+      try {
+        const body = c.req.valid("json")
+        return c.json(
+          await runService.switchModel(c.req.param("runId"), {
+            modelId: body.modelId,
+            ...(body.thinkingLevel !== undefined
+              ? { thinkingLevel: body.thinkingLevel }
+              : {}),
+          })
+        )
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
 
   app.post("/api/runs/:runId/close", validateJson(emptyInput), async (c) => {
     try {

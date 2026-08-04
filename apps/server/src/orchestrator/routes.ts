@@ -34,6 +34,14 @@ const messageInput = Type.Object(
 
 const emptyInput = Type.Object({}, { additionalProperties: false })
 
+const switchModelInput = Type.Object(
+  {
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+    thinkingLevel: Type.Optional(ThinkingLevelSchema),
+  },
+  { additionalProperties: false }
+)
+
 export function registerOrchestratorRoutes(
   app: Hono,
   options: { orchestratorService: OrchestratorService }
@@ -155,6 +163,26 @@ export function registerOrchestratorRoutes(
     async (c) => {
       try {
         return c.json(await orchestratorService.stop(c.req.param("eventId")))
+      } catch (error) {
+        return orchError(c, error)
+      }
+    }
+  )
+
+  app.post(
+    "/api/events/:eventId/orchestrator/switch-model",
+    validateJson(switchModelInput),
+    async (c) => {
+      try {
+        const body = c.req.valid("json")
+        return c.json(
+          await orchestratorService.switchModel(c.req.param("eventId"), {
+            modelId: body.modelId,
+            ...(body.thinkingLevel !== undefined
+              ? { thinkingLevel: body.thinkingLevel }
+              : {}),
+          })
+        )
       } catch (error) {
         return orchError(c, error)
       }

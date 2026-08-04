@@ -41,6 +41,7 @@ export type {
   SettingGroup,
   SettingKey,
   SettingWidget,
+  SwitchModelInput,
   TargetState,
   ThinkingLevel,
 } from "../../../shared"

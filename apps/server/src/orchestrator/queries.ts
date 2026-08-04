@@ -120,7 +120,9 @@ export function createOrchestratorQueries(options: { db: Database }) {
       if (
         entry.type !== "message" &&
         entry.type !== "compaction" &&
-        entry.type !== "branch_summary"
+        entry.type !== "branch_summary" &&
+        entry.type !== "model_change" &&
+        entry.type !== "thinking_level_change"
       )
         continue
       const agentId = row.agentId ?? ORCHESTRATOR_AGENT_ID

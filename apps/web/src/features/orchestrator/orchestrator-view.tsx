@@ -9,7 +9,7 @@ import {
   Square,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { OrchestratorConfigInput } from "@/api"
+import type { OrchestratorConfigInput, ThinkingLevel } from "@/api"
 import { keys, orchestratorsApi, providersApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -19,6 +19,7 @@ import {
   CardFrame,
   CardFrameAction,
   CardFrameDescription,
+  CardFrameFooter,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -26,6 +27,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { ModelThinkingSwitcher } from "@/features/runs/model-switcher"
 import { Timeline } from "@/features/runs/timeline"
 import { toast } from "@/lib/toast"
 import { ConversationStore } from "@/stream/conversation-store"
@@ -156,6 +158,16 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
     onSuccess: () => setDraft(""),
     onError: (error: Error) => toast.error("Failed to send", error.message),
   })
+  const switchModel = useMutation({
+    mutationFn: (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
+      orchestratorsApi.switchOrchestratorModel(eventId, input),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: keys.orchestrator.detail(eventId),
+      }),
+    onError: (error: Error) =>
+      toast.error("Failed to switch model", error.message),
+  })
 
   if (detail.isPending) {
     return (
@@ -268,40 +280,57 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                     Reconnecting…
                   </div>
                 )}
-                <div className="shrink-0 border-t p-3">
-                  <form
-                    className="mx-auto flex max-w-3xl items-center gap-2"
-                    onSubmit={(e) => {
-                      e.preventDefault()
-                      if (draft.trim()) send.mutate()
-                    }}
-                  >
-                    <input
-                      className="h-9 flex-1 rounded-md border bg-background px-3 text-sm"
-                      disabled={send.isPending || orch.status === "closed"}
-                      onChange={(e) => setDraft(e.target.value)}
-                      placeholder={
-                        orch.status === "closed"
-                          ? "Start the orchestrator to begin"
-                          : running
-                            ? "Steer the orchestrator…"
-                            : "Send a message to the orchestrator…"
-                      }
-                      value={draft}
-                    />
-                    <Button
-                      disabled={
-                        !draft.trim() ||
-                        send.isPending ||
-                        orch.status === "closed"
-                      }
-                      loading={send.isPending}
-                      size="icon"
-                      type="submit"
-                    >
-                      <Send />
-                    </Button>
-                  </form>
+                <div className="shrink-0 px-3 pb-3">
+                  <CardFrame className="mx-auto max-w-3xl">
+                    <Card>
+                      <CardPanel className="p-2">
+                        <form
+                          className="flex w-full items-center gap-2"
+                          onSubmit={(e) => {
+                            e.preventDefault()
+                            if (draft.trim()) send.mutate()
+                          }}
+                        >
+                          <input
+                            className="h-9 flex-1 rounded-md border bg-background px-3 text-sm"
+                            disabled={
+                              send.isPending || orch.status === "closed"
+                            }
+                            onChange={(e) => setDraft(e.target.value)}
+                            placeholder={
+                              orch.status === "closed"
+                                ? "Start the orchestrator to begin"
+                                : running
+                                  ? "Steer the orchestrator…"
+                                  : "Send a message to the orchestrator…"
+                            }
+                            value={draft}
+                          />
+                          <Button
+                            disabled={
+                              !draft.trim() ||
+                              send.isPending ||
+                              orch.status === "closed"
+                            }
+                            loading={send.isPending}
+                            size="icon"
+                            type="submit"
+                          >
+                            <Send />
+                          </Button>
+                        </form>
+                      </CardPanel>
+                    </Card>
+                    <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
+                      <ModelThinkingSwitcher
+                        findCurrentModelId={() => orch.modelId}
+                        thinkingLevel={orch.thinkingLevel}
+                        disabled={orch.status === "closed"}
+                        streaming={running}
+                        onSwitch={(input) => switchModel.mutate(input)}
+                      />
+                    </CardFrameFooter>
+                  </CardFrame>
                 </div>
               </div>
             </TabsPanel>

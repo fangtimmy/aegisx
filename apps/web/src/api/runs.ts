@@ -4,6 +4,7 @@ import type {
   RunDetail,
   RunFile,
   RunPublic,
+  SwitchModelInput,
   ThinkingLevel,
 } from "./types"
 
@@ -57,6 +58,13 @@ export function setQueue(
   input: { steering: string[]; followUp: string[] }
 ) {
   return apiRequest<void>(`/runs/${runId}/queue`, jsonRequest("PUT", input))
+}
+
+export function switchModel(runId: string, input: SwitchModelInput) {
+  return apiRequest<RunPublic>(
+    `/runs/${runId}/switch-model`,
+    jsonRequest("POST", input)
+  )
 }
 
 export function finishRun(runId: string, summary: string) {

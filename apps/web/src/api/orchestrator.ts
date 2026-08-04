@@ -3,6 +3,7 @@ import type {
   MessageList,
   OrchestratorConfigInput,
   OrchestratorDetail,
+  SwitchModelInput,
 } from "./types"
 
 export type OrchestratorMessageInput = {
@@ -59,5 +60,15 @@ export function closeOrchestrator(eventId: string) {
   return apiRequest<OrchestratorDetail>(
     `/events/${eventId}/orchestrator/close`,
     jsonRequest("POST", {})
+  )
+}
+
+export function switchOrchestratorModel(
+  eventId: string,
+  input: SwitchModelInput
+) {
+  return apiRequest<OrchestratorDetail>(
+    `/events/${eventId}/orchestrator/switch-model`,
+    jsonRequest("POST", input)
   )
 }
