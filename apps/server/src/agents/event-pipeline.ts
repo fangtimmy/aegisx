@@ -5,7 +5,7 @@ import type {
   SessionEntry,
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
-import type { ContextSnapshot } from "../../../../shared/live-event"
+import type { ContextSnapshot } from "../../../shared/live-event"
 import { accumulateEntryUsage } from "./entry-usage"
 import type { LiveBus } from "./live"
 
@@ -71,7 +71,7 @@ export function computeContextSample(session: AgentSession): ContextSnapshot {
   }
 }
 
-export type RunEventPipeline = ReturnType<typeof createRunEventPipeline>
+export type AgentEventPipeline = ReturnType<typeof createAgentEventPipeline>
 
 /**
  * Per-agent event pipeline. Subscribed to one AgentSession; translates SDK
@@ -86,9 +86,12 @@ export type RunEventPipeline = ReturnType<typeof createRunEventPipeline>
  * persisted" signal, carrying the entry's real `seq`. No tree diffing, no
  * positional guess. retry is intentionally transient (SSE activity only);
  * compaction / branch_summary surface as their own entries (centered markers).
+ *
+ * The `channel` is the LiveBus key: a run id for solver agents, an event id
+ * for the orchestrator. The pipeline is agnostic to which.
  */
-export function createRunEventPipeline(options: {
-  runId: string
+export function createAgentEventPipeline(options: {
+  channel: string
   agentId: string
   bus: LiveBus
   /** Live context snapshot for the conversation stat strip. */
@@ -97,14 +100,14 @@ export function createRunEventPipeline(options: {
    * branch_summary), so the service can recompute + re-emit the run snapshot. */
   onUsageMaybeChanged?: () => void
 }) {
-  const { runId, agentId, bus } = options
+  const { channel, agentId, bus } = options
   let revision = 0
   const nextRevision = () => (revision += 1)
 
   function emitContext(): void {
     const sample = options.sampleContext?.()
     if (!sample) return
-    bus.emit(runId, { type: "context.updated", agentId, ...sample })
+    bus.emit(channel, { type: "context.updated", agentId, ...sample })
   }
 
   /** Called by DbSessionManager.onAppend for every persisted entry. Emits
@@ -120,7 +123,7 @@ export function createRunEventPipeline(options: {
     ) {
       return
     }
-    bus.emit(runId, {
+    bus.emit(channel, {
       type: "message.committed",
       agentId,
       item: { entry, seq, key: entryKeyOf(agentId, entry) },
@@ -143,7 +146,7 @@ export function createRunEventPipeline(options: {
           ae.type === "toolcall_end"
         ) {
           const entry = syntheticMessageEntry(agentId, event.message)
-          bus.emit(runId, {
+          bus.emit(channel, {
             type: "message.progress",
             agentId,
             key: messageIdOf(agentId, event.message),
@@ -155,7 +158,7 @@ export function createRunEventPipeline(options: {
       }
       case "message_start": {
         const entry = syntheticMessageEntry(agentId, event.message)
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "message.progress",
           agentId,
           key: messageIdOf(agentId, event.message),
@@ -182,7 +185,7 @@ export function createRunEventPipeline(options: {
         return
       }
       case "tool_execution_start": {
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "tool.progress",
           agentId,
           toolCallId: event.toolCallId,
@@ -194,7 +197,7 @@ export function createRunEventPipeline(options: {
         return
       }
       case "tool_execution_update": {
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "tool.progress",
           agentId,
           toolCallId: event.toolCallId,
@@ -207,7 +210,7 @@ export function createRunEventPipeline(options: {
         return
       }
       case "tool_execution_end": {
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "tool.progress",
           agentId,
           toolCallId: event.toolCallId,
@@ -223,7 +226,7 @@ export function createRunEventPipeline(options: {
       }
       case "auto_retry_start": {
         // Transient: retry never persists (pi itself doesn't); SSE badge only.
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "agent.activity",
           agentId,
           activity: "retrying",
@@ -235,13 +238,13 @@ export function createRunEventPipeline(options: {
         return
       }
       case "auto_retry_end": {
-        bus.emit(runId, { type: "agent.activity", agentId, activity: null })
+        bus.emit(channel, { type: "agent.activity", agentId, activity: null })
         return
       }
       case "summarization_retry_scheduled": {
         // Retry of a compaction/branch-summary summarization call (shared pi
         // retry budget). Transient SSE badge — mirrors auto_retry_start.
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "agent.activity",
           agentId,
           activity: "retrying",
@@ -257,15 +260,15 @@ export function createRunEventPipeline(options: {
         // compaction. Reflect it so the badge matches what pi is doing.
         const activity =
           event.source === "branchSummary" ? "retrying" : "compacting"
-        bus.emit(runId, { type: "agent.activity", agentId, activity })
+        bus.emit(channel, { type: "agent.activity", agentId, activity })
         return
       }
       case "summarization_retry_finished": {
-        bus.emit(runId, { type: "agent.activity", agentId, activity: null })
+        bus.emit(channel, { type: "agent.activity", agentId, activity: null })
         return
       }
       case "compaction_start": {
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "agent.activity",
           agentId,
           activity: "compacting",
@@ -277,7 +280,7 @@ export function createRunEventPipeline(options: {
         // The compaction entry (with its usage) is committed via
         // DbSessionManager.onAppend, which also refreshes context/totals. Here
         // we only clear the activity badge (with a summary for the badge tail).
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "agent.activity",
           agentId,
           activity: null,
@@ -292,7 +295,7 @@ export function createRunEventPipeline(options: {
         return
       }
       case "queue_update": {
-        bus.emit(runId, {
+        bus.emit(channel, {
           type: "queue.updated",
           agentId,
           steering: [...event.steering],

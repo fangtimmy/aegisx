@@ -6,8 +6,8 @@ import { join } from "node:path"
 import { createDatabase } from "./index"
 import { agents, runs, SCHEMA_VERSION } from "./schema"
 
-describe("schema v5 bootstrap", () => {
-  test("fresh database migrates and sets user_version=4", () => {
+describe("schema v6 bootstrap", () => {
+  test("fresh database migrates and sets user_version to the current schema", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
       const { db, sqlite, releaseLock } = createDatabase(dir)
@@ -23,6 +23,7 @@ describe("schema v5 bootstrap", () => {
       const names = new Set(tables.map((row) => row.name))
       expect(names.has("runs")).toBe(true)
       expect(names.has("agents")).toBe(true)
+      expect(names.has("orchestrators")).toBe(true)
       expect(names.has("submissions")).toBe(true)
       // the legacy normalized event log is gone (session_entries is the source)
       expect(names.has("run_events")).toBe(false)
@@ -79,7 +80,7 @@ describe("schema v5 bootstrap", () => {
       sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
       sqlite.run(`PRAGMA user_version = 3`)
       sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/older than v5/i)
+      expect(() => createDatabase(dir)).toThrow(/older than v6/i)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -93,7 +94,21 @@ describe("schema v5 bootstrap", () => {
       sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
       sqlite.run(`PRAGMA user_version = 4`)
       sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/older than v5/i)
+      expect(() => createDatabase(dir)).toThrow(/older than v6/i)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("rejects v5 database (user_version=5)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v5-"))
+    try {
+      const path = join(dir, "aegisx.sqlite")
+      const sqlite = new Database(path, { create: true })
+      sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
+      sqlite.run(`PRAGMA user_version = 5`)
+      sqlite.close()
+      expect(() => createDatabase(dir)).toThrow(/older than v6/i)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -22,4 +22,9 @@ export const keys = {
   settings: {
     all: ["settings"] as const,
   },
+  orchestrator: {
+    detail: (eventId: string) => ["orchestrator", eventId] as const,
+    messages: (eventId: string) =>
+      ["orchestrator", eventId, "messages"] as const,
+  },
 }

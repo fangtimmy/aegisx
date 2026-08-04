@@ -5,15 +5,16 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import type { PromptTemplateContext } from "../../../shared"
 import type { ThinkingLevel } from "../../../shared/thinking"
+import {
+  type AgentLoopSettings,
+  createHostAgentSession,
+  type HostAgentSession,
+} from "../agents/host-session"
+import type { LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import type { ContainerManager } from "./container/container-manager"
 import { createContainerBashOperations } from "./container/container-tools"
 import type { RunModelRuntime } from "./model-runtime"
-import {
-  createRunAgentSession,
-  type RunAgentSession,
-} from "./session/agent-session"
-import type { LiveBus } from "./session/live"
 import {
   createMainTools,
   type RunToolContext,
@@ -23,12 +24,6 @@ import { createDockerExecBackend } from "./workspace/backend"
 import { createWorkspaceTools } from "./workspace/tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
-
-/** SDK agent-loop settings resolved from AegisX settings (compaction/retry). */
-export type AgentLoopSettings = {
-  compaction: { enabled: boolean }
-  retry: { enabled: boolean; maxRetries: number }
-}
 
 /** Build the main agent's tool set: container bash + file tools + CTF tools. */
 export function buildMainAgentTools(
@@ -106,7 +101,7 @@ export type ProvisionDeps = {
 export async function provisionRunSession(
   args: ProvisionArgs,
   deps: ProvisionDeps
-): Promise<RunAgentSession> {
+): Promise<HostAgentSession> {
   const toolCtx = deps.buildMainToolContext(
     args.runId,
     args.challengeId,
@@ -119,13 +114,24 @@ export async function provisionRunSession(
     args.caps,
     deps.containerManager
   )
-  return createRunAgentSession({
-    runId: args.runId,
+  return createHostAgentSession({
+    owner: {
+      type: "run",
+      id: args.runId,
+      runId: args.runId,
+      agentId: args.agentId,
+    },
+    channel: args.runId,
     agentId: args.agentId,
-    workspaceHostPath: args.workspaceHostPath,
-    sessionsDir: args.sessionsDir,
+    cwd: args.workspaceHostPath,
     ...(args.sessionFile !== undefined
-      ? { sessionFile: args.sessionFile }
+      ? {
+          resumeFrom: {
+            sessionId: args.sessionFile,
+            isJsonl: args.sessionFile.endsWith(".jsonl"),
+            sessionsDir: args.sessionsDir,
+          },
+        }
       : {}),
     modelRuntime: args.modelRuntime,
     model: args.sdkModel,

@@ -5,6 +5,8 @@ import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
 import { createConfigStore } from "./infrastructure/config-store"
 import { createStorage } from "./infrastructure/storage"
+import { registerOrchestratorRoutes } from "./orchestrator/routes"
+import { createOrchestratorService } from "./orchestrator/service"
 import { registerPlatformRoutes } from "./platforms/routes"
 import { createPlatformService } from "./platforms/service"
 import { registerProviderRoutes } from "./providers/routes"
@@ -40,8 +42,27 @@ export function createApp(options: { dataDir: string }) {
   platformService.setRunHooks({
     onRunFlagAccepted: (runId) => {
       runService.refresh(runId)
+      runService.notifyFlagAccepted(runId)
     },
   })
+
+  const orchestratorService = createOrchestratorService({
+    db,
+    dataDir: options.dataDir,
+    containerManager,
+    runService,
+    getSettings,
+    configStore,
+  })
+  runService.setOrchestratorNotifier((eventId, message) =>
+    orchestratorService.notify(eventId, message)
+  )
+  void orchestratorService.recoverOnBoot().catch((error) => {
+    console.error("Orchestrator boot recovery failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
+
   void runService.recoverOnBoot().catch((error) => {
     console.error("Boot recovery failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -91,6 +112,7 @@ export function createApp(options: { dataDir: string }) {
     getSettings,
     configStore,
   })
+  registerOrchestratorRoutes(app, { orchestratorService })
 
   app.get("/api/platform/status", (c) => c.json({ available: true }))
 
@@ -98,6 +120,7 @@ export function createApp(options: { dataDir: string }) {
     app,
     close: async () => {
       await runService.close()
+      await orchestratorService.close()
       sqlite.close()
       releaseLock()
     },

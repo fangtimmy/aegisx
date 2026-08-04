@@ -8,6 +8,8 @@ import type {
   RunUsage,
 } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
+import { accumulateEntryUsage } from "../agents/entry-usage"
+import { entryKeyOf } from "../agents/event-pipeline"
 import type { createDatabase } from "../db"
 import {
   agents,
@@ -19,8 +21,6 @@ import {
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { type ChallengeMeta, toAgentSummary, toRunPublic } from "./public"
-import { accumulateEntryUsage } from "./session/entry-usage"
-import { entryKeyOf } from "./session/events"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
@@ -190,8 +190,8 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       items.push({
         entry,
         seq: row.seq,
-        key: entryKeyOf(row.agentId, entry),
-        agentId: row.agentId,
+        key: entryKeyOf(row.agentId ?? "", entry),
+        agentId: row.agentId ?? "",
       })
     }
     return {

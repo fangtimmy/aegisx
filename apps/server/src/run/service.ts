@@ -11,6 +11,12 @@ import type {
 import { get } from "../../../shared"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { ThinkingLevel } from "../../../shared/thinking"
+import type {
+  AgentLoopSettings,
+  HostAgentSession,
+} from "../agents/host-session"
+import { createSessionLifecycle } from "../agents/lifecycle"
+import { createLiveBus, type LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import { agents, challenges, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
@@ -31,10 +37,8 @@ import {
   resolveRunModel,
 } from "./model-runtime"
 import { buildPromptContext, copyAttachments } from "./prompt"
-import { type AgentLoopSettings, provisionRunSession } from "./provision"
+import { provisionRunSession } from "./provision"
 import { createRunQueries } from "./queries"
-import type { RunAgentSession } from "./session/agent-session"
-import { createLiveBus, type LiveBus } from "./session/live"
 import type { RunToolContext, ToolCapabilities } from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -83,6 +87,12 @@ export type CreateRunInput = {
     tmpfsSize: string
     workspace: string
   }
+  /** Who started this run. Defaults to 'manual'. */
+  source?: "manual" | "orchestrator"
+  /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
+  timeoutMs?: number
+  /** Override the rendered initial prompt (orchestrator per-run strategy). */
+  initialPromptOverride?: string
 }
 
 export type SendMessageInput = {
@@ -99,14 +109,20 @@ export function createRunService(options: RunServiceOptions) {
   const queries = createRunQueries({ db, dataDir })
   const bus: LiveBus = createLiveBus()
 
-  const sessions = new Map<string, RunAgentSession>() // main agent per run
-  const childSessions = new Map<string, RunAgentSession>() // by child agent id
+  const childSessions = new Map<string, HostAgentSession>() // by child agent id
   const contexts = new Map<string, RunContext>() // per-run reusable handles
   const locks = new Map<string, Promise<unknown>>()
   const pending = new Map<string, PendingOutcome>()
-  /** Monotonic per-run turn counter; stale turn settles no-op (generation guard). */
-  const turnGeneration = new Map<string, number>()
   const forceKillTimers = new Map<string, NodeJS.Timeout>()
+  /** Per-run halfway/deadline timers (orchestrator scheduling). */
+  const timeoutTimers = new Map<
+    string,
+    { halfway?: NodeJS.Timeout; deadline?: NodeJS.Timeout }
+  >()
+  /** Notifies the event orchestrator of run lifecycle events. */
+  let orchestratorNotifier:
+    | ((eventId: string, message: string) => void)
+    | undefined
   let closed = false
   const now = () => new Date().toISOString()
 
@@ -123,6 +139,48 @@ export function createRunService(options: RunServiceOptions) {
       if (locks.get(runId) === next) locks.delete(runId)
     }) as Promise<T>
   }
+
+  // Shared turn-driving core (generation-guarded, lock-serialized). The run
+  // service keeps what's genuinely run-specific — child agents, pending
+  // finish/close outcomes, force-kill + halfway/deadline timers, orchestrator
+  // notification — and reaches them through the hooks below.
+  const lifecycle = createSessionLifecycle({
+    kind: "run",
+    withLock,
+    onTurnStart(runId) {
+      const ts = now()
+      updateRun(runId, { status: "running", error: null, updatedAt: ts })
+      const mainAgent = queries.mainAgent(runId)
+      if (mainAgent) {
+        updateAgent(mainAgent.id, {
+          status: "running",
+          error: null,
+          updatedAt: ts,
+        })
+      }
+      emitRun(runId)
+      emitAgents(runId)
+    },
+    onTurnSettled(runId, runError) {
+      const row = queries.getRow(runId)
+      if (row?.status !== "running") return
+      const outcome = pending.get(runId)
+      pending.delete(runId)
+      if (outcome?.mode === "finish") {
+        freeRun(runId, { summary: outcome.summary, finished: true })
+      } else if (outcome?.mode === "close") {
+        freeRun(runId)
+      } else {
+        idleRun(runId, runError)
+      }
+    },
+    onBeforeNewTurn(runId) {
+      pending.delete(runId)
+    },
+    async onResume(runId) {
+      await ensureWarm(runId)
+    },
+  })
 
   const runDir = (runId: string) => join(dataDir, RUNS_SUBDIR, runId)
   const workspaceAbs = (runId: string) => join(runDir(runId), "workspace")
@@ -166,6 +224,75 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
+  /** Resolve the event id for a run (run → challenge → event). */
+  function eventIdOf(runId: string): string | undefined {
+    const row = queries.getRow(runId)
+    if (!row) return undefined
+    const challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, row.challengeId))
+      .get()
+    return challenge?.eventId
+  }
+
+  /** Push a lifecycle message to the owning event's orchestrator (no-op if none). */
+  function notifyOrchestratorForRun(runId: string, message: string): void {
+    const eventId = eventIdOf(runId)
+    if (!eventId) return
+    orchestratorNotifier?.(eventId, message)
+  }
+
+  /** Clear a run's halfway/deadline timers. */
+  function clearRunTimers(runId: string): void {
+    const t = timeoutTimers.get(runId)
+    if (t?.halfway) clearTimeout(t.halfway)
+    if (t?.deadline) clearTimeout(t.deadline)
+    timeoutTimers.delete(runId)
+  }
+
+  /** Arm a run's halfway-notify + hard-deadline timers. At the halfway point
+   * the orchestrator is nudged; at the deadline the current turn is aborted
+   * (→ idle, container kept) and the orchestrator is told. Idempotent. */
+  function armRunTimers(
+    runId: string,
+    timeoutMs: number,
+    deadlineAt: string | null,
+    halfwayNotified: boolean
+  ): void {
+    clearRunTimers(runId)
+    if (!deadlineAt || timeoutMs <= 0) return
+    const deadlineMs = new Date(deadlineAt).getTime()
+    const nowMs = Date.now()
+    const entry: { halfway?: NodeJS.Timeout; deadline?: NodeJS.Timeout } = {}
+    if (!halfwayNotified) {
+      const halfwayMs = deadlineMs - timeoutMs / 2
+      const delay = halfwayMs - nowMs
+      if (delay > 0) {
+        entry.halfway = setTimeout(() => {
+          updateRun(runId, { halfwayNotifiedAt: new Date().toISOString() })
+          notifyOrchestratorForRun(
+            runId,
+            `Run ${runId} is at the halfway mark of its time limit.`
+          )
+        }, delay)
+      }
+    }
+    const deadlineDelay = Math.max(deadlineMs - nowMs, 0)
+    entry.deadline = setTimeout(() => {
+      const agentSession = lifecycle.get(runId)
+      if (agentSession?.session.isStreaming) {
+        void agentSession.session.abort().catch(() => undefined)
+      }
+      clearRunTimers(runId)
+      notifyOrchestratorForRun(
+        runId,
+        `Run ${runId} reached its time limit and was interrupted.`
+      )
+    }, deadlineDelay)
+    timeoutTimers.set(runId, entry)
+  }
+
   /** Grace period between SIGTERM and the forced SIGKILL. */
   const FORCE_KILL_GRACE_MS = 10_000
 
@@ -187,62 +314,6 @@ export function createRunService(options: RunServiceOptions) {
     forceKillTimers.set(runId, timer)
   }
 
-  /**
-   * Drive one prompt() turn to completion, then settle. The run is marked
-   * running for the turn; on resolve it goes idle (container kept) unless
-   * finish_run / a manual close requested resource release (→ closed).
-   */
-  function driveRun(runId: string, text: string) {
-    const agentSession = sessions.get(runId)
-    if (!agentSession) return
-    const gen = (turnGeneration.get(runId) ?? 0) + 1
-    turnGeneration.set(runId, gen)
-    const ts = now()
-    updateRun(runId, { status: "running", error: null, updatedAt: ts })
-    const mainAgent = queries.mainAgent(runId)
-    if (mainAgent) {
-      updateAgent(mainAgent.id, {
-        status: "running",
-        error: null,
-        updatedAt: ts,
-      })
-    }
-    emitRun(runId)
-    emitAgents(runId)
-    void (async () => {
-      let runError: string | null = null
-      try {
-        await agentSession.session.prompt(text)
-      } catch (error) {
-        runError = error instanceof Error ? error.message : String(error)
-        console.error("Run prompt failed", { runId, error: runError })
-      }
-      settleTurn(runId, runError, gen)
-    })()
-  }
-
-  /**
-   * Turn resolved — the single settle point. A stale turn (a newer turn already
-   * started) no-ops via the generation guard. Otherwise: finish/close → free
-   * resources (closed); anything else → idle (container kept).
-   */
-  function settleTurn(runId: string, runError: string | null, gen: number) {
-    void withLock(runId, () => {
-      if (turnGeneration.get(runId) !== gen) return
-      const row = queries.getRow(runId)
-      if (row?.status !== "running") return
-      const outcome = pending.get(runId)
-      pending.delete(runId)
-      if (outcome?.mode === "finish") {
-        freeRun(runId, { summary: outcome.summary, finished: true })
-      } else if (outcome?.mode === "close") {
-        freeRun(runId)
-      } else {
-        idleRun(runId, runError)
-      }
-    })
-  }
-
   /** Turn ended without a finish/close: go idle, keep the container warm. */
   function idleRun(runId: string, runError: string | null) {
     const ts = now()
@@ -257,6 +328,10 @@ export function createRunService(options: RunServiceOptions) {
     }
     emitRun(runId)
     emitAgents(runId)
+    notifyOrchestratorForRun(
+      runId,
+      `Run ${runId} went idle.${runError ? ` Error: ${runError}` : ""}`
+    )
   }
 
   /**
@@ -279,18 +354,24 @@ export function createRunService(options: RunServiceOptions) {
     const mainAgent = queries.mainAgent(runId)
     if (mainAgent) updateAgent(mainAgent.id, { status: "idle", updatedAt: ts })
     clearForceKill(runId)
+    clearRunTimers(runId)
     terminateContainer(runId, containerName(runId))
     childRuntime.abortAll(runId)
-    const agentSession = sessions.get(runId)
+    const agentSession = lifecycle.get(runId)
     if (agentSession) {
       void agentSession.dispose()
-      sessions.delete(runId)
+      lifecycle.delete(runId)
     }
     contexts.delete(runId)
-    turnGeneration.delete(runId)
     pending.delete(runId)
     emitRun(runId)
     emitAgents(runId)
+    if (opts.finished) {
+      notifyOrchestratorForRun(
+        runId,
+        `Run ${runId} finished.${opts.summary ? ` Summary: ${opts.summary}` : ""}`
+      )
+    }
   }
 
   function providers(): ProviderConnection[] {
@@ -348,12 +429,12 @@ export function createRunService(options: RunServiceOptions) {
   /** Hand a finished child's result text to its parent: steer into the current
    * turn if streaming, otherwise drive a fresh turn (steer never starts a loop). */
   const deliverToParent = (runId: string, text: string): void => {
-    const mainSession = sessions.get(runId)
+    const mainSession = lifecycle.get(runId)
     if (!mainSession) return // run closed/gone
     if (mainSession.session.isStreaming) {
       void mainSession.session.steer(text).catch(() => undefined)
     } else {
-      driveRun(runId, text)
+      lifecycle.drive(runId, text)
     }
   }
 
@@ -400,6 +481,11 @@ export function createRunService(options: RunServiceOptions) {
 
     const runId = crypto.randomUUID()
     return withLock(runId, async () => {
+      const runSource = input.source ?? "manual"
+      const runTimeoutMs =
+        input.timeoutMs ??
+        get(options.getSettings(), "scheduler.defaultRunTimeoutMs")
+      const deadlineAtIso = new Date(Date.now() + runTimeoutMs).toISOString()
       const name = containerName(runId)
       const wsAbs = workspaceAbs(runId)
       const sessAbs = sessionsAbs(runId)
@@ -506,6 +592,9 @@ export function createRunService(options: RunServiceOptions) {
           containerName: name,
           workspacePath: relative(dataDir, wsAbs),
           sessionDir: relative(dataDir, sessAbs),
+          source: runSource,
+          timeoutMs: runTimeoutMs,
+          deadlineAt: deadlineAtIso,
           createdAt: ts,
           startedAt: ts,
           updatedAt: ts,
@@ -533,7 +622,7 @@ export function createRunService(options: RunServiceOptions) {
         })
         .run()
 
-      let agentSession: RunAgentSession
+      let agentSession: HostAgentSession
       try {
         agentSession = await provisionRunSession(
           {
@@ -571,7 +660,7 @@ export function createRunService(options: RunServiceOptions) {
       }
 
       updateAgent(mainAgentId, {
-        sessionFile: agentSession.sessionFile ?? null,
+        sessionFile: agentSession.sessionId ?? null,
       })
 
       contexts.set(runId, {
@@ -586,12 +675,13 @@ export function createRunService(options: RunServiceOptions) {
         caps,
         challengeId: challenge.id,
       })
-      sessions.set(runId, agentSession)
+      lifecycle.set(runId, agentSession)
       emitRun(runId)
       emitAgents(runId)
 
       // Fire the bootstrap prompt; the run settles (idle/closed) on resolution.
-      driveRun(runId, initialPrompt)
+      armRunTimers(runId, runTimeoutMs, deadlineAtIso, false)
+      lifecycle.drive(runId, input.initialPromptOverride ?? initialPrompt)
       return requireRun(runId)
     })
   }
@@ -603,7 +693,7 @@ export function createRunService(options: RunServiceOptions) {
       if (run.status !== "running") {
         throw new RunActionError("invalid_state", "Run is not running")
       }
-      const agentSession = sessions.get(runId)
+      const agentSession = lifecycle.get(runId)
       if (agentSession)
         await agentSession.session.abort().catch(() => undefined)
       return requireRun(runId)
@@ -618,7 +708,7 @@ export function createRunService(options: RunServiceOptions) {
         throw new RunActionError("invalid_state", "Run is already closed")
       }
       pending.set(runId, { mode: "finish", summary })
-      const agentSession = sessions.get(runId)
+      const agentSession = lifecycle.get(runId)
       if (agentSession?.session.isStreaming) {
         await agentSession.session.abort().catch(() => undefined)
       } else {
@@ -635,7 +725,7 @@ export function createRunService(options: RunServiceOptions) {
    * fresh container. Does not drive a turn — the caller prompts afterwards.
    */
   async function ensureWarm(runId: string): Promise<void> {
-    if (sessions.has(runId)) return
+    if (lifecycle.has(runId)) return
     const row = queries.getRow(runId)
     if (!row) throw new RunActionError("not_found", "Run not found")
     const mainAgent = queries.mainAgent(runId)
@@ -714,7 +804,7 @@ export function createRunService(options: RunServiceOptions) {
     )
     const caps = resolveCaps(promptContext)
 
-    let agentSession: RunAgentSession
+    let agentSession: HostAgentSession
     try {
       agentSession = await provisionRunSession(
         {
@@ -756,35 +846,27 @@ export function createRunService(options: RunServiceOptions) {
       caps,
       challengeId: row.challengeId,
     })
-    sessions.set(runId, agentSession)
+    lifecycle.set(runId, agentSession)
+    armRunTimers(
+      runId,
+      row.timeoutMs ?? 0,
+      row.deadlineAt,
+      Boolean(row.halfwayNotifiedAt)
+    )
   }
 
   /**
-   * Unified message entry. Streaming → steer/followUp (queue into the current
-   * turn). Idle/closed → drive a new turn (cold-restoring a closed run first).
+   * Unified message entry, delegated to the shared lifecycle: streaming →
+   * steer/followUp (queue into the current turn); idle/closed → a fresh turn
+   * (cold-restoring a closed run first via onResume). pending finish/close
+   * outcomes are cleared on a new turn (onBeforeNewTurn).
    */
-  function sendMessage(
+  async function sendMessage(
     runId: string,
     input: SendMessageInput
   ): Promise<RunPublic> {
-    return withLock(runId, async () => {
-      const run = requireRun(runId)
-      if (run.status === "closed") await ensureWarm(runId)
-      const agentSession = sessions.get(runId)
-      if (!agentSession)
-        throw new RunActionError("invalid_state", "Run has no active session")
-      if (agentSession.session.isStreaming) {
-        if (input.deliverAs === "followUp") {
-          await agentSession.session.followUp(input.text)
-        } else {
-          await agentSession.session.steer(input.text)
-        }
-        return requireRun(runId)
-      }
-      pending.delete(runId)
-      driveRun(runId, input.text)
-      return requireRun(runId)
-    })
+    await lifecycle.send(runId, input.text, input.deliverAs)
+    return requireRun(runId)
   }
 
   /**
@@ -798,7 +880,7 @@ export function createRunService(options: RunServiceOptions) {
     input: { steering: string[]; followUp: string[] }
   ): Promise<void> {
     return withLock(runId, async () => {
-      const agentSession = sessions.get(runId)
+      const agentSession = lifecycle.get(runId)
       if (!agentSession) return
       agentSession.session.clearQueue()
       for (const text of input.steering) {
@@ -823,7 +905,7 @@ export function createRunService(options: RunServiceOptions) {
       if (run.status === "closed") {
         throw new RunActionError("invalid_state", "Run is already closed")
       }
-      const agentSession = sessions.get(runId)
+      const agentSession = lifecycle.get(runId)
       if (agentSession?.session.isStreaming) {
         pending.set(runId, { mode: "close" })
         await agentSession.session.abort().catch(() => undefined)
@@ -838,19 +920,19 @@ export function createRunService(options: RunServiceOptions) {
     await withLock(runId, async () => {
       const row = queries.getRow(runId)
       if (!row) throw new RunActionError("not_found", "Run not found")
-      const agentSession = sessions.get(runId)
+      const agentSession = lifecycle.get(runId)
       if (agentSession?.session.isStreaming) {
         await agentSession.session.abort().catch(() => undefined)
       }
       clearForceKill(runId)
+      clearRunTimers(runId)
       await containerManager.remove(row.containerName).catch(() => undefined)
       childRuntime.abortAll(runId)
       if (agentSession) {
         void agentSession.dispose()
-        sessions.delete(runId)
+        lifecycle.delete(runId)
       }
       contexts.delete(runId)
-      turnGeneration.delete(runId)
       pending.delete(runId)
       rmSync(runDir(runId), { recursive: true, force: true })
       db.delete(runs).where(eq(runs.id, runId)).run()
@@ -858,7 +940,7 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   function mainSessionFor(runId: string) {
-    return sessions.get(runId)
+    return lifecycle.get(runId)
   }
 
   /** Latest assistant text for an agent (inspect_agent). */
@@ -905,14 +987,29 @@ export function createRunService(options: RunServiceOptions) {
     locks.clear()
     for (const timer of forceKillTimers.values()) clearTimeout(timer)
     forceKillTimers.clear()
-    for (const agentSession of sessions.values()) await agentSession.dispose()
+    for (const t of timeoutTimers.values()) {
+      if (t.halfway) clearTimeout(t.halfway)
+      if (t.deadline) clearTimeout(t.deadline)
+    }
+    timeoutTimers.clear()
+    await lifecycle.closeAll()
     for (const childSession of childSessions.values())
       await childSession.dispose()
-    sessions.clear()
     childSessions.clear()
     pending.clear()
-    turnGeneration.clear()
     bus.close()
+  }
+
+  function setOrchestratorNotifier(
+    fn: (eventId: string, message: string) => void
+  ) {
+    orchestratorNotifier = fn
+  }
+
+  /** Called when a platform accepts a flag (hook from app.ts) so the
+   * orchestrator can react to a solve. */
+  function notifyFlagAccepted(runId: string) {
+    notifyOrchestratorForRun(runId, `Flag accepted for run ${runId}.`)
   }
 
   return {
@@ -926,6 +1023,8 @@ export function createRunService(options: RunServiceOptions) {
     refresh: queries.get,
     recoverOnBoot,
     close,
+    setOrchestratorNotifier,
+    notifyFlagAccepted,
     listMessages: queries.listMessages,
     mainSessionFor,
     get: queries.get,

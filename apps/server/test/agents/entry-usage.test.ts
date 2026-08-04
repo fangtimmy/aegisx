@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { accumulateEntryUsage, entryUsageOf } from "./entry-usage"
+import {
+  accumulateEntryUsage,
+  entryUsageOf,
+} from "../../src/agents/entry-usage"
 
 /**
  * Parity anchor for `accumulateEntryUsage` / `entryUsageOf`.

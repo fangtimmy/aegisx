@@ -382,10 +382,11 @@ export class ConversationStore {
   connect(
     runId: string,
     onReconnect: () => void,
-    onDisconnectedChange: (disconnected: boolean) => void
+    onDisconnectedChange: (disconnected: boolean) => void,
+    streamPath?: string
   ) {
     this.close()
-    const source = new EventSource(`/api/runs/${runId}/stream`)
+    const source = new EventSource(streamPath ?? `/api/runs/${runId}/stream`)
     this.source = source
     let opened = false
     source.onopen = () => {

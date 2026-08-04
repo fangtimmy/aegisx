@@ -11,8 +11,8 @@ import {
   type SessionTreeNode,
 } from "@earendil-works/pi-coding-agent"
 import { asc, eq } from "drizzle-orm"
-import type { createDatabase } from "../../db"
-import { sessionEntries, sessions } from "../../db/schema"
+import type { createDatabase } from "../db"
+import { sessionEntries, sessions } from "../db/schema"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
@@ -52,8 +52,11 @@ function nowIso(): string {
 export class DbSessionManager {
   private readonly db: Database
   private readonly sessionId: string
-  private readonly runId: string
-  private readonly agentId: string
+  private readonly ownerType: "run" | "orchestrator"
+  private readonly ownerId: string
+  /** Runs/agents FK target for run-owned sessions; undefined for orchestrator. */
+  private readonly runId: string | undefined
+  private readonly agentId: string | undefined
   private readonly cwd: string
   private readonly createdAt: string
   private readonly fileEntries: SessionEntry[] = []
@@ -69,41 +72,63 @@ export class DbSessionManager {
 
   private constructor(opts: {
     sessionId: string
-    runId: string
-    agentId: string
+    ownerType: "run" | "orchestrator"
+    ownerId: string
+    runId?: string
+    agentId?: string
     cwd: string
     createdAt: string
     db: Database
   }) {
     this.db = opts.db
     this.sessionId = opts.sessionId
+    this.ownerType = opts.ownerType
+    this.ownerId = opts.ownerId
     this.runId = opts.runId
     this.agentId = opts.agentId
     this.cwd = opts.cwd
     this.createdAt = opts.createdAt
   }
 
-  /** Create a new database session for a run agent (main or child). */
+  /**
+   * Create a new database session. `ownerType` defaults to 'run' for back-compat
+   * (run callers pass runId/agentId and get ownerType='run', ownerId=runId).
+   * Orchestrator sessions pass ownerType='orchestrator', ownerId=eventId and
+   * omit runId/agentId.
+   */
   static create(opts: {
     cwd: string
-    runId: string
-    agentId: string
+    ownerType?: "run" | "orchestrator"
+    /** The run id (run) or event id (orchestrator). Defaults to runId. */
+    ownerId?: string
+    /** Run-owned sessions: the runs/agents FK targets. */
+    runId?: string
+    agentId?: string
     db: Database
   }): DbSessionManager {
+    const ownerType = opts.ownerType ?? "run"
+    const ownerId = opts.ownerId ?? opts.runId
+    if (!ownerId) {
+      throw new Error("DbSessionManager.create requires ownerId (or runId)")
+    }
     const sessionId = randomUUID()
     const createdAt = nowIso()
     opts.db
       .insert(sessions)
       .values({
         id: sessionId,
-        runId: opts.runId,
-        agentId: opts.agentId,
+        ownerType,
+        ownerId,
+        runId: opts.runId ?? null,
+        agentId: opts.agentId ?? null,
         cwd: opts.cwd,
         createdAt,
       })
       .run()
     return new DbSessionManager({
       sessionId,
+      ownerType,
+      ownerId,
       runId: opts.runId,
       agentId: opts.agentId,
       cwd: opts.cwd,
@@ -112,11 +137,23 @@ export class DbSessionManager {
     })
   }
 
-  /** Reopen an existing database session (resume / cold-restore). */
+  /** Reopen an existing database session (resume / cold-restore). Same
+   * owner-dimension convention as create(). */
   static open(
     sessionId: string,
-    opts: { runId: string; agentId: string; db: Database }
+    opts: {
+      ownerType?: "run" | "orchestrator"
+      ownerId?: string
+      runId?: string
+      agentId?: string
+      db: Database
+    }
   ): DbSessionManager {
+    const ownerType = opts.ownerType ?? "run"
+    const ownerId = opts.ownerId ?? opts.runId
+    if (!ownerId) {
+      throw new Error("DbSessionManager.open requires ownerId (or runId)")
+    }
     const row = opts.db
       .select({ cwd: sessions.cwd, createdAt: sessions.createdAt })
       .from(sessions)
@@ -127,6 +164,8 @@ export class DbSessionManager {
     }
     const sm = new DbSessionManager({
       sessionId,
+      ownerType,
+      ownerId,
       runId: opts.runId,
       agentId: opts.agentId,
       cwd: row.cwd,
@@ -185,8 +224,10 @@ export class DbSessionManager {
       .values({
         id: entry.id,
         sessionId: this.sessionId,
-        runId: this.runId,
-        agentId: this.agentId,
+        ownerType: this.ownerType,
+        ownerId: this.ownerId,
+        runId: this.runId ?? null,
+        agentId: this.agentId ?? null,
         parentId: entry.parentId,
         seq,
         type: entry.type,

@@ -5,22 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1785646434680,
-      "tag": "0000_mean_klaw",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1785754878640,
-      "tag": "0001_illegal_roland_deschain",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1785758076259,
-      "tag": "0002_stiff_sunfire",
+      "when": 1785818785132,
+      "tag": "0000_broken_snowbird",
       "breakpoints": true
     }
   ]

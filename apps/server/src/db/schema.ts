@@ -9,7 +9,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -139,11 +139,62 @@ export const runs = sqliteTable(
     error: text("error"),
     summary: text("summary"),
     flag: text("flag"),
+    // Orchestrator scheduling metadata
+    source: text("source").notNull().default("manual"),
+    timeoutMs: integer("timeout_ms"),
+    deadlineAt: text("deadline_at"),
+    halfwayNotifiedAt: text("halfway_notified_at"),
   },
   (table) => [
     index("runs_challenge_id_idx").on(table.challengeId),
     check(
       "runs_status_check",
+      sql`${table.status} in ('running', 'idle', 'closed')`
+    ),
+    check(
+      "runs_source_check",
+      sql`${table.source} in ('manual', 'orchestrator')`
+    ),
+  ]
+)
+
+/**
+ * Per-event orchestrator: a host-side pi SDK AgentSession that schedules
+ * solver runs and reviews their progress. Structurally a sibling of `runs`
+ * (own container + workspace + session + running/idle/closed lifecycle), but
+ * scoped to an event and armed with management tools instead of CTF tools.
+ * One row per event (eventId PK).
+ */
+export const orchestrators = sqliteTable(
+  "orchestrators",
+  {
+    eventId: text("event_id")
+      .primaryKey()
+      .references(() => events.id, { onDelete: "cascade" }),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+    /** ProviderModel.id; null = fall back to the global default model. */
+    modelId: text("model_id"),
+    thinkingLevel: text("thinking_level").notNull().default("off"),
+    /** Natural-language steering ("hit crypto first, leave pwn for last"). */
+    instruction: text("instruction").notNull().default(""),
+    maxConcurrentTargets: integer("max_concurrent_targets")
+      .notNull()
+      .default(1),
+    status: text("status").notNull().default("idle"),
+    // Container + workspace snapshot (cold-restore, mirrors runs)
+    containerName: text("container_name").notNull(),
+    image: text("image").notNull(),
+    cpus: integer("cpus").notNull(),
+    memoryMb: integer("memory_mb").notNull(),
+    pidsLimit: integer("pids_limit").notNull(),
+    workspacePath: text("workspace_path").notNull(),
+    sessionDir: text("session_dir").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "orchestrators_status_check",
       sql`${table.status} in ('running', 'idle', 'closed')`
     ),
   ]
@@ -198,16 +249,22 @@ export const sessions = sqliteTable(
   "sessions",
   {
     id: text("id").primaryKey(),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
+    /** Owner dimension so the same table backs run agents and orchestrators. */
+    ownerType: text("owner_type").notNull().default("run"),
+    ownerId: text("owner_id").notNull(),
+    /** Set for run-owned sessions (ownerType='run'); null for orchestrator. */
+    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+    /** Set for run-owned sessions; null for orchestrator (no agents row). */
+    agentId: text("agent_id").references(() => agents.id, {
+      onDelete: "cascade",
+    }),
     cwd: text("cwd").notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [index("sessions_run_id_idx").on(table.runId)]
+  (table) => [
+    index("sessions_owner_idx").on(table.ownerType, table.ownerId),
+    index("sessions_run_id_idx").on(table.runId),
+  ]
 )
 
 export const sessionEntries = sqliteTable(
@@ -217,12 +274,15 @@ export const sessionEntries = sqliteTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
-    agentId: text("agent_id")
-      .notNull()
-      .references(() => agents.id, { onDelete: "cascade" }),
+    /** Owner dimension (mirrors sessions). */
+    ownerType: text("owner_type").notNull().default("run"),
+    ownerId: text("owner_id").notNull(),
+    /** Set for run-owned entries; null for orchestrator. */
+    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+    /** Set for run-owned entries; null for orchestrator. */
+    agentId: text("agent_id").references(() => agents.id, {
+      onDelete: "cascade",
+    }),
     parentId: text("parent_id"),
     /** Monotonic append order within the session (= jsonl line number). */
     seq: integer("seq").notNull(),
@@ -236,12 +296,18 @@ export const sessionEntries = sqliteTable(
       table.sessionId,
       table.seq
     ),
-    index("session_entries_run_seq_idx").on(table.runId, table.seq),
-    index("session_entries_run_agent_seq_idx").on(
-      table.runId,
+    index("session_entries_owner_seq_idx").on(
+      table.ownerType,
+      table.ownerId,
+      table.seq
+    ),
+    index("session_entries_owner_agent_seq_idx").on(
+      table.ownerType,
+      table.ownerId,
       table.agentId,
       table.seq
     ),
+    index("session_entries_run_seq_idx").on(table.runId, table.seq),
     index("session_entries_session_type_idx").on(table.sessionId, table.type),
   ]
 )

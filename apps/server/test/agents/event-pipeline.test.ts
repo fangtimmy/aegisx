@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import type { LiveEvent } from "../../../shared/live-event"
-import { createRunEventPipeline } from "../../src/run/session/events"
-import type { LiveBus } from "../../src/run/session/live"
+import { createAgentEventPipeline } from "../../src/agents/event-pipeline"
+import type { LiveBus } from "../../src/agents/live"
 
 type Committed = Extract<LiveEvent, { type: "message.committed" }>
 
@@ -14,10 +14,10 @@ type Committed = Extract<LiveEvent, { type: "message.committed" }>
 function setup() {
   const emitted: LiveEvent[] = []
   const bus = {
-    emit: (_runId: string, event: LiveEvent) => emitted.push(event),
+    emit: (_channel: string, event: LiveEvent) => emitted.push(event),
   } as unknown as LiveBus
-  const pipeline = createRunEventPipeline({
-    runId: "run-1",
+  const pipeline = createAgentEventPipeline({
+    channel: "run-1",
     agentId: "agent-1",
     bus,
   })
@@ -37,7 +37,7 @@ function messageEntry(role: string, ts: number, id: string): SessionEntry {
   } as SessionEntry
 }
 
-describe("createRunEventPipeline commitEntry", () => {
+describe("createAgentEventPipeline commitEntry", () => {
   test("emits committed for a message with its real seq", () => {
     const { pipeline, emitted } = setup()
     pipeline.commitEntry(messageEntry("user", 1000, "e1"), 1)

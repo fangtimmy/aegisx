@@ -3,19 +3,19 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import type { AgentSummary } from "../../../shared/agent"
+import {
+  type AgentLoopSettings,
+  createHostAgentSession,
+  type HostAgentSession,
+} from "../agents/host-session"
+import type { LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import { agents } from "../db/schema"
 import { renderSystemPrompt } from "../settings/prompt-templates"
 import type { ContainerManager } from "./container/container-manager"
 import { createContainerBashOperations } from "./container/container-tools"
 import { RunActionError } from "./errors"
-import type { AgentLoopSettings } from "./provision"
 import type { RunContext } from "./service"
-import {
-  createRunAgentSession,
-  type RunAgentSession,
-} from "./session/agent-session"
-import type { LiveBus } from "./session/live"
 import { createDockerExecBackend } from "./workspace/backend"
 import { createWorkspaceTools } from "./workspace/tools"
 
@@ -29,7 +29,7 @@ export type ChildAgentDeps = {
   /** Per-run reusable handles (model, workspace, prompt context, ...). */
   contexts: Map<string, RunContext>
   /** Live child sessions, keyed by child agent id. */
-  childSessions: Map<string, RunAgentSession>
+  childSessions: Map<string, HostAgentSession>
   /** Cap on concurrent child agents per run. */
   maxChildrenPerRun: number
   agentSettings: () => AgentLoopSettings
@@ -58,7 +58,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     childAgentId: string,
     childName: string,
     task: string,
-    childSession: RunAgentSession
+    childSession: HostAgentSession
   ): Promise<void> {
     let runError: string | null = null
     try {
@@ -165,13 +165,13 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     // Children: coding tools only (no finish/flag/target/spawn).
     const toolNames = ["read", "bash", "edit", "write", "grep", "find", "ls"]
 
-    let childSession: RunAgentSession
+    let childSession: HostAgentSession
     try {
-      childSession = await createRunAgentSession({
-        runId,
+      childSession = await createHostAgentSession({
+        owner: { type: "run", id: runId, runId, agentId: childAgentId },
+        channel: runId,
         agentId: childAgentId,
-        workspaceHostPath: ctx.workspaceHostPath,
-        sessionsDir: ctx.sessionsDir,
+        cwd: ctx.workspaceHostPath,
         modelRuntime: ctx.modelRuntime,
         model: ctx.sdkModel,
         thinkingLevel: ctx.thinkingLevel,
@@ -196,7 +196,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     }
     deps.childSessions.set(childAgentId, childSession)
     deps.updateAgent(childAgentId, {
-      sessionFile: childSession.sessionFile ?? null,
+      sessionFile: childSession.sessionId ?? null,
     })
     deps.emitAgents(runId)
 

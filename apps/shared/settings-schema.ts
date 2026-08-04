@@ -18,6 +18,7 @@ export type SettingGroup =
 	| "Agent"
 	| "Runtime"
 	| "Container"
+	| "Scheduler"
 	| "Prompts"
 
 type BaseDef = {
@@ -77,6 +78,8 @@ export type FlatSettings = {
 	"agent.compactionEnabled": boolean
 	"agent.retryEnabled": boolean
 	"agent.retryMaxRetries": number
+	"scheduler.maxConcurrentRuns": number
+	"scheduler.defaultRunTimeoutMs": number
 	"runtime.maxAttachmentMb": number
 	"runtime.platformRequestTimeoutMs": number
 	"runtime.providerDiscoverTimeoutMs": number
@@ -158,6 +161,32 @@ export const SETTINGS_DEFS: SettingDef[] = [
 		title: "Max retries",
 		widget: "number",
 		order: 35,
+	},
+	{
+		key: "scheduler.maxConcurrentRuns",
+		type: "integer",
+		default: 4,
+		minimum: 1,
+		maximum: 32,
+		group: "Scheduler",
+		title: "Max concurrent runs",
+		description:
+			"Global cap on simultaneously running solver runs (local container resources). Enforced as a hard guardrail by the orchestrator.",
+		widget: "number",
+		order: 10,
+	},
+	{
+		key: "scheduler.defaultRunTimeoutMs",
+		type: "integer",
+		default: 3_600_000,
+		minimum: 60_000,
+		maximum: 86_400_000,
+		group: "Scheduler",
+		title: "Default run timeout (ms)",
+		description:
+			"Per-run hard deadline. At the halfway point the orchestrator is notified; at the deadline the turn is aborted to idle.",
+		widget: "number",
+		order: 20,
 	},
 	{
 		key: "runtime.maxAttachmentMb",

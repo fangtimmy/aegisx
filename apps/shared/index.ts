@@ -1,5 +1,6 @@
 export * from "./agent";
 export * from "./challenge";
+export * from "./orchestrator";
 export * from "./event";
 export * from "./live-event";
 export * from "./session-entry";
