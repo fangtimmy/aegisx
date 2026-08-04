@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react"
+import { type ReactNode, useEffect, useRef, useState } from "react"
 import { CodePreview } from "@/components/code-preview"
 import {
   isRecord,
@@ -6,6 +6,8 @@ import {
   text,
   toolFilePath,
 } from "@/domain/conversation"
+import { highlightCode } from "@/lib/shiki"
+import { useResolvedTheme } from "@/lib/use-resolved-theme"
 import { cn } from "@/lib/utils"
 
 const ESC = String.fromCharCode(0x1b)
@@ -229,6 +231,60 @@ function DiffPreview({ diff }: { diff: string }) {
   )
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+}
+
+/** Plain (un-highlighted) command HTML mirroring Shiki's line structure. */
+function plainCommandHtml(command: string) {
+  const lines = command.length > 0 ? command.split("\n") : [""]
+  const body = lines
+    .map((line) => `<span class="line">${escapeHtml(line)}</span>`)
+    .join("")
+  return `<pre class="shiki"><code>${body}</code></pre>`
+}
+
+/** Shell-highlighted bash command with a leading `$` prompt, no line gutter. */
+function BashCommand({ command }: { command: string }) {
+  const theme = useResolvedTheme()
+  const [html, setHtml] = useState(() => plainCommandHtml(command))
+  useEffect(() => {
+    let cancelled = false
+    setHtml(plainCommandHtml(command))
+    void highlightCode(command, "bash", theme, { lineNumbers: false })
+      .then((next) => {
+        if (!cancelled) setHtml(next)
+      })
+      .catch(() => {
+        if (!cancelled) setHtml(plainCommandHtml(command))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [command, theme])
+  return (
+    <div className="flex items-start gap-2 border-b px-2.5 py-1.5 font-mono text-xs leading-5">
+      <span aria-hidden className="select-none text-muted-foreground">
+        $
+      </span>
+      <div
+        className={cn(
+          "min-w-0 flex-1",
+          "[&_pre]:m-0 [&_pre]:border-0 [&_pre]:bg-transparent! [&_pre]:p-0 [&_pre]:font-mono",
+          "[&_code]:block [&_code]:font-mono",
+          "[&_.line]:whitespace-pre-wrap [&_.line]:break-words [&_.line]:[overflow-wrap:anywhere]"
+        )}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: Shiki HTML / escaped fallback
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
+  )
+}
+
 function BashBody({
   command,
   value,
@@ -250,14 +306,7 @@ function BashBody({
   }, [streaming, streamBytes])
   return (
     <ToolScroll>
-      {command ? (
-        <div className="border-b px-2.5 py-1.5 font-mono text-xs leading-5">
-          <span className="select-none text-muted-foreground">$ </span>
-          <span className="whitespace-pre-wrap break-words text-foreground">
-            {command}
-          </span>
-        </div>
-      ) : null}
+      {command ? <BashCommand command={command} /> : null}
       {!value.trim() ? (
         <EmptyHint>
           {streaming

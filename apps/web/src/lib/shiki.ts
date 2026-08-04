@@ -56,15 +56,17 @@ export async function highlightCode(
   code: string,
   lang: string,
   theme: "light" | "dark",
-  options?: { startLine?: number }
+  options?: { startLine?: number; lineNumbers?: boolean }
 ): Promise<string> {
   const highlighter = await getHighlighter()
   const resolvedLang = await ensureLang(highlighter, lang)
   const themeName = theme === "dark" ? "github-dark-default" : "github-light"
   const startLine = options?.startLine ?? 1
+  const transformers =
+    options?.lineNumbers === false ? [] : [lineNumberTransformer(startLine)]
   return highlighter.codeToHtml(code, {
     lang: resolvedLang,
     theme: themeName,
-    transformers: [lineNumberTransformer(startLine)],
+    transformers,
   })
 }

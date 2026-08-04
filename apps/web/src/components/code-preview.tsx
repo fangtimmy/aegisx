@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { langFromPath } from "@/lib/lang-from-path"
 import { highlightCode } from "@/lib/shiki"
+import { useResolvedTheme } from "@/lib/use-resolved-theme"
 import { cn } from "@/lib/utils"
 
 type CodePreviewProps = {
@@ -9,21 +10,6 @@ type CodePreviewProps = {
   className?: string
   /** 1-based starting line number (default 1). */
   startLine?: number
-}
-
-function useResolvedTheme(): "dark" | "light" {
-  const [resolved, setResolved] = useState<"dark" | "light">(() =>
-    document.documentElement.classList.contains("dark") ? "dark" : "light"
-  )
-  useEffect(() => {
-    const el = document.documentElement
-    const sync = () =>
-      setResolved(el.classList.contains("dark") ? "dark" : "light")
-    const observer = new MutationObserver(sync)
-    observer.observe(el, { attributes: true, attributeFilter: ["class"] })
-    return () => observer.disconnect()
-  }, [])
-  return resolved
 }
 
 function escapeHtml(value: string) {
