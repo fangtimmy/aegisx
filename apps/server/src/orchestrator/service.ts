@@ -320,7 +320,10 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
             reason: "Run belongs to another event",
           }
         const list = runService.listMessages(runId, { after: opts?.since })
-        const roles = opts?.roles
+        // Default to assistant + toolResult so the orchestrator sees a run's
+        // reasoning and tool outcomes without the verbosity of raw user
+        // prompts. Caller can narrow/expand via opts.roles.
+        const roles = opts?.roles ?? ["assistant", "toolResult"]
         const items = list.items
           .map((it) => {
             const msg = it.entry as { type: string; message?: { role: string } }
@@ -481,6 +484,13 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       const row = queries.ensureRow(eventId)
       if (lifecycle.has(eventId))
         return getDetail(eventId) as OrchestratorDetail
+      // `enabled` is the arm/disarm switch (docs §八/§九): start requires it
+      // so a toggled-off orchestrator can't be launched, even via the API.
+      if (!row.enabled)
+        throw new OrchestratorActionError(
+          "invalid_state",
+          "Orchestrator is disabled; enable it before starting"
+        )
 
       const { modelRuntime, sdkModel } = await resolveOrchestratorModel(
         eventId,

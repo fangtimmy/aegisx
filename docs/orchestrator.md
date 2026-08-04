@@ -1,6 +1,6 @@
 # Orchestrator：基于 LLM 的解题调度
 
-Status: **实施中 — Phase 0–2 已落地并验证，Phase 3 打磨待做**
+Status: **Phase 0–3 已落地**（Phase 3 剩「closed 冷恢复」一项未做）。本文档为设计定稿，决策已冻结。
 Related: [architecture.md](./architecture.md)（v5 现状）、[refactor-v4.md](./refactor-v4.md)（v4 SDK 重构）
 
 > 本设计 crystallize 自 2026-07-31 与 2026-08-02 两次会话讨论，并基于已落地的
@@ -138,7 +138,7 @@ orchestrator 启用 solver 同款文件工具（read/bash/edit/write/grep/find/l
 | `list_challenges` | — | 该 event 所有题：id/name/category/points/靶机依赖/已有 run 状态/上次结果 |
 | `start_run` | `challengeId`, `initialPromptOverride?`, `timeoutMs?`, `modelId?` | 围栏内启动 solver run；内部调 `runService.create`（container 配置取 settings 默认，模型取 orchestrator 配置或参数覆盖或全局默认） |
 | `stop_run` | `runId` | `session.abort()` → idle（保留容器），等同用户按 Esc；用于"掐掉重来" |
-| `read_run` | `runId`, `roles?`(默认 assistant), `since?` | 读该 run 的 `session_entries`，默认只给 assistant 消息省上下文；`since` 游标增量读 |
+| `read_run` | `runId`, `roles?`(默认 assistant+toolResult), `since?` | 读该 run 的 `session_entries`，默认给 assistant 文本 + toolResult（thinking 省略）；每条/总体双截断，超出提示用 `since` 续读；`since` 游标增量读 |
 | `get_status` | — | 当前并发槽 X/Y、靶机槽 X/Y、各 run 状态摘要，供 orchestrator 决策 |
 
 **显式不做**：`set_exclude`（排除靠 instruction）、`steer_run`（中途给 solver 注入
@@ -181,23 +181,13 @@ orchestrators
 + halfwayNotifiedAt text  -- 30min 通知后打戳，防重复
 ```
 
-### session 存储泛化（关键决策点）
+### session 存储泛化（已落地：方案 A）
 
-现状 `sessions`/`session_entries` 的 `runId` 是 `notNull` FK→`runs`，orchestrator
-session 不属于任何 run。两条路：
-
-- **方案 A（推荐，一次做对）**：给 `sessions`/`session_entries` 加 `ownerType`
-  (`'run'`|`'orchestrator'`) + `ownerId`，`runId` 放宽为可空。`DbSessionManager`
-  参数化 owner。run 的 ownerType='run'/ownerId=runId，orchestrator 的
-  ownerType='orchestrator'/ownerId=eventId。前端 `ConversationStore` 按 owner 拉
-  entries，**timeline 几乎原样复用**。代价：动核心表 + 现有 run-scoped queries。
-- **方案 B（MVP 快通道）**：orchestrator session 走 jsonl 文件
-  （`data/orchestrators/<eventId>/sessions/*.jsonl`，`SessionManager.create`），
-  前端 orchestrator timeline 单独写一套轻量 jsonl 读取。快，但与"DB-backed 单一
-  真相源"不一致，留技术债。
-
-**推荐 A**（与项目"对齐 pi、单一真相源"的一贯取向一致）。实施时若想先跑通验证，
-可 Phase 0 spike 用 B，Phase 1 再统一到 A。
+`sessions`/`session_entries` 加 `ownerType` (`'run'`|`'orchestrator'`) +
+`ownerId`，`runId` 放宽为可空。`DbSessionManager` 参数化 owner：run 的
+`ownerType='run'/ownerId=runId`，orchestrator 的
+`ownerType='orchestrator'/ownerId=eventId`。前端 `ConversationStore` 按 owner 拉
+entries，timeline 原样复用。未走 jsonl 快通道（方案 B）。
 
 ### 全局 settings 新增（`FlatSettings`）
 
@@ -302,11 +292,15 @@ apps/server/src/
 2. Conversation + Timeline 复用（ConversationStore 按 orchestrator owner）。
 3. start/stop/close 按钮。
 
-**Phase 3 — 打磨**（待做）
-1. read_run 的 since 游标增量读（长 run 监督不爆上下文）。
-2. recoverOnBoot 对 orchestrator 的处理（running/idle → closed，同 run）。
-3. 冷恢复（给 closed 的 orchestrator 发消息 → 重建 session 续同一 owner）。
-4. usage/cost 回填 orchestrator Overview（复用 run 的 usage 机制）。
+**Phase 3 — 打磨**
+1. ✅ read_run：`since` 游标增量读 + 默认 role(assistant/toolResult) +
+   toolResult 文本抽取 + 每条/总体双截断。
+2. ✅ recoverOnBoot：running/idle → closed 并删容器（同 run 语义）。
+3. ✅ usage/cost 回填 orchestrator Detail（复用 run 的 usage 累计机制）。
+4. ⏳ 冷恢复：给 closed 的 orchestrator 发消息 → 重建 session 续同一 owner（现需
+     close+start 重启；start 不重接旧 session 的 onResume 钩子）。
+5. ✅ notify 摘要：run 生命周期事件携带题名/分值/flag/src 摘要，减少 orchestrator
+     的 read_run 往返。
 
 ## 十三、明确放弃 / 保留
 
@@ -339,19 +333,8 @@ apps/server/src/
 |------|------|
 | 方案 A 改核心表波及 run queries | Phase 0 先做 + 完整测试；run 侧 ownerType 恒为 'run'，现有 query 加 `where ownerType='run'` 兜底 |
 | orchestrator 决策跑偏（乱开 run 烧钱） | 3 条硬围栏兜底物理上限；instruction 可随时 steer 纠偏；timeline 全可见 |
-| read_run 上下文爆炸 | since 游标增量读；默认只 assistant；大输出截断（复用 run 的截断策略） |
+| read_run 上下文爆炸 | since 游标增量读；默认只 assistant+toolResult（省 user prompt）；每条 1500 / 总体 16000 字符双截断，超出提示续读 |
 | per-run 超时 timer 跨崩溃丢失 | recoverOnBoot 标 closed；ensureWarm 按 deadlineAt 剩余值重设 |
 | orchestrator 和手动 run 抢资源 | 手动 run 一样占并发槽、一样受围栏；不豁免，超额时 orchestrator 自然退让 |
 | schema wipe | 单用户本地，沿用 v4/v5 惯例；`SCHEMA_VERSION=6`，旧库拒开，迁移配置 |
 
----
-
-## 待你确认
-
-1. **存储方案 A vs B**（第十一节"session 存储泛化"）：一次做对（A，推荐）还是
-   MVP 先 jsonl（B）再统一？
-2. **Phase 0 开工前的 spike**：先单独验证"orchestrator session（per-event 容器 +
-   文件工具）能建 + subscribe 落库 + 工具能调 runService.create"，再动表结构？
-3. **文档本身**：这版定稿有没有漏掉的点或想调整的决策？
-
-确认后我按 Phase 0 开工。

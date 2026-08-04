@@ -243,6 +243,36 @@ export function createRunService(options: RunServiceOptions) {
     orchestratorNotifier?.(eventId, message)
   }
 
+  /** Compact one-liner identifying the run's challenge + outcome, appended to
+   * orchestrator notifications so it can often decide without a read_run
+   * round-trip. `flag` override is used by notifyFlagAccepted (the row may not
+   * be persisted yet). Returns "" if the run can't be resolved. */
+  function runDigest(runId: string, opts: { flag?: boolean } = {}): string {
+    const row = queries.getRow(runId)
+    if (!row) return ""
+    const challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, row.challengeId))
+      .get()
+    const parts: string[] = []
+    if (challenge) {
+      parts.push(`challenge "${challenge.name}"`)
+      if (challenge.category) parts.push(challenge.category)
+      if (challenge.points != null) parts.push(`${challenge.points}pts`)
+    }
+    const hasFlag = opts.flag ?? Boolean(row.flag)
+    parts.push(`flag=${hasFlag ? "yes" : "no"}`)
+    parts.push(`src=${row.source}`)
+    return parts.join(", ")
+  }
+
+  /** Suffix helper: ` — <digest>` or "" when the run can't be described. */
+  function appendDigest(runId: string, opts: { flag?: boolean } = {}): string {
+    const digest = runDigest(runId, opts)
+    return digest ? ` — ${digest}` : ""
+  }
+
   /** Clear a run's halfway/deadline timers. */
   function clearRunTimers(runId: string): void {
     const t = timeoutTimers.get(runId)
@@ -273,7 +303,8 @@ export function createRunService(options: RunServiceOptions) {
           updateRun(runId, { halfwayNotifiedAt: new Date().toISOString() })
           notifyOrchestratorForRun(
             runId,
-            `Run ${runId} is at the halfway mark of its time limit.`
+            `Run ${runId} is at the halfway mark of its time limit` +
+              appendDigest(runId)
           )
         }, delay)
       }
@@ -287,7 +318,8 @@ export function createRunService(options: RunServiceOptions) {
       clearRunTimers(runId)
       notifyOrchestratorForRun(
         runId,
-        `Run ${runId} reached its time limit and was interrupted.`
+        `Run ${runId} reached its time limit and was interrupted` +
+          appendDigest(runId)
       )
     }, deadlineDelay)
     timeoutTimers.set(runId, entry)
@@ -330,7 +362,8 @@ export function createRunService(options: RunServiceOptions) {
     emitAgents(runId)
     notifyOrchestratorForRun(
       runId,
-      `Run ${runId} went idle.${runError ? ` Error: ${runError}` : ""}`
+      `Run ${runId} went idle${runError ? `: ${runError}` : ""}` +
+        appendDigest(runId)
     )
   }
 
@@ -369,7 +402,8 @@ export function createRunService(options: RunServiceOptions) {
     if (opts.finished) {
       notifyOrchestratorForRun(
         runId,
-        `Run ${runId} finished.${opts.summary ? ` Summary: ${opts.summary}` : ""}`
+        `Run ${runId} finished${opts.summary ? `: ${opts.summary}` : ""}` +
+          appendDigest(runId)
       )
     }
   }
@@ -1009,7 +1043,10 @@ export function createRunService(options: RunServiceOptions) {
   /** Called when a platform accepts a flag (hook from app.ts) so the
    * orchestrator can react to a solve. */
   function notifyFlagAccepted(runId: string) {
-    notifyOrchestratorForRun(runId, `Flag accepted for run ${runId}.`)
+    notifyOrchestratorForRun(
+      runId,
+      `Flag accepted for run ${runId}${appendDigest(runId, { flag: true })}`
+    )
   }
 
   return {

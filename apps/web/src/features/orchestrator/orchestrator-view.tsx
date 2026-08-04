@@ -120,7 +120,14 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
     onError: (error: Error) => toast.error("Failed to save", error.message),
   })
   const startMut = useMutation({
-    mutationFn: () => orchestratorsApi.startOrchestrator(eventId),
+    mutationFn: async () => {
+      // `enabled` gates start server-side (docs §九). If the user toggled it
+      // off (or never enabled), arm it first so the primary CTA always works.
+      if (!orch?.enabled) {
+        await orchestratorsApi.patchOrchestrator(eventId, { enabled: true })
+      }
+      return orchestratorsApi.startOrchestrator(eventId)
+    },
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: keys.orchestrator.detail(eventId),
@@ -199,7 +206,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
               size="sm"
               type="button"
             >
-              <Play /> Start
+              <Play /> {orch.enabled ? "Start" : "Enable & Start"}
             </Button>
           )}
           {running && (

@@ -155,7 +155,7 @@ export function createOrchestratorTools(ctx: OrchestratorToolContext) {
       name: "read_run",
       label: "Read run",
       description:
-        "Read a run's committed session entries to review its progress and reasoning. Returns assistant messages by default (tool calls summarized) to save your context; pass roles to include others. Use since for incremental reads on long runs.",
+        "Read a run's committed session entries to review its progress and reasoning. Returns assistant messages and tool results by default (thinking omitted; each item truncated) to save your context; pass roles to narrow or expand (e.g. ['assistant'] for reasoning only, ['user'] for the solver's prompts). Use since for incremental reads on long runs. Output is capped; if truncated, read again with a larger since cursor.",
       parameters: Type.Object({
         runId: Type.String({ minLength: 1 }),
         roles: Type.Optional(Type.Array(Type.String())),
@@ -169,15 +169,25 @@ export function createOrchestratorTools(ctx: OrchestratorToolContext) {
         })
         if (result.reason)
           return textResult(`Could not read run: ${result.reason}`)
+        // Overall body cap so a long run can't blow the orchestrator's context.
+        const lines: string[] = []
+        let used = 0
+        for (const it of result.items) {
+          const line = `[${it.seq}] ${it.role}: ${it.text}`
+          if (used + line.length + 2 > READ_RUN_TOTAL_CHAR_LIMIT) break
+          lines.push(line)
+          used += line.length + 2
+        }
+        const dropped = result.items.length - lines.length
         const body =
-          result.items.length > 0
-            ? result.items
-                .map((it) => `[${it.seq}] ${it.role}: ${it.text}`)
-                .join("\n\n")
-            : "(no matching entries yet)"
+          lines.length > 0 ? lines.join("\n\n") : "(no matching entries yet)"
+        const note =
+          dropped > 0
+            ? `\n\n… (${dropped} more entries omitted — read again with a larger since cursor)`
+            : ""
         return textResult(
-          `${result.runId} (${result.items.length} entries, nextAfter=${result.nextAfter}):\n\n${body}`,
-          result
+          `${result.runId} (${result.items.length} entries, nextAfter=${result.nextAfter}):\n\n${body}${note}`,
+          { ...result, truncated: dropped > 0 }
         )
       },
     }),
@@ -208,16 +218,40 @@ export function createOrchestratorTools(ctx: OrchestratorToolContext) {
   ]
 }
 
-/** Flatten a SessionEntry's message content to compact text for read_run. */
+/** Per-item character cap for read_run (bounds the orchestrator's context). */
+export const READ_RUN_ITEM_CHAR_LIMIT = 1500
+/** Total character cap for a read_run response body. */
+export const READ_RUN_TOTAL_CHAR_LIMIT = 16_000
+
+function truncate(text: string, limit: number): string {
+  return text.length > limit
+    ? `${text.slice(0, limit)}… (truncated at ${limit} chars)`
+    : text
+}
+
+/**
+ * Flatten a SessionEntry's message content to compact text for read_run.
+ *
+ * - assistant: visible text + `[tool: <name>]` per tool call. Thinking blocks
+ *   are dropped — verbose and low-value for progress review.
+ * - toolResult: `[result: <toolName>] <text>` — included so the orchestrator
+ *   sees what a solver's tool calls actually returned, not just that they ran.
+ * - user / other: their text, if any.
+ *
+ * Each item is truncated to {@link READ_RUN_ITEM_CHAR_LIMIT}; the read_run
+ * tool applies a further total cap ({@link READ_RUN_TOTAL_CHAR_LIMIT}).
+ */
 export function flattenEntryText(entry: {
   type: string
   message?: {
     role: string
     content: unknown
+    toolName?: string
   }
 }): { role: string; text: string } | null {
   if (entry.type !== "message" || !entry.message) return null
-  const content = entry.message.content
+  const msg = entry.message
+  const content = msg.content
   const parts: string[] = []
   if (typeof content === "string") {
     parts.push(content)
@@ -227,6 +261,7 @@ export function flattenEntryText(entry: {
         parts.push(block)
       } else if (block && typeof block === "object") {
         const b = block as { type?: string; text?: string; name?: string }
+        // Keep visible text; surface tool calls; skip thinking (verbose).
         if (b.type === "text" && typeof b.text === "string") {
           parts.push(b.text)
         } else if (b.type === "toolCall" && typeof b.name === "string") {
@@ -235,8 +270,10 @@ export function flattenEntryText(entry: {
       }
     }
   }
-  return {
-    role: entry.message.role,
-    text: parts.join("\n").trim() || "(empty)",
+  let text = parts.join("\n").trim()
+  if (msg.role === "toolResult") {
+    text = `[result: ${msg.toolName ?? "tool"}] ${text || "(empty)"}`
   }
+  if (!text) return null
+  return { role: msg.role, text: truncate(text, READ_RUN_ITEM_CHAR_LIMIT) }
 }
