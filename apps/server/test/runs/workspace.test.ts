@@ -6,7 +6,7 @@ import {
 } from "../../src/run/workspace/backend"
 
 /** manager is only touched by read/write/list/exec; resolvePath is pure. */
-const backend = createDockerExecBackend("container", {} as never)
+const backend = createDockerExecBackend("container", {} as never, "/workspace")
 
 describe("DockerExecBackend.resolvePath", () => {
   test("relative path → under /workspace", () => {

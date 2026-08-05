@@ -518,11 +518,12 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       })
 
       const toolCtx = buildToolContext(eventId)
-      const bashDef = createBashToolDefinition(wsAbs, {
+      const bashDef = createBashToolDefinition(cfg.workspace, {
         operations: createContainerBashOperations(name, containerManager),
+        exposeSessionEnvironment: false,
       })
       const workspaceTools = createWorkspaceTools(
-        createDockerExecBackend(name, containerManager)
+        createDockerExecBackend(name, containerManager, cfg.workspace)
       )
       const mgmt = createOrchestratorTools(toolCtx)
       const customTools = [
@@ -546,6 +547,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
         orchSession = await createOrchestratorSession({
           eventId,
           workspaceHostPath: wsAbs,
+          containerWorkspace: cfg.workspace,
           modelRuntime,
           model: sdkModel,
           thinkingLevel: row.thinkingLevel as ThinkingLevel,

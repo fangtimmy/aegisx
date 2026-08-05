@@ -195,9 +195,11 @@ export function createContainerManager(options?: { socketPath?: string }) {
       stderrSink: NodeJS.WritableStream
     }
   ): Promise<{ exitCode: number | null; timedOut: boolean }> {
-    const workdir = opts.workdir ?? "/workspace"
+    // Inherit the container's WorkingDir (set at create time from the
+    // container.workspace setting) when no override is given.
+    const workdir = opts.workdir
     const execInst = await get(name).exec({
-      Cmd: ["bash", "-lc", command],
+      Cmd: ["bash", "-c", command],
       WorkingDir: workdir,
       AttachStdout: true,
       AttachStderr: true,

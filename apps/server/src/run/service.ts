@@ -64,6 +64,7 @@ type PendingOutcome = { mode: "finish"; summary: string } | { mode: "close" }
 export type RunContext = {
   containerName: string
   workspaceHostPath: string
+  containerWorkspace: string
   sessionsDir: string
   modelRuntime: RunModelRuntime
   sdkModel: Model<Api>
@@ -664,7 +665,7 @@ export function createRunService(options: RunServiceOptions) {
           {
             runId,
             agentId: mainAgentId,
-            workspaceHostPath: wsAbs,
+            containerWorkspace: input.container.workspace,
             sessionsDir: sessAbs,
             modelRuntime,
             sdkModel,
@@ -702,6 +703,7 @@ export function createRunService(options: RunServiceOptions) {
       contexts.set(runId, {
         containerName: name,
         workspaceHostPath: wsAbs,
+        containerWorkspace: input.container.workspace,
         sessionsDir: sessAbs,
         modelRuntime,
         sdkModel,
@@ -905,7 +907,7 @@ export function createRunService(options: RunServiceOptions) {
         {
           runId,
           agentId: mainAgent.id,
-          workspaceHostPath: wsAbs,
+          containerWorkspace: settings["container.workspace"],
           sessionsDir: sessAbs,
           sessionFile: mainAgent.sessionFile,
           modelRuntime,
@@ -932,6 +934,7 @@ export function createRunService(options: RunServiceOptions) {
     contexts.set(runId, {
       containerName: row.containerName,
       workspaceHostPath: wsAbs,
+      containerWorkspace: settings["container.workspace"],
       sessionsDir: sessAbs,
       modelRuntime,
       sdkModel,

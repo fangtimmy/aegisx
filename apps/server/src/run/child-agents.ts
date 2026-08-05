@@ -153,14 +153,19 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
         task: input.task,
       },
     })
-    const bashDef = createBashToolDefinition(ctx.workspaceHostPath, {
+    const bashDef = createBashToolDefinition(ctx.containerWorkspace, {
       operations: createContainerBashOperations(
         ctx.containerName,
         containerManager
       ),
+      exposeSessionEnvironment: false,
     })
     const workspaceTools = createWorkspaceTools(
-      createDockerExecBackend(ctx.containerName, containerManager)
+      createDockerExecBackend(
+        ctx.containerName,
+        containerManager,
+        ctx.containerWorkspace
+      )
     )
     // Children: coding tools only (no finish/flag/target/spawn).
     const toolNames = ["read", "bash", "edit", "write", "grep", "find", "ls"]
@@ -171,7 +176,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
         owner: { type: "run", id: runId, runId, agentId: childAgentId },
         channel: runId,
         agentId: childAgentId,
-        cwd: ctx.workspaceHostPath,
+        cwd: ctx.containerWorkspace,
         modelRuntime: ctx.modelRuntime,
         model: ctx.sdkModel,
         thinkingLevel: ctx.thinkingLevel,

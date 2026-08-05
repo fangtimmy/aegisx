@@ -31,7 +31,7 @@ export type BackendExecOptions = {
 }
 
 export type WorkspaceBackend = {
-  /** Workspace root as seen inside the container. Always "/workspace". */
+  /** Workspace root as seen inside the container (the container.workspace setting). */
   readonly cwd: string
   /**
    * Resolve an agent-supplied path to a container-internal absolute path.
@@ -84,9 +84,9 @@ export function buildSingleFileTar(
 export function createDockerExecBackend(
   containerName: string,
   manager: ContainerManager,
+  cwd: string,
   options?: { maxCapture?: number }
 ): WorkspaceBackend {
-  const cwd = "/workspace"
   const maxCapture = options?.maxCapture ?? 1_000_000
 
   function resolvePath(path: string, write = false): string {

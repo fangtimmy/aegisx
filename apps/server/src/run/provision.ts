@@ -27,17 +27,18 @@ type Database = ReturnType<typeof createDatabase>["db"]
 
 /** Build the main agent's tool set: container bash + file tools + CTF tools. */
 export function buildMainAgentTools(
-  workspaceHostPath: string,
+  containerWorkspace: string,
   containerName: string,
   ctx: RunToolContext,
   caps: ToolCapabilities,
   containerManager: ContainerManager
 ) {
-  const bashDef = createBashToolDefinition(workspaceHostPath, {
+  const bashDef = createBashToolDefinition(containerWorkspace, {
     operations: createContainerBashOperations(containerName, containerManager),
+    exposeSessionEnvironment: false,
   })
   const workspaceTools = createWorkspaceTools(
-    createDockerExecBackend(containerName, containerManager)
+    createDockerExecBackend(containerName, containerManager, containerWorkspace)
   )
   const nativeTools = createMainTools(ctx, caps)
   return {
@@ -62,7 +63,7 @@ export function buildMainAgentTools(
 export type ProvisionArgs = {
   runId: string
   agentId: string
-  workspaceHostPath: string
+  containerWorkspace: string
   sessionsDir: string
   /** Omit for a new session; pass the existing session id/file to resume. */
   sessionFile?: string
@@ -108,7 +109,7 @@ export async function provisionRunSession(
     args.agentId
   )
   const { customTools, toolNames } = buildMainAgentTools(
-    args.workspaceHostPath,
+    args.containerWorkspace,
     args.containerName,
     toolCtx,
     args.caps,
@@ -123,7 +124,7 @@ export async function provisionRunSession(
     },
     channel: args.runId,
     agentId: args.agentId,
-    cwd: args.workspaceHostPath,
+    cwd: args.containerWorkspace,
     ...(args.sessionFile !== undefined
       ? {
           resumeFrom: {

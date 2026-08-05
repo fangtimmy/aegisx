@@ -78,7 +78,10 @@ export type CreateHostAgentSessionInput = {
   channel: string
   /** Agent id for entry keys + SSE routing (main/child ids, or ORCHESTRATOR_AGENT_ID). */
   agentId: string
-  /** Host workspace path (file tools operate here; bind target is /workspace). */
+  /** Container-internal workspace path surfaced to the model as its cwd (pi
+   * appends `Current working directory: <cwd>` to the system prompt). The host
+   * bind path must NOT be used here — file tools and bash both operate at this
+   * path inside the container. */
   cwd: string
   modelRuntime: ModelRuntime
   model: Model<Api>

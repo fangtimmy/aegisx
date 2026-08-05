@@ -24,6 +24,7 @@ export type OrchestratorAgentSettings = AgentLoopSettings
 export type CreateOrchestratorSessionInput = {
   eventId: string
   workspaceHostPath: string
+  containerWorkspace: string
   modelRuntime: ModelRuntime
   model: Model<Api>
   thinkingLevel: ThinkingLevel
@@ -70,7 +71,7 @@ export async function createOrchestratorSession(
     owner: { type: "orchestrator", id: input.eventId },
     channel: input.eventId,
     agentId: ORCHESTRATOR_AGENT_ID,
-    cwd: input.workspaceHostPath,
+    cwd: input.containerWorkspace,
     modelRuntime: input.modelRuntime,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
