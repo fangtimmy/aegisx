@@ -96,7 +96,12 @@ export function ConnectPlatformDialog({
         type: values.type,
         baseUrl: values.baseUrl.trim(),
         credential: values.credential,
-        remoteEventId: values.type === "ctfd" ? "site" : values.remoteEventId,
+        remoteEventId:
+          values.type === "ctfd"
+            ? "site"
+            : values.type === "tsecbench"
+              ? "task"
+              : values.remoteEventId,
       }),
     onSuccess: async () => {
       await refreshEvent(queryClient, eventId)
@@ -110,7 +115,8 @@ export function ConnectPlatformDialog({
     },
   })
   const discoverData = discover.data
-  const needsDiscovery = !platform && type !== "ctfd" && !discoverData
+  const needsDiscovery =
+    !platform && type !== "ctfd" && type !== "tsecbench" && !discoverData
 
   return (
     <Dialog
@@ -253,7 +259,7 @@ export function ConnectPlatformDialog({
                 rules={{ required: true }}
               />
             </Field>
-            {discoverData && type !== "ctfd" && (
+            {discoverData && type !== "ctfd" && type !== "tsecbench" && (
               <Field>
                 <FieldLabel>赛事</FieldLabel>
                 <Controller
@@ -327,7 +333,12 @@ export function ConnectPlatformDialog({
                 !baseUrl.trim() ||
                 !credential ||
                 testConnection.isPending ||
-                Boolean(discoverData && type !== "ctfd" && !remoteEventId)
+                Boolean(
+                  discoverData &&
+                    type !== "ctfd" &&
+                    type !== "tsecbench" &&
+                    !remoteEventId
+                )
               }
               loading={discover.isPending || bind.isPending}
               type="submit"

@@ -15,6 +15,7 @@ import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { A1CtfAdapter } from "./adapters/a1ctf"
 import { CtfdAdapter } from "./adapters/ctfd"
 import { Ret2ShellAdapter } from "./adapters/ret2shell"
+import { TsecBenchAdapter } from "./adapters/tsecbench"
 import type {
   CtfPlatformAdapter,
   PlatformConfig,
@@ -38,6 +39,8 @@ export function createPlatformAdapter(
   if (config.type === "ret2shell") {
     return new Ret2ShellAdapter(config, onCredential, onError, timeoutMs)
   }
+  if (config.type === "tsecbench")
+    return new TsecBenchAdapter(config, onError, timeoutMs)
   return new A1CtfAdapter(config, onError, timeoutMs)
 }
 
@@ -161,7 +164,7 @@ export function createPlatformService(
       type: input.type,
       baseUrl: normalizeBaseUrl(input.baseUrl),
       credential: input.credential,
-      remoteEventId: input.type === "ctfd" ? "site" : input.remoteEventId,
+      remoteEventId: syntheticRemoteEventId(input.type) ?? input.remoteEventId,
     }
     const sourceKey = platformSourceKey(config)
     const linkedSources = db
@@ -257,7 +260,7 @@ export function createPlatformService(
         {
           ...input,
           baseUrl: normalizeBaseUrl(input.baseUrl),
-          remoteEventId: input.type === "ctfd" ? "site" : "",
+          remoteEventId: syntheticRemoteEventId(input.type) ?? "",
         },
         undefined,
         logPlatformRequest,
@@ -277,7 +280,7 @@ export function createPlatformService(
       const config: PlatformConfig = {
         ...input,
         baseUrl: normalizeBaseUrl(input.baseUrl),
-        remoteEventId: input.type === "ctfd" ? "site" : "",
+        remoteEventId: syntheticRemoteEventId(input.type) ?? "",
       }
       await createPlatformAdapter(
         config,
@@ -345,4 +348,12 @@ function platformSourceKey(config: PlatformConfig) {
     normalizeBaseUrl(config.baseUrl),
     config.remoteEventId,
   ])
+}
+
+/** Platforms with no real event concept get a fixed synthetic remoteEventId
+ * (mirrors ctfd → "site"). TSecBench's token already identifies the task. */
+function syntheticRemoteEventId(type: PlatformType): string | null {
+  if (type === "ctfd") return "site"
+  if (type === "tsecbench") return "task"
+  return null
 }

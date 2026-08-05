@@ -79,11 +79,17 @@ export interface CtfPlatformAdapter {
 export type JsonRecord = Record<string, unknown>
 
 export class PlatformError extends Error {
-  constructor(
-    message: string,
-    readonly status?: number
-  ) {
+  /** HTTP status from the response, when one was received. */
+  readonly status?: number
+  /** Machine-readable error code from the platform body (e.g. "duplicate"),
+   * when the platform exposes one. Lets adapters distinguish cases that share
+   * an HTTP status (TSecBench's 409 duplicate vs invalid_state). */
+  readonly code?: string
+
+  constructor(message: string, status?: number, code?: string) {
     super(message)
+    this.status = status
+    this.code = code
   }
 }
 
@@ -167,6 +173,7 @@ export class PlatformHttp {
         // Body unreadable; leave null.
       }
       let message = `Platform request failed (${response.status})`
+      let code: string | undefined
       if (responseBody) {
         try {
           const body = JSON.parse(responseBody) as JsonRecord
@@ -177,6 +184,7 @@ export class PlatformHttp {
           if (extracted !== undefined && extracted !== null) {
             message = String(extracted)
           }
+          if (typeof body.code === "string") code = body.code
         } catch {
           // Non-JSON body; keep the status-line message.
         }
@@ -195,7 +203,7 @@ export class PlatformHttp {
         responseBody,
         error: null,
       })
-      throw new PlatformError(message, response.status)
+      throw new PlatformError(message, response.status, code)
     }
     return response
   }

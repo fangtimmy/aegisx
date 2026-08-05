@@ -5,12 +5,14 @@ export const platformLabels: Record<PlatformType, string> = {
   ctfd: "CTFd",
   ret2shell: "ret2shell",
   a1ctf: "A1CTF",
+  tsecbench: "TSecBench",
 }
 
 export const credentialLabels: Record<PlatformType, string> = {
   ctfd: "访问令牌",
   ret2shell: "Bearer token",
   a1ctf: "a1token cookie",
+  tsecbench: "BENCHMARK_TOKEN",
 }
 
 export const credentialPrefixes: Partial<Record<PlatformType, string>> = {
