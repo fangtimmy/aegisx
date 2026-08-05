@@ -34,6 +34,14 @@ import { ConversationStore } from "@/stream/conversation-store"
 
 const AGENT_ID = "orchestrator"
 
+function orchestratorStatusLabel(
+  status: "running" | "idle" | "closed"
+): string {
+  if (status === "running") return "运行中"
+  if (status === "idle") return "空闲"
+  return "已关闭"
+}
+
 export function OrchestratorView({ eventId }: { eventId: string }) {
   const queryClient = useQueryClient()
   const detail = useQuery({
@@ -117,9 +125,9 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       queryClient.invalidateQueries({
         queryKey: keys.orchestrator.detail(eventId),
       })
-      toast.success("Orchestrator config saved")
+      toast.success("编排器配置已保存")
     },
-    onError: (error: Error) => toast.error("Failed to save", error.message),
+    onError: (error: Error) => toast.error("保存失败", error.message),
   })
   const startMut = useMutation({
     mutationFn: async () => {
@@ -134,7 +142,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       queryClient.invalidateQueries({
         queryKey: keys.orchestrator.detail(eventId),
       }),
-    onError: (error: Error) => toast.error("Failed to start", error.message),
+    onError: (error: Error) => toast.error("启动失败", error.message),
   })
   const stopMut = useMutation({
     mutationFn: () => orchestratorsApi.stopOrchestrator(eventId),
@@ -142,7 +150,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       queryClient.invalidateQueries({
         queryKey: keys.orchestrator.detail(eventId),
       }),
-    onError: (error: Error) => toast.error("Failed to stop", error.message),
+    onError: (error: Error) => toast.error("停止失败", error.message),
   })
   const closeMut = useMutation({
     mutationFn: () => orchestratorsApi.closeOrchestrator(eventId),
@@ -150,13 +158,13 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       queryClient.invalidateQueries({
         queryKey: keys.orchestrator.detail(eventId),
       }),
-    onError: (error: Error) => toast.error("Failed to close", error.message),
+    onError: (error: Error) => toast.error("关闭失败", error.message),
   })
   const send = useMutation({
     mutationFn: () =>
       orchestratorsApi.sendOrchestratorMessage(eventId, { text: draft.trim() }),
     onSuccess: () => setDraft(""),
-    onError: (error: Error) => toast.error("Failed to send", error.message),
+    onError: (error: Error) => toast.error("发送失败", error.message),
   })
   const switchModel = useMutation({
     mutationFn: (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
@@ -165,8 +173,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       queryClient.invalidateQueries({
         queryKey: keys.orchestrator.detail(eventId),
       }),
-    onError: (error: Error) =>
-      toast.error("Failed to switch model", error.message),
+    onError: (error: Error) => toast.error("切换模型失败", error.message),
   })
 
   if (detail.isPending) {
@@ -175,7 +182,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
         className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
         role="status"
       >
-        <Spinner aria-hidden="true" /> Loading orchestrator...
+        <Spinner aria-hidden="true" /> 正在加载编排器…
       </div>
     )
   }
@@ -183,7 +190,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
     return (
       <Alert className="m-4 w-auto" variant="error">
         <CircleAlert />
-        <AlertTitle>Unable to load orchestrator</AlertTitle>
+        <AlertTitle>无法加载编排器</AlertTitle>
         <AlertDescription>{detail.error.message}</AlertDescription>
       </Alert>
     )
@@ -202,12 +209,14 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       <CardFrameHeader>
         <CardFrameTitle>
           <span className="flex items-center gap-2">
-            <Bot className="size-4" /> Orchestrator
-            <Badge variant={statusVariant}>{orch.status}</Badge>
+            <Bot className="size-4" /> 编排器
+            <Badge variant={statusVariant}>
+              {orchestratorStatusLabel(orch.status)}
+            </Badge>
           </span>
         </CardFrameTitle>
         <CardFrameDescription className="font-mono text-xs">
-          Concurrency {status.running}/{status.maxConcurrentRuns} · Targets{" "}
+          并发 {status.running}/{status.maxConcurrentRuns} · 目标{" "}
           {status.inflightTargets}/{status.maxConcurrentTargets}
         </CardFrameDescription>
         <CardFrameAction className="gap-2">
@@ -218,7 +227,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
               size="sm"
               type="button"
             >
-              <Play /> {orch.enabled ? "Start" : "Enable & Start"}
+              <Play /> {orch.enabled ? "启动" : "启用并启动"}
             </Button>
           )}
           {running && (
@@ -229,7 +238,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
               type="button"
               variant="destructive-outline"
             >
-              <Square /> Stop
+              <Square /> 停止
             </Button>
           )}
           {orch.status !== "closed" && (
@@ -240,7 +249,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
               type="button"
               variant="outline"
             >
-              Close
+              关闭
             </Button>
           )}
         </CardFrameAction>
@@ -259,10 +268,10 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
               variant="underline"
             >
               <TabsTab className="gap-2" value="conversation">
-                <MessageSquare /> Conversation
+                <MessageSquare /> 对话
               </TabsTab>
               <TabsTab className="gap-2" value="instruction">
-                <SettingsIcon /> Instruction
+                <SettingsIcon /> 指令
               </TabsTab>
             </TabsList>
             <TabsPanel
@@ -277,7 +286,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                 </div>
                 {disconnected && running && (
                   <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-muted-foreground text-xs">
-                    Reconnecting…
+                    正在重新连接…
                   </div>
                 )}
                 <div className="shrink-0 px-3 pb-3">
@@ -299,10 +308,10 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                             onChange={(e) => setDraft(e.target.value)}
                             placeholder={
                               orch.status === "closed"
-                                ? "Start the orchestrator to begin"
+                                ? "启动编排器以开始"
                                 : running
-                                  ? "Steer the orchestrator…"
-                                  : "Send a message to the orchestrator…"
+                                  ? "引导编排器…"
+                                  : "向编排器发送消息…"
                             }
                             value={draft}
                           />
@@ -345,17 +354,16 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                       className="mb-1 block font-medium text-sm"
                       htmlFor="orchestrator-instruction"
                     >
-                      Instruction
+                      指令
                     </label>
                     <p className="mb-2 text-muted-foreground text-xs">
-                      Natural-language strategy. The orchestrator follows this
-                      when scheduling and reviewing runs.
+                      自然语言策略。编排器在调度和审查任务时会遵循此指令。
                     </p>
                     <textarea
                       className="min-h-48 w-full rounded-md border bg-background p-3 text-sm"
                       id="orchestrator-instruction"
                       onChange={(e) => setInstruction(e.target.value)}
-                      placeholder="e.g. Hit low-point challenges first; leave pwn for last; skip already-solved ones."
+                      placeholder="例如：先打低分题；pwn 放到最后；跳过已解决的题目。"
                       value={instruction}
                     />
                     <div className="mt-2 flex justify-end">
@@ -366,15 +374,15 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                         onClick={() => patch.mutate({ instruction })}
                         type="button"
                       >
-                        Save instruction
+                        保存指令
                       </Button>
                     </div>
                   </div>
                   <div className="flex items-center justify-between rounded-md border p-3">
                     <div>
-                      <p className="font-medium text-sm">Enabled</p>
+                      <p className="font-medium text-sm">启用</p>
                       <p className="text-muted-foreground text-xs">
-                        When on, the orchestrator is armed and ready to start.
+                        开启后，编排器即处于待命状态，随时可启动。
                       </p>
                     </div>
                     <Button
@@ -382,7 +390,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                       type="button"
                       variant={orch.enabled ? "secondary" : "outline"}
                     >
-                      {orch.enabled ? "Enabled" : "Disabled"}
+                      {orch.enabled ? "已启用" : "已禁用"}
                     </Button>
                   </div>
                   <div className="space-y-3 rounded-md border p-3">
@@ -392,7 +400,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                           className="mb-1 block text-muted-foreground text-xs"
                           htmlFor="orch-model"
                         >
-                          Model
+                          模型
                         </label>
                         <select
                           className="h-9 w-full rounded-md border bg-background px-2 text-sm"
@@ -403,7 +411,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                           }
                           value={orch.modelId ?? ""}
                         >
-                          <option value="">(global default)</option>
+                          <option value="">（全局默认）</option>
                           {modelOptions.map((m) => (
                             <option key={m.id} value={m.id}>
                               {m.label}
@@ -416,7 +424,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                           className="mb-1 block text-muted-foreground text-xs"
                           htmlFor="orch-targets"
                         >
-                          Max concurrent targets
+                          最大并发目标数
                         </label>
                         <input
                           className="h-9 w-full rounded-md border bg-background px-2 text-sm"
@@ -439,36 +447,36 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                       </div>
                     </div>
                     <p className="text-muted-foreground text-xs">
-                      Reasoning: {orch.thinkingLevel}
+                      推理：{orch.thinkingLevel}
                     </p>
                   </div>
                   {usage && (
                     <div className="rounded-md border p-3">
                       <p className="mb-2 font-medium text-sm">
-                        Token usage &amp; cost
+                        Token 用量与费用
                       </p>
                       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-muted-foreground text-xs sm:grid-cols-3">
                         <div>
-                          <dt className="text-[10px] uppercase">Input</dt>
+                          <dt className="text-[10px] uppercase">输入</dt>
                           <dd>{usage.input.toLocaleString()}</dd>
                         </div>
                         <div>
-                          <dt className="text-[10px] uppercase">Output</dt>
+                          <dt className="text-[10px] uppercase">输出</dt>
                           <dd>{usage.output.toLocaleString()}</dd>
                         </div>
                         <div>
-                          <dt className="text-[10px] uppercase">Cache</dt>
+                          <dt className="text-[10px] uppercase">缓存</dt>
                           <dd>
-                            {usage.cacheRead.toLocaleString()} R /{" "}
-                            {usage.cacheWrite.toLocaleString()} W
+                            {usage.cacheRead.toLocaleString()} 读 /{" "}
+                            {usage.cacheWrite.toLocaleString()} 写
                           </dd>
                         </div>
                         <div>
-                          <dt className="text-[10px] uppercase">Turns</dt>
+                          <dt className="text-[10px] uppercase">轮次</dt>
                           <dd>{usage.turns}</dd>
                         </div>
                         <div>
-                          <dt className="text-[10px] uppercase">Cost</dt>
+                          <dt className="text-[10px] uppercase">费用</dt>
                           <dd>${usage.cost.toFixed(3)}</dd>
                         </div>
                       </dl>

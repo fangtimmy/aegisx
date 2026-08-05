@@ -75,10 +75,8 @@ export function EditModelDialog({
     >
       <DialogPopup className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Edit model</DialogTitle>
-          <DialogDescription>
-            Model IDs cannot be changed after they are added.
-          </DialogDescription>
+          <DialogTitle>编辑模型</DialogTitle>
+          <DialogDescription>模型 ID 在添加后无法更改。</DialogDescription>
         </DialogHeader>
         <form
           className="contents"
@@ -96,7 +94,7 @@ export function EditModelDialog({
               }
               metadata = parsed as ProviderModel["metadata"]
             } catch {
-              setMetadataError("Enter a JSON object")
+              setMetadataError("请输入一个 JSON 对象")
               return
             }
             editModel.mutate({
@@ -110,7 +108,7 @@ export function EditModelDialog({
           <DialogPanel className="grid gap-4">
             <Field>
               <FieldLabel htmlFor="editing-provider-model-id">
-                Model ID
+                模型 ID
               </FieldLabel>
               <Input
                 disabled
@@ -120,7 +118,7 @@ export function EditModelDialog({
             </Field>
             <Field>
               <FieldLabel htmlFor="editing-provider-model-label">
-                Display name
+                显示名称
               </FieldLabel>
               <Controller
                 control={editForm.control}
@@ -142,11 +140,11 @@ export function EditModelDialog({
               <div className="flex w-full min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0">
                   <FieldLabel htmlFor="editing-provider-model-metadata">
-                    Metadata JSON
+                    元数据 JSON
                   </FieldLabel>
                   {editingBinding && (
                     <p className="truncate font-mono text-muted-foreground text-xs">
-                      Bound to {editingBinding.providerId} /{" "}
+                      已绑定到 {editingBinding.providerId} /{" "}
                       {editingBinding.modelId}
                     </p>
                   )}
@@ -161,14 +159,14 @@ export function EditModelDialog({
                     type="button"
                     variant="outline"
                   >
-                    <Link2 /> {editingBinding ? "Change" : "Bind"}
+                    <Link2 /> {editingBinding ? "更改" : "绑定"}
                   </Button>
                   {editingBinding && (
                     <Button
-                      aria-label="Unbind Pi model"
+                      aria-label="解绑 Pi 模型"
                       onClick={() => setEditingBinding(null)}
                       size="icon-sm"
-                      title="Unbind Pi model"
+                      title="解绑 Pi 模型"
                       type="button"
                       variant="outline"
                     >
@@ -211,10 +209,10 @@ export function EditModelDialog({
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
+              取消
             </DialogClose>
             <Button loading={editModel.isPending} type="submit">
-              Save model
+              保存模型
             </Button>
           </DialogFooter>
         </form>
@@ -250,17 +248,17 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
     >
       <DialogPopup className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Bind Pi built-in model</DialogTitle>
+          <DialogTitle>绑定 Pi 内置模型</DialogTitle>
           <DialogDescription>
-            Apply a Pi profile to <code>{bindingModel?.modelId}</code>. This
-            replaces its metadata but keeps its configured model ID. Any
-            built-in profile can be bound regardless of protocol.
+            将一个 Pi profile 应用到 <code>{bindingModel?.modelId}</code>
+            。这会替换其元数据，但保留已配置的模型 ID。任何内置 profile
+            都可绑定，与协议无关。
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="grid gap-4">
           {builtins.isPending ? (
             <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <Spinner aria-hidden="true" /> Loading Pi models...
+              <Spinner aria-hidden="true" /> 正在加载 Pi 模型…
             </div>
           ) : builtins.error ? (
             <Alert variant="error">
@@ -269,7 +267,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
             </Alert>
           ) : (
             <Field>
-              <FieldLabel htmlFor="pi-model-binding">Pi model</FieldLabel>
+              <FieldLabel htmlFor="pi-model-binding">Pi 模型</FieldLabel>
               <Combobox<PiModelProfile>
                 filter={(item, query) => {
                   const q = query.trim().toLowerCase()
@@ -298,7 +296,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
               >
                 <ComboboxInput
                   id="pi-model-binding"
-                  placeholder="Search by model id, name, or provider"
+                  placeholder="按模型 ID、名称或供应商搜索"
                 />
                 <ComboboxPopup>
                   <ComboboxList>
@@ -315,7 +313,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
                         </ComboboxItem>
                       )}
                     </ComboboxCollection>
-                    <ComboboxEmpty>No models found</ComboboxEmpty>
+                    <ComboboxEmpty>未找到模型</ComboboxEmpty>
                   </ComboboxList>
                 </ComboboxPopup>
               </Combobox>
@@ -324,7 +322,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="ghost" />}>
-            Cancel
+            取消
           </DialogClose>
           <Button
             disabled={!bindingModel || !selectedProfile}
@@ -339,7 +337,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
             }}
             type="button"
           >
-            <Link2 /> Bind model
+            <Link2 /> 绑定模型
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -364,17 +362,15 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
     >
       <DialogPopup className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add fetched models</DialogTitle>
-          <DialogDescription>
-            Select the new models to add to this provider.
-          </DialogDescription>
+          <DialogTitle>添加已获取的模型</DialogTitle>
+          <DialogDescription>选择要添加到该供应商的新模型。</DialogDescription>
         </DialogHeader>
         <DialogPanel>
           {items.length > 0 ? (
             <>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <span className="text-muted-foreground text-xs">
-                  {selected.length} of {items.length} selected
+                  已选 {selected.length} / 共 {items.length}
                 </span>
                 <Button
                   disabled={addModels.isPending}
@@ -382,11 +378,11 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
                   type="button"
                   variant="ghost"
                 >
-                  {allSelected ? "Clear all" : "Select all"}
+                  {allSelected ? "清除全部" : "全选"}
                 </Button>
               </div>
               <CheckboxGroup
-                aria-label="Models to add"
+                aria-label="要添加的模型"
                 className="max-h-80 w-full gap-0 overflow-y-auto border-y"
                 disabled={addModels.isPending}
                 onValueChange={setSelected}
@@ -408,10 +404,8 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
           ) : (
             <Empty className="py-8">
               <EmptyHeader>
-                <EmptyTitle>No new models found</EmptyTitle>
-                <EmptyDescription>
-                  All fetched models are already configured.
-                </EmptyDescription>
+                <EmptyTitle>未发现新模型</EmptyTitle>
+                <EmptyDescription>所有获取到的模型均已配置。</EmptyDescription>
               </EmptyHeader>
             </Empty>
           )}
@@ -424,7 +418,7 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="ghost" />}>
-            {items.length > 0 ? "Cancel" : "Close"}
+            {items.length > 0 ? "取消" : "关闭"}
           </DialogClose>
           {items.length > 0 && (
             <Button
@@ -437,7 +431,7 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
               }
               type="button"
             >
-              Add selected ({selected.length})
+              添加所选（{selected.length}）
             </Button>
           )}
         </DialogFooter>

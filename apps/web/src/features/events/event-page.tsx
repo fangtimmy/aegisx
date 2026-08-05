@@ -81,25 +81,25 @@ type ChallengeSort = "event" | "name" | "points"
 type ChallengeGroup = "category" | "status" | "none"
 
 const FULLWIDTH_KEY = "aegisx:event-fullwidth"
-const UNCATEGORIZED = "Uncategorized"
+const UNCATEGORIZED = "未分类"
 
 const LOCAL_STATUS_OPTIONS: Array<{
   value: LocalChallengeStatus
   label: string
 }> = [
-  { value: "not_started", label: "Not started" },
-  { value: "in_progress", label: "In progress" },
-  { value: "solved", label: "Solved" },
+  { value: "not_started", label: "未开始" },
+  { value: "in_progress", label: "进行中" },
+  { value: "solved", label: "已解决" },
 ]
 
 const REMOTE_STATUS_OPTIONS: Array<{
   value: RemoteChallengeStatus
   label: string
 }> = [
-  { value: "no_remote", label: "No remote" },
-  { value: "unsolved", label: "Remote unsolved" },
-  { value: "solved", label: "Remote solved" },
-  { value: "unavailable", label: "Remote unavailable" },
+  { value: "no_remote", label: "无远端" },
+  { value: "unsolved", label: "远端未解决" },
+  { value: "solved", label: "远端已解决" },
+  { value: "unavailable", label: "远端不可用" },
 ]
 
 function readFullWidth(): boolean {
@@ -146,7 +146,7 @@ function challengeGroups(
   const sorted = [...challenges]
   if (sort === "name") {
     sorted.sort((left, right) =>
-      left.name.localeCompare(right.name, undefined, {
+      left.name.localeCompare(right.name, "zh-Hans-CN", {
         numeric: true,
         sensitivity: "base",
       })
@@ -164,10 +164,10 @@ function challengeGroups(
     group === "category"
       ? challenge.category || UNCATEGORIZED
       : challenge.status === "solved"
-        ? "Solved"
+        ? "已解决"
         : challenge.status === "in_progress"
-          ? "In progress"
-          : "Not started"
+          ? "进行中"
+          : "未开始"
   const groupKeys = [...new Set(sorted.map(keyFor))]
   return groupKeys.map((key) => ({
     key,
@@ -206,7 +206,7 @@ export function EventPage() {
           challenges.map((challenge) => challenge.category || UNCATEGORIZED)
         ),
       ].sort((left, right) =>
-        left.localeCompare(right, undefined, {
+        left.localeCompare(right, "zh-Hans-CN", {
           numeric: true,
           sensitivity: "base",
         })
@@ -237,7 +237,7 @@ export function EventPage() {
           role="status"
         >
           <Spinner aria-hidden="true" />
-          Loading event...
+          正在加载赛事…
         </div>
       )}
       {eventQuery.error && (
@@ -268,16 +268,16 @@ export function EventPage() {
           >
             <TabsList className="w-full items-stretch" variant="underline">
               <TabsTab className="justify-start gap-2" value="overview">
-                <LayoutPanelTop /> Overview
+                <LayoutPanelTop /> 概览
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="run">
-                <Play /> Run
+                <Play /> 任务
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="orchestrator">
-                <Bot /> Orchestrator
+                <Bot /> 编排器
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="settings">
-                <Settings /> Settings
+                <Settings /> 设置
               </TabsTab>
             </TabsList>
             <button
@@ -286,7 +286,7 @@ export function EventPage() {
               type="button"
             >
               {fullWidth ? <Minimize2 /> : <Maximize2 />}
-              {fullWidth ? "Normal width" : "Full width"}
+              {fullWidth ? "标准宽度" : "全宽"}
             </button>
           </aside>
           <div
@@ -306,7 +306,7 @@ export function EventPage() {
                     {activeFilterCount > 0
                       ? `${filteredChallenges.length} / ${eventQuery.data.challenges.length}`
                       : eventQuery.data.challenges.length}{" "}
-                    challenges
+                    个题目
                   </Badge>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -317,7 +317,7 @@ export function EventPage() {
                           render={<Button type="button" variant="outline" />}
                         >
                           <ListFilter />
-                          Filter
+                          筛选
                           {activeFilterCount > 0 && (
                             <Badge size="sm" variant="secondary">
                               {activeFilterCount}
@@ -326,7 +326,7 @@ export function EventPage() {
                         </MenuTrigger>
                         <MenuPopup align="end" className="min-w-56">
                           <MenuGroup>
-                            <MenuGroupLabel>Category</MenuGroupLabel>
+                            <MenuGroupLabel>分类</MenuGroupLabel>
                             {categoryOptions.map((category) => (
                               <MenuCheckboxItem
                                 checked={categoryFilter.includes(category)}
@@ -343,7 +343,7 @@ export function EventPage() {
                           </MenuGroup>
                           <MenuSeparator />
                           <MenuGroup>
-                            <MenuGroupLabel>Local status</MenuGroupLabel>
+                            <MenuGroupLabel>本地状态</MenuGroupLabel>
                             {LOCAL_STATUS_OPTIONS.map((option) => (
                               <MenuCheckboxItem
                                 checked={localFilter.includes(option.value)}
@@ -360,7 +360,7 @@ export function EventPage() {
                           </MenuGroup>
                           <MenuSeparator />
                           <MenuGroup>
-                            <MenuGroupLabel>Remote status</MenuGroupLabel>
+                            <MenuGroupLabel>远端状态</MenuGroupLabel>
                             {REMOTE_STATUS_OPTIONS.map((option) => (
                               <MenuCheckboxItem
                                 checked={remoteFilter.includes(option.value)}
@@ -385,7 +385,7 @@ export function EventPage() {
                                   setRemoteFilter([])
                                 }}
                               >
-                                Clear filters
+                                清除筛选
                               </MenuItem>
                             </>
                           )}
@@ -397,10 +397,10 @@ export function EventPage() {
                         >
                           <ListTree />
                           {group === "category"
-                            ? "Category"
+                            ? "按分类"
                             : group === "status"
-                              ? "Status"
-                              : "No groups"}
+                              ? "按状态"
+                              : "不分组"}
                         </MenuTrigger>
                         <MenuPopup align="end">
                           <MenuRadioGroup
@@ -410,12 +410,10 @@ export function EventPage() {
                             value={group}
                           >
                             <MenuRadioItem value="category">
-                              Category
+                              按分类
                             </MenuRadioItem>
-                            <MenuRadioItem value="status">Status</MenuRadioItem>
-                            <MenuRadioItem value="none">
-                              No groups
-                            </MenuRadioItem>
+                            <MenuRadioItem value="status">按状态</MenuRadioItem>
+                            <MenuRadioItem value="none">不分组</MenuRadioItem>
                           </MenuRadioGroup>
                         </MenuPopup>
                       </Menu>
@@ -425,10 +423,10 @@ export function EventPage() {
                         >
                           <ArrowUpDown />
                           {sort === "event"
-                            ? "Event order"
+                            ? "赛事顺序"
                             : sort === "name"
-                              ? "Name"
-                              : "Points"}
+                              ? "名称"
+                              : "分值"}
                         </MenuTrigger>
                         <MenuPopup align="end">
                           <MenuRadioGroup
@@ -438,11 +436,11 @@ export function EventPage() {
                             value={sort}
                           >
                             <MenuRadioItem value="event">
-                              Event order
+                              赛事顺序
                             </MenuRadioItem>
-                            <MenuRadioItem value="name">Name</MenuRadioItem>
+                            <MenuRadioItem value="name">名称</MenuRadioItem>
                             <MenuRadioItem value="points">
-                              Points: high to low
+                              分值：从高到低
                             </MenuRadioItem>
                           </MenuRadioGroup>
                         </MenuPopup>
@@ -461,7 +459,7 @@ export function EventPage() {
               {uploadError && (
                 <Alert className="mb-4" variant="warning">
                   <TriangleAlert />
-                  <AlertTitle>Attachment upload failed</AlertTitle>
+                  <AlertTitle>附件上传失败</AlertTitle>
                   <AlertDescription>{uploadError}</AlertDescription>
                 </Alert>
               )}
@@ -471,9 +469,9 @@ export function EventPage() {
                     <EmptyMedia variant="icon">
                       <Flag />
                     </EmptyMedia>
-                    <EmptyTitle>No challenges</EmptyTitle>
+                    <EmptyTitle>暂无题目</EmptyTitle>
                     <EmptyDescription>
-                      Add the first challenge for this event.
+                      为本赛事添加第一个题目。
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
@@ -483,9 +481,9 @@ export function EventPage() {
                     <EmptyMedia variant="icon">
                       <ListFilter />
                     </EmptyMedia>
-                    <EmptyTitle>No matching challenges</EmptyTitle>
+                    <EmptyTitle>没有匹配的题目</EmptyTitle>
                     <EmptyDescription>
-                      Clear or adjust filters to see challenges again.
+                      清除或调整筛选条件以重新查看题目。
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>

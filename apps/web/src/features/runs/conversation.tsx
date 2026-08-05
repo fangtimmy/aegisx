@@ -117,7 +117,7 @@ export function Conversation({
     mutationFn: () =>
       runsApi.sendMessage(runId, { text: draft.trim(), deliverAs }),
     onSuccess: () => setDraft(""),
-    onError: (error) => toast.error("Failed to send message", error.message),
+    onError: (error) => toast.error("发送消息失败", error.message),
   })
 
   const queryClient = useQueryClient()
@@ -126,7 +126,7 @@ export function Conversation({
       runsApi.switchModel(runId, input),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
-    onError: (error) => toast.error("Failed to switch model", error.message),
+    onError: (error) => toast.error("切换模型失败", error.message),
   })
 
   const onSubmit = () => {
@@ -154,7 +154,7 @@ export function Conversation({
                   <GitFork aria-hidden="true" className="size-3.5" />
                 )}
                 <span className="max-w-40 truncate">
-                  {agent.role === "main" ? "Main" : (agent.name ?? "Child")}
+                  {agent.role === "main" ? "主" : (agent.name ?? "子")}
                 </span>
                 <AgentStatusIcon
                   className="[&_svg]:size-3.5"
@@ -176,7 +176,7 @@ export function Conversation({
       </div>
       {disconnected && running && (
         <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-muted-foreground text-xs">
-          <LoaderCircle className="size-3 animate-spin" /> Reconnecting…
+          <LoaderCircle className="size-3 animate-spin" /> 正在重新连接…
         </div>
       )}
       {selectedAgent && (
@@ -257,10 +257,10 @@ function MessageInput({
   onSubmit: () => void
 }) {
   const placeholder = closed
-    ? "Send a message to reopen and continue (container will rebuild)"
+    ? "发送消息以重新打开并继续（容器将重建）"
     : running
-      ? "Steer or follow up the agent…"
-      : "Send a message to the agent…"
+      ? "引导或追问 agent…"
+      : "向 agent 发送消息…"
   return (
     <form
       className="flex w-full items-center gap-2"
@@ -270,7 +270,7 @@ function MessageInput({
       }}
     >
       <Input
-        aria-label="Message to agent"
+        aria-label="向 agent 发送消息"
         className="flex-1"
         disabled={busy}
         onChange={(e) => onDraftChange(e.target.value)}
@@ -280,7 +280,7 @@ function MessageInput({
       />
       <ButtonGroup>
         <Button
-          aria-label="Send message"
+          aria-label="发送消息"
           disabled={!draft.trim() || busy}
           loading={busy}
           size="icon"
@@ -294,11 +294,7 @@ function MessageInput({
             <Menu>
               <MenuTrigger
                 render={
-                  <Button
-                    aria-label="Delivery mode"
-                    size="icon"
-                    variant="outline"
-                  />
+                  <Button aria-label="投递方式" size="icon" variant="outline" />
                 }
               >
                 <ChevronDown />
@@ -310,8 +306,8 @@ function MessageInput({
                   }
                   value={deliverAs}
                 >
-                  <MenuRadioItem value="steer">Steer</MenuRadioItem>
-                  <MenuRadioItem value="followUp">Follow-up</MenuRadioItem>
+                  <MenuRadioItem value="steer">引导</MenuRadioItem>
+                  <MenuRadioItem value="followUp">追问</MenuRadioItem>
                 </MenuRadioGroup>
               </MenuPopup>
             </Menu>
@@ -420,7 +416,7 @@ function SteerQueue({
   const put = useMutation({
     mutationFn: (body: { steering: string[]; followUp: string[] }) =>
       runsApi.setQueue(runId, body),
-    onError: (error) => toast.error("Failed to update queue", error.message),
+    onError: (error) => toast.error("更新队列失败", error.message),
   })
 
   const rows: QueueRow[] = [
@@ -477,7 +473,7 @@ function SteerQueue({
                   : "bg-secondary text-secondary-foreground"
               )}
             >
-              {row.role === "steering" ? "Steer" : "Follow-up"}
+              {row.role === "steering" ? "引导" : "追问"}
             </span>
             {editing ? (
               <input
@@ -500,14 +496,14 @@ function SteerQueue({
               <button
                 className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-muted-foreground text-xs hover:bg-secondary"
                 onClick={() => setEdit(row)}
-                title="Click to edit"
+                title="点击编辑"
                 type="button"
               >
                 {row.text}
               </button>
             )}
             <Button
-              aria-label="Remove from queue"
+              aria-label="从队列移除"
               onClick={() => remove(row.role, row.index)}
               size="icon-sm"
               type="button"

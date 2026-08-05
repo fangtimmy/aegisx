@@ -57,7 +57,7 @@ function DeleteChallengeDialog({
       <AlertDialogTrigger
         render={
           <Button
-            aria-label={`Delete ${challenge.name}`}
+            aria-label={`删除 ${challenge.name}`}
             size="icon-sm"
             type="button"
             variant="ghost"
@@ -90,18 +90,17 @@ function DeleteChallengeDialogContent({
         }),
         queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
-      toast.success("Challenge deleted")
+      toast.success("题目已删除")
     },
-    onError: (error) =>
-      toast.error("Failed to delete challenge", error.message),
+    onError: (error) => toast.error("删除题目失败", error.message),
   })
 
   return (
     <AlertDialogPopup>
       <AlertDialogHeader>
-        <AlertDialogTitle>Delete {challenge.name}?</AlertDialogTitle>
+        <AlertDialogTitle>删除 {challenge.name}？</AlertDialogTitle>
         <AlertDialogDescription>
-          This permanently deletes the challenge and its attachments.
+          这将永久删除该题目及其附件。
         </AlertDialogDescription>
         {mutation.error && (
           <Alert variant="error">
@@ -112,7 +111,7 @@ function DeleteChallengeDialogContent({
       </AlertDialogHeader>
       <AlertDialogFooter>
         <AlertDialogClose render={<Button type="button" variant="ghost" />}>
-          Cancel
+          取消
         </AlertDialogClose>
         <Button
           loading={mutation.isPending}
@@ -120,7 +119,7 @@ function DeleteChallengeDialogContent({
           type="button"
           variant="destructive"
         >
-          Delete challenge
+          删除题目
         </Button>
       </AlertDialogFooter>
     </AlertDialogPopup>
@@ -145,16 +144,14 @@ export function ChallengeCard({
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
               <Badge size="sm" variant="outline">
-                {challenge.category || "Uncategorized"}
+                {challenge.category || "未分类"}
               </Badge>
               {isChallengeSolved(challenge) ? (
                 <Badge size="sm" variant="success">
-                  Solved
+                  已解决
                   <Cloud
                     aria-label={
-                      challenge.remoteSolved
-                        ? "Remote solved"
-                        : "Remote unsolved"
+                      challenge.remoteSolved ? "远端已解决" : "远端未解决"
                     }
                     className={
                       challenge.remoteSolved
@@ -165,8 +162,8 @@ export function ChallengeCard({
                   <HardDrive
                     aria-label={
                       challenge.status === "solved"
-                        ? "Local solved"
-                        : "Local unsolved"
+                        ? "本地已解决"
+                        : "本地未解决"
                     }
                     className={
                       challenge.status === "solved"
@@ -177,12 +174,12 @@ export function ChallengeCard({
                 </Badge>
               ) : (
                 <Badge size="sm" variant="secondary">
-                  Open
+                  待解决
                 </Badge>
               )}
               {challenge.remoteId && !challenge.remoteAvailable && (
                 <Badge size="sm" variant="warning">
-                  Remote unavailable
+                  远端不可用
                 </Badge>
               )}
             </div>
@@ -191,14 +188,14 @@ export function ChallengeCard({
             </CardTitle>
           </div>
           <CardAction className="row-span-1 row-start-1 gap-0.5">
-            <IconTooltip label={`View and edit ${challenge.name}`}>
+            <IconTooltip label={`查看并编辑 ${challenge.name}`}>
               <ChallengeDialog
                 challenge={challenge}
                 eventId={eventId}
                 onUploadError={onUploadError}
               />
             </IconTooltip>
-            <IconTooltip label={`Start run for ${challenge.name}`}>
+            <IconTooltip label={`为 ${challenge.name} 启动任务`}>
               <CreateRunDialog
                 challenge={challenge}
                 trigger={<Play />}
@@ -207,7 +204,7 @@ export function ChallengeCard({
               />
             </IconTooltip>
             {!managed && (
-              <IconTooltip label={`Delete ${challenge.name}`}>
+              <IconTooltip label={`删除 ${challenge.name}`}>
                 <DeleteChallengeDialog
                   challenge={challenge}
                   eventId={eventId}
@@ -218,25 +215,25 @@ export function ChallengeCard({
         </CardHeader>
         <CardPanel className="px-4 pb-4">
           <CardDescription className="line-clamp-2 min-h-10 whitespace-pre-line leading-5">
-            {challenge.description || "No description"}
+            {challenge.description || "无描述"}
           </CardDescription>
         </CardPanel>
       </Card>
       <CardFrameFooter className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-muted-foreground text-xs">
         <span className="font-medium text-foreground tabular-nums">
-          {challenge.points === null ? "No points" : `${challenge.points} pts`}
+          {challenge.points === null ? "无分值" : `${challenge.points} 分`}
         </span>
         {challenge.attachments.length > 0 && (
           <span className="inline-flex items-center gap-1 tabular-nums">
             <Paperclip aria-hidden="true" className="size-3.5" />
-            <span className="sr-only">Attachments:</span>
+            <span className="sr-only">附件：</span>
             {challenge.attachments.length}
           </span>
         )}
         {(challenge.remoteTargetCount ?? 0) > 0 && (
           <span className="inline-flex items-center gap-1 tabular-nums">
             <Server aria-hidden="true" className="size-3.5" />
-            <span className="sr-only">Targets:</span>
+            <span className="sr-only">目标：</span>
             {challenge.remoteTargetCount}
           </span>
         )}

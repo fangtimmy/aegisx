@@ -46,11 +46,11 @@ export function ErrorState({
   return (
     <Alert variant="error">
       <TriangleAlert />
-      <AlertTitle>Unable to load data</AlertTitle>
+      <AlertTitle>无法加载数据</AlertTitle>
       <AlertDescription>{error.message}</AlertDescription>
       <AlertAction>
         <Button onClick={retry} size="xs" type="button" variant="ghost">
-          Try again
+          重试
         </Button>
       </AlertAction>
     </Alert>

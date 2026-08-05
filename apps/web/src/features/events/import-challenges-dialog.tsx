@@ -49,10 +49,10 @@ function challengeTitle(entry: { name?: string; remoteId: string }) {
 function progressLogText(progress: ChallengeSyncProgress): string | null {
   const subject = challengeTitle(progress)
   if (progress.phase === "fetching") {
-    return `${subject}: fetching challenge metadata`
+    return `${subject}：正在获取题目元数据`
   }
   if (progress.phase === "attachment" && progress.attachment) {
-    return `${subject}: downloading ${progress.attachment.filename} (${progress.attachment.index}/${progress.attachment.total})`
+    return `${subject}：正在下载 ${progress.attachment.filename}（${progress.attachment.index}/${progress.attachment.total}）`
   }
   return null
 }
@@ -64,7 +64,7 @@ function itemLogLines(item: ChallengeSyncItem): ImportLogEntry[] {
       {
         key: `item-${item.remoteId}-failed`,
         level: "error",
-        text: `${subject}: failed${item.error ? ` — ${item.error}` : ""}`,
+        text: `${subject}：失败${item.error ? ` — ${item.error}` : ""}`,
       },
     ]
   }
@@ -72,7 +72,7 @@ function itemLogLines(item: ChallengeSyncItem): ImportLogEntry[] {
     {
       key: `item-${item.remoteId}`,
       level: "success",
-      text: `${subject}: imported challenge`,
+      text: `${subject}：已导入题目`,
     },
   ]
 }
@@ -146,17 +146,17 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
         .map((item) => item.remoteId)
       const synced = result.results.length - failed.length
       if (failed.length === 0) {
-        toast.success(`Imported ${synced} challenge${synced === 1 ? "" : "s"}`)
+        toast.success(`已导入 ${synced} 个题目`)
         setOpen(false)
         return
       }
       toast.warning(
-        `Imported ${synced}, ${failed.length} failed`,
-        "Retrying failed items"
+        `已导入 ${synced} 个，${failed.length} 个失败`,
+        "正在重试失败项"
       )
       setSelected(failed)
     },
-    onError: (error) => toast.error("Challenge sync failed", error.message),
+    onError: (error) => toast.error("题目同步失败", error.message),
   })
   const items = challenges.data?.items ?? []
   const failures = results.filter((result) => result.status === "failed")
@@ -177,20 +177,19 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
       open={open}
     >
       <DialogTrigger render={<Button type="button" variant="outline" />}>
-        <RefreshCw /> Import challenges
+        <RefreshCw /> 导入题目
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Import challenges</DialogTitle>
+          <DialogTitle>导入题目</DialogTitle>
           <DialogDescription>
-            New challenges are selected automatically. Select imported entries
-            to import them again; platform data overwrites local edits.
+            新题目会被自动选中。选择已导入项可重新导入；平台数据会覆盖本地修改。
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           {challenges.isPending ? (
             <div className="flex items-center gap-2 text-muted-foreground text-sm">
-              <Spinner /> Loading challenges...
+              <Spinner /> 正在加载题目…
             </div>
           ) : challenges.error ? (
             <Alert variant="error">
@@ -201,7 +200,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
             <>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <span className="text-muted-foreground text-xs">
-                  {selected.length} of {items.length} selected
+                  已选 {selected.length} / 共 {items.length}
                 </span>
                 <Button
                   disabled={sync.isPending}
@@ -215,13 +214,11 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                   type="button"
                   variant="ghost"
                 >
-                  {selected.length === items.length
-                    ? "Clear all"
-                    : "Select all"}
+                  {selected.length === items.length ? "清除全部" : "全选"}
                 </Button>
               </div>
               <CheckboxGroup
-                aria-label="Remote challenges"
+                aria-label="远端题目"
                 className="max-h-80 w-full gap-0 overflow-y-auto border-y"
                 disabled={sync.isPending}
                 onValueChange={setSelected}
@@ -240,20 +237,20 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                         </span>
                         {challenge.imported && (
                           <Badge size="sm" variant="secondary">
-                            Imported
+                            已导入
                           </Badge>
                         )}
                         {challenge.solved && (
                           <Badge size="sm" variant="success">
-                            Solved
+                            已解决
                           </Badge>
                         )}
                       </span>
                       <span className="block text-muted-foreground text-xs">
-                        {challenge.category ?? "Uncategorized"}
+                        {challenge.category ?? "未分类"}
                         {challenge.points === null
                           ? ""
-                          : ` · ${challenge.points} pts`}
+                          : ` · ${challenge.points} 分`}
                       </span>
                     </span>
                   </Label>
@@ -261,14 +258,14 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
               </CheckboxGroup>
               {items.length === 0 && (
                 <p className="py-8 text-center text-muted-foreground text-sm">
-                  No challenges are currently available.
+                  当前没有可用题目。
                 </p>
               )}
               {progress.total > 0 && (
                 <div aria-live="polite" className="mt-4 grid gap-3">
                   <Progress value={(progress.completed / progress.total) * 100}>
                     <div className="flex items-center justify-between gap-3">
-                      <ProgressLabel>Import progress</ProgressLabel>
+                      <ProgressLabel>导入进度</ProgressLabel>
                       <span className="text-muted-foreground text-xs tabular-nums">
                         {progress.completed} / {progress.total}
                       </span>
@@ -283,9 +280,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                     role="log"
                   >
                     {log.length === 0 ? (
-                      <p className="text-muted-foreground">
-                        Waiting for import events...
-                      </p>
+                      <p className="text-muted-foreground">等待导入事件…</p>
                     ) : (
                       log.map((entry) => (
                         <p
@@ -312,9 +307,9 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                       failures
                         .map(
                           (failure) =>
-                            `${challengeTitle(failure)}: ${failure.error ?? "Sync failed"}`
+                            `${challengeTitle(failure)}：${failure.error ?? "同步失败"}`
                         )
-                        .join("; ")}
+                        .join("；")}
                   </AlertDescription>
                 </Alert>
               )}
@@ -327,7 +322,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
               <Button disabled={sync.isPending} type="button" variant="ghost" />
             }
           >
-            Cancel
+            取消
           </DialogClose>
           <Button
             disabled={selected.length === 0}
@@ -335,7 +330,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
             onClick={() => sync.mutate()}
             type="button"
           >
-            Import {selected.length || ""}
+            导入 {selected.length || ""}
           </Button>
         </DialogFooter>
       </DialogPopup>

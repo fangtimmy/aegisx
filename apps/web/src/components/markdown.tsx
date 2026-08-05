@@ -22,7 +22,7 @@ export const Markdown = memo(function Markdown({
 }) {
   const content =
     children.length > MAX_MARKDOWN_CHARS
-      ? `${children.slice(0, MAX_MARKDOWN_CHARS)}\n\n[Message preview truncated]`
+      ? `${children.slice(0, MAX_MARKDOWN_CHARS)}\n\n[消息预览已截断]`
       : children
 
   return (

@@ -86,7 +86,7 @@ export function SettingsScreen() {
         role="status"
       >
         <Spinner aria-hidden="true" />
-        Loading settings...
+        正在加载设置…
       </div>
     )
   }
@@ -114,13 +114,13 @@ export function SettingsScreen() {
       <div className="w-48 shrink-0 border-s">
         <TabsList className="w-full items-stretch" variant="underline">
           <TabsTab value="general">
-            <SlidersHorizontal aria-hidden="true" /> General
+            <SlidersHorizontal aria-hidden="true" /> 常规
           </TabsTab>
           <TabsTab value="models">
-            <Boxes aria-hidden="true" /> Model providers
+            <Boxes aria-hidden="true" /> 模型供应商
           </TabsTab>
           <TabsTab value="settings">
-            <Settings2 aria-hidden="true" /> Settings
+            <Settings2 aria-hidden="true" /> 设置
           </TabsTab>
         </TabsList>
       </div>
@@ -131,9 +131,9 @@ export function SettingsScreen() {
         <TabsPanel value="settings">
           <CardFrame className="min-w-0">
             <CardFrameHeader>
-              <CardFrameTitle>Settings</CardFrameTitle>
+              <CardFrameTitle>设置</CardFrameTitle>
               <CardFrameDescription>
-                Searchable configuration. Changes save automatically.
+                可搜索的配置项。修改会自动保存。
               </CardFrameDescription>
             </CardFrameHeader>
             <Card>
@@ -151,7 +151,7 @@ export function SettingsScreen() {
               <CardFrameHeader>
                 <CardFrameTitle>
                   <span className="flex items-center gap-2">
-                    Providers
+                    供应商
                     <Badge variant="secondary">{items.length}</Badge>
                   </span>
                 </CardFrameTitle>
@@ -166,7 +166,7 @@ export function SettingsScreen() {
               </CardFrameHeader>
               <Card>
                 <CardPanel className="p-2">
-                  <nav aria-label="Provider connections">
+                  <nav aria-label="供应商连接">
                     {items.map((provider) => (
                       <div
                         className={cn(
@@ -189,7 +189,7 @@ export function SettingsScreen() {
                             </span>
                             {!provider.apiKey && (
                               <span className="text-muted-foreground text-xs">
-                                No key
+                                无密钥
                               </span>
                             )}
                           </span>
@@ -200,8 +200,8 @@ export function SettingsScreen() {
                         <Switch
                           aria-label={
                             provider.enabled
-                              ? `Disable ${provider.label}`
-                              : `Enable ${provider.label}`
+                              ? `禁用 ${provider.label}`
+                              : `启用 ${provider.label}`
                           }
                           checked={provider.enabled}
                           className="mr-3"
@@ -244,9 +244,9 @@ export function SettingsScreen() {
                   <CardPanel>
                     <Empty>
                       <EmptyHeader>
-                        <EmptyTitle>No provider selected</EmptyTitle>
+                        <EmptyTitle>未选择供应商</EmptyTitle>
                         <EmptyDescription>
-                          Add or select a provider to configure it.
+                          添加或选择一个供应商以配置它。
                         </EmptyDescription>
                       </EmptyHeader>
                     </Empty>

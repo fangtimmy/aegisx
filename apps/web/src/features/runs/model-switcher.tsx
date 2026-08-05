@@ -140,7 +140,7 @@ export function ModelThinkingSwitcher({
           disabled={disabled}
           size="sm"
         >
-          <SelectValue placeholder="Model" />
+          <SelectValue placeholder="模型" />
         </SelectTrigger>
         <SelectPopup>
           {grouped.map(([providerLabel, list]) => (
@@ -180,7 +180,7 @@ export function ModelThinkingSwitcher({
         </SelectPopup>
       </Select>
       {streaming && !disabled && (
-        <span className="text-muted-foreground/70">next turn</span>
+        <span className="text-muted-foreground/70">下一轮生效</span>
       )}
     </span>
   )

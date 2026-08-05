@@ -72,7 +72,7 @@ function DirectoryEntry({
   if (!isDirectory) {
     return (
       <Button
-        aria-label={`Preview ${entry.name}`}
+        aria-label={`预览 ${entry.name}`}
         className="h-8 w-full justify-start gap-1.5 px-2 text-left text-xs"
         onClick={() => onSelect(entry.path)}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -90,7 +90,7 @@ function DirectoryEntry({
   return (
     <Collapsible onOpenChange={setExpanded} open={expanded}>
       <CollapsibleTrigger
-        aria-label={`${expanded ? "Collapse" : "Expand"} ${entry.name}`}
+        aria-label={`${expanded ? "折叠" : "展开"} ${entry.name}`}
         render={
           <Button
             className="h-8 w-full justify-start gap-1.5 px-2 text-left text-xs"
@@ -112,7 +112,7 @@ function DirectoryEntry({
             style={{ paddingLeft: `${depth * 16 + 40}px` }}
           >
             <Spinner aria-hidden="true" />
-            Loading directory...
+            正在加载目录…
           </div>
         )}
         {directory.error && (
@@ -201,7 +201,7 @@ export function FilesWorkspace({
         className="flex min-h-0 shrink-0 flex-col pr-2"
         style={{ width: sidebarWidth }}
       >
-        <h3 className="mb-2 font-medium text-sm">Run files</h3>
+        <h3 className="mb-2 font-medium text-sm">任务文件</h3>
         <ScrollArea className="flex-1" scrollFade>
           {root.isPending && (
             <div
@@ -209,7 +209,7 @@ export function FilesWorkspace({
               role="status"
             >
               <Spinner aria-hidden="true" />
-              Loading files...
+              正在加载文件…
             </div>
           )}
           {root.error && (
@@ -219,9 +219,7 @@ export function FilesWorkspace({
           )}
           {root.data?.type === "directory" &&
             root.data.entries.length === 0 && (
-              <p className="text-muted-foreground text-xs">
-                Run directory is empty.
-              </p>
+              <p className="text-muted-foreground text-xs">任务目录为空。</p>
             )}
           {root.data?.type === "directory" &&
             root.data.entries.map((entry) => (
@@ -249,19 +247,19 @@ export function FilesWorkspace({
         <div className="mb-2 flex min-h-8 items-start justify-between gap-2">
           <div className="flex min-w-0 flex-1 flex-col">
             <h3 className="truncate font-medium text-sm">
-              {selectedPath || "Preview"}
+              {selectedPath || "预览"}
             </h3>
             {selected.data?.type === "text" && (
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground text-xs">
                 <span>{formatSize(selected.data.size)}</span>
-                <span>Modified {formatTime(selected.data.modifiedAt)}</span>
-                {selected.data.truncated && <span>Preview truncated</span>}
+                <span>修改于 {formatTime(selected.data.modifiedAt)}</span>
+                {selected.data.truncated && <span>预览已截断</span>}
               </div>
             )}
           </div>
           {selectedPath && (
             <Button
-              aria-label={`Download ${selectedPath}`}
+              aria-label={`下载 ${selectedPath}`}
               render={
                 <a
                   download
@@ -270,16 +268,16 @@ export function FilesWorkspace({
               }
               variant="outline"
             >
-              <Download /> Download
+              <Download /> 下载
             </Button>
           )}
         </div>
         {!selectedPath && (
           <Empty className="min-h-64">
             <EmptyHeader>
-              <EmptyTitle>Select a file</EmptyTitle>
+              <EmptyTitle>选择一个文件</EmptyTitle>
               <EmptyDescription>
-                Choose a file from the workspace tree to preview it.
+                从工作区目录树中选择文件以预览。
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -290,13 +288,13 @@ export function FilesWorkspace({
             role="status"
           >
             <Spinner aria-hidden="true" />
-            Loading preview...
+            正在加载预览…
           </div>
         )}
         {selected.error && (
           <Alert variant="error">
             <CircleAlert />
-            <AlertTitle>Unable to load file</AlertTitle>
+            <AlertTitle>无法加载文件</AlertTitle>
             <AlertDescription>{selected.error.message}</AlertDescription>
           </Alert>
         )}
@@ -311,10 +309,10 @@ export function FilesWorkspace({
         {selected.data?.type === "binary" && (
           <Alert>
             <Info />
-            <AlertTitle>Binary file</AlertTitle>
+            <AlertTitle>二进制文件</AlertTitle>
             <AlertDescription>
-              Preview is unavailable. Size: {formatSize(selected.data.size)}.
-              Modified: {formatTime(selected.data.modifiedAt)}.
+              无法预览。大小：{formatSize(selected.data.size)}。修改于：
+              {formatTime(selected.data.modifiedAt)}。
             </AlertDescription>
           </Alert>
         )}

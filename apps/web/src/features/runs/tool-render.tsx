@@ -224,7 +224,7 @@ function DiffPreview({ diff }: { diff: string }) {
           </div>
         ))}
         {rows.length === 0 ? (
-          <p className="px-2.5 py-2 text-muted-foreground">Empty diff</p>
+          <p className="px-2.5 py-2 text-muted-foreground">空差异</p>
         ) : null}
       </div>
     </ToolScroll>
@@ -309,11 +309,7 @@ function BashBody({
       {command ? <BashCommand command={command} /> : null}
       {!value.trim() ? (
         <EmptyHint>
-          {streaming
-            ? "Running…"
-            : isError
-              ? "Command failed with no output"
-              : "No output"}
+          {streaming ? "运行中…" : isError ? "命令失败，无输出" : "无输出"}
         </EmptyHint>
       ) : (
         <pre
@@ -340,8 +336,8 @@ export function ToolCustomBody({ tool }: { tool: ToolBlock }) {
     return (
       <EmptyHint>
         {tool.status === "running" || tool.status === "pending"
-          ? "Editing…"
-          : tool.output || "No diff"}
+          ? "编辑中…"
+          : tool.output || "无差异"}
       </EmptyHint>
     )
   }
@@ -360,7 +356,7 @@ export function ToolCustomBody({ tool }: { tool: ToolBlock }) {
     }
     return (
       <EmptyHint>
-        {tool.status === "running" ? "Writing…" : tool.output || "Empty write"}
+        {tool.status === "running" ? "写入中…" : tool.output || "空写入"}
       </EmptyHint>
     )
   }
@@ -369,7 +365,7 @@ export function ToolCustomBody({ tool }: { tool: ToolBlock }) {
     if (!tool.output) {
       return (
         <EmptyHint>
-          {tool.status === "running" ? "Reading…" : "Empty file"}
+          {tool.status === "running" ? "读取中…" : "空文件"}
         </EmptyHint>
       )
     }

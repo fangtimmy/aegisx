@@ -76,11 +76,11 @@ export function ProviderDialog({
       open={open}
     >
       <DialogTrigger render={<Button type="button" variant="outline" />}>
-        <Plus /> Add
+        <Plus /> 添加
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Add provider</DialogTitle>
+          <DialogTitle>添加供应商</DialogTitle>
         </DialogHeader>
         <form
           className="contents"
@@ -101,7 +101,7 @@ export function ProviderDialog({
               )}
             />
             <Field>
-              <FieldLabel htmlFor="provider-label">Name</FieldLabel>
+              <FieldLabel htmlFor="provider-label">名称</FieldLabel>
               <Controller
                 control={form.control}
                 name="label"
@@ -162,10 +162,10 @@ export function ProviderDialog({
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
+              取消
             </DialogClose>
             <Button loading={mutation.isPending} type="submit">
-              Add provider
+              添加供应商
             </Button>
           </DialogFooter>
         </form>
@@ -183,7 +183,7 @@ export function ProviderTypeField({
 }) {
   return (
     <Field name="type">
-      <FieldLabel>Provider type</FieldLabel>
+      <FieldLabel>供应商类型</FieldLabel>
       <Select
         items={providerTypeLabels}
         name="type"

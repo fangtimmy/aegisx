@@ -133,23 +133,22 @@ export function ConnectPlatformDialog({
       <DialogTrigger
         render={
           <Button
-            aria-label={platform ? "Update platform connection" : undefined}
+            aria-label={platform ? "更新平台连接" : undefined}
             type="button"
             variant="outline"
           />
         }
       >
         {platform ? <Settings2 /> : <Link2 />}
-        {!platform && "Connect platform"}
+        {!platform && "连接平台"}
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
           <DialogTitle>
-            {platform ? "Update platform connection" : "Connect CTF platform"}
+            {platform ? "更新平台连接" : "连接 CTF 平台"}
           </DialogTitle>
           <DialogDescription>
-            Credentials are stored only for this event and are never exposed to
-            agents.
+            凭据仅对本赛事保存，且不会暴露给 agent。
           </DialogDescription>
         </DialogHeader>
         <form
@@ -161,7 +160,7 @@ export function ConnectPlatformDialog({
         >
           <DialogPanel className="grid gap-4">
             <Field>
-              <FieldLabel>Platform</FieldLabel>
+              <FieldLabel>平台</FieldLabel>
               <Controller
                 control={form.control}
                 name="type"
@@ -194,7 +193,7 @@ export function ConnectPlatformDialog({
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="platform-url">Platform URL</FieldLabel>
+              <FieldLabel htmlFor="platform-url">平台 URL</FieldLabel>
               <Controller
                 control={form.control}
                 name="baseUrl"
@@ -256,7 +255,7 @@ export function ConnectPlatformDialog({
             </Field>
             {discoverData && type !== "ctfd" && (
               <Field>
-                <FieldLabel>Competition</FieldLabel>
+                <FieldLabel>赛事</FieldLabel>
                 <Controller
                   control={form.control}
                   name="remoteEventId"
@@ -272,7 +271,7 @@ export function ConnectPlatformDialog({
                       value={field.value}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select a competition" />
+                        <SelectValue placeholder="选择一个赛事" />
                       </SelectTrigger>
                       <SelectPopup>
                         {discoverData.items.map((event) => (
@@ -290,7 +289,7 @@ export function ConnectPlatformDialog({
             {testConnection.isSuccess && (
               <Alert variant="success">
                 <CircleCheck />
-                <AlertDescription>Connection successful</AlertDescription>
+                <AlertDescription>连接成功</AlertDescription>
               </Alert>
             )}
             {(testConnection.error || discover.error || bind.error) && (
@@ -307,7 +306,7 @@ export function ConnectPlatformDialog({
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
+              取消
             </DialogClose>
             <Button
               disabled={
@@ -321,7 +320,7 @@ export function ConnectPlatformDialog({
               type="button"
               variant="outline"
             >
-              Test connection
+              测试连接
             </Button>
             <Button
               disabled={
@@ -333,11 +332,7 @@ export function ConnectPlatformDialog({
               loading={discover.isPending || bind.isPending}
               type="submit"
             >
-              {needsDiscovery
-                ? "Load competitions"
-                : platform
-                  ? "Update connection"
-                  : "Connect"}
+              {needsDiscovery ? "加载赛事" : platform ? "更新连接" : "连接"}
             </Button>
           </DialogFooter>
         </form>

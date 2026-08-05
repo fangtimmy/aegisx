@@ -8,7 +8,7 @@ export const platformLabels: Record<PlatformType, string> = {
 }
 
 export const credentialLabels: Record<PlatformType, string> = {
-  ctfd: "Access token",
+  ctfd: "访问令牌",
   ret2shell: "Bearer token",
   a1ctf: "a1token cookie",
 }

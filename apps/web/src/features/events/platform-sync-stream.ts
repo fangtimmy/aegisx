@@ -110,14 +110,14 @@ export function parseSyncStreamLine(line: string): SyncStreamEvent | undefined {
   try {
     value = JSON.parse(line)
   } catch {
-    throw new Error("Invalid challenge sync event")
+    throw new Error("无效的题目同步事件")
   }
   if (!isRecord(value) || typeof value.type !== "string") {
-    throw new Error("Invalid challenge sync event")
+    throw new Error("无效的题目同步事件")
   }
   if (value.type === "progress") {
     if (!isProgress(value.progress)) {
-      throw new Error("Invalid challenge sync event")
+      throw new Error("无效的题目同步事件")
     }
     return { type: "progress", progress: value.progress }
   }
@@ -127,7 +127,7 @@ export function parseSyncStreamLine(line: string): SyncStreamEvent | undefined {
       typeof value.completed !== "number" ||
       typeof value.total !== "number"
     ) {
-      throw new Error("Invalid challenge sync event")
+      throw new Error("无效的题目同步事件")
     }
     return {
       type: "item",
@@ -142,7 +142,7 @@ export function parseSyncStreamLine(line: string): SyncStreamEvent | undefined {
   if (value.type === "error" && typeof value.message === "string") {
     return { type: "error", message: value.message }
   }
-  throw new Error("Invalid challenge sync event")
+  throw new Error("无效的题目同步事件")
 }
 
 export async function syncChallengeStream(
@@ -156,8 +156,8 @@ export async function syncChallengeStream(
     `/api/events/${eventId}/platform/challenges/sync/stream`,
     jsonRequest("POST", { remoteIds })
   )
-  if (!response.ok) throw new Error(`Sync failed (${response.status})`)
-  if (!response.body) throw new Error("Sync stream is unavailable")
+  if (!response.ok) throw new Error(`同步失败（${response.status}）`)
+  if (!response.body) throw new Error("同步流不可用")
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -187,6 +187,6 @@ export async function syncChallengeStream(
     if (done) break
   }
   consume(buffer)
-  if (!syncedAt) throw new Error("Sync stream ended unexpectedly")
+  if (!syncedAt) throw new Error("同步流意外结束")
   return { syncedAt, results }
 }

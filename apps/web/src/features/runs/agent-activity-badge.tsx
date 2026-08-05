@@ -36,15 +36,15 @@ export function AgentActivityBadge({
     const after = activity.tokensAfter
     label =
       before !== undefined && after !== undefined
-        ? `Compacting ${formatBadgeTokens(before)} → ~${formatBadgeTokens(after)}…`
-        : "Compacting context…"
+        ? `压缩中 ${formatBadgeTokens(before)} → ~${formatBadgeTokens(after)}…`
+        : "压缩上下文中…"
   } else if (activity?.activity === "retrying") {
     label =
       activity.attempt !== undefined && activity.maxAttempts !== undefined
-        ? `Retry ${activity.attempt}/${activity.maxAttempts}…`
-        : "Retrying…"
+        ? `重试 ${activity.attempt}/${activity.maxAttempts}…`
+        : "重试中…"
   } else {
-    label = stream.getRunningTool(agentId) ? "Working…" : "Thinking…"
+    label = stream.getRunningTool(agentId) ? "工作中…" : "思考中…"
   }
   return (
     <span

@@ -16,9 +16,9 @@ import { Label } from "@/components/ui/label"
 import { Radio, RadioGroup } from "@/components/ui/radio-group"
 
 const themes = [
-  { label: "System", value: "system" },
-  { label: "Light", value: "light" },
-  { label: "Dark", value: "dark" },
+  { label: "跟随系统", value: "system" },
+  { label: "浅色", value: "light" },
+  { label: "深色", value: "dark" },
 ] as const
 
 type Theme = (typeof themes)[number]["value"]
@@ -97,7 +97,7 @@ function ThemeSelector({
 }) {
   return (
     <RadioGroup
-      aria-label="Theme"
+      aria-label="主题"
       className="flex-row flex-wrap gap-4"
       onValueChange={(value) => {
         if (value === "light" || value === "dark" || value === "system") {
@@ -146,7 +146,7 @@ function SettingsTransfer({
     setMessage(null)
     try {
       const response = await fetch("/api/settings/export")
-      if (!response.ok) throw new Error("Unable to export settings")
+      if (!response.ok) throw new Error("无法导出设置")
       const data = await response.json()
       const content = JSON.stringify(
         {
@@ -164,9 +164,9 @@ function SettingsTransfer({
       link.download = "aegisx-settings.json"
       link.click()
       URL.revokeObjectURL(url)
-      setMessage("Settings exported.")
+      setMessage("设置已导出。")
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Export failed")
+      setError(cause instanceof Error ? cause.message : "导出失败")
     } finally {
       setPending(false)
     }
@@ -188,7 +188,7 @@ function SettingsTransfer({
         !document.settings ||
         !Array.isArray(document.providers)
       ) {
-        throw new Error("Unsupported settings file (expected version 1)")
+        throw new Error("不支持设置文件（预期版本 1）")
       }
       await settingsApi.importSettingsPayload({
         version: 1,
@@ -198,10 +198,10 @@ function SettingsTransfer({
       if (document.appearance?.theme && isTheme(document.appearance.theme)) {
         setTheme(document.appearance.theme)
       }
-      setMessage("Settings imported.")
+      setMessage("设置已导入。")
       window.location.reload()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Import failed")
+      setError(cause instanceof Error ? cause.message : "导入失败")
     } finally {
       setPending(false)
     }
@@ -216,7 +216,7 @@ function SettingsTransfer({
           type="button"
           variant="outline"
         >
-          <Download /> Export
+          <Download /> 导出
         </Button>
         <Button
           disabled={pending}
@@ -224,7 +224,7 @@ function SettingsTransfer({
           type="button"
           variant="outline"
         >
-          <Upload /> Import
+          <Upload /> 导入
         </Button>
         <input
           accept="application/json,.json"
@@ -259,9 +259,9 @@ export function GeneralSettings() {
     <div className="grid min-w-0 gap-4">
       <CardFrame>
         <CardFrameHeader>
-          <CardFrameTitle>Appearance</CardFrameTitle>
+          <CardFrameTitle>外观</CardFrameTitle>
           <CardFrameDescription>
-            Choose how AegisX looks on this device.
+            选择 AegisX 在本设备上的显示方式。
           </CardFrameDescription>
         </CardFrameHeader>
         <Card>
@@ -272,9 +272,9 @@ export function GeneralSettings() {
       </CardFrame>
       <CardFrame>
         <CardFrameHeader>
-          <CardFrameTitle>Configuration transfer</CardFrameTitle>
+          <CardFrameTitle>配置迁移</CardFrameTitle>
           <CardFrameDescription>
-            Export or import settings and providers (version 1 JSON).
+            导出或导入设置与供应商（版本 1 JSON）。
           </CardFrameDescription>
         </CardFrameHeader>
         <Card>

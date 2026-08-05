@@ -106,7 +106,7 @@ export function ChallengeDialog({
         render={
           challenge ? (
             <Button
-              aria-label={`View and edit ${challenge.name}`}
+              aria-label={`查看并编辑 ${challenge.name}`}
               size="icon-sm"
               type="button"
               variant="ghost"
@@ -120,7 +120,7 @@ export function ChallengeDialog({
           <Pencil />
         ) : (
           <>
-            <Plus /> Add challenge
+            <Plus /> 添加题目
           </>
         )}
       </DialogTrigger>
@@ -192,7 +192,7 @@ function ChallengeDialogContent({
         uploadErrors: results.flatMap((result, index) =>
           result.status === "rejected"
             ? [
-                `${files[index].name}: ${result.reason instanceof Error ? result.reason.message : "Upload failed"}`,
+                `${files[index].name}：${result.reason instanceof Error ? result.reason.message : "上传失败"}`,
               ]
             : []
         ),
@@ -207,7 +207,7 @@ function ChallengeDialogContent({
       ])
       onUploadError(
         uploadErrors.length > 0
-          ? `${saved.name} was saved, but some attachments failed: ${uploadErrors.join("; ")}`
+          ? `${saved.name} 已保存，但部分附件失败：${uploadErrors.join("；")}`
           : null
       )
       onClose()
@@ -217,11 +217,11 @@ function ChallengeDialogContent({
   return (
     <DialogPopup className="max-w-2xl overflow-hidden">
       <DialogHeader>
-        <DialogTitle>{challenge?.name ?? "Create challenge"}</DialogTitle>
+        <DialogTitle>{challenge?.name ?? "创建题目"}</DialogTitle>
         <DialogDescription>
           {challenge
-            ? `${challenge.category || "Uncategorized"}${challenge.points === null ? "" : ` · ${challenge.points} pts`}`
-            : "Define the task details and add its attachments."}
+            ? `${challenge.category || "未分类"}${challenge.points === null ? "" : ` · ${challenge.points} 分`}`
+            : "填写任务详情并添加其附件。"}
         </DialogDescription>
       </DialogHeader>
       <form
@@ -237,10 +237,10 @@ function ChallengeDialogContent({
             className="grid gap-4 px-6 pb-6"
           >
             <h3 className="font-medium text-sm" id="challenge-details">
-              Details
+              详情
             </h3>
             <Field>
-              <FieldLabel>Name</FieldLabel>
+              <FieldLabel>名称</FieldLabel>
               <Controller
                 control={form.control}
                 name="name"
@@ -257,7 +257,7 @@ function ChallengeDialogContent({
               />
             </Field>
             <Field>
-              <FieldLabel>Description</FieldLabel>
+              <FieldLabel>描述</FieldLabel>
               <Controller
                 control={form.control}
                 name="description"
@@ -275,14 +275,14 @@ function ChallengeDialogContent({
             </Field>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
               <Field>
-                <FieldLabel>Category</FieldLabel>
+                <FieldLabel>分类</FieldLabel>
                 <Controller
                   control={form.control}
                   name="category"
                   render={({ field }) => (
                     <Input
                       onChange={field.onChange}
-                      placeholder="Web, Crypto, Pwn..."
+                      placeholder="Web、Crypto、Pwn…"
                       type="text"
                       value={field.value}
                     />
@@ -290,7 +290,7 @@ function ChallengeDialogContent({
                 />
               </Field>
               <Field>
-                <FieldLabel>Points</FieldLabel>
+                <FieldLabel>分值</FieldLabel>
                 <Controller
                   control={form.control}
                   name="points"
@@ -318,17 +318,17 @@ function ChallengeDialogContent({
           >
             <div className="flex items-center justify-between gap-3">
               <h3 className="font-medium text-sm" id="challenge-attachments">
-                Attachments
+                附件
               </h3>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground text-xs tabular-nums">
                   {(challenge?.attachments.length ?? 0) + pendingFiles.length}
                 </span>
                 <Button
-                  aria-label="Upload attachments"
+                  aria-label="上传附件"
                   onClick={() => uploadInput.current?.click()}
                   size="icon-sm"
-                  title="Upload attachments"
+                  title="上传附件"
                   type="button"
                   variant="outline"
                 >
@@ -382,7 +382,7 @@ function ChallengeDialogContent({
               </div>
             ) : (
               <p className="mt-3 text-muted-foreground text-xs">
-                No attachments yet. Upload files to include with this challenge.
+                暂无附件。上传文件以附加到本题目。
               </p>
             )}
           </section>
@@ -394,11 +394,10 @@ function ChallengeDialogContent({
               <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <h3 className="font-medium text-sm" id="challenge-target">
-                    Platform target
+                    平台目标
                   </h3>
                   <p className="mt-1 text-muted-foreground text-xs">
-                    Imported targets cannot be edited. Removing this target
-                    disables platform target tools for future Runs.
+                    导入的目标无法编辑。移除该目标后，后续任务将停用平台目标工具。
                   </p>
                 </div>
                 <AlertDialog>
@@ -407,23 +406,20 @@ function ChallengeDialogContent({
                       <Button type="button" variant="destructive-outline" />
                     }
                   >
-                    <Trash2 /> Remove target
+                    <Trash2 /> 移除目标
                   </AlertDialogTrigger>
                   <AlertDialogPopup>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>
-                        Remove platform target?
-                      </AlertDialogTitle>
+                      <AlertDialogTitle>移除平台目标？</AlertDialogTitle>
                       <AlertDialogDescription>
-                        The target must be stopped first. AegisX will keep it
-                        ignored after future platform syncs.
+                        需先停止该目标；此后平台同步仍会忽略它。
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogClose
                         render={<Button type="button" variant="ghost" />}
                       >
-                        Cancel
+                        取消
                       </AlertDialogClose>
                       <Button
                         loading={removeTarget.isPending}
@@ -431,7 +427,7 @@ function ChallengeDialogContent({
                         type="button"
                         variant="destructive"
                       >
-                        Remove target
+                        移除目标
                       </Button>
                     </AlertDialogFooter>
                   </AlertDialogPopup>
@@ -448,7 +444,7 @@ function ChallengeDialogContent({
                         {target.name}
                       </span>
                       <span className="min-w-0 break-all text-right text-muted-foreground text-xs">
-                        {target.services.join(", ") || "No exposed services"}
+                        {target.services.join(", ") || "无暴露服务"}
                       </span>
                     </div>
                   ))}
@@ -473,10 +469,10 @@ function ChallengeDialogContent({
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="ghost" />}>
-            Cancel
+            取消
           </DialogClose>
           <Button loading={mutation.isPending} type="submit">
-            {challenge ? "Save changes" : "Create challenge"}
+            {challenge ? "保存更改" : "创建题目"}
           </Button>
         </DialogFooter>
       </form>
@@ -504,9 +500,9 @@ function AttachmentRow({
           {formatBytes(attachment.size)}
         </p>
       </div>
-      <IconTooltip label={`Download ${attachment.originalName}`}>
+      <IconTooltip label={`下载 ${attachment.originalName}`}>
         <Button
-          aria-label={`Download ${attachment.originalName}`}
+          aria-label={`下载 ${attachment.originalName}`}
           render={<a href={attachment.downloadUrl} />}
           size="icon-sm"
           variant="ghost"
@@ -519,7 +515,7 @@ function AttachmentRow({
           <AlertDialogTrigger
             render={
               <Button
-                aria-label={`Delete ${attachment.originalName}`}
+                aria-label={`删除 ${attachment.originalName}`}
                 size="icon-sm"
                 type="button"
                 variant="ghost"
@@ -531,18 +527,17 @@ function AttachmentRow({
           <AlertDialogPopup>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                Delete {attachment.originalName}?
+                删除 {attachment.originalName}？
               </AlertDialogTitle>
               <AlertDialogDescription>
-                Platform attachments will return the next time this challenge is
-                synchronized.
+                平台附件会在下次同步该题目时重新下载。
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogClose
                 render={<Button type="button" variant="ghost" />}
               >
-                Cancel
+                取消
               </AlertDialogClose>
               <Button
                 loading={deleting}
@@ -550,7 +545,7 @@ function AttachmentRow({
                 type="button"
                 variant="destructive"
               >
-                Delete attachment
+                删除附件
               </Button>
             </AlertDialogFooter>
           </AlertDialogPopup>
@@ -573,12 +568,12 @@ function PendingFileRow({
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium text-sm">{file.name}</p>
         <p className="mt-0.5 text-muted-foreground text-xs">
-          {formatBytes(file.size)} · uploads on save
+          {formatBytes(file.size)} · 保存时上传
         </p>
       </div>
-      <IconTooltip label={`Remove ${file.name}`}>
+      <IconTooltip label={`移除 ${file.name}`}>
         <Button
-          aria-label={`Remove ${file.name}`}
+          aria-label={`移除 ${file.name}`}
           onClick={onRemove}
           size="icon-sm"
           type="button"

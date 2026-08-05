@@ -83,7 +83,7 @@ export function CreateRunDialog({
         aria-label={
           trigger
             ? (triggerLabel ??
-              (challenge ? `Start run for ${challenge.name}` : "Start run"))
+              (challenge ? `为 ${challenge.name} 启动任务` : "启动任务"))
             : undefined
         }
         render={
@@ -97,7 +97,7 @@ export function CreateRunDialog({
       >
         {trigger ?? (
           <>
-            <Plus /> Start run
+            <Plus /> 启动任务
           </>
         )}
       </DialogTrigger>
@@ -213,11 +213,11 @@ function CreateRunDialogContent({
   return (
     <DialogPopup>
       <DialogHeader>
-        <DialogTitle>Start run</DialogTitle>
+        <DialogTitle>启动任务</DialogTitle>
         <DialogDescription>
           {challenge
-            ? `Configure a run for ${challenge.name}.`
-            : "Choose a challenge and model for this run."}
+            ? `为 ${challenge.name} 配置一次任务。`
+            : "为本次任务选择题目和模型。"}
         </DialogDescription>
       </DialogHeader>
       {(settings.isPending || providers.isPending) && (
@@ -227,7 +227,7 @@ function CreateRunDialogContent({
             role="status"
           >
             <Spinner aria-hidden="true" />
-            Loading defaults...
+            正在加载默认值…
           </div>
         </DialogPanel>
       )}
@@ -235,7 +235,7 @@ function CreateRunDialogContent({
         <DialogPanel>
           <Alert variant="error">
             <CircleAlert />
-            <AlertTitle>Unable to load run configuration</AlertTitle>
+            <AlertTitle>无法加载任务配置</AlertTitle>
             <AlertDescription>
               {(settings.error ?? providers.error)?.message}
             </AlertDescription>
@@ -247,7 +247,7 @@ function CreateRunDialogContent({
               type="button"
               variant="outline"
             >
-              Try again
+              重试
             </Button>
           </Alert>
         </DialogPanel>
@@ -261,7 +261,7 @@ function CreateRunDialogContent({
           <DialogPanel className="grid gap-4">
             {!challenge && (
               <Field>
-                <FieldLabel>Challenge</FieldLabel>
+                <FieldLabel>题目</FieldLabel>
                 <Controller
                   control={form.control}
                   name="challengeId"
@@ -274,7 +274,7 @@ function CreateRunDialogContent({
                       value={field.value}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select a challenge" />
+                        <SelectValue placeholder="选择题目" />
                       </SelectTrigger>
                       <SelectPopup>
                         {available.map((item) => (
@@ -290,7 +290,7 @@ function CreateRunDialogContent({
               </Field>
             )}
             <Field>
-              <FieldLabel>Model</FieldLabel>
+              <FieldLabel>模型</FieldLabel>
               <Controller
                 control={form.control}
                 name="modelId"
@@ -306,7 +306,7 @@ function CreateRunDialogContent({
                     value={field.value}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="No enabled models" />
+                      <SelectValue placeholder="没有已启用的模型" />
                     </SelectTrigger>
                     <SelectPopup>
                       {(providers.data?.items ?? []).map((provider) => {
@@ -334,7 +334,7 @@ function CreateRunDialogContent({
               />
             </Field>
             <Field>
-              <FieldLabel>Reasoning</FieldLabel>
+              <FieldLabel>推理</FieldLabel>
               <Controller
                 control={form.control}
                 name="thinkingLevel"
@@ -366,7 +366,7 @@ function CreateRunDialogContent({
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="run-image">Container image</FieldLabel>
+              <FieldLabel htmlFor="run-image">容器镜像</FieldLabel>
               <Controller
                 control={form.control}
                 name="image"
@@ -385,10 +385,10 @@ function CreateRunDialogContent({
             </Field>
             <Alert>
               <Box />
-              <AlertTitle>Isolated container</AlertTitle>
+              <AlertTitle>隔离容器</AlertTitle>
               <AlertDescription>
-                pi runs as the container's main process with its workspace at
-                /workspace. Watch and steer it from the Terminal tab.
+                pi 作为容器主进程运行，其工作区位于
+                /workspace。可在「对话」标签页中监控并干预它。
               </AlertDescription>
             </Alert>
             {mutation.error && (
@@ -400,14 +400,14 @@ function CreateRunDialogContent({
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
+              取消
             </DialogClose>
             <Button
               disabled={!modelId}
               loading={mutation.isPending}
               type="submit"
             >
-              <Play /> Start run
+              <Play /> 启动任务
             </Button>
           </DialogFooter>
         </form>

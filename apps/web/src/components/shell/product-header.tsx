@@ -28,7 +28,7 @@ export function ProductHeader({ eventName }: { eventName?: string }) {
       <div className="mx-auto flex h-14 w-full items-center justify-between px-6">
         <div className="flex min-w-0 items-center gap-2.5">
           <Button
-            aria-label="AegisX events"
+            aria-label="AegisX 赛事"
             render={<Link to="/" />}
             size="xl"
             variant="ghost"
@@ -52,9 +52,9 @@ export function ProductHeader({ eventName }: { eventName?: string }) {
             </>
           )}
         </div>
-        <IconTooltip label="Settings">
+        <IconTooltip label="设置">
           <Button
-            aria-label="Settings"
+            aria-label="设置"
             render={<Link to="/settings" />}
             size="icon"
             variant="ghost"

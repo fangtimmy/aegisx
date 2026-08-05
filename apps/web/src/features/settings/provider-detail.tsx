@@ -69,15 +69,13 @@ export function ProviderDetail({
     <div className="flex flex-col gap-4">
       <CardFrame>
         <CardFrameHeader>
-          <CardFrameTitle>Provider configuration</CardFrameTitle>
+          <CardFrameTitle>供应商配置</CardFrameTitle>
           <CardFrameDescription>
             {providerTypeLabels[provider.type]}
           </CardFrameDescription>
           <CardFrameAction>
             <Switch
-              aria-label={
-                provider.enabled ? "Disable provider" : "Enable provider"
-              }
+              aria-label={provider.enabled ? "禁用供应商" : "启用供应商"}
               checked={provider.enabled}
               disabled={save.isPending}
               onCheckedChange={(enabled) =>
@@ -109,7 +107,7 @@ export function ProviderDetail({
         >
           <CardPanel className="grid grid-cols-2 gap-4">
             <Field>
-              <FieldLabel htmlFor="selected-provider-name">Name</FieldLabel>
+              <FieldLabel htmlFor="selected-provider-name">名称</FieldLabel>
               <Controller
                 control={form.control}
                 name="label"
@@ -171,17 +169,17 @@ export function ProviderDetail({
                       onBlur={field.onBlur}
                       onChange={field.onChange}
                       type={showKey ? "text" : "password"}
-                      placeholder="Leave blank to keep the current key"
+                      placeholder="留空以保留当前密钥"
                       value={field.value}
                     />
                   )}
                 />
                 <InputGroupAddon align="inline-end">
                   <Button
-                    aria-label={showKey ? "Hide API key" : "Show API key"}
+                    aria-label={showKey ? "隐藏 API key" : "显示 API key"}
                     onClick={() => setShowKey((value) => !value)}
                     size="icon-sm"
-                    title={showKey ? "Hide API key" : "Show API key"}
+                    title={showKey ? "隐藏 API key" : "显示 API key"}
                     type="button"
                     variant="ghost"
                   >
@@ -205,26 +203,26 @@ export function ProviderDetail({
           </CardPanel>
           <CardFooter className="flex-wrap gap-2">
             <Button loading={save.isPending} type="submit">
-              Save provider
+              保存供应商
             </Button>
             <AlertDialog>
               <AlertDialogTrigger
                 render={<Button type="button" variant="outline" />}
               >
-                <Trash2 /> Delete provider
+                <Trash2 /> 删除供应商
               </AlertDialogTrigger>
               <AlertDialogPopup>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Delete {provider.label}?</AlertDialogTitle>
+                  <AlertDialogTitle>删除 {provider.label}？</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This permanently deletes the provider and its models.
+                    这将永久删除该供应商及其模型。
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogClose
                     render={<Button type="button" variant="ghost" />}
                   >
-                    Cancel
+                    取消
                   </AlertDialogClose>
                   <Button
                     disabled={deletePending}
@@ -233,7 +231,7 @@ export function ProviderDetail({
                     type="button"
                     variant="destructive"
                   >
-                    Delete provider
+                    删除供应商
                   </Button>
                 </AlertDialogFooter>
               </AlertDialogPopup>

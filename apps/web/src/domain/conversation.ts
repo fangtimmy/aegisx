@@ -63,37 +63,37 @@ export function toolStatusLabel(
   const verb = (() => {
     switch (name) {
       case "bash":
-        return running ? "Running" : "Ran"
+        return running ? "正在运行" : "已运行"
       case "read":
-        return running ? "Reading" : "Read"
+        return running ? "正在读取" : "已读取"
       case "write":
-        return running ? "Writing" : "Wrote"
+        return running ? "正在写入" : "已写入"
       case "edit":
-        return running ? "Editing" : "Edited"
+        return running ? "正在编辑" : "已编辑"
       case "grep":
-        return running ? "Searching for" : "Searched for"
+        return running ? "正在搜索" : "已搜索"
       case "find":
-        return running ? "Finding" : "Found"
+        return running ? "正在查找" : "已查找"
       case "ls":
-        return running ? "Listing" : "Listed"
+        return running ? "正在列出" : "已列出"
       case "submit_flag":
-        return running ? "Submitting flag" : "Submitted flag"
+        return running ? "正在提交 flag" : "已提交 flag"
       case "finish_run":
-        return running ? "Finishing run" : "Finished run"
+        return running ? "正在结束任务" : "已结束任务"
       case "spawn_agent":
-        return running ? "Spawning agent" : "Spawned agent"
+        return running ? "正在派生 agent" : "已派生 agent"
       case "inspect_agent":
-        return running ? "Inspecting agent" : "Inspected agent"
+        return running ? "正在检查 agent" : "已检查 agent"
       case "get_target":
-        return running ? "Checking target" : "Checked target"
+        return running ? "正在检查目标" : "已检查目标"
       case "start_target":
-        return running ? "Starting target" : "Started target"
+        return running ? "正在启动目标" : "已启动目标"
       case "extend_target":
-        return running ? "Extending target" : "Extended target"
+        return running ? "正在延长目标" : "已延长目标"
       case "stop_target":
-        return running ? "Stopping target" : "Stopped target"
+        return running ? "正在停止目标" : "已停止目标"
       default:
-        return running ? `Running ${name}` : name
+        return running ? `正在运行 ${name}` : name
     }
   })()
   const label = subject ? `${verb} ${subject}` : verb
@@ -217,7 +217,7 @@ function applyCompaction(
   items: ConversationItem[],
   stableKey: string
 ) {
-  const title = `Compacted ${formatTokens(entry.tokensBefore)} tokens`
+  const title = `已压缩 ${formatTokens(entry.tokensBefore)} token`
   items.push({
     key: stableKey,
     type: "system",
@@ -350,7 +350,7 @@ export function buildConversation(
         key: stableKey,
         type: "system",
         kind: "compact_end",
-        title: "Branched from an earlier point",
+        title: "从更早的节点分叉",
         timestamp: entry.timestamp,
       })
       agent = null
@@ -360,7 +360,7 @@ export function buildConversation(
       items.push({
         key: stableKey,
         type: "system",
-        title: `Switched model → ${entry.provider} / ${entry.modelId}`,
+        title: `已切换模型 → ${entry.provider} / ${entry.modelId}`,
         timestamp: entry.timestamp,
       })
       agent = null
@@ -370,7 +370,7 @@ export function buildConversation(
       items.push({
         key: stableKey,
         type: "system",
-        title: `Reasoning → ${entry.thinkingLevel}`,
+        title: `推理 → ${entry.thinkingLevel}`,
         timestamp: entry.timestamp,
       })
       agent = null

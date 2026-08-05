@@ -52,7 +52,7 @@ const platformLabels = {
   a1ctf: "A1CTF",
 } as const
 
-const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   dateStyle: "medium",
   timeStyle: "short",
 })
@@ -81,14 +81,12 @@ function EventDialog() {
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogTrigger render={<Button type="button" />}>
-        <Plus /> Create event
+        <Plus /> 创建赛事
       </DialogTrigger>
       <DialogPopup>
         <DialogHeader>
-          <DialogTitle>Create event</DialogTitle>
-          <DialogDescription>
-            Set up a workspace for challenges and runs.
-          </DialogDescription>
+          <DialogTitle>创建赛事</DialogTitle>
+          <DialogDescription>为题目和任务搭建一个工作区。</DialogDescription>
         </DialogHeader>
         <form
           className="contents"
@@ -98,7 +96,7 @@ function EventDialog() {
         >
           <DialogPanel className="grid gap-4">
             <Field>
-              <FieldLabel htmlFor="event-name">Name</FieldLabel>
+              <FieldLabel htmlFor="event-name">名称</FieldLabel>
               <Controller
                 control={form.control}
                 name="name"
@@ -124,10 +122,10 @@ function EventDialog() {
           </DialogPanel>
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
+              取消
             </DialogClose>
             <Button loading={mutation.isPending} type="submit">
-              Create event
+              创建赛事
             </Button>
           </DialogFooter>
         </form>
@@ -139,7 +137,7 @@ function EventDialog() {
 function EventCard({ event }: { event: EventSummary }) {
   const platformLabel = event.platform
     ? platformLabels[event.platform.type]
-    : "Local"
+    : "本地"
 
   return (
     <CardFrame className="h-full min-w-0" render={<article />}>
@@ -156,20 +154,20 @@ function EventCard({ event }: { event: EventSummary }) {
           {event.platform ? (
             <div className="flex flex-col gap-2">
               <div className="flex items-baseline justify-between gap-3 text-sm">
-                <span className="text-muted-foreground">Progress</span>
+                <span className="text-muted-foreground">进度</span>
                 <span className="font-medium tabular-nums">
-                  {event.solvedCount} / {event.challengeCount} solved
+                  已解决 {event.solvedCount} / {event.challengeCount}
                 </span>
               </div>
               <Progress
-                aria-label={`${event.solvedCount} of ${event.challengeCount} challenges solved`}
+                aria-label={`已解决 ${event.solvedCount} / ${event.challengeCount} 个题目`}
                 max={Math.max(event.challengeCount, 1)}
                 value={event.solvedCount}
               />
             </div>
           ) : (
             <div>
-              <p className="text-muted-foreground text-xs">Challenges</p>
+              <p className="text-muted-foreground text-xs">题目</p>
               <p className="mt-1 font-semibold text-2xl tabular-nums">
                 {event.challengeCount}
               </p>
@@ -177,8 +175,7 @@ function EventCard({ event }: { event: EventSummary }) {
           )}
           {event.activeRunCount > 0 && (
             <Badge className="w-fit" variant="info">
-              <Activity /> {event.activeRunCount} active run
-              {event.activeRunCount === 1 ? "" : "s"}
+              <Activity /> {event.activeRunCount} 个活跃任务
             </Badge>
           )}
         </CardPanel>
@@ -187,7 +184,7 @@ function EventCard({ event }: { event: EventSummary }) {
         <div className="flex min-w-0 flex-col gap-1 text-muted-foreground text-xs">
           <span className="flex items-center gap-1.5">
             <Clock3 className="size-3.5 shrink-0" />
-            Updated
+            更新于
             <time dateTime={event.lastActivityAt}>
               {dateTimeFormatter.format(new Date(event.lastActivityAt))}
             </time>
@@ -197,14 +194,14 @@ function EventCard({ event }: { event: EventSummary }) {
               <RefreshCw className="size-3.5 shrink-0" />
               {event.platform.credentialConfigured
                 ? event.platform.lastSyncedAt
-                  ? `Synced ${dateTimeFormatter.format(new Date(event.platform.lastSyncedAt))}`
-                  : "Not synced"
-                : "Credentials required"}
+                  ? `已同步 ${dateTimeFormatter.format(new Date(event.platform.lastSyncedAt))}`
+                  : "未同步"
+                : "需要凭据"}
             </span>
           )}
         </div>
         <Button render={<Link to={`/events/${event.id}`} />} variant="ghost">
-          Open <ArrowRight />
+          打开 <ArrowRight />
         </Button>
       </CardFrameFooter>
     </CardFrame>
@@ -221,9 +218,9 @@ export function HomePage() {
     <AppLayout>
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-semibold text-2xl">Events</h1>
+          <h1 className="font-semibold text-2xl">赛事</h1>
           <p className="mt-1 text-muted-foreground text-sm">
-            Manage CTF workspaces, challenges, and run preparation.
+            管理 CTF 工作区、题目与解题任务。
           </p>
         </div>
         <EventDialog />
@@ -235,7 +232,7 @@ export function HomePage() {
           role="status"
         >
           <Spinner aria-hidden="true" />
-          Loading events...
+          正在加载赛事…
         </div>
       )}
       {events.error && (
@@ -247,10 +244,8 @@ export function HomePage() {
             <EmptyMedia variant="icon">
               <CalendarDays />
             </EmptyMedia>
-            <EmptyTitle>No events yet</EmptyTitle>
-            <EmptyDescription>
-              Create an event to begin organizing challenges.
-            </EmptyDescription>
+            <EmptyTitle>暂无赛事</EmptyTitle>
+            <EmptyDescription>创建赛事即可开始整理题目。</EmptyDescription>
           </EmptyHeader>
         </Empty>
       )}

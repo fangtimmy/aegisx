@@ -25,10 +25,9 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
     mutationFn: () => platformsApi.testBoundPlatform(event.id),
     onSuccess: () => {
       refreshEvent(queryClient, event.id)
-      toast.success("Platform connection OK")
+      toast.success("平台连接正常")
     },
-    onError: (error) =>
-      toast.error("Platform connection failed", error.message),
+    onError: (error) => toast.error("平台连接失败", error.message),
   })
   const detach = useMutation({
     mutationFn: () => platformsApi.unbindPlatform(event.id),
@@ -49,14 +48,14 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
         type="button"
         variant="outline"
       >
-        <CircleCheck /> Test connection
+        <CircleCheck /> 测试连接
       </Button>
       <ConnectPlatformDialog eventId={event.id} platform={event.platform} />
       <AlertDialog>
         <AlertDialogTrigger
           render={
             <Button
-              aria-label="Disconnect platform"
+              aria-label="断开平台"
               size="icon-sm"
               type="button"
               variant="ghost"
@@ -67,15 +66,14 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
         </AlertDialogTrigger>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disconnect platform?</AlertDialogTitle>
+            <AlertDialogTitle>断开平台？</AlertDialogTitle>
             <AlertDialogDescription>
-              Current challenge snapshots and attachments will be kept. A later
-              connection to the same competition will update those challenges.
+              当前的题目快照和附件将被保留。之后连接到同一赛事时会更新这些题目。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
+              取消
             </AlertDialogClose>
             <Button
               loading={detach.isPending}
@@ -83,7 +81,7 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
               type="button"
               variant="destructive"
             >
-              Disconnect
+              断开
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -92,7 +90,7 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
         <span className="text-destructive text-xs">{detach.error.message}</span>
       )}
       {testConnection.isSuccess && (
-        <span className="text-success text-xs">Connection successful</span>
+        <span className="text-success text-xs">连接成功</span>
       )}
       {testConnection.error && (
         <span className="text-destructive text-xs">

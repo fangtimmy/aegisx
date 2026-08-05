@@ -73,10 +73,10 @@ test("parses challenge sync progress and completion events", () => {
 test("rejects malformed challenge sync events", () => {
   assert.throws(
     () => parseSyncStreamLine(JSON.stringify({ type: "item", item: {} })),
-    /Invalid challenge sync event/
+    /无效的题目同步事件/
   )
   assert.throws(
     () => parseSyncStreamLine(JSON.stringify({ type: "unknown" })),
-    /Invalid challenge sync event/
+    /无效的题目同步事件/
   )
 })

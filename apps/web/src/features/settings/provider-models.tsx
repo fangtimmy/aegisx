@@ -105,7 +105,7 @@ export function ProviderModels({
         <CardFrameHeader>
           <CardFrameTitle>
             <span className="flex items-center gap-2">
-              Models
+              模型
               <Badge variant="secondary">{provider.models.length}</Badge>
             </span>
           </CardFrameTitle>
@@ -119,7 +119,7 @@ export function ProviderModels({
               type="button"
               variant="outline"
             >
-              <RefreshCw /> Fetch models
+              <RefreshCw /> 获取模型
             </Button>
             <Dialog
               onOpenChange={(open) => {
@@ -129,13 +129,13 @@ export function ProviderModels({
               open={addOpen}
             >
               <DialogTrigger render={<Button type="button" />}>
-                <Plus /> Add model
+                <Plus /> 添加模型
               </DialogTrigger>
               <DialogPopup className="sm:max-w-sm">
                 <DialogHeader>
-                  <DialogTitle>Add model</DialogTitle>
+                  <DialogTitle>添加模型</DialogTitle>
                   <DialogDescription>
-                    Enter the model identifier accepted by this provider.
+                    输入该供应商接受的模型标识。
                   </DialogDescription>
                 </DialogHeader>
                 <form
@@ -150,7 +150,7 @@ export function ProviderModels({
                   <DialogPanel className="grid gap-4">
                     <Field>
                       <FieldLabel htmlFor="provider-model-id">
-                        Model ID
+                        模型 ID
                       </FieldLabel>
                       <Controller
                         control={addForm.control}
@@ -170,7 +170,7 @@ export function ProviderModels({
                     </Field>
                     <Field>
                       <FieldLabel htmlFor="provider-model-label">
-                        Display name
+                        显示名称
                       </FieldLabel>
                       <Controller
                         control={addForm.control}
@@ -180,7 +180,7 @@ export function ProviderModels({
                             id="provider-model-label"
                             onBlur={field.onBlur}
                             onChange={field.onChange}
-                            placeholder="Defaults to the model ID"
+                            placeholder="默认使用模型 ID"
                             value={field.value}
                           />
                         )}
@@ -199,10 +199,10 @@ export function ProviderModels({
                     <DialogClose
                       render={<Button type="button" variant="ghost" />}
                     >
-                      Cancel
+                      取消
                     </DialogClose>
                     <Button loading={addModels.isPending} type="submit">
-                      Add model
+                      添加模型
                     </Button>
                   </DialogFooter>
                 </form>
@@ -230,9 +230,9 @@ export function ProviderModels({
               {provider.models.length === 0 ? (
                 <Empty className="py-10">
                   <EmptyHeader>
-                    <EmptyTitle>No models configured</EmptyTitle>
+                    <EmptyTitle>未配置模型</EmptyTitle>
                     <EmptyDescription>
-                      Add a model manually or fetch models from this provider.
+                      手动添加模型，或从该供应商获取模型。
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
@@ -282,10 +282,10 @@ export function ProviderModels({
                       </div>
                     </div>
                     <Button
-                      aria-label={`Edit ${model.label}`}
+                      aria-label={`编辑 ${model.label}`}
                       onClick={() => openEdit(model)}
                       size="icon"
-                      title="Edit model"
+                      title="编辑模型"
                       type="button"
                       variant="ghost"
                     >
@@ -295,9 +295,9 @@ export function ProviderModels({
                       <AlertDialogTrigger
                         render={
                           <Button
-                            aria-label={`Delete ${model.label}`}
+                            aria-label={`删除 ${model.label}`}
                             size="icon"
-                            title="Delete model"
+                            title="删除模型"
                             type="button"
                             variant="ghost"
                           />
@@ -308,17 +308,17 @@ export function ProviderModels({
                       <AlertDialogPopup>
                         <AlertDialogHeader>
                           <AlertDialogTitle>
-                            Delete {model.label}?
+                            删除 {model.label}？
                           </AlertDialogTitle>
                           <AlertDialogDescription>
-                            This model will no longer be available for new runs.
+                            该模型将不再可用于新任务。
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
                           <AlertDialogClose
                             render={<Button type="button" variant="ghost" />}
                           >
-                            Cancel
+                            取消
                           </AlertDialogClose>
                           <Button
                             loading={
@@ -329,7 +329,7 @@ export function ProviderModels({
                             type="button"
                             variant="destructive"
                           >
-                            Delete model
+                            删除模型
                           </Button>
                         </AlertDialogFooter>
                       </AlertDialogPopup>
@@ -337,8 +337,8 @@ export function ProviderModels({
                     <Switch
                       aria-label={
                         model.enabled
-                          ? `Disable ${model.label}`
-                          : `Enable ${model.label}`
+                          ? `禁用 ${model.label}`
+                          : `启用 ${model.label}`
                       }
                       checked={model.enabled}
                       disabled={modelMutation.isPending}

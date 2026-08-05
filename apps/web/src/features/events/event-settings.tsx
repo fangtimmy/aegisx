@@ -36,32 +36,32 @@ export function EventSettings({ event }: { event: EventSummary }) {
         }),
         queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
-      toast.success("Event updated")
+      toast.success("赛事已更新")
     },
-    onError: (error) => toast.error("Failed to update event", error.message),
+    onError: (error) => toast.error("更新赛事失败", error.message),
   })
   const remove = useMutation({
     mutationFn: () => eventsApi.deleteEvent(event.id),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: keys.events.all })
-      toast.success("Event deleted")
+      toast.success("赛事已删除")
       navigate("/")
     },
-    onError: (error) => toast.error("Failed to delete event", error.message),
+    onError: (error) => toast.error("删除赛事失败", error.message),
   })
 
   return (
     <div className="max-w-3xl">
       <header className="mb-6">
-        <h1 className="font-semibold text-2xl">Event settings</h1>
+        <h1 className="font-semibold text-2xl">赛事设置</h1>
         <p className="mt-1 text-muted-foreground text-sm">
-          Manage this event and its platform connection.
+          管理本赛事及其平台连接。
         </p>
       </header>
 
       <section className="border-t py-6" aria-labelledby="event-general">
         <h2 className="font-medium text-base" id="event-general">
-          General
+          常规
         </h2>
         <form
           className="mt-4 flex max-w-xl items-end gap-3"
@@ -73,7 +73,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
           )}
         >
           <Field className="min-w-0 flex-1">
-            <FieldLabel htmlFor="event-name">Name</FieldLabel>
+            <FieldLabel htmlFor="event-name">名称</FieldLabel>
             <Controller
               control={form.control}
               name="name"
@@ -91,7 +91,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
             />
           </Field>
           <Button loading={update.isPending} type="submit">
-            Save
+            保存
           </Button>
         </form>
         {update.error && (
@@ -104,11 +104,11 @@ export function EventSettings({ event }: { event: EventSummary }) {
 
       <section className="border-t py-6" aria-labelledby="event-prompt-hint">
         <h2 className="font-medium text-base" id="event-prompt-hint">
-          Prompt instructions
+          提示词指令
         </h2>
         <p className="mt-1 text-muted-foreground text-sm">
-          Additional instructions appended to every agent prompt for this event
-          — flag formats, conventions, common gotchas.
+          追加到本赛事每个 agent 提示词末尾的额外指令——flag
+          格式、约定、常见陷阱。
         </p>
         <form
           className="mt-4 max-w-xl"
@@ -128,7 +128,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
                   id="event-prompt-hint"
                   onBlur={field.onBlur}
                   onChange={field.onChange}
-                  placeholder="e.g. Flag format is moectf{...}. Submit only flags matching this format."
+                  placeholder="例如：flag 格式为 moectf{...}。仅提交匹配该格式的 flag。"
                   rows={6}
                   value={field.value}
                 />
@@ -136,17 +136,17 @@ export function EventSettings({ event }: { event: EventSummary }) {
             />
           </Field>
           <Button className="mt-3" loading={update.isPending} type="submit">
-            Save instructions
+            保存指令
           </Button>
         </form>
       </section>
 
       <section className="border-t py-6" aria-labelledby="event-platform">
         <h2 className="font-medium text-base" id="event-platform">
-          CTF platform
+          CTF 平台
         </h2>
         <p className="mt-1 mb-4 text-muted-foreground text-sm">
-          Connect this event to import challenges, attachments, and targets.
+          连接本赛事以导入题目、附件和目标。
         </p>
         <PlatformBinding event={event} />
       </section>
@@ -156,13 +156,12 @@ export function EventSettings({ event }: { event: EventSummary }) {
           className="font-medium text-destructive text-base"
           id="event-danger"
         >
-          Danger zone
+          危险区域
         </h2>
         <Field className="mt-4 max-w-xl">
-          <FieldLabel>Delete event</FieldLabel>
+          <FieldLabel>删除赛事</FieldLabel>
           <FieldDescription>
-            Permanently delete this event, its challenges, attachments, and run
-            history.
+            永久删除本赛事及其题目、附件和任务历史。
           </FieldDescription>
           <AlertDialog>
             <AlertDialogTrigger
@@ -174,14 +173,13 @@ export function EventSettings({ event }: { event: EventSummary }) {
                 />
               }
             >
-              <Trash2 /> Delete event
+              <Trash2 /> 删除赛事
             </AlertDialogTrigger>
             <AlertDialogPopup>
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete {event.name}?</AlertDialogTitle>
+                <AlertDialogTitle>删除 {event.name}？</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This action cannot be undone. Active runs must be stopped
-                  first.
+                  此操作无法撤销。必须先停止所有活跃任务。
                 </AlertDialogDescription>
                 {remove.error && (
                   <Alert variant="error">
@@ -194,7 +192,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
                 <AlertDialogClose
                   render={<Button type="button" variant="ghost" />}
                 >
-                  Cancel
+                  取消
                 </AlertDialogClose>
                 <Button
                   loading={remove.isPending}
@@ -202,7 +200,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
                   type="button"
                   variant="destructive"
                 >
-                  Delete event
+                  删除赛事
                 </Button>
               </AlertDialogFooter>
             </AlertDialogPopup>

@@ -1,7 +1,7 @@
 import type { ProviderType } from "@/api"
 
 export const providerTypeLabels: Record<ProviderType, string> = {
-  "openai-compatible": "OpenAI compatible",
+  "openai-compatible": "OpenAI 兼容",
   "openai-responses": "OpenAI Responses",
   "anthropic-messages": "Anthropic Messages",
 }

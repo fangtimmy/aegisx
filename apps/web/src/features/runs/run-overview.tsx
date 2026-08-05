@@ -14,6 +14,13 @@ export function statusVariant(status: RunStatus) {
   return "secondary" as const
 }
 
+export function runStatusLabel(status: RunStatus): string {
+  if (status === "running") return "运行中"
+  if (status === "idle") return "空闲"
+  if (status === "closed") return "已关闭"
+  return status
+}
+
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
@@ -31,88 +38,89 @@ export function RunOverview({ run }: { run: RunPublic }) {
     <div className="flex flex-col gap-4 px-6 py-4">
       <Alert>
         <Box />
-        <AlertTitle>Container tool box</AlertTitle>
+        <AlertTitle>容器工具箱</AlertTitle>
         <AlertDescription>
-          The agent runs host-side in-process; this container is a Kali tool
-          box. bash runs inside it with the full CTF toolchain, and its
-          workspace is shared with your host file tools. Watch and steer it in
-          the Conversation tab.
+          agent 在宿主机端以进程内方式运行；该容器是一个 Kali 工具箱。bash
+          在其中运行，配备完整 CTF
+          工具链，其工作区与你的宿主机文件工具共享。可在「对话」标签页中监控并干预它。
         </AlertDescription>
       </Alert>
       {run.targetSupported && <TargetPanel run={run} />}
       <dl className="grid grid-cols-2 gap-x-8 gap-y-4 text-sm">
         <div>
-          <dt className="text-muted-foreground text-xs">Status</dt>
+          <dt className="text-muted-foreground text-xs">状态</dt>
           <dd className="mt-1">
-            <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+            <Badge variant={statusVariant(run.status)}>
+              {runStatusLabel(run.status)}
+            </Badge>
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Model</dt>
+          <dt className="text-muted-foreground text-xs">模型</dt>
           <dd className="mt-1 break-all font-mono text-xs">
             {run.provider} / {run.modelName}
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Reasoning</dt>
+          <dt className="text-muted-foreground text-xs">推理</dt>
           <dd className="mt-1 capitalize">{run.thinkingLevel}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Image</dt>
+          <dt className="text-muted-foreground text-xs">镜像</dt>
           <dd className="mt-1 break-all font-mono text-xs">
-            {run.image || "Not available"}
+            {run.image || "不可用"}
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Resources</dt>
+          <dt className="text-muted-foreground text-xs">资源</dt>
           <dd className="mt-1 font-mono text-xs">
-            {run.cpus} CPU · {run.memoryMb}MB · {run.pidsLimit} PIDs
+            {run.cpus} CPU · {run.memoryMb}MB · {run.pidsLimit} PID
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Started</dt>
+          <dt className="text-muted-foreground text-xs">开始时间</dt>
           <dd className="mt-1">{formatTime(run.startedAt)}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">Completed</dt>
+          <dt className="text-muted-foreground text-xs">完成时间</dt>
           <dd className="mt-1">{formatTime(run.completedAt)}</dd>
         </div>
       </dl>
       {run.usage && (
         <section className="border-t pt-4">
-          <h3 className="mb-2 font-medium text-sm">Token usage &amp; cost</h3>
+          <h3 className="mb-2 font-medium text-sm">Token 用量与费用</h3>
           <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
             <div>
-              <dt className="text-muted-foreground text-xs">Input</dt>
+              <dt className="text-muted-foreground text-xs">输入</dt>
               <dd className="mt-0.5 font-mono text-xs">
                 {formatTokens(run.usage.input)}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">Output</dt>
+              <dt className="text-muted-foreground text-xs">输出</dt>
               <dd className="mt-0.5 font-mono text-xs">
                 {formatTokens(run.usage.output)}
                 {run.usage.reasoning > 0 && (
                   <span className="text-muted-foreground">
                     {" "}
-                    ({formatTokens(run.usage.reasoning)} reasoning)
+                    （{formatTokens(run.usage.reasoning)} 推理）
                   </span>
                 )}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">Cache</dt>
+              <dt className="text-muted-foreground text-xs">缓存</dt>
               <dd className="mt-0.5 font-mono text-xs">
-                {formatTokens(run.usage.cacheRead)} read /{" "}
-                {formatTokens(run.usage.cacheWrite)} write
+                {formatTokens(run.usage.cacheRead)} 读 /{" "}
+                {formatTokens(run.usage.cacheWrite)} 写
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">Turns</dt>
+              <dt className="text-muted-foreground text-xs">轮次</dt>
               <dd className="mt-0.5 font-mono text-xs">{run.usage.turns}</dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">Cost</dt>
+              <dt className="text-muted-foreground text-xs">费用</dt>
               <dd className="mt-0.5 font-mono text-xs">
                 {formatCost(run.usage.cost)}
               </dd>
@@ -122,21 +130,21 @@ export function RunOverview({ run }: { run: RunPublic }) {
       )}
       {(run.summary || run.flag) && (
         <section className="border-t pt-4">
-          <h3 className="mb-2 font-medium text-sm">Result</h3>
+          <h3 className="mb-2 font-medium text-sm">结果</h3>
           {run.summary && (
             <p className="whitespace-pre-wrap text-sm leading-6">
               {run.summary}
             </p>
           )}
           {run.flag && (
-            <p className="mt-2 break-all font-mono text-xs">Flag: {run.flag}</p>
+            <p className="mt-2 break-all font-mono text-xs">Flag：{run.flag}</p>
           )}
         </section>
       )}
       {run.error && (
         <Alert variant="error">
           <CircleAlert />
-          <AlertTitle>Run failed</AlertTitle>
+          <AlertTitle>任务失败</AlertTitle>
           <AlertDescription className="whitespace-pre-wrap">
             {run.error}
           </AlertDescription>
@@ -160,25 +168,31 @@ function TargetPanel({ run }: { run: RunPublic }) {
       queryClient.setQueryData(key, value)
       const verb =
         variables === "start"
-          ? "started"
+          ? "已启动"
           : variables === "stop"
-            ? "stopped"
-            : "extended"
-      toast.success(`Target ${verb}`)
+            ? "已停止"
+            : "已延长"
+      toast.success(`目标 ${verb}`)
     },
-    onError: (error) => toast.error("Target action failed", error.message),
+    onError: (error) => toast.error("目标操作失败", error.message),
   })
   const value = target.data
+  const statusLabel =
+    value?.status === "running"
+      ? "运行中"
+      : value?.status === "absent"
+        ? "未启动"
+        : (value?.status ?? "加载中")
 
   return (
     <section className="border-t pt-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="mr-auto font-medium text-sm">Challenge target</h3>
+        <h3 className="mr-auto font-medium text-sm">题目目标</h3>
         <Badge variant={value?.status === "running" ? "success" : "secondary"}>
-          {value?.status ?? "loading"}
+          {statusLabel}
         </Badge>
         <Button
-          aria-label="Refresh target"
+          aria-label="刷新目标"
           loading={target.isFetching}
           onClick={() => target.refetch()}
           size="icon-sm"
@@ -194,7 +208,7 @@ function TargetPanel({ run }: { run: RunPublic }) {
             type="button"
             variant="outline"
           >
-            <Play /> Start
+            <Play /> 启动
           </Button>
         )}
         {value?.status === "running" && (
@@ -205,7 +219,7 @@ function TargetPanel({ run }: { run: RunPublic }) {
               type="button"
               variant="outline"
             >
-              <Clock3 /> Extend
+              <Clock3 /> 延长
             </Button>
             <Button
               loading={action.isPending && action.variables === "stop"}
@@ -213,7 +227,7 @@ function TargetPanel({ run }: { run: RunPublic }) {
               type="button"
               variant="destructive-outline"
             >
-              <Square /> Stop
+              <Square /> 停止
             </Button>
           </>
         )}
@@ -233,7 +247,7 @@ function TargetPanel({ run }: { run: RunPublic }) {
       )}
       {value?.expiresAt && (
         <p className="mt-2 text-muted-foreground text-xs">
-          Expires {formatTime(value.expiresAt)}
+          过期时间 {formatTime(value.expiresAt)}
         </p>
       )}
       {(target.error || action.error) && (

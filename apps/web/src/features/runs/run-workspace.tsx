@@ -44,7 +44,7 @@ import { toast } from "@/lib/toast"
 import { Conversation } from "./conversation"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
-import { RunOverview, statusVariant } from "./run-overview"
+import { RunOverview, runStatusLabel, statusVariant } from "./run-overview"
 
 export function RunWorkspace({
   eventId,
@@ -79,19 +79,19 @@ export function RunWorkspace({
   const stop = useMutation({
     mutationFn: () => runsApi.stopRun(runId ?? ""),
     onSuccess: () => {
-      toast.success("Run stopping")
+      toast.success("任务正在停止")
       void invalidate(queryClient, eventId)
     },
-    onError: (error) => toast.error("Failed to stop run", error.message),
+    onError: (error) => toast.error("停止任务失败", error.message),
   })
 
   const close = useMutation({
     mutationFn: () => runsApi.closeRun(runId ?? ""),
     onSuccess: () => {
-      toast.success("Run closed")
+      toast.success("任务已关闭")
       void invalidate(queryClient, eventId)
     },
-    onError: (error) => toast.error("Failed to close run", error.message),
+    onError: (error) => toast.error("关闭任务失败", error.message),
   })
 
   if (!runId) {
@@ -99,11 +99,11 @@ export function RunWorkspace({
       <div className="flex min-h-96 items-center justify-center p-6">
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>Select a run</EmptyTitle>
+            <EmptyTitle>选择一个任务</EmptyTitle>
             <EmptyDescription>
               {challenges.length > 0
-                ? "Open an existing run or start a new run."
-                : "Add a challenge before starting a run."}
+                ? "打开已有任务或启动一个新任务。"
+                : "启动任务前请先添加题目。"}
             </EmptyDescription>
           </EmptyHeader>
           {challenges.length > 0 ? (
@@ -121,7 +121,7 @@ export function RunWorkspace({
         role="status"
       >
         <Spinner aria-hidden="true" />
-        Loading run...
+        正在加载任务…
       </div>
     )
   }
@@ -129,7 +129,7 @@ export function RunWorkspace({
     return (
       <Alert className="m-4 w-auto" variant="error">
         <CircleAlert />
-        <AlertTitle>Unable to load runs</AlertTitle>
+        <AlertTitle>无法加载任务</AlertTitle>
         <AlertDescription>{runs.error.message}</AlertDescription>
       </Alert>
     )
@@ -138,9 +138,9 @@ export function RunWorkspace({
     return (
       <Alert className="m-4 w-auto" variant="error">
         <CircleAlert />
-        <AlertTitle>Run not found</AlertTitle>
+        <AlertTitle>未找到任务</AlertTitle>
         <AlertDescription>
-          This run may have been deleted. Select another from the list.
+          该任务可能已被删除。请从列表中选择另一个。
         </AlertDescription>
       </Alert>
     )
@@ -163,7 +163,9 @@ export function RunWorkspace({
         <CardFrameTitle>
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate">{run.challengeName}</span>
-            <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+            <Badge variant={statusVariant(run.status)}>
+              {runStatusLabel(run.status)}
+            </Badge>
           </span>
         </CardFrameTitle>
         <CardFrameDescription className="truncate font-mono text-xs">
@@ -178,7 +180,7 @@ export function RunWorkspace({
               type="button"
               variant="outline"
             >
-              <Archive /> Close
+              <Archive /> 关闭
             </Button>
           )}
           {running && (
@@ -192,21 +194,21 @@ export function RunWorkspace({
                   />
                 }
               >
-                <Square /> Stop
+                <Square /> 停止
               </AlertDialogTrigger>
               <AlertDialogPopup>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Stop this run?</AlertDialogTitle>
+                  <AlertDialogTitle>停止该任务？</AlertDialogTitle>
                   <AlertDialogDescription>
-                    The current turn is cancelled (like pressing Esc). The
-                    container stays; send a message to continue.
+                    当前轮次将被取消（类似按
+                    Esc）。容器会保留；发送消息即可继续。
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogClose
                     render={<Button type="button" variant="ghost" />}
                   >
-                    Cancel
+                    取消
                   </AlertDialogClose>
                   <Button
                     loading={stop.isPending}
@@ -214,7 +216,7 @@ export function RunWorkspace({
                     type="button"
                     variant="destructive"
                   >
-                    Stop run
+                    停止任务
                   </Button>
                 </AlertDialogFooter>
               </AlertDialogPopup>
@@ -241,13 +243,13 @@ export function RunWorkspace({
               variant="underline"
             >
               <TabsTab className="gap-2" value="conversation">
-                <MessageSquare /> Conversation
+                <MessageSquare /> 对话
               </TabsTab>
               <TabsTab className="gap-2" value="overview">
-                <Info /> Overview
+                <Info /> 概览
               </TabsTab>
               <TabsTab className="gap-2" value="files">
-                <Files /> Files
+                <Files /> 文件
               </TabsTab>
             </TabsList>
             <TabsPanel

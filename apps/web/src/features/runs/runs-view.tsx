@@ -50,23 +50,23 @@ function RunStatusBadge({ status }: { status: RunPublic["status"] }) {
     return (
       <Badge size="sm" variant="info" className="gap-1">
         <span className="size-1.5 animate-pulse rounded-full bg-info" />
-        running
+        运行中
       </Badge>
     )
   if (status === "idle")
     return (
       <Badge size="sm" variant="success">
-        idle
+        空闲
       </Badge>
     )
   return (
     <Badge size="sm" variant="secondary">
-      shelved
+      已关闭
     </Badge>
   )
 }
 
-const runTimeFormatter = new Intl.DateTimeFormat(undefined, {
+const runTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "short",
   day: "numeric",
   hour: "numeric",
@@ -89,12 +89,12 @@ function RunItem({
     mutationFn: () => runsApi.deleteRun(run.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) })
-      toast.success("Run deleted")
+      toast.success("任务已删除")
       if (run.id === runId) {
         navigate(`/events/${eventId}/runs`)
       }
     },
-    onError: (error) => toast.error("Failed to delete run", error.message),
+    onError: (error) => toast.error("删除任务失败", error.message),
   })
   return (
     <div className="group relative">
@@ -137,7 +137,7 @@ function RunItem({
           <MenuTrigger
             render={
               <Button
-                aria-label="Run actions"
+                aria-label="任务操作"
                 size="icon-sm"
                 type="button"
                 variant="ghost"
@@ -153,7 +153,7 @@ function RunItem({
               variant="destructive"
             >
               <Trash2 />
-              Delete run
+              删除任务
             </MenuItem>
           </MenuPopup>
         </Menu>
@@ -165,16 +165,15 @@ function RunItem({
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete run for {run.challengeName}?
+              删除 {run.challengeName} 的任务？
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently deletes the run, its conversation history, and
-              workspace files.
+              这将永久删除该任务、其对话历史和工作区文件。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button type="button" variant="ghost" />}>
-              Cancel
+              取消
             </AlertDialogClose>
             <Button
               loading={deleteMutation.isPending}
@@ -185,7 +184,7 @@ function RunItem({
               type="button"
               variant="destructive"
             >
-              Delete run
+              删除任务
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -252,14 +251,14 @@ export function RunsView({
         role="status"
       >
         <Spinner aria-hidden="true" />
-        Loading runs...
+        正在加载任务…
       </div>
     )
   if (runs.error)
     return (
       <Alert variant="error">
         <CircleAlert />
-        <AlertTitle>Unable to load runs</AlertTitle>
+        <AlertTitle>无法加载任务</AlertTitle>
         <AlertDescription>{runs.error.message}</AlertDescription>
       </Alert>
     )
@@ -272,7 +271,7 @@ export function RunsView({
   const historyRuns = runs.data.items.filter((run) => run.status === "closed")
   if (sort === "name") {
     historyRuns.sort((left, right) =>
-      left.challengeName.localeCompare(right.challengeName, undefined, {
+      left.challengeName.localeCompare(right.challengeName, "zh-Hans-CN", {
         numeric: true,
         sensitivity: "base",
       })
@@ -296,7 +295,7 @@ export function RunsView({
           <CardFrameHeader>
             <CardFrameTitle>
               <span className="flex items-center gap-2">
-                <List className="size-4" /> Runs
+                <List className="size-4" /> 任务
               </span>
             </CardFrameTitle>
             <CardFrameAction className="gap-1">
@@ -304,9 +303,9 @@ export function RunsView({
                 <MenuTrigger
                   render={
                     <Button
-                      aria-label="Sort run history"
+                      aria-label="排序任务历史"
                       size="icon-sm"
-                      title="Sort run history"
+                      title="排序任务历史"
                       variant="ghost"
                     />
                   }
@@ -320,18 +319,16 @@ export function RunsView({
                     }
                     value={sort}
                   >
-                    <MenuRadioItem value="recent">
-                      Recent activity
-                    </MenuRadioItem>
-                    <MenuRadioItem value="event">Event order</MenuRadioItem>
-                    <MenuRadioItem value="name">Challenge name</MenuRadioItem>
+                    <MenuRadioItem value="recent">最近活动</MenuRadioItem>
+                    <MenuRadioItem value="event">赛事顺序</MenuRadioItem>
+                    <MenuRadioItem value="name">题目名称</MenuRadioItem>
                   </MenuRadioGroup>
                 </MenuPopup>
               </Menu>
               <CreateRunDialog
                 challenges={challenges}
                 trigger={<Plus />}
-                triggerLabel="Start run"
+                triggerLabel="启动任务"
                 triggerSize="icon-sm"
                 triggerVariant="ghost"
               />
@@ -343,19 +340,16 @@ export function RunsView({
                 <div className="p-3">
                   {runs.data.items.length === 0 ? (
                     <p className="px-3 py-10 text-center text-muted-foreground text-sm">
-                      No runs yet
+                      暂无任务
                     </p>
                   ) : (
-                    <nav
-                      aria-label="Event runs"
-                      className="flex flex-col gap-3"
-                    >
+                    <nav aria-label="赛事任务" className="flex flex-col gap-3">
                       {activeRuns.length > 0 && (
                         <RunSection
                           eventId={eventId}
                           runId={runId}
                           runs={activeRuns}
-                          title="Active"
+                          title="活跃"
                         />
                       )}
                       {historyRuns.length > 0 && (
@@ -363,7 +357,7 @@ export function RunsView({
                           eventId={eventId}
                           runId={runId}
                           runs={historyRuns}
-                          title="Shelved"
+                          title="已归档"
                         />
                       )}
                     </nav>

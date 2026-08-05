@@ -78,7 +78,7 @@ function ResetSlot({
     <div className="flex h-7 w-7 shrink-0 items-center justify-center">
       {modified ? (
         <Button
-          aria-label="Reset to default"
+          aria-label="重置为默认"
           className="size-7"
           disabled={disabled}
           onClick={onReset}
@@ -247,7 +247,7 @@ function SettingControl({
       <Select
         disabled={disabled}
         items={Object.fromEntries([
-          ["", "No default model"],
+          ["", "无默认模型"],
           ...models.map((model) => [
             model.id,
             `${model.provider.label} / ${model.label}`,
@@ -257,10 +257,10 @@ function SettingControl({
         value={current}
       >
         <SelectTrigger>
-          <SelectValue placeholder="No default model" />
+          <SelectValue placeholder="无默认模型" />
         </SelectTrigger>
         <SelectPopup>
-          <SelectItem value="">No default model</SelectItem>
+          <SelectItem value="">无默认模型</SelectItem>
           {(providers ?? []).map((provider) => {
             const providerModels = models.filter(
               (model) => model.provider.id === provider.id
@@ -336,7 +336,7 @@ function PromptControl({
           <MenuTrigger
             render={<Button type="button" variant="outline" size="sm" />}
           >
-            <Braces /> Variables
+            <Braces /> 变量
           </MenuTrigger>
           <MenuPopup align="end" className="max-h-72">
             {variables.map((variable) => (
@@ -357,25 +357,24 @@ function PromptControl({
           type="button"
           variant="outline"
         >
-          <Eye /> Preview
+          <Eye /> 预览
         </Button>
         <Dialog>
           <DialogTrigger
             render={<Button type="button" variant="ghost" size="sm" />}
           >
-            <BookOpen /> Syntax
+            <BookOpen /> 语法
           </DialogTrigger>
           <DialogPopup className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Handlebars template syntax</DialogTitle>
+              <DialogTitle>Handlebars 模板语法</DialogTitle>
               <DialogDescription>
-                Blank is stored as blank (not substituted with the built-in
-                default). Use Reset to restore the default template.
+                留空即保存为空（不回退到内置默认值）。使用「重置」可恢复默认模板。
               </DialogDescription>
             </DialogHeader>
             <DialogPanel className="text-sm">
               <p className="text-muted-foreground">
-                Use {"{{variable}}"} tokens from the Variables menu.
+                使用「变量」菜单中的 {"{{variable}}"} 占位符。
               </p>
             </DialogPanel>
           </DialogPopup>
@@ -398,10 +397,8 @@ function PromptControl({
       >
         <DialogPopup className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Preview: {def.title}</DialogTitle>
-            <DialogDescription>
-              Sample context with highlighted substitutions.
-            </DialogDescription>
+            <DialogTitle>预览：{def.title}</DialogTitle>
+            <DialogDescription>带高亮替换内容的示例上下文。</DialogDescription>
           </DialogHeader>
           <DialogPanel className="max-h-[60vh] overflow-auto whitespace-pre-wrap font-mono text-xs">
             {preview.error && (
@@ -450,7 +447,7 @@ export function SchemaSettingsForm({
         setLocal(response.settings)
       }
     },
-    onError: (error) => toast.error("Failed to save settings", error.message),
+    onError: (error) => toast.error("保存设置失败", error.message),
   })
 
   function scheduleSave(key: SettingKey, value: unknown) {
@@ -496,9 +493,9 @@ export function SchemaSettingsForm({
       <div className="flex items-center gap-3">
         <InputGroup className="min-w-0 flex-1">
           <InputGroupInput
-            aria-label="Search settings"
+            aria-label="搜索设置"
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search settings"
+            placeholder="搜索设置"
             type="search"
             value={query}
           />
@@ -513,7 +510,7 @@ export function SchemaSettingsForm({
             onCheckedChange={(checked) => setModifiedOnly(checked === true)}
           />
           <label htmlFor="settings-modified-only">
-            Modified only
+            仅显示已修改
             {modifiedCount > 0 && (
               <span className="text-muted-foreground"> ({modifiedCount})</span>
             )}
@@ -521,7 +518,7 @@ export function SchemaSettingsForm({
         </div>
       </div>
       {groups.length === 0 && (
-        <p className="text-muted-foreground text-sm">No settings match.</p>
+        <p className="text-muted-foreground text-sm">没有匹配的设置项。</p>
       )}
       {groups.map(([group, defs]) => (
         <section key={group}>

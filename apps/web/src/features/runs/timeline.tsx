@@ -52,7 +52,7 @@ import type { ConversationStore } from "@/stream/conversation-store"
 import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
 
 function formatConversationTime(value: string | number) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("zh-CN", {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value))
@@ -92,7 +92,7 @@ function formatToolCell(value: unknown) {
           ? (JSON.stringify(value, null, 2) ?? "undefined")
           : String(value)
   return formatted.length > 64_000
-    ? `${formatted.slice(0, 64_000)}\n\n[Output preview truncated]`
+    ? `${formatted.slice(0, 64_000)}\n\n[输出预览已截断]`
     : formatted
 }
 
@@ -136,9 +136,7 @@ function ToolData({ value }: { value: unknown }) {
           </tbody>
         </table>
         {allRows.length > rows.length && (
-          <p className="px-2.5 pt-1 text-muted-foreground">
-            Showing the first 200 entries.
-          </p>
+          <p className="px-2.5 pt-1 text-muted-foreground">仅显示前 200 条。</p>
         )}
       </div>
     </ScrollArea>
@@ -166,11 +164,11 @@ const activityTriggerClass =
 function terminalLabel(tool: ToolBlock): string | null {
   switch (tool.terminal) {
     case "timed_out":
-      return "Timed out"
+      return "已超时"
     case "cancelled":
-      return "Cancelled"
+      return "已取消"
     case "failed":
-      return "Failed"
+      return "失败"
     default:
       return null
   }
@@ -184,7 +182,7 @@ function ToolActivity({
   separated?: boolean
 }) {
   const isError = tool.status === "error"
-  const label = isError ? (terminalLabel(tool) ?? "Failed") : null
+  const label = isError ? (terminalLabel(tool) ?? "失败") : null
   const StatusIcon =
     tool.status === "running"
       ? LoaderCircle
@@ -338,7 +336,7 @@ const ConversationRow = memo(function ConversationRow({
                 <CollapsibleTrigger className={activityTriggerClass}>
                   <Brain className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate">
-                    Reasoning
+                    推理
                     {block.durationMs !== undefined
                       ? ` · ${formatDuration(block.durationMs)}`
                       : ""}
@@ -381,7 +379,7 @@ const ConversationRow = memo(function ConversationRow({
  * Scrollable conversation timeline for one agent. Merges durable committed
  * messages with ephemeral live progress from the store. Must be rendered inside
  * a coss <ScrollArea>; it locates the viewport via data-slot to drive
- * follow-latest scrolling, overflow detection, and a "Latest" jump button.
+ * follow-latest scrolling, overflow detection, and a "最新" jump button.
  */
 export function Timeline({
   agentId,
@@ -483,9 +481,9 @@ export function Timeline({
     return (
       <Empty className="py-12">
         <EmptyHeader>
-          <EmptyTitle>No conversation yet</EmptyTitle>
+          <EmptyTitle>暂无对话</EmptyTitle>
           <EmptyDescription>
-            Agent output and tool activity will appear here.
+            agent 的输出和工具活动将显示在这里。
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -514,7 +512,7 @@ export function Timeline({
               type="button"
             >
               <ArrowDown aria-hidden="true" />
-              Latest
+              最新
             </Button>
           </div>,
           scrollContainer
@@ -523,7 +521,7 @@ export function Timeline({
         <ConversationRow item={item} key={item.key} />
       ))}
       <div aria-live="polite" className="sr-only">
-        {items.length > 0 ? "Agent activity updated" : ""}
+        {items.length > 0 ? "agent 活动已更新" : ""}
       </div>
     </div>
   )
