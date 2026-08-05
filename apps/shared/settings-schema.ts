@@ -84,6 +84,7 @@ export type FlatSettings = {
   "container.pidsLimit": number
   "container.workspace": string
   "container.tmpfsSize": string
+  "container.networkMode": string
   "prompts.mainSystem": string
   "prompts.childSystem": string
   "prompts.initial": string
@@ -282,6 +283,18 @@ export const SETTINGS_DEFS: SettingDef[] = [
     title: "tmpfs 大小",
     widget: "text",
     order: 70,
+  },
+  {
+    key: "container.networkMode",
+    type: "string",
+    default: "",
+    maxLength: 200,
+    group: "容器",
+    title: "网络模式",
+    description:
+      "Docker 网络模式。留空用默认 bridge；填 container:<vpn-容器名> 可让所有 solver 共享该容器的网络命名空间（自管 VPN 场景，solver 不需 NET_ADMIN）。此时 host.docker.internal 由 Docker Desktop 自动注入。",
+    widget: "text",
+    order: 80,
   },
   {
     key: "prompts.mainSystem",

@@ -605,6 +605,7 @@ export function createRunService(options: RunServiceOptions) {
             pidsLimit: env.pidsLimit,
           },
           tmpfsSize: input.container.tmpfsSize,
+          networkMode: get(options.getSettings(), "container.networkMode"),
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -860,6 +861,7 @@ export function createRunService(options: RunServiceOptions) {
           pidsLimit: row.pidsLimit,
         },
         tmpfsSize: settings["container.tmpfsSize"],
+        networkMode: get(settings, "container.networkMode"),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -30,6 +30,11 @@ export type CreateOptions = {
   binds: string[]
   limits: ContainerLimits
   tmpfsSize: string
+  /** Docker network mode (HostConfig.NetworkMode). Empty/undefined = default
+   * bridge. Set to `container:<name>` to share another container's netns
+   * (e.g. a self-managed VPN container), so solvers reach VPN routes without
+   * their own NET_ADMIN. */
+  networkMode?: string
 }
 
 export type ExecOptions = {
@@ -107,7 +112,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
         Tmpfs: {
           "/tmp": `rw,nosuid,nodev,noexec,size=${opts.tmpfsSize}`,
         },
-        ExtraHosts: ["host.docker.internal:host-gateway"],
+        ...(opts.networkMode ? { NetworkMode: opts.networkMode } : {}),
       },
     })
     await container.start()
