@@ -33,10 +33,9 @@ export type CreateOptions = {
 }
 
 export type ExecOptions = {
-  /** Container-internal working directory for the command (default /workspace). */
+  /** Container-internal working directory; omitted = inherit the container's
+   * WorkingDir (set at create time from the container.workspace setting). */
   workdir?: string
-  /** Extra env (KEY=VALUE) injected into the exec. */
-  env?: string[]
   onData: (data: Buffer) => void
   signal?: AbortSignal
   /** Timeout in seconds (matches the bash tool schema; converted to ms in exec). */
@@ -188,7 +187,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     command: string,
     opts: {
       workdir?: string
-      env?: string[]
       signal?: AbortSignal
       timeout?: number
       stdoutSink: NodeJS.WritableStream
@@ -203,7 +201,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
       WorkingDir: workdir,
       AttachStdout: true,
       AttachStderr: true,
-      Env: opts.env,
       Tty: false,
     })
 
@@ -256,7 +253,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     const sink = onDataSink(opts.onData)
     const { exitCode } = await runHijacked(name, command, {
       workdir: opts.workdir,
-      env: opts.env,
       signal: opts.signal,
       timeout: opts.timeout,
       stdoutSink: sink,
@@ -275,7 +271,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     command: string,
     opts?: {
       workdir?: string
-      env?: string[]
       signal?: AbortSignal
       /** Timeout in seconds (converted to ms in runHijacked). */
       timeout?: number
@@ -285,7 +280,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     const errChunks: Buffer[] = []
     const { exitCode } = await runHijacked(name, command, {
       workdir: opts?.workdir,
-      env: opts?.env,
       signal: opts?.signal,
       timeout: opts?.timeout,
       stdoutSink: collectSink(outChunks),
