@@ -43,6 +43,15 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
 
 ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so
 
+# Strip package-provided file capabilities from network binaries. The solver
+# container runs with --cap-drop ALL + no-new-privileges, under which exec of a
+# file-capability binary (e.g. nmap's cap_net_raw=eip) is refused with EPERM at
+# exec time — before any privileged op. NET_RAW is granted to the *container*
+# instead (see container-manager.ts), so these binaries work via inherited caps
+# once their own file caps are gone. Runtime setcap is impossible (no CAP_SETFCP
+# in the container), so this must happen at build time.
+RUN setcap -r /usr/lib/nmap/nmap /usr/bin/fping 2>/dev/null || true
+
 COPY solver-cache.py /usr/local/bin/solver-cache.py
 COPY ENVIRONMENT.md /opt/solver/ENVIRONMENT.md
 

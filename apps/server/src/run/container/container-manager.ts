@@ -106,7 +106,12 @@ export function createContainerManager(options?: { socketPath?: string }) {
         NanoCpus: Math.round(opts.limits.cpus * 1e9),
         Memory: opts.limits.memoryMb * 1024 * 1024,
         PidsLimit: opts.limits.pidsLimit,
+        // NET_RAW restored after the drop: nmap -sS / scapy raw sockets /
+        // naabu / tshark capture need it. (nmap/fping still have their package
+        // file-caps stripped in the image — those trip no-new-privileges at
+        // exec, see Dockerfile.)
         CapDrop: ["ALL"],
+        CapAdd: ["NET_RAW"],
         SecurityOpt: ["no-new-privileges"],
         IpcMode: "none",
         Tmpfs: {
@@ -254,16 +259,16 @@ export function createContainerManager(options?: { socketPath?: string }) {
     name: string,
     command: string,
     opts: ExecOptions
-  ): Promise<{ exitCode: number | null }> {
+  ): Promise<{ exitCode: number | null; timedOut: boolean }> {
     const sink = onDataSink(opts.onData)
-    const { exitCode } = await runHijacked(name, command, {
+    const { exitCode, timedOut } = await runHijacked(name, command, {
       workdir: opts.workdir,
       signal: opts.signal,
       timeout: opts.timeout,
       stdoutSink: sink,
       stderrSink: sink,
     })
-    return { exitCode }
+    return { exitCode, timedOut }
   }
 
   /**
