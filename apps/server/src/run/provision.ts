@@ -1,8 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai"
-import {
-  createBashToolDefinition,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent"
+import { type ToolDefinition } from "@earendil-works/pi-coding-agent"
 import type { PromptTemplateContext } from "../../../shared"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import {
@@ -13,7 +10,7 @@ import {
 import type { LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import type { ContainerManager } from "./container/container-manager"
-import { createContainerBashOperations } from "./container/container-tools"
+import { createBashTool } from "./bash-tool"
 import type { RunModelRuntime } from "./model-runtime"
 import {
   createMainTools,
@@ -33,10 +30,11 @@ export function buildMainAgentTools(
   caps: ToolCapabilities,
   containerManager: ContainerManager
 ) {
-  const bashDef = createBashToolDefinition(containerWorkspace, {
-    operations: createContainerBashOperations(containerName, containerManager),
-    exposeSessionEnvironment: false,
-  })
+  const bashDef = createBashTool(
+    containerWorkspace,
+    containerName,
+    containerManager
+  )
   const workspaceTools = createWorkspaceTools(
     createDockerExecBackend(containerName, containerManager, containerWorkspace)
   )

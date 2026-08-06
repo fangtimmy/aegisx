@@ -1,7 +1,4 @@
-import {
-  createBashToolDefinition,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent"
+import { type ToolDefinition } from "@earendil-works/pi-coding-agent"
 import type { AgentSummary } from "../../../shared/agent"
 import {
   type AgentLoopSettings,
@@ -13,7 +10,7 @@ import type { createDatabase } from "../db"
 import { agents } from "../db/schema"
 import { renderSystemPrompt } from "../settings/prompt-templates"
 import type { ContainerManager } from "./container/container-manager"
-import { createContainerBashOperations } from "./container/container-tools"
+import { createBashTool } from "./bash-tool"
 import { RunActionError } from "./errors"
 import type { RunContext } from "./service"
 import { createDockerExecBackend } from "./workspace/backend"
@@ -153,13 +150,11 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
         task: input.task,
       },
     })
-    const bashDef = createBashToolDefinition(ctx.containerWorkspace, {
-      operations: createContainerBashOperations(
-        ctx.containerName,
-        containerManager
-      ),
-      exposeSessionEnvironment: false,
-    })
+    const bashDef = createBashTool(
+      ctx.containerWorkspace,
+      ctx.containerName,
+      containerManager
+    )
     const workspaceTools = createWorkspaceTools(
       createDockerExecBackend(
         ctx.containerName,

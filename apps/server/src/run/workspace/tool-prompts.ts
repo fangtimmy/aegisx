@@ -30,19 +30,6 @@ Usage:
 - Prefer edit over write for minimal patches.
 - Returns a small diff of the replacement.`
 
-export const BASH_DESCRIPTION = `Run a shell command in the agent workspace.
-
-Usage:
-- Use for side effects, pipelines, and CTF tooling. Prefer read/grep/find/ls for simple file inspection.
-- Non-zero exit raises; stdout/stderr are still included in the error message.
-- Large output (>~12KB) is written to \`.aegisx/tool-output/<uuid>.log\`; then read/grep that path instead of re-running.
-- Capture is capped (~1MB).
-- Fire independent probes as parallel bash calls.
-- Avoid interactive commands (REPL, pagers); they hang until timeout.
-- workdir sets the command working directory (workspace-relative). Prefer workdir over embedding cd.
-- background=true starts the command detached, returns pid + logPath under \`.aegisx/bg/\`, and does not wait. Kill the process yourself when finished (\`kill <pid>\`). Tail the log with read/grep.
-- timeout (seconds) applies to foreground commands only.`
-
 export const GREP_DESCRIPTION = `Fast content search powered by ripgrep (rg). Requires rg on PATH.
 
 Usage:

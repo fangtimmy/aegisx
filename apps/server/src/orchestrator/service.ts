@@ -2,7 +2,6 @@ import { mkdirSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import {
-  createBashToolDefinition,
   type ModelRuntime,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
@@ -33,7 +32,7 @@ import type { ConfigStore } from "../infrastructure/config-store"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { getProviderConnections } from "../providers/public"
 import type { ContainerManager } from "../run/container/container-manager"
-import { createContainerBashOperations } from "../run/container/container-tools"
+import { createBashTool } from "../run/bash-tool"
 import { createRunModelRuntime, resolveRunModel } from "../run/model-runtime"
 import type { RunService } from "../run/service"
 import { createDockerExecBackend } from "../run/workspace/backend"
@@ -518,10 +517,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       })
 
       const toolCtx = buildToolContext(eventId)
-      const bashDef = createBashToolDefinition(cfg.workspace, {
-        operations: createContainerBashOperations(name, containerManager),
-        exposeSessionEnvironment: false,
-      })
+      const bashDef = createBashTool(cfg.workspace, name, containerManager)
       const workspaceTools = createWorkspaceTools(
         createDockerExecBackend(name, containerManager, cfg.workspace)
       )
