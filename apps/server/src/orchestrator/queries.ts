@@ -1,14 +1,10 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { and, asc, eq, gt } from "drizzle-orm"
-import type {
-  MessageList,
-  MessageListItem,
-  OrchestratorPublic,
-  RunUsage,
-} from "../../../shared"
+import { and, eq } from "drizzle-orm"
+import type { MessageList, OrchestratorPublic, RunUsage } from "../../../shared"
 import type { ThinkingLevel } from "../../../shared/thinking"
-import { accumulateEntryUsage } from "../agents/entry-usage"
-import { entryKeyOf } from "../agents/event-pipeline"
+import {
+  listRenderableEntries,
+  sumUsageTotals,
+} from "../agents/session-queries"
 import type { createDatabase } from "../db"
 import { orchestrators, sessionEntries } from "../db/schema"
 
@@ -96,83 +92,25 @@ export function createOrchestratorQueries(options: { db: Database }) {
     eventId: string,
     opts: { after?: number }
   ): MessageList {
-    const after = opts.after ?? 0
-    const rows = db
-      .select()
-      .from(sessionEntries)
-      .where(
-        and(
-          eq(sessionEntries.ownerType, "orchestrator"),
-          eq(sessionEntries.ownerId, eventId),
-          gt(sessionEntries.seq, after)
-        )
-      )
-      .orderBy(asc(sessionEntries.seq))
-      .all()
-    const items: MessageListItem[] = []
-    for (const row of rows) {
-      let entry: SessionEntry
-      try {
-        entry = JSON.parse(row.data) as SessionEntry
-      } catch {
-        continue
-      }
-      if (
-        entry.type !== "message" &&
-        entry.type !== "compaction" &&
-        entry.type !== "branch_summary" &&
-        entry.type !== "model_change" &&
-        entry.type !== "thinking_level_change"
-      )
-        continue
-      const agentId = row.agentId ?? ORCHESTRATOR_AGENT_ID
-      items.push({
-        entry,
-        seq: row.seq,
-        key: entryKeyOf(agentId, entry),
-        agentId,
-      })
-    }
-    return {
-      items,
-      nextAfter: items.length > 0 ? items[items.length - 1].seq : after,
-    }
+    return listRenderableEntries(
+      db,
+      and(
+        eq(sessionEntries.ownerType, "orchestrator"),
+        eq(sessionEntries.ownerId, eventId)
+      ),
+      { after: opts.after ?? 0, agentIdFallback: ORCHESTRATOR_AGENT_ID }
+    )
   }
 
   /** Sum token usage + cost across the orchestrator session (owner-scoped). */
   function usageTotals(eventId: string): RunUsage | undefined {
-    const rows = db
-      .select({ data: sessionEntries.data })
-      .from(sessionEntries)
-      .where(
-        and(
-          eq(sessionEntries.ownerType, "orchestrator"),
-          eq(sessionEntries.ownerId, eventId)
-        )
+    return sumUsageTotals(
+      db,
+      and(
+        eq(sessionEntries.ownerType, "orchestrator"),
+        eq(sessionEntries.ownerId, eventId)
       )
-      .all()
-    const entries: SessionEntry[] = []
-    for (const row of rows) {
-      try {
-        entries.push(JSON.parse(row.data) as SessionEntry)
-      } catch {
-        // skip malformed
-      }
-    }
-    const sample = accumulateEntryUsage(entries)
-    if (sample.turns === 0 && sample.cost === 0 && sample.totalTokens === 0) {
-      return undefined
-    }
-    return {
-      input: sample.input,
-      output: sample.output,
-      cacheRead: sample.cacheRead,
-      cacheWrite: sample.cacheWrite,
-      reasoning: sample.reasoning,
-      totalTokens: sample.totalTokens,
-      cost: sample.cost,
-      turns: sample.turns,
-    }
+    )
   }
 
   return { get, getRow, ensureRow, update, listMessages, usageTotals }

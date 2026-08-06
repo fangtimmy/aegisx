@@ -72,15 +72,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     return docker.getContainer(name)
   }
 
-  async function exists(name: string): Promise<boolean> {
-    try {
-      await get(name).inspect()
-      return true
-    } catch {
-      return false
-    }
-  }
-
   async function remove(name: string, force = true) {
     try {
       await get(name).remove({ force, v: true })
@@ -130,11 +121,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     } catch (error) {
       if (!/is not running|no such/i.test(String(error))) throw error
     }
-  }
-
-  /** Resolves when the container's main process exits. */
-  function wait(name: string): Promise<{ StatusCode: number }> {
-    return get(name).wait() as Promise<{ StatusCode: number }>
   }
 
   async function isRunning(name: string): Promise<boolean> {
@@ -311,25 +297,48 @@ export function createContainerManager(options?: { socketPath?: string }) {
     await get(name).putArchive(tar, { path })
   }
 
-  /** Stream a tar archive of `path` out of the container (Docker getArchive). */
-  async function getArchive(
-    name: string,
-    path: string
-  ): Promise<NodeJS.ReadableStream> {
-    return get(name).getArchive({ path })
-  }
-
   return {
     create,
     kill,
-    wait,
     remove,
-    exists,
     isRunning,
     exec,
     capture,
     putArchive,
-    getArchive,
     get,
   }
+}
+
+/** Build + start the sleep-infinity tool-box container shared by run sessions
+ * and the orchestrator. `workspace` is the in-container path; `hostWorkspace`
+ * is bind-mounted onto it. Resource fields mirror the container.* settings /
+ * run-row snapshot. `networkMode` is optional (the orchestrator uses the
+ * default bridge). */
+export async function createToolboxContainer(
+  manager: ContainerManager,
+  opts: {
+    name: string
+    image: string
+    workspace: string
+    hostWorkspace: string
+    cpus: number
+    memoryMb: number
+    pidsLimit: number
+    tmpfsSize: string
+    networkMode?: string
+  }
+): Promise<{ id: string }> {
+  return manager.create({
+    name: opts.name,
+    image: opts.image,
+    workingDir: opts.workspace,
+    binds: [`${opts.hostWorkspace}:${opts.workspace}`],
+    limits: {
+      cpus: opts.cpus,
+      memoryMb: opts.memoryMb,
+      pidsLimit: opts.pidsLimit,
+    },
+    tmpfsSize: opts.tmpfsSize,
+    networkMode: opts.networkMode,
+  })
 }

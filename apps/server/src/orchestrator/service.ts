@@ -1,9 +1,9 @@
 import { mkdirSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import {
-  type ModelRuntime,
-  type ToolDefinition,
+import type {
+  ModelRuntime,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import { desc, eq } from "drizzle-orm"
 import type {
@@ -17,7 +17,7 @@ import { get } from "../../../shared"
 import type { ProviderConnection } from "../../../shared/provider"
 import type { ThinkingLevel } from "../../../shared/thinking"
 import type { HostAgentSession } from "../agents/host-session"
-import { createSessionLifecycle } from "../agents/lifecycle"
+import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import { resolveSwitchTarget, type SwitchTarget } from "../agents/model-switch"
 import type { createDatabase } from "../db"
@@ -31,8 +31,9 @@ import {
 import type { ConfigStore } from "../infrastructure/config-store"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { getProviderConnections } from "../providers/public"
-import type { ContainerManager } from "../run/container/container-manager"
 import { createBashTool } from "../run/bash-tool"
+import type { ContainerManager } from "../run/container/container-manager"
+import { createToolboxContainer } from "../run/container/container-manager"
 import { createRunModelRuntime, resolveRunModel } from "../run/model-runtime"
 import type { RunService } from "../run/service"
 import { createDockerExecBackend } from "../run/workspace/backend"
@@ -107,12 +108,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
           "Orchestrator service is closed"
         )
       )
-    const previous = locks.get(eventId) ?? Promise.resolve()
-    const next = previous.catch(() => undefined).then(op)
-    locks.set(eventId, next)
-    return next.finally(() => {
-      if (locks.get(eventId) === next) locks.delete(eventId)
-    }) as Promise<T>
+    return chainLock(locks, eventId, op)
   }
 
   // Shared turn-driving core (generation-guarded, lock-serialized). The
@@ -327,7 +323,10 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
         const roles = opts?.roles ?? ["assistant", "toolResult"]
         const items = list.items
           .map((it) => {
-            const msg = it.entry as { type: string; message?: { role: string } }
+            const msg = it.entry as {
+              type: string
+              message?: { role: string; content: unknown; toolName?: string }
+            }
             if (
               roles &&
               msg.type === "message" &&
@@ -335,7 +334,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
               !roles.includes(msg.message.role)
             )
               return null
-            const flat = flattenEntryText(msg as never)
+            const flat = flattenEntryText(msg)
             return flat
               ? { seq: it.seq, role: flat.role, text: flat.text }
               : null
@@ -400,8 +399,11 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
     const ev = db.select().from(events).where(eq(events.id, eventId)).get()
     if (!ev) return undefined
     queries.ensureRow(eventId)
+    const orchestrator = queries.get(eventId)
+    if (!orchestrator)
+      throw new Error(`orchestrator row missing for ${eventId} after ensureRow`)
     return {
-      orchestrator: queries.get(eventId) as never,
+      orchestrator,
       status: statusSnapshot(eventId),
       usage: queries.usageTotals(eventId),
     }
@@ -503,16 +505,14 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       mkdirSync(wsAbs, { recursive: true })
       mkdirSync(runtimeAbs(eventId), { recursive: true })
 
-      await containerManager.create({
+      await createToolboxContainer(containerManager, {
         name,
         image: cfg.image,
-        workingDir: cfg.workspace,
-        binds: [`${wsAbs}:${cfg.workspace}`],
-        limits: {
-          cpus: cfg.cpus,
-          memoryMb: cfg.memoryMb,
-          pidsLimit: cfg.pidsLimit,
-        },
+        workspace: cfg.workspace,
+        hostWorkspace: wsAbs,
+        cpus: cfg.cpus,
+        memoryMb: cfg.memoryMb,
+        pidsLimit: cfg.pidsLimit,
         tmpfsSize: cfg.tmpfsSize,
       })
 

@@ -92,15 +92,16 @@ export type PromptTemplateContext = {
   }
   run: {
     id: string
-    environment: "local" | "container"
-    isContainer: boolean
+    /** v3 is container-only — every run runs in a Docker container. */
+    environment: "container"
+    isContainer: true
     workspace: string
     targetSupported: boolean
     platformIntegrated: boolean
-    containerImage: string | null
-    cpus: number | null
-    memoryMb: number | null
-    pidsLimit: number | null
+    containerImage: string
+    cpus: number
+    memoryMb: number
+    pidsLimit: number
   }
   capabilities: {
     canFinishRun: boolean
@@ -282,22 +283,13 @@ export function resolvePromptTemplates(settings: {
   "prompts.mainSystem"?: string
   "prompts.childSystem"?: string
   "prompts.initial"?: string
-  mainSystemPromptTemplate?: string
-  childSystemPromptTemplate?: string
-  initialPromptTemplate?: string
 }): PromptTemplates {
   return {
     mainSystemPromptTemplate:
-      settings["prompts.mainSystem"] ??
-      settings.mainSystemPromptTemplate ??
-      DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+      settings["prompts.mainSystem"] ?? DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
     childSystemPromptTemplate:
-      settings["prompts.childSystem"] ??
-      settings.childSystemPromptTemplate ??
-      DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+      settings["prompts.childSystem"] ?? DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
     initialPromptTemplate:
-      settings["prompts.initial"] ??
-      settings.initialPromptTemplate ??
-      DEFAULT_INITIAL_PROMPT_TEMPLATE,
+      settings["prompts.initial"] ?? DEFAULT_INITIAL_PROMPT_TEMPLATE,
   }
 }

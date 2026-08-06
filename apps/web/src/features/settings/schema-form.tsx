@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { BookOpen, Braces, Eye, RotateCcw, Search } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import {
+  type FlatSettings,
   isSettingModified,
   keys,
   type ProviderConnection,
@@ -440,7 +441,7 @@ export function SchemaSettingsForm({
 
   const save = useMutation({
     mutationFn: (patch: Partial<Record<SettingKey, unknown>>) =>
-      settingsApi.updateSettings(patch as never),
+      settingsApi.updateSettings(patch as Partial<FlatSettings>),
     onSuccess: (response) => {
       queryClient.setQueryData(keys.settings.all, response)
       if (timers.current.size === 0) {

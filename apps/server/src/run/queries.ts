@@ -1,15 +1,11 @@
 import { dirname, join } from "node:path"
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { and, eq, gt } from "drizzle-orm"
-import type {
-  MessageList,
-  MessageListItem,
-  RunPublic,
-  RunUsage,
-} from "../../../shared"
+import { and, desc, eq } from "drizzle-orm"
+import type { MessageList, RunPublic, RunUsage } from "../../../shared"
 import type { AgentSummary } from "../../../shared/agent"
-import { accumulateEntryUsage } from "../agents/entry-usage"
-import { entryKeyOf } from "../agents/event-pipeline"
+import {
+  listRenderableEntries,
+  sumUsageTotals,
+} from "../agents/session-queries"
 import type { createDatabase } from "../db"
 import {
   agents,
@@ -65,10 +61,9 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       .from(runs)
       .innerJoin(challenges, eq(runs.challengeId, challenges.id))
       .where(eq(challenges.eventId, eventId))
-      .orderBy(runs.updatedAt)
+      .orderBy(desc(runs.updatedAt))
       .all()
       .map(({ runs: run }) => mapRow(run))
-      .reverse()
   }
 
   function listAgents(runId: string): AgentSummary[] {
@@ -114,31 +109,7 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
    * (entry-usage.ts) so the two never drift (counts assistant + toolResult
    * message usage + compaction + branch_summary usage). */
   function usageTotals(runId: string): RunUsage | undefined {
-    const rows = db
-      .select({ data: sessionEntries.data })
-      .from(sessionEntries)
-      .where(eq(sessionEntries.runId, runId))
-      .all()
-    const entries: SessionEntry[] = []
-    for (const row of rows) {
-      try {
-        entries.push(JSON.parse(row.data) as SessionEntry)
-      } catch {}
-    }
-    const sample = accumulateEntryUsage(entries)
-    if (sample.turns === 0 && sample.cost === 0 && sample.totalTokens === 0) {
-      return undefined
-    }
-    return {
-      input: sample.input,
-      output: sample.output,
-      cacheRead: sample.cacheRead,
-      cacheWrite: sample.cacheWrite,
-      reasoning: sample.reasoning,
-      totalTokens: sample.totalTokens,
-      cost: sample.cost,
-      turns: sample.turns,
-    }
+    return sumUsageTotals(db, eq(sessionEntries.runId, runId))
   }
 
   /** Whether this run has an accepted flag submission (gate for finish_run). */
@@ -162,45 +133,14 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     runId: string,
     opts: { after?: number; agentId?: string }
   ): MessageList {
-    const after = opts.after ?? 0
-    const conditions = [
-      eq(sessionEntries.runId, runId),
-      gt(sessionEntries.seq, after),
-      ...(opts.agentId ? [eq(sessionEntries.agentId, opts.agentId)] : []),
-    ]
-    const rows = db
-      .select()
-      .from(sessionEntries)
-      .where(and(...conditions))
-      .orderBy(sessionEntries.seq)
-      .all()
-    const items: MessageListItem[] = []
-    for (const row of rows) {
-      let entry: SessionEntry
-      try {
-        entry = JSON.parse(row.data) as SessionEntry
-      } catch {
-        continue
-      }
-      if (
-        entry.type !== "message" &&
-        entry.type !== "compaction" &&
-        entry.type !== "branch_summary" &&
-        entry.type !== "model_change" &&
-        entry.type !== "thinking_level_change"
-      )
-        continue
-      items.push({
-        entry,
-        seq: row.seq,
-        key: entryKeyOf(row.agentId ?? "", entry),
-        agentId: row.agentId ?? "",
-      })
-    }
-    return {
-      items,
-      nextAfter: items.length > 0 ? items[items.length - 1].seq : after,
-    }
+    return listRenderableEntries(
+      db,
+      and(
+        eq(sessionEntries.runId, runId),
+        opts.agentId ? eq(sessionEntries.agentId, opts.agentId) : undefined
+      ),
+      { after: opts.after ?? 0, agentIdFallback: "" }
+    )
   }
 
   return {

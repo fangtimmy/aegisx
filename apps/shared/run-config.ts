@@ -60,15 +60,16 @@ export type PromptTemplateContext = {
 	};
 	run: {
 		id: string;
-		environment: "local" | "container";
-		isContainer: boolean;
+		/** v3 is container-only — every run runs in a Docker container. */
+		environment: "container";
+		isContainer: true;
 		workspace: string;
 		targetSupported: boolean;
 		platformIntegrated: boolean;
-		containerImage: string | null;
-		cpus: number | null;
-		memoryMb: number | null;
-		pidsLimit: number | null;
+		containerImage: string;
+		cpus: number;
+		memoryMb: number;
+		pidsLimit: number;
 	};
 	capabilities: {
 		canFinishRun: boolean;

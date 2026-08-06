@@ -16,7 +16,7 @@ import type {
   AgentLoopSettings,
   HostAgentSession,
 } from "../agents/host-session"
-import { createSessionLifecycle } from "../agents/lifecycle"
+import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import { resolveSwitchTarget, type SwitchTarget } from "../agents/model-switch"
 import type { createDatabase } from "../db"
@@ -32,6 +32,7 @@ import {
 } from "../settings/prompt-templates"
 import { createChildAgentRuntime } from "./child-agents"
 import type { ContainerManager } from "./container/container-manager"
+import { createToolboxContainer } from "./container/container-manager"
 import { RunActionError, RunStartError } from "./errors"
 import {
   createRunModelRuntime,
@@ -135,12 +136,7 @@ export function createRunService(options: RunServiceOptions) {
         new RunActionError("invalid_state", "Run service is closed")
       )
     }
-    const previous = locks.get(runId) ?? Promise.resolve()
-    const next = previous.catch(() => undefined).then(op)
-    locks.set(runId, next)
-    return next.finally(() => {
-      if (locks.get(runId) === next) locks.delete(runId)
-    }) as Promise<T>
+    return chainLock(locks, runId, op)
   }
 
   // Shared turn-driving core (generation-guarded, lock-serialized). The run
@@ -594,16 +590,14 @@ export function createRunService(options: RunServiceOptions) {
 
       // Tool-box container (sleep infinity) + bash forwarded via docker exec.
       try {
-        await containerManager.create({
+        await createToolboxContainer(containerManager, {
           name,
           image: env.image,
-          workingDir: input.container.workspace,
-          binds: [`${wsAbs}:${input.container.workspace}`],
-          limits: {
-            cpus: env.cpus,
-            memoryMb: env.memoryMb,
-            pidsLimit: env.pidsLimit,
-          },
+          workspace: input.container.workspace,
+          hostWorkspace: wsAbs,
+          cpus: env.cpus,
+          memoryMb: env.memoryMb,
+          pidsLimit: env.pidsLimit,
           tmpfsSize: input.container.tmpfsSize,
           networkMode: get(options.getSettings(), "container.networkMode"),
         })
@@ -850,16 +844,14 @@ export function createRunService(options: RunServiceOptions) {
     }
 
     try {
-      await containerManager.create({
+      await createToolboxContainer(containerManager, {
         name: row.containerName,
         image: row.image,
-        workingDir: settings["container.workspace"],
-        binds: [`${wsAbs}:${settings["container.workspace"]}`],
-        limits: {
-          cpus: row.cpus,
-          memoryMb: row.memoryMb,
-          pidsLimit: row.pidsLimit,
-        },
+        workspace: settings["container.workspace"],
+        hostWorkspace: wsAbs,
+        cpus: row.cpus,
+        memoryMb: row.memoryMb,
+        pidsLimit: row.pidsLimit,
         tmpfsSize: settings["container.tmpfsSize"],
         networkMode: get(settings, "container.networkMode"),
       })
@@ -1039,10 +1031,6 @@ export function createRunService(options: RunServiceOptions) {
     })
   }
 
-  function mainSessionFor(runId: string) {
-    return lifecycle.get(runId)
-  }
-
   /** Latest assistant text for an agent (inspect_agent). */
   function lastAssistantText(runId: string, agentId: string): string | null {
     const list = queries.listMessages(runId, { agentId })
@@ -1130,7 +1118,6 @@ export function createRunService(options: RunServiceOptions) {
     setOrchestratorNotifier,
     notifyFlagAccepted,
     listMessages: queries.listMessages,
-    mainSessionFor,
     get: queries.get,
     detail: queries.detail,
     listForEvent: queries.listForEvent,
