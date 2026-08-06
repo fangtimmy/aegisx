@@ -76,6 +76,10 @@ export type OrchestratorServiceOptions = {
   runService: RunService
   getSettings(): FlatSettings
   configStore: ConfigStore
+  /** Test seam: override the host-session creation (default =
+   * createOrchestratorSession). Tests inject a stub to avoid building a real
+   * pi AgentSession + hitting a model. */
+  createSession?: typeof createOrchestratorSession
 }
 
 export type OrchestratorService = ReturnType<typeof createOrchestratorService>
@@ -87,8 +91,226 @@ export type OrchestratorService = ReturnType<typeof createOrchestratorService>
  * `notify()`. Mirrors runService's shape (create/stop/close/sendMessage/
  * listMessages/recoverOnBoot) so the frontend can reuse ConversationStore.
  */
+/** Dependencies for {@link buildOrchestratorToolContext}. Extracted from the
+ * service factory so the tool-context wiring is unit-testable in isolation
+ * (the closures only need these deps, not the whole service). */
+export type BuildToolContextDeps = {
+  db: Database
+  eventId: string
+  /** Current orchestrator config row (max concurrent targets / model / level). */
+  getRow: () => typeof orchestrators.$inferSelect
+  getSettings(): FlatSettings
+  runService: RunService
+  resolveModelSelection(modelId?: string | null): {
+    provider: ProviderConnection
+    model: { id: string; enabled: boolean }
+  }
+  containerConfig(): {
+    image: string
+    cpus: number
+    memoryMb: number
+    pidsLimit: number
+    tmpfsSize: string
+    workspace: string
+  }
+}
+
+/** Build the orchestrator's management-tool context: the closures the
+ * list_challenges / start_run / stop_run / read_run / get_status tools call.
+ * Pure DB + delegation logic — no model, no async side effects beyond
+ * runService calls. */
+export function buildOrchestratorToolContext(
+  deps: BuildToolContextDeps
+): OrchestratorToolContext {
+  const {
+    db,
+    eventId,
+    getRow,
+    getSettings,
+    runService,
+    resolveModelSelection,
+    containerConfig,
+  } = deps
+
+  const ctx: OrchestratorToolContext = {
+    eventId,
+
+    listChallenges(): ChallengeDigest[] {
+      const list = db
+        .select({ challenge: challenges, remote: challengeRemote })
+        .from(challenges)
+        .leftJoin(
+          challengeRemote,
+          eq(challenges.id, challengeRemote.challengeId)
+        )
+        .where(eq(challenges.eventId, eventId))
+        .all()
+      return list.map(({ challenge: c, remote }) => {
+        const chRuns = db
+          .select()
+          .from(runs)
+          .where(eq(runs.challengeId, c.id))
+          .all()
+          .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+        return {
+          id: c.id,
+          name: c.name,
+          category: c.category,
+          points: c.points,
+          targetCapable: isTargetCapable(remote ?? undefined),
+          remoteSolved: remote?.solved ?? false,
+          hasRunningRun: chRuns.some((r) => r.status === "running"),
+          lastRunStatus: chRuns[0]?.status ?? null,
+          attempts: chRuns.length,
+        }
+      })
+    },
+
+    async startRun(input) {
+      const r = getRow()
+      const verdict = canLaunchRun(db, eventId, input.challengeId, {
+        maxConcurrentRuns: get(getSettings(), "scheduler.maxConcurrentRuns"),
+        maxConcurrentTargets: r.maxConcurrentTargets,
+      })
+      if (!verdict.ok)
+        return { runId: "", status: "rejected", reason: verdict.reason }
+      try {
+        const { provider, model } = resolveModelSelection(
+          input.modelId ?? r.modelId
+        )
+        if (!model.enabled || !provider.enabled || !provider.apiKey)
+          return {
+            runId: "",
+            status: "rejected",
+            reason: "Model unavailable",
+          }
+        const cfg = containerConfig()
+        const created = await runService.create({
+          challengeId: input.challengeId,
+          provider,
+          modelId: model.id,
+          thinkingLevel: r.thinkingLevel as ThinkingLevel,
+          container: {
+            image: cfg.image,
+            cpus: cfg.cpus,
+            memoryMb: cfg.memoryMb,
+            pidsLimit: cfg.pidsLimit,
+            tmpfsSize: cfg.tmpfsSize,
+            workspace: cfg.workspace,
+          },
+          source: "orchestrator",
+          ...(input.timeoutMs !== undefined
+            ? { timeoutMs: input.timeoutMs }
+            : {}),
+          ...(input.initialPromptOverride !== undefined
+            ? { initialPromptOverride: input.initialPromptOverride }
+            : {}),
+        })
+        return { runId: created.id, status: created.status }
+      } catch (error) {
+        return {
+          runId: "",
+          status: "rejected",
+          reason: error instanceof Error ? error.message : String(error),
+        }
+      }
+    },
+
+    async stopRun(runId) {
+      const target = db.select().from(runs).where(eq(runs.id, runId)).get()
+      if (!target) return { status: "rejected", reason: "Run not found" }
+      if (target.status !== "running")
+        return { status: target.status, reason: "Run is not running" }
+      try {
+        const updated = await runService.stop(runId)
+        return { status: updated.status }
+      } catch (error) {
+        return {
+          status: "rejected",
+          reason: error instanceof Error ? error.message : String(error),
+        }
+      }
+    },
+
+    async readRun(runId, opts): Promise<ReadRunResult & { reason?: string }> {
+      const target = db.select().from(runs).where(eq(runs.id, runId)).get()
+      if (!target)
+        return { runId, items: [], nextAfter: 0, reason: "Run not found" }
+      const challenge = db
+        .select()
+        .from(challenges)
+        .where(eq(challenges.id, target.challengeId))
+        .get()
+      if (challenge?.eventId !== eventId)
+        return {
+          runId,
+          items: [],
+          nextAfter: 0,
+          reason: "Run belongs to another event",
+        }
+      const list = runService.listMessages(runId, { after: opts?.since })
+      // Default to assistant + toolResult so the orchestrator sees a run's
+      // reasoning and tool outcomes without the verbosity of raw user
+      // prompts. Caller can narrow/expand via opts.roles.
+      const roles = opts?.roles ?? ["assistant", "toolResult"]
+      const items = list.items
+        .map((it) => {
+          const msg = it.entry as {
+            type: string
+            message?: { role: string; content: unknown; toolName?: string }
+          }
+          if (
+            roles &&
+            msg.type === "message" &&
+            msg.message &&
+            !roles.includes(msg.message.role)
+          )
+            return null
+          const flat = flattenEntryText(msg)
+          return flat ? { seq: it.seq, role: flat.role, text: flat.text } : null
+        })
+        .filter(
+          (x): x is { seq: number; role: string; text: string } => x !== null
+        )
+      return { runId, items, nextAfter: list.nextAfter }
+    },
+
+    getStatus() {
+      const r = getRow()
+      const active = db
+        .select({ run: runs, challenge: challenges })
+        .from(runs)
+        .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+        .where(eq(challenges.eventId, eventId))
+        .orderBy(desc(runs.updatedAt))
+        .all()
+        .filter(({ run }) => run.status === "running" || run.status === "idle")
+      const digest: RunDigest[] = active.map(({ run, challenge }) => ({
+        id: run.id,
+        challengeId: run.challengeId,
+        challengeName: challenge.name,
+        status: run.status,
+        source: run.source,
+        hasFlag: Boolean(run.flag),
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+      }))
+      return {
+        running: countRunningRuns(db),
+        maxConcurrentRuns: get(getSettings(), "scheduler.maxConcurrentRuns"),
+        inflightTargets: countTargetRuns(db, eventId),
+        maxConcurrentTargets: r.maxConcurrentTargets,
+        runs: digest,
+      }
+    },
+  }
+  return ctx
+}
+
 export function createOrchestratorService(options: OrchestratorServiceOptions) {
   const { db, dataDir, containerManager, runService, configStore } = options
+  /** Host-session creation (real impl by default; stubbable for tests). */
+  const createSession = options.createSession ?? createOrchestratorSession
   const queries: OrchestratorQueries = createOrchestratorQueries({ db })
   const bus: LiveBus = createLiveBus()
   const locks = new Map<string, Promise<unknown>>()
@@ -195,191 +417,15 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
 
   /** Build the tool context the orchestrator's management tools delegate to. */
   function buildToolContext(eventId: string): OrchestratorToolContext {
-    const row = () => queries.ensureRow(eventId)
-
-    const ctx: OrchestratorToolContext = {
+    return buildOrchestratorToolContext({
+      db,
       eventId,
-
-      listChallenges(): ChallengeDigest[] {
-        const list = db
-          .select({ challenge: challenges, remote: challengeRemote })
-          .from(challenges)
-          .leftJoin(
-            challengeRemote,
-            eq(challenges.id, challengeRemote.challengeId)
-          )
-          .where(eq(challenges.eventId, eventId))
-          .all()
-        return list.map(({ challenge: c, remote }) => {
-          const chRuns = db
-            .select()
-            .from(runs)
-            .where(eq(runs.challengeId, c.id))
-            .all()
-            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-          return {
-            id: c.id,
-            name: c.name,
-            category: c.category,
-            points: c.points,
-            targetCapable: isTargetCapable(remote ?? undefined),
-            remoteSolved: remote?.solved ?? false,
-            hasRunningRun: chRuns.some((r) => r.status === "running"),
-            lastRunStatus: chRuns[0]?.status ?? null,
-            attempts: chRuns.length,
-          }
-        })
-      },
-
-      async startRun(input) {
-        const r = row()
-        const verdict = canLaunchRun(db, eventId, input.challengeId, {
-          maxConcurrentRuns: get(
-            options.getSettings(),
-            "scheduler.maxConcurrentRuns"
-          ),
-          maxConcurrentTargets: r.maxConcurrentTargets,
-        })
-        if (!verdict.ok)
-          return { runId: "", status: "rejected", reason: verdict.reason }
-        try {
-          const { provider, model } = resolveModelSelection(
-            input.modelId ?? r.modelId
-          )
-          if (!model.enabled || !provider.enabled || !provider.apiKey)
-            return {
-              runId: "",
-              status: "rejected",
-              reason: "Model unavailable",
-            }
-          const cfg = containerConfig()
-          const created = await runService.create({
-            challengeId: input.challengeId,
-            provider,
-            modelId: model.id,
-            thinkingLevel: r.thinkingLevel as ThinkingLevel,
-            container: {
-              image: cfg.image,
-              cpus: cfg.cpus,
-              memoryMb: cfg.memoryMb,
-              pidsLimit: cfg.pidsLimit,
-              tmpfsSize: cfg.tmpfsSize,
-              workspace: cfg.workspace,
-            },
-            source: "orchestrator",
-            ...(input.timeoutMs !== undefined
-              ? { timeoutMs: input.timeoutMs }
-              : {}),
-            ...(input.initialPromptOverride !== undefined
-              ? { initialPromptOverride: input.initialPromptOverride }
-              : {}),
-          })
-          return { runId: created.id, status: created.status }
-        } catch (error) {
-          return {
-            runId: "",
-            status: "rejected",
-            reason: error instanceof Error ? error.message : String(error),
-          }
-        }
-      },
-
-      async stopRun(runId) {
-        const target = db.select().from(runs).where(eq(runs.id, runId)).get()
-        if (!target) return { status: "rejected", reason: "Run not found" }
-        if (target.status !== "running")
-          return { status: target.status, reason: "Run is not running" }
-        try {
-          const updated = await runService.stop(runId)
-          return { status: updated.status }
-        } catch (error) {
-          return {
-            status: "rejected",
-            reason: error instanceof Error ? error.message : String(error),
-          }
-        }
-      },
-
-      async readRun(runId, opts): Promise<ReadRunResult & { reason?: string }> {
-        const target = db.select().from(runs).where(eq(runs.id, runId)).get()
-        if (!target)
-          return { runId, items: [], nextAfter: 0, reason: "Run not found" }
-        const challenge = db
-          .select()
-          .from(challenges)
-          .where(eq(challenges.id, target.challengeId))
-          .get()
-        if (challenge?.eventId !== eventId)
-          return {
-            runId,
-            items: [],
-            nextAfter: 0,
-            reason: "Run belongs to another event",
-          }
-        const list = runService.listMessages(runId, { after: opts?.since })
-        // Default to assistant + toolResult so the orchestrator sees a run's
-        // reasoning and tool outcomes without the verbosity of raw user
-        // prompts. Caller can narrow/expand via opts.roles.
-        const roles = opts?.roles ?? ["assistant", "toolResult"]
-        const items = list.items
-          .map((it) => {
-            const msg = it.entry as {
-              type: string
-              message?: { role: string; content: unknown; toolName?: string }
-            }
-            if (
-              roles &&
-              msg.type === "message" &&
-              msg.message &&
-              !roles.includes(msg.message.role)
-            )
-              return null
-            const flat = flattenEntryText(msg)
-            return flat
-              ? { seq: it.seq, role: flat.role, text: flat.text }
-              : null
-          })
-          .filter(
-            (x): x is { seq: number; role: string; text: string } => x !== null
-          )
-        return { runId, items, nextAfter: list.nextAfter }
-      },
-
-      getStatus() {
-        const r = row()
-        const active = db
-          .select({ run: runs, challenge: challenges })
-          .from(runs)
-          .innerJoin(challenges, eq(runs.challengeId, challenges.id))
-          .where(eq(challenges.eventId, eventId))
-          .orderBy(desc(runs.updatedAt))
-          .all()
-          .filter(
-            ({ run }) => run.status === "running" || run.status === "idle"
-          )
-        const digest: RunDigest[] = active.map(({ run, challenge }) => ({
-          id: run.id,
-          challengeId: run.challengeId,
-          challengeName: challenge.name,
-          status: run.status,
-          source: run.source,
-          hasFlag: Boolean(run.flag),
-          createdAt: run.createdAt,
-          updatedAt: run.updatedAt,
-        }))
-        return {
-          running: countRunningRuns(db),
-          maxConcurrentRuns: get(
-            options.getSettings(),
-            "scheduler.maxConcurrentRuns"
-          ),
-          inflightTargets: countTargetRuns(db, eventId),
-          maxConcurrentTargets: r.maxConcurrentTargets,
-          runs: digest,
-        }
-      },
-    }
-    return ctx
+      getRow: () => queries.ensureRow(eventId),
+      getSettings: options.getSettings,
+      runService,
+      resolveModelSelection,
+      containerConfig,
+    })
   }
 
   function statusSnapshot(eventId: string): OrchestratorStatus {
@@ -540,7 +586,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
 
       let orchSession: HostAgentSession
       try {
-        orchSession = await createOrchestratorSession({
+        orchSession = await createSession({
           eventId,
           workspaceHostPath: wsAbs,
           containerWorkspace: cfg.workspace,

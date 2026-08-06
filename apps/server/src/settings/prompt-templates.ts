@@ -1,4 +1,5 @@
 import Handlebars from "handlebars"
+import type { PromptTemplateContext } from "../../../shared"
 import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
@@ -55,60 +56,6 @@ export type PromptPreviewSegment = {
   id: number
   text: string
   highlighted: boolean
-}
-
-export type PromptAttachment = {
-  name: string
-  path: string
-  size: number
-}
-
-export type PromptTemplateContext = {
-  agent: {
-    role: "main" | "child"
-    isMain: boolean
-    name: string
-    task: string | null
-  }
-  event: {
-    id: string
-    name: string
-    platform: string | null
-    promptHint: string
-  }
-  challenge: {
-    id: string
-    name: string
-    description: string
-    category: string | null
-    points: number | null
-    attachments: PromptAttachment[]
-    attachmentPaths: string[]
-  }
-  model: {
-    provider: string
-    name: string
-    id: string
-  }
-  run: {
-    id: string
-    /** v3 is container-only — every run runs in a Docker container. */
-    environment: "container"
-    isContainer: true
-    workspace: string
-    targetSupported: boolean
-    platformIntegrated: boolean
-    containerImage: string
-    cpus: number
-    memoryMb: number
-    pidsLimit: number
-  }
-  capabilities: {
-    canFinishRun: boolean
-    canSpawnAgent: boolean
-    canSubmitFlag: boolean
-    canManageTarget: boolean
-  }
 }
 
 const handlebars = Handlebars.create()

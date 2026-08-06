@@ -58,6 +58,10 @@ export type RunServiceOptions = {
   platformService: PlatformService
   configStore: ConfigStore
   getSettings(): import("../../../shared").FlatSettings
+  /** Test seam: override the host-session provision step (default =
+   * provisionRunSession). Tests inject a stub to avoid building a real pi
+   * AgentSession + hitting a model. */
+  provisionSession?: typeof provisionRunSession
 }
 
 type PendingOutcome = { mode: "finish"; summary: string } | { mode: "close" }
@@ -110,6 +114,8 @@ export type RunService = ReturnType<typeof createRunService>
 export function createRunService(options: RunServiceOptions) {
   const { db, dataDir, containerManager, platformService, configStore } =
     options
+  /** Host-session provision (real impl by default; stubbable for tests). */
+  const provision = options.provisionSession ?? provisionRunSession
   const queries = createRunQueries({ db, dataDir })
   const bus: LiveBus = createLiveBus()
 
@@ -656,7 +662,7 @@ export function createRunService(options: RunServiceOptions) {
 
       let agentSession: HostAgentSession
       try {
-        agentSession = await provisionRunSession(
+        agentSession = await provision(
           {
             runId,
             agentId: mainAgentId,
@@ -897,7 +903,7 @@ export function createRunService(options: RunServiceOptions) {
 
     let agentSession: HostAgentSession
     try {
-      agentSession = await provisionRunSession(
+      agentSession = await provision(
         {
           runId,
           agentId: mainAgent.id,
