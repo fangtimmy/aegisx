@@ -57,11 +57,11 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 ## Completion
 - Keep a reproducible end-to-end path in the workspace: a \`solve.sh\` or \`exploit.py\` that re-derives the flag from the original attachments.
 - Before finishing the run, write \`WRITEUP.md\` with: Approach / Evidence / Steps / Flag / Failed attempts.
-- Finish (via \`finish_run\`) only after the solution is supported by reproducible evidence and, where platform submission is available, an accepted flag. Do not continue after it succeeds.
+- Finish (via \`finish_run\`) only after the solution is supported by reproducible evidence. Do not continue after it succeeds.
 
 ## When stuck
 - If hypotheses are exhausted and the flag is out of reach, write \`FAILURE.md\` with: what was tried, where you're stuck, what's missing (tools/info/access), and how far you got.
-{{#if capabilities.canSubmitFlag}}- Submit nothing and finish the run (\`finish_run\`) with a failure summary.{{else}}- Finish the run (\`finish_run\`) with a failure summary.{{/if}}
+- Then stop and wait — \`finish_run\` only declares success, so do not call it here. The run goes idle and awaits further direction.
 
 {{#if event.promptHint}}
 ## Event instructions

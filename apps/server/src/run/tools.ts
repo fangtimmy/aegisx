@@ -26,8 +26,6 @@ export type RunToolContext = {
     name: string
     task: string
   }): Promise<{ agentId: string; name: string; status: string }>
-  /** Whether an accepted flag submission exists for this run. */
-  hasAcceptedFlag(): Promise<boolean>
   /** Look up an agent in this run (for inspect_agent). */
   getAgent(agentId: string): AgentSummary | undefined
   /** Latest assistant text for an agent (for inspect_agent). */
@@ -56,7 +54,7 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
       name: "finish_run",
       label: "Finish run",
       description:
-        "Mark this run complete and stop further work. Call only after the solution is backed by reproducible evidence: when platform submission is available, an accepted flag must come first; when a remote target exists, it must be stopped first.",
+        "Declare the run complete and stop further work. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first.",
       parameters: Type.Object({
         summary: Type.String({
           description:
@@ -66,9 +64,6 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
       }),
       executionMode: "sequential",
       execute: async (_id, params) => {
-        if (caps.canSubmitFlag && !(await ctx.hasAcceptedFlag())) {
-          throw new Error("Submit an accepted flag before finishing this Run")
-        }
         if (caps.canManageTarget) {
           const target = await ctx.targetAction("get")
           if (isActiveTarget(target)) {

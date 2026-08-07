@@ -13,7 +13,6 @@ import {
   challenges,
   runs,
   sessionEntries,
-  submissions,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { type ChallengeMeta, toAgentSummary, toRunPublic } from "./public"
@@ -112,18 +111,6 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return sumUsageTotals(db, eq(sessionEntries.runId, runId))
   }
 
-  /** Whether this run has an accepted flag submission (gate for finish_run). */
-  function hasAcceptedFlag(runId: string): boolean {
-    const row = db
-      .select({ id: submissions.id })
-      .from(submissions)
-      .where(
-        and(eq(submissions.runId, runId), eq(submissions.status, "accepted"))
-      )
-      .get()
-    return Boolean(row)
-  }
-
   /** Durable committed entries for a run, paginated by `seq`. Only renderable
    * kinds (message / compaction / branch_summary / model_change /
    * thinking_level_change) are returned; others (custom, ...) are skipped
@@ -153,7 +140,6 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     workspacePath,
     runDirPath,
     usageTotals,
-    hasAcceptedFlag,
     listMessages,
   }
 }

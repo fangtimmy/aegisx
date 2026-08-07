@@ -25,7 +25,6 @@ function mockCtx(overrides: Partial<RunToolContext> = {}): RunToolContext {
       name: input.name,
       status: "running",
     }),
-    hasAcceptedFlag: async () => false,
     getAgent: () => undefined,
     lastAssistantText: () => null,
     ...overrides,
@@ -92,25 +91,9 @@ describe("createMainTools", () => {
     expect(byName.spawn_agent.executionMode).toBe("parallel")
   })
 
-  test("finish_run requires an accepted flag when submission is available", async () => {
-    const tools = createMainTools(
-      mockCtx({ hasAcceptedFlag: async () => false }),
-      {
-        canSubmitFlag: true,
-        canManageTarget: false,
-        canSpawnAgent: false,
-      }
-    )
-    const finish = findTool(tools, "finish_run")
-    await expect(invoke(finish, { summary: "s" })).rejects.toThrow(
-      /accepted flag/
-    )
-  })
-
   test("finish_run requires the target to be stopped", async () => {
     const tools = createMainTools(
       mockCtx({
-        hasAcceptedFlag: async () => true,
         targetAction: async () => ({
           status: "running",
           endpoints: [],
@@ -129,7 +112,6 @@ describe("createMainTools", () => {
     let finished: string | null = null
     const tools = createMainTools(
       mockCtx({
-        hasAcceptedFlag: async () => true,
         targetAction: async () => ({
           status: "absent",
           endpoints: [],

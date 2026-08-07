@@ -458,7 +458,6 @@ export function createRunService(options: RunServiceOptions) {
         pending.set(runId, { mode: "finish", summary }),
       spawnChild: (childInput) =>
         childRuntime.spawn(runId, mainAgentId, childInput),
-      hasAcceptedFlag: () => Promise.resolve(queries.hasAcceptedFlag(runId)),
       getAgent: (agentId) =>
         queries.listAgents(runId).find((a) => a.id === agentId),
       lastAssistantText: (agentId) => lastAssistantText(runId, agentId),
