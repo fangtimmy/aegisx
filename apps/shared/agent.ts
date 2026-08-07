@@ -4,20 +4,20 @@ import type { AgentStatus } from "./run-status"
 export type AgentRole = "main" | "child"
 
 export type AgentSummary = {
-	id: string
-	runId: string
-	role: AgentRole
-	/** null for the main agent. */
-	parentAgentId: string | null
-	name: string | null
-	/** Delegated task text for child agents; null for main. */
-	task: string | null
-	status: AgentStatus
-	/** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
-	sessionFile: string | null
-	createdAt: string
-	startedAt: string | null
-	updatedAt: string
-	completedAt: string | null
-	error: string | null
+  id: string
+  runId: string
+  role: AgentRole
+  /** null for the main agent. */
+  parentAgentId: string | null
+  name: string | null
+  /** Delegated task text for child agents; null for main. */
+  task: string | null
+  status: AgentStatus
+  /** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
+  sessionFile: string | null
+  createdAt: string
+  startedAt: string | null
+  updatedAt: string
+  completedAt: string | null
+  error: string | null
 }

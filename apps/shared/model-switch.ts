@@ -9,6 +9,6 @@ import type { ThinkingLevel } from "./thinking"
  * session entries, so the switch is visible in the timeline.
  */
 export type SwitchModelInput = {
-	modelId: string
-	thinkingLevel?: ThinkingLevel
+  modelId: string
+  thinkingLevel?: ThinkingLevel
 }

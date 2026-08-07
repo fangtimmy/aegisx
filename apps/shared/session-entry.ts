@@ -84,7 +84,9 @@ export function isMessageEntry(
 }
 
 /** Narrow to a compaction entry (rendered as a centered timeline marker). */
-export function isCompactionEntry(entry: SessionEntry): entry is CompactionEntry {
+export function isCompactionEntry(
+  entry: SessionEntry
+): entry is CompactionEntry {
   return entry.type === "compaction"
 }
 

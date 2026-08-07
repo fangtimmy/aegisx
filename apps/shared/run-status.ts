@@ -10,7 +10,7 @@ export type RunStatus = "running" | "idle" | "closed"
 
 /** A run holds live resources (container + in-process session). */
 export function isActiveRunStatus(status: string): boolean {
-	return status === "running" || status === "idle"
+  return status === "running" || status === "idle"
 }
 
 /** Per-agent lifecycle. The main agent uses running|idle; children run to
