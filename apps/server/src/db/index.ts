@@ -60,10 +60,11 @@ function tableNames(sqlite: Database): Set<string> {
 }
 
 /**
- * v5 is a full data wipe (run lifecycle redesign: a run is a long-lived pi
- * session + container; statuses collapsed to running/idle/closed).
- * Refuse to open any older schema so operators wipe data/ instead of silent
- * corruption. v1/v2 are detected by their unique tables; v3/v4 by user_version.
+ * A schema major bump requires a full data wipe (the last was the run lifecycle
+ * redesign: a run is a long-lived pi session + container; statuses collapsed
+ * to running/idle/closed). Refuse to open any older schema so operators wipe
+ * data/ instead of silent corruption. v1/v2 are detected by their unique
+ * tables; v3+ by user_version.
  */
 function assertCompatibleSchema(sqlite: Database) {
   const tables = tableNames(sqlite)
@@ -75,7 +76,7 @@ function assertCompatibleSchema(sqlite: Database) {
   if (v1Markers.some((name) => tables.has(name))) {
     throw new Error(
       [
-        "AegisX v5 cannot open a v1 database.",
+        `AegisX v${SCHEMA_VERSION} cannot open a v1 database.`,
         "Delete the data directory (or only aegisx.sqlite) and restart.",
         `Example: rm -rf ${"data/"}  # or remove AEGISX_DATA_DIR contents`,
       ].join(" ")
@@ -85,8 +86,8 @@ function assertCompatibleSchema(sqlite: Database) {
   if (v2Markers.some((name) => tables.has(name))) {
     throw new Error(
       [
-        "AegisX v5 cannot open a v2 database (incompatible run/agent schema).",
-        "v5 is a full data wipe. Delete the data directory and restart.",
+        `AegisX v${SCHEMA_VERSION} cannot open a v2 database (incompatible run/agent schema).`,
+        `v${SCHEMA_VERSION} requires a full data wipe. Delete the data directory and restart.`,
         `Example: rm -rf ${"data/"}  # or remove AEGISX_DATA_DIR contents`,
       ].join(" ")
     )
@@ -104,7 +105,7 @@ function assertCompatibleSchema(sqlite: Database) {
     throw new Error(
       [
         `AegisX database schema version ${userVersion} is older than v${SCHEMA_VERSION}.`,
-        "v5 is a full data wipe. Delete the data directory and restart.",
+        `v${SCHEMA_VERSION} requires a full data wipe. Delete the data directory and restart.`,
         `Example: rm -rf ${"data/"}  # or remove AEGISX_DATA_DIR contents`,
       ].join(" ")
     )

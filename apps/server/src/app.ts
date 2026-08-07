@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { get } from "../../shared"
 import { createDatabase } from "./db"
+import { SCHEMA_VERSION } from "./db/schema"
 import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
 import { createConfigStore } from "./infrastructure/config-store"
@@ -84,7 +85,9 @@ export function createApp(options: { dataDir: string }) {
     )
   })
 
-  app.get("/", (c) => c.json({ name: "AegisX", status: "ok", version: 4 }))
+  app.get("/", (c) =>
+    c.json({ name: "AegisX", status: "ok", version: SCHEMA_VERSION })
+  )
 
   // syncModels is a v2 artifact (pi-ai registry); kept as a no-op so the
   // provider/settings routes persist config without a live model registry.

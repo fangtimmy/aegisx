@@ -2,7 +2,7 @@
 
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, and token usage.
 
-> **Schema v4** — wipe any old `data/` directory (or just `data/aegisx.sqlite*`) before first start; older databases are refused.
+> **Schema v6** — wipe any old `data/` directory (or just `data/aegisx.sqlite*`) before first start; older databases are refused.
 > Design notes: [docs/architecture.md](docs/architecture.md) (current). Transitions: [docs/refactor-v4.md](docs/refactor-v4.md) (v3→v4), [docs/refactor-v3.md](docs/refactor-v3.md) (v2→v3); v2 docs live in [docs/archive/](docs/archive/).
 
 ## Requirements

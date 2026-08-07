@@ -1,6 +1,6 @@
 # AegisX Architecture
 
-Status: **current** (v4)
+Status: **current** (v6)
 Related: [refactor-v4.md](./refactor-v4.md) is the v3→v4 transition plan (host-side SDK agent).
 
 ## What v4 is
@@ -26,7 +26,7 @@ Server responsibilities:
    `spawn_agent`) that call the platform service in-process.
 4. Project SDK events → committed entries (SQLite `session_entries`) + ephemeral
    live progress (SSE) for the Conversation UI.
-5. Persist run + agent state in SQLite (schema v4).
+5. Persist run + agent state in SQLite (schema v6).
 
 ## Data flow
 
@@ -89,7 +89,7 @@ apps/server/src/
   providers/        model registry + pi models.json generation
   settings/         prompt templates + settings routes
   events/           event/challenge/attachment routes + catalog
-  db/               drizzle schema v4 + compat guard + migrations
+  db/               drizzle schema v6 + compat guard + migrations
 apps/shared/        wire types (Run/Agent/Message/LiveEvent/Settings/...)
 apps/web/           React + Vite; Conversation timeline; coss UI
 containers/solver/  Kali-based solver image (sleep infinity CMD)
@@ -159,12 +159,12 @@ active turn rebuilds on streaming.
 Child agents share the workspace and model but cannot finish, submit, manage
 targets, or spawn further agents. Concurrent children per run are capped.
 
-## Data model (schema v4)
+## Data model (schema v6)
 
 `events` → `event_platforms` → `challenges` → (`attachments`, `challenge_remote`)
 → `runs` → (`agents`, `sessions` → `session_entries`, `submissions`). Plus
-`platform_request_log`. v1/v2/v3 databases are refused at open (full wipe);
-`SCHEMA_VERSION = 5`.
+`platform_request_log`. Older databases are refused at open (full wipe);
+`SCHEMA_VERSION = 6`.
 
 `runs` dropped the v3 `launcher`/`pi_model_ref` and gained `session_dir`.
 `agents` (main + child), `sessions` + `session_entries` (committed
