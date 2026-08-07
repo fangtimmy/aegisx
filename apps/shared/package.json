@@ -9,7 +9,8 @@
     "./*": "./*.ts"
   },
   "scripts": {
-    "check": "oxlint --fix --type-check . && oxfmt ."
+    "check": "oxlint --type-check . && oxfmt --check .",
+    "fmt": "oxlint --fix --type-check . && oxfmt ."
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0"

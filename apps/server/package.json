@@ -2,7 +2,8 @@
   "name": "@aegisx/server",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
-    "check": "oxlint --fix --type-check . && oxfmt .",
+    "check": "oxlint --type-check . && oxfmt --check .",
+    "fmt": "oxlint --fix --type-check . && oxfmt .",
     "test": "bun test --max-concurrency 1",
     "db:generate": "drizzle-kit generate"
   },

@@ -1,5 +1,14 @@
 {
-  "plugins": ["react", "jsx-a11y", "import"],
+  "$schema": "../../node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "eslint",
+    "typescript",
+    "unicorn",
+    "oxc",
+    "react",
+    "jsx-a11y",
+    "import"
+  ],
   "ignorePatterns": ["src/components/ui/**", "dist/**", "tests/**"],
   "options": {
     "typeAware": true

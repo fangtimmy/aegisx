@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "check": "oxlint --fix --type-check . && oxfmt .",
+    "check": "oxlint --type-check . && oxfmt --check .",
+    "fmt": "oxlint --fix --type-check . && oxfmt .",
     "test": "bun test",
     "preview": "vite preview"
   },

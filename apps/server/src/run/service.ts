@@ -1078,7 +1078,7 @@ export function createRunService(options: RunServiceOptions) {
 
   async function close() {
     closed = true
-    await Promise.allSettled([...locks.values()])
+    await Promise.allSettled(locks.values())
     locks.clear()
     for (const timer of forceKillTimers.values()) clearTimeout(timer)
     forceKillTimers.clear()

@@ -129,14 +129,14 @@ export function generateModelsJson(
         entry.apiKey = provider.apiKey
         if (model.metadata.headers) {
           entry.headers = {
-            ...(entry.headers ?? {}),
+            ...entry.headers,
             ...model.metadata.headers,
           }
         }
         // Optional per-model overrides (headers/compat from metadata).
         if (model.metadata.compat) {
           entry.modelOverrides = {
-            ...(entry.modelOverrides ?? {}),
+            ...entry.modelOverrides,
             [model.piBinding.modelId]: {
               ...(model.metadata.headers
                 ? { headers: model.metadata.headers }

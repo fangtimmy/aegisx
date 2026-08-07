@@ -735,7 +735,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
 
   async function close() {
     closed = true
-    await Promise.allSettled([...locks.values()])
+    await Promise.allSettled(locks.values())
     locks.clear()
     await lifecycle.closeAll()
     bus.close()
