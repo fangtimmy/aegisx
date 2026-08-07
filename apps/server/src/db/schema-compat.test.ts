@@ -1,12 +1,16 @@
 import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createDatabase } from "./index"
-import { agents, runs, SCHEMA_VERSION } from "./schema"
+import {
+  classifyDatabaseState,
+  createDatabase,
+  pendingMigrationCount,
+} from "./index"
+import { SCHEMA_VERSION } from "./schema"
 
-describe("schema v6 bootstrap", () => {
+describe("schema bootstrap", () => {
   test("fresh database migrates and sets user_version to the current schema", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
@@ -25,18 +29,10 @@ describe("schema v6 bootstrap", () => {
       expect(names.has("agents")).toBe(true)
       expect(names.has("orchestrators")).toBe(true)
       expect(names.has("submissions")).toBe(true)
+      // drizzle migration tracking is present (the recognized-DB marker)
+      expect(names.has("__drizzle_migrations")).toBe(true)
       // the legacy normalized event log is gone (session_entries is the source)
       expect(names.has("run_events")).toBe(false)
-      // v2-only tables are gone
-      expect(names.has("messages")).toBe(false)
-      expect(names.has("agent_usage")).toBe(false)
-      // v1-only tables are gone
-      expect(names.has("agent_inbox")).toBe(false)
-      expect(names.has("run_agents")).toBe(false)
-      expect(names.has("agent_messages")).toBe(false)
-      // drizzle table symbols resolve
-      expect(runs).toBeDefined()
-      expect(agents).toBeDefined()
       expect(db).toBeDefined()
       sqlite.close()
       releaseLock()
@@ -44,71 +40,146 @@ describe("schema v6 bootstrap", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
 
-  test("rejects v1 database with agent_inbox", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v1-"))
-    try {
-      const path = join(dir, "aegisx.sqlite")
-      const sqlite = new Database(path, { create: true })
-      sqlite.run(`CREATE TABLE agent_inbox (id text PRIMARY KEY NOT NULL)`)
-      sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/v1 database/i)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+describe("classifyDatabaseState", () => {
+  test("fresh when there are no tables", () => {
+    expect(classifyDatabaseState(new Set(), 0, SCHEMA_VERSION)).toEqual({
+      kind: "fresh",
+    })
   })
 
-  test("rejects v2 database with messages", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v2-"))
-    try {
-      const path = join(dir, "aegisx.sqlite")
-      const sqlite = new Database(path, { create: true })
-      sqlite.run(`CREATE TABLE messages (id text PRIMARY KEY NOT NULL)`)
-      sqlite.run(`CREATE TABLE agent_usage (id text PRIMARY KEY NOT NULL)`)
-      sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/v2 database/i)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+  test("recognized when __drizzle_migrations is present", () => {
+    expect(
+      classifyDatabaseState(
+        new Set(["runs", "__drizzle_migrations"]),
+        SCHEMA_VERSION,
+        SCHEMA_VERSION
+      )
+    ).toEqual({ kind: "recognized" })
   })
 
-  test("rejects v3 database (user_version=3)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v3-"))
-    try {
-      const path = join(dir, "aegisx.sqlite")
-      const sqlite = new Database(path, { create: true })
-      sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
-      sqlite.run(`PRAGMA user_version = 3`)
-      sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/older than v6/i)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+  test("preBaseline when tables exist without __drizzle_migrations", () => {
+    expect(
+      classifyDatabaseState(new Set(["runs", "agents"]), 5, SCHEMA_VERSION)
+    ).toEqual({ kind: "preBaseline" })
   })
 
-  test("rejects v4 database (user_version=4)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v4-"))
-    try {
-      const path = join(dir, "aegisx.sqlite")
-      const sqlite = new Database(path, { create: true })
-      sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
-      sqlite.run(`PRAGMA user_version = 4`)
-      sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/older than v6/i)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+  test("newerThanBinary when user_version exceeds the schema version", () => {
+    expect(
+      classifyDatabaseState(
+        new Set(["runs", "__drizzle_migrations"]),
+        SCHEMA_VERSION + 1,
+        SCHEMA_VERSION
+      )
+    ).toEqual({
+      kind: "newerThanBinary",
+      userVersion: SCHEMA_VERSION + 1,
+    })
+  })
+})
+
+describe("pendingMigrationCount", () => {
+  test("zero when applied equals known", () => {
+    expect(pendingMigrationCount(1, 1)).toBe(0)
   })
 
-  test("rejects v5 database (user_version=5)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-v5-"))
+  test("positive when known exceeds applied", () => {
+    expect(pendingMigrationCount(3, 1)).toBe(2)
+  })
+
+  test("clamps to zero when applied exceeds known (downgrade)", () => {
+    expect(pendingMigrationCount(1, 2)).toBe(0)
+  })
+})
+
+describe("createDatabase classification", () => {
+  test("rejects a pre-baseline database (predates the migration system)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-prebaseline-"))
     try {
       const path = join(dir, "aegisx.sqlite")
       const sqlite = new Database(path, { create: true })
+      // v1–v5 era DB: our tables, no drizzle tracking, stale user_version.
       sqlite.run(`CREATE TABLE runs (id text PRIMARY KEY NOT NULL)`)
       sqlite.run(`PRAGMA user_version = 5`)
       sqlite.close()
-      expect(() => createDatabase(dir)).toThrow(/older than v6/i)
+      expect(() => createDatabase(dir)).toThrow(
+        /predates the migration system/i
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("rejects a database newer than the binary (downgrade)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-newer-"))
+    try {
+      // bootstrap fresh, then bump user_version past the binary's version
+      const boot = createDatabase(dir)
+      boot.sqlite.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`)
+      boot.sqlite.close()
+      boot.releaseLock()
+      expect(() => createDatabase(dir)).toThrow(/newer than this binary/i)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a recognized, up-to-date database opens without making a backup", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-current-"))
+    try {
+      const boot = createDatabase(dir)
+      boot.sqlite.close()
+      boot.releaseLock()
+      // reopen: recognized + no pending migrations → no snapshot taken
+      const before = readdirSync(dir).filter((f) =>
+        f.startsWith("aegisx.sqlite.bak")
+      )
+      const second = createDatabase(dir)
+      const after = readdirSync(dir).filter((f) =>
+        f.startsWith("aegisx.sqlite.bak")
+      )
+      expect(after).toEqual(before)
+      second.sqlite.close()
+      second.releaseLock()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("backs up and restores when a migration fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-fail-"))
+    try {
+      // Bootstrap a real DB and plant a sentinel row to prove restore preserves data.
+      const boot = createDatabase(dir)
+      boot.sqlite.run(
+        `INSERT INTO events (id, name, created_at, updated_at) VALUES ('sentinel', 's', 't', 't')`
+      )
+      boot.sqlite.close()
+      boot.releaseLock()
+
+      // Force a pending migration by dropping the applied-migration record,
+      // so migrate() tries to re-run the baseline and fails (tables already exist).
+      const raw = new Database(join(dir, "aegisx.sqlite"))
+      raw.run(`DELETE FROM __drizzle_migrations`)
+      raw.close()
+
+      const backupsBefore = readdirSync(dir).filter((f) =>
+        f.startsWith("aegisx.sqlite.bak")
+      ).length
+      expect(() => createDatabase(dir)).toThrow(/restored from/i)
+      const backupsAfter = readdirSync(dir).filter((f) =>
+        f.startsWith("aegisx.sqlite.bak")
+      )
+      expect(backupsAfter.length).toBe(backupsBefore + 1)
+
+      // The snapshot was restored: the sentinel row survives.
+      const check = new Database(join(dir, "aegisx.sqlite"))
+      const rows = check
+        .query(`SELECT count(*) AS n FROM events WHERE id = 'sentinel'`)
+        .get() as { n: number }
+      check.close()
+      expect(rows.n).toBe(1)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
