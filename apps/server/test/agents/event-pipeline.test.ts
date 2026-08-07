@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import type { LiveEvent } from "../../../shared/live-event"
 import { createAgentEventPipeline } from "../../src/agents/event-pipeline"
 import type { LiveBus } from "../../src/agents/live"
 

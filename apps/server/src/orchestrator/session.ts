@@ -1,10 +1,10 @@
+import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import type {
   ModelRuntime,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import { and, eq } from "drizzle-orm"
-import type { ThinkingLevel } from "../../../shared/thinking"
 import {
   type AgentLoopSettings,
   createHostAgentSession,

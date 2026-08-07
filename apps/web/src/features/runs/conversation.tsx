@@ -217,7 +217,6 @@ export function Conversation({
                   }
                   thinkingLevel={run.thinkingLevel}
                   disabled={run.status === "closed"}
-                  streaming={running}
                   onSwitch={(input) => switchModel.mutate(input)}
                 />
               )}

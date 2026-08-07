@@ -6,8 +6,6 @@ import {
   writeFileSync,
 } from "node:fs"
 import { join } from "node:path"
-import { Type } from "typebox"
-import { Value } from "typebox/value"
 import {
   CONFIG_DOCUMENT_VERSION,
   defaultSettings,
@@ -16,7 +14,9 @@ import {
   type ProviderType,
   parseSettings,
   patchSettings,
-} from "../../../shared"
+} from "@aegisx/shared"
+import { Type } from "typebox"
+import { Value } from "typebox/value"
 import { ProviderTypeSchema } from "../lib/schemas"
 
 export type { FlatSettings, ProviderType }

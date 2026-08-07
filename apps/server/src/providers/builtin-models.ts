@@ -1,3 +1,4 @@
+import type { ProviderType } from "@aegisx/shared/platform"
 import {
   type Api,
   getSupportedThinkingLevels,
@@ -10,7 +11,6 @@ import {
   getBuiltinModels,
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all"
-import type { ProviderType } from "../../../shared/platform"
 
 export type { ModelThinkingLevel, ThinkingLevelMap }
 

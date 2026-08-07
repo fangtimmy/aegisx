@@ -1,7 +1,7 @@
+import type { PromptTemplateContext } from "@aegisx/shared"
+import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import { type ToolDefinition } from "@earendil-works/pi-coding-agent"
-import type { PromptTemplateContext } from "../../../shared"
-import type { ThinkingLevel } from "../../../shared/thinking"
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 import {
   type AgentLoopSettings,
   createHostAgentSession,
@@ -9,8 +9,8 @@ import {
 } from "../agents/host-session"
 import type { LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
-import type { ContainerManager } from "./container/container-manager"
 import { createBashTool } from "./bash-tool"
+import type { ContainerManager } from "./container/container-manager"
 import type { RunModelRuntime } from "./model-runtime"
 import {
   createMainTools,

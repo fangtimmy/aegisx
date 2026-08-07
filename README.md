@@ -12,21 +12,14 @@ AegisX is a local, single-user workspace for running multi-agent CTF solving ses
 
 ## Run locally
 
-Install and start the API:
+Install everything, then start the API and web app together:
 
 ```sh
-cd apps/server
-bun install
-bun run dev
+bun install    # at repo root — installs all workspaces (single lockfile)
+bun run dev    # starts server + web concurrently
 ```
 
-In another terminal, install and start the web app:
-
-```sh
-cd apps/web
-bun install
-bun run dev
-```
+Or start them individually: `bun run dev:server` / `bun run dev:web`.
 
 Open the URL printed by Vite. The web development server proxies `/api` to `http://127.0.0.1:3000` by default. Set `VITE_API_URL` to use another API endpoint.
 
@@ -45,6 +38,10 @@ Each run has one main agent and may spawn background child agents (`spawn_agent`
 ## Checks
 
 ```sh
-cd apps/server && bun run check && bun test
-cd apps/web && bun run check && bun test && bun run build
+bun run check        # biome + tsc across all workspaces
+bun run test         # tests across all workspaces
+bun run build        # web production build
+bun run db:generate  # server drizzle migrations
 ```
+
+All run from the repo root. The workspace is a Bun monorepo: `apps/server` (`@aegisx/server`), `apps/web` (`@aegisx/web`), and `apps/shared` (`@aegisx/shared`, wire types) are linked as workspace packages; shared model-provider versions are pinned centrally via `overrides` in the root `package.json`.

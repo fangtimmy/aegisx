@@ -1,4 +1,4 @@
-import type { LiveEvent } from "../../../shared"
+import type { LiveEvent } from "@aegisx/shared"
 
 type Listener = (event: LiveEvent) => void
 

@@ -1,11 +1,11 @@
-import { count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
-import { Value } from "typebox/value"
 import type {
   Attachment,
   Challenge as ChallengePublic,
   EventSummary,
   RemoteTargetInfo,
-} from "../../../shared"
+} from "@aegisx/shared"
+import { count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
+import { Value } from "typebox/value"
 import type { createDatabase } from "../db"
 import {
   attachments,

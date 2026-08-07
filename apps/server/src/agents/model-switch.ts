@@ -1,6 +1,6 @@
+import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
-import type { ProviderConnection } from "../../../shared/provider"
 import { resolveRunModel } from "../run/model-runtime"
 
 export type SwitchTarget = {

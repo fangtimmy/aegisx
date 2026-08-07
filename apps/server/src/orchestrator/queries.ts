@@ -1,6 +1,6 @@
+import type { MessageList, OrchestratorPublic, RunUsage } from "@aegisx/shared"
+import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import { and, eq } from "drizzle-orm"
-import type { MessageList, OrchestratorPublic, RunUsage } from "../../../shared"
-import type { ThinkingLevel } from "../../../shared/thinking"
 import {
   listRenderableEntries,
   sumUsageTotals,

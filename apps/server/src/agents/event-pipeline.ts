@@ -1,3 +1,4 @@
+import type { ContextSnapshot } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type {
   AgentSession,
@@ -5,7 +6,6 @@ import type {
   SessionEntry,
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
-import type { ContextSnapshot } from "../../../shared/live-event"
 import { accumulateEntryUsage } from "./entry-usage"
 import type { LiveBus } from "./live"
 

@@ -1,21 +1,21 @@
 import { mkdirSync } from "node:fs"
 import { join, relative } from "node:path"
-import type { Api, Model } from "@earendil-works/pi-ai"
-import type {
-  ModelRuntime,
-  ToolDefinition,
-} from "@earendil-works/pi-coding-agent"
-import { desc, eq } from "drizzle-orm"
 import type {
   FlatSettings,
   OrchestratorConfigInput,
   OrchestratorDetail,
   OrchestratorStatus,
   SwitchModelInput,
-} from "../../../shared"
-import { get } from "../../../shared"
-import type { ProviderConnection } from "../../../shared/provider"
-import type { ThinkingLevel } from "../../../shared/thinking"
+} from "@aegisx/shared"
+import { get } from "@aegisx/shared"
+import type { ProviderConnection } from "@aegisx/shared/provider"
+import type { ThinkingLevel } from "@aegisx/shared/thinking"
+import type { Api, Model } from "@earendil-works/pi-ai"
+import type {
+  ModelRuntime,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent"
+import { desc, eq } from "drizzle-orm"
 import type { HostAgentSession } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"

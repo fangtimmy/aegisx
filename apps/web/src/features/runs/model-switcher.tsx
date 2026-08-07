@@ -41,20 +41,18 @@ type AvailableModel = {
  * orchestrator row already stores the UUID — the parent supplies the matcher.
  *
  * Switching takes effect on the next turn (the in-flight turn, if any, finishes
- * on the old model); when `streaming` is true a subtle "next turn" hint shows.
+ * on the old model).
  */
 export function ModelThinkingSwitcher({
   findCurrentModelId,
   thinkingLevel,
   disabled,
-  streaming,
   onSwitch,
   className,
 }: {
   findCurrentModelId: (models: AvailableModel[]) => string | null | undefined
   thinkingLevel: ThinkingLevel
   disabled?: boolean
-  streaming?: boolean
   onSwitch: (input: { modelId: string; thinkingLevel: ThinkingLevel }) => void
   className?: string
 }) {
@@ -179,9 +177,6 @@ export function ModelThinkingSwitcher({
           ))}
         </SelectPopup>
       </Select>
-      {streaming && !disabled && (
-        <span className="text-muted-foreground/70">下一轮生效</span>
-      )}
     </span>
   )
 }

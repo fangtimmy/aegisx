@@ -335,7 +335,6 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                         findCurrentModelId={() => orch.modelId}
                         thinkingLevel={orch.thinkingLevel}
                         disabled={orch.status === "closed"}
-                        streaming={running}
                         onSwitch={(input) => switchModel.mutate(input)}
                       />
                     </CardFrameFooter>

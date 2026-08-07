@@ -1,5 +1,5 @@
-import type { RunPublic, RunUsage } from "../../../shared"
-import type { AgentSummary } from "../../../shared/agent"
+import type { RunPublic, RunUsage } from "@aegisx/shared"
+import type { AgentSummary } from "@aegisx/shared/agent"
 import type { agents, runs } from "../db/schema"
 
 export type RunRow = typeof runs.$inferSelect

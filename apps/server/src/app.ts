@@ -1,5 +1,5 @@
+import { get } from "@aegisx/shared"
 import { Hono } from "hono"
-import { get } from "../../shared"
 import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
 import { createCatalogReader } from "./events/catalog"

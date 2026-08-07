@@ -44,7 +44,7 @@ export type {
   SwitchModelInput,
   TargetState,
   ThinkingLevel,
-} from "../../../shared"
+} from "@aegisx/shared"
 export {
   defaultSettings,
   get,
@@ -52,14 +52,14 @@ export {
   isSettingModified,
   SETTINGS_DEFS,
   settingDef,
-} from "../../../shared"
+} from "@aegisx/shared"
 
 export type {
   CompactionReason,
   ContextSnapshot,
-} from "../../../shared/live-event"
+} from "@aegisx/shared/live-event"
 
-import type { FlatSettings } from "../../../shared"
+import type { FlatSettings } from "@aegisx/shared"
 
 export type SettingsResponse = {
   settings: FlatSettings

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto"
 import type { AgentToolResult } from "@earendil-works/pi-agent-core"
-import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent"
+import {
+  defineTool,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import type { ContainerManager } from "./container/container-manager"
 import { buildSingleFileTar, shellQuote } from "./workspace/backend"
@@ -35,7 +38,10 @@ const CAPTURE_CAP = 16 * 1024 * 1024
 const OVERFLOW_DIR_REL = ".aegisx/tool-output"
 
 function clampTimeout(requested: number | undefined): number {
-  const base = typeof requested === "number" && requested > 0 ? requested : DEFAULT_TIMEOUT_SEC
+  const base =
+    typeof requested === "number" && requested > 0
+      ? requested
+      : DEFAULT_TIMEOUT_SEC
   return Math.min(base, MAX_TIMEOUT_SEC)
 }
 
@@ -76,10 +82,12 @@ function concatenated(acc: Accumulator): Buffer {
 /** Cheap tail (no totals): used for throttled streaming partials. */
 function cheapTail(buf: Buffer): string {
   let bytes = buf
-  if (buf.byteLength > MAX_BYTES) bytes = buf.subarray(buf.byteLength - MAX_BYTES)
+  if (buf.byteLength > MAX_BYTES)
+    bytes = buf.subarray(buf.byteLength - MAX_BYTES)
   let text = bytes.toString("utf8")
   const lines = text.split("\n")
-  if (lines.length > MAX_LINES) text = lines.slice(lines.length - MAX_LINES).join("\n")
+  if (lines.length > MAX_LINES)
+    text = lines.slice(lines.length - MAX_LINES).join("\n")
   return text
 }
 
@@ -117,7 +125,10 @@ async function finalizeTail(
   }
 
   const truncated =
-    acc.capped || bytesTruncated || shownLines < totalLines || acc.total > totalBytesAll
+    acc.capped ||
+    bytesTruncated ||
+    shownLines < totalLines ||
+    acc.total > totalBytesAll
 
   let fullOutputPath: string | undefined
   if (truncated) {
@@ -242,7 +253,12 @@ export function createBashTool(
         if (updateTimer) clearTimeout(updateTimer)
       }
 
-      const tail = await finalizeTail(acc, overflowDirAbs, manager, containerName)
+      const tail = await finalizeTail(
+        acc,
+        overflowDirAbs,
+        manager,
+        containerName
+      )
       const truncated = tail.truncated
 
       let text = tail.text

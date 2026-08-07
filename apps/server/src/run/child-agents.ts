@@ -1,5 +1,5 @@
-import { type ToolDefinition } from "@earendil-works/pi-coding-agent"
-import type { AgentSummary } from "../../../shared/agent"
+import type { AgentSummary } from "@aegisx/shared/agent"
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 import {
   type AgentLoopSettings,
   createHostAgentSession,
@@ -9,8 +9,8 @@ import type { LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import { agents } from "../db/schema"
 import { renderSystemPrompt } from "../settings/prompt-templates"
-import type { ContainerManager } from "./container/container-manager"
 import { createBashTool } from "./bash-tool"
+import type { ContainerManager } from "./container/container-manager"
 import { RunActionError } from "./errors"
 import type { RunContext } from "./service"
 import { createDockerExecBackend } from "./workspace/backend"

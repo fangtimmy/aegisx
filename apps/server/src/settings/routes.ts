@@ -1,12 +1,12 @@
-import type { Hono } from "hono"
-import { Type } from "typebox"
 import {
   type FlatSettings,
   get,
   isConfigDocumentV1,
   parseSettings,
   patchSettings,
-} from "../../../shared"
+} from "@aegisx/shared"
+import type { Hono } from "hono"
+import { Type } from "typebox"
 import type {
   ConfigStore,
   ProviderData,

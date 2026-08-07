@@ -1,6 +1,6 @@
+import type { MessageList, MessageListItem, RunUsage } from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { and, asc, gt, type SQL } from "drizzle-orm"
-import type { MessageList, MessageListItem, RunUsage } from "../../../shared"
 import type { createDatabase } from "../db"
 import { sessionEntries } from "../db/schema"
 import { accumulateEntryUsage } from "./entry-usage"

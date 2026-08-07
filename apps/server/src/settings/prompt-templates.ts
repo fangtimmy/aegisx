@@ -1,10 +1,10 @@
-import Handlebars from "handlebars"
-import type { PromptTemplateContext } from "../../../shared"
+import type { PromptTemplateContext } from "@aegisx/shared"
 import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-} from "../../../shared/prompt-defaults"
+} from "@aegisx/shared/prompt-defaults"
+import Handlebars from "handlebars"
 
 export {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,

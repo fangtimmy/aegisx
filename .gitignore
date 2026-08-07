@@ -1,5 +1,7 @@
 .opencode/
 data/
+node_modules/
+dist/
 __pycache__
 # macOS
 .DS_Store

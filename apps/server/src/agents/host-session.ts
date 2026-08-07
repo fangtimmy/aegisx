@@ -1,3 +1,5 @@
+import type { ContextSnapshot } from "@aegisx/shared/live-event"
+import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import {
   type AgentSession,
@@ -9,8 +11,6 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
-import type { ContextSnapshot } from "../../../shared/live-event"
-import type { ThinkingLevel } from "../../../shared/thinking"
 import type { createDatabase } from "../db"
 import { DbSessionManager } from "./db-session-manager"
 import {

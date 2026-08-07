@@ -1,7 +1,13 @@
 {
-  "name": "shared",
+  "name": "@aegisx/shared",
   "private": true,
   "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./*": "./*.ts"
+  },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0"
   }

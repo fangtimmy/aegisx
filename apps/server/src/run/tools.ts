@@ -1,11 +1,11 @@
-import { defineTool } from "@earendil-works/pi-coding-agent"
-import { Type } from "typebox"
-import type { AgentSummary } from "../../../shared/agent"
+import type { AgentSummary } from "@aegisx/shared/agent"
 import {
   isActiveTarget,
   type TargetEndpoint,
   type TargetState,
-} from "../../../shared/target"
+} from "@aegisx/shared/target"
+import { defineTool } from "@earendil-works/pi-coding-agent"
+import { Type } from "typebox"
 
 /** Per-run callbacks the native tools delegate to (wired by the service). */
 export type RunToolContext = {

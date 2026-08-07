@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import type { AgentSummary } from "@aegisx/shared/agent"
+import type { TargetState } from "@aegisx/shared/target"
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
-import type { AgentSummary } from "../../../shared/agent"
-import type { TargetState } from "../../../shared/target"
 import {
   createMainTools,
   type RunToolContext,

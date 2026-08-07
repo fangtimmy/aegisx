@@ -1,10 +1,10 @@
 import { basename } from "node:path"
-import { and, eq } from "drizzle-orm"
 import type {
   ChallengeSyncAttachment,
   ChallengeSyncItem,
   ChallengeSyncProgress,
-} from "../../../shared"
+} from "@aegisx/shared"
+import { and, eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import {
   attachments,

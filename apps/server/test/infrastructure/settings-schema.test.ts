@@ -6,7 +6,7 @@ import {
   migrateLegacySettings,
   parseSettings,
   patchSettings,
-} from "../../../shared"
+} from "@aegisx/shared"
 
 describe("settings schema", () => {
   test("get falls back to defaults", () => {

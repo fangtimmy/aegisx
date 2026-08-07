@@ -1,0 +1,18 @@
+{
+  "name": "aegisx",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "bun run dev:server & bun run dev:web & wait",
+    "dev:server": "bun run --filter @aegisx/server dev",
+    "dev:web": "bun run --filter @aegisx/web dev",
+    "check": "bun run --filter '@aegisx/*' check",
+    "test": "bun run --filter '@aegisx/*' test",
+    "build": "bun run --filter @aegisx/web build",
+    "db:generate": "bun run --filter @aegisx/server db:generate"
+  },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@earendil-works/pi-ai": "0.83.0"
+  }
+}

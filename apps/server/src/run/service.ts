@@ -1,17 +1,17 @@
 import { mkdirSync, rmSync } from "node:fs"
 import { join, relative } from "node:path"
-import type { Api, Model } from "@earendil-works/pi-ai"
-import { eq } from "drizzle-orm"
 import type {
   EnvironmentConfig,
   ModelConfig,
   PromptTemplateContext,
   RunPublic,
   SwitchModelInput,
-} from "../../../shared"
-import { get } from "../../../shared"
-import type { ProviderConnection } from "../../../shared/provider"
-import type { ThinkingLevel } from "../../../shared/thinking"
+} from "@aegisx/shared"
+import { get } from "@aegisx/shared"
+import type { ProviderConnection } from "@aegisx/shared/provider"
+import type { ThinkingLevel } from "@aegisx/shared/thinking"
+import type { Api, Model } from "@earendil-works/pi-ai"
+import { eq } from "drizzle-orm"
 import type {
   AgentLoopSettings,
   HostAgentSession,
@@ -57,7 +57,7 @@ export type RunServiceOptions = {
   containerManager: ContainerManager
   platformService: PlatformService
   configStore: ConfigStore
-  getSettings(): import("../../../shared").FlatSettings
+  getSettings(): import("@aegisx/shared").FlatSettings
   /** Test seam: override the host-session provision step (default =
    * provisionRunSession). Tests inject a stub to avoid building a real pi
    * AgentSession + hitting a model. */

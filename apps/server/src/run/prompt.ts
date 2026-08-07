@@ -1,12 +1,12 @@
 import { copyFileSync } from "node:fs"
 import { basename, extname, join } from "node:path"
-import { eq } from "drizzle-orm"
 import type {
   EnvironmentConfig,
   ModelConfig,
   PromptAttachment,
   PromptTemplateContext,
-} from "../../../shared"
+} from "@aegisx/shared"
+import { eq } from "drizzle-orm"
 import type { createDatabase } from "../db"
 import {
   attachments,
