@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 
 import type { AgentLoopSettings } from "../agents/host-session"
 import type { createDatabase } from "../db"
@@ -13,9 +13,11 @@ export const ORCHESTRATOR_AGENT_ID = "orchestrator"
 export type OrchestratorAgentSettings = AgentLoopSettings
 
 /**
- * Find an existing orchestrator session id (cold-restore), else undefined.
- * An event has at most one orchestrator session; the oldest row is the
- * original (DbSessionManager never creates a second one — close+start reopens).
+ * Find the ACTIVE orchestrator session id (cold-restore), else undefined.
+ * The active session is the NEWEST `sessions` row for this owner: a normal
+ * start creates one session and reuses it, while "new session" (see
+ * service.newSession) creates a fresh row that becomes the active one — so
+ * older rows stay as archived history. orderBy createdAt desc picks it.
  */
 export function findExistingOrchestratorSessionId(
   db: Database,
@@ -27,7 +29,7 @@ export function findExistingOrchestratorSessionId(
     .where(
       and(eq(sessions.ownerType, "orchestrator"), eq(sessions.ownerId, eventId))
     )
-    .orderBy(sessions.createdAt)
+    .orderBy(desc(sessions.createdAt))
     .all()
   return rows[0]?.id
 }

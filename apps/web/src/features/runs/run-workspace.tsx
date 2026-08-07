@@ -318,8 +318,13 @@ export function RunWorkspace({
             <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="files">
               <FilesWorkspace
                 enabled={view === "files"}
+                files={{
+                  key: (p) => keys.runs.files(runId, p),
+                  get: (p) => runsApi.getRunFile(runId, p),
+                  downloadUrl: (p) =>
+                    `/api/runs/${runId}/files/download?path=${encodeURIComponent(p)}`,
+                }}
                 key={runId}
-                runId={runId}
               />
             </TabsPanel>
           </Tabs>

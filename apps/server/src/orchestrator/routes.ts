@@ -5,8 +5,22 @@ import { Type } from "typebox"
 
 import { jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
+import {
+  readWorkspacePath,
+  workspaceDownload,
+  WorkspaceFileError,
+} from "../infrastructure/workspace-files"
 import { ThinkingLevelSchema } from "../lib/schemas"
 import { OrchestratorActionError, type OrchestratorService } from "./service"
+
+function workspaceFileError(c: Context, error: unknown) {
+  if (!(error instanceof WorkspaceFileError)) throw error
+  return jsonError(
+    c,
+    { code: error.code, message: error.message },
+    error.code === "not_found" ? 404 : 400
+  )
+}
 
 const configInput = Type.Object(
   {
@@ -75,6 +89,45 @@ export function registerOrchestratorRoutes(
     return c.json(orchestratorService.listMessages(eventId, { after }))
   })
 
+  // Workspace file browser (same shape as run files). The orchestrator's
+  // per-event workspace lives under its data dir; before first start the dir
+  // may not exist yet — surface an empty directory rather than an error.
+  app.get("/api/events/:eventId/orchestrator/files", (c) => {
+    const root = orchestratorService.dirPath(c.req.param("eventId"))
+    if (!root) return notFound(c, "Event not found")
+    try {
+      return c.json(readWorkspacePath(root, c.req.query("path") ?? ""))
+    } catch (error) {
+      // Before the orchestrator's first start the workspace dir doesn't exist
+      // yet — surface an empty directory instead of a 404 so the Files tab
+      // renders a clean empty state.
+      if (error instanceof WorkspaceFileError && error.code === "not_found") {
+        return c.json({
+          path: c.req.query("path") ?? "",
+          type: "directory",
+          entries: [],
+        })
+      }
+      return workspaceFileError(c, error)
+    }
+  })
+
+  app.get("/api/events/:eventId/orchestrator/files/download", (c) => {
+    const root = orchestratorService.dirPath(c.req.param("eventId"))
+    if (!root) return notFound(c, "Event not found")
+    try {
+      const file = workspaceDownload(root, c.req.query("path") ?? "")
+      return new Response(file.stream as unknown as ReadableStream, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+        },
+      })
+    } catch (error) {
+      return workspaceFileError(c, error)
+    }
+  })
+
   // Live event stream (EventSource). Same shape as the run stream: ephemeral
   // pipeline events (message/tool progress); reconnect re-reads committed
   // entries via GET .../messages.
@@ -107,6 +160,10 @@ export function registerOrchestratorRoutes(
         runId: eventId,
         agentId: orchestratorService.agentId,
       })
+      // Seed the live context snapshot so the composer stat strip shows
+      // immediately on (re)connect, mirroring the run stream.
+      const context = bus.getContext(orchestratorService.agentId)
+      if (context) queue.push(context)
       try {
         while (!aborted) {
           if (queue.length === 0) {
@@ -152,6 +209,20 @@ export function registerOrchestratorRoutes(
     async (c) => {
       try {
         return c.json(await orchestratorService.start(c.req.param("eventId")))
+      } catch (error) {
+        return orchError(c, error)
+      }
+    }
+  )
+
+  app.post(
+    "/api/events/:eventId/orchestrator/new-session",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        return c.json(
+          await orchestratorService.newSession(c.req.param("eventId"))
+        )
       } catch (error) {
         return orchError(c, error)
       }

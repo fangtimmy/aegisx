@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Bot,
   CircleAlert,
+  FolderOpen,
   MessageSquare,
   Play,
+  RotateCcw,
   Settings as SettingsIcon,
   Square,
 } from "lucide-react"
@@ -16,6 +18,16 @@ import type {
 } from "@/api"
 import { keys, orchestratorsApi, providersApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,10 +39,32 @@ import {
   CardFrameTitle,
   CardPanel,
 } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Conversation } from "@/features/runs/conversation"
+import { FilesWorkspace, type FilesApi } from "@/features/runs/files-workspace"
 import { toast } from "@/lib/toast"
 
 /** Stable agent id for the orchestrator's single session (no `agents` row). */
@@ -55,7 +89,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       query.state.data?.orchestrator.status === "running" ? 4000 : false,
   })
 
-  const [view, setView] = useState<"conversation" | "instruction">(
+  const [view, setView] = useState<"conversation" | "files" | "instruction">(
     "conversation"
   )
 
@@ -83,6 +117,20 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
     return out
   }, [providers.data])
 
+  // Full model rows (with thinkingLevels + provider) for the start dialog's
+  // reasoning picker, which filters levels to those the selected model supports.
+  const availableModels = useMemo(
+    () =>
+      (providers.data?.items ?? []).flatMap((provider) =>
+        provider.enabled && provider.apiKey
+          ? provider.models
+              .filter((model) => model.enabled)
+              .map((model) => ({ ...model, provider }))
+          : []
+      ),
+    [providers.data]
+  )
+
   const [maxTargets, setMaxTargets] = useState(orch?.maxConcurrentTargets ?? 1)
   useEffect(() => {
     setMaxTargets(orch?.maxConcurrentTargets ?? 1)
@@ -106,21 +154,6 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
     },
     onError: (error: Error) => toast.error("保存失败", error.message),
   })
-  const startMut = useMutation({
-    mutationFn: async () => {
-      // `enabled` gates start server-side. If the user toggled it off (or never
-      // enabled), arm it first so the primary CTA always works.
-      if (!orch?.enabled) {
-        await orchestratorsApi.patchOrchestrator(eventId, { enabled: true })
-      }
-      return orchestratorsApi.startOrchestrator(eventId)
-    },
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: keys.orchestrator.detail(eventId),
-      }),
-    onError: (error: Error) => toast.error("启动失败", error.message),
-  })
   const stopMut = useMutation({
     mutationFn: () => orchestratorsApi.stopOrchestrator(eventId),
     onSuccess: () =>
@@ -136,6 +169,19 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
         queryKey: keys.orchestrator.detail(eventId),
       }),
     onError: (error: Error) => toast.error("关闭失败", error.message),
+  })
+  const newSessionMut = useMutation({
+    mutationFn: () => orchestratorsApi.newOrchestratorSession(eventId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: keys.orchestrator.detail(eventId),
+      })
+      queryClient.invalidateQueries({
+        queryKey: keys.orchestrator.messages(eventId),
+      })
+      toast.success("已开启新会话")
+    },
+    onError: (error: Error) => toast.error("开新会话失败", error.message),
   })
 
   // --- Conversation adapter (same shape the solver run implements) ---------
@@ -188,6 +234,18 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
   )
   const findCurrentModelId = useCallback(() => orch?.modelId, [orch?.modelId])
 
+  // Workspace file browser adapter — same component the solver run uses,
+  // pointed at the orchestrator's per-event files API.
+  const orchestratorFiles = useMemo<FilesApi>(
+    () => ({
+      key: (p) => keys.orchestrator.files(eventId, p),
+      get: (p) => orchestratorsApi.getOrchestratorFile(eventId, p),
+      downloadUrl: (p) =>
+        `/api/events/${eventId}/orchestrator/files/download?path=${encodeURIComponent(p)}`,
+    }),
+    [eventId]
+  )
+
   if (detail.isPending) {
     return (
       <div
@@ -233,14 +291,14 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
         </CardFrameDescription>
         <CardFrameAction className="gap-2">
           {orch.status === "closed" && (
-            <Button
-              loading={startMut.isPending}
-              onClick={() => startMut.mutate()}
-              size="sm"
-              type="button"
-            >
-              <Play /> {orch.enabled ? "启动" : "启用并启动"}
-            </Button>
+            <StartOrchestratorDialog
+              availableModels={availableModels}
+              enabled={orch.enabled}
+              eventId={eventId}
+              thinkingLevel={orch.thinkingLevel}
+              modelId={orch.modelId}
+              providersItems={providers.data?.items ?? []}
+            />
           )}
           {running && (
             <Button
@@ -271,7 +329,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
           <Tabs
             className="flex h-full min-h-0 min-w-0 flex-col"
             onValueChange={(value) =>
-              setView(value as "conversation" | "instruction")
+              setView(value as "conversation" | "files" | "instruction")
             }
             value={view}
           >
@@ -281,6 +339,9 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
             >
               <TabsTab className="gap-2" value="conversation">
                 <MessageSquare /> 对话
+              </TabsTab>
+              <TabsTab className="gap-2" value="files">
+                <FolderOpen /> 文件
               </TabsTab>
               <TabsTab className="gap-2" value="instruction">
                 <SettingsIcon /> 指令
@@ -302,6 +363,13 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                 streamPath={`/api/events/${eventId}/orchestrator/stream`}
                 switchModel={switchModel}
                 thinkingLevel={orch.thinkingLevel}
+              />
+            </TabsPanel>
+            <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="files">
+              <FilesWorkspace
+                enabled={view === "files"}
+                files={orchestratorFiles}
+                rootLabel="工作台文件"
               />
             </TabsPanel>
             <TabsPanel
@@ -411,6 +479,51 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                       推理：{orch.thinkingLevel}
                     </p>
                   </div>
+                  <div className="flex items-center justify-between rounded-md border p-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">开新会话</p>
+                      <p className="text-xs text-muted-foreground">
+                        丢弃当前对话上下文，以空白会话重启。旧会话保留为历史，工作区文件不受影响。
+                      </p>
+                    </div>
+                    <AlertDialog>
+                      <AlertDialogTrigger
+                        render={
+                          <Button
+                            disabled={newSessionMut.isPending}
+                            loading={newSessionMut.isPending}
+                            size="sm"
+                            type="button"
+                            variant="destructive-outline"
+                          />
+                        }
+                      >
+                        <RotateCcw /> 开新会话
+                      </AlertDialogTrigger>
+                      <AlertDialogPopup>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>开启新会话？</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            当前对话上下文将被清空，编排器以空白会话重启。旧会话记录会保留为历史，工作台文件（策略/状态笔记）不受影响。
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogClose
+                            render={<Button type="button" variant="ghost" />}
+                          >
+                            取消
+                          </AlertDialogClose>
+                          <Button
+                            onClick={() => newSessionMut.mutate()}
+                            type="button"
+                            variant="destructive"
+                          >
+                            <RotateCcw /> 开新会话
+                          </Button>
+                        </AlertDialogFooter>
+                      </AlertDialogPopup>
+                    </AlertDialog>
+                  </div>
                   {usage && (
                     <div className="rounded-md border p-3">
                       <p className="mb-2 text-sm font-medium">
@@ -450,5 +563,187 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
         </CardPanel>
       </Card>
     </CardFrame>
+  )
+}
+
+const thinkingLevelLabels: Record<ThinkingLevel, string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Maximum",
+}
+const offThinkingLevels: ThinkingLevel[] = ["off"]
+
+type StartModel = {
+  id: string
+  label: string
+  thinkingLevels: ThinkingLevel[]
+  provider: { id: string; label: string }
+}
+
+/** Pre-start dialog (model + thinking picker), mirroring the solver run's
+ * create dialog. Patches the orchestrator config (arming `enabled` if needed)
+ * then starts. */
+function StartOrchestratorDialog({
+  eventId,
+  enabled,
+  modelId,
+  thinkingLevel,
+  availableModels,
+  providersItems,
+}: {
+  eventId: string
+  enabled: boolean
+  modelId: string | null
+  thinkingLevel: ThinkingLevel
+  availableModels: StartModel[]
+  providersItems: { id: string; label: string }[]
+}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [selectedModelId, setSelectedModelId] = useState(
+    modelId ?? availableModels[0]?.id ?? ""
+  )
+  const [level, setLevel] = useState<ThinkingLevel>(thinkingLevel)
+  useEffect(() => {
+    setSelectedModelId(modelId ?? availableModels[0]?.id ?? "")
+  }, [modelId, availableModels])
+  useEffect(() => {
+    setLevel(thinkingLevel)
+  }, [thinkingLevel])
+
+  const selected = availableModels.find((m) => m.id === selectedModelId)
+  const supported = selected?.thinkingLevels ?? offThinkingLevels
+  const supportedKey = supported.join(",")
+  useEffect(() => {
+    if (!supportedKey.split(",").includes(level))
+      setLevel(supported[0] ?? "off")
+  }, [supportedKey, supported, level])
+
+  const start = useMutation({
+    mutationFn: async () => {
+      const patch: OrchestratorConfigInput = {
+        modelId: selectedModelId || null,
+        thinkingLevel: level,
+      }
+      if (!enabled) patch.enabled = true
+      if (
+        modelId === (selectedModelId || null) &&
+        thinkingLevel === level &&
+        enabled
+      ) {
+        // nothing to change — just start
+      } else {
+        await orchestratorsApi.patchOrchestrator(eventId, patch)
+      }
+      return orchestratorsApi.startOrchestrator(eventId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: keys.orchestrator.detail(eventId),
+      })
+      setOpen(false)
+    },
+    onError: (error: Error) => toast.error("启动失败", error.message),
+  })
+
+  return (
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogTrigger
+        render={<Button loading={start.isPending} size="sm" type="button" />}
+      >
+        <Play /> {enabled ? "启动" : "启用并启动"}
+      </DialogTrigger>
+      {open ? (
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>启动编排器</DialogTitle>
+            <DialogDescription>
+              选择模型与推理强度。启动后仍可在对话框底部随时切换。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="grid gap-4">
+            <Field>
+              <FieldLabel>模型</FieldLabel>
+              <Select
+                items={Object.fromEntries(
+                  availableModels.map((m) => [
+                    m.id,
+                    `${m.provider.label} / ${m.label}`,
+                  ])
+                )}
+                onValueChange={(v) => setSelectedModelId(v as string)}
+                value={selectedModelId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="没有已启用的模型" />
+                </SelectTrigger>
+                <SelectPopup>
+                  {providersItems.map((provider) => {
+                    const models = availableModels.filter(
+                      (m) => m.provider.id === provider.id
+                    )
+                    if (models.length === 0) return null
+                    return (
+                      <SelectGroup key={provider.id}>
+                        <SelectGroupLabel>{provider.label}</SelectGroupLabel>
+                        {models.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )
+                  })}
+                </SelectPopup>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel>推理</FieldLabel>
+              <Select
+                items={Object.fromEntries(
+                  supported.map((l) => [l, thinkingLevelLabels[l]])
+                )}
+                onValueChange={(v) => setLevel(v as ThinkingLevel)}
+                value={level}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  {supported.map((l) => (
+                    <SelectItem key={l} value={l}>
+                      {thinkingLevelLabels[l]}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </Field>
+            {start.error && (
+              <Alert variant="error">
+                <CircleAlert />
+                <AlertDescription>{start.error.message}</AlertDescription>
+              </Alert>
+            )}
+          </DialogPanel>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" />}>
+              取消
+            </DialogClose>
+            <Button
+              disabled={!selectedModelId || start.isPending}
+              loading={start.isPending}
+              onClick={() => start.mutate()}
+              type="button"
+            >
+              <Play /> {enabled ? "启动" : "启用并启动"}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      ) : null}
+    </Dialog>
   )
 }

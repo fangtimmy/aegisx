@@ -26,5 +26,7 @@ export const keys = {
     detail: (eventId: string) => ["orchestrator", eventId] as const,
     messages: (eventId: string) =>
       ["orchestrator", eventId, "messages"] as const,
+    files: (eventId: string, path: string) =>
+      ["orchestrator", eventId, "files", path] as const,
   },
 }

@@ -672,13 +672,29 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
     void lifecycle.send(eventId, message).catch(() => undefined)
   }
 
-  async function start(eventId: string): Promise<OrchestratorDetail> {
+  async function start(
+    eventId: string,
+    opts?: { fresh?: boolean }
+  ): Promise<OrchestratorDetail> {
     return withLock(eventId, async () => {
       const ev = db.select().from(events).where(eq(events.id, eventId)).get()
       if (!ev) throw new OrchestratorActionError("not_found", "Event not found")
       const row = queries.ensureRow(eventId)
-      if (lifecycle.has(eventId))
-        return getDetail(eventId) as OrchestratorDetail
+      if (lifecycle.has(eventId)) {
+        if (opts?.fresh) {
+          // "New session": discard the live session (its DB row stays as
+          // archived history) and fall through to create a brand-new one. The
+          // container is recreated below (createToolboxContainer is idempotent)
+          // with the same workspace, so strategy/state notes persist.
+          const live = lifecycle.get(eventId) as HostAgentSession
+          if (live.session.isStreaming)
+            await live.session.abort().catch(() => undefined)
+          await live.dispose()
+          lifecycle.delete(eventId)
+        } else {
+          return getDetail(eventId) as OrchestratorDetail
+        }
+      }
       // `enabled` is the arm/disarm switch (docs §八/§九): start requires it
       // so a toggled-off orchestrator can't be launched, even via the API.
       if (!row.enabled)
@@ -710,7 +726,11 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
 
       const toolCtx = buildToolContext(eventId)
       const mgmt = createOrchestratorTools(toolCtx)
-      const existingSessionId = findExistingOrchestratorSessionId(db, eventId)
+      // Fresh start (newSession) skips the resume — it creates a brand-new
+      // session row. Otherwise cold-restore the active (newest) session.
+      const existingSessionId = opts?.fresh
+        ? undefined
+        : findExistingOrchestratorSessionId(db, eventId)
 
       let orchSession: HostAgentSession
       try {
@@ -755,6 +775,13 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       lifecycle.drive(eventId, buildInitialPrompt(eventId))
       return detail
     })
+  }
+
+  /** Discard the current session and start a brand-new one (clean context).
+   * The old session's DB rows stay as archived history; the workspace files
+   * persist. Delegates to {@link start} with `fresh`. */
+  async function newSession(eventId: string): Promise<OrchestratorDetail> {
+    return start(eventId, { fresh: true })
   }
 
   async function stop(eventId: string): Promise<OrchestratorDetail> {
@@ -861,13 +888,25 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
     bus.close()
   }
 
+  /** Absolute path to the orchestrator's data dir (data/orchestrators/<eventId>),
+   * the files-browser root — mirrors runService.runDirPath. Deterministic
+   * (does not require the dir to exist yet); the files route surfaces an
+   * empty directory before first start. */
+  function dirPath(eventId: string): string | undefined {
+    const ev = db.select().from(events).where(eq(events.id, eventId)).get()
+    if (!ev) return undefined
+    return orchDir(eventId)
+  }
+
   return {
     bus,
     agentId: ORCHESTRATOR_AGENT_ID,
     getDetail,
     patchConfig,
     listMessages,
+    dirPath,
     start,
+    newSession,
     stop,
     switchModel,
     closeOrchestrator,

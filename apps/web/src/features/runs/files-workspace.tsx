@@ -11,7 +11,7 @@ import {
 } from "lucide-react"
 import { useCallback, useRef, useState } from "react"
 
-import { keys, type RunFileEntry, runsApi } from "@/api"
+import { type RunFileEntry } from "@/api"
 import { CodePreview } from "@/components/code-preview"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -50,13 +50,13 @@ function formatSize(size: number) {
 
 function DirectoryEntry({
   entry,
-  runId,
+  files,
   onSelect,
   depth = 0,
   defaultExpanded = false,
 }: {
   entry: RunFileEntry
-  runId: string
+  files: FilesApi
   onSelect: (path: string) => void
   depth?: number
   defaultExpanded?: boolean
@@ -64,8 +64,8 @@ function DirectoryEntry({
   const [expanded, setExpanded] = useState(defaultExpanded)
   const directory = useQuery({
     enabled: entry.type === "directory" && expanded,
-    queryKey: keys.runs.files(runId, entry.path),
-    queryFn: () => runsApi.getRunFile(runId, entry.path),
+    queryKey: files.key(entry.path),
+    queryFn: () => files.get(entry.path),
   })
   const isDirectory = entry.type === "directory"
   const FolderIcon = expanded ? FolderOpen : Folder
@@ -130,9 +130,9 @@ function DirectoryEntry({
             <DirectoryEntry
               depth={depth + 1}
               entry={child}
+              files={files}
               key={child.path}
               onSelect={onSelect}
-              runId={runId}
             />
           ))}
       </CollapsiblePanel>
@@ -140,12 +140,26 @@ function DirectoryEntry({
   )
 }
 
+/** Adapter that fetches a workspace tree + builds a download URL. Lets the
+ * same browser serve a solver run (/api/runs/:id/files) and the per-event
+ * orchestrator (/api/events/:id/orchestrator/files) without knowing which. */
+export type FilesApi = {
+  /** React Query key for a path (stable per path). */
+  key: (path: string) => readonly unknown[]
+  /** Fetch a file/directory entry at a path. */
+  get: (path: string) => Promise<import("@/api").RunFile>
+  /** Download URL for a path (anchor href). */
+  downloadUrl: (path: string) => string
+}
+
 export function FilesWorkspace({
-  runId,
+  files,
   enabled,
+  rootLabel = "任务文件",
 }: {
-  runId: string
+  files: FilesApi
   enabled: boolean
+  rootLabel?: string
 }) {
   const [selectedPath, setSelectedPath] = useState<string>()
   const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth)
@@ -187,13 +201,13 @@ export function FilesWorkspace({
 
   const root = useQuery({
     enabled,
-    queryKey: keys.runs.files(runId, ""),
-    queryFn: () => runsApi.getRunFile(runId, ""),
+    queryKey: files.key(""),
+    queryFn: () => files.get(""),
   })
   const selected = useQuery({
     enabled: enabled && Boolean(selectedPath),
-    queryKey: keys.runs.files(runId, selectedPath ?? ""),
-    queryFn: () => runsApi.getRunFile(runId, selectedPath ?? ""),
+    queryKey: files.key(selectedPath ?? ""),
+    queryFn: () => files.get(selectedPath ?? ""),
   })
 
   return (
@@ -202,7 +216,7 @@ export function FilesWorkspace({
         className="flex min-h-0 shrink-0 flex-col pr-2"
         style={{ width: sidebarWidth }}
       >
-        <h3 className="mb-2 text-sm font-medium">任务文件</h3>
+        <h3 className="mb-2 text-sm font-medium">{rootLabel}</h3>
         <ScrollArea className="flex-1" scrollFade>
           {root.isPending && (
             <div
@@ -227,9 +241,9 @@ export function FilesWorkspace({
               <DirectoryEntry
                 defaultExpanded={entry.name === "workspace"}
                 entry={entry}
+                files={files}
                 key={entry.path}
                 onSelect={setSelectedPath}
-                runId={runId}
               />
             ))}
         </ScrollArea>
@@ -261,12 +275,7 @@ export function FilesWorkspace({
           {selectedPath && (
             <Button
               aria-label={`下载 ${selectedPath}`}
-              render={
-                <a
-                  download
-                  href={`/api/runs/${runId}/files/download?path=${encodeURIComponent(selectedPath)}`}
-                />
-              }
+              render={<a download href={files.downloadUrl(selectedPath)} />}
               variant="outline"
             >
               <Download /> 下载

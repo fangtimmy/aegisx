@@ -8,6 +8,7 @@ import {
 } from "../agents/session-queries"
 import type { createDatabase } from "../db"
 import { orchestrators, sessionEntries } from "../db/schema"
+import { findExistingOrchestratorSessionId } from "./session"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
@@ -87,17 +88,22 @@ export function createOrchestratorQueries(options: { db: Database }) {
     return getRow(eventId) as typeof orchestrators.$inferSelect
   }
 
-  /** Durable committed entries for the orchestrator session, paginated by seq
-   * (same shape/semantics as run listMessages, but owner-scoped). */
+  /** Durable committed entries for the orchestrator’s ACTIVE session only,
+   * paginated by seq. Scoping to the active (newest) session means “new
+   * session” starts a blank timeline; older sessions’ rows stay as archived
+   * history. Same shape/semantics as run listMessages. */
   function listMessages(
     eventId: string,
     opts: { after?: number }
   ): MessageList {
+    const sessionId = findExistingOrchestratorSessionId(db, eventId)
+    if (!sessionId) return { items: [], nextAfter: opts.after ?? 0 }
     return listRenderableEntries(
       db,
       and(
         eq(sessionEntries.ownerType, "orchestrator"),
-        eq(sessionEntries.ownerId, eventId)
+        eq(sessionEntries.ownerId, eventId),
+        eq(sessionEntries.sessionId, sessionId)
       ),
       { after: opts.after ?? 0, agentIdFallback: ORCHESTRATOR_AGENT_ID }
     )
