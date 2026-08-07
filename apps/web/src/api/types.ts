@@ -69,7 +69,9 @@ export type SettingsResponse = {
       "prompts.mainSystem": string
       "prompts.childSystem": string
       "prompts.initial": string
+      "prompts.orchestratorSystem": string
     }
     promptVariables: string[]
+    orchestratorPromptVariables: string[]
   }
 }

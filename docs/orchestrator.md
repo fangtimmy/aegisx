@@ -31,8 +31,9 @@ Related: [architecture.md](./architecture.md)（v5 现状）、[refactor-v4.md](
 │  ┌─ Orchestrator AgentSession (per-event) ───────────────┐ │
 │  │  per-event 容器 + workspace（战略工作台）               │ │
 │  │  工具: 文件工具（同 solver）+ 管理工具                   │ │
-│  │        list_challenges / start_run / stop_run /        │ │
-│  │        read_run / get_status                           │ │
+│  │        list_challenges / get_challenge / list_runs /     │ │
+│  │        start_run / stop_run / message_run / close_run /  │ │
+│  │        read_run / get_status                             │ │
 │  │  subscribe → session_entries(orchestrator) + SSE       │ │
 │  └────────────────────┬───────────────────────────────────┘ │
 │                       │ 调 runService.create / stop          │
@@ -74,8 +75,9 @@ STRATEGY/STATE/DECISIONS 等）。区别只在工具集（管理工具 vs CTF �
 | # | 围栏 | 为什么是硬的 |
 |---|------|-------------|
 | 1 | 全局 running run 数 ≤ `scheduler.maxConcurrentRuns` | 本地资源，爆了 OOM |
-| 2 | 靶机题同时 ≤ `orchestrators.maxConcurrentTargets`（默认 1） | 平台物理上限，撞了 `start_target` 报错 |
-| 3 | 不给已有 running run 的题再开 | 逻辑铁律，一题一活 run |
+| 2 | **不同的**靶机题（target-capable 且未解）同时被攻 ≤ `orchestrators.maxConcurrentTargets`（默认 1） | 平台物理上限是"同时起几个 target 实例"，撞了 `start_target` 报错。target 是 per-challenge 实例，多 run 打同一题共享一个实例 → 共享一个槽 |
+
+> **没有"每题至多一个 run"的围栏。** 靶机槽数按**题数**计、不按 run 数计，所以 orchestrator 可以同时开多个 run 打同一道题（仅受全局 run 上限约束）。
 
 **显式放弃的围栏**（7-31 原清单里的第 4、5 条）：
 
@@ -88,6 +90,8 @@ STRATEGY/STATE/DECISIONS 等）。区别只在工具集（管理工具 vs CTF �
 围栏实现：`canLaunchRun(eventId, challengeId)` 函数，`start_run` 工具 execute 前置
 调用。违反时**不抛异常**，而是把拒绝原因作为 tool result 返回给 orchestrator
 （"靶机槽已满，当前 1/1"），让 AI 据此调整计划——这比硬失败更符合"计划制"语义。
+
+> `message_run` 冷恢复一个 closed run（→ running）会占用一个全局并发槽，同样走围栏 #1；idle/running 的 message 不查（该 run 本就合法持有槽位）。
 
 ## 四、触发模型：事件驱动 + 定时唤醒
 
@@ -135,15 +139,19 @@ orchestrator 启用 solver 同款文件工具（read/bash/edit/write/grep/find/l
 
 | 工具 | 参数 | 作用 |
 |------|------|------|
-| `list_challenges` | — | 该 event 所有题：id/name/category/points/靶机依赖/已有 run 状态/上次结果 |
-| `start_run` | `challengeId`, `initialPromptOverride?`, `timeoutMs?`, `modelId?` | 围栏内启动 solver run；内部调 `runService.create`（container 配置取 settings 默认，模型取 orchestrator 配置或参数覆盖或全局默认） |
-| `stop_run` | `runId` | `session.abort()` → idle（保留容器），等同用户按 Esc；用于"掐掉重来" |
-| `read_run` | `runId`, `roles?`(默认 assistant+toolResult), `since?` | 读该 run 的 `session_entries`，默认给 assistant 文本 + toolResult（thinking 省略）；每条/总体双截断，超出提示用 `since` 续读；`since` 游标增量读 |
-| `get_status` | — | 当前并发槽 X/Y、靶机槽 X/Y、各 run 状态摘要，供 orchestrator 决策 |
+| `list_challenges` | — | 该 event 所有题的 digest：id/name/category/points/靶机能力/已解/尝试次数/上次结果。扫描选题用 |
+| `get_challenge` | `challengeId` | 单题完整详情：description/附件清单/靶机连接信息（name+services）/可用与已解状态/run 活动计数/上次 summary。开题前或判断难度时深读 |
+| `list_runs` | `challengeId?`, `status?` | 枚举 run（最近优先，上限 50），含 summary/flag/error/时间戳。复盘历史、找 runId 用 |
+| `start_run` | `challengeId`, `initialPromptOverride?`, `timeoutMs?`, `modelId?` | 围栏内启动 solver run；内部调 `runService.create`。允许多 run 打同一题 |
+| `stop_run` | `runId` | `session.abort()` → idle（保留容器），等同用户按 Esc |
+| `message_run` | `runId`, `text`, `deliverAs?` | 给 run 发消息：running→steer/followUp；idle→开新轮；closed→冷恢复容器+续 session 开新轮。**优先于 stop+start**：保留 solver 上下文与工作区 |
+| `close_run` | `runId` | 释放容器（→ closed；session 与历史保留，之后可用 `message_run` 续跑）。释放资源用 |
+| `read_run` | `runId`, `roles?`(默认 assistant+toolResult), `since?` | 读该 run 的 `session_entries`，默认给 assistant 文本 + toolResult（thinking 省略）；每条/总体双截断，超出提示用 `since` 续读 |
+| `get_status` | — | 当前并发槽 X/Y、靶机槽 X/Y（按题数计）、各 run 状态摘要 + deadline |
 
-**显式不做**：`set_exclude`（排除靠 instruction）、`steer_run`（中途给 solver 注入
-消息）——MVP 不给。review 闭环里"换策略"靠 `stop_run` + `start_run`(带新
-initialPromptOverride) 实现，不直接干预 solver 思考。若日后证明需要，再补 `steer_run`。
+**显式不做**：`set_exclude`（排除靠 instruction）。review 闭环里"换策略"靠
+`message_run`（保留上下文纠偏）或 `stop_run` + `start_run`(带新 initialPromptOverride)
+实现。
 
 ## 七、orchestrator 的 session 可见性
 
@@ -309,7 +317,7 @@ apps/server/src/
 | 固定策略算法（preset/排序维度） | 用户明确要纯 AI + instruction |
 | "跳过已解"/excluded 硬围栏 | 历史赛事测试需要；偏好交 instruction |
 | orchestrator 自带周期 tick | per-run 30/60min 阈值已覆盖"卡题唤醒" |
-| `set_exclude`/`steer_run` 工具 | MVP 不需要；换策略靠 stop+start |
+| `set_exclude` 工具 | 偏好交 instruction |
 
 | 保留 / 复用 | 理由 |
 |-------------|------|
@@ -321,12 +329,16 @@ apps/server/src/
 
 ## 十四、Future（明确不做，记录待日后）
 
-- **steer_run 工具**：让 orchestrator 中途给 solver 注入消息纠偏，而非 stop+重来。
 - **动态难度估算**：本地多 run 数据自动估题难度，反哺 orchestrator 决策。
 - **长驻 shell 复用**：降 solver 的 docker exec 开销（与 orchestrator 无关，run 侧债）。
 
+> `steer_run` / 中途纠偏 / 冷恢复续跑已落地为 `message_run`（见 §六工具表）。
 > 运行时切模型/思考强度已落地（run 主 agent + orchestrator 的 composer footer 选择器，
-> 下一轮生效，见 §六工具表与 `agents/model-switch.ts`）。
+> 下一轮生效，见 §六与 `agents/model-switch.ts`）。
+>
+> orchestrator 的系统提示词与 solver 一样走"模板 + 设置项"：
+> `prompts.orchestratorSystem`（默认见 `prompt-defaults.ts`），变量 `event.id` /
+> `event.name` / `instruction`，在设置页可编辑与预览。
 
 ## 十五、风险与缓解
 

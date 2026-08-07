@@ -13,7 +13,7 @@ import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
-import { desc, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 
 import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -22,6 +22,7 @@ import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import {
+  attachments,
   challengeRemote,
   challenges,
   events,
@@ -29,13 +30,17 @@ import {
   runs,
 } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
-import { isTargetCapable } from "../platforms/challenge-state"
+import {
+  isPlatformIntegrated,
+  isTargetCapable,
+} from "../platforms/challenge-state"
 import { getProviderConnections } from "../providers/public"
 import type { ContainerManager } from "../run/container/container-manager"
 import { createToolboxContainer } from "../run/container/container-manager"
 import { createRunModelRuntime, resolveRunModel } from "../run/model-runtime"
 import type { RunService } from "../run/service"
-import { canLaunchRun, countRunningRuns, countTargetRuns } from "./guard"
+import { renderOrchestratorSystemPrompt } from "../settings/prompt-templates"
+import { canLaunchRun, countRunningRuns, countTargetChallenges } from "./guard"
 import { createOrchestratorQueries, type OrchestratorQueries } from "./queries"
 import {
   findExistingOrchestratorSessionId,
@@ -43,12 +48,15 @@ import {
   type OrchestratorAgentSettings,
 } from "./session"
 import {
+  type ChallengeDetail,
   type ChallengeDigest,
   createOrchestratorTools,
   flattenEntryText,
+  LIST_RUNS_ROW_LIMIT,
   type OrchestratorToolContext,
   type ReadRunResult,
   type RunDigest,
+  type RunListItem,
 } from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -163,6 +171,88 @@ export function buildOrchestratorToolContext(
       })
     },
 
+    getChallenge(challengeId): ChallengeDetail | { reason: string } {
+      const row = db
+        .select({ challenge: challenges, remote: challengeRemote })
+        .from(challenges)
+        .leftJoin(
+          challengeRemote,
+          eq(challenges.id, challengeRemote.challengeId)
+        )
+        .where(eq(challenges.id, challengeId))
+        .get()
+      if (!row) return { reason: "Challenge not found" }
+      if (row.challenge.eventId !== eventId)
+        return { reason: "Challenge belongs to another event" }
+      const chRuns = db
+        .select()
+        .from(runs)
+        .where(eq(runs.challengeId, challengeId))
+        .all()
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+      const remote = row.remote
+      const targetRows =
+        remote && remote.targetInfo ? safeParseTargets(remote.targetInfo) : []
+      const files = db
+        .select({ name: attachments.originalName, size: attachments.size })
+        .from(attachments)
+        .where(eq(attachments.challengeId, challengeId))
+        .orderBy(attachments.createdAt, attachments.id)
+        .all()
+      return {
+        id: row.challenge.id,
+        name: row.challenge.name,
+        category: row.challenge.category,
+        points: row.challenge.points,
+        targetCapable: isTargetCapable(remote ?? undefined),
+        remoteSolved: remote?.solved ?? false,
+        hasRunningRun: chRuns.some((r) => r.status === "running"),
+        lastRunStatus: chRuns[0]?.status ?? null,
+        lastRunSummary: chRuns[0]?.summary ?? null,
+        attempts: chRuns.length,
+        description: row.challenge.description,
+        platformIntegrated: isPlatformIntegrated(remote ?? undefined),
+        available: remote?.available ?? false,
+        attachments: files,
+        targets: targetRows,
+        runningRuns: chRuns.filter((r) => r.status === "running").length,
+        idleRuns: chRuns.filter((r) => r.status === "idle").length,
+        closedRuns: chRuns.filter((r) => r.status === "closed").length,
+      }
+    },
+
+    listRuns(opts): RunListItem[] {
+      const rows = db
+        .select({ run: runs, challenge: challenges })
+        .from(runs)
+        .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+        .where(eq(challenges.eventId, eventId))
+        .orderBy(desc(runs.updatedAt))
+        .all()
+      const filtered = rows.filter(({ run }) => {
+        if (opts?.status && run.status !== opts.status) return false
+        if (opts?.challengeId && run.challengeId !== opts.challengeId)
+          return false
+        return true
+      })
+      return filtered
+        .slice(0, LIST_RUNS_ROW_LIMIT)
+        .map(({ run, challenge }) => ({
+          id: run.id,
+          challengeId: run.challengeId,
+          challengeName: challenge.name,
+          status: run.status,
+          source: run.source,
+          hasFlag: Boolean(run.flag),
+          summary: run.summary,
+          error: run.error,
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+          completedAt: run.completedAt,
+          deadlineAt: run.deadlineAt,
+        }))
+    },
+
     async startRun(input) {
       const r = getRow()
       const verdict = canLaunchRun(db, eventId, input.challengeId, {
@@ -220,6 +310,54 @@ export function buildOrchestratorToolContext(
         return { status: target.status, reason: "Run is not running" }
       try {
         const updated = await runService.stop(runId)
+        return { status: updated.status }
+      } catch (error) {
+        return {
+          status: "rejected",
+          reason: error instanceof Error ? error.message : String(error),
+        }
+      }
+    },
+
+    async messageRun(runId, input) {
+      const target = db.select().from(runs).where(eq(runs.id, runId)).get()
+      if (!target) return { status: "rejected", reason: "Run not found" }
+      const challenge = db
+        .select()
+        .from(challenges)
+        .where(eq(challenges.id, target.challengeId))
+        .get()
+      if (challenge?.eventId !== eventId)
+        return { status: "rejected", reason: "Run belongs to another event" }
+      // Restoring a closed run (→ running) consumes a global concurrency
+      // slot, so honor the same cap start_run does; idle/running messages
+      // reclaim a slot this run already holds and skip the check.
+      if (target.status === "closed") {
+        const cap = get(getSettings(), "scheduler.maxConcurrentRuns")
+        if (countRunningRuns(db) >= cap)
+          return {
+            status: "rejected",
+            reason: `Concurrency full — close or wait for a run first (cap ${cap})`,
+          }
+      }
+      try {
+        const updated = await runService.sendMessage(runId, input)
+        return { status: updated.status }
+      } catch (error) {
+        return {
+          status: "rejected",
+          reason: error instanceof Error ? error.message : String(error),
+        }
+      }
+    },
+
+    async closeRun(runId) {
+      const target = db.select().from(runs).where(eq(runs.id, runId)).get()
+      if (!target) return { status: "rejected", reason: "Run not found" }
+      if (target.status === "closed")
+        return { status: "closed", reason: "Run is already closed" }
+      try {
+        const updated = await runService.closeRun(runId)
         return { status: updated.status }
       } catch (error) {
         return {
@@ -291,17 +429,38 @@ export function buildOrchestratorToolContext(
         hasFlag: Boolean(run.flag),
         createdAt: run.createdAt,
         updatedAt: run.updatedAt,
+        deadlineAt: run.deadlineAt,
       }))
       return {
         running: countRunningRuns(db),
         maxConcurrentRuns: get(getSettings(), "scheduler.maxConcurrentRuns"),
-        inflightTargets: countTargetRuns(db, eventId),
+        inflightTargets: countTargetChallenges(db, eventId),
         maxConcurrentTargets: r.maxConcurrentTargets,
         runs: digest,
       }
     },
   }
   return ctx
+}
+
+/** Parse challenge_remote.target_info (a JSON array of {name, services}).
+ * Defensive: bad shapes yield [] rather than throwing into the tool path. */
+function safeParseTargets(raw: string): { name: string; services: string[] }[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((t) => {
+      if (!t || typeof t !== "object") return []
+      const o = t as { name?: unknown; services?: unknown }
+      if (typeof o.name !== "string") return []
+      const services = Array.isArray(o.services)
+        ? o.services.filter((s): s is string => typeof s === "string")
+        : []
+      return [{ name: o.name, services }]
+    })
+  } catch {
+    return []
+  }
 }
 
 export function createOrchestratorService(options: OrchestratorServiceOptions) {
@@ -433,7 +592,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
         options.getSettings(),
         "scheduler.maxConcurrentRuns"
       ),
-      inflightTargets: countTargetRuns(db, eventId),
+      inflightTargets: countTargetChallenges(db, eventId),
       maxConcurrentTargets: r.maxConcurrentTargets,
     }
   }
@@ -471,26 +630,16 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
   }
 
   /** Render the orchestrator system prompt (role + instruction + tool guide). */
-  function buildSystemPrompt(instruction: string): string {
-    return [
-      "You are the AegisX orchestrator — the scheduling brain for a CTF event. You do not solve challenges yourself; you manage solver runs.",
-      "",
-      "Your job: decide which challenges to work on, when to start/stop/restart runs, and how long each run gets. Review solver progress and adapt.",
-      "",
-      "The user's instruction (your strategic direction):",
-      '"""',
-      instruction.trim() ||
-        "(none — proceed by your best judgment, or ask the user)",
-      '"""',
-      "",
-      "Tools:",
-      "- list_challenges / start_run / stop_run / read_run / get_status (see each tool's description).",
-      "- File tools (read/bash/edit/write/grep/find/ls): keep strategy and state notes in your workspace (e.g. STRATEGY.md, STATE.md, DECISIONS.md).",
-      "",
-      "Hard guardrails (server-enforced, you cannot violate): global run concurrency, per-event target slots, no duplicate run on a challenge. Everything else — priority, retry, whether to redo solved challenges — is your judgment, guided by the instruction.",
-      "",
-      "You are woken on events: a run went idle (finished a turn), a flag was accepted, or a run hit its halfway / time limit. Act on each wake-up: read_run to assess, then start/stop/restart as needed. Be decisive and concise. Do not poll repeatedly — wait for events.",
-    ].join("\n")
+  /** Render the orchestrator system prompt from the configurable template
+   * (settings: prompts.orchestratorSystem), injecting the event + the user's
+   * instruction. Mirrors the solver's template path. */
+  function buildSystemPrompt(eventId: string, instruction: string): string {
+    const ev = db.select().from(events).where(eq(events.id, eventId)).get()
+    const template = get(options.getSettings(), "prompts.orchestratorSystem")
+    return renderOrchestratorSystemPrompt(template, {
+      event: { id: eventId, name: ev?.name ?? eventId },
+      instruction: instruction.trim(),
+    })
   }
 
   function buildInitialPrompt(eventId: string): string {
@@ -576,7 +725,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
           model: sdkModel,
           thinkingLevel: row.thinkingLevel as ThinkingLevel,
           agentSettings: agentSettings(),
-          systemPrompt: buildSystemPrompt(row.instruction),
+          systemPrompt: buildSystemPrompt(eventId, row.instruction),
           extraTools: mgmt,
           extraToolNames: mgmt.map((tool) => tool.name),
           ...(existingSessionId

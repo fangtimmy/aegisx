@@ -9,7 +9,9 @@ type Database = ReturnType<typeof createDatabase>["db"]
 export type GuardLimits = {
   /** Global cap on simultaneously running solver runs (local resources). */
   maxConcurrentRuns: number
-  /** Per-event cap on target-capable challenges running at once (platform limit). */
+  /** Per-event cap on DISTINCT target-capable challenges attacked at once
+   * (platform target-instance limit). Multiple runs on the same challenge
+   * share one slot. */
   maxConcurrentTargets: number
 }
 
@@ -20,8 +22,9 @@ export type GuardVerdict = { ok: true } | { ok: false; reason: string }
  * These are physical / logical constraints that fail noisily if exceeded:
  *
  *   1. global running runs ≤ maxConcurrentRuns (local container resources)
- *   2. target-capable challenges running ≤ maxConcurrentTargets (platform limit)
- *   3. a challenge that already has a running run cannot be started again
+ *   2. DISTINCT target-capable challenges running ≤ maxConcurrentTargets
+ *      (platform target-instance limit). A target is a per-challenge instance;
+ *      multiple runs on the same target-capable challenge share one slot.
  *
  * Preference-style filters (already-solved, excluded, priority) are
  * intentionally NOT enforced here — those belong to the orchestrator's
@@ -47,16 +50,6 @@ export function canLaunchRun(
     return { ok: false, reason: "Challenge does not belong to this event" }
   }
 
-  // (3) No second run while another for the same challenge is running.
-  const activeForChallenge = db
-    .select({ id: runs.id })
-    .from(runs)
-    .where(and(eq(runs.challengeId, challengeId), eq(runs.status, "running")))
-    .get()
-  if (activeForChallenge) {
-    return { ok: false, reason: "This challenge already has a running run" }
-  }
-
   // (1) Global running-run cap.
   const runningCount = countRunningRuns(db)
   if (runningCount >= limits.maxConcurrentRuns) {
@@ -66,15 +59,23 @@ export function canLaunchRun(
     }
   }
 
-  // (2) Target-capable concurrency (platform instance limit). Conservative
-  // accounting: a running run on a target-capable, unsolved challenge holds a
-  // target slot, because the solver starts its target lazily mid-run.
+  // (2) Target-capable concurrency, counted as DISTINCT challenges. Launching
+  // another run on a challenge that already has a running run does NOT consume
+  // a new target slot (it shares the same target instance) — only a run on a
+  // target-capable challenge with no other running run adds a slot.
   if (isTargetCapable(row.remote ?? undefined) && !row.remote?.solved) {
-    const inflightTargets = countTargetRuns(db, eventId)
-    if (inflightTargets >= limits.maxConcurrentTargets) {
-      return {
-        ok: false,
-        reason: `Target slots full (${inflightTargets}/${limits.maxConcurrentTargets} target-capable challenges running)`,
+    const hasRunning = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.challengeId, challengeId), eq(runs.status, "running")))
+      .get()
+    if (!hasRunning) {
+      const activeTargets = countTargetChallenges(db, eventId)
+      if (activeTargets >= limits.maxConcurrentTargets) {
+        return {
+          ok: false,
+          reason: `Target slots full (${activeTargets}/${limits.maxConcurrentTargets} target-capable challenges running)`,
+        }
       }
     }
   }
@@ -92,19 +93,27 @@ export function countRunningRuns(db: Database): number {
 }
 
 /**
- * Per-event count of running runs on target-capable, unsolved challenges
- * (guardrail 2 + status tool). Conservative: counts any running run whose
- * challenge could hold a target slot.
+ * Per-event count of DISTINCT target-capable, unsolved challenges with at
+ * least one running run (guardrail 2 + status tool). A target is a
+ * per-challenge platform instance, so N parallel runs on one such challenge
+ * count as 1 here.
  */
-export function countTargetRuns(db: Database, eventId: string): number {
+export function countTargetChallenges(db: Database, eventId: string): number {
   const rows = db
-    .select({ remote: challengeRemote })
+    .select({
+      challengeId: runs.challengeId,
+      remote: challengeRemote,
+    })
     .from(runs)
     .innerJoin(challenges, eq(runs.challengeId, challenges.id))
     .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
     .where(and(eq(runs.status, "running"), eq(challenges.eventId, eventId)))
     .all()
-  return rows.filter(
-    (r) => r.remote !== null && isTargetCapable(r.remote) && !r.remote.solved
-  ).length
+  const distinct = new Set<string>()
+  for (const r of rows) {
+    if (r.remote && isTargetCapable(r.remote) && !r.remote.solved) {
+      distinct.add(r.challengeId)
+    }
+  }
+  return distinct.size
 }

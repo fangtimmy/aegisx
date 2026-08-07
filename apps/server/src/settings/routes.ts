@@ -25,9 +25,13 @@ import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES,
   PROMPT_TEMPLATE_VARIABLES,
   previewInitialPrompt,
+  previewOrchestratorSystemPrompt,
   previewSystemPrompt,
+  sampleOrchestratorPromptContext,
   samplePromptContext,
 } from "./prompt-templates"
 
@@ -37,6 +41,7 @@ const promptPreviewInput = Type.Object(
       Type.Literal("mainSystemPrompt"),
       Type.Literal("childSystemPrompt"),
       Type.Literal("initialPrompt"),
+      Type.Literal("orchestratorSystemPrompt"),
     ]),
     template: Type.String({ maxLength: 100_000 }),
   },
@@ -52,8 +57,11 @@ export function settingsResponse(configStore: ConfigStore) {
         "prompts.mainSystem": DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
         "prompts.childSystem": DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
         "prompts.initial": DEFAULT_INITIAL_PROMPT_TEMPLATE,
+        "prompts.orchestratorSystem":
+          DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
       },
       promptVariables: [...PROMPT_TEMPLATE_VARIABLES],
+      orchestratorPromptVariables: [...ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES],
     },
   }
 }
@@ -76,7 +84,11 @@ export function registerSettingsRoutes(
     },
   }
   const previewPrompt = (
-    kind: "mainSystemPrompt" | "childSystemPrompt" | "initialPrompt",
+    kind:
+      | "mainSystemPrompt"
+      | "childSystemPrompt"
+      | "initialPrompt"
+      | "orchestratorSystemPrompt",
     template: string
   ) => {
     if (kind === "mainSystemPrompt") {
@@ -85,6 +97,12 @@ export function registerSettingsRoutes(
     if (kind === "childSystemPrompt") {
       return previewSystemPrompt(template, childSampleContext)
     }
+    if (kind === "orchestratorSystemPrompt") {
+      return previewOrchestratorSystemPrompt(
+        template,
+        sampleOrchestratorPromptContext
+      )
+    }
     return previewInitialPrompt(template, samplePromptContext)
   }
 
@@ -92,6 +110,10 @@ export function registerSettingsRoutes(
     previewPrompt("mainSystemPrompt", get(settings, "prompts.mainSystem"))
     previewPrompt("childSystemPrompt", get(settings, "prompts.childSystem"))
     previewPrompt("initialPrompt", get(settings, "prompts.initial"))
+    previewPrompt(
+      "orchestratorSystemPrompt",
+      get(settings, "prompts.orchestratorSystem")
+    )
   }
 
   const transferModel = (model: ProviderModelData) => ({

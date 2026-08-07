@@ -53,11 +53,15 @@ import { cn } from "@/lib/utils"
 
 const PROMPT_KIND: Record<
   string,
-  "mainSystemPrompt" | "childSystemPrompt" | "initialPrompt"
+  | "mainSystemPrompt"
+  | "childSystemPrompt"
+  | "initialPrompt"
+  | "orchestratorSystemPrompt"
 > = {
   "prompts.mainSystem": "mainSystemPrompt",
   "prompts.childSystem": "childSystemPrompt",
   "prompts.initial": "initialPrompt",
+  "prompts.orchestratorSystem": "orchestratorSystemPrompt",
 }
 
 function matchesQuery(def: SettingDef, query: string) {
@@ -545,7 +549,11 @@ export function SchemaSettingsForm({
                       disabled={save.isPending}
                       onChange={(next) => scheduleSave(def.key, next)}
                       value={typeof value === "string" ? value : ""}
-                      variables={data.meta.promptVariables}
+                      variables={
+                        def.key === "prompts.orchestratorSystem"
+                          ? data.meta.orchestratorPromptVariables
+                          : data.meta.promptVariables
+                      }
                     />
                   </SettingRow>
                 )

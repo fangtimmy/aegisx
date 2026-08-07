@@ -2,6 +2,7 @@ import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
 } from "./prompt-defaults"
 import type { ThinkingLevel } from "./thinking"
 import { isThinkingLevel } from "./thinking"
@@ -88,6 +89,7 @@ export type FlatSettings = {
   "prompts.mainSystem": string
   "prompts.childSystem": string
   "prompts.initial": string
+  "prompts.orchestratorSystem": string
 }
 
 export type SettingKey = keyof FlatSettings
@@ -318,6 +320,18 @@ export const SETTINGS_DEFS: SettingDef[] = [
       "主 agent 派生的子 pi 进程的基础系统提示词（参见 aegisx-child 技能）。留空即保存为空（不回退到内置默认值）。",
     widget: "prompt",
     order: 20,
+  },
+  {
+    key: "prompts.orchestratorSystem",
+    type: "string",
+    default: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+    maxLength: 100_000,
+    group: "提示词",
+    title: "编排器系统提示词",
+    description:
+      "per-event 编排器（调度大脑）的基础系统提示词。留空即保存为空（不回退到内置默认值）。",
+    widget: "prompt",
+    order: 25,
   },
   {
     key: "prompts.initial",

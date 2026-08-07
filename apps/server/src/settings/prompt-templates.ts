@@ -3,6 +3,7 @@ import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
 } from "@aegisx/shared/prompt-defaults"
 import Handlebars from "handlebars"
 
@@ -10,6 +11,7 @@ export {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
 }
 
 export const PROMPT_TEMPLATE_VARIABLES = [
@@ -50,6 +52,7 @@ export type PromptTemplates = {
   mainSystemPromptTemplate: string
   childSystemPromptTemplate: string
   initialPromptTemplate: string
+  orchestratorSystemPromptTemplate: string
 }
 
 export type PromptPreviewSegment = {
@@ -188,11 +191,42 @@ function previewSegments(value: string): PromptPreviewSegment[] {
     .map((segment, id) => ({ ...segment, id }))
 }
 
+/** Variables available to the orchestrator system-prompt template. The
+ * orchestrator has no challenge/run/agent context — only the owning event and
+ * the user's natural-language instruction. */
+export const ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES = [
+  "event.id",
+  "event.name",
+  "instruction",
+] as const
+
+export type OrchestratorPromptContext = {
+  event: { id: string; name: string }
+  instruction: string
+}
+
+export const sampleOrchestratorPromptContext: OrchestratorPromptContext = {
+  event: { id: "sample-event", name: "Sample CTF" },
+  instruction: "Hit crypto first; leave pwn for last.",
+}
+
 export function renderSystemPrompt(
   template: string,
   context: PromptTemplateContext
 ) {
   return render(template, context)
+}
+
+export function renderOrchestratorSystemPrompt(
+  template: string,
+  context: OrchestratorPromptContext
+) {
+  return handlebars
+    .compile(template, { noEscape: true, strict: true })(context, {
+      allowProtoMethodsByDefault: false,
+      allowProtoPropertiesByDefault: false,
+    })
+    .trim()
 }
 
 export function renderInitialPrompt(
@@ -214,6 +248,18 @@ export function previewSystemPrompt(
   )
 }
 
+export function previewOrchestratorSystemPrompt(
+  template: string,
+  context: OrchestratorPromptContext
+) {
+  return previewSegments(
+    renderOrchestratorSystemPrompt(
+      template,
+      markPreviewValues(context) as OrchestratorPromptContext
+    )
+  )
+}
+
 export function previewInitialPrompt(
   template: string,
   context: PromptTemplateContext
@@ -230,6 +276,7 @@ export function resolvePromptTemplates(settings: {
   "prompts.mainSystem"?: string
   "prompts.childSystem"?: string
   "prompts.initial"?: string
+  "prompts.orchestratorSystem"?: string
 }): PromptTemplates {
   return {
     mainSystemPromptTemplate:
@@ -238,5 +285,8 @@ export function resolvePromptTemplates(settings: {
       settings["prompts.childSystem"] ?? DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
     initialPromptTemplate:
       settings["prompts.initial"] ?? DEFAULT_INITIAL_PROMPT_TEMPLATE,
+    orchestratorSystemPromptTemplate:
+      settings["prompts.orchestratorSystem"] ??
+      DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
   }
 }
