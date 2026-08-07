@@ -1,18 +1,26 @@
 {
   "name": "aegisx",
   "private": true,
-  "workspaces": ["apps/*"],
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "dev": "bun run dev:server & bun run dev:web & wait",
     "dev:server": "bun run --filter @aegisx/server dev",
     "dev:web": "bun run --filter @aegisx/web dev",
-    "check": "bun run --filter '@aegisx/*' check",
+    "check": "oxfmt package.json .oxfmtrc.json && bun run --filter '@aegisx/*' check",
     "test": "bun run --filter '@aegisx/*' test",
     "build": "bun run --filter @aegisx/web build",
     "db:generate": "bun run --filter @aegisx/server db:generate"
   },
+  "devDependencies": {
+    "oxfmt": "0.62.0",
+    "oxlint": "1.76.0",
+    "oxlint-tailwindcss": "^1.7.1",
+    "oxlint-tsgolint": "^7.0.2001"
+  },
   "overrides": {
-    "@earendil-works/pi-coding-agent": "0.83.0",
-    "@earendil-works/pi-ai": "0.83.0"
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0"
   }
 }

@@ -8,6 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
+
 import type { AgentSummary, RunPublic, ThinkingLevel } from "@/api"
 import { keys, runsApi } from "@/api"
 import { Button } from "@/components/ui/button"
@@ -32,6 +33,7 @@ import { Tabs, TabsList, TabsTab } from "@/components/ui/tabs"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
+
 import { AgentActivityBadge } from "./agent-activity-badge"
 import { AgentStatusIcon } from "./agent-status-icon"
 import { ModelThinkingSwitcher } from "./model-switcher"
@@ -175,7 +177,7 @@ export function Conversation({
         </ScrollArea>
       </div>
       {disconnected && running && (
-        <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-muted-foreground text-xs">
+        <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
           <LoaderCircle className="size-3 animate-spin" /> 正在重新连接…
         </div>
       )}
@@ -466,7 +468,7 @@ function SteerQueue({
           >
             <span
               className={cn(
-                "shrink-0 rounded px-1.5 py-0.5 font-medium text-xs",
+                "shrink-0 rounded px-1.5 py-0.5 text-xs font-medium",
                 row.role === "steering"
                   ? "bg-info/15 text-info"
                   : "bg-secondary text-secondary-foreground"
@@ -493,7 +495,7 @@ function SteerQueue({
               />
             ) : (
               <button
-                className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-muted-foreground text-xs hover:bg-secondary"
+                className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-xs text-muted-foreground hover:bg-secondary"
                 onClick={() => setEdit(row)}
                 title="点击编辑"
                 type="button"

@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react"
+
 import { CodePreview } from "@/components/code-preview"
 import {
   isRecord,
@@ -86,7 +87,7 @@ function ToolScroll({
 
 function EmptyHint({ children }: { children: string }) {
   return (
-    <p className="px-2.5 py-2 font-mono text-muted-foreground text-xs">
+    <p className="px-2.5 py-2 font-mono text-xs text-muted-foreground">
       {children}
     </p>
   )
@@ -203,7 +204,7 @@ function DiffPreview({ diff }: { diff: string }) {
           >
             <span
               aria-hidden
-              className="select-none pr-1 text-right tabular-nums text-muted-foreground/70"
+              className="pr-1 text-right text-muted-foreground/70 tabular-nums select-none"
               style={{ minWidth: `${lineWidth}ch` }}
             >
               {row.line ?? ""}
@@ -211,14 +212,14 @@ function DiffPreview({ diff }: { diff: string }) {
             <span
               aria-hidden
               className={cn(
-                "select-none text-center opacity-70",
+                "text-center opacity-70 select-none",
                 row.kind === "add" && "text-emerald-700 dark:text-emerald-400",
                 row.kind === "del" && "text-red-700 dark:text-red-400"
               )}
             >
               {row.kind === "add" ? "+" : row.kind === "del" ? "−" : " "}
             </span>
-            <span className="min-w-0 whitespace-pre-wrap break-words pr-2.5 [overflow-wrap:anywhere]">
+            <span className="min-w-0 pr-2.5 wrap-anywhere whitespace-pre-wrap">
               {row.text || " "}
             </span>
           </div>
@@ -268,7 +269,7 @@ function BashCommand({ command }: { command: string }) {
   }, [command, theme])
   return (
     <div className="flex items-start gap-2 border-b px-2.5 py-1.5 font-mono text-xs leading-5">
-      <span aria-hidden className="select-none text-muted-foreground">
+      <span aria-hidden className="text-muted-foreground select-none">
         $
       </span>
       <div
@@ -276,7 +277,7 @@ function BashCommand({ command }: { command: string }) {
           "min-w-0 flex-1",
           "[&_pre]:m-0 [&_pre]:border-0 [&_pre]:bg-transparent! [&_pre]:p-0 [&_pre]:font-mono",
           "[&_code]:block [&_code]:font-mono",
-          "[&_.line]:whitespace-pre-wrap [&_.line]:break-words [&_.line]:[overflow-wrap:anywhere]"
+          "[&_.line]:wrap-anywhere [&_.line]:whitespace-pre-wrap"
         )}
         // biome-ignore lint/security/noDangerouslySetInnerHtml: Shiki HTML / escaped fallback
         dangerouslySetInnerHTML={{ __html: html }}
@@ -314,7 +315,7 @@ function BashBody({
       ) : (
         <pre
           className={cn(
-            "whitespace-pre-wrap break-words p-2.5 font-mono text-xs leading-5 text-foreground [overflow-wrap:anywhere]",
+            "p-2.5 font-mono text-xs leading-5 wrap-anywhere whitespace-pre-wrap text-foreground",
             isError && "text-destructive"
           )}
         >
@@ -378,7 +379,7 @@ export function ToolCustomBody({ tool }: { tool: ToolBlock }) {
         <ToolScroll>
           <pre
             className={cn(
-              "whitespace-pre-wrap break-words p-2.5 font-mono text-xs leading-5",
+              "p-2.5 font-mono text-xs leading-5 wrap-break-word whitespace-pre-wrap",
               isError && "text-destructive"
             )}
           >

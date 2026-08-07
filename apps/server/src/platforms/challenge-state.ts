@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm"
+
 import type { createDatabase } from "../db"
 import { challengeRemote } from "../db/schema"
 

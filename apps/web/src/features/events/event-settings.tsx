@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Trash2, TriangleAlert } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
+
 import { type EventInput, type EventSummary, eventsApi, keys } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -19,6 +20,7 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
+
 import { PlatformBinding } from "./platform-binding"
 
 export function EventSettings({ event }: { event: EventSummary }) {
@@ -53,14 +55,14 @@ export function EventSettings({ event }: { event: EventSummary }) {
   return (
     <div className="max-w-3xl">
       <header className="mb-6">
-        <h1 className="font-semibold text-2xl">赛事设置</h1>
-        <p className="mt-1 text-muted-foreground text-sm">
+        <h1 className="text-2xl font-semibold">赛事设置</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           管理本赛事及其平台连接。
         </p>
       </header>
 
       <section className="border-t py-6" aria-labelledby="event-general">
-        <h2 className="font-medium text-base" id="event-general">
+        <h2 className="text-base font-medium" id="event-general">
           常规
         </h2>
         <form
@@ -103,10 +105,10 @@ export function EventSettings({ event }: { event: EventSummary }) {
       </section>
 
       <section className="border-t py-6" aria-labelledby="event-prompt-hint">
-        <h2 className="font-medium text-base" id="event-prompt-hint">
+        <h2 className="text-base font-medium" id="event-prompt-hint">
           提示词指令
         </h2>
-        <p className="mt-1 text-muted-foreground text-sm">
+        <p className="mt-1 text-sm text-muted-foreground">
           追加到本赛事每个 agent 提示词末尾的额外指令——flag
           格式、约定、常见陷阱。
         </p>
@@ -142,10 +144,10 @@ export function EventSettings({ event }: { event: EventSummary }) {
       </section>
 
       <section className="border-t py-6" aria-labelledby="event-platform">
-        <h2 className="font-medium text-base" id="event-platform">
+        <h2 className="text-base font-medium" id="event-platform">
           CTF 平台
         </h2>
-        <p className="mt-1 mb-4 text-muted-foreground text-sm">
+        <p className="mt-1 mb-4 text-sm text-muted-foreground">
           连接本赛事以导入题目、附件和目标。
         </p>
         <PlatformBinding event={event} />
@@ -153,7 +155,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
 
       <section className="border-t py-6" aria-labelledby="event-danger">
         <h2
-          className="font-medium text-destructive text-base"
+          className="text-base font-medium text-destructive"
           id="event-danger"
         >
           危险区域

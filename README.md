@@ -38,10 +38,10 @@ Each run has one main agent and may spawn background child agents (`spawn_agent`
 ## Checks
 
 ```sh
-bun run check        # biome + tsc across all workspaces
+bun run check        # oxlint (lint + type-check) + oxfmt (format) across all workspaces
 bun run test         # tests across all workspaces
 bun run build        # web production build
 bun run db:generate  # server drizzle migrations
 ```
 
-All run from the repo root. The workspace is a Bun monorepo: `apps/server` (`@aegisx/server`), `apps/web` (`@aegisx/web`), and `apps/shared` (`@aegisx/shared`, wire types) are linked as workspace packages; shared model-provider versions are pinned centrally via `overrides` in the root `package.json`.
+All run from the repo root. Lint and formatting are provided by the oxc toolchain: `oxlint` (with the native `oxlint-tailwindcss` plugin for Tailwind v4 class checking and type-aware/`--type-check` via `tsgolint`) and `oxfmt` (with built-in import, Tailwind class, and package.json sorting). The workspace is a Bun monorepo: `apps/server` (`@aegisx/server`), `apps/web` (`@aegisx/web`), and `apps/shared` (`@aegisx/shared`, wire types) are linked as workspace packages; shared model-provider versions are pinned centrally via `overrides` in the root `package.json`.

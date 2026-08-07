@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query"
+
 import { keys, type PlatformType } from "@/api"
 
 export const platformLabels: Record<PlatformType, string> = {

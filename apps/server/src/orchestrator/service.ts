@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs"
 import { join, relative } from "node:path"
+
 import type {
   FlatSettings,
   OrchestratorConfigInput,
@@ -16,6 +17,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import { desc, eq } from "drizzle-orm"
+
 import type { HostAgentSession } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"

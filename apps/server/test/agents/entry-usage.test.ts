@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
+
 import {
   accumulateEntryUsage,
   entryUsageOf,

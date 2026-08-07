@@ -10,6 +10,7 @@ import {
   Info,
 } from "lucide-react"
 import { useCallback, useRef, useState } from "react"
+
 import { keys, type RunFileEntry, runsApi } from "@/api"
 import { CodePreview } from "@/components/code-preview"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -107,7 +108,7 @@ function DirectoryEntry({
       <CollapsiblePanel>
         {directory.isPending && (
           <div
-            className="flex items-center gap-2 py-1 text-muted-foreground text-xs"
+            className="flex items-center gap-2 py-1 text-xs text-muted-foreground"
             role="status"
             style={{ paddingLeft: `${depth * 16 + 40}px` }}
           >
@@ -117,7 +118,7 @@ function DirectoryEntry({
         )}
         {directory.error && (
           <p
-            className="py-1 text-destructive-foreground text-xs"
+            className="py-1 text-xs text-destructive-foreground"
             role="alert"
             style={{ paddingLeft: `${depth * 16 + 40}px` }}
           >
@@ -201,11 +202,11 @@ export function FilesWorkspace({
         className="flex min-h-0 shrink-0 flex-col pr-2"
         style={{ width: sidebarWidth }}
       >
-        <h3 className="mb-2 font-medium text-sm">任务文件</h3>
+        <h3 className="mb-2 text-sm font-medium">任务文件</h3>
         <ScrollArea className="flex-1" scrollFade>
           {root.isPending && (
             <div
-              className="flex items-center gap-2 text-muted-foreground text-xs"
+              className="flex items-center gap-2 text-xs text-muted-foreground"
               role="status"
             >
               <Spinner aria-hidden="true" />
@@ -213,13 +214,13 @@ export function FilesWorkspace({
             </div>
           )}
           {root.error && (
-            <p className="text-destructive-foreground text-xs" role="alert">
+            <p className="text-xs text-destructive-foreground" role="alert">
               {root.error.message}
             </p>
           )}
           {root.data?.type === "directory" &&
             root.data.entries.length === 0 && (
-              <p className="text-muted-foreground text-xs">任务目录为空。</p>
+              <p className="text-xs text-muted-foreground">任务目录为空。</p>
             )}
           {root.data?.type === "directory" &&
             root.data.entries.map((entry) => (
@@ -240,17 +241,17 @@ export function FilesWorkspace({
         onPointerMove={onHandlePointerMove}
         onPointerUp={onHandlePointerUp}
       >
-        <div className="absolute inset-y-0 -left-1 -right-1" />
+        <div className="absolute inset-y-0 -right-1 -left-1" />
         <div className="absolute inset-y-0 left-0 w-0.5 bg-transparent transition-colors group-hover:bg-primary/40 data-[active]:bg-primary" />
       </div>
       <section className="flex min-h-0 min-w-0 flex-1 flex-col pl-4">
         <div className="mb-2 flex min-h-8 items-start justify-between gap-2">
           <div className="flex min-w-0 flex-1 flex-col">
-            <h3 className="truncate font-medium text-sm">
+            <h3 className="truncate text-sm font-medium">
               {selectedPath || "预览"}
             </h3>
             {selected.data?.type === "text" && (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground text-xs">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span>{formatSize(selected.data.size)}</span>
                 <span>修改于 {formatTime(selected.data.modifiedAt)}</span>
                 {selected.data.truncated && <span>预览已截断</span>}
@@ -284,7 +285,7 @@ export function FilesWorkspace({
         )}
         {selected.isPending && selectedPath && (
           <div
-            className="flex items-center gap-2 text-muted-foreground text-sm"
+            className="flex items-center gap-2 text-sm text-muted-foreground"
             role="status"
           >
             <Spinner aria-hidden="true" />

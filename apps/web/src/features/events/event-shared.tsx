@@ -1,4 +1,5 @@
 import { TriangleAlert } from "lucide-react"
+
 import type { Challenge } from "@/api"
 import {
   Alert,

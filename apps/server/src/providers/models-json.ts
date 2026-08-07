@@ -3,6 +3,7 @@ import type {
   ProviderConnection,
   ProviderModel,
 } from "@aegisx/shared/provider"
+
 import { providerApi, type ThinkingLevelMap } from "./builtin-models"
 
 /**

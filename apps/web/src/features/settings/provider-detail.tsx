@@ -1,5 +1,6 @@
 import { CircleAlert, Eye, EyeOff, Trash2 } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
+
 import type { ProviderConnection } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -31,6 +32,7 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Switch } from "@/components/ui/switch"
+
 import { providerTypeLabels } from "./provider-config"
 import { ProviderTypeField } from "./provider-dialog"
 import { ProviderModels } from "./provider-models"

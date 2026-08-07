@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Box, CircleAlert, Clock3, Play, RefreshCw, Square } from "lucide-react"
+
 import type { RunPublic, RunStatus } from "@/api"
 import { challengesApi, keys } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -48,7 +49,7 @@ export function RunOverview({ run }: { run: RunPublic }) {
       {run.targetSupported && <TargetPanel run={run} />}
       <dl className="grid grid-cols-2 gap-x-8 gap-y-4 text-sm">
         <div>
-          <dt className="text-muted-foreground text-xs">状态</dt>
+          <dt className="text-xs text-muted-foreground">状态</dt>
           <dd className="mt-1">
             <Badge variant={statusVariant(run.status)}>
               {runStatusLabel(run.status)}
@@ -56,48 +57,48 @@ export function RunOverview({ run }: { run: RunPublic }) {
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">模型</dt>
-          <dd className="mt-1 break-all font-mono text-xs">
+          <dt className="text-xs text-muted-foreground">模型</dt>
+          <dd className="mt-1 font-mono text-xs break-all">
             {run.provider} / {run.modelName}
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">推理</dt>
+          <dt className="text-xs text-muted-foreground">推理</dt>
           <dd className="mt-1 capitalize">{run.thinkingLevel}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">镜像</dt>
-          <dd className="mt-1 break-all font-mono text-xs">
+          <dt className="text-xs text-muted-foreground">镜像</dt>
+          <dd className="mt-1 font-mono text-xs break-all">
             {run.image || "不可用"}
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">资源</dt>
+          <dt className="text-xs text-muted-foreground">资源</dt>
           <dd className="mt-1 font-mono text-xs">
             {run.cpus} CPU · {run.memoryMb}MB · {run.pidsLimit} PID
           </dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">开始时间</dt>
+          <dt className="text-xs text-muted-foreground">开始时间</dt>
           <dd className="mt-1">{formatTime(run.startedAt)}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">完成时间</dt>
+          <dt className="text-xs text-muted-foreground">完成时间</dt>
           <dd className="mt-1">{formatTime(run.completedAt)}</dd>
         </div>
       </dl>
       {run.usage && (
         <section className="border-t pt-4">
-          <h3 className="mb-2 font-medium text-sm">Token 用量与费用</h3>
+          <h3 className="mb-2 text-sm font-medium">Token 用量与费用</h3>
           <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
             <div>
-              <dt className="text-muted-foreground text-xs">输入</dt>
+              <dt className="text-xs text-muted-foreground">输入</dt>
               <dd className="mt-0.5 font-mono text-xs">
                 {formatTokens(run.usage.input)}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">输出</dt>
+              <dt className="text-xs text-muted-foreground">输出</dt>
               <dd className="mt-0.5 font-mono text-xs">
                 {formatTokens(run.usage.output)}
                 {run.usage.reasoning > 0 && (
@@ -109,18 +110,18 @@ export function RunOverview({ run }: { run: RunPublic }) {
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">缓存</dt>
+              <dt className="text-xs text-muted-foreground">缓存</dt>
               <dd className="mt-0.5 font-mono text-xs">
                 {formatTokens(run.usage.cacheRead)} 读 /{" "}
                 {formatTokens(run.usage.cacheWrite)} 写
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">轮次</dt>
+              <dt className="text-xs text-muted-foreground">轮次</dt>
               <dd className="mt-0.5 font-mono text-xs">{run.usage.turns}</dd>
             </div>
             <div>
-              <dt className="text-muted-foreground text-xs">费用</dt>
+              <dt className="text-xs text-muted-foreground">费用</dt>
               <dd className="mt-0.5 font-mono text-xs">
                 {formatCost(run.usage.cost)}
               </dd>
@@ -130,14 +131,14 @@ export function RunOverview({ run }: { run: RunPublic }) {
       )}
       {(run.summary || run.flag) && (
         <section className="border-t pt-4">
-          <h3 className="mb-2 font-medium text-sm">结果</h3>
+          <h3 className="mb-2 text-sm font-medium">结果</h3>
           {run.summary && (
-            <p className="whitespace-pre-wrap text-sm leading-6">
+            <p className="text-sm leading-6 whitespace-pre-wrap">
               {run.summary}
             </p>
           )}
           {run.flag && (
-            <p className="mt-2 break-all font-mono text-xs">Flag：{run.flag}</p>
+            <p className="mt-2 font-mono text-xs break-all">Flag：{run.flag}</p>
           )}
         </section>
       )}
@@ -187,7 +188,7 @@ function TargetPanel({ run }: { run: RunPublic }) {
   return (
     <section className="border-t pt-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="mr-auto font-medium text-sm">题目目标</h3>
+        <h3 className="mr-auto text-sm font-medium">题目目标</h3>
         <Badge variant={value?.status === "running" ? "success" : "secondary"}>
           {statusLabel}
         </Badge>
@@ -246,12 +247,12 @@ function TargetPanel({ run }: { run: RunPublic }) {
         </div>
       )}
       {value?.expiresAt && (
-        <p className="mt-2 text-muted-foreground text-xs">
+        <p className="mt-2 text-xs text-muted-foreground">
           过期时间 {formatTime(value.expiresAt)}
         </p>
       )}
       {(target.error || action.error) && (
-        <p className="mt-2 text-destructive text-xs">
+        <p className="mt-2 text-xs text-destructive">
           {(target.error ?? action.error)?.message}
         </p>
       )}

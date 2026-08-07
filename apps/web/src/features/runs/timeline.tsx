@@ -27,6 +27,7 @@ import {
   useSyncExternalStore,
 } from "react"
 import { createPortal } from "react-dom"
+
 import { Markdown } from "@/components/markdown"
 import { Button } from "@/components/ui/button"
 import {
@@ -49,6 +50,7 @@ import {
 } from "@/domain/conversation"
 import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
+
 import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
 
 function formatConversationTime(value: string | number) {
@@ -107,7 +109,7 @@ function ToolData({ value }: { value: unknown }) {
   if (rows.length === 0) {
     return (
       <ScrollArea className="h-auto max-h-80" scrollFade scrollbarGutter>
-        <pre className="whitespace-pre-wrap break-words p-2.5 font-mono text-xs leading-5">
+        <pre className="p-2.5 font-mono text-xs leading-5 wrap-break-word whitespace-pre-wrap">
           {formatToolCell(parsed)}
         </pre>
       </ScrollArea>
@@ -121,13 +123,13 @@ function ToolData({ value }: { value: unknown }) {
             {rows.map(([key, item]) => (
               <tr key={key}>
                 <th
-                  className="w-24 px-2.5 py-0.5 text-left align-top font-mono font-medium text-muted-foreground leading-5"
+                  className="w-24 px-2.5 py-0.5 text-left align-top font-mono leading-5 font-medium text-muted-foreground"
                   scope="row"
                 >
                   {key}
                 </th>
                 <td className="min-w-0 px-2.5 py-0.5 align-top">
-                  <pre className="whitespace-pre-wrap break-words font-mono leading-5">
+                  <pre className="font-mono leading-5 wrap-break-word whitespace-pre-wrap">
                     {formatToolCell(item)}
                   </pre>
                 </td>
@@ -219,13 +221,13 @@ function ToolActivity({
         />
         <span className="min-w-0 flex-1 truncate">{toolSummary(tool)}</span>
         {elapsed !== null && (
-          <span className="shrink-0 text-muted-foreground text-xs">
+          <span className="shrink-0 text-xs text-muted-foreground">
             {formatDuration(elapsed)}
           </span>
         )}
         {label && (
           <span
-            className="shrink-0 text-destructive text-xs"
+            className="shrink-0 text-xs text-destructive"
             title={tool.terminalMessage ?? undefined}
           >
             {label}
@@ -248,7 +250,7 @@ function ToolActivity({
               <>
                 {tool.args !== null && tool.args !== undefined && (
                   <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)]">
-                    <div className="flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs">
+                    <div className="flex justify-center border-r py-2.5 font-mono text-xs font-semibold text-muted-foreground">
                       I
                     </div>
                     <ToolData value={tool.args} />
@@ -258,7 +260,7 @@ function ToolActivity({
                   <div className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] border-t">
                     <div
                       className={cn(
-                        "flex justify-center border-r py-2.5 font-mono font-semibold text-muted-foreground text-xs",
+                        "flex justify-center border-r py-2.5 font-mono text-xs font-semibold text-muted-foreground",
                         tool.status === "error" && "text-destructive"
                       )}
                     >
@@ -296,12 +298,12 @@ const ConversationRow = memo(function ConversationRow({
       item.kind === "compact_start" || item.kind === "compact_end"
     const Icon = isCompaction ? Shrink : RotateCw
     return (
-      <article className="flex items-center gap-2 py-3 text-muted-foreground text-xs">
+      <article className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
         <span aria-hidden="true" className="h-px flex-1 bg-border" />
         <Icon aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="font-medium">{item.title}</span>
         {item.detail && (
-          <span className="min-w-0 max-w-[60%] truncate">{item.detail}</span>
+          <span className="max-w-[60%] min-w-0 truncate">{item.detail}</span>
         )}
         {time && <time className="shrink-0">{time}</time>}
         <span aria-hidden="true" className="h-px flex-1 bg-border" />
@@ -355,7 +357,7 @@ const ConversationRow = memo(function ConversationRow({
             return (
               <div
                 className={cn(
-                  "flex gap-2 border-l-2 border-destructive bg-destructive/5 px-3 py-2 text-destructive-foreground text-sm",
+                  "flex gap-2 border-l-2 border-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive-foreground",
                   separated && "mt-3"
                 )}
                 key={block.key}

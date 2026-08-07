@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+
 import { SessionManager } from "@earendil-works/pi-coding-agent"
 import { eq } from "drizzle-orm"
+
 import { DbSessionManager } from "../../src/agents/db-session-manager"
 import { createDatabase } from "../../src/db"
 import { sessionEntries, sessions } from "../../src/db/schema"

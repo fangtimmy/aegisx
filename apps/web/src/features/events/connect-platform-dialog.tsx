@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { CircleAlert, CircleCheck, Link2, Settings2 } from "lucide-react"
 import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
+
 import { type EventPlatform, type PlatformType, platformsApi } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -31,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+
 import {
   credentialLabels,
   credentialPrefixes,
@@ -335,9 +337,9 @@ export function ConnectPlatformDialog({
                 testConnection.isPending ||
                 Boolean(
                   discoverData &&
-                    type !== "ctfd" &&
-                    type !== "tsecbench" &&
-                    !remoteEventId
+                  type !== "ctfd" &&
+                  type !== "tsecbench" &&
+                  !remoteEventId
                 )
               }
               loading={discover.isPending || bind.isPending}

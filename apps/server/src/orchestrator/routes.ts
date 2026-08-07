@@ -2,6 +2,7 @@ import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { Context, Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
+
 import { jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { ThinkingLevelSchema } from "../lib/schemas"

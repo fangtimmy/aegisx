@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+
 import { langFromPath } from "@/lib/lang-from-path"
 import { highlightCode } from "@/lib/shiki"
 import { useResolvedTheme } from "@/lib/use-resolved-theme"
@@ -109,12 +110,12 @@ export function CodePreview({
         className={cn(
           "min-w-0 text-xs leading-5",
           // Soft wrap
-          "[&_pre]:m-0 [&_pre]:overflow-x-hidden [&_pre]:whitespace-normal [&_pre]:bg-transparent! [&_pre]:p-0 [&_pre]:font-mono",
+          "[&_pre]:m-0 [&_pre]:overflow-x-hidden [&_pre]:bg-transparent! [&_pre]:p-0 [&_pre]:font-mono [&_pre]:whitespace-normal",
           "[&_code]:block [&_code]:font-mono",
           // Line + gutter
           "[&_.line]:flex [&_.line]:min-w-0 [&_.line]:gap-3 [&_.line]:px-2.5 [&_.line]:py-0",
-          "[&_.line]:before:w-7 [&_.line]:before:shrink-0 [&_.line]:before:select-none [&_.line]:before:text-right [&_.line]:before:text-muted-foreground/70 [&_.line]:before:content-[attr(data-line)]",
-          "[&_.line-content]:min-w-0 [&_.line-content]:flex-1 [&_.line-content]:whitespace-pre-wrap [&_.line-content]:break-words [&_.line-content]:[overflow-wrap:anywhere]"
+          "[&_.line]:before:w-7 [&_.line]:before:shrink-0 [&_.line]:before:text-right [&_.line]:before:text-muted-foreground/70 [&_.line]:before:content-[attr(data-line)] [&_.line]:before:select-none",
+          "[&_.line-content]:min-w-0 [&_.line-content]:flex-1 [&_.line-content]:wrap-anywhere [&_.line-content]:whitespace-pre-wrap"
         )}
         // biome-ignore lint/security/noDangerouslySetInnerHtml: Shiki HTML / escaped plain fallback
         dangerouslySetInnerHTML={{ __html: html }}

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Boxes, CircleAlert, Settings2, SlidersHorizontal } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
+
 import { keys, providersApi, settingsApi } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -25,6 +26,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
+
 import { GeneralSettings } from "./general-settings"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
@@ -82,7 +84,7 @@ export function SettingsScreen() {
   if (providers.isPending || settings.isPending) {
     return (
       <div
-        className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
+        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
         role="status"
       >
         <Spinner aria-hidden="true" />
@@ -170,9 +172,9 @@ export function SettingsScreen() {
                     {items.map((provider) => (
                       <div
                         className={cn(
-                          "mb-1 flex items-center rounded-lg hover:bg-accent/50 focus-within:bg-accent/50",
+                          "mb-1 flex items-center rounded-lg focus-within:bg-accent/50 hover:bg-accent/50",
                           selectedId === provider.id &&
-                            "bg-secondary hover:bg-secondary focus-within:bg-secondary"
+                            "bg-secondary focus-within:bg-secondary hover:bg-secondary"
                         )}
                         key={provider.id}
                       >
@@ -184,11 +186,11 @@ export function SettingsScreen() {
                           variant="ghost"
                         >
                           <span className="flex min-w-0 flex-1 flex-col items-start">
-                            <span className="w-full truncate font-medium text-sm">
+                            <span className="w-full truncate text-sm font-medium">
                               {provider.label}
                             </span>
                             {!provider.apiKey && (
-                              <span className="text-muted-foreground text-xs">
+                              <span className="text-xs text-muted-foreground">
                                 无密钥
                               </span>
                             )}

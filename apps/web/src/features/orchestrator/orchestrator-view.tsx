@@ -9,6 +9,7 @@ import {
   Square,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+
 import type { OrchestratorConfigInput, ThinkingLevel } from "@/api"
 import { keys, orchestratorsApi, providersApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -179,7 +180,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
   if (detail.isPending) {
     return (
       <div
-        className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
+        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
         role="status"
       >
         <Spinner aria-hidden="true" /> 正在加载编排器…
@@ -285,7 +286,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                   </ScrollArea>
                 </div>
                 {disconnected && running && (
-                  <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-muted-foreground text-xs">
+                  <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
                     正在重新连接…
                   </div>
                 )}
@@ -350,12 +351,12 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                 <div className="mx-auto max-w-3xl space-y-4 p-6">
                   <div>
                     <label
-                      className="mb-1 block font-medium text-sm"
+                      className="mb-1 block text-sm font-medium"
                       htmlFor="orchestrator-instruction"
                     >
                       指令
                     </label>
-                    <p className="mb-2 text-muted-foreground text-xs">
+                    <p className="mb-2 text-xs text-muted-foreground">
                       自然语言策略。编排器在调度和审查任务时会遵循此指令。
                     </p>
                     <textarea
@@ -379,8 +380,8 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                   </div>
                   <div className="flex items-center justify-between rounded-md border p-3">
                     <div>
-                      <p className="font-medium text-sm">启用</p>
-                      <p className="text-muted-foreground text-xs">
+                      <p className="text-sm font-medium">启用</p>
+                      <p className="text-xs text-muted-foreground">
                         开启后，编排器即处于待命状态，随时可启动。
                       </p>
                     </div>
@@ -396,7 +397,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div>
                         <label
-                          className="mb-1 block text-muted-foreground text-xs"
+                          className="mb-1 block text-xs text-muted-foreground"
                           htmlFor="orch-model"
                         >
                           模型
@@ -420,7 +421,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                       </div>
                       <div>
                         <label
-                          className="mb-1 block text-muted-foreground text-xs"
+                          className="mb-1 block text-xs text-muted-foreground"
                           htmlFor="orch-targets"
                         >
                           最大并发目标数
@@ -445,16 +446,16 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                         />
                       </div>
                     </div>
-                    <p className="text-muted-foreground text-xs">
+                    <p className="text-xs text-muted-foreground">
                       推理：{orch.thinkingLevel}
                     </p>
                   </div>
                   {usage && (
                     <div className="rounded-md border p-3">
-                      <p className="mb-2 font-medium text-sm">
+                      <p className="mb-2 text-sm font-medium">
                         Token 用量与费用
                       </p>
-                      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-muted-foreground text-xs sm:grid-cols-3">
+                      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-xs text-muted-foreground sm:grid-cols-3">
                         <div>
                           <dt className="text-[10px] uppercase">输入</dt>
                           <dd>{usage.input.toLocaleString()}</dd>

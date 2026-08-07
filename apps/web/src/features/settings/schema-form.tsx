@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { BookOpen, Braces, Eye, RotateCcw, Search } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
+
 import {
   type FlatSettings,
   isSettingModified,
@@ -76,7 +77,7 @@ function ResetSlot({
   onReset: () => void
 }) {
   return (
-    <div className="flex h-7 w-7 shrink-0 items-center justify-center">
+    <div className="flex size-7 shrink-0 items-center justify-center">
       {modified ? (
         <Button
           aria-label="重置为默认"
@@ -99,13 +100,13 @@ function ResetSlot({
 function SettingMeta({ def }: { def: SettingDef }) {
   return (
     <div className="min-w-0">
-      <div className="font-medium text-sm leading-7">{def.title}</div>
+      <div className="text-sm leading-7 font-medium">{def.title}</div>
       {def.description && (
-        <p className="text-muted-foreground text-xs leading-snug">
+        <p className="text-xs leading-snug text-muted-foreground">
           {def.description}
         </p>
       )}
-      <code className="block text-[11px] text-muted-foreground leading-snug">
+      <code className="block text-[11px] leading-snug text-muted-foreground">
         {def.key}
       </code>
     </div>
@@ -401,7 +402,7 @@ function PromptControl({
             <DialogTitle>预览：{def.title}</DialogTitle>
             <DialogDescription>带高亮替换内容的示例上下文。</DialogDescription>
           </DialogHeader>
-          <DialogPanel className="max-h-[60vh] overflow-auto whitespace-pre-wrap font-mono text-xs">
+          <DialogPanel className="max-h-[60vh] overflow-auto font-mono text-xs whitespace-pre-wrap">
             {preview.error && (
               <p className="text-destructive">{preview.error.message}</p>
             )}
@@ -519,11 +520,11 @@ export function SchemaSettingsForm({
         </div>
       </div>
       {groups.length === 0 && (
-        <p className="text-muted-foreground text-sm">没有匹配的设置项。</p>
+        <p className="text-sm text-muted-foreground">没有匹配的设置项。</p>
       )}
       {groups.map(([group, defs]) => (
         <section key={group}>
-          <h2 className="mb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
+          <h2 className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
             {group}
           </h2>
           <div className="divide-y overflow-hidden rounded-lg border">

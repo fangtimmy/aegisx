@@ -8,6 +8,7 @@ import {
   Square,
 } from "lucide-react"
 import { useSearchParams } from "react-router"
+
 import { type Challenge, keys, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -41,6 +42,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { toast } from "@/lib/toast"
+
 import { Conversation } from "./conversation"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
@@ -117,7 +119,7 @@ export function RunWorkspace({
   if (runs.isPending) {
     return (
       <div
-        className="flex items-center gap-2 p-6 text-muted-foreground text-sm"
+        className="flex items-center gap-2 p-6 text-sm text-muted-foreground"
         role="status"
       >
         <Spinner aria-hidden="true" />

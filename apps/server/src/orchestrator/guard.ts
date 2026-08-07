@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm"
+
 import type { createDatabase } from "../db"
 import { challengeRemote, challenges, runs } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"

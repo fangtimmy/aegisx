@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs"
+
 import { get, type RunPublic } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
+
 import type { createDatabase } from "../db"
 import { attachments, challenges, events, runs } from "../db/schema"
 import {

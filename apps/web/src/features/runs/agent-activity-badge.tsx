@@ -1,5 +1,6 @@
 import { LoaderCircle } from "lucide-react"
 import { useCallback, useSyncExternalStore } from "react"
+
 import type { AgentStatus } from "@/api"
 import type { ConversationStore } from "@/stream/conversation-store"
 
@@ -49,7 +50,7 @@ export function AgentActivityBadge({
   return (
     <span
       aria-live="polite"
-      className="inline-flex items-center gap-1.5 text-info text-xs"
+      className="inline-flex items-center gap-1.5 text-xs text-info"
       role="status"
     >
       <LoaderCircle aria-hidden="true" className="size-3 animate-spin" />

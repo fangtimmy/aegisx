@@ -1,0 +1,7 @@
+{
+  "plugins": ["import"],
+  "ignorePatterns": ["drizzle/**"],
+  "options": {
+    "typeAware": true
+  }
+}

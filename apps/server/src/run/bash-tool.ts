@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto"
+
 import type { AgentToolResult } from "@earendil-works/pi-agent-core"
 import {
   defineTool,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
+
 import type { ContainerManager } from "./container/container-manager"
 import { buildSingleFileTar, shellQuote } from "./workspace/backend"
 

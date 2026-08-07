@@ -2,6 +2,7 @@
 
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress"
 import type React from "react"
+
 import { cn } from "@/lib/utils"
 
 export function Progress({
@@ -32,7 +33,7 @@ export function ProgressLabel({
 }: ProgressPrimitive.Label.Props): React.ReactElement {
   return (
     <ProgressPrimitive.Label
-      className={cn("font-medium text-sm", className)}
+      className={cn("text-sm font-medium", className)}
       data-slot="progress-label"
       {...props}
     />

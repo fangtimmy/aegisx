@@ -1,10 +1,12 @@
 import { basename } from "node:path"
+
 import type {
   ChallengeSyncAttachment,
   ChallengeSyncItem,
   ChallengeSyncProgress,
 } from "@aegisx/shared"
 import { and, eq } from "drizzle-orm"
+
 import type { createDatabase } from "../db"
 import {
   attachments,

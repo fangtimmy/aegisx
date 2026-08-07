@@ -1,4 +1,5 @@
 import { resolve } from "node:path"
+
 import { createApp } from "./app"
 
 const dataDir = process.env.AEGISX_DATA_DIR

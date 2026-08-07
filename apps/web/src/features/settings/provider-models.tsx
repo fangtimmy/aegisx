@@ -10,6 +10,7 @@ import {
   Type,
 } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
+
 import type { ProviderConnection, ProviderModel } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -52,6 +53,7 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+
 import {
   BindPiModelDialog,
   DiscoverModelsDialog,
@@ -241,7 +243,7 @@ export function ProviderModels({
                   <div className="flex items-center gap-3 py-3" key={model.id}>
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-center gap-2">
-                        <span className="min-w-0 truncate font-medium text-sm">
+                        <span className="min-w-0 truncate text-sm font-medium">
                           {model.label}
                         </span>
                         <Badge variant="secondary">{model.modelId}</Badge>

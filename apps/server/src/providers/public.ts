@@ -1,5 +1,6 @@
 import type { ProviderType } from "@aegisx/shared/platform"
 import type { ProviderConnection, ProviderModel } from "@aegisx/shared/provider"
+
 import type { ConfigStore, ProviderData } from "../infrastructure/config-store"
 import { parseModelMetadata, supportedThinkingLevels } from "./builtin-models"
 

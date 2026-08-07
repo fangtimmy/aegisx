@@ -3,6 +3,7 @@ import { Box, CircleAlert, Play, Plus } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
+
 import {
   type Challenge,
   keys,
@@ -223,7 +224,7 @@ function CreateRunDialogContent({
       {(settings.isPending || providers.isPending) && (
         <DialogPanel>
           <div
-            className="flex items-center gap-2 text-muted-foreground text-sm"
+            className="flex items-center gap-2 text-sm text-muted-foreground"
             role="status"
           >
             <Spinner aria-hidden="true" />

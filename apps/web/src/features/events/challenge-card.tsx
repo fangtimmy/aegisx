@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react"
 import { useState } from "react"
+
 import { type Challenge, challengesApi, keys, type RunStatus } from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -40,6 +41,7 @@ import {
 import { CreateRunDialog } from "@/features/runs"
 import { statusVariant } from "@/features/runs/run-overview"
 import { toast } from "@/lib/toast"
+
 import { ChallengeDialog } from "./challenge-dialog"
 import { isChallengeSolved } from "./event-shared"
 
@@ -214,12 +216,12 @@ export function ChallengeCard({
           </CardAction>
         </CardHeader>
         <CardPanel className="px-4 pb-4">
-          <CardDescription className="line-clamp-2 min-h-10 whitespace-pre-line leading-5">
+          <CardDescription className="line-clamp-2 min-h-10 leading-5 whitespace-pre-line">
             {challenge.description || "无描述"}
           </CardDescription>
         </CardPanel>
       </Card>
-      <CardFrameFooter className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-muted-foreground text-xs">
+      <CardFrameFooter className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-xs text-muted-foreground">
         <span className="font-medium text-foreground tabular-nums">
           {challenge.points === null ? "无分值" : `${challenge.points} 分`}
         </span>

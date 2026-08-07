@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+
 import { ProductHeader } from "./product-header"
 
 export function AppLayout({

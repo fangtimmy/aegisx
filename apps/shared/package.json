@@ -4,17 +4,14 @@
   "type": "module",
   "main": "./index.ts",
   "types": "./index.ts",
-  "scripts": {
-    "check": "biome check --write ."
-  },
   "exports": {
     ".": "./index.ts",
     "./*": "./*.ts"
   },
+  "scripts": {
+    "check": "oxlint --fix --type-check . && oxfmt ."
+  },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.5.4"
   }
 }

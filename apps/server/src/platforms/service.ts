@@ -1,5 +1,6 @@
 import { type EventPlatform, get } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
+
 import type { createDatabase } from "../db"
 import {
   challengeRemote,

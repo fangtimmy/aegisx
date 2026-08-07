@@ -1,5 +1,6 @@
 import { CircleAlert, Link2, Unlink } from "lucide-react"
 import { Controller, type useForm } from "react-hook-form"
+
 import type { PiModelProfile, ProviderModel } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+
 import type { ProviderEditor } from "./use-provider-editor"
 
 type EditForm = {
@@ -143,7 +145,7 @@ export function EditModelDialog({
                     元数据 JSON
                   </FieldLabel>
                   {editingBinding && (
-                    <p className="truncate font-mono text-muted-foreground text-xs">
+                    <p className="truncate font-mono text-xs text-muted-foreground">
                       已绑定到 {editingBinding.providerId} /{" "}
                       {editingBinding.modelId}
                     </p>
@@ -257,7 +259,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
         </DialogHeader>
         <DialogPanel className="grid gap-4">
           {builtins.isPending ? (
-            <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner aria-hidden="true" /> 正在加载 Pi 模型…
             </div>
           ) : builtins.error ? (
@@ -307,7 +309,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
                           value={model}
                         >
                           <span className="block truncate">{model.name}</span>
-                          <span className="block truncate font-mono text-muted-foreground text-xs">
+                          <span className="block truncate font-mono text-xs text-muted-foreground">
                             {model.providerId}/{model.modelId}
                           </span>
                         </ComboboxItem>
@@ -369,7 +371,7 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
           {items.length > 0 ? (
             <>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <span className="text-muted-foreground text-xs">
+                <span className="text-xs text-muted-foreground">
                   已选 {selected.length} / 共 {items.length}
                 </span>
                 <Button
@@ -390,11 +392,11 @@ export function DiscoverModelsDialog({ editor }: { editor: ProviderEditor }) {
               >
                 {items.map((id) => (
                   <Label
-                    className="flex w-full min-w-0 items-center gap-2 px-2 py-2 last:border-b-0"
+                    className="flex w-full min-w-0 items-center gap-2 p-2 last:border-b-0"
                     key={id}
                   >
                     <Checkbox value={id} />
-                    <span className="min-w-0 flex-1 break-all font-mono text-xs">
+                    <span className="min-w-0 flex-1 font-mono text-xs break-all">
                       {id}
                     </span>
                   </Label>

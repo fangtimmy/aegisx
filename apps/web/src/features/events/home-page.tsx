@@ -11,6 +11,7 @@ import {
 import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { Link } from "react-router"
+
 import { type EventInput, type EventSummary, eventsApi, keys } from "@/api"
 import { AppLayout } from "@/components/shell/app-layout"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -44,6 +45,7 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
+
 import { ErrorState } from "./event-shared"
 
 const platformLabels = {
@@ -145,7 +147,7 @@ function EventCard({ event }: { event: EventSummary }) {
       <Card className="flex-1">
         <CardPanel className="flex min-h-32 flex-col justify-center gap-4">
           <div className="flex min-w-0 items-start justify-between gap-3">
-            <h2 className="min-w-0 truncate font-semibold text-base leading-5">
+            <h2 className="min-w-0 truncate text-base leading-5 font-semibold">
               <Link className="hover:underline" to={`/events/${event.id}`}>
                 {event.name}
               </Link>
@@ -168,8 +170,8 @@ function EventCard({ event }: { event: EventSummary }) {
             </div>
           ) : (
             <div>
-              <p className="text-muted-foreground text-xs">题目</p>
-              <p className="mt-1 font-semibold text-2xl tabular-nums">
+              <p className="text-xs text-muted-foreground">题目</p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
                 {event.challengeCount}
               </p>
             </div>
@@ -182,7 +184,7 @@ function EventCard({ event }: { event: EventSummary }) {
         </CardPanel>
       </Card>
       <CardFrameFooter className="flex min-h-16 items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1 text-muted-foreground text-xs">
+        <div className="flex min-w-0 flex-col gap-1 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <Clock3 className="size-3.5 shrink-0" />
             更新于
@@ -219,8 +221,8 @@ export function HomePage() {
     <AppLayout>
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-semibold text-2xl">赛事</h1>
-          <p className="mt-1 text-muted-foreground text-sm">
+          <h1 className="text-2xl font-semibold">赛事</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             管理 CTF 工作区、题目与解题任务。
           </p>
         </div>
@@ -229,7 +231,7 @@ export function HomePage() {
 
       {events.isPending && (
         <div
-          className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
+          className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
           role="status"
         >
           <Spinner aria-hidden="true" />

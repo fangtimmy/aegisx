@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { useRef, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
+
 import {
   type Attachment,
   type Challenge,
@@ -236,7 +237,7 @@ function ChallengeDialogContent({
             aria-labelledby="challenge-details"
             className="grid gap-4 px-6 pb-6"
           >
-            <h3 className="font-medium text-sm" id="challenge-details">
+            <h3 className="text-sm font-medium" id="challenge-details">
               详情
             </h3>
             <Field>
@@ -317,11 +318,11 @@ function ChallengeDialogContent({
             className="border-t px-6 py-5"
           >
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-medium text-sm" id="challenge-attachments">
+              <h3 className="text-sm font-medium" id="challenge-attachments">
                 附件
               </h3>
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground text-xs tabular-nums">
+                <span className="text-xs text-muted-foreground tabular-nums">
                   {(challenge?.attachments.length ?? 0) + pendingFiles.length}
                 </span>
                 <Button
@@ -381,7 +382,7 @@ function ChallengeDialogContent({
                 ))}
               </div>
             ) : (
-              <p className="mt-3 text-muted-foreground text-xs">
+              <p className="mt-3 text-xs text-muted-foreground">
                 暂无附件。上传文件以附加到本题目。
               </p>
             )}
@@ -393,10 +394,10 @@ function ChallengeDialogContent({
             >
               <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
-                  <h3 className="font-medium text-sm" id="challenge-target">
+                  <h3 className="text-sm font-medium" id="challenge-target">
                     平台目标
                   </h3>
-                  <p className="mt-1 text-muted-foreground text-xs">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     导入的目标无法编辑。移除该目标后，后续任务将停用平台目标工具。
                   </p>
                 </div>
@@ -443,7 +444,7 @@ function ChallengeDialogContent({
                       <span className="min-w-0 truncate text-sm">
                         {target.name}
                       </span>
-                      <span className="min-w-0 break-all text-right text-muted-foreground text-xs">
+                      <span className="min-w-0 text-right text-xs break-all text-muted-foreground">
                         {target.services.join(", ") || "无暴露服务"}
                       </span>
                     </div>
@@ -455,7 +456,7 @@ function ChallengeDialogContent({
           {(removeAttachment.error || removeTarget.error) && (
             <Alert className="mx-6 mb-4 w-auto" variant="error">
               <TriangleAlert />
-              <AlertDescription className="break-words">
+              <AlertDescription className="wrap-break-word">
                 {(removeAttachment.error ?? removeTarget.error)?.message}
               </AlertDescription>
             </Alert>
@@ -493,10 +494,10 @@ function AttachmentRow({
     <div className="flex min-w-0 items-center gap-3 border-t py-3 first:border-t-0">
       <FileArchive className="size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-sm">
+        <p className="truncate text-sm font-medium">
           {attachment.originalName}
         </p>
-        <p className="mt-0.5 text-muted-foreground text-xs">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           {formatBytes(attachment.size)}
         </p>
       </div>
@@ -566,8 +567,8 @@ function PendingFileRow({
     <div className="flex min-w-0 items-center gap-3 border-t py-3 first:border-t-0">
       <FileArchive className="size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-sm">{file.name}</p>
-        <p className="mt-0.5 text-muted-foreground text-xs">
+        <p className="truncate text-sm font-medium">{file.name}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
           {formatBytes(file.size)} · 保存时上传
         </p>
       </div>

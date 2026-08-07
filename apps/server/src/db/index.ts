@@ -7,8 +7,10 @@ import {
   writeFileSync,
 } from "node:fs"
 import { basename, join, resolve } from "node:path"
+
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
+
 import * as schema from "./schema"
 import { SCHEMA_VERSION } from "./schema"
 

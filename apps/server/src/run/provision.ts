@@ -2,6 +2,7 @@ import type { PromptTemplateContext } from "@aegisx/shared"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
+
 import {
   type AgentLoopSettings,
   createHostAgentSession,

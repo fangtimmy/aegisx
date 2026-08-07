@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+
 import { parseSyncStreamLine } from "@/features/events/platform-sync-stream"
 
 test("parses challenge sync progress and completion events", () => {

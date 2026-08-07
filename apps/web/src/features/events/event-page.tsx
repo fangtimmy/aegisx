@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
+
 import { type Challenge, eventsApi, keys } from "@/api"
 import { AppLayout } from "@/components/shell/app-layout"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -42,6 +43,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { OrchestratorView } from "@/features/orchestrator/orchestrator-view"
 import { RunsView } from "@/features/runs"
+
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
 import { EventSettings } from "./event-settings"
@@ -233,7 +235,7 @@ export function EventPage() {
     >
       {eventQuery.isPending && (
         <div
-          className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
+          className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
           role="status"
         >
           <Spinner aria-hidden="true" />
@@ -250,7 +252,7 @@ export function EventPage() {
         <Tabs
           className={
             workspace
-              ? "h-full min-h-0 w-full items-start gap-4"
+              ? "size-full min-h-0 items-start gap-4"
               : "items-start gap-4"
           }
           onValueChange={(value) =>
@@ -281,7 +283,7 @@ export function EventPage() {
               </TabsTab>
             </TabsList>
             <button
-              className="mt-auto flex h-9 w-full shrink-0 cursor-pointer items-center justify-start gap-1.5 rounded-md border border-transparent px-[calc(--spacing(2.5)-1px)] text-left text-muted-foreground text-sm transition-colors hover:bg-accent [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:-mx-0.5 [&_svg]:shrink-0"
+              className="mt-auto flex h-9 w-full shrink-0 cursor-pointer items-center justify-start gap-1.5 rounded-md border border-transparent px-[calc(--spacing(2.5)-1px)] text-left text-sm text-muted-foreground transition-colors hover:bg-accent [&_svg]:pointer-events-none [&_svg]:-mx-0.5 [&_svg]:size-4 [&_svg]:shrink-0"
               onClick={toggleFullWidth}
               type="button"
             >
@@ -299,7 +301,7 @@ export function EventPage() {
             <TabsPanel value="overview">
               <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <h1 className="truncate font-semibold text-2xl">
+                  <h1 className="truncate text-2xl font-semibold">
                     {eventQuery.data.event.name}
                   </h1>
                   <Badge variant="secondary">
@@ -494,7 +496,7 @@ export function EventPage() {
                       <section key={challengeGroup.key}>
                         {challengeGroup.label && (
                           <div className="mb-3 flex items-center gap-2 border-b pb-2">
-                            <h2 className="font-medium text-sm">
+                            <h2 className="text-sm font-medium">
                               {challengeGroup.label}
                             </h2>
                             <Badge size="sm" variant="secondary">
@@ -510,7 +512,7 @@ export function EventPage() {
                               key={challenge.id}
                               managed={Boolean(
                                 eventQuery.data.event.platform &&
-                                  challenge.remoteId
+                                challenge.remoteId
                               )}
                               onUploadError={setUploadError}
                             />

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { useEffect, useMemo, useState } from "react"
+
 import { keys, providersApi, type ThinkingLevel } from "@/api"
 import {
   Select,
@@ -134,7 +135,7 @@ export function ModelThinkingSwitcher({
         value={selectedId ?? undefined}
       >
         <SelectTrigger
-          className="h-7 min-w-[7rem] max-w-[16rem] px-2 font-mono text-xs"
+          className="h-7 max-w-[16rem] min-w-[7rem] px-2 font-mono text-xs"
           disabled={disabled}
           size="sm"
         >

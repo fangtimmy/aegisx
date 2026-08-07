@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import { and, eq } from "drizzle-orm"
+
 import {
   type AgentLoopSettings,
   createHostAgentSession,

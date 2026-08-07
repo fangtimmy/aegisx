@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 import { Link, useNavigate } from "react-router"
+
 import { type Challenge, keys, type RunPublic, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -42,6 +43,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/lib/toast"
+
 import { CreateRunDialog } from "./create-run-dialog"
 import { RunWorkspace } from "./run-workspace"
 
@@ -100,7 +102,7 @@ function RunItem({
     <div className="group relative">
       <Button
         aria-current={run.id === runId ? "page" : undefined}
-        className="h-auto min-h-16 w-full items-start justify-start gap-2.5 whitespace-normal px-3 py-2.5 pr-10 text-left"
+        className="h-auto min-h-16 w-full items-start justify-start gap-2.5 px-3 py-2.5 pr-10 text-left whitespace-normal"
         render={<Link to={`/events/${eventId}/runs/${run.id}`} />}
         variant={run.id === runId ? "secondary" : "ghost"}
       >
@@ -109,7 +111,7 @@ function RunItem({
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate font-medium text-sm">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
               {run.challengeName}
             </span>
             {run.hasFlag && (
@@ -118,8 +120,8 @@ function RunItem({
               </Badge>
             )}
           </span>
-          <span className="mt-1.5 flex min-w-0 items-start gap-2 text-muted-foreground text-xs">
-            <span className="min-w-0 flex-1 break-all font-mono">
+          <span className="mt-1.5 flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 font-mono break-all">
               {run.provider} / {run.modelName}
             </span>
             <time
@@ -132,7 +134,7 @@ function RunItem({
           </span>
         </span>
       </Button>
-      <div className="absolute right-1 top-1/2 -translate-y-1/2">
+      <div className="absolute top-1/2 right-1 -translate-y-1/2">
         <Menu>
           <MenuTrigger
             render={
@@ -207,7 +209,7 @@ function RunSection({
   return (
     <section>
       <div className="flex items-center gap-2 px-2 py-1.5">
-        <h3 className="font-medium text-muted-foreground text-xs uppercase">
+        <h3 className="text-xs font-medium text-muted-foreground uppercase">
           {title}
         </h3>
         <Badge size="sm" variant="secondary">
@@ -247,7 +249,7 @@ export function RunsView({
   if (runs.isPending)
     return (
       <div
-        className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm"
+        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
         role="status"
       >
         <Spinner aria-hidden="true" />
@@ -289,8 +291,8 @@ export function RunsView({
     )
   }
   return (
-    <section className="h-full min-h-0 w-full min-w-0">
-      <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-[20rem_minmax(0,1fr)] gap-4">
+    <section className="size-full min-h-0 min-w-0">
+      <div className="grid size-full min-h-0 min-w-0 grid-cols-[20rem_minmax(0,1fr)] gap-4">
         <CardFrame className="flex h-full min-h-0">
           <CardFrameHeader>
             <CardFrameTitle>
@@ -339,7 +341,7 @@ export function RunsView({
               <ScrollArea className="h-full" scrollFade scrollbarGutter>
                 <div className="p-3">
                   {runs.data.items.length === 0 ? (
-                    <p className="px-3 py-10 text-center text-muted-foreground text-sm">
+                    <p className="px-3 py-10 text-center text-sm text-muted-foreground">
                       暂无任务
                     </p>
                   ) : (

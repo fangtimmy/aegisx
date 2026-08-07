@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { CircleCheck, Unlink } from "lucide-react"
+
 import { type EventSummary, platformsApi } from "@/api"
 import {
   AlertDialog,
@@ -14,6 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { toast } from "@/lib/toast"
+
 import { ConnectPlatformDialog } from "./connect-platform-dialog"
 import { platformLabels, refreshEvent } from "./platform-config"
 
@@ -39,7 +41,7 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Badge variant="outline">{platformLabels[event.platform.type]}</Badge>
-      <span className="max-w-56 truncate text-muted-foreground text-xs">
+      <span className="max-w-56 truncate text-xs text-muted-foreground">
         {event.platform.baseUrl}
       </span>
       <Button
@@ -87,13 +89,13 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
         </AlertDialogPopup>
       </AlertDialog>
       {detach.error && (
-        <span className="text-destructive text-xs">{detach.error.message}</span>
+        <span className="text-xs text-destructive">{detach.error.message}</span>
       )}
       {testConnection.isSuccess && (
-        <span className="text-success text-xs">连接成功</span>
+        <span className="text-xs text-success">连接成功</span>
       )}
       {testConnection.error && (
-        <span className="text-destructive text-xs">
+        <span className="text-xs text-destructive">
           {testConnection.error.message}
         </span>
       )}

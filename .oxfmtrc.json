@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": false,
+  "singleQuote": false,
+  "jsxSingleQuote": false,
+  "trailingComma": "es5",
+  "quoteProps": "as-needed",
+  "arrowParens": "always",
+  "bracketSpacing": true,
+  "bracketSameLine": false,
+  "endOfLine": "lf",
+  "insertFinalNewline": true,
+  "sortImports": true,
+  "sortTailwindcss": {
+    "stylesheet": "apps/web/src/index.css",
+    "functions": ["cn", "clsx", "cva", "tv", "twMerge", "twJoin"]
+  },
+  "sortPackageJson": true,
+  "ignorePatterns": ["apps/server/drizzle"]
+}

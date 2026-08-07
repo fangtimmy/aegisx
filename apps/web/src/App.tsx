@@ -1,4 +1,5 @@
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router"
+
 import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { EventPage } from "@/features/events/event-page"

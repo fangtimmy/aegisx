@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { CircleAlert, RefreshCw } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
+
 import {
   type ChallengeSyncItem,
   type ChallengeSyncProgress,
@@ -33,6 +34,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
+
 import { refreshEvent } from "./platform-config"
 import { syncChallengeStream } from "./platform-sync-stream"
 
@@ -188,7 +190,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
         </DialogHeader>
         <DialogPanel>
           {challenges.isPending ? (
-            <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner /> 正在加载题目…
             </div>
           ) : challenges.error ? (
@@ -199,7 +201,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
           ) : (
             <>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <span className="text-muted-foreground text-xs">
+                <span className="text-xs text-muted-foreground">
                   已选 {selected.length} / 共 {items.length}
                 </span>
                 <Button
@@ -232,7 +234,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                     <Checkbox value={challenge.id} />
                     <span className="min-w-0 flex-1">
                       <span className="flex min-w-0 items-center gap-2">
-                        <span className="truncate font-medium text-sm">
+                        <span className="truncate text-sm font-medium">
                           {challenge.name}
                         </span>
                         {challenge.imported && (
@@ -246,7 +248,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                           </Badge>
                         )}
                       </span>
-                      <span className="block text-muted-foreground text-xs">
+                      <span className="block text-xs text-muted-foreground">
                         {challenge.category ?? "未分类"}
                         {challenge.points === null
                           ? ""
@@ -257,7 +259,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                 ))}
               </CheckboxGroup>
               {items.length === 0 && (
-                <p className="py-8 text-center text-muted-foreground text-sm">
+                <p className="py-8 text-center text-sm text-muted-foreground">
                   当前没有可用题目。
                 </p>
               )}
@@ -266,7 +268,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                   <Progress value={(progress.completed / progress.total) * 100}>
                     <div className="flex items-center justify-between gap-3">
                       <ProgressLabel>导入进度</ProgressLabel>
-                      <span className="text-muted-foreground text-xs tabular-nums">
+                      <span className="text-xs text-muted-foreground tabular-nums">
                         {progress.completed} / {progress.total}
                       </span>
                     </div>
@@ -285,7 +287,7 @@ export function ImportChallengesDialog({ eventId }: { eventId: string }) {
                       log.map((entry) => (
                         <p
                           className={cn(
-                            "py-0.5 break-words whitespace-pre-wrap",
+                            "py-0.5 wrap-break-word whitespace-pre-wrap",
                             entry.level === "error" && "text-destructive",
                             entry.level === "success" && "text-foreground",
                             entry.level === "info" && "text-muted-foreground"

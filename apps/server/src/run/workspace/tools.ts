@@ -1,9 +1,11 @@
 import { basename, dirname, relative } from "node:path"
+
 import {
   type AgentToolResult,
   defineTool,
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
+
 import { shellQuote, type WorkspaceBackend } from "./backend"
 import { applyExactEdit } from "./edit-apply"
 import {

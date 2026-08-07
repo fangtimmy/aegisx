@@ -3,6 +3,7 @@ import { math } from "@streamdown/math"
 import { mermaid } from "@streamdown/mermaid"
 import { memo } from "react"
 import { Streamdown } from "streamdown"
+
 import { cn } from "@/lib/utils"
 
 const plugins = { mermaid, math, cjk } as const

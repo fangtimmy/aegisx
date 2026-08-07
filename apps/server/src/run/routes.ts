@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm"
 import type { Context, Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
+
 import type { createDatabase } from "../db"
 import { challenges } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+
 import { langFromPath } from "../src/lib/lang-from-path"
 
 test("maps common extensions", () => {

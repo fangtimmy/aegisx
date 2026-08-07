@@ -1,5 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises"
+
 import { eq } from "drizzle-orm"
+
 import type { createDatabase } from "../db"
 import { challengeRemote, challenges, type eventPlatforms } from "../db/schema"
 import { getChallengeRemote, isTargetCapable } from "./challenge-state"

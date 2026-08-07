@@ -1,4 +1,5 @@
 import type { Context } from "hono"
+
 import { jsonError } from "../infrastructure/http-errors"
 import { PlatformError } from "./core"
 

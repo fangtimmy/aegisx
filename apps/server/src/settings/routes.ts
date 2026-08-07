@@ -7,6 +7,7 @@ import {
 } from "@aegisx/shared"
 import type { Hono } from "hono"
 import { Type } from "typebox"
+
 import type {
   ConfigStore,
   ProviderData,
