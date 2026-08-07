@@ -47,7 +47,7 @@ describe("runService.create", () => {
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
       const { manager, created } = stubContainerManager()
-      const provision = mock(async () =>
+      const createHost = mock(async () =>
         stubHostAgentSession("sess-1", { hang: true })
       )
 
@@ -55,8 +55,8 @@ describe("runService.create", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        // buildMainToolContext (the only platformService reader) never runs
-        // with a stubbed provision; opaque internal type → cast.
+        // buildMainToolContext builds tool closures but they are never
+        // invoked under a stubbed createHost; opaque internal type → cast.
         platformService: {
           submitFlag: async () => undefined,
           targetAction: async () => ({
@@ -67,7 +67,7 @@ describe("runService.create", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettings,
-        provisionSession: provision,
+        createHost,
       })
 
       const run = await runService.create(
@@ -113,7 +113,7 @@ describe("runService.create", () => {
       })
       expect(opts.tmpfsSize).toBe(containerInput.tmpfsSize)
 
-      expect(provision).toHaveBeenCalledTimes(1)
+      expect(createHost).toHaveBeenCalledTimes(1)
     } finally {
       close()
     }
@@ -126,7 +126,7 @@ describe("runService.create", () => {
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
       const { manager, created, killed } = stubContainerManager()
-      const provision = mock(async () => {
+      const createHost = mock(async () => {
         throw new Error("agent session boom")
       })
 
@@ -144,7 +144,7 @@ describe("runService.create", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettings,
-        provisionSession: provision,
+        createHost,
       })
 
       await expect(
@@ -194,7 +194,7 @@ describe("runService.create", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettings,
-        provisionSession: async () => stubHostAgentSession(),
+        createHost: async () => stubHostAgentSession(),
       })
       await expect(
         runService.create(baseCreateInput("missing", toConnection(provider)))

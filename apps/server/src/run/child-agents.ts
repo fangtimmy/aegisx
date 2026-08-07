@@ -1,21 +1,17 @@
 import type { AgentSummary } from "@aegisx/shared/agent"
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 
-import {
-  type AgentLoopSettings,
-  createHostAgentSession,
-  type HostAgentSession,
+import { createAgentHost } from "../agents/host"
+import type {
+  AgentLoopSettings,
+  HostAgentSession,
 } from "../agents/host-session"
 import type { LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import { agents } from "../db/schema"
 import { renderSystemPrompt } from "../settings/prompt-templates"
-import { createBashTool } from "./bash-tool"
 import type { ContainerManager } from "./container/container-manager"
 import { RunActionError } from "./errors"
 import type { RunContext } from "./service"
-import { createDockerExecBackend } from "./workspace/backend"
-import { createWorkspaceTools } from "./workspace/tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type AgentPatch = Partial<typeof agents.$inferInsert>
@@ -151,35 +147,22 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
         task: input.task,
       },
     })
-    const bashDef = createBashTool(
-      ctx.containerWorkspace,
-      ctx.containerName,
-      containerManager
-    )
-    const workspaceTools = createWorkspaceTools(
-      createDockerExecBackend(
-        ctx.containerName,
-        containerManager,
-        ctx.containerWorkspace
-      )
-    )
-    // Children: coding tools only (no finish/flag/target/spawn).
-    const toolNames = ["read", "bash", "edit", "write", "grep", "find", "ls"]
-
+    // Children: file tools only (no finish/flag/target/spawn) — they get the
+    // common host tool set with no extras, reusing the run's container + model.
     let childSession: HostAgentSession
     try {
-      childSession = await createHostAgentSession({
+      childSession = await createAgentHost({
         owner: { type: "run", id: runId, runId, agentId: childAgentId },
         channel: runId,
         agentId: childAgentId,
         cwd: ctx.containerWorkspace,
+        containerName: ctx.containerName,
+        containerManager,
         modelRuntime: ctx.modelRuntime,
         model: ctx.sdkModel,
         thinkingLevel: ctx.thinkingLevel,
         agentSettings: deps.agentSettings(),
         systemPrompt: childSystemPrompt,
-        toolNames,
-        customTools: [bashDef, ...workspaceTools] as ToolDefinition[],
         onUsageMaybeChanged: () => deps.emitRun(runId),
         db,
         bus,

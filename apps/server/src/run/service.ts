@@ -14,13 +14,14 @@ import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { eq } from "drizzle-orm"
 
+import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
+import { createAgentHost } from "../agents/host"
 import type {
   AgentLoopSettings,
   HostAgentSession,
 } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
-import { resolveSwitchTarget, type SwitchTarget } from "../agents/model-switch"
 import type { createDatabase } from "../db"
 import { agents, challenges, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
@@ -42,9 +43,12 @@ import {
   resolveRunModel,
 } from "./model-runtime"
 import { buildPromptContext, copyAttachments } from "./prompt"
-import { provisionRunSession } from "./provision"
 import { createRunQueries } from "./queries"
-import type { RunToolContext, ToolCapabilities } from "./tools"
+import {
+  createMainTools,
+  type RunToolContext,
+  type ToolCapabilities,
+} from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -60,10 +64,10 @@ export type RunServiceOptions = {
   platformService: PlatformService
   configStore: ConfigStore
   getSettings(): import("@aegisx/shared").FlatSettings
-  /** Test seam: override the host-session provision step (default =
-   * provisionRunSession). Tests inject a stub to avoid building a real pi
-   * AgentSession + hitting a model. */
-  provisionSession?: typeof provisionRunSession
+  /** Test seam: override the host-session creation (default = createAgentHost).
+   * Tests inject a stub to avoid building a real pi AgentSession + hitting a
+   * model. */
+  createHost?: typeof createAgentHost
 }
 
 type PendingOutcome = { mode: "finish"; summary: string } | { mode: "close" }
@@ -116,8 +120,8 @@ export type RunService = ReturnType<typeof createRunService>
 export function createRunService(options: RunServiceOptions) {
   const { db, dataDir, containerManager, platformService, configStore } =
     options
-  /** Host-session provision (real impl by default; stubbable for tests). */
-  const provision = options.provisionSession ?? provisionRunSession
+  /** Host-session creation (real impl by default; stubbable for tests). */
+  const createHost = options.createHost ?? createAgentHost
   const queries = createRunQueries({ db, dataDir })
   const bus: LiveBus = createLiveBus()
 
@@ -478,16 +482,6 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
-  /** Deps shared by create/ensureWarm (main-agent provisioning). */
-  const provisionDeps = {
-    db,
-    bus,
-    containerManager,
-    agentSettings,
-    buildMainToolContext,
-    onUsageMaybeChanged: emitRun,
-  }
-
   /** Background child-agent orchestration (spawn_agent). */
   const childRuntime = createChildAgentRuntime({
     db,
@@ -661,25 +655,33 @@ export function createRunService(options: RunServiceOptions) {
         })
         .run()
 
+      const toolCtx = buildMainToolContext(runId, challenge.id, mainAgentId)
+      const nativeTools = createMainTools(toolCtx, caps)
       let agentSession: HostAgentSession
       try {
-        agentSession = await provision(
-          {
+        agentSession = await createHost({
+          owner: {
+            type: "run",
+            id: runId,
             runId,
             agentId: mainAgentId,
-            containerWorkspace: input.container.workspace,
-            sessionsDir: sessAbs,
-            modelRuntime,
-            sdkModel,
-            thinkingLevel: input.thinkingLevel,
-            systemPrompt: mainSystemPrompt,
-            containerName: name,
-            challengeId: challenge.id,
-            promptContext,
-            caps,
           },
-          provisionDeps
-        )
+          channel: runId,
+          agentId: mainAgentId,
+          cwd: input.container.workspace,
+          containerName: name,
+          containerManager,
+          modelRuntime,
+          model: sdkModel,
+          thinkingLevel: input.thinkingLevel,
+          agentSettings: agentSettings(),
+          systemPrompt: mainSystemPrompt,
+          extraTools: nativeTools,
+          extraToolNames: nativeTools.map((tool) => tool.name),
+          onUsageMaybeChanged: () => emitRun(runId),
+          db,
+          bus,
+        })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         updateAgent(mainAgentId, {
@@ -758,28 +760,14 @@ export function createRunService(options: RunServiceOptions) {
           "Run has no live session; start or reopen it first"
         )
       let target: SwitchTarget
+      let thinkingLevel: ThinkingLevel
       try {
-        target = resolveSwitchTarget(
-          agentSession.session.modelRuntime,
+        ;({ target, thinkingLevel } = await applyModelSwitch(
+          agentSession,
           providers(),
-          input.modelId
-        )
-      } catch (error) {
-        throw new RunActionError(
-          "invalid_state",
-          error instanceof Error ? error.message : String(error)
-        )
-      }
-      // Skip setModel when the model is unchanged (thinking-only switch) so we
-      // don't persist a spurious model_change marker. setThinkingLevel itself
-      // short-circuits when the level doesn't change.
-      const row = queries.getRow(runId)
-      const modelUnchanged = row?.modelId === target.model.modelId
-      try {
-        if (!modelUnchanged)
-          await agentSession.session.setModel(target.sdkModel)
-        if (input.thinkingLevel)
-          agentSession.session.setThinkingLevel(input.thinkingLevel)
+          input,
+          (t) => queries.getRow(runId)?.modelId === t.model.modelId
+        ))
       } catch (error) {
         throw new RunActionError(
           "invalid_state",
@@ -791,7 +779,7 @@ export function createRunService(options: RunServiceOptions) {
         providerLabel: target.provider.label,
         modelId: target.model.modelId,
         modelLabel: target.model.label,
-        thinkingLevel: agentSession.session.thinkingLevel,
+        thinkingLevel,
         updatedAt: now(),
       })
       emitRun(runId)
@@ -901,30 +889,37 @@ export function createRunService(options: RunServiceOptions) {
       settings["container.workspace"]
     )
     const caps = resolveCaps(promptContext)
+    const toolCtx = buildMainToolContext(runId, row.challengeId, mainAgent.id)
+    const nativeTools = createMainTools(toolCtx, caps)
 
     let agentSession: HostAgentSession
     try {
-      agentSession = await provision(
-        {
-          runId,
-          agentId: mainAgent.id,
-          containerWorkspace: settings["container.workspace"],
+      agentSession = await createHost({
+        owner: { type: "run", id: runId, runId, agentId: mainAgent.id },
+        channel: runId,
+        agentId: mainAgent.id,
+        cwd: settings["container.workspace"],
+        containerName: row.containerName,
+        containerManager,
+        modelRuntime,
+        model: sdkModel,
+        thinkingLevel: row.thinkingLevel as ThinkingLevel,
+        agentSettings: agentSettings(),
+        systemPrompt: renderSystemPrompt(
+          templates.mainSystemPromptTemplate,
+          promptContext
+        ),
+        extraTools: nativeTools,
+        extraToolNames: nativeTools.map((tool) => tool.name),
+        resumeFrom: {
+          sessionId: mainAgent.sessionFile,
+          isJsonl: mainAgent.sessionFile.endsWith(".jsonl"),
           sessionsDir: sessAbs,
-          sessionFile: mainAgent.sessionFile,
-          modelRuntime,
-          sdkModel,
-          thinkingLevel: row.thinkingLevel as ThinkingLevel,
-          systemPrompt: renderSystemPrompt(
-            templates.mainSystemPromptTemplate,
-            promptContext
-          ),
-          containerName: row.containerName,
-          challengeId: row.challengeId,
-          promptContext,
-          caps,
         },
-        provisionDeps
-      )
+        onUsageMaybeChanged: () => emitRun(runId),
+        db,
+        bus,
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       clearForceKill(runId)

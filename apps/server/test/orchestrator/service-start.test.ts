@@ -23,7 +23,7 @@ describe("orchestratorService.start", () => {
       seedOrchestrator(db, "evt-1", { enabled: true, modelId: "model-1" })
       const provider = makeProvider()
       const { manager, created } = stubContainerManager()
-      const createSession = mock(async () =>
+      const createHost = mock(async () =>
         stubHostAgentSession("orch-sess", { hang: true })
       )
 
@@ -36,7 +36,7 @@ describe("orchestratorService.start", () => {
         runService: {} as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettings,
-        createSession,
+        createHost,
       })
 
       const detail = await orch.start("evt-1")
@@ -61,7 +61,7 @@ describe("orchestratorService.start", () => {
       expect(typeof opts.image).toBe("string")
       expect(opts.image.length).toBeGreaterThan(0)
 
-      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(createHost).toHaveBeenCalledTimes(1)
     } finally {
       close()
     }
@@ -81,7 +81,7 @@ describe("orchestratorService.start", () => {
         runService: {} as never,
         configStore: stubConfigStore([makeProvider()]),
         getSettings: flatSettings,
-        createSession: async () => stubHostAgentSession(),
+        createHost: async () => stubHostAgentSession(),
       })
 
       await expect(orch.start("evt-1")).rejects.toThrow(/disabled/i)

@@ -4,13 +4,16 @@ import {
   CircleAlert,
   MessageSquare,
   Play,
-  Send,
   Settings as SettingsIcon,
   Square,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
-import type { OrchestratorConfigInput, ThinkingLevel } from "@/api"
+import type {
+  AgentSummary,
+  OrchestratorConfigInput,
+  ThinkingLevel,
+} from "@/api"
 import { keys, orchestratorsApi, providersApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -20,7 +23,6 @@ import {
   CardFrame,
   CardFrameAction,
   CardFrameDescription,
-  CardFrameFooter,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -28,11 +30,10 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { ModelThinkingSwitcher } from "@/features/runs/model-switcher"
-import { Timeline } from "@/features/runs/timeline"
+import { Conversation } from "@/features/runs/conversation"
 import { toast } from "@/lib/toast"
-import { ConversationStore } from "@/stream/conversation-store"
 
+/** Stable agent id for the orchestrator's single session (no `agents` row). */
 const AGENT_ID = "orchestrator"
 
 function orchestratorStatusLabel(
@@ -54,34 +55,9 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       query.state.data?.orchestrator.status === "running" ? 4000 : false,
   })
 
-  const storeRef = useRef<ConversationStore | null>(null)
-  if (storeRef.current === null) storeRef.current = new ConversationStore()
-  const store = storeRef.current
-  const [disconnected, setDisconnected] = useState(false)
-  const [draft, setDraft] = useState("")
   const [view, setView] = useState<"conversation" | "instruction">(
     "conversation"
   )
-
-  const loadMessages = useCallback(async () => {
-    try {
-      const list = await orchestratorsApi.listOrchestratorMessages(eventId, 0)
-      store.applySnapshot(AGENT_ID, list.items)
-    } catch {
-      // non-fatal; live stream reconciles
-    }
-  }, [eventId, store])
-
-  useEffect(() => {
-    const disconnect = store.connect(
-      eventId,
-      loadMessages,
-      setDisconnected,
-      `/api/events/${eventId}/orchestrator/stream`
-    )
-    void loadMessages()
-    return disconnect
-  }, [eventId, store, loadMessages])
 
   const orch = detail.data?.orchestrator
   const status = detail.data?.status
@@ -132,8 +108,8 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
   })
   const startMut = useMutation({
     mutationFn: async () => {
-      // `enabled` gates start server-side (docs §九). If the user toggled it
-      // off (or never enabled), arm it first so the primary CTA always works.
+      // `enabled` gates start server-side. If the user toggled it off (or never
+      // enabled), arm it first so the primary CTA always works.
       if (!orch?.enabled) {
         await orchestratorsApi.patchOrchestrator(eventId, { enabled: true })
       }
@@ -161,21 +137,56 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
       }),
     onError: (error: Error) => toast.error("关闭失败", error.message),
   })
-  const send = useMutation({
-    mutationFn: () =>
-      orchestratorsApi.sendOrchestratorMessage(eventId, { text: draft.trim() }),
-    onSuccess: () => setDraft(""),
-    onError: (error: Error) => toast.error("发送失败", error.message),
-  })
-  const switchModel = useMutation({
-    mutationFn: (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      orchestratorsApi.switchOrchestratorModel(eventId, input),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: keys.orchestrator.detail(eventId),
-      }),
-    onError: (error: Error) => toast.error("切换模型失败", error.message),
-  })
+
+  // --- Conversation adapter (same shape the solver run implements) ---------
+  // The orchestrator is a single agent with no `agents` row, so we synthesize
+  // one. canEditQueue is false: the orchestrator supports steer/followUp on
+  // send, but exposes no queue-edit endpoint.
+  const agents = useMemo<AgentSummary[]>(
+    () =>
+      orch
+        ? [
+            {
+              id: AGENT_ID,
+              runId: eventId,
+              role: "main",
+              parentAgentId: null,
+              name: null,
+              task: null,
+              status: orch.status === "running" ? "running" : "idle",
+              sessionFile: null,
+              createdAt: orch.createdAt,
+              startedAt: null,
+              updatedAt: orch.updatedAt,
+              completedAt: null,
+              error: null,
+            },
+          ]
+        : [],
+    [orch, eventId]
+  )
+  const loadMessages = useCallback(
+    () =>
+      orchestratorsApi
+        .listOrchestratorMessages(eventId, 0)
+        .then((list) => list.items),
+    [eventId]
+  )
+  const sendMessage = useCallback(
+    (text: string, deliverAs?: "steer" | "followUp") =>
+      orchestratorsApi.sendOrchestratorMessage(eventId, { text, deliverAs }),
+    [eventId]
+  )
+  const switchModel = useCallback(
+    (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
+      orchestratorsApi.switchOrchestratorModel(eventId, input).then(() =>
+        queryClient.invalidateQueries({
+          queryKey: keys.orchestrator.detail(eventId),
+        })
+      ),
+    [eventId, queryClient]
+  )
+  const findCurrentModelId = useCallback(() => orch?.modelId, [orch?.modelId])
 
   if (detail.isPending) {
     return (
@@ -279,69 +290,19 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
               className="min-h-0 flex-1 overflow-hidden"
               value="conversation"
             >
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="min-h-0 flex-1">
-                  <ScrollArea className="relative h-full" scrollFade>
-                    <Timeline agentId={AGENT_ID} stream={store} />
-                  </ScrollArea>
-                </div>
-                {disconnected && running && (
-                  <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
-                    正在重新连接…
-                  </div>
-                )}
-                <div className="shrink-0 px-3 pb-3">
-                  <CardFrame className="mx-auto max-w-3xl">
-                    <Card>
-                      <CardPanel className="p-2">
-                        <form
-                          className="flex w-full items-center gap-2"
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            if (draft.trim()) send.mutate()
-                          }}
-                        >
-                          <input
-                            className="h-9 flex-1 rounded-md border bg-background px-3 text-sm"
-                            disabled={
-                              send.isPending || orch.status === "closed"
-                            }
-                            onChange={(e) => setDraft(e.target.value)}
-                            placeholder={
-                              orch.status === "closed"
-                                ? "启动编排器以开始"
-                                : running
-                                  ? "引导编排器…"
-                                  : "向编排器发送消息…"
-                            }
-                            value={draft}
-                          />
-                          <Button
-                            disabled={
-                              !draft.trim() ||
-                              send.isPending ||
-                              orch.status === "closed"
-                            }
-                            loading={send.isPending}
-                            size="icon"
-                            type="submit"
-                          >
-                            <Send />
-                          </Button>
-                        </form>
-                      </CardPanel>
-                    </Card>
-                    <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
-                      <ModelThinkingSwitcher
-                        findCurrentModelId={() => orch.modelId}
-                        thinkingLevel={orch.thinkingLevel}
-                        disabled={orch.status === "closed"}
-                        onSwitch={(input) => switchModel.mutate(input)}
-                      />
-                    </CardFrameFooter>
-                  </CardFrame>
-                </div>
-              </div>
+              <Conversation
+                agents={agents}
+                canEditQueue={false}
+                channel={eventId}
+                closedReopenable={false}
+                findCurrentModelId={findCurrentModelId}
+                loadMessages={loadMessages}
+                sendMessage={sendMessage}
+                status={orch.status}
+                streamPath={`/api/events/${eventId}/orchestrator/stream`}
+                switchModel={switchModel}
+                thinkingLevel={orch.thinkingLevel}
+              />
             </TabsPanel>
             <TabsPanel
               className="min-h-0 flex-1 overflow-hidden"

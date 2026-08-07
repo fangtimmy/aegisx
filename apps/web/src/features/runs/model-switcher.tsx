@@ -33,6 +33,8 @@ type AvailableModel = {
   thinkingLevels: ThinkingLevel[]
 }
 
+export type { AvailableModel }
+
 /**
  * Compact model + reasoning selectors for the conversation composer footer.
  * Drives a live session switch via `onSwitch` (caller POSTs .../switch-model).

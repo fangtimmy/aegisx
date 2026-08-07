@@ -12,16 +12,14 @@ import { get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import type {
-  ModelRuntime,
-  ToolDefinition,
-} from "@earendil-works/pi-coding-agent"
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import { desc, eq } from "drizzle-orm"
 
+import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
+import { createAgentHost } from "../agents/host"
 import type { HostAgentSession } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
-import { resolveSwitchTarget, type SwitchTarget } from "../agents/model-switch"
 import type { createDatabase } from "../db"
 import {
   challengeRemote,
@@ -33,17 +31,14 @@ import {
 import type { ConfigStore } from "../infrastructure/config-store"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { getProviderConnections } from "../providers/public"
-import { createBashTool } from "../run/bash-tool"
 import type { ContainerManager } from "../run/container/container-manager"
 import { createToolboxContainer } from "../run/container/container-manager"
 import { createRunModelRuntime, resolveRunModel } from "../run/model-runtime"
 import type { RunService } from "../run/service"
-import { createDockerExecBackend } from "../run/workspace/backend"
-import { createWorkspaceTools } from "../run/workspace/tools"
 import { canLaunchRun, countRunningRuns, countTargetRuns } from "./guard"
 import { createOrchestratorQueries, type OrchestratorQueries } from "./queries"
 import {
-  createOrchestratorSession,
+  findExistingOrchestratorSessionId,
   ORCHESTRATOR_AGENT_ID,
   type OrchestratorAgentSettings,
 } from "./session"
@@ -78,10 +73,10 @@ export type OrchestratorServiceOptions = {
   runService: RunService
   getSettings(): FlatSettings
   configStore: ConfigStore
-  /** Test seam: override the host-session creation (default =
-   * createOrchestratorSession). Tests inject a stub to avoid building a real
-   * pi AgentSession + hitting a model. */
-  createSession?: typeof createOrchestratorSession
+  /** Test seam: override the host-session creation (default = createAgentHost).
+   * Tests inject a stub to avoid building a real pi AgentSession + hitting a
+   * model. */
+  createHost?: typeof createAgentHost
 }
 
 export type OrchestratorService = ReturnType<typeof createOrchestratorService>
@@ -312,7 +307,7 @@ export function buildOrchestratorToolContext(
 export function createOrchestratorService(options: OrchestratorServiceOptions) {
   const { db, dataDir, containerManager, runService, configStore } = options
   /** Host-session creation (real impl by default; stubbable for tests). */
-  const createSession = options.createSession ?? createOrchestratorSession
+  const createHost = options.createHost ?? createAgentHost
   const queries: OrchestratorQueries = createOrchestratorQueries({ db })
   const bus: LiveBus = createLiveBus()
   const locks = new Map<string, Promise<unknown>>()
@@ -565,40 +560,28 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       })
 
       const toolCtx = buildToolContext(eventId)
-      const bashDef = createBashTool(cfg.workspace, name, containerManager)
-      const workspaceTools = createWorkspaceTools(
-        createDockerExecBackend(name, containerManager, cfg.workspace)
-      )
       const mgmt = createOrchestratorTools(toolCtx)
-      const customTools = [
-        bashDef,
-        ...workspaceTools,
-        ...mgmt,
-      ] as ToolDefinition[]
-      const toolNames = [
-        "read",
-        "bash",
-        "edit",
-        "write",
-        "grep",
-        "find",
-        "ls",
-        ...mgmt.map((t) => t.name),
-      ]
+      const existingSessionId = findExistingOrchestratorSessionId(db, eventId)
 
       let orchSession: HostAgentSession
       try {
-        orchSession = await createSession({
-          eventId,
-          workspaceHostPath: wsAbs,
-          containerWorkspace: cfg.workspace,
+        orchSession = await createHost({
+          owner: { type: "orchestrator", id: eventId },
+          channel: eventId,
+          agentId: ORCHESTRATOR_AGENT_ID,
+          cwd: cfg.workspace,
+          containerName: name,
+          containerManager,
           modelRuntime,
           model: sdkModel,
           thinkingLevel: row.thinkingLevel as ThinkingLevel,
           agentSettings: agentSettings(),
           systemPrompt: buildSystemPrompt(row.instruction),
-          customTools,
-          toolNames,
+          extraTools: mgmt,
+          extraToolNames: mgmt.map((tool) => tool.name),
+          ...(existingSessionId
+            ? { resumeFrom: { sessionId: existingSessionId, isJsonl: false } }
+            : {}),
           db,
           bus,
         })
@@ -651,26 +634,14 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
           "Orchestrator is not running"
         )
       let target: SwitchTarget
+      let thinkingLevel: ThinkingLevel
       try {
-        target = resolveSwitchTarget(
-          orch.session.modelRuntime,
+        ;({ target, thinkingLevel } = await applyModelSwitch(
+          orch,
           providers(),
-          input.modelId
-        )
-      } catch (error) {
-        throw new OrchestratorActionError(
-          "invalid_state",
-          error instanceof Error ? error.message : String(error)
-        )
-      }
-      // Skip setModel when unchanged (thinking-only switch) to avoid a spurious
-      // model_change marker; setThinkingLevel short-circuits on no-change.
-      const row = queries.getRow(eventId)
-      const modelUnchanged = row?.modelId === target.model.id
-      try {
-        if (!modelUnchanged) await orch.session.setModel(target.sdkModel)
-        if (input.thinkingLevel)
-          orch.session.setThinkingLevel(input.thinkingLevel)
+          input,
+          (t) => queries.getRow(eventId)?.modelId === t.model.id
+        ))
       } catch (error) {
         throw new OrchestratorActionError(
           "invalid_state",
@@ -679,7 +650,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       }
       queries.update(eventId, {
         modelId: target.model.id,
-        thinkingLevel: orch.session.thinkingLevel as ThinkingLevel,
+        thinkingLevel,
       })
       return getDetail(eventId) as OrchestratorDetail
     })

@@ -7,9 +7,10 @@ import {
   MessageSquare,
   Square,
 } from "lucide-react"
+import { useCallback } from "react"
 import { useSearchParams } from "react-router"
 
-import { type Challenge, keys, runsApi } from "@/api"
+import { type Challenge, type ThinkingLevel, keys, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -46,6 +47,7 @@ import { toast } from "@/lib/toast"
 import { Conversation } from "./conversation"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
+import { type AvailableModel } from "./model-switcher"
 import { RunOverview, runStatusLabel, statusVariant } from "./run-overview"
 
 export function RunWorkspace({
@@ -150,6 +152,38 @@ export function RunWorkspace({
 
   const running = run.status === "running"
   const agents = detail.data?.agents ?? []
+
+  // Conversation adapter — stable callbacks so the SSE connection effect
+  // does not reconnect on re-render. Model switch refreshes the run list so
+  // the header + switcher re-derive the current model.
+  const loadMessages = useCallback(
+    () => runsApi.listMessages(runId, 0).then((list) => list.items),
+    [runId]
+  )
+  const sendMessage = useCallback(
+    (text: string, deliverAs?: "steer" | "followUp") =>
+      runsApi.sendMessage(runId, { text, deliverAs }),
+    [runId]
+  )
+  const switchModel = useCallback(
+    (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
+      runsApi
+        .switchModel(runId, input)
+        .then(() => invalidate(queryClient, eventId)),
+    [runId, eventId, queryClient]
+  )
+  const setQueue = useCallback(
+    (_agentId: string, body: { steering: string[]; followUp: string[] }) =>
+      runsApi.setQueue(runId, body),
+    [runId]
+  )
+  const findCurrentModelId = useCallback(
+    (models: AvailableModel[]) =>
+      models.find(
+        (m) => m.modelId === run.modelId && m.providerLabel === run.provider
+      )?.id,
+    [run.modelId, run.provider]
+  )
 
   const requestedView = searchParams.get("view")
   const view =
@@ -258,7 +292,20 @@ export function RunWorkspace({
               className="min-h-0 flex-1 overflow-hidden"
               value="conversation"
             >
-              <Conversation agents={agents} run={run} runId={runId} />
+              <Conversation
+                agents={agents}
+                canEditQueue
+                channel={runId}
+                closedReopenable
+                findCurrentModelId={findCurrentModelId}
+                loadMessages={loadMessages}
+                sendMessage={sendMessage}
+                status={run.status}
+                streamPath={`/api/runs/${runId}/stream`}
+                switchModel={switchModel}
+                setQueue={setQueue}
+                thinkingLevel={run.thinkingLevel}
+              />
             </TabsPanel>
             <TabsPanel
               className="min-h-0 flex-1 overflow-hidden"

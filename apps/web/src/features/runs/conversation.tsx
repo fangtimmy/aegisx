@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation } from "@tanstack/react-query"
 import { Bot, ChevronDown, GitFork, LoaderCircle, Send, X } from "lucide-react"
 import {
   useCallback,
@@ -9,8 +9,7 @@ import {
   useSyncExternalStore,
 } from "react"
 
-import type { AgentSummary, RunPublic, ThinkingLevel } from "@/api"
-import { keys, runsApi } from "@/api"
+import type { AgentSummary, MessageListItem, ThinkingLevel } from "@/api"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -36,18 +35,69 @@ import { ConversationStore } from "@/stream/conversation-store"
 
 import { AgentActivityBadge } from "./agent-activity-badge"
 import { AgentStatusIcon } from "./agent-status-icon"
-import { ModelThinkingSwitcher } from "./model-switcher"
+import { type AvailableModel, ModelThinkingSwitcher } from "./model-switcher"
 import { Timeline } from "./timeline"
 
-export function Conversation({
-  runId,
-  run,
-  agents,
-}: {
-  runId: string
-  run: RunPublic
+/**
+ * Data + lifecycle adapter for {@link Conversation}. Both the solver run
+ * (run-workspace) and the per-event orchestrator (orchestrator-view) implement
+ * this; Conversation itself is agent-agnostic. The callbacks should be stable
+ * (useCallback) so the SSE connection effect does not reconnect on re-render.
+ */
+export type ConversationProps = {
+  /** LiveBus channel id (run id / event id). */
+  channel: string
+  /** SSE endpoint path. */
+  streamPath: string
+  /** Agents in this conversation (≥1). Re-renders agent tabs; does NOT affect
+   * the SSE connection. The orchestrator passes a single synthetic agent. */
   agents: AgentSummary[]
-}) {
+  /** Aggregate status driving the input placeholder + switcher disabled state. */
+  status: "running" | "idle" | "closed"
+  /** Whether messaging a closed entity reopens it (solver runs cold-restore).
+   * When false (orchestrator), the composer is locked while closed and the
+   * user must (re)start it via the header action. */
+  closedReopenable: boolean
+  /** Resolve the current model id (UUID) from the providers list, for the
+   * model switcher. Only used for the main agent. */
+  findCurrentModelId: (models: AvailableModel[]) => string | null | undefined
+  thinkingLevel: ThinkingLevel
+  /** Offer steer/followUp queue editing (run main agent only). */
+  canEditQueue: boolean
+  /** Load durable committed messages (raw list; Conversation buckets by agent). */
+  loadMessages: () => Promise<MessageListItem[]>
+  /** Send a message (steer / followUp / new turn). */
+  sendMessage: (
+    text: string,
+    deliverAs?: "steer" | "followUp"
+  ) => Promise<unknown>
+  /** Switch the live model (main agent). Parent owns success invalidation. */
+  switchModel: (input: {
+    modelId: string
+    thinkingLevel: ThinkingLevel
+  }) => Promise<unknown>
+  /** Replace an agent's steer/followUp queue (run main agent only). */
+  setQueue?: (
+    agentId: string,
+    body: { steering: string[]; followUp: string[] }
+  ) => Promise<unknown>
+}
+
+export function Conversation(props: ConversationProps) {
+  const {
+    channel,
+    streamPath,
+    agents,
+    status,
+    findCurrentModelId,
+    thinkingLevel,
+    canEditQueue,
+    loadMessages: loadMessagesFn,
+    sendMessage: sendMessageFn,
+    switchModel: switchModelFn,
+    setQueue,
+  } = props
+
   const storeRef = useRef<ConversationStore | null>(null)
   if (storeRef.current === null) storeRef.current = new ConversationStore()
   const store = storeRef.current
@@ -62,7 +112,9 @@ export function Conversation({
   const [disconnected, setDisconnected] = useState(false)
   const [draft, setDraft] = useState("")
   const [deliverAs, setDeliverAs] = useState<"steer" | "followUp">("steer")
-  const running = run.status === "running"
+  const running = status === "running"
+  const closed = status === "closed"
+  const locked = closed && !props.closedReopenable
 
   // Keep the selected agent valid as agents appear/disappear (e.g. a child
   // spawns or completes).
@@ -82,14 +134,16 @@ export function Conversation({
   const showSteerQueue =
     running &&
     selectedAgent?.role === "main" &&
+    canEditQueue &&
+    setQueue !== undefined &&
     queuedMessages !== null &&
     (queuedMessages.steering.length > 0 || queuedMessages.followUp.length > 0)
 
   const loadMessages = useCallback(async () => {
     try {
-      const list = await runsApi.listMessages(runId, 0)
-      const byAgent = new Map<string, typeof list.items>()
-      for (const message of list.items) {
+      const items = await loadMessagesFn()
+      const byAgent = new Map<string, MessageListItem[]>()
+      for (const message of items) {
         const bucket = byAgent.get(message.agentId) ?? []
         bucket.push(message)
         byAgent.set(message.agentId, bucket)
@@ -100,13 +154,18 @@ export function Conversation({
     } catch {
       // non-fatal; live stream + retry reconcile on reconnect
     }
-  }, [runId, store])
+  }, [store, loadMessagesFn])
 
   useEffect(() => {
-    const disconnect = store.connect(runId, loadMessages, setDisconnected)
+    const disconnect = store.connect(
+      channel,
+      loadMessages,
+      setDisconnected,
+      streamPath
+    )
     void loadMessages()
     return disconnect
-  }, [runId, store, loadMessages])
+  }, [channel, streamPath, store, loadMessages])
 
   // Re-fetch when the agent list grows (e.g. a child spawned) so its history
   // is loaded even if committed SSE events raced ahead.
@@ -116,18 +175,14 @@ export function Conversation({
   }, [agents.length, loadMessages])
 
   const send = useMutation({
-    mutationFn: () =>
-      runsApi.sendMessage(runId, { text: draft.trim(), deliverAs }),
+    mutationFn: () => sendMessageFn(draft.trim(), deliverAs),
     onSuccess: () => setDraft(""),
     onError: (error) => toast.error("发送消息失败", error.message),
   })
 
-  const queryClient = useQueryClient()
   const switchModel = useMutation({
     mutationFn: (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      runsApi.switchModel(runId, input),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
+      switchModelFn(input),
     onError: (error) => toast.error("切换模型失败", error.message),
   })
 
@@ -184,11 +239,11 @@ export function Conversation({
       {selectedAgent && (
         <div className="shrink-0 px-3 pb-3">
           <CardFrame className="mx-auto max-w-3xl">
-            {showSteerQueue && (
+            {showSteerQueue && setQueue && (
               <CardFrameHeader className="px-3 py-2">
                 <SteerQueue
                   agentId={selectedAgent.id}
-                  runId={runId}
+                  setQueue={setQueue}
                   stream={store}
                 />
               </CardFrameHeader>
@@ -197,7 +252,8 @@ export function Conversation({
               <CardPanel className="p-2">
                 <MessageInput
                   busy={send.isPending}
-                  closed={run.status === "closed"}
+                  closed={closed}
+                  closedReopenable={props.closedReopenable}
                   deliverAs={deliverAs}
                   draft={draft}
                   onDeliverAsChange={setDeliverAs}
@@ -210,15 +266,9 @@ export function Conversation({
             <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
               {selectedAgent.role === "main" && (
                 <ModelThinkingSwitcher
-                  findCurrentModelId={(ms) =>
-                    ms.find(
-                      (m) =>
-                        m.modelId === run.modelId &&
-                        m.providerLabel === run.provider
-                    )?.id
-                  }
-                  thinkingLevel={run.thinkingLevel}
-                  disabled={run.status === "closed"}
+                  findCurrentModelId={findCurrentModelId}
+                  thinkingLevel={thinkingLevel}
+                  disabled={locked}
                   onSwitch={(input) => switchModel.mutate(input)}
                 />
               )}
@@ -243,6 +293,7 @@ function MessageInput({
   deliverAs,
   busy,
   closed,
+  closedReopenable,
   running,
   onDraftChange,
   onDeliverAsChange,
@@ -252,16 +303,20 @@ function MessageInput({
   deliverAs: "steer" | "followUp"
   busy: boolean
   closed: boolean
+  closedReopenable: boolean
   running: boolean
   onDraftChange: (value: string) => void
   onDeliverAsChange: (value: "steer" | "followUp") => void
   onSubmit: () => void
 }) {
-  const placeholder = closed
-    ? "发送消息以重新打开并继续（容器将重建）"
-    : running
-      ? "引导或追问 agent…"
-      : "向 agent 发送消息…"
+  const locked = closed && !closedReopenable
+  const placeholder = locked
+    ? "已关闭，请重新启动以开始"
+    : closed
+      ? "发送消息以重新打开并继续（容器将重建）"
+      : running
+        ? "引导或追问 agent…"
+        : "向 agent 发送消息…"
   return (
     <form
       className="flex w-full items-center gap-2"
@@ -273,7 +328,7 @@ function MessageInput({
       <Input
         aria-label="向 agent 发送消息"
         className="flex-1"
-        disabled={busy}
+        disabled={busy || locked}
         onChange={(e) => onDraftChange(e.target.value)}
         placeholder={placeholder}
         unstyled
@@ -282,7 +337,7 @@ function MessageInput({
       <ButtonGroup>
         <Button
           aria-label="发送消息"
-          disabled={!draft.trim() || busy}
+          disabled={!draft.trim() || busy || locked}
           loading={busy}
           size="icon"
           type="submit"
@@ -392,16 +447,18 @@ function ContextStatStrip({
 
 type QueueRow = { role: "steering" | "followUp"; index: number; text: string }
 
-/** Editable list of queued steer / follow-up messages above the input. The SDK
- * only exposes clearQueue(), so an edit/remove commits clear + re-queue via
- * PUT /queue; the server reconciles through queue.updated. */
+/** Editable list of queued steer / follow-up messages above the input. Commits
+ * clear + re-queue via `setQueue`; the server reconciles through queue.updated. */
 function SteerQueue({
-  runId,
   agentId,
+  setQueue,
   stream,
 }: {
-  runId: string
   agentId: string
+  setQueue: (
+    agentId: string,
+    body: { steering: string[]; followUp: string[] }
+  ) => Promise<unknown>
   stream: ConversationStore
 }) {
   const subscribe = useCallback(
@@ -416,7 +473,7 @@ function SteerQueue({
   const [edit, setEdit] = useState<QueueRow | null>(null)
   const put = useMutation({
     mutationFn: (body: { steering: string[]; followUp: string[] }) =>
-      runsApi.setQueue(runId, body),
+      setQueue(agentId, body),
     onError: (error) => toast.error("更新队列失败", error.message),
   })
 
