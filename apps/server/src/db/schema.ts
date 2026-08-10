@@ -9,7 +9,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -44,10 +44,18 @@ export const challenges = sqliteTable(
     description: text("description").notNull(),
     category: text("category"),
     points: integer("points"),
+    /** Manual solve-state override (user-assigned). Drives `solved.manual`. */
+    manualSolveState: text("manual_solve_state").notNull().default("unsolved"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [index("challenges_event_id_idx").on(table.eventId)]
+  (table) => [
+    index("challenges_event_id_idx").on(table.eventId),
+    check(
+      "challenges_manual_solve_state_check",
+      sql`${table.manualSolveState} in ('solved', 'partial', 'unsolved')`
+    ),
+  ]
 )
 
 export const challengeRemote = sqliteTable(
@@ -138,7 +146,6 @@ export const runs = sqliteTable(
     completedAt: text("completed_at"),
     error: text("error"),
     summary: text("summary"),
-    flag: text("flag"),
     // Orchestrator scheduling metadata
     source: text("source").notNull().default("manual"),
     timeoutMs: integer("timeout_ms"),
@@ -312,26 +319,45 @@ export const sessionEntries = sqliteTable(
   ]
 )
 
-export const submissions = sqliteTable(
-  "submissions",
+/**
+ * Per-challenge flag records (one-to-many: a challenge may have many flags —
+ * "一题多解"). The unified source of truth for the `solved.local` dimension
+ * (EXISTS accepted) and for flag provenance (which run / manual entry / remote
+ * submission id). Replaces the v6 `runs.flag` column and `submissions` table.
+ */
+export const challengeFlags = sqliteTable(
+  "challenge_flags",
   {
     id: text("id").primaryKey(),
-    runId: text("run_id")
+    challengeId: text("challenge_id")
       .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
+      .references(() => challenges.id, { onDelete: "cascade" }),
     flag: text("flag").notNull(),
+    /** pending | accepted | rejected | error (adapter partial/already_solved
+     * collapse to accepted — the flag itself was verified). */
     status: text("status").notNull(),
+    /** run = submitted by a run via submit_flag; manual = recorded by the user. */
+    source: text("source").notNull(),
+    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
     remoteId: text("remote_id"),
     message: text("message"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    index("submissions_run_id_idx").on(table.runId),
-    uniqueIndex("submissions_run_flag_unique").on(table.runId, table.flag),
+    uniqueIndex("challenge_flags_challenge_flag_unique").on(
+      table.challengeId,
+      table.flag
+    ),
+    index("challenge_flags_challenge_id_idx").on(table.challengeId),
+    index("challenge_flags_run_id_idx").on(table.runId),
     check(
-      "submissions_status_check",
-      sql`${table.status} in ('pending', 'accepted', 'rejected', 'partial', 'already_solved', 'rate_limited', 'error')`
+      "challenge_flags_status_check",
+      sql`${table.status} in ('pending', 'accepted', 'rejected', 'error')`
+    ),
+    check(
+      "challenge_flags_source_check",
+      sql`${table.source} in ('run', 'manual')`
     ),
   ]
 )

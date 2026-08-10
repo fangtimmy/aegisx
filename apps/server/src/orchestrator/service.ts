@@ -23,6 +23,7 @@ import { createLiveBus, type LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import {
   attachments,
+  challengeFlags,
   challengeRemote,
   challenges,
   events,
@@ -137,6 +138,22 @@ export function buildOrchestratorToolContext(
     containerConfig,
   } = deps
 
+  /** True iff the run has any accepted flag record (platform- or run-sourced). */
+  function runHasAcceptedFlag(runId: string): boolean {
+    return Boolean(
+      db
+        .select({ id: challengeFlags.id })
+        .from(challengeFlags)
+        .where(
+          and(
+            eq(challengeFlags.runId, runId),
+            eq(challengeFlags.status, "accepted")
+          )
+        )
+        .get()
+    )
+  }
+
   const ctx: OrchestratorToolContext = {
     eventId,
 
@@ -243,7 +260,7 @@ export function buildOrchestratorToolContext(
           challengeName: challenge.name,
           status: run.status,
           source: run.source,
-          hasFlag: Boolean(run.flag),
+          hasFlag: runHasAcceptedFlag(run.id),
           summary: run.summary,
           error: run.error,
           createdAt: run.createdAt,
@@ -426,7 +443,7 @@ export function buildOrchestratorToolContext(
         challengeName: challenge.name,
         status: run.status,
         source: run.source,
-        hasFlag: Boolean(run.flag),
+        hasFlag: runHasAcceptedFlag(run.id),
         createdAt: run.createdAt,
         updatedAt: run.updatedAt,
         deadlineAt: run.deadlineAt,

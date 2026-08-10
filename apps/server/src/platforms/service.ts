@@ -24,7 +24,7 @@ import type {
   PlatformType,
 } from "./core"
 import { PlatformActionError, platformError } from "./errors"
-import { createPlatformSubmissions } from "./submissions"
+import { createPlatformFlags } from "./flags"
 import { createPlatformSync } from "./sync"
 import { createPlatformTargets } from "./targets"
 
@@ -126,7 +126,7 @@ export function createPlatformService(
     storedPlatform,
     adapterForEvent
   )
-  const platformSubmissions = createPlatformSubmissions(
+  const platformFlags = createPlatformFlags(
     db,
     storedPlatform,
     adapterForEvent,
@@ -324,7 +324,11 @@ export function createPlatformService(
     setRunHooks(hooks: { onRunFlagAccepted?(runId: string): void }) {
       onRunFlagAccepted = hooks.onRunFlagAccepted
     },
-    submitFlag: platformSubmissions.submitFlag,
+    addManualFlag: platformFlags.addManualFlag,
+    deleteFlag: platformFlags.deleteFlag,
+    listFlags: platformFlags.listFlags,
+    refreshChallengeRemote: platformSync.refreshChallengeRemote,
+    submitFlag: platformFlags.submitFlag,
     syncChallenges: platformSync.syncChallenges,
     targetAction: platformTargets.targetAction,
     testBoundConnection,

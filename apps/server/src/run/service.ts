@@ -12,7 +12,7 @@ import { get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 
 import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -23,7 +23,7 @@ import type {
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
-import { agents, challenges, runs } from "../db/schema"
+import { agents, challengeFlags, challenges, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
@@ -272,7 +272,20 @@ export function createRunService(options: RunServiceOptions) {
       if (challenge.category) parts.push(challenge.category)
       if (challenge.points != null) parts.push(`${challenge.points}pts`)
     }
-    const hasFlag = opts.flag ?? Boolean(row.flag)
+    const hasFlag =
+      opts.flag ??
+      Boolean(
+        db
+          .select({ id: challengeFlags.id })
+          .from(challengeFlags)
+          .where(
+            and(
+              eq(challengeFlags.runId, runId),
+              eq(challengeFlags.status, "accepted")
+            )
+          )
+          .get()
+      )
     parts.push(`flag=${hasFlag ? "yes" : "no"}`)
     parts.push(`src=${row.source}`)
     return parts.join(", ")
@@ -454,9 +467,9 @@ export function createRunService(options: RunServiceOptions) {
       runId,
       challengeId,
       agentId: mainAgentId,
-      submitFlag: (flag) =>
+      submitFlag: (flag, verifyRemote = true) =>
         platformService
-          .submitFlag(runId, challengeId, flag)
+          .submitFlag(runId, challengeId, flag, verifyRemote)
           .then((r) => r ?? null),
       targetAction: (action) =>
         platformService.targetAction(challengeId, action),

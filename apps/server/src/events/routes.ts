@@ -40,6 +40,22 @@ const challengeInput = Type.Object({
   ),
 })
 
+const solveStateInput = Type.Object(
+  {
+    state: Type.Union([
+      Type.Literal("solved"),
+      Type.Literal("partial"),
+      Type.Literal("unsolved"),
+    ]),
+  },
+  { additionalProperties: false }
+)
+
+const manualFlagInput = Type.Object(
+  { flag: Type.String({ minLength: 1, maxLength: 10_000 }) },
+  { additionalProperties: false }
+)
+
 type Database = ReturnType<typeof createDatabase>["db"]
 type Storage = ReturnType<typeof createStorage>
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -234,6 +250,65 @@ export function registerEventRoutes(
       return c.json(getChallenge(challengeId))
     }
   )
+
+  app.patch(
+    "/api/challenges/:challengeId/solved",
+    validateJson(solveStateInput),
+    (c) => {
+      const challengeId = c.req.param("challengeId")
+      if (!getChallenge(challengeId)) {
+        return notFound(c, "Challenge not found")
+      }
+      const { state } = c.req.valid("json")
+      db.update(challenges)
+        .set({ manualSolveState: state, updatedAt: new Date().toISOString() })
+        .where(eq(challenges.id, challengeId))
+        .run()
+      return c.json(getChallenge(challengeId))
+    }
+  )
+
+  app.post(
+    "/api/challenges/:challengeId/flags",
+    validateJson(manualFlagInput),
+    (c) => {
+      const challengeId = c.req.param("challengeId")
+      if (!getChallenge(challengeId)) {
+        return notFound(c, "Challenge not found")
+      }
+      const flag = platformService.addManualFlag(
+        challengeId,
+        c.req.valid("json").flag
+      )
+      return c.json({ flag }, 201)
+    }
+  )
+
+  app.delete("/api/challenges/:challengeId/flags/:flagId", (c) => {
+    const challengeId = c.req.param("challengeId")
+    if (!getChallenge(challengeId)) {
+      return notFound(c, "Challenge not found")
+    }
+    const deleted = platformService.deleteFlag(
+      challengeId,
+      c.req.param("flagId")
+    )
+    if (!deleted) return notFound(c, "Flag not found")
+    return c.body(null, 204)
+  })
+
+  app.post("/api/challenges/:challengeId/remote/refresh", async (c) => {
+    const challengeId = c.req.param("challengeId")
+    if (!getChallenge(challengeId)) {
+      return notFound(c, "Challenge not found")
+    }
+    try {
+      await platformService.refreshChallengeRemote(challengeId)
+      return c.json(getChallenge(challengeId))
+    } catch (error) {
+      return platformActionHttpError(c, error)
+    }
+  })
 
   app.delete("/api/challenges/:challengeId", (c) => {
     const challenge = getChallenge(c.req.param("challengeId"))

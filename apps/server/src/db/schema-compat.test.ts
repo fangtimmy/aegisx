@@ -29,7 +29,7 @@ describe("schema bootstrap", () => {
       expect(names.has("runs")).toBe(true)
       expect(names.has("agents")).toBe(true)
       expect(names.has("orchestrators")).toBe(true)
-      expect(names.has("submissions")).toBe(true)
+      expect(names.has("challenge_flags")).toBe(true)
       // drizzle migration tracking is present (the recognized-DB marker)
       expect(names.has("__drizzle_migrations")).toBe(true)
       // the legacy normalized event log is gone (session_entries is the source)

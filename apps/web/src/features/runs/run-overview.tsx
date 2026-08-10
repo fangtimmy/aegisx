@@ -129,7 +129,7 @@ export function RunOverview({ run }: { run: RunPublic }) {
           </dl>
         </section>
       )}
-      {(run.summary || run.flag) && (
+      {(run.summary || run.flags.length > 0) && (
         <section className="border-t pt-4">
           <h3 className="mb-2 text-sm font-medium">结果</h3>
           {run.summary && (
@@ -137,8 +137,14 @@ export function RunOverview({ run }: { run: RunPublic }) {
               {run.summary}
             </p>
           )}
-          {run.flag && (
-            <p className="mt-2 font-mono text-xs break-all">Flag：{run.flag}</p>
+          {run.flags.length > 0 && (
+            <ul className="mt-2 grid gap-1">
+              {run.flags.map((flag) => (
+                <li className="font-mono text-xs break-all" key={flag.id}>
+                  {flag.flag}
+                </li>
+              ))}
+            </ul>
           )}
         </section>
       )}

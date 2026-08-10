@@ -113,6 +113,15 @@ export class A1CtfAdapter extends BaseAdapter {
     }
   }
 
+  async getSolveState(remoteId: string): Promise<boolean> {
+    const summaries = await this.listChallenges()
+    const summary = summaries.find((item) => item.id === remoteId)
+    if (!summary) {
+      throw new PlatformError("Challenge not found on platform", 404)
+    }
+    return summary.solved
+  }
+
   async submitFlag(
     remoteId: string,
     flag: string,

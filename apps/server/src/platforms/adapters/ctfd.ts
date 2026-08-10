@@ -94,6 +94,13 @@ export class CtfdAdapter extends BaseAdapter {
     }
   }
 
+  async getSolveState(remoteId: string): Promise<boolean> {
+    const body = await this.http.json<{ data: JsonRecord }>(
+      `/api/v1/challenges/${encodeURIComponent(remoteId)}`
+    )
+    return body.data?.solved_by_me === true
+  }
+
   async submitFlag(
     remoteId: string,
     flag: string,

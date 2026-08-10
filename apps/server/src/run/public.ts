@@ -1,7 +1,7 @@
-import type { RunPublic, RunUsage } from "@aegisx/shared"
+import type { ChallengeFlag, RunPublic, RunUsage } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
 
-import type { agents, runs } from "../db/schema"
+import type { agents, challengeFlags, runs } from "../db/schema"
 
 export type RunRow = typeof runs.$inferSelect
 export type AgentRow = typeof agents.$inferSelect
@@ -12,9 +12,27 @@ export type ChallengeMeta = {
   targetSupported: boolean
 }
 
+export function toFlagPublic(
+  row: typeof challengeFlags.$inferSelect
+): ChallengeFlag {
+  return {
+    id: row.id,
+    challengeId: row.challengeId,
+    flag: row.flag,
+    status: row.status as ChallengeFlag["status"],
+    source: row.source as ChallengeFlag["source"],
+    runId: row.runId,
+    remoteId: row.remoteId,
+    message: row.message,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }
+}
+
 export function toRunPublic(
   row: RunRow,
   challenge?: ChallengeMeta,
+  flags: ChallengeFlag[] = [],
   usage?: RunUsage
 ): RunPublic {
   return {
@@ -40,8 +58,8 @@ export function toRunPublic(
     completedAt: row.completedAt,
     error: row.error,
     summary: row.summary,
-    flag: row.flag,
-    hasFlag: Boolean(row.flag),
+    flags,
+    hasAcceptedFlag: flags.some((flag) => flag.status === "accepted"),
     usage,
   }
 }

@@ -1,15 +1,18 @@
 import type {
   Attachment,
   Challenge as ChallengePublic,
+  ChallengeFlag,
+  ChallengeSolved,
   EventSummary,
   RemoteTargetInfo,
 } from "@aegisx/shared"
-import { count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
+import { asc, count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
 import { Value } from "typebox/value"
 
 import type { createDatabase } from "../db"
 import {
   attachments,
+  challengeFlags,
   challengeRemote,
   challenges,
   events,
@@ -31,7 +34,7 @@ export function createCatalogReader(
       .select({
         ...getTableColumns(events),
         challengeCount: count(challenges.id),
-        solvedCount: sql<number>`coalesce(sum(case when ${challengeRemote.solved} = 1 or exists (select 1 from ${runs} where ${runs.challengeId} = ${challenges.id} and ${runs.flag} is not null) then 1 else 0 end), 0)`,
+        solvedCount: sql<number>`coalesce(sum(case when ${challengeRemote.solved} = 1 or ${challenges.manualSolveState} != 'unsolved' or exists (select 1 from ${challengeFlags} where ${challengeFlags.challengeId} = ${challenges.id} and ${challengeFlags.status} = 'accepted') then 1 else 0 end), 0)`,
         lastChallengeAt: max(challenges.updatedAt),
         activeRunCount: sql<number>`coalesce((select sum(case when r.status in ('running', 'idle') then 1 else 0 end) from runs r inner join challenges rc on r.challenge_id = rc.id where rc.event_id = events.id), 0)`,
         lastRunAt: sql<
@@ -83,32 +86,52 @@ export function createCatalogReader(
       }))
   }
 
+  const toFlagPublic = (
+    row: typeof challengeFlags.$inferSelect
+  ): ChallengeFlag => ({
+    id: row.id,
+    challengeId: row.challengeId,
+    flag: row.flag,
+    status: row.status as ChallengeFlag["status"],
+    source: row.source as ChallengeFlag["source"],
+    runId: row.runId,
+    remoteId: row.remoteId,
+    message: row.message,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  })
+
+  const listFlagsFor = (challengeIds: string[]): ChallengeFlag[] => {
+    if (challengeIds.length === 0) return []
+    return db
+      .select()
+      .from(challengeFlags)
+      .where(inArray(challengeFlags.challengeId, challengeIds))
+      .orderBy(asc(challengeFlags.createdAt), asc(challengeFlags.id))
+      .all()
+      .map(toFlagPublic)
+  }
+
   const publicChallenge = (
     challenge: typeof challenges.$inferSelect,
     remote: ChallengeRemote | null,
-    challengeAttachments: Array<{
-      id: string
-      challengeId: string
-      originalName: string
-      size: number
-      sha256: string
-      createdAt: string
-      downloadUrl: string
-    }>,
+    challengeAttachments: Attachment[],
+    flags: ChallengeFlag[],
     runSummary?: {
       runCount: number
       runningCount: number
       idleCount: number
       closedCount: number
-      flaggedCount: number
     }
   ): ChallengePublic => {
     const runCount = Number(runSummary?.runCount ?? 0)
-    const runningCount = Number(runSummary?.runningCount ?? 0)
-    const idleCount = Number(runSummary?.idleCount ?? 0)
-    const closedCount = Number(runSummary?.closedCount ?? 0)
-    const flaggedCount = Number(runSummary?.flaggedCount ?? 0)
     const ignored = remote?.targetIgnored ?? false
+    const hasAcceptedFlag = flags.some((flag) => flag.status === "accepted")
+    const solved: ChallengeSolved = {
+      local: hasAcceptedFlag ? "solved" : "unsolved",
+      manual: challenge.manualSolveState as ChallengeSolved["manual"],
+      remote: remote?.solved ? "solved" : "unsolved",
+    }
     return {
       id: challenge.id,
       eventId: challenge.eventId,
@@ -119,26 +142,21 @@ export function createCatalogReader(
       createdAt: challenge.createdAt,
       updatedAt: challenge.updatedAt,
       attachments: challengeAttachments,
+      flags,
+      solved,
       runCount,
       runStatusCounts: {
-        running: runningCount,
-        idle: idleCount,
-        closed: closedCount,
+        running: Number(runSummary?.runningCount ?? 0),
+        idle: Number(runSummary?.idleCount ?? 0),
+        closed: Number(runSummary?.closedCount ?? 0),
       },
       remoteId: remote?.remoteId ?? null,
       remoteAvailable: remote ? remote.available : true,
-      remoteSolved: remote?.solved ?? false,
       remoteTarget: remote?.targetSupported ?? false,
       remoteTargetIgnored: ignored,
       remoteTargetCount: ignored ? 0 : (remote?.targetCount ?? 0),
       targets: ignored ? [] : parseTargetInfo(remote?.targetInfo),
       remoteUpdatedAt: remote?.syncedAt ?? null,
-      status:
-        remote?.solved || flaggedCount > 0
-          ? ("solved" as const)
-          : runCount > 0
-            ? ("in_progress" as const)
-            : ("not_started" as const),
     }
   }
 
@@ -156,7 +174,6 @@ export function createCatalogReader(
         runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
         idleCount: sql<number>`coalesce(sum(case when ${runs.status} = 'idle' then 1 else 0 end), 0)`,
         closedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'closed' then 1 else 0 end), 0)`,
-        flaggedCount: sql<number>`coalesce(sum(case when ${runs.flag} is not null then 1 else 0 end), 0)`,
       })
       .from(runs)
       .where(eq(runs.challengeId, challengeId))
@@ -165,6 +182,7 @@ export function createCatalogReader(
       row.challenge,
       row.remote,
       listAttachments([challengeId]),
+      listFlagsFor([challengeId]),
       runSummary
     )
   }
@@ -178,6 +196,7 @@ export function createCatalogReader(
       .all()
     const ids = rows.map(({ challenge }) => challenge.id)
     const attachmentRows = listAttachments(ids)
+    const flagRows = listFlagsFor(ids)
     const runRows =
       ids.length === 0
         ? []
@@ -188,7 +207,6 @@ export function createCatalogReader(
               runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
               idleCount: sql<number>`coalesce(sum(case when ${runs.status} = 'idle' then 1 else 0 end), 0)`,
               closedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'closed' then 1 else 0 end), 0)`,
-              flaggedCount: sql<number>`coalesce(sum(case when ${runs.flag} is not null then 1 else 0 end), 0)`,
             })
             .from(runs)
             .where(inArray(runs.challengeId, ids))
@@ -200,6 +218,12 @@ export function createCatalogReader(
       values.push(attachment)
       attachmentsByChallenge.set(attachment.challengeId, values)
     }
+    const flagsByChallenge = new Map<string, ChallengeFlag[]>()
+    for (const flag of flagRows) {
+      const values = flagsByChallenge.get(flag.challengeId) ?? []
+      values.push(flag)
+      flagsByChallenge.set(flag.challengeId, values)
+    }
     const runsByChallenge = new Map(
       runRows.map((row) => [row.challengeId, row])
     )
@@ -208,6 +232,7 @@ export function createCatalogReader(
         challenge,
         remote,
         attachmentsByChallenge.get(challenge.id) ?? [],
+        flagsByChallenge.get(challenge.id) ?? [],
         runsByChallenge.get(challenge.id)
       )
     )

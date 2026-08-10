@@ -73,7 +73,11 @@ describe("event, challenge, and attachment API", () => {
     expect(detail.challenges).toHaveLength(1)
     expect(detail.challenges[0]).toMatchObject({
       name: "Warmup",
-      status: "not_started",
+      solved: {
+        local: "unsolved",
+        manual: "unsolved",
+        remote: "unsolved",
+      },
     })
   })
 
@@ -115,10 +119,20 @@ describe("event, challenge, and attachment API", () => {
     const challenge = await createChallenge(app, event.id)
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir, flag) values (?, ?, 'closed', 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?, 'flag{local}')",
+      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir) values (?, ?, 'closed', 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?)",
       [
         "flagged-local-run",
         challenge.id,
+        "2100-01-01T00:00:00.000Z",
+        "2100-01-01T00:00:00.000Z",
+      ]
+    )
+    sqlite.run(
+      "insert into challenge_flags (id, challenge_id, flag, status, source, run_id, remote_id, message, created_at, updated_at) values (?, ?, 'flag{local}', 'accepted', 'run', ?, null, null, ?, ?)",
+      [
+        "flag-1",
+        challenge.id,
+        "flagged-local-run",
         "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
       ]
@@ -129,7 +143,7 @@ describe("event, challenge, and attachment API", () => {
     expect(detail.event.solvedCount).toBe(1)
     expect(detail.challenges[0]).toMatchObject({
       runCount: 1,
-      status: "solved",
+      solved: { local: "solved" },
     })
   })
 

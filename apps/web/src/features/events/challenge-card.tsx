@@ -1,9 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Check,
+  CircleDot,
   CircleSlash,
-  Cloud,
-  HardDrive,
+  EllipsisVertical,
   Paperclip,
   Play,
   Server,
@@ -13,7 +13,13 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 
-import { type Challenge, challengesApi, keys, type RunStatus } from "@/api"
+import {
+  type Challenge,
+  challengesApi,
+  keys,
+  type RunStatus,
+  type SolveState,
+} from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -24,7 +30,6 @@ import {
   AlertDialogHeader,
   AlertDialogPopup,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -38,38 +43,60 @@ import {
   CardPanel,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "@/components/ui/menu"
 import { CreateRunDialog } from "@/features/runs"
 import { statusVariant } from "@/features/runs/run-overview"
 import { toast } from "@/lib/toast"
 
 import { ChallengeDialog } from "./challenge-dialog"
-import { isChallengeSolved } from "./event-shared"
+import { ChallengeStatusDialog } from "./challenge-status-dialog"
+import { overallSolved } from "./event-shared"
 
-function DeleteChallengeDialog({
+const SOLVE_BADGE_LABEL: Record<SolveState, string> = {
+  solved: "已解决",
+  partial: "部分解出",
+  unsolved: "待解决",
+}
+
+function SolveBadge({ overall }: { overall: SolveState }) {
+  const variant =
+    overall === "solved"
+      ? "success"
+      : overall === "partial"
+        ? "warning"
+        : "secondary"
+  return (
+    <Badge size="sm" variant={variant}>
+      {SOLVE_BADGE_LABEL[overall]}
+    </Badge>
+  )
+}
+
+function DeleteChallengeAlertDialog({
   eventId,
   challenge,
+  open,
+  onOpenChange,
 }: {
   eventId: string
   challenge: Challenge
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
-
   return (
-    <AlertDialog onOpenChange={setOpen} open={open}>
-      <AlertDialogTrigger
-        render={
-          <Button
-            aria-label={`删除 ${challenge.name}`}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          />
-        }
-      >
-        <Trash2 />
-      </AlertDialogTrigger>
+    <AlertDialog onOpenChange={onOpenChange} open={open}>
       {open ? (
-        <DeleteChallengeDialogContent challenge={challenge} eventId={eventId} />
+        <DeleteChallengeDialogContent
+          challenge={challenge}
+          eventId={eventId}
+          onClose={() => onOpenChange(false)}
+        />
       ) : null}
     </AlertDialog>
   )
@@ -78,9 +105,11 @@ function DeleteChallengeDialog({
 function DeleteChallengeDialogContent({
   eventId,
   challenge,
+  onClose,
 }: {
   eventId: string
   challenge: Challenge
+  onClose: () => void
 }) {
   const queryClient = useQueryClient()
   const mutation = useMutation({
@@ -93,6 +122,7 @@ function DeleteChallengeDialogContent({
         queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
       toast.success("题目已删除")
+      onClose()
     },
     onError: (error) => toast.error("删除题目失败", error.message),
   })
@@ -128,6 +158,76 @@ function DeleteChallengeDialogContent({
   )
 }
 
+/** Three-dot menu: modify solve state + (non-managed only) delete. */
+function ChallengeActionsMenu({
+  challenge,
+  eventId,
+  managed,
+}: {
+  challenge: Challenge
+  eventId: string
+  managed: boolean
+}) {
+  const [statusOpen, setStatusOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  return (
+    <>
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              aria-label={`更多操作 ${challenge.name}`}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            />
+          }
+        >
+          <EllipsisVertical />
+        </MenuTrigger>
+        <MenuPopup align="end">
+          <MenuItem
+            onClick={() => {
+              setStatusOpen(true)
+            }}
+          >
+            <CircleDot />
+            修改状态
+          </MenuItem>
+          {!managed && (
+            <>
+              <MenuSeparator />
+              <MenuItem
+                onClick={() => {
+                  setDeleteOpen(true)
+                }}
+              >
+                <Trash2 />
+                删除题目
+              </MenuItem>
+            </>
+          )}
+        </MenuPopup>
+      </Menu>
+      {statusOpen ? (
+        <ChallengeStatusDialog
+          challenge={challenge}
+          eventId={eventId}
+          onClose={() => setStatusOpen(false)}
+        />
+      ) : null}
+      {!managed && deleteOpen ? (
+        <DeleteChallengeAlertDialog
+          challenge={challenge}
+          eventId={eventId}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+        />
+      ) : null}
+    </>
+  )
+}
+
 export function ChallengeCard({
   eventId,
   challenge,
@@ -148,37 +248,7 @@ export function ChallengeCard({
               <Badge size="sm" variant="outline">
                 {challenge.category || "未分类"}
               </Badge>
-              {isChallengeSolved(challenge) ? (
-                <Badge size="sm" variant="success">
-                  已解决
-                  <Cloud
-                    aria-label={
-                      challenge.remoteSolved ? "远端已解决" : "远端未解决"
-                    }
-                    className={
-                      challenge.remoteSolved
-                        ? "size-3 opacity-100"
-                        : "size-3 opacity-35"
-                    }
-                  />
-                  <HardDrive
-                    aria-label={
-                      challenge.status === "solved"
-                        ? "本地已解决"
-                        : "本地未解决"
-                    }
-                    className={
-                      challenge.status === "solved"
-                        ? "size-3 opacity-100"
-                        : "size-3 opacity-35"
-                    }
-                  />
-                </Badge>
-              ) : (
-                <Badge size="sm" variant="secondary">
-                  待解决
-                </Badge>
-              )}
+              <SolveBadge overall={overallSolved(challenge)} />
               {challenge.remoteId && !challenge.remoteAvailable && (
                 <Badge size="sm" variant="warning">
                   远端不可用
@@ -205,14 +275,13 @@ export function ChallengeCard({
                 triggerVariant="ghost"
               />
             </IconTooltip>
-            {!managed && (
-              <IconTooltip label={`删除 ${challenge.name}`}>
-                <DeleteChallengeDialog
-                  challenge={challenge}
-                  eventId={eventId}
-                />
-              </IconTooltip>
-            )}
+            <IconTooltip label={`更多操作 ${challenge.name}`}>
+              <ChallengeActionsMenu
+                challenge={challenge}
+                eventId={eventId}
+                managed={managed}
+              />
+            </IconTooltip>
           </CardAction>
         </CardHeader>
         <CardPanel className="px-4 pb-4">

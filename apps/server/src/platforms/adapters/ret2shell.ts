@@ -100,6 +100,13 @@ export class Ret2ShellAdapter extends BaseAdapter {
     }
   }
 
+  async getSolveState(remoteId: string): Promise<boolean> {
+    const value = await this.http.json<JsonRecord>(
+      `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge/${encodeURIComponent(remoteId)}/submit`
+    )
+    return value.solved === true
+  }
+
   async submitFlag(remoteId: string, flag: string, signal?: AbortSignal) {
     const root = `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge/${encodeURIComponent(remoteId)}/submit`
     const value = await this.http.json<JsonRecord>(root, {

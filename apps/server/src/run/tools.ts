@@ -14,8 +14,14 @@ export type RunToolContext = {
   /** This agent's id (validates child ownership for inspect_agent). */
   agentId: string
   submitFlag(
-    flag: string
-  ): Promise<{ status: string; message?: string; remoteId?: string } | null>
+    flag: string,
+    verifyRemote?: boolean
+  ): Promise<{
+    status: string
+    message?: string
+    remoteId?: string
+    verified?: boolean
+  } | null>
   targetAction(
     action: "get" | "start" | "extend" | "stop"
   ): Promise<TargetState>
@@ -87,25 +93,35 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
         name: "submit_flag",
         label: "Submit flag",
         description:
-          "Submit a candidate flag to the challenge's platform. Use only for high-confidence candidates derived from evidence.",
+          "Record a candidate flag for the challenge and (by default) verify it against the platform. Use only for high-confidence candidates derived from evidence. For platform challenges `verify_remote` contacts the remote judge; set it to false to record a candidate locally without consuming a remote submission (e.g. when batching, or the remote is unavailable). For non-platform challenges the flag is recorded as locally accepted regardless.",
         parameters: Type.Object({
           flag: Type.String({
             description: "The flag string to submit.",
             minLength: 1,
           }),
+          verify_remote: Type.Optional(
+            Type.Boolean({
+              description:
+                "Whether to verify against the remote platform (default true). Only meaningful for platform-managed challenges; when false the flag is recorded as a pending candidate.",
+            })
+          ),
         }),
         executionMode: "sequential",
         execute: async (_id, params) => {
-          const result = await ctx.submitFlag(params.flag)
+          const verifyRemote = params.verify_remote ?? true
+          const result = await ctx.submitFlag(params.flag, verifyRemote)
           if (!result) {
-            return textResult(
-              "This challenge is not managed by a platform. Record the flag in WRITEUP.md instead."
-            )
+            return textResult("Flag could not be recorded.")
           }
+          const suffix = result.message ? ` — ${result.message}` : ""
+          const note =
+            result.verified === false && result.status === "pending"
+              ? " (recorded as candidate; not verified remotely)"
+              : result.verified === false && result.status === "accepted"
+                ? " (recorded locally; no remote verification)"
+                : ""
           return textResult(
-            `Flag submission verdict: ${result.status}${
-              result.message ? ` — ${result.message}` : ""
-            }`,
+            `Flag submission verdict: ${result.status}${suffix}${note}`,
             result
           )
         },

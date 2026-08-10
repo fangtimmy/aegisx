@@ -4,9 +4,16 @@
   "entries": [
     {
       "idx": 0,
-      "version": "6",
+      "version": 6,
       "when": 1785818785132,
       "tag": "0000_broken_snowbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": 7,
+      "when": 1785986800000,
+      "tag": "0001_challenge_flags_solve_state",
       "breakpoints": true
     }
   ]

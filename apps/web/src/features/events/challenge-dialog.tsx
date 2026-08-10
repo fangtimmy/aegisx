@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Download,
   FileArchive,
+  Flag,
   Pencil,
   Plus,
   Trash2,
@@ -14,6 +15,7 @@ import { Controller, useForm } from "react-hook-form"
 import {
   type Attachment,
   type Challenge,
+  type ChallengeFlag,
   challengesApi,
   eventsApi,
   keys,
@@ -52,6 +54,7 @@ import {
   NumberFieldInput,
 } from "@/components/ui/number-field"
 import { Textarea } from "@/components/ui/textarea"
+import { toast } from "@/lib/toast"
 
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`
@@ -387,6 +390,9 @@ function ChallengeDialogContent({
               </p>
             )}
           </section>
+          {challenge ? (
+            <FlagsSection challenge={challenge} eventId={eventId} />
+          ) : null}
           {challenge?.remoteTarget && !challenge.remoteTargetIgnored && (
             <section
               aria-labelledby="challenge-target"
@@ -584,5 +590,143 @@ function PendingFileRow({
         </Button>
       </IconTooltip>
     </div>
+  )
+}
+
+const FLAG_STATUS_LABEL: Record<ChallengeFlag["status"], string> = {
+  pending: "待验证",
+  accepted: "已验证",
+  rejected: "已拒绝",
+  error: "错误",
+}
+
+/** One-to-many flag management: record manual candidates, remove any flag. */
+function FlagsSection({
+  challenge,
+  eventId,
+}: {
+  challenge: Challenge
+  eventId: string
+}) {
+  const queryClient = useQueryClient()
+  const [value, setValue] = useState("")
+  const addFlag = useMutation({
+    mutationFn: (flag: string) =>
+      challengesApi.addManualFlag(challenge.id, flag),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: keys.events.detail(eventId),
+      })
+      setValue("")
+      toast.success("已记录 flag")
+    },
+    onError: (error) => toast.error("添加 flag 失败", error.message),
+  })
+  const deleteFlag = useMutation({
+    mutationFn: (flagId: string) =>
+      challengesApi.deleteManualFlag(challenge.id, flagId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: keys.events.detail(eventId),
+      })
+    },
+    onError: (error) => toast.error("删除 flag 失败", error.message),
+  })
+  const submit = () => {
+    const trimmed = value.trim()
+    if (!trimmed) return
+    addFlag.mutate(trimmed)
+  }
+  return (
+    <section aria-labelledby="challenge-flags" className="border-t px-6 py-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium" id="challenge-flags">
+          Flag
+        </h3>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {challenge.flags.length}
+        </span>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Input
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault()
+              submit()
+            }
+          }}
+          placeholder="输入 flag 字符串，回车记录"
+          type="text"
+          value={value}
+        />
+        <Button
+          disabled={!value.trim()}
+          loading={addFlag.isPending}
+          onClick={submit}
+          type="button"
+          variant="outline"
+        >
+          <Plus /> 记录
+        </Button>
+      </div>
+      {challenge.flags.length > 0 ? (
+        <ul className="mt-3 border-y">
+          {challenge.flags.map((flag) => (
+            <FlagRow
+              deleting={
+                deleteFlag.isPending && deleteFlag.variables === flag.id
+              }
+              flag={flag}
+              key={flag.id}
+              onDelete={() => deleteFlag.mutate(flag.id)}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-xs text-muted-foreground">
+          暂无 flag。记录的候选 flag 默认视为本地已验证。
+        </p>
+      )}
+    </section>
+  )
+}
+
+function FlagRow({
+  flag,
+  deleting = false,
+  onDelete,
+}: {
+  flag: ChallengeFlag
+  deleting?: boolean
+  onDelete: () => void
+}) {
+  return (
+    <li className="flex min-w-0 items-center gap-3 border-t py-3 first:border-t-0">
+      <Flag className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-mono text-xs break-all">{flag.flag}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {FLAG_STATUS_LABEL[flag.status]}
+          {flag.source === "manual"
+            ? " · 手动"
+            : flag.runId
+              ? " · 任务提交"
+              : ""}
+        </p>
+      </div>
+      <IconTooltip label="删除 flag">
+        <Button
+          aria-label="删除 flag"
+          loading={deleting}
+          onClick={onDelete}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <Trash2 />
+        </Button>
+      </IconTooltip>
+    </li>
   )
 }

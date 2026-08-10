@@ -1,4 +1,5 @@
 import type { AgentSummary } from "./agent"
+import type { ChallengeFlag } from "./challenge"
 import type { RunStatus } from "./run-status"
 import type { ThinkingLevel } from "./thinking"
 
@@ -38,8 +39,8 @@ export type RunPublic = {
   completedAt: string | null
   error: string | null
   summary: string | null
-  flag: string | null
-  hasFlag: boolean
+  flags: ChallengeFlag[]
+  hasAcceptedFlag: boolean
   usage?: RunUsage
 }
 

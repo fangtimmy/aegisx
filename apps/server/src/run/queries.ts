@@ -1,8 +1,13 @@
 import { dirname, join } from "node:path"
 
-import type { MessageList, RunPublic, RunUsage } from "@aegisx/shared"
+import type {
+  ChallengeFlag,
+  MessageList,
+  RunPublic,
+  RunUsage,
+} from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
-import { and, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, inArray } from "drizzle-orm"
 
 import {
   listRenderableEntries,
@@ -11,13 +16,42 @@ import {
 import type { createDatabase } from "../db"
 import {
   agents,
+  challengeFlags,
   challengeRemote,
   challenges,
   runs,
   sessionEntries,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
-import { type ChallengeMeta, toAgentSummary, toRunPublic } from "./public"
+import {
+  type ChallengeMeta,
+  toAgentSummary,
+  toFlagPublic,
+  toRunPublic,
+} from "./public"
+
+/** Group flags by their originating run id (runId-sourced flags only). */
+function groupFlagsByRun(
+  db: Database,
+  runIds: string[]
+): Map<string, ChallengeFlag[]> {
+  const map = new Map<string, ChallengeFlag[]>()
+  if (runIds.length === 0) return map
+  const rows = db
+    .select()
+    .from(challengeFlags)
+    .where(inArray(challengeFlags.runId, runIds))
+    .orderBy(asc(challengeFlags.createdAt), asc(challengeFlags.id))
+    .all()
+    .map(toFlagPublic)
+  for (const flag of rows) {
+    if (!flag.runId) continue
+    const list = map.get(flag.runId) ?? []
+    list.push(flag)
+    map.set(flag.runId, list)
+  }
+  return map
+}
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
@@ -41,15 +75,29 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     }
   }
 
-  function mapRow(row: typeof runs.$inferSelect): RunPublic {
-    return toRunPublic(row, challengeMeta(row.challengeId))
+  function mapRow(
+    row: typeof runs.$inferSelect,
+    flags: ChallengeFlag[] = []
+  ): RunPublic {
+    return toRunPublic(row, challengeMeta(row.challengeId), flags)
   }
 
   function get(runId: string): RunPublic | undefined {
     const row = db.select().from(runs).where(eq(runs.id, runId)).get()
-    return row
-      ? toRunPublic(row, challengeMeta(row.challengeId), usageTotals(runId))
-      : undefined
+    if (!row) return undefined
+    const flags = db
+      .select()
+      .from(challengeFlags)
+      .where(eq(challengeFlags.runId, runId))
+      .orderBy(asc(challengeFlags.createdAt), asc(challengeFlags.id))
+      .all()
+      .map(toFlagPublic)
+    return toRunPublic(
+      row,
+      challengeMeta(row.challengeId),
+      flags,
+      usageTotals(runId)
+    )
   }
 
   function getRow(runId: string) {
@@ -57,14 +105,20 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
   }
 
   function listForEvent(eventId: string): RunPublic[] {
-    return db
+    const rows = db
       .select()
       .from(runs)
       .innerJoin(challenges, eq(runs.challengeId, challenges.id))
       .where(eq(challenges.eventId, eventId))
       .orderBy(desc(runs.updatedAt))
       .all()
-      .map(({ runs: run }) => mapRow(run))
+    const flagsByRun = groupFlagsByRun(
+      db,
+      rows.map(({ runs: run }) => run.id)
+    )
+    return rows.map(({ runs: run }) =>
+      mapRow(run, flagsByRun.get(run.id) ?? [])
+    )
   }
 
   function listAgents(runId: string): AgentSummary[] {

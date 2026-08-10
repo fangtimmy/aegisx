@@ -60,6 +60,14 @@ export interface CtfPlatformAdapter {
   listEvents(): Promise<RemoteEvent[]>
   listChallenges(): Promise<RemoteChallengeSummary[]>
   getChallenge(remoteId: string): Promise<RemoteChallenge>
+  /**
+   * Authoritative per-challenge solve verdict for single-challenge refresh.
+   * Throws PlatformError(404) when the challenge no longer exists on the
+   * platform. Each adapter picks its most reliable source — some platforms
+   * only expose solves on the list endpoint (a1ctf), others only on the
+   * detail / submit endpoint (ret2shell).
+   */
+  getSolveState(remoteId: string): Promise<boolean>
   downloadAttachment(attachment: RemoteAttachment): Promise<Response>
   submitFlag(
     remoteId: string,
@@ -250,6 +258,7 @@ export abstract class BaseAdapter implements CtfPlatformAdapter {
   abstract testConnection(): Promise<void>
   abstract listChallenges(): Promise<RemoteChallengeSummary[]>
   abstract getChallenge(remoteId: string): Promise<RemoteChallenge>
+  abstract getSolveState(remoteId: string): Promise<boolean>
   abstract submitFlag(
     remoteId: string,
     flag: string,

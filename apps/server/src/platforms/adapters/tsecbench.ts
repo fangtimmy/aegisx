@@ -134,6 +134,14 @@ export class TsecBenchAdapter extends BaseAdapter {
     }
   }
 
+  async getSolveState(remoteId: string): Promise<boolean> {
+    const challenge = await this.fetchChallenge(remoteId)
+    if (!challenge) {
+      throw new PlatformError("Challenge not found on platform", 404)
+    }
+    return challenge.is_completed === true
+  }
+
   async submitFlag(
     remoteId: string,
     flag: string,

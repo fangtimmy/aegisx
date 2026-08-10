@@ -1,6 +1,6 @@
 import { TriangleAlert } from "lucide-react"
 
-import type { Challenge } from "@/api"
+import type { Challenge, SolveState } from "@/api"
 import {
   Alert,
   AlertAction,
@@ -16,11 +16,23 @@ export type RemoteChallengeStatus =
   | "solved"
   | "unavailable"
 
+/**
+ * Merge the three solve dimensions by priority manual > remote > local
+ * (first non-`unsolved` wins). `solved` > `partial` > `unsolved`.
+ */
+export function overallSolved(challenge: Challenge): SolveState {
+  const { manual, remote, local } = challenge.solved
+  if (manual !== "unsolved") return manual
+  if (remote !== "unsolved") return remote
+  return local
+}
+
 export function localChallengeStatus(
   challenge: Challenge
 ): LocalChallengeStatus {
-  if (challenge.status === "solved") return "solved"
-  if (challenge.runCount > 0) return "in_progress"
+  const overall = overallSolved(challenge)
+  if (overall === "solved") return "solved"
+  if (overall === "partial" || challenge.runCount > 0) return "in_progress"
   return "not_started"
 }
 
@@ -29,12 +41,12 @@ export function remoteChallengeStatus(
 ): RemoteChallengeStatus {
   if (!challenge.remoteId) return "no_remote"
   if (!challenge.remoteAvailable) return "unavailable"
-  if (challenge.remoteSolved) return "solved"
+  if (challenge.solved.remote === "solved") return "solved"
   return "unsolved"
 }
 
 export function isChallengeSolved(challenge: Challenge) {
-  return challenge.status === "solved"
+  return overallSolved(challenge) === "solved"
 }
 
 export function ErrorState({

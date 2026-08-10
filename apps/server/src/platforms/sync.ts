@@ -15,6 +15,7 @@ import {
   eventPlatforms,
 } from "../db/schema"
 import type { createStorage } from "../infrastructure/storage"
+import { getChallengeRemote } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
   PlatformError,
@@ -373,7 +374,52 @@ export function createPlatformSync(
     return { syncedAt: inventory.syncedAt, results }
   }
 
-  return { discoverChallenges, syncChallenges }
+  /** Re-fetch a single challenge's remote solved/available verdict and align
+   * the local row to the platform's current truth. Uses the adapter's
+   * `getSolveState` (each platform's most reliable per-challenge source —
+   * ret2shell's submit endpoint, a1ctf's solved-challenge list, etc.) and
+   * writes the verdict verbatim so a manual refresh can correct a stale local
+   * flag. A 404 marks the challenge unavailable without clearing the verdict. */
+  async function refreshChallengeRemote(challengeId: string) {
+    const challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+    const platform = challenge ? storedPlatform(challenge.eventId) : undefined
+    const adapter = challenge ? adapterForEvent(challenge.eventId) : undefined
+    const remote = getChallengeRemote(db, challengeId)
+    if (!challenge || !platform || !adapter || !remote) {
+      throw new PlatformActionError(
+        "not_bound",
+        "Challenge is not connected to a platform"
+      )
+    }
+    const now = new Date().toISOString()
+    try {
+      const solved = await adapter.getSolveState(remote.remoteId)
+      db.update(challengeRemote)
+        .set({ available: true, solved, syncedAt: now })
+        .where(eq(challengeRemote.challengeId, challengeId))
+        .run()
+      return { found: true as const, available: true, solved }
+    } catch (error) {
+      if (error instanceof PlatformError && error.status === 404) {
+        db.update(challengeRemote)
+          .set({ available: false, syncedAt: now })
+          .where(eq(challengeRemote.challengeId, challengeId))
+          .run()
+        return {
+          found: false as const,
+          available: false,
+          solved: remote.solved,
+        }
+      }
+      throw platformError(error)
+    }
+  }
+
+  return { discoverChallenges, syncChallenges, refreshChallengeRemote }
 }
 
 function syncFailureMessage(error: unknown) {

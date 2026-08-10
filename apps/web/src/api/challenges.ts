@@ -2,7 +2,9 @@ import { apiRequest, jsonRequest } from "./client"
 import type {
   Attachment,
   Challenge,
+  ChallengeFlag,
   ChallengeInput,
+  SolveState,
   TargetState,
 } from "./types"
 
@@ -50,4 +52,31 @@ export function ignoreTarget(challengeId: string) {
   return apiRequest<void>(`/challenges/${challengeId}/target`, {
     method: "DELETE",
   })
+}
+
+export function setChallengeSolved(challengeId: string, state: SolveState) {
+  return apiRequest<Challenge>(
+    `/challenges/${challengeId}/solved`,
+    jsonRequest("PATCH", { state })
+  )
+}
+
+export function addManualFlag(challengeId: string, flag: string) {
+  return apiRequest<{ flag: ChallengeFlag }>(
+    `/challenges/${challengeId}/flags`,
+    jsonRequest("POST", { flag })
+  )
+}
+
+export function deleteManualFlag(challengeId: string, flagId: string) {
+  return apiRequest<void>(`/challenges/${challengeId}/flags/${flagId}`, {
+    method: "DELETE",
+  })
+}
+
+export function refreshChallengeRemote(challengeId: string) {
+  return apiRequest<Challenge>(
+    `/challenges/${challengeId}/remote/refresh`,
+    jsonRequest("POST", {})
+  )
 }

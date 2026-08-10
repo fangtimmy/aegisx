@@ -162,14 +162,15 @@ function challengeGroups(
   }
   if (group === "none") return [{ key: "all", label: null, items: sorted }]
 
-  const keyFor = (challenge: Challenge) =>
-    group === "category"
-      ? challenge.category || UNCATEGORIZED
-      : challenge.status === "solved"
-        ? "已解决"
-        : challenge.status === "in_progress"
-          ? "进行中"
-          : "未开始"
+  const keyFor = (challenge: Challenge) => {
+    if (group === "category") return challenge.category || UNCATEGORIZED
+    const status = localChallengeStatus(challenge)
+    return status === "solved"
+      ? "已解决"
+      : status === "in_progress"
+        ? "进行中"
+        : "未开始"
+  }
   const groupKeys = [...new Set(sorted.map(keyFor))]
   return groupKeys.map((key) => ({
     key,
