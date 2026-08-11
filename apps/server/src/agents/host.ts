@@ -26,30 +26,27 @@ type Database = ReturnType<typeof createDatabase>["db"]
  * container workspace (the agent's cwd). Profile-specific tools (CTF / run
  * management) are layered on top via {@link createAgentHost}'s `extraTools`.
  */
-export const HOST_FILE_TOOLS = [
-  "read",
-  "bash",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-] as const
+export const HOST_FILE_TOOLS = ["read", "bash", "edit", "write"] as const
 
 /**
  * Build the container-backed bash + file-workspace tool pair shared by every
  * host agent — solver main, solver child (worker), and the orchestrator. The
  * one place that knows how file tools reach a container.
+ *
+ * `multimodal` (derived from the model's `input` modalities) gates whether
+ * `read` attaches image bytes for image files; pass false for text-only models.
  */
 export function buildHostFileTools(
   cwd: string,
   containerName: string,
-  containerManager: ContainerManager
+  containerManager: ContainerManager,
+  multimodal = false
 ): ToolDefinition[] {
   return [
     createBashTool(cwd, containerName, containerManager),
     ...createWorkspaceTools(
-      createDockerExecBackend(containerName, containerManager, cwd)
+      createDockerExecBackend(containerName, containerManager, cwd),
+      { multimodal }
     ),
   ]
 }
@@ -111,7 +108,8 @@ export async function createAgentHost(
   const fileTools = buildHostFileTools(
     input.cwd,
     input.containerName,
-    input.containerManager
+    input.containerManager,
+    input.model.input.includes("image")
   )
   const customTools: ToolDefinition[] = [
     ...fileTools,

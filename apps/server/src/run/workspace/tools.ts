@@ -1,4 +1,4 @@
-import { basename, dirname, relative } from "node:path"
+import { basename, dirname } from "node:path"
 
 import {
   type AgentToolResult,
@@ -6,13 +6,10 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 
-import { shellQuote, type WorkspaceBackend } from "./backend"
+import { type WorkspaceBackend } from "./backend"
 import { applyExactEdit } from "./edit-apply"
 import {
   EDIT_DESCRIPTION,
-  FIND_DESCRIPTION,
-  GREP_DESCRIPTION,
-  LS_DESCRIPTION,
   READ_DESCRIPTION,
   WRITE_DESCRIPTION,
 } from "./tool-prompts"
@@ -20,32 +17,22 @@ import {
 const defaultMaxOutput = 64_000
 const defaultReadLimit = 2000
 const maxLineLength = 2000
-const defaultLsLimit = 500
-const defaultGrepLimit = 100
-const defaultFindLimit = 1000
+/** Cap on image bytes attached to a read result. Image content is expensive
+ * (base64 + vision tokens); above this the model is pointed at the file path
+ * instead of being fed the bytes directly. */
+const maxImageBytes = 5 * 1024 * 1024
 
-export type WorkspaceToolLimits = {
-  maxOutput: number
+export type WorkspaceToolOptions = {
+  /** Max text output per tool call, in bytes. */
+  maxOutput?: number
+  /** Whether the active model accepts image input (`model.input` includes
+   * "image"). When true, `read` attaches image bytes for image files (under
+   * {@link maxImageBytes}); when false, it returns a text hint so a
+   * text-only model isn't fed bytes it can't use. */
+  multimodal?: boolean
 }
 
 // ── output helpers ──────────────────────────────────────────────────────────
-
-function truncateText(value: string, limit: number) {
-  const bytes = Buffer.from(value)
-  return bytes.byteLength > limit ? bytes.subarray(0, limit).toString() : value
-}
-
-function boundedText(value: string, maxOutput: number) {
-  const outputBytes = Buffer.byteLength(value)
-  const truncated = outputBytes > maxOutput
-  return {
-    text: truncated
-      ? `${truncateText(value, maxOutput)}\n\nOutput truncated. Narrow the request or use pagination.`
-      : value,
-    outputBytes,
-    truncated,
-  }
-}
 
 function formatNumberedLines(
   lines: string[],
@@ -186,147 +173,21 @@ async function suggestSimilarPaths(
   }
 }
 
-// ── ripgrep / fd shells (run inside the container) ───────────────────────────
-
-async function requireBinary(
-  backend: WorkspaceBackend,
-  names: string[],
-  label: string,
-  signal?: AbortSignal
-) {
-  const checks = names
-    .map((name) => `command -v ${shellQuote(name)}`)
-    .join(" || ")
-  const result = await backend.exec(checks, { signal, timeout: 5 })
-  const found = result.stdout.trim().split("\n").filter(Boolean)[0]
-  if (result.exitCode !== 0 || !found) {
-    throw new Error(
-      `${label} is required but was not found on PATH (tried: ${names.join(", ")}). Install it in the execution environment.`
-    )
-  }
-  return found
-}
-
-export type GrepOutputMode = "content" | "files_with_matches" | "count"
-
-async function runRipgrep(
-  backend: WorkspaceBackend,
-  params: {
-    pattern: string
-    path?: string
-    glob?: string
-    ignoreCase?: boolean
-    literal?: boolean
-    outputMode: GrepOutputMode
-    context?: number
-    before?: number
-    after?: number
-    type?: string
-    multiline?: boolean
-    offset: number
-    limit: number
-  },
-  signal?: AbortSignal
-) {
-  const rg = await requireBinary(backend, ["rg"], "ripgrep (rg)", signal)
-  const root = backend.resolvePath(params.path ?? ".")
-  const args = [shellQuote(rg)]
-  if (params.outputMode === "files_with_matches") args.push("-l")
-  else if (params.outputMode === "count") args.push("-c")
-  else {
-    args.push("-n", "--no-heading")
-    const before = params.before ?? params.context
-    const after = params.after ?? params.context
-    if (
-      params.context !== undefined &&
-      params.before === undefined &&
-      params.after === undefined &&
-      params.context > 0
-    ) {
-      args.push(`-C${Math.floor(params.context)}`)
-    } else {
-      if (before !== undefined && before > 0)
-        args.push(`-B${Math.floor(before)}`)
-      if (after !== undefined && after > 0) args.push(`-A${Math.floor(after)}`)
-    }
-  }
-  if (params.ignoreCase) args.push("-i")
-  if (params.literal) args.push("-F")
-  if (params.multiline) args.push("-U", "--multiline-dotall")
-  if (params.type) args.push("--type", shellQuote(params.type))
-  if (params.glob) args.push("-g", shellQuote(params.glob))
-  args.push("--", shellQuote(params.pattern), shellQuote(root))
-  const start = Math.max(0, params.offset) + 1
-  const end = Math.max(0, params.offset) + Math.max(1, params.limit)
-  const command = `set -o pipefail; ${args.join(" ")} | sed -n '${start},${end}p'`
-  const result = await backend.exec(command, { signal, timeout: 120 })
-  if (result.exitCode > 1 && result.exitCode !== 141) {
-    throw new Error(result.stderr.trim() || result.stdout.trim() || "rg failed")
-  }
-  const text = result.stdout.replace(/\n$/, "")
-  const lines = text ? text.split("\n") : []
-  return {
-    text: text || "No matches found",
-    count: lines.length && text ? lines.length : 0,
-    truncated: lines.length >= params.limit,
-  }
-}
-
-async function runFd(
-  backend: WorkspaceBackend,
-  params: { pattern: string; path?: string; limit: number },
-  signal?: AbortSignal
-) {
-  const fd = await requireBinary(backend, ["fd", "fdfind"], "fd", signal)
-  const root = backend.resolvePath(params.path ?? ".")
-  const command = [
-    shellQuote(fd),
-    "-g",
-    shellQuote(params.pattern),
-    "--max-results",
-    String(Math.max(1, params.limit)),
-    shellQuote(root),
-  ].join(" ")
-  const result = await backend.exec(command, { signal, timeout: 120 })
-  if (result.exitCode !== 0) {
-    if (!result.stdout.trim() && !result.stderr.trim()) {
-      return { text: "No files found", count: 0, truncated: false }
-    }
-    if (result.stderr.trim() && !result.stdout.trim()) {
-      throw new Error(result.stderr.trim())
-    }
-  }
-  const text = result.stdout.replace(/\n$/, "")
-  const lines = text ? text.split("\n") : []
-  const relativeLines = lines.map((line) => {
-    const abs = line.trim()
-    if (!abs) return abs
-    try {
-      return relative(backend.cwd, abs) || abs
-    } catch {
-      return abs
-    }
-  })
-  return {
-    text: relativeLines.join("\n") || "No files found",
-    count: relativeLines.filter(Boolean).length,
-    truncated: relativeLines.length >= params.limit,
-  }
-}
-
 // ── tools ────────────────────────────────────────────────────────────────────
 
 /**
- * read / write / edit / ls / find / grep backed by a WorkspaceBackend (every
- * operation runs inside the run's container). bash is NOT included — it stays
- * the SDK bash tool forwarded over docker exec. Returned ToolDefinitions are
- * dropped into `customTools`, overriding the SDK built-ins of the same name.
+ * read / write / edit backed by a WorkspaceBackend (every operation runs
+ * inside the run's container). bash (the workhorse for search included) is
+ * NOT defined here — it stays the self-implemented bash tool forwarded over
+ * docker exec. Returned ToolDefinitions are dropped into `customTools`,
+ * overriding the SDK built-ins of the same name.
  */
 export function createWorkspaceTools(
   backend: WorkspaceBackend,
-  limits: WorkspaceToolLimits = { maxOutput: defaultMaxOutput }
+  options: WorkspaceToolOptions = {}
 ) {
-  const { maxOutput } = limits
+  const maxOutput = options.maxOutput ?? defaultMaxOutput
+  const multimodal = options.multimodal === true
 
   // Per-file write/edit serialization. Scoped to this backend instance (per
   // run) so the lock map is reclaimed when the run's tools are discarded,
@@ -395,11 +256,37 @@ export function createWorkspaceTools(
       }
       const mime = detectImageMime(bytes)
       if (mime) {
+        // Attach the image when the active model accepts image input AND it is
+        // under the size cap; otherwise fall back to a text hint so a text-only
+        // model (or a too-large image) isn't fed bytes it can't use.
+        const attach = multimodal && bytes.byteLength <= maxImageBytes
+        if (attach) {
+          const data = Buffer.from(bytes).toString("base64")
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Image: ${params.filePath} (${mime}, ${bytes.byteLength} bytes). The image is attached.`,
+              },
+              { type: "image" as const, data, mimeType: mime },
+            ],
+            details: {
+              filePath: params.filePath,
+              kind: "image",
+              mimeType: mime,
+              bytes: bytes.byteLength,
+              attached: true,
+            },
+          }
+        }
+        const reason = !multimodal
+          ? "the active model does not accept image input"
+          : `image exceeds the ${maxImageBytes}-byte attach cap`
         return {
           content: [
             {
               type: "text" as const,
-              text: `Image file: ${params.filePath} (${mime}, ${bytes.byteLength} bytes). Image bytes are not attached; analyze with workspace tools or bash if needed.`,
+              text: `Image file: ${params.filePath} (${mime}, ${bytes.byteLength} bytes). ${reason}; analyze with bash (file/xxd/strings/zbarimg/steghide) instead.`,
             },
           ],
           details: {
@@ -407,6 +294,7 @@ export function createWorkspaceTools(
             kind: "image",
             mimeType: mime,
             bytes: bytes.byteLength,
+            attached: false,
           },
         }
       }
@@ -524,218 +412,5 @@ export function createWorkspaceTools(
     },
   })
 
-  const ls = defineTool({
-    name: "ls",
-    label: "List",
-    description: LS_DESCRIPTION,
-    parameters: Type.Object({
-      path: Type.Optional(
-        Type.String({
-          description:
-            "Directory to list (default: current workspace directory)",
-        })
-      ),
-      limit: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          maximum: 10_000,
-          description: `Maximum number of entries to return (default: ${defaultLsLimit})`,
-        })
-      ),
-    }),
-    execute: async (_id, params, signal) => {
-      const entries = await backend.list(params.path ?? ".", signal)
-      const limit = params.limit ?? defaultLsLimit
-      const sliced = entries.slice(0, limit)
-      const lines = sliced.map(
-        (entry) => `${entry.name}${entry.directory ? "/" : ""}`
-      )
-      const truncated = entries.length > sliced.length
-      const body = [
-        lines.join("\n"),
-        truncated
-          ? `Listing truncated to ${limit} entries (${entries.length} total).`
-          : null,
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-      const output = boundedText(body, maxOutput)
-      return {
-        content: [{ type: "text" as const, text: output.text }],
-        details: {
-          count: sliced.length,
-          total: entries.length,
-          outputBytes: output.outputBytes,
-          truncated: output.truncated || truncated,
-        },
-      }
-    },
-  })
-
-  const find = defineTool({
-    name: "find",
-    label: "Find",
-    description: FIND_DESCRIPTION,
-    parameters: Type.Object({
-      pattern: Type.String({
-        description:
-          "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
-      }),
-      path: Type.Optional(
-        Type.String({
-          description: "Directory to search in (default: workspace root)",
-        })
-      ),
-      limit: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          maximum: 10_000,
-          description: `Maximum number of results (default: ${defaultFindLimit})`,
-        })
-      ),
-    }),
-    execute: async (_id, params, signal) => {
-      const result = await runFd(
-        backend,
-        {
-          pattern: params.pattern,
-          path: params.path,
-          limit: params.limit ?? defaultFindLimit,
-        },
-        signal
-      )
-      const output = boundedText(result.text, maxOutput)
-      return {
-        content: [{ type: "text" as const, text: output.text }],
-        details: {
-          count: result.count,
-          truncated: result.truncated || output.truncated,
-          outputBytes: output.outputBytes,
-        },
-      }
-    },
-  })
-
-  const grep = defineTool({
-    name: "grep",
-    label: "Grep",
-    description: GREP_DESCRIPTION,
-    parameters: Type.Object({
-      pattern: Type.String({
-        description:
-          "The regular expression pattern to search for in file contents",
-      }),
-      path: Type.Optional(
-        Type.String({
-          description:
-            "File or directory to search in. Defaults to the workspace root.",
-        })
-      ),
-      glob: Type.Optional(
-        Type.String({
-          description:
-            'Glob pattern to filter files (e.g. "*.js") — maps to rg --glob',
-        })
-      ),
-      outputMode: Type.Optional(
-        Type.Union(
-          [
-            Type.Literal("content"),
-            Type.Literal("files_with_matches"),
-            Type.Literal("count"),
-          ],
-          {
-            description:
-              'Output mode: "content" shows matching lines, "files_with_matches" shows only file paths (default), "count" shows per-file match counts.',
-          }
-        )
-      ),
-      ignoreCase: Type.Optional(
-        Type.Boolean({ description: "Case-insensitive search (rg -i)" })
-      ),
-      literal: Type.Optional(
-        Type.Boolean({
-          description:
-            "Treat pattern as a literal string instead of regex (rg -F)",
-        })
-      ),
-      context: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description:
-            'Lines of context before and after each match (rg -C). Only applies when outputMode is "content".',
-        })
-      ),
-      before: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description:
-            'Lines before each match (rg -B). Only for outputMode "content".',
-        })
-      ),
-      after: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description:
-            'Lines after each match (rg -A). Only for outputMode "content".',
-        })
-      ),
-      type: Type.Optional(
-        Type.String({
-          description: 'File type filter for rg --type (e.g. "py", "js").',
-        })
-      ),
-      multiline: Type.Optional(
-        Type.Boolean({
-          description:
-            "Enable multiline matching (rg -U --multiline-dotall). Default false.",
-        })
-      ),
-      offset: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description: "Skip the first N output lines (default 0).",
-        })
-      ),
-      limit: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          maximum: 10_000,
-          description: `Maximum number of output lines (default ${defaultGrepLimit}).`,
-        })
-      ),
-    }),
-    execute: async (_id, params, signal) => {
-      const result = await runRipgrep(
-        backend,
-        {
-          pattern: params.pattern,
-          path: params.path,
-          glob: params.glob,
-          ignoreCase: params.ignoreCase,
-          literal: params.literal,
-          outputMode: params.outputMode ?? "files_with_matches",
-          context: params.context,
-          before: params.before,
-          after: params.after,
-          type: params.type,
-          multiline: params.multiline,
-          offset: params.offset ?? 0,
-          limit: params.limit ?? defaultGrepLimit,
-        },
-        signal
-      )
-      const output = boundedText(result.text, maxOutput)
-      return {
-        content: [{ type: "text" as const, text: output.text }],
-        details: {
-          count: result.count,
-          truncated: result.truncated || output.truncated,
-          outputBytes: output.outputBytes,
-        },
-      }
-    },
-  })
-
-  return [read, write, edit, ls, find, grep]
+  return [read, write, edit]
 }
