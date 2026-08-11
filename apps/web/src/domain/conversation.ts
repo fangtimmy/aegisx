@@ -227,6 +227,20 @@ function applyCompaction(
   })
 }
 
+/** Extract a tool's structured terminal reason from its result details
+ * (the bash tool attaches `terminal` on timeout / abort / non-zero exit). */
+function terminalOfDetails(
+  details: unknown
+): "timed_out" | "cancelled" | "failed" | undefined {
+  if (!isRecord(details)) return undefined
+  const terminal = details.terminal
+  return terminal === "timed_out" ||
+    terminal === "cancelled" ||
+    terminal === "failed"
+    ? terminal
+    : undefined
+}
+
 function applyToolResult(
   entry: SessionMessageEntry,
   tools: Map<string, ToolBlock>,
@@ -249,7 +263,13 @@ function applyToolResult(
     } satisfies ToolBlock)
   block.output = contentText(message.content) || resultText(message.details)
   if (message.details !== undefined) block.details = message.details
-  block.status = message.isError ? "error" : "done"
+  // The bash tool returns a result (not a throw) on failure, so the SDK's
+  // isError is false for non-zero exits — derive the error state from the
+  // structured `details.terminal` the tool attaches, falling back to isError
+  // for untyped tools that still throw.
+  const terminal = terminalOfDetails(message.details)
+  block.status = message.isError || terminal ? "error" : "done"
+  if (terminal) block.terminal = terminal
   if (!existing) {
     currentAgent(entry.timestamp).blocks.push(block)
     tools.set(id, block)

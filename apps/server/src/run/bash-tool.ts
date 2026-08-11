@@ -182,7 +182,7 @@ Working directory & paths:
 - The full CTF toolchain is on PATH: python3 (venv with pwntools/angr/impacket/pycryptodome/...), nmap, gdb/pwndbg, ghidra-analyze, fd, rg, ...
 
 Execution:
-- Non-zero exit raises; stdout+stderr are still attached to the error. Keep output bounded: pipe through head/grep/awk and sample before dumping large results into context.
+- Non-zero exit is returned as an error result (stdout+stderr still attached); the outcome is also reflected in the exit code shown to you. Keep output bounded: pipe through head/grep/awk and sample before dumping large results into context.
 - Output is tailed to the last ${MAX_LINES} lines / ${MAX_BYTES} bytes. When truncated, the full output is saved to ${OVERFLOW_DIR_REL}/<id>.log in the workspace and the path is returned — read or grep that file instead of re-running the command.
 - Foreground commands must finish promptly: pass \`timeout\` (seconds) for anything non-trivial (default ${DEFAULT_TIMEOUT_SEC}s, hard max ${MAX_TIMEOUT_SEC}s). For genuinely long jobs, start them backgrounded (\`nohup ... > out.log 2>&1 &\`) and poll the log with read/grep — never block a single call for many minutes.
 - Avoid interactive commands (REPLs, pagers, \`ssh\`/credential prompts without -o BatchMode=yes); they hang until the timeout.
@@ -270,24 +270,32 @@ export function createBashTool(
         text += `\n\n[Output truncated to last ${tail.shownLines} lines / ${tail.shownBytes} bytes of ${tail.totalBytes} bytes total.]`
       }
 
+      // Return a result instead of throwing. The SDK's createErrorToolResult
+      // discards `details` (sets {}) on throw, which would lose exitCode /
+      // truncated / fullOutputPath for the frontend and force the pipeline to
+      // classify the terminal reason by parsing prose. Returning structured
+      // details keeps them intact into the persisted toolResult; the failure is
+      // still surfaced to the model via the content text, and the pipeline
+      // reads `details.terminal` to mark the tool result as an error.
+      let terminal: "timed_out" | "cancelled" | "failed" | undefined
+      if (signal?.aborted) {
+        text += "\n\nCommand aborted"
+        terminal = "cancelled"
+      } else if (timedOut || exitCode === null) {
+        text += `\n\nCommand timed out after ${timeout} seconds`
+        terminal = "timed_out"
+      } else if (exitCode !== 0) {
+        text += `\n\nCommand exited with code ${exitCode}`
+        terminal = "failed"
+      }
+
       const details = {
         exitCode,
         timedOut,
         outputBytes: tail.totalBytes,
         truncated,
         fullOutputPath: tail.fullOutputPath,
-      }
-
-      // Surface the outcome to the model as a thrown error so the agent loop
-      // treats it as a failed probe (it still sees the captured output).
-      if (signal?.aborted) {
-        throw new Error(`${text}\n\nCommand aborted`)
-      }
-      if (timedOut || exitCode === null) {
-        throw new Error(`${text}\n\nCommand timed out after ${timeout} seconds`)
-      }
-      if (exitCode !== 0) {
-        throw new Error(`${text}\n\nCommand exited with code ${exitCode}`)
+        terminal,
       }
 
       const result: AgentToolResult<typeof details> = {

@@ -1,4 +1,4 @@
-import type { ContextSnapshot } from "@aegisx/shared/live-event"
+import type { ContextSnapshot, ToolTerminal } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type {
   AgentSession,
@@ -51,38 +51,36 @@ function syntheticMessageEntry(
   }
 }
 
-/** Best-effort terminal-reason classification for a failed tool, read from
- * its result text. The AegisX bash tool throws deterministic, end-anchored
- * messages on abort / timeout / non-zero exit (see run/bash-tool.ts); we mirror
- * those here so the UI can distinguish 已超时 / 已取消 from a generic 失败.
- * Coupled to the bash tool's wording by design — both live in this repo and
- * the messages are the documented contract. Unknown failures stay "failed". */
-function classifyTerminal(
-  result: unknown
-): "timed_out" | "cancelled" | "failed" {
-  const text = toolResultText(result)
-  if (text.endsWith("Command aborted")) return "cancelled"
-  if (/Command timed out after \d+ seconds$/.test(text)) return "timed_out"
-  return "failed"
+/** Read a tool's structured terminal reason from its result.details — the
+ * AgentToolResult side channel that survives into the persisted toolResult
+ * (unlike `content`, `details` is not sent to the model). Tools that classify
+ * outcomes (the AegisX bash tool) put a `terminal` field there so the UI can
+ * show 已超时 / 已取消 instead of a generic 失败, without the pipeline parsing
+ * prose. Falls back to "failed" when the SDK reports an error but the tool
+ * gave no structured reason (e.g. an untyped tool that still throws). */
+function terminalOf(
+  result: unknown,
+  sdkError: boolean
+): { terminal: ToolTerminal | undefined; isError: boolean } {
+  const details =
+    result && typeof result === "object"
+      ? (result as { details?: unknown }).details
+      : undefined
+  const terminal =
+    isRecord(details) && isTerminalValue(details.terminal)
+      ? (details.terminal as ToolTerminal)
+      : sdkError
+        ? "failed"
+        : undefined
+  return { terminal, isError: terminal !== undefined }
 }
 
-/** Flatten a tool result (SDK AgentToolResult shape) into its text content. */
-function toolResultText(result: unknown): string {
-  if (typeof result === "string") return result
-  if (result && typeof result === "object") {
-    const content = (result as { content?: unknown }).content
-    const parts = Array.isArray(content) ? content : [content]
-    return parts
-      .map((part) =>
-        part &&
-        typeof part === "object" &&
-        "text" in (part as Record<string, unknown>)
-          ? String((part as Record<string, unknown>).text)
-          : ""
-      )
-      .join("\n")
-  }
-  return ""
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isTerminalValue(value: unknown): boolean {
+  return value === "timed_out" || value === "cancelled" || value === "failed"
 }
 
 /** Per-agent context snapshot for the conversation stat strip (pi-TUI footer
@@ -257,12 +255,10 @@ export function createAgentEventPipeline(options: {
       case "tool_execution_end": {
         // The SDK's tool_execution_end carries no args; omitting `args` lets
         // the store keep the args captured at tool_execution_start/_update
-        // (null here would clobber them). Classify the terminal reason for a
-        // failed bash probe from its result text so the UI can show 已超时 /
-        // 已取消 instead of a generic 失败.
-        const terminal = event.isError
-          ? classifyTerminal(event.result)
-          : undefined
+        // (null here would clobber them). The terminal reason + isError come
+        // from result.details.terminal (structured) when the tool provides it,
+        // falling back to the SDK's isError for untyped tools that still throw.
+        const { terminal, isError } = terminalOf(event.result, event.isError)
         bus.emit(channel, {
           type: "tool.progress",
           agentId,
@@ -270,8 +266,8 @@ export function createAgentEventPipeline(options: {
           revision: nextRevision(),
           toolName: event.toolName,
           result: event.result,
-          status: event.isError ? "error" : "done",
-          isError: event.isError || undefined,
+          status: isError ? "error" : "done",
+          isError: isError || undefined,
           ...(terminal ? { terminal } : {}),
         })
         return

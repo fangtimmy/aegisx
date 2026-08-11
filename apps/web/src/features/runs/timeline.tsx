@@ -185,6 +185,14 @@ function ToolActivity({
 }) {
   const isError = tool.status === "error"
   const label = isError ? (terminalLabel(tool) ?? "失败") : null
+  // Bash exit code (structured in details) — surfaced as a chip so a failed
+  // probe shows its specific code (1 / 139 / ...) at a glance, not just 失败.
+  const exitCode =
+    tool.name === "bash" &&
+    isRecord(tool.details) &&
+    typeof tool.details.exitCode === "number"
+      ? tool.details.exitCode
+      : null
   const StatusIcon =
     tool.status === "running"
       ? LoaderCircle
@@ -231,6 +239,14 @@ function ToolActivity({
             title={tool.terminalMessage ?? undefined}
           >
             {label}
+          </span>
+        )}
+        {exitCode !== null && exitCode !== 0 && (
+          <span
+            className="shrink-0 font-mono text-xs text-destructive"
+            title="退出码"
+          >
+            退出码 {exitCode}
           </span>
         )}
         <ChevronRight className="size-3.5 shrink-0 transition-transform" />

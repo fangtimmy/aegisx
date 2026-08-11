@@ -194,26 +194,27 @@ describe("createAgentEventPipeline tool progress", () => {
     expect("terminal" in tp[0]).toBe(false)
   })
 
-  test("tool_execution_end classifies terminal reason from the bash error text", () => {
+  test("tool_execution_end classifies terminal from result.details.terminal (bash no longer throws)", () => {
     const cases: Array<{
-      text: string
       terminal: "timed_out" | "cancelled" | "failed"
     }> = [
-      { text: "out\n\nCommand aborted", terminal: "cancelled" },
-      {
-        text: "out\n\nCommand timed out after 30 seconds",
-        terminal: "timed_out",
-      },
-      { text: "out\n\nCommand exited with code 1", terminal: "failed" },
+      { terminal: "cancelled" },
+      { terminal: "timed_out" },
+      { terminal: "failed" },
     ]
-    for (const { text, terminal } of cases) {
+    for (const { terminal } of cases) {
       const { pipeline, emitted } = setup()
+      // The bash tool now returns a result (isError:false) with the terminal
+      // reason in details — the pipeline derives the error state from it.
       pipeline.handle({
         type: "tool_execution_end",
         toolCallId: "t1",
         toolName: "bash",
-        result: { content: [{ type: "text", text }], details: {} },
-        isError: true,
+        result: {
+          content: [{ type: "text", text: "out" }],
+          details: { exitCode: 1, terminal },
+        },
+        isError: false,
       } as unknown as AgentSessionEvent)
       const tp = emitted.find(
         (e): e is ToolProgress => e.type === "tool.progress"
@@ -223,6 +224,23 @@ describe("createAgentEventPipeline tool progress", () => {
       expect(tp?.isError).toBe(true)
       expect(tp?.terminal).toBe(terminal)
     }
+  })
+
+  test("tool_execution_end falls back to 'failed' when the SDK reports an error without structured details", () => {
+    // An untyped tool that still throws → SDK isError:true, details:{}.
+    const { pipeline, emitted } = setup()
+    pipeline.handle({
+      type: "tool_execution_end",
+      toolCallId: "t1",
+      toolName: "something",
+      result: { content: [{ type: "text", text: "boom" }], details: {} },
+      isError: true,
+    } as unknown as AgentSessionEvent)
+    const tp = emitted.find(
+      (e): e is ToolProgress => e.type === "tool.progress"
+    )
+    expect(tp?.status).toBe("error")
+    expect(tp?.terminal).toBe("failed")
   })
 })
 
