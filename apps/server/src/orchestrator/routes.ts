@@ -160,10 +160,16 @@ export function registerOrchestratorRoutes(
         runId: eventId,
         agentId: orchestratorService.agentId,
       })
-      // Seed the live context snapshot so the composer stat strip shows
-      // immediately on (re)connect, mirroring the run stream.
+      // Seed the live ephemeral snapshot (context + current activity +
+      // in-flight tools with their latest partial result) so the composer stat
+      // strip AND an executing bash command's streamed output show immediately
+      // on (re)connect, mirroring the run stream.
       const context = bus.getContext(orchestratorService.agentId)
       if (context) queue.push(context)
+      const activity = bus.getActivity(orchestratorService.agentId)
+      if (activity) queue.push(activity)
+      for (const tool of bus.getToolProgress(orchestratorService.agentId))
+        queue.push(tool)
       try {
         while (!aborted) {
           if (queue.length === 0) {

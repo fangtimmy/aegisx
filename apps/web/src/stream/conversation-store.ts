@@ -29,7 +29,7 @@ type ToolProgress = {
   toolCallId: string
   revision: number
   toolName: string
-  args: unknown
+  args?: unknown
   result?: unknown
   status: "running" | "done" | "error"
   isError: boolean
@@ -44,10 +44,6 @@ type ActivityState = {
   maxAttempts?: number
   delayMs?: number
   reason?: "manual" | "threshold" | "overflow"
-  tokensBefore?: number
-  tokensAfter?: number
-  aborted?: boolean
-  success?: boolean
 }
 
 type QueueState = {
@@ -330,12 +326,6 @@ export class ConversationStore {
           state.maxAttempts = event.maxAttempts
         if (typeof event.delayMs === "number") state.delayMs = event.delayMs
         if (event.reason) state.reason = event.reason
-        if (typeof event.tokensBefore === "number")
-          state.tokensBefore = event.tokensBefore
-        if (typeof event.tokensAfter === "number")
-          state.tokensAfter = event.tokensAfter
-        if (typeof event.aborted === "boolean") state.aborted = event.aborted
-        if (typeof event.success === "boolean") state.success = event.success
         this.activity.set(event.agentId, state)
         this.notify(event.agentId)
       }

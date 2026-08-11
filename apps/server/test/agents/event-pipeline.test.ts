@@ -2,12 +2,16 @@ import { describe, expect, test } from "bun:test"
 
 import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 
 import { createAgentEventPipeline } from "../../src/agents/event-pipeline"
 import type { LiveBus } from "../../src/agents/live"
 
 type Committed = Extract<LiveEvent, { type: "message.committed" }>
+type ToolProgress = Extract<LiveEvent, { type: "tool.progress" }>
+type MessageProgress = Extract<LiveEvent, { type: "message.progress" }>
+type Activity = Extract<LiveEvent, { type: "agent.activity" }>
 
 /** A pipeline wired to a recording bus. Persistence is owned by the
  * SessionManager; the pipeline's `commitEntry` is driven by
@@ -128,5 +132,157 @@ describe("createAgentEventPipeline commitEntry", () => {
       willRetry: false,
     } as never)
     expect(committedOf(emitted).length).toBe(0)
+  })
+})
+
+describe("createAgentEventPipeline tool progress", () => {
+  test("tool_execution_start emits a running tool.progress with args", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.handle({
+      type: "tool_execution_start",
+      toolCallId: "t1",
+      toolName: "bash",
+      args: { command: "echo hi" },
+    } as AgentSessionEvent)
+    const tp = emitted.filter(
+      (e): e is ToolProgress => e.type === "tool.progress"
+    )
+    expect(tp.length).toBe(1)
+    expect(tp[0].status).toBe("running")
+    expect(tp[0].args).toEqual({ command: "echo hi" })
+  })
+
+  test("tool_execution_update carries the partial result (intermediate output)", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.handle({
+      type: "tool_execution_update",
+      toolCallId: "t1",
+      toolName: "bash",
+      args: { command: "seq 100" },
+      partialResult: {
+        content: [{ type: "text", text: "1\n2\n3" }],
+        details: { streaming: true },
+      },
+    } as AgentSessionEvent)
+    const tp = emitted.filter(
+      (e): e is ToolProgress => e.type === "tool.progress"
+    )
+    expect(tp.length).toBe(1)
+    expect(tp[0].status).toBe("running")
+    expect(tp[0].result).toEqual({
+      content: [{ type: "text", text: "1\n2\n3" }],
+      details: { streaming: true },
+    })
+  })
+
+  test("tool_execution_end omits args (keeps store's start args) and is done", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.handle({
+      type: "tool_execution_end",
+      toolCallId: "t1",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "ok" }], details: {} },
+      isError: false,
+    } as AgentSessionEvent)
+    const tp = emitted.filter(
+      (e): e is ToolProgress => e.type === "tool.progress"
+    )
+    expect(tp.length).toBe(1)
+    expect(tp[0].status).toBe("done")
+    expect(tp[0].isError).toBeUndefined()
+    expect("args" in tp[0]).toBe(false)
+    expect("terminal" in tp[0]).toBe(false)
+  })
+
+  test("tool_execution_end classifies terminal reason from the bash error text", () => {
+    const cases: Array<{
+      text: string
+      terminal: "timed_out" | "cancelled" | "failed"
+    }> = [
+      { text: "out\n\nCommand aborted", terminal: "cancelled" },
+      {
+        text: "out\n\nCommand timed out after 30 seconds",
+        terminal: "timed_out",
+      },
+      { text: "out\n\nCommand exited with code 1", terminal: "failed" },
+    ]
+    for (const { text, terminal } of cases) {
+      const { pipeline, emitted } = setup()
+      pipeline.handle({
+        type: "tool_execution_end",
+        toolCallId: "t1",
+        toolName: "bash",
+        result: { content: [{ type: "text", text }], details: {} },
+        isError: true,
+      } as unknown as AgentSessionEvent)
+      const tp = emitted.find(
+        (e): e is ToolProgress => e.type === "tool.progress"
+      )
+      expect(tp).toBeDefined()
+      expect(tp?.status).toBe("error")
+      expect(tp?.isError).toBe(true)
+      expect(tp?.terminal).toBe(terminal)
+    }
+  })
+})
+
+describe("createAgentEventPipeline message / activity", () => {
+  test("message_start for a toolResult is NOT streamed (tool block owns it)", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.handle({
+      type: "message_start",
+      message: {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "bash",
+        content: [],
+        details: {},
+        isError: false,
+        timestamp: 1,
+      } as AgentMessage,
+    } as AgentSessionEvent)
+    expect(emitted.some((e) => e.type === "message.progress")).toBe(false)
+  })
+
+  test("message_update toolcall_delta forwards the partial assistant message", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.handle({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "t1", name: "bash", arguments: '{"comm' },
+        ],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+      assistantMessageEvent: {
+        type: "toolcall_delta",
+        contentIndex: 0,
+        delta: '{"comm',
+      },
+    } as AgentSessionEvent)
+    const mp = emitted.filter(
+      (e): e is MessageProgress => e.type === "message.progress"
+    )
+    expect(mp.length).toBe(1)
+  })
+
+  test("compaction_end emits a clean activity:null (no token enrichment)", () => {
+    const { pipeline, emitted } = setup()
+    pipeline.handle({
+      type: "compaction_end",
+      reason: "threshold",
+      result: { tokensBefore: 180000, estimatedTokensAfter: 30000 } as never,
+      aborted: false,
+      willRetry: false,
+    } as AgentSessionEvent)
+    const act = emitted.filter(
+      (e): e is Activity => e.type === "agent.activity"
+    )
+    expect(act.length).toBe(1)
+    expect(act[0].activity).toBeNull()
+    expect("tokensBefore" in act[0]).toBe(false)
+    expect("tokensAfter" in act[0]).toBe(false)
+    expect("aborted" in act[0]).toBe(false)
   })
 })

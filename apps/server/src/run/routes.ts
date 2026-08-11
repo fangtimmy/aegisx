@@ -237,6 +237,12 @@ export function registerRunRoutes(
         if (context) queue.push(context)
         const queueState = bus.getQueue(agent.id)
         if (queueState) queue.push(queueState)
+        const activity = bus.getActivity(agent.id)
+        if (activity) queue.push(activity)
+        // Replay in-flight tools (with their latest partial result) so a fresh
+        // connection sees an executing bash command's streamed output right
+        // away, not only events that arrive after connect.
+        for (const tool of bus.getToolProgress(agent.id)) queue.push(tool)
       }
 
       try {

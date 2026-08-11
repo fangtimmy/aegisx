@@ -57,10 +57,6 @@ export type LiveEvent =
       maxAttempts?: number
       delayMs?: number
       reason?: CompactionReason
-      tokensBefore?: number
-      tokensAfter?: number
-      aborted?: boolean
-      success?: boolean
     }
   | ({
       type: "context.updated"
@@ -89,7 +85,10 @@ export type LiveEvent =
       toolCallId: string
       revision: number
       toolName: string
-      args: unknown
+      /** Omitted on the terminal (tool_execution_end) event — the SDK's
+       * tool_execution_end carries no args, so the store keeps the args from
+       * the earlier tool_execution_start/_update instead of clobbering them. */
+      args?: unknown
       result?: unknown
       status: ToolProgressStatus
       isError?: boolean

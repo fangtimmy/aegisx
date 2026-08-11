@@ -51,6 +51,40 @@ function syntheticMessageEntry(
   }
 }
 
+/** Best-effort terminal-reason classification for a failed tool, read from
+ * its result text. The AegisX bash tool throws deterministic, end-anchored
+ * messages on abort / timeout / non-zero exit (see run/bash-tool.ts); we mirror
+ * those here so the UI can distinguish 已超时 / 已取消 from a generic 失败.
+ * Coupled to the bash tool's wording by design — both live in this repo and
+ * the messages are the documented contract. Unknown failures stay "failed". */
+function classifyTerminal(
+  result: unknown
+): "timed_out" | "cancelled" | "failed" {
+  const text = toolResultText(result)
+  if (text.endsWith("Command aborted")) return "cancelled"
+  if (/Command timed out after \d+ seconds$/.test(text)) return "timed_out"
+  return "failed"
+}
+
+/** Flatten a tool result (SDK AgentToolResult shape) into its text content. */
+function toolResultText(result: unknown): string {
+  if (typeof result === "string") return result
+  if (result && typeof result === "object") {
+    const content = (result as { content?: unknown }).content
+    const parts = Array.isArray(content) ? content : [content]
+    return parts
+      .map((part) =>
+        part &&
+        typeof part === "object" &&
+        "text" in (part as Record<string, unknown>)
+          ? String((part as Record<string, unknown>).text)
+          : ""
+      )
+      .join("\n")
+  }
+  return ""
+}
+
 /** Per-agent context snapshot for the conversation stat strip (pi-TUI footer
  * parity: cumulative usage from session entries via the shared accumulator +
  * live context usage from `session.getContextUsage()`). */
@@ -144,6 +178,8 @@ export function createAgentEventPipeline(options: {
           ae.type === "thinking_delta" ||
           ae.type === "text_end" ||
           ae.type === "thinking_end" ||
+          ae.type === "toolcall_start" ||
+          ae.type === "toolcall_delta" ||
           ae.type === "toolcall_end"
         ) {
           const entry = syntheticMessageEntry(agentId, event.message)
@@ -158,6 +194,14 @@ export function createAgentEventPipeline(options: {
         return
       }
       case "message_start": {
+        // A toolResult message is driven by tool.progress (status + result)
+        // and finalized by message.committed; a streaming draft for it is
+        // redundant (the tool block already shows it). Skip it, only refresh
+        // the stat strip.
+        if (event.message.role === "toolResult") {
+          emitContext()
+          return
+        }
         const entry = syntheticMessageEntry(agentId, event.message)
         bus.emit(channel, {
           type: "message.progress",
@@ -211,17 +255,24 @@ export function createAgentEventPipeline(options: {
         return
       }
       case "tool_execution_end": {
+        // The SDK's tool_execution_end carries no args; omitting `args` lets
+        // the store keep the args captured at tool_execution_start/_update
+        // (null here would clobber them). Classify the terminal reason for a
+        // failed bash probe from its result text so the UI can show 已超时 /
+        // 已取消 instead of a generic 失败.
+        const terminal = event.isError
+          ? classifyTerminal(event.result)
+          : undefined
         bus.emit(channel, {
           type: "tool.progress",
           agentId,
           toolCallId: event.toolCallId,
           revision: nextRevision(),
           toolName: event.toolName,
-          args: null,
           result: event.result,
           status: event.isError ? "error" : "done",
           isError: event.isError || undefined,
-          ...(event.isError ? { terminal: "failed" } : {}),
+          ...(terminal ? { terminal } : {}),
         })
         return
       }
@@ -278,21 +329,9 @@ export function createAgentEventPipeline(options: {
         return
       }
       case "compaction_end": {
-        // The compaction entry (with its usage) is committed via
-        // DbSessionManager.onAppend, which also refreshes context/totals. Here
-        // we only clear the activity badge (with a summary for the badge tail).
-        bus.emit(channel, {
-          type: "agent.activity",
-          agentId,
-          activity: null,
-          ...(event.result?.tokensBefore !== undefined
-            ? { tokensBefore: event.result.tokensBefore }
-            : {}),
-          ...(event.result?.estimatedTokensAfter !== undefined
-            ? { tokensAfter: event.result.estimatedTokensAfter }
-            : {}),
-          ...(event.aborted ? { aborted: true } : {}),
-        })
+        // The compaction summary (tokensBefore) is surfaced as a committed
+        // system marker via message.committed; here we only clear the badge.
+        bus.emit(channel, { type: "agent.activity", agentId, activity: null })
         return
       }
       case "queue_update": {

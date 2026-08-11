@@ -25,7 +25,7 @@ export function AgentActivityBadge({
   const getSignature = useCallback(() => {
     const activity = stream.getActivity(agentId)
     const running = stream.getRunningTool(agentId)
-    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.attempt ?? ""}|${activity?.maxAttempts ?? ""}|${activity?.reason ?? ""}|${activity?.tokensBefore ?? ""}|${activity?.tokensAfter ?? ""}|${running ? 1 : 0}`
+    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.attempt ?? ""}|${activity?.maxAttempts ?? ""}|${activity?.reason ?? ""}|${running ? 1 : 0}`
   }, [stream, agentId, agentStatus])
   useSyncExternalStore(subscribe, getSignature, getSignature)
 
@@ -33,12 +33,7 @@ export function AgentActivityBadge({
   const activity = stream.getActivity(agentId)
   let label: string
   if (activity?.activity === "compacting") {
-    const before = activity.tokensBefore
-    const after = activity.tokensAfter
-    label =
-      before !== undefined && after !== undefined
-        ? `压缩中 ${formatBadgeTokens(before)} → ~${formatBadgeTokens(after)}…`
-        : "压缩上下文中…"
+    label = "压缩上下文中…"
   } else if (activity?.activity === "retrying") {
     label =
       activity.attempt !== undefined && activity.maxAttempts !== undefined
@@ -57,10 +52,4 @@ export function AgentActivityBadge({
       {label}
     </span>
   )
-}
-
-function formatBadgeTokens(count: number): string {
-  if (count < 1000) return String(count)
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
-  return `${(count / 1_000_000).toFixed(1)}M`
 }

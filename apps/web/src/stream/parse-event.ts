@@ -41,10 +41,6 @@ function optStr(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined
 }
 
-function optBool(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined
-}
-
 /** Parse one SSE data payload into a typed LiveEvent, or undefined if malformed. */
 export function parseLiveEvent(value: unknown): LiveEvent | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined
@@ -93,7 +89,7 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
           toolCallId: value.toolCallId,
           revision,
           toolName: value.toolName,
-          args: value.args,
+          ...(value.args !== undefined ? { args: value.args } : {}),
           ...("result" in value ? { result: value.result } : {}),
           status,
           ...(value.isError === true ? { isError: true } : {}),
@@ -131,18 +127,6 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
         ? { delayMs: value.delayMs as number }
         : {}),
       ...(isCompactionReason(value.reason) ? { reason: value.reason } : {}),
-      ...(optNum(value.tokensBefore) !== undefined
-        ? { tokensBefore: value.tokensBefore as number }
-        : {}),
-      ...(optNum(value.tokensAfter) !== undefined
-        ? { tokensAfter: value.tokensAfter as number }
-        : {}),
-      ...(optBool(value.aborted) !== undefined
-        ? { aborted: value.aborted as boolean }
-        : {}),
-      ...(optBool(value.success) !== undefined
-        ? { success: value.success as boolean }
-        : {}),
     }
   }
   if (value.type === "context.updated") {
