@@ -209,35 +209,18 @@ export function RunWorkspace({
         </CardFrameDescription>
         <CardFrameAction className="gap-2">
           {(running || run.status === "idle") && (
-            <Button
-              loading={close.isPending}
-              onClick={() => close.mutate()}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <Archive /> 关闭
-            </Button>
-          )}
-          {running && (
             <AlertDialog>
               <AlertDialogTrigger
-                render={
-                  <Button
-                    size="sm"
-                    type="button"
-                    variant="destructive-outline"
-                  />
-                }
+                render={<Button size="sm" type="button" variant="outline" />}
               >
-                <Square /> 停止
+                <Archive /> 关闭
               </AlertDialogTrigger>
               <AlertDialogPopup>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>停止该任务？</AlertDialogTitle>
+                  <AlertDialogTitle>关闭该任务？</AlertDialogTitle>
                   <AlertDialogDescription>
-                    当前轮次将被取消（类似按
-                    Esc）。容器会保留；发送消息即可继续。
+                    容器与会话将被释放（warm →
+                    closed），对话历史与工作区文件保留；之后发送消息会重建容器后继续。
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -247,16 +230,27 @@ export function RunWorkspace({
                     取消
                   </AlertDialogClose>
                   <Button
-                    loading={stop.isPending}
-                    onClick={() => stop.mutate()}
+                    loading={close.isPending}
+                    onClick={() => close.mutate()}
                     type="button"
-                    variant="destructive"
                   >
-                    停止任务
+                    关闭任务
                   </Button>
                 </AlertDialogFooter>
               </AlertDialogPopup>
             </AlertDialog>
+          )}
+          {running && (
+            <Button
+              loading={stop.isPending}
+              onClick={() => stop.mutate()}
+              size="sm"
+              title="取消当前轮次（容器保留），发送消息即可继续"
+              type="button"
+              variant="destructive-outline"
+            >
+              <Square /> 停止
+            </Button>
           )}
           <CreateRunDialog
             challenge={{ id: run.challengeId, name: run.challengeName }}

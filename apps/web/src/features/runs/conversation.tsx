@@ -1,5 +1,13 @@
 import { useMutation } from "@tanstack/react-query"
-import { Bot, ChevronDown, GitFork, LoaderCircle, Send, X } from "lucide-react"
+import {
+  Bot,
+  ChevronDown,
+  CircleAlert,
+  GitFork,
+  LoaderCircle,
+  Send,
+  X,
+} from "lucide-react"
 import {
   useCallback,
   useEffect,
@@ -112,9 +120,17 @@ export function Conversation(props: ConversationProps) {
   const [disconnected, setDisconnected] = useState(false)
   const [draft, setDraft] = useState("")
   const [deliverAs, setDeliverAs] = useState<"steer" | "followUp">("steer")
+  const [loadError, setLoadError] = useState<string | null>(null)
   const running = status === "running"
   const closed = status === "closed"
   const locked = closed && !props.closedReopenable
+
+  // The steer/followUp picker is only meaningful mid-turn; once the turn
+  // settles (idle/closed) the next send starts a fresh turn, so drop a stale
+  // choice instead of silently carrying it into the next prompt.
+  useEffect(() => {
+    if (!running) setDeliverAs("steer")
+  }, [running])
 
   // Keep the selected agent valid as agents appear/disappear (e.g. a child
   // spawns or completes).
@@ -142,6 +158,7 @@ export function Conversation(props: ConversationProps) {
   const loadMessages = useCallback(async () => {
     try {
       const items = await loadMessagesFn()
+      setLoadError(null)
       const byAgent = new Map<string, MessageListItem[]>()
       for (const message of items) {
         const bucket = byAgent.get(message.agentId) ?? []
@@ -151,8 +168,10 @@ export function Conversation(props: ConversationProps) {
       for (const [agentId, messages] of byAgent) {
         store.applySnapshot(agentId, messages)
       }
-    } catch {
-      // non-fatal; live stream + retry reconcile on reconnect
+    } catch (error) {
+      // Surface the failure (e.g. run deleted / unreachable) instead of a
+      // silent empty timeline; a later reconnect retry that succeeds clears it.
+      setLoadError(error instanceof Error ? error.message : "加载消息失败")
     }
   }, [store, loadMessagesFn])
 
@@ -231,7 +250,13 @@ export function Conversation(props: ConversationProps) {
           />
         </ScrollArea>
       </div>
-      {disconnected && running && (
+      {loadError && (
+        <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-xs text-destructive">
+          <CircleAlert className="size-3 shrink-0" />
+          <span className="min-w-0 truncate">无法加载对话：{loadError}</span>
+        </div>
+      )}
+      {disconnected && (
         <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
           <LoaderCircle className="size-3 animate-spin" /> 正在重新连接…
         </div>

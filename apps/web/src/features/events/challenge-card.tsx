@@ -1,15 +1,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
-  Check,
+  Archive,
   CircleDot,
-  CircleSlash,
+  CircleDashed,
   EllipsisVertical,
   Paperclip,
   Play,
   Server,
   Trash2,
   TriangleAlert,
-  X,
 } from "lucide-react"
 import { useState } from "react"
 
@@ -51,7 +50,7 @@ import {
   MenuTrigger,
 } from "@/components/ui/menu"
 import { CreateRunDialog } from "@/features/runs"
-import { statusVariant } from "@/features/runs/run-overview"
+import { runStatusLabel, statusVariant } from "@/features/runs/run-overview"
 import { toast } from "@/lib/toast"
 
 import { ChallengeDialog } from "./challenge-dialog"
@@ -310,21 +309,31 @@ export function ChallengeCard({
         )}
         {challenge.runCount > 0 && (
           <span className="ml-auto flex items-center gap-1.5">
-            {Object.entries(challenge.runStatusCounts).map(([status, count]) =>
-              count > 0 ? (
-                <Badge
-                  key={status}
-                  size="sm"
-                  variant={statusVariant(status as RunStatus)}
-                >
-                  {count}
-                  {status === "completed" && <Check className="size-3" />}
-                  {status === "failed" && <X className="size-3" />}
-                  {status === "stopped" && <CircleSlash className="size-3" />}
-                  {status === "running" && <Play className="size-3" />}
-                  <span className="sr-only"> {status}</span>
-                </Badge>
-              ) : null
+            {Object.entries(challenge.runStatusCounts).map(
+              ([status, count]) => {
+                if (count <= 0) return null
+                const runStatus = status as RunStatus
+                const Icon =
+                  runStatus === "running"
+                    ? Play
+                    : runStatus === "idle"
+                      ? CircleDashed
+                      : Archive
+                return (
+                  <Badge
+                    key={status}
+                    size="sm"
+                    variant={statusVariant(runStatus)}
+                  >
+                    {count}
+                    <Icon className="size-3" />
+                    <span className="sr-only">
+                      {" "}
+                      {runStatusLabel(runStatus)}
+                    </span>
+                  </Badge>
+                )
+              }
             )}
           </span>
         )}

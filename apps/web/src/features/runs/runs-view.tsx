@@ -93,7 +93,7 @@ function RunItem({
       queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) })
       toast.success("任务已删除")
       if (run.id === runId) {
-        navigate(`/events/${eventId}/runs`)
+        navigate(`/events/${eventId}/run`)
       }
     },
     onError: (error) => toast.error("删除任务失败", error.message),

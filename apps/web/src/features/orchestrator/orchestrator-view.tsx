@@ -50,7 +50,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -63,6 +70,7 @@ import {
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace, type FilesApi } from "@/features/runs/files-workspace"
 import { toast } from "@/lib/toast"
@@ -183,6 +191,44 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
     },
     onError: (error: Error) => toast.error("开新会话失败", error.message),
   })
+
+  // Optimistic local mirrors for the config knobs (model / reasoning). The
+  // server values stay authoritative (resynced on refetch), but local state
+  // lets the selects feel instant instead of waiting for the 4s poll.
+  const [localModelId, setLocalModelId] = useState<string | null>(
+    orch?.modelId ?? null
+  )
+  useEffect(() => {
+    setLocalModelId(orch?.modelId ?? null)
+  }, [orch?.modelId])
+
+  const [localThinking, setLocalThinking] = useState<ThinkingLevel>(
+    orch?.thinkingLevel ?? "off"
+  )
+  useEffect(() => {
+    setLocalThinking(orch?.thinkingLevel ?? "off")
+  }, [orch?.thinkingLevel])
+
+  // Resolve the selected model's supported reasoning levels; fall back to the
+  // full ordered list when no model is pinned (global default).
+  const selectedModel = availableModels.find((m) => m.id === localModelId)
+  const supportedThinkingLevels =
+    selectedModel?.thinkingLevels ?? ALL_THINKING_LEVELS
+
+  // Switching model atomically re-clamps reasoning to a level the new model
+  // supports, so the patch never lands in an inconsistent state.
+  const handleModelChange = (next: string | null) => {
+    setLocalModelId(next)
+    const model = availableModels.find((m) => m.id === next)
+    const levels = model?.thinkingLevels ?? ALL_THINKING_LEVELS
+    const body: OrchestratorConfigInput = { modelId: next }
+    if (!levels.includes(localThinking)) {
+      const fallback = levels[0] ?? "off"
+      setLocalThinking(fallback)
+      body.thinkingLevel = fallback
+    }
+    patch.mutate(body)
+  }
 
   // --- Conversation adapter (same shape the solver run implements) ---------
   // The orchestrator is a single agent with no `agents` row, so we synthesize
@@ -312,15 +358,36 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
             </Button>
           )}
           {orch.status !== "closed" && (
-            <Button
-              loading={closeMut.isPending}
-              onClick={() => closeMut.mutate()}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              关闭
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={<Button size="sm" type="button" variant="outline" />}
+              >
+                关闭
+              </AlertDialogTrigger>
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>关闭编排器？</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    将释放编排器的会话与资源（warm →
+                    closed），对话历史保留；之后可通过「启动」重新拉起。
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose
+                    render={<Button type="button" variant="ghost" />}
+                  >
+                    取消
+                  </AlertDialogClose>
+                  <Button
+                    loading={closeMut.isPending}
+                    onClick={() => closeMut.mutate()}
+                    type="button"
+                  >
+                    关闭
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
           )}
         </CardFrameAction>
       </CardFrameHeader>
@@ -378,21 +445,18 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
             >
               <ScrollArea className="h-full" scrollFade>
                 <div className="mx-auto max-w-3xl space-y-4 p-6">
-                  <div>
-                    <label
-                      className="mb-1 block text-sm font-medium"
-                      htmlFor="orchestrator-instruction"
-                    >
+                  <Field>
+                    <FieldLabel htmlFor="orchestrator-instruction">
                       指令
-                    </label>
-                    <p className="mb-2 text-xs text-muted-foreground">
+                    </FieldLabel>
+                    <FieldDescription>
                       自然语言策略。编排器在调度和审查任务时会遵循此指令。
-                    </p>
-                    <textarea
-                      className="min-h-48 w-full rounded-md border bg-background p-3 text-sm"
+                    </FieldDescription>
+                    <Textarea
                       id="orchestrator-instruction"
                       onChange={(e) => setInstruction(e.target.value)}
                       placeholder="例如：先打低分题；pwn 放到最后；跳过已解决的题目。"
+                      rows={6}
                       value={instruction}
                     />
                     <div className="mt-2 flex justify-end">
@@ -406,7 +470,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                         保存指令
                       </Button>
                     </div>
-                  </div>
+                  </Field>
                   <div className="flex items-center justify-between rounded-md border p-3">
                     <div>
                       <p className="text-sm font-medium">启用</p>
@@ -422,62 +486,92 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
                       {orch.enabled ? "已启用" : "已禁用"}
                     </Button>
                   </div>
-                  <div className="space-y-3 rounded-md border p-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <label
-                          className="mb-1 block text-xs text-muted-foreground"
-                          htmlFor="orch-model"
-                        >
-                          模型
-                        </label>
-                        <select
-                          className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                          disabled={patch.isPending}
-                          id="orch-model"
-                          onChange={(e) =>
-                            patch.mutate({ modelId: e.target.value || null })
-                          }
-                          value={orch.modelId ?? ""}
-                        >
-                          <option value="">（全局默认）</option>
+                  <div className="space-y-4 rounded-md border p-3">
+                    <Field>
+                      <FieldLabel htmlFor="orch-model">模型</FieldLabel>
+                      <Select
+                        items={Object.fromEntries([
+                          ["__default__", "（全局默认）"],
+                          ...modelOptions.map((m) => [m.id, m.label]),
+                        ])}
+                        onValueChange={(value) => {
+                          const next =
+                            value === "__default__" ? null : (value as string)
+                          handleModelChange(next)
+                        }}
+                        value={localModelId ?? "__default__"}
+                      >
+                        <SelectTrigger id="orch-model" size="sm">
+                          <SelectValue placeholder="（全局默认）" />
+                        </SelectTrigger>
+                        <SelectPopup>
+                          <SelectItem value="__default__">
+                            （全局默认）
+                          </SelectItem>
                           {modelOptions.map((m) => (
-                            <option key={m.id} value={m.id}>
+                            <SelectItem key={m.id} value={m.id}>
                               {m.label}
-                            </option>
+                            </SelectItem>
                           ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label
-                          className="mb-1 block text-xs text-muted-foreground"
-                          htmlFor="orch-targets"
+                        </SelectPopup>
+                      </Select>
+                    </Field>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field>
+                        <FieldLabel htmlFor="orch-thinking">推理</FieldLabel>
+                        <Select
+                          items={Object.fromEntries(
+                            supportedThinkingLevels.map((level) => [
+                              level,
+                              thinkingLevelLabels[level],
+                            ])
+                          )}
+                          onValueChange={(value) => {
+                            const next = value as ThinkingLevel
+                            setLocalThinking(next)
+                            patch.mutate({ thinkingLevel: next })
+                          }}
+                          value={localThinking}
                         >
+                          <SelectTrigger id="orch-thinking" size="sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectPopup>
+                            {supportedThinkingLevels.map((level) => (
+                              <SelectItem key={level} value={level}>
+                                {thinkingLevelLabels[level]}
+                              </SelectItem>
+                            ))}
+                          </SelectPopup>
+                        </Select>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="orch-targets">
                           最大并发目标数
-                        </label>
-                        <input
-                          className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                          disabled={patch.isPending}
-                          id="orch-targets"
+                        </FieldLabel>
+                        <NumberField
                           max={32}
                           min={0}
-                          onBlur={() => {
-                            if (maxTargets !== orch.maxConcurrentTargets)
-                              patch.mutate({
-                                maxConcurrentTargets: maxTargets,
-                              })
-                          }}
-                          onChange={(e) =>
-                            setMaxTargets(Number(e.target.value))
-                          }
-                          type="number"
+                          onValueChange={(value) => setMaxTargets(value ?? 0)}
+                          step={1}
                           value={maxTargets}
-                        />
-                      </div>
+                        >
+                          <NumberFieldGroup>
+                            <NumberFieldDecrement />
+                            <NumberFieldInput
+                              id="orch-targets"
+                              onBlur={() => {
+                                if (maxTargets !== orch.maxConcurrentTargets)
+                                  patch.mutate({
+                                    maxConcurrentTargets: maxTargets,
+                                  })
+                              }}
+                            />
+                            <NumberFieldIncrement />
+                          </NumberFieldGroup>
+                        </NumberField>
+                      </Field>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      推理：{orch.thinkingLevel}
-                    </p>
                   </div>
                   <div className="flex items-center justify-between rounded-md border p-3">
                     <div className="min-w-0">
@@ -576,6 +670,9 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   max: "Maximum",
 }
 const offThinkingLevels: ThinkingLevel[] = ["off"]
+const ALL_THINKING_LEVELS: ThinkingLevel[] = Object.keys(
+  thinkingLevelLabels
+) as ThinkingLevel[]
 
 type StartModel = {
   id: string

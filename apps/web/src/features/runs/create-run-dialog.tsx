@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Box, CircleAlert, Play, Plus } from "lucide-react"
+import { Box, CircleAlert, Play, Plus, TriangleAlert } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
-import { useNavigate } from "react-router"
+import { Link, useNavigate } from "react-router"
 
 import {
   type Challenge,
@@ -292,47 +292,63 @@ function CreateRunDialogContent({
             )}
             <Field>
               <FieldLabel>模型</FieldLabel>
-              <Controller
-                control={form.control}
-                name="modelId"
-                render={({ field }) => (
-                  <Select
-                    items={Object.fromEntries(
-                      availableModels.map((model) => [
-                        model.id,
-                        `${model.provider.label} / ${model.label}`,
-                      ])
-                    )}
-                    onValueChange={field.onChange}
-                    value={field.value}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="没有已启用的模型" />
-                    </SelectTrigger>
-                    <SelectPopup>
-                      {(providers.data?.items ?? []).map((provider) => {
-                        const models = availableModels.filter(
-                          (model) => model.provider.id === provider.id
-                        )
-                        if (models.length === 0) return null
-                        return (
-                          <SelectGroup key={provider.id}>
-                            <SelectGroupLabel>
-                              {provider.label}
-                            </SelectGroupLabel>
-                            {models.map((model) => (
-                              <SelectItem key={model.id} value={model.id}>
-                                {model.label}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        )
-                      })}
-                    </SelectPopup>
-                  </Select>
-                )}
-                rules={{ required: true }}
-              />
+              {availableModels.length === 0 ? (
+                <Alert variant="warning">
+                  <TriangleAlert />
+                  <AlertDescription>
+                    没有已启用的模型。请先到{" "}
+                    <Link
+                      className="font-medium underline"
+                      to="/settings/models"
+                    >
+                      设置 · 模型供应商
+                    </Link>{" "}
+                    配置并启用一个，再回来启动任务。
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Controller
+                  control={form.control}
+                  name="modelId"
+                  render={({ field }) => (
+                    <Select
+                      items={Object.fromEntries(
+                        availableModels.map((model) => [
+                          model.id,
+                          `${model.provider.label} / ${model.label}`,
+                        ])
+                      )}
+                      onValueChange={field.onChange}
+                      value={field.value}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择模型" />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {(providers.data?.items ?? []).map((provider) => {
+                          const models = availableModels.filter(
+                            (model) => model.provider.id === provider.id
+                          )
+                          if (models.length === 0) return null
+                          return (
+                            <SelectGroup key={provider.id}>
+                              <SelectGroupLabel>
+                                {provider.label}
+                              </SelectGroupLabel>
+                              {models.map((model) => (
+                                <SelectItem key={model.id} value={model.id}>
+                                  {model.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          )
+                        })}
+                      </SelectPopup>
+                    </Select>
+                  )}
+                  rules={{ required: true }}
+                />
+              )}
             </Field>
             <Field>
               <FieldLabel>推理</FieldLabel>
@@ -386,10 +402,12 @@ function CreateRunDialogContent({
             </Field>
             <Alert>
               <Box />
-              <AlertTitle>隔离容器</AlertTitle>
+              <AlertTitle>容器工具箱</AlertTitle>
               <AlertDescription>
-                pi 作为容器主进程运行，其工作区位于
-                /workspace。可在「对话」标签页中监控并干预它。
+                agent 在宿主机端以进程内方式运行；启动后会拉起一个 Kali
+                工具箱容器（<code className="font-mono">sleep infinity</code>
+                ），bash 在其中运行，配备完整 CTF
+                工具链，其工作区与宿主机文件工具共享。可在「对话」标签页中监控并干预它。
               </AlertDescription>
             </Alert>
             {mutation.error && (

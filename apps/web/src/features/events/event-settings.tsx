@@ -3,7 +3,7 @@ import { Trash2, TriangleAlert } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
 
-import { type EventInput, type EventSummary, eventsApi, keys } from "@/api"
+import { type EventSummary, eventsApi, keys } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -26,11 +26,18 @@ import { PlatformBinding } from "./platform-binding"
 export function EventSettings({ event }: { event: EventSummary }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const form = useForm<{ name: string; promptHint: string }>({
-    defaultValues: { name: event.name, promptHint: event.promptHint ?? "" },
+  // Two independent forms: "名称" and "提示词指令" live in separate sections
+  // and each save button only submits its own field (Partial update), so
+  // editing one never implicitly re-submits the other.
+  const nameForm = useForm<{ name: string }>({
+    defaultValues: { name: event.name },
   })
-  const update = useMutation({
-    mutationFn: (input: EventInput) => eventsApi.updateEvent(event.id, input),
+  const promptForm = useForm<{ promptHint: string }>({
+    defaultValues: { promptHint: event.promptHint ?? "" },
+  })
+  const updateName = useMutation({
+    mutationFn: (input: { name: string }) =>
+      eventsApi.updateEvent(event.id, input),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
@@ -38,9 +45,20 @@ export function EventSettings({ event }: { event: EventSummary }) {
         }),
         queryClient.invalidateQueries({ queryKey: keys.events.all }),
       ])
-      toast.success("赛事已更新")
+      toast.success("名称已更新")
     },
-    onError: (error) => toast.error("更新赛事失败", error.message),
+    onError: (error) => toast.error("更新名称失败", error.message),
+  })
+  const updatePrompt = useMutation({
+    mutationFn: (input: { promptHint: string }) =>
+      eventsApi.updateEvent(event.id, input),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: keys.events.detail(event.id),
+      })
+      toast.success("提示词指令已保存")
+    },
+    onError: (error) => toast.error("保存指令失败", error.message),
   })
   const remove = useMutation({
     mutationFn: () => eventsApi.deleteEvent(event.id),
@@ -67,17 +85,14 @@ export function EventSettings({ event }: { event: EventSummary }) {
         </h2>
         <form
           className="mt-4 flex max-w-xl items-end gap-3"
-          onSubmit={form.handleSubmit((values) =>
-            update.mutate({
-              name: values.name.trim(),
-              promptHint: values.promptHint.trim(),
-            })
+          onSubmit={nameForm.handleSubmit((values) =>
+            updateName.mutate({ name: values.name.trim() })
           )}
         >
           <Field className="min-w-0 flex-1">
             <FieldLabel htmlFor="event-name">名称</FieldLabel>
             <Controller
-              control={form.control}
+              control={nameForm.control}
               name="name"
               render={({ field }) => (
                 <Input
@@ -92,14 +107,14 @@ export function EventSettings({ event }: { event: EventSummary }) {
               rules={{ required: true }}
             />
           </Field>
-          <Button loading={update.isPending} type="submit">
+          <Button loading={updateName.isPending} type="submit">
             保存
           </Button>
         </form>
-        {update.error && (
+        {updateName.error && (
           <Alert className="mt-3 max-w-xl" variant="error">
             <TriangleAlert />
-            <AlertDescription>{update.error.message}</AlertDescription>
+            <AlertDescription>{updateName.error.message}</AlertDescription>
           </Alert>
         )}
       </section>
@@ -114,16 +129,13 @@ export function EventSettings({ event }: { event: EventSummary }) {
         </p>
         <form
           className="mt-4 max-w-xl"
-          onSubmit={form.handleSubmit((values) =>
-            update.mutate({
-              name: values.name.trim(),
-              promptHint: values.promptHint.trim(),
-            })
+          onSubmit={promptForm.handleSubmit((values) =>
+            updatePrompt.mutate({ promptHint: values.promptHint.trim() })
           )}
         >
           <Field>
             <Controller
-              control={form.control}
+              control={promptForm.control}
               name="promptHint"
               render={({ field }) => (
                 <Textarea
@@ -137,10 +149,20 @@ export function EventSettings({ event }: { event: EventSummary }) {
               )}
             />
           </Field>
-          <Button className="mt-3" loading={update.isPending} type="submit">
+          <Button
+            className="mt-3"
+            loading={updatePrompt.isPending}
+            type="submit"
+          >
             保存指令
           </Button>
         </form>
+        {updatePrompt.error && (
+          <Alert className="mt-3 max-w-xl" variant="error">
+            <TriangleAlert />
+            <AlertDescription>{updatePrompt.error.message}</AlertDescription>
+          </Alert>
+        )}
       </section>
 
       <section className="border-t py-6" aria-labelledby="event-platform">
