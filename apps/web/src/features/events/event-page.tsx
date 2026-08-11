@@ -54,6 +54,11 @@ import {
   type RemoteChallengeStatus,
   remoteChallengeStatus,
 } from "./event-shared"
+import {
+  type ChallengeGroup,
+  type ChallengeSort,
+  useEventViewPrefs,
+} from "./event-view-prefs"
 import { ImportChallengesDialog } from "./platform-binding"
 
 type EventTab = "overview" | "run" | "orchestrator" | "settings"
@@ -78,9 +83,6 @@ function pathForTab(eventId: string, tab: EventTab, runId?: string) {
   if (tab === "settings") return `/events/${eventId}/settings`
   return `/events/${eventId}`
 }
-
-type ChallengeSort = "event" | "name" | "points"
-type ChallengeGroup = "category" | "status" | "none"
 
 const FULLWIDTH_KEY = "aegisx:event-fullwidth"
 const UNCATEGORIZED = "未分类"
@@ -184,11 +186,8 @@ export function EventPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [uploadError, setUploadError] = useState<string | null>(null)
-  const [sort, setSort] = useState<ChallengeSort>("event")
-  const [group, setGroup] = useState<ChallengeGroup>("category")
-  const [categoryFilter, setCategoryFilter] = useState<string[]>([])
-  const [localFilter, setLocalFilter] = useState<LocalChallengeStatus[]>([])
-  const [remoteFilter, setRemoteFilter] = useState<RemoteChallengeStatus[]>([])
+  const [prefs, setPrefs] = useEventViewPrefs(eventId)
+  const { sort, group, categoryFilter, localFilter, remoteFilter } = prefs
   const [fullWidth, setFullWidth] = useState(readFullWidth)
   const toggleFullWidth = () =>
     setFullWidth((prev) => {
@@ -335,9 +334,14 @@ export function EventPage() {
                                 checked={categoryFilter.includes(category)}
                                 key={category}
                                 onCheckedChange={(checked) =>
-                                  setCategoryFilter((values) =>
-                                    toggleInSet(values, category, checked)
-                                  )
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    categoryFilter: toggleInSet(
+                                      prev.categoryFilter,
+                                      category,
+                                      checked
+                                    ),
+                                  }))
                                 }
                               >
                                 {category}
@@ -352,9 +356,14 @@ export function EventPage() {
                                 checked={localFilter.includes(option.value)}
                                 key={option.value}
                                 onCheckedChange={(checked) =>
-                                  setLocalFilter((values) =>
-                                    toggleInSet(values, option.value, checked)
-                                  )
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    localFilter: toggleInSet(
+                                      prev.localFilter,
+                                      option.value,
+                                      checked
+                                    ),
+                                  }))
                                 }
                               >
                                 {option.label}
@@ -369,9 +378,14 @@ export function EventPage() {
                                 checked={remoteFilter.includes(option.value)}
                                 key={option.value}
                                 onCheckedChange={(checked) =>
-                                  setRemoteFilter((values) =>
-                                    toggleInSet(values, option.value, checked)
-                                  )
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    remoteFilter: toggleInSet(
+                                      prev.remoteFilter,
+                                      option.value,
+                                      checked
+                                    ),
+                                  }))
                                 }
                               >
                                 {option.label}
@@ -382,11 +396,14 @@ export function EventPage() {
                             <>
                               <MenuSeparator />
                               <MenuItem
-                                onClick={() => {
-                                  setCategoryFilter([])
-                                  setLocalFilter([])
-                                  setRemoteFilter([])
-                                }}
+                                onClick={() =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    categoryFilter: [],
+                                    localFilter: [],
+                                    remoteFilter: [],
+                                  }))
+                                }
                               >
                                 清除筛选
                               </MenuItem>
@@ -408,7 +425,10 @@ export function EventPage() {
                         <MenuPopup align="end">
                           <MenuRadioGroup
                             onValueChange={(value) =>
-                              setGroup(value as ChallengeGroup)
+                              setPrefs((prev) => ({
+                                ...prev,
+                                group: value as ChallengeGroup,
+                              }))
                             }
                             value={group}
                           >
@@ -434,7 +454,10 @@ export function EventPage() {
                         <MenuPopup align="end">
                           <MenuRadioGroup
                             onValueChange={(value) =>
-                              setSort(value as ChallengeSort)
+                              setPrefs((prev) => ({
+                                ...prev,
+                                sort: value as ChallengeSort,
+                              }))
                             }
                             value={sort}
                           >
