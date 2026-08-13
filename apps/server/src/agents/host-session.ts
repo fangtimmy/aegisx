@@ -24,20 +24,12 @@ import type { LiveBus } from "./live"
 type Database = ReturnType<typeof createDatabase>["db"]
 
 /**
- * Who a host-side session belongs to. The same `sessions` / `session_entries`
- * tables back both run agents (one main + N children per run) and the per-event
- * orchestrator; `ownerType` / `ownerId` are the discriminator.
- *
- *  - run agents:          `{ type: "run", id: runId, runId, agentId }`
- *  - orchestrator:        `{ type: "orchestrator", id: eventId }`
+ * Who a host-side session belongs to: exactly one agent (and, redundantly
+ * for run-level queries, its run). Every session is agent-scoped in v8.
  */
 export type SessionOwner = {
-  type: "run" | "orchestrator"
-  /** Run id (for runs) or event id (for orchestrators). */
-  id: string
-  /** Run-owned sessions only: the runs/agents FK targets. */
-  runId?: string
-  agentId?: string
+  agentId: string
+  runId: string
 }
 
 /**
@@ -105,15 +97,7 @@ export type CreateHostAgentSessionInput = {
 
 /** Map a {@link SessionOwner} onto `DbSessionManager` create/open params. */
 function ownerManagerOpts(owner: SessionOwner) {
-  if (owner.type === "run") {
-    return {
-      ownerType: "run" as const,
-      ownerId: owner.id,
-      runId: owner.runId ?? owner.id,
-      agentId: owner.agentId,
-    }
-  }
-  return { ownerType: "orchestrator" as const, ownerId: owner.id }
+  return { agentId: owner.agentId, runId: owner.runId }
 }
 
 /**

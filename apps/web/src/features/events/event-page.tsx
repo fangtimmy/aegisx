@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowUpDown,
-  Bot,
   Flag,
   LayoutPanelTop,
   ListFilter,
@@ -41,7 +40,6 @@ import {
 } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { OrchestratorView } from "@/features/orchestrator/orchestrator-view"
 import { RunsView } from "@/features/runs"
 
 import { ChallengeCard } from "./challenge-card"
@@ -61,11 +59,10 @@ import {
 } from "./event-view-prefs"
 import { ImportChallengesDialog } from "./platform-binding"
 
-type EventTab = "overview" | "run" | "orchestrator" | "settings"
+type EventTab = "overview" | "run" | "settings"
 
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
-  if (pathname === `/events/${eventId}/orchestrator`) return "orchestrator"
   if (
     pathname === `/events/${eventId}/run` ||
     pathname.startsWith(`/events/${eventId}/runs/`)
@@ -79,7 +76,6 @@ function pathForTab(eventId: string, tab: EventTab, runId?: string) {
   if (tab === "run") {
     return runId ? `/events/${eventId}/runs/${runId}` : `/events/${eventId}/run`
   }
-  if (tab === "orchestrator") return `/events/${eventId}/orchestrator`
   if (tab === "settings") return `/events/${eventId}/settings`
   return `/events/${eventId}`
 }
@@ -225,7 +221,7 @@ export function EventPage() {
 
   if (!eventId) return null
   const tab = tabFromPath(location.pathname, eventId)
-  const workspace = tab === "run" || tab === "orchestrator"
+  const workspace = tab === "run"
 
   return (
     <AppLayout
@@ -274,9 +270,6 @@ export function EventPage() {
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="run">
                 <Play /> 任务
-              </TabsTab>
-              <TabsTab className="justify-start gap-2" value="orchestrator">
-                <Bot /> 编排器
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="settings">
                 <Settings /> 设置
@@ -554,9 +547,6 @@ export function EventPage() {
                 eventId={eventId}
                 runId={runId}
               />
-            </TabsPanel>
-            <TabsPanel className="min-h-0" value="orchestrator">
-              <OrchestratorView eventId={eventId} />
             </TabsPanel>
             <TabsPanel className="pt-0" value="settings">
               <EventSettings event={eventQuery.data.event} />

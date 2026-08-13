@@ -163,14 +163,16 @@ export function RunOverview({ run }: { run: RunPublic }) {
 
 function TargetPanel({ run }: { run: RunPublic }) {
   const queryClient = useQueryClient()
-  const key = keys.challenges.target(run.challengeId)
+  if (!run.challengeId) return null
+  const challengeId = run.challengeId
+  const key = keys.challenges.target(challengeId)
   const target = useQuery({
     queryKey: key,
-    queryFn: () => challengesApi.getTarget(run.challengeId),
+    queryFn: () => challengesApi.getTarget(challengeId),
   })
   const action = useMutation({
     mutationFn: (value: "start" | "extend" | "stop") =>
-      challengesApi.targetAction(run.challengeId, value),
+      challengesApi.targetAction(challengeId, value),
     onSuccess: (value, variables) => {
       queryClient.setQueryData(key, value)
       const verb =

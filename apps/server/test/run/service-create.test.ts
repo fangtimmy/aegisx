@@ -41,7 +41,7 @@ function baseCreateInput(
 
 describe("runService.create", () => {
   test("happy path: inserts run + main agent, creates the tool-box container, provisions", async () => {
-    const { db, dir, close } = setupDb()
+    const { db, sqlite, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
@@ -52,6 +52,7 @@ describe("runService.create", () => {
       )
 
       const runService = createRunService({
+        sqlite,
         db,
         dataDir: dir,
         containerManager: manager,
@@ -84,13 +85,16 @@ describe("runService.create", () => {
       expect(row?.image).toBe(containerInput.image)
       expect(row?.containerName).toBe(`aegisx-run-${run.id}`)
 
-      // Main agent row
+      // Entry agent row (v8: slot/role/isEntry + prompt/tools snapshot)
       const agent = db
         .select()
         .from(agents)
         .where(eq(agents.runId, run.id))
         .get()
-      expect(agent?.role).toBe("main")
+      expect(agent?.role).toBe("solver")
+      expect(agent?.slot).toBe("solver")
+      expect(agent?.isEntry).toBe(true)
+      expect(agent?.systemPrompt).toBeTruthy()
       expect(agent?.status).toBe("running")
 
       // Tool-box container created with the resolved config
@@ -120,7 +124,7 @@ describe("runService.create", () => {
   })
 
   test("provision failure: run is closed, main agent failed, container reclaimed", async () => {
-    const { db, dir, close } = setupDb()
+    const { db, sqlite, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
@@ -131,6 +135,7 @@ describe("runService.create", () => {
       })
 
       const runService = createRunService({
+        sqlite,
         db,
         dataDir: dir,
         containerManager: manager,
@@ -175,12 +180,13 @@ describe("runService.create", () => {
   })
 
   test("rejects when the challenge does not exist", async () => {
-    const { db, dir, close } = setupDb()
+    const { db, sqlite, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       const provider = makeProvider()
       const { manager } = stubContainerManager()
       const runService = createRunService({
+        sqlite,
         db,
         dataDir: dir,
         containerManager: manager,

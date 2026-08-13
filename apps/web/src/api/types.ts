@@ -1,5 +1,4 @@
 export type {
-  AgentRole,
   AgentStatus,
   AgentSummary,
   Attachment,
@@ -21,10 +20,6 @@ export type {
   MessageList,
   MessageListItem,
   ModelMetadata,
-  OrchestratorConfigInput,
-  OrchestratorDetail,
-  OrchestratorPublic,
-  OrchestratorStatus,
   PiModelProfile,
   PlatformType,
   ProviderConnection,

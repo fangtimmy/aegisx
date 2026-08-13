@@ -253,7 +253,7 @@ export function RunWorkspace({
             </Button>
           )}
           <CreateRunDialog
-            challenge={{ id: run.challengeId, name: run.challengeName }}
+            challenge={{ id: run.challengeId ?? "", name: run.challengeName }}
           />
         </CardFrameAction>
       </CardFrameHeader>

@@ -91,9 +91,10 @@ describe("event, challenge, and attachment API", () => {
       [challenge.id, "2099-01-01T00:00:00.000Z"]
     )
     sqlite.run(
-      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?)",
+      "insert into runs (id, scope_type, event_id, challenge_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, 'challenge', ?, ?, 'classic', ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', 'manual', ?, ?)",
       [
         "active-run-1",
+        event.id,
         challenge.id,
         "running",
         "2100-01-01T00:00:00.000Z",
@@ -119,9 +120,10 @@ describe("event, challenge, and attachment API", () => {
     const challenge = await createChallenge(app, event.id)
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir) values (?, ?, 'closed', 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?)",
+      "insert into runs (id, scope_type, event_id, challenge_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, 'challenge', ?, ?, 'classic', 'closed', 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', 'manual', ?, ?)",
       [
         "flagged-local-run",
+        event.id,
         challenge.id,
         "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
@@ -210,9 +212,10 @@ describe("event, challenge, and attachment API", () => {
 
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, challenge_id, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, created_at, updated_at, session_dir) values (?, ?, ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', ?, ?)",
+      "insert into runs (id, scope_type, event_id, challenge_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, 'challenge', ?, ?, 'classic', ?, 'Test', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', 'manual', ?, ?)",
       [
         "active-run",
+        event.id,
         challenge.id,
         "running",
         new Date().toISOString(),

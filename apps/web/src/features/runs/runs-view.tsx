@@ -281,8 +281,10 @@ export function RunsView({
   } else if (sort === "event") {
     historyRuns.sort(
       (left, right) =>
-        (challengeOrder.get(left.challengeId) ?? Number.MAX_SAFE_INTEGER) -
-          (challengeOrder.get(right.challengeId) ?? Number.MAX_SAFE_INTEGER) ||
+        (challengeOrder.get(left.challengeId ?? "") ??
+          Number.MAX_SAFE_INTEGER) -
+          (challengeOrder.get(right.challengeId ?? "") ??
+            Number.MAX_SAFE_INTEGER) ||
         right.updatedAt.localeCompare(left.updatedAt)
     )
   } else if (sort === "recent") {

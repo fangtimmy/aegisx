@@ -17,7 +17,7 @@ type Database = ReturnType<typeof createDatabase>["db"]
 import type { ProviderConnection } from "@aegisx/shared/provider"
 
 import type { HostAgentSession } from "../src/agents/host-session"
-import { challenges, events, orchestrators, runs } from "../src/db/schema"
+import { challenges, events, runs } from "../src/db/schema"
 import type {
   ConfigStore,
   ProviderData,
@@ -26,11 +26,17 @@ import { mapProviderConnection } from "../src/providers/public"
 import type { ContainerManager } from "../src/run/container/container-manager"
 
 /** Fresh on-disk SQLite on a temp dir. FKs left on (tests seed real graphs). */
-export function setupDb(): { db: Database; dir: string; close: () => void } {
+export function setupDb(): {
+  db: Database
+  sqlite: ReturnType<typeof createDatabase>["sqlite"]
+  dir: string
+  close: () => void
+} {
   const dir = mkdtempSync(join(tmpdir(), "aegisx-test-"))
   const { db, sqlite, releaseLock } = createDatabase(dir)
   return {
     db,
+    sqlite,
     dir,
     close: () => {
       sqlite.close()
@@ -76,39 +82,24 @@ export function seedChallenge(
   return id
 }
 
-export function seedOrchestrator(
-  db: Database,
-  eventId: string,
-  overrides: Partial<typeof orchestrators.$inferInsert> = {}
-) {
-  db.insert(orchestrators)
-    .values({
-      eventId,
-      enabled: true,
-      status: "idle",
-      containerName: `aegisx-orchestrator-${eventId}`,
-      image: "img",
-      cpus: 1,
-      memoryMb: 512,
-      pidsLimit: 64,
-      workspacePath: "w",
-      sessionDir: "s",
-      createdAt: now(),
-      updatedAt: now(),
-      ...overrides,
-    })
-    .run()
-}
-
 export function seedRun(
   db: Database,
-  overrides: Partial<typeof runs.$inferInsert> & { id?: string } = {}
+  overrides: Partial<typeof runs.$inferInsert> & {
+    id?: string
+    eventId?: string
+    challengeId?: string
+  } = {}
 ) {
   const id = overrides.id ?? "run-1"
+  const eventId = overrides.eventId ?? "evt-1"
+  const challengeId = overrides.challengeId ?? "ch-1"
   db.insert(runs)
     .values({
       id,
-      challengeId: overrides.challengeId ?? "ch-1",
+      scopeType: "challenge",
+      eventId,
+      challengeId,
+      orchestration: "classic",
       status: "closed",
       provider: "Test Provider",
       modelId: "test-model",
@@ -119,6 +110,7 @@ export function seedRun(
       containerName: "c",
       workspacePath: "w",
       sessionDir: "s",
+      source: "manual",
       createdAt: now(),
       updatedAt: now(),
       ...overrides,

@@ -19,8 +19,8 @@ const RENDERABLE_TYPES = new Set([
 ])
 
 /** Parse committed session_entries.data rows (matching `where`) into entries.
- * Malformed rows are skipped. Shared by run (runId-scoped) and orchestrator
- * (ownerType/ownerId-scoped) queries — the caller supplies the owner filter. */
+ * Malformed rows are skipped. Shared by run (runId-scoped) and per-agent
+ * queries — the caller supplies the scoping filter. */
 export function readSessionEntries(
   db: Database,
   where: SQL | undefined
@@ -63,19 +63,18 @@ export function sumUsageTotals(
   }
 }
 
-/** List renderable entries (seq > after, matching `ownerWhere`) as message
- * items, ordered by seq. `ownerWhere` is the owner-scoping condition WITHOUT
- * the seq filter (this adds it). `agentIdFallback` is used when a row has no
- * agent_id (the orchestrator's single session). */
+/** List renderable entries (seq > after, matching `scopeWhere`) as message
+ * items, ordered by seq. `scopeWhere` is the scoping condition WITHOUT the seq
+ * filter (this adds it). Every row carries its agent_id (v8: notNull). */
 export function listRenderableEntries(
   db: Database,
-  ownerWhere: SQL | undefined,
-  opts: { after: number; agentIdFallback: string }
+  scopeWhere: SQL | undefined,
+  opts: { after: number }
 ): MessageList {
   const rows = db
     .select()
     .from(sessionEntries)
-    .where(and(ownerWhere, gt(sessionEntries.seq, opts.after)))
+    .where(and(scopeWhere, gt(sessionEntries.seq, opts.after)))
     .orderBy(asc(sessionEntries.seq))
     .all()
   const items: MessageListItem[] = []
@@ -87,12 +86,11 @@ export function listRenderableEntries(
       continue
     }
     if (!RENDERABLE_TYPES.has(entry.type)) continue
-    const agentId = row.agentId ?? opts.agentIdFallback
     items.push({
       entry,
       seq: row.seq,
-      key: entryKeyOf(agentId, entry),
-      agentId,
+      key: entryKeyOf(row.agentId, entry),
+      agentId: row.agentId,
     })
   }
   return {

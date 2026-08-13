@@ -160,8 +160,10 @@ describe("createMainTools", () => {
     const foreignChild: AgentSummary = {
       id: "child",
       runId: "r",
+      slot: "child-xxxx",
       role: "child",
       parentAgentId: "other-parent",
+      isEntry: false,
       name: "Child",
       task: "t",
       status: "completed",
@@ -187,8 +189,10 @@ describe("createMainTools", () => {
     const child: AgentSummary = {
       id: "child",
       runId: "r",
+      slot: "child-xxxx",
       role: "child",
       parentAgentId: "main",
+      isEntry: false,
       name: "Child",
       task: "t",
       status: "completed",

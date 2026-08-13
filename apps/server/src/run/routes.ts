@@ -203,7 +203,7 @@ export function registerRunRoutes(
     const runId = c.req.param("runId")
     const detail = runService.detail(runId)
     if (!detail) return notFound(c, "Run not found")
-    const mainAgent = detail.agents.find((a) => a.role === "main")
+    const mainAgent = detail.agents.find((a) => a.isEntry)
     const bus = runService.bus
 
     return streamSSE(c, async (stream) => {
@@ -345,6 +345,7 @@ export function registerRunRoutes(
     const runId = c.req.param("runId")
     const run = runService.get(runId)
     if (!run) return notFound(c, "Run not found")
+    if (!run.challengeId) return notFound(c, "Run has no challenge")
     try {
       const result = await runService.submitFlag(
         runId,
@@ -368,6 +369,7 @@ export function registerRunRoutes(
   app.get("/api/runs/:runId/target", async (c) => {
     const run = runService.get(c.req.param("runId"))
     if (!run) return notFound(c, "Run not found")
+    if (!run.challengeId) return notFound(c, "Run has no challenge")
     try {
       return c.json(await runService.targetAction(run.challengeId, "get"))
     } catch (error) {
@@ -382,6 +384,7 @@ export function registerRunRoutes(
       async (c) => {
         const run = runService.get(c.req.param("runId"))
         if (!run) return notFound(c, "Run not found")
+        if (!run.challengeId) return notFound(c, "Run has no challenge")
         try {
           return c.json(await runService.targetAction(run.challengeId, action))
         } catch (error) {

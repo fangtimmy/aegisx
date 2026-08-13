@@ -1,18 +1,21 @@
-/** v5 run lifecycle: a run is a long-lived pi session + container. The agent
- * loops prompt()-by-prompt(); a turn resolving does NOT tear the run down.
- *
- * - `running`: a prompt() turn is in flight (pi isStreaming); container warm.
- * - `idle`: between turns; container warm — promptable instantly.
- * - `closed`: container + in-process session released (after finish_run, a
- *   manual close, or crash recovery); the DB session is retained,
- *   cold-restorable by messaging the run. Not a dead terminal. */
+/** v8 run lifecycle. A run's status is SQL-derived from its agents' statuses
+ * (running ↔ idle) plus sanctioned explicit `closed` transitions
+ * (finish / close / timeout-SIGKILL / recoverOnBoot). Not a dead terminal:
+ * the DB session + agent rows survive a `closed` run for cold-restore. */
 export type RunStatus = "running" | "idle" | "closed"
 
-/** A run holds live resources (container + in-process session). */
+/** A run holds live resources (container + in-process sessions). */
 export function isActiveRunStatus(status: string): boolean {
   return status === "running" || status === "idle"
 }
 
-/** Per-agent lifecycle. The main agent uses running|idle; children run to
- * completion within a single spawn_agent call (running|completed|failed). */
-export type AgentStatus = "running" | "idle" | "completed" | "failed"
+/** Per-agent lifecycle. Declared agents use running|idle (turn-by-turn); a
+ * spawn child runs to completion within one spawn_agent call
+ * (running|completed|aborted|failed). `aborted` is set when the run is torn
+ * down (finish/close/timeout) while the agent was mid-turn. */
+export type AgentStatus =
+  | "running"
+  | "idle"
+  | "completed"
+  | "aborted"
+  | "failed"

@@ -1,16 +1,21 @@
 import type { AgentStatus } from "./run-status"
 
-/** v4 agent: one main AgentSession per run, plus optional child agents. */
-export type AgentRole = "main" | "child"
-
+/** v8 agent: a pi session + role + model + prompt + tools, snapshotted on the
+ * row at createAgent time. A run declares N agents (classic = 1 solver);
+ * spawn adds child agents (parentAgentId set). */
 export type AgentSummary = {
   id: string
   runId: string
-  role: AgentRole
-  /** null for the main agent. */
+  /** Run-unique createAgent idempotency key; spawn child = `child-<8char>`. */
+  slot: string
+  /** Free-form role ('solver' / 'observer' / 'orchestrator' / 'child' ...). */
+  role: string
+  /** Non-null = spawn child; references the delegating parent agent. */
   parentAgentId: string | null
+  /** Entry agent (run-level default conversation target); at most one per run. */
+  isEntry: boolean
   name: string | null
-  /** Delegated task text for child agents; null for main. */
+  /** Delegated task text (spawn children). */
   task: string | null
   status: AgentStatus
   /** Session id (DB) or legacy jsonl path for this agent (resume + audit). */

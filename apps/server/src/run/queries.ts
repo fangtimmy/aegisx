@@ -60,7 +60,10 @@ export type RunQueries = ReturnType<typeof createRunQueries>
 export function createRunQueries(options: { db: Database; dataDir: string }) {
   const { db, dataDir } = options
 
-  function challengeMeta(challengeId: string): ChallengeMeta | undefined {
+  function challengeMeta(
+    challengeId: string | null
+  ): ChallengeMeta | undefined {
+    if (!challengeId) return undefined
     const row = db
       .select({ challenge: challenges, remote: challengeRemote })
       .from(challenges)
@@ -131,8 +134,8 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       .map((row) => toAgentSummary(row))
   }
 
-  function mainAgent(runId: string): AgentSummary | undefined {
-    return listAgents(runId).find((agent) => agent.role === "main")
+  function entryAgent(runId: string): AgentSummary | undefined {
+    return listAgents(runId).find((agent) => agent.isEntry)
   }
 
   function detail(
@@ -182,7 +185,7 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
         eq(sessionEntries.runId, runId),
         opts.agentId ? eq(sessionEntries.agentId, opts.agentId) : undefined
       ),
-      { after: opts.after ?? 0, agentIdFallback: "" }
+      { after: opts.after ?? 0 }
     )
   }
 
@@ -191,7 +194,7 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     getRow,
     listForEvent,
     listAgents,
-    mainAgent,
+    entryAgent,
     detail,
     workspacePath,
     runDirPath,

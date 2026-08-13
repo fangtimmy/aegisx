@@ -33,6 +33,9 @@ export type ChildAgentDeps = {
   emitAgents(runId: string): void
   /** Hand a finished child's result text to its parent (steer or new turn). */
   deliverToParent(runId: string, text: string): void
+  /** Child turn boundary hooks (status aggregation — spec §4.5e). */
+  onChildTurnStart(agentId: string, runId: string): void
+  onChildTurnSettled(agentId: string, runId: string, error: string | null): void
 }
 
 export type ChildAgentRuntime = ReturnType<typeof createChildAgentRuntime>
@@ -54,6 +57,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     task: string,
     childSession: HostAgentSession
   ): Promise<void> {
+    deps.onChildTurnStart(childAgentId, runId)
     let runError: string | null = null
     try {
       await childSession.session.prompt(task)
@@ -71,6 +75,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
       updatedAt: settled,
       ...(runError ? { error: runError } : {}),
     })
+    deps.onChildTurnSettled(childAgentId, runId, runError)
     void childSession.dispose()
     deps.childSessions.delete(childAgentId)
     deps.emitAgents(runId)
@@ -121,12 +126,30 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     const childAgentId = crypto.randomUUID()
     const childName = input.name.trim() || "Child agent"
     const ts = now()
+    const childSystemPrompt = renderSystemPrompt(ctx.childTemplate, {
+      ...ctx.promptContext,
+      agent: {
+        role: "child",
+        isMain: false,
+        name: childName,
+        task: input.task,
+      },
+    })
     db.insert(agents)
       .values({
         id: childAgentId,
         runId,
+        slot: `child-${childAgentId.slice(0, 8)}`,
         role: "child",
         parentAgentId,
+        isEntry: false,
+        provider: ctx.model.provider,
+        providerLabel: ctx.model.providerLabel ?? null,
+        modelId: ctx.model.modelId,
+        modelLabel: ctx.model.modelLabel ?? null,
+        thinkingLevel: ctx.thinkingLevel,
+        systemPrompt: childSystemPrompt,
+        tools: "[]",
         status: "running",
         sessionFile: null,
         name: childName,
@@ -138,21 +161,12 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
       .run()
     deps.emitAgents(runId)
 
-    const childSystemPrompt = renderSystemPrompt(ctx.childTemplate, {
-      ...ctx.promptContext,
-      agent: {
-        role: "child",
-        isMain: false,
-        name: childName,
-        task: input.task,
-      },
-    })
     // Children: file tools only (no finish/flag/target/spawn) — they get the
     // common host tool set with no extras, reusing the run's container + model.
     let childSession: HostAgentSession
     try {
       childSession = await createAgentHost({
-        owner: { type: "run", id: runId, runId, agentId: childAgentId },
+        owner: { agentId: childAgentId, runId },
         channel: runId,
         agentId: childAgentId,
         cwd: ctx.containerWorkspace,

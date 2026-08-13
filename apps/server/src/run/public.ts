@@ -37,10 +37,14 @@ export function toRunPublic(
 ): RunPublic {
   return {
     id: row.id,
+    scopeType: row.scopeType as RunPublic["scopeType"],
+    eventId: row.eventId,
     challengeId: row.challengeId,
     challengeName: challenge?.name ?? "",
-    eventId: challenge?.eventId ?? "",
+    orchestration: row.orchestration,
     status: row.status as RunPublic["status"],
+    finishing: row.finishing,
+    source: row.source as RunPublic["source"],
     targetSupported: challenge?.targetSupported ?? false,
     provider: row.provider,
     modelId: row.modelId,
@@ -68,8 +72,10 @@ export function toAgentSummary(row: AgentRow): AgentSummary {
   return {
     id: row.id,
     runId: row.runId,
-    role: row.role as AgentSummary["role"],
+    slot: row.slot,
+    role: row.role,
     parentAgentId: row.parentAgentId,
+    isEntry: row.isEntry,
     name: row.name,
     task: row.task,
     status: row.status as AgentSummary["status"],

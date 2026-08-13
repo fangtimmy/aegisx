@@ -16,12 +16,25 @@ export type RunUsage = {
   turns: number
 }
 
+/** 'challenge' = a solver run on one challenge; 'event' = the scheduler run
+ * (orchestration='scheduler') that manages a task queue for an event. */
+export type RunScope = "challenge" | "event"
+
+export type RunSource = "manual" | "scheduler"
+
 export type RunPublic = {
   id: string
-  challengeId: string
-  challengeName: string
+  scopeType: RunScope
   eventId: string
+  /** Nullable: event-scope (scheduler) runs have no challenge. */
+  challengeId: string | null
+  challengeName: string
+  /** Orchestration plugin id (e.g. 'classic', 'scheduler'). */
+  orchestration: string
   status: RunStatus
+  /** Set atomically by finish_run; the winning agent tears the run down. */
+  finishing: boolean
+  source: RunSource
   targetSupported: boolean
   provider: string
   modelId: string
