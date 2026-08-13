@@ -17,6 +17,7 @@ import {
   workspaceDownload,
 } from "../infrastructure/workspace-files"
 import { EmptyInputSchema, ThinkingLevelSchema } from "../lib/schemas"
+import { listPlugins, requirePlugin } from "../orchestration/registry"
 import { platformActionHttpError } from "../platforms/errors"
 import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
@@ -26,6 +27,9 @@ type Database = ReturnType<typeof createDatabase>["db"]
 
 const runInput = Type.Object(
   {
+    orchestration: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+    /** Plugin input snapshot (validated against the plugin's params schema). */
+    params: Type.Optional(Type.Unknown()),
     modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
     image: Type.Optional(
       Type.String({
@@ -133,8 +137,21 @@ export function registerRunRoutes(
           .get()
         if (!challenge) return notFound(c, "Challenge not found")
 
+        const orchestration = input.orchestration ?? "classic"
+        const plugin = requirePlugin(orchestration)
+        if (plugin.scope !== "challenge") {
+          return badRequest(
+            c,
+            "invalid_scope",
+            `Plugin '${plugin.id}' is event-scoped; it cannot start a challenge run`
+          )
+        }
+
         const run = await runService.create({
+          scopeType: "challenge",
           challengeId,
+          orchestration: plugin.id,
+          params: input.params as Record<string, unknown> | undefined,
           provider: selected.provider,
           modelId: selected.model.id,
           thinkingLevel:
@@ -154,6 +171,19 @@ export function registerRunRoutes(
         return runError(c, error)
       }
     }
+  )
+
+  /** Orchestration plugin registry (id, scope, params schema, templates) — the
+   * create-run dialog renders against it (spec §10). */
+  app.get("/api/orchestrations", (c) =>
+    c.json({
+      items: listPlugins().map((plugin) => ({
+        id: plugin.id,
+        scope: plugin.scope,
+        params: plugin.params,
+        templates: plugin.templates ?? {},
+      })),
+    })
   )
 
   app.get("/api/runs/:runId", (c) => {

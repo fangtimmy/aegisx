@@ -72,8 +72,8 @@ export type PromptTemplateContext = {
     pidsLimit: number
   }
   capabilities: {
-    canFinishRun: boolean
-    canSpawnAgent: boolean
+    canFinish: boolean
+    canSpawn: boolean
     canSubmitFlag: boolean
     canManageTarget: boolean
   }

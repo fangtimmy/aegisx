@@ -1,0 +1,39 @@
+import type { PromptContext } from "./types"
+
+/** Platform + target tools, granted conditionally from the challenge context
+ * (platform-integrated → submit_flag; target-capable → the four target tools).
+ * Keeps v7 parity: a plain challenge gets no flag/target tooling. */
+function platformTools(ctx: PromptContext): string[] {
+  const tools: string[] = []
+  if (ctx.run?.platformIntegrated) tools.push("submit_flag")
+  if (ctx.run?.targetSupported) {
+    tools.push("get_target", "start_target", "extend_target", "stop_target")
+  }
+  return tools
+}
+
+/** The classic single-solver set: finish + spawn + read, plus conditional
+ * platform/target tools. Shared by classic / observer-solver / bootstrap-solver
+ * so every "main solver" grants the same baseline (spec §7.1/§7.2/§7.3). */
+export function solverTools(ctx: PromptContext): string[] {
+  return ["finish_run", "spawn_agent", "read_agent", ...platformTools(ctx)]
+}
+
+/** Trio variant: peers coordinate via message_agent/list_agents; no spawn
+ * (three parallel solvers are enough — spec §7.4). */
+export function trioTools(ctx: PromptContext): string[] {
+  return [
+    "finish_run",
+    "message_agent",
+    "read_agent",
+    "list_agents",
+    ...platformTools(ctx),
+  ]
+}
+
+/** Probe set for the bootstrap agent: platform/target tools only — no
+ * finish_run (canFinish derives false) and no spawn; it hands off to the
+ * solver, which owns the finish (spec §7.3). */
+export function bootstrapTools(ctx: PromptContext): string[] {
+  return platformTools(ctx)
+}

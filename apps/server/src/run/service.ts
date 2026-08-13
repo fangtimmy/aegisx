@@ -5,7 +5,6 @@ import { join, relative } from "node:path"
 import type {
   EnvironmentConfig,
   ModelConfig,
-  PromptTemplateContext,
   RunPublic,
   SwitchModelInput,
 } from "@aegisx/shared"
@@ -14,6 +13,8 @@ import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { and, eq, inArray, sql } from "drizzle-orm"
+import type { TSchema } from "typebox"
+import { Value } from "typebox/value"
 
 import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -24,16 +25,30 @@ import type {
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
-import { agents, challenges, runs } from "../db/schema"
+import { agents, challenges, events, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
+import {
+  loadTemplateMap,
+  renderTemplate,
+} from "../orchestration/prompt-templates-store"
+import { bootOrchestration, requirePlugin } from "../orchestration/registry"
+import {
+  createRunHandle,
+  EventScopeEmitter,
+  type FreshAgentInput,
+  RunEmitter,
+  type RunHandleHost,
+} from "../orchestration/run-handle"
+import type {
+  EventHandle,
+  EventScopePayload,
+  ModelSnapshot,
+  OrchestrationPlugin,
+  PromptContext,
+} from "../orchestration/types"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 import { getProviderConnections } from "../providers/public"
-import {
-  renderInitialPrompt,
-  renderSystemPrompt,
-  resolvePromptTemplates,
-} from "../settings/prompt-templates"
 import { createChildAgentRuntime } from "./child-agents"
 import type { ContainerManager } from "./container/container-manager"
 import { createToolboxContainer } from "./container/container-manager"
@@ -43,13 +58,13 @@ import {
   type RunModelRuntime,
   resolveRunModel,
 } from "./model-runtime"
-import { buildPromptContext, copyAttachments } from "./prompt"
-import { createRunQueries } from "./queries"
 import {
-  createMainTools,
-  type RunToolContext,
-  type ToolCapabilities,
-} from "./tools"
+  buildEventPromptContext,
+  buildPromptContext,
+  copyAttachments,
+} from "./prompt"
+import { createRunQueries } from "./queries"
+import { createMainTools, type RunToolContext } from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -83,18 +98,20 @@ export type RunContext = {
   containerWorkspace: string
   sessionsDir: string
   modelRuntime: RunModelRuntime
-  sdkModel: Model<Api>
+  sdkModel: Model<Api> | undefined
   /** Run default model config (spawn children snapshot this). */
   model: ModelConfig
   thinkingLevel: ThinkingLevel
   childTemplate: string
-  promptContext: PromptTemplateContext
-  caps: ToolCapabilities
+  promptContext: PromptContext
   challengeId: string
 }
 
 export type CreateRunInput = {
-  challengeId: string
+  /** Orchestration plugin id (challenge runs default to 'classic'). */
+  orchestration?: string
+  /** Plugin input snapshot, validated against the plugin's params schema. */
+  params?: Record<string, unknown>
   provider: ProviderConnection
   /** ProviderModel.id */
   modelId: string
@@ -111,7 +128,10 @@ export type CreateRunInput = {
   source?: "manual" | "scheduler"
   /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
   timeoutMs?: number
-}
+} & (
+  | { scopeType: "challenge"; challengeId: string }
+  | { scopeType: "event"; eventId: string; instruction: string }
+)
 
 export type SendMessageInput = {
   text: string
@@ -134,6 +154,10 @@ export function createRunService(options: RunServiceOptions) {
   const queries = createRunQueries({ db, dataDir })
   const bus: LiveBus = createLiveBus()
 
+  // Register built-in plugins + seed default prompt templates (idempotent) so
+  // the service is self-sufficient — any RunHandle built here can render.
+  bootOrchestration(db)
+
   /** Per-agent promise-chaining locks (the only concurrency mechanism; spec §4.5). */
   const locks = new Map<string, Promise<unknown>>()
   /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
@@ -146,6 +170,12 @@ export function createRunService(options: RunServiceOptions) {
   >()
   /** Reusable per-run handles (entry snapshot lives on the agent row). */
   const contexts = new Map<string, RunContext>()
+  /** Per-run plugin event emitters (spec §3.5); close clears, setup rebuilds. */
+  const emitters = new Map<string, RunEmitter>()
+  /** Per-event run-lifecycle emitters (spec §3.5 EventHandle), owned by the
+   * event's scheduler run. Created lazily at scheduler setup; cleared on its
+   * close (a fresh scheduler run rebuilds a fresh emitter). */
+  const eventScopes = new Map<string, EventScopeEmitter>()
   /** Live spawn-child sessions, keyed by child agent id. */
   const childSessions = new Map<string, HostAgentSession>()
   let closed = false
@@ -207,6 +237,15 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
+  /** Dispatch a run lifecycle event to its event's scheduler (spec §3.5). Only
+   * challenge-scoped runs emit — the scheduler observes its child runs, never
+   * itself (an event-scoped run's own turns don't re-notify it). */
+  function emitRunEvent(runId: string, payload: EventScopePayload): void {
+    const run = queries.getRow(runId)
+    if (run?.scopeType !== "challenge") return
+    eventScopes.get(run.eventId)?.emit(payload)
+  }
+
   // --- run status: SQL-derived (spec §4.5b) --------------------------------
 
   /** Recompute a run's status from its agents' statuses. No-op once the run is
@@ -247,7 +286,8 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Mark an agent's turn settled and rederive the run status. `error` (already
-   * logged by the lifecycle core) sends the agent to `failed`. */
+   * logged by the lifecycle core) sends the agent to `failed`. The last settle
+   * flips the run to idle — notify the event's scheduler (spec §3.5). */
   function agentTurnSettled(
     agentId: string,
     runId: string,
@@ -260,8 +300,15 @@ export function createRunService(options: RunServiceOptions) {
       updatedAt: ts,
     })
     recomputeRunStatus(runId)
+    const run = queries.getRow(runId)
+    if (run?.status === "idle") {
+      emitRunEvent(runId, { type: "run.idle", runId })
+    }
     emitRun(runId)
     emitAgents(runId)
+    emitters
+      .get(runId)
+      ?.emit(agentId, { type: "turnEnded", ...(error ? { error } : {}) })
   }
 
   // --- per-agent turn lifecycle (entry agent) ------------------------------
@@ -289,7 +336,7 @@ export function createRunService(options: RunServiceOptions) {
     },
     async onResume(agentId) {
       const runId = runIdOf(agentId)
-      if (runId) await ensureAgentWarm(runId, agentId)
+      if (runId) await prepareAgent(runId, agentId)
     },
   })
 
@@ -321,13 +368,29 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Sanctioned `closed` transition (spec §4.1/§4.5d): stamp the row, then
-   * release live resources outside the lock. Keeps the DB session + agent rows
-   * so the run is cold-restorable. */
+   * release live resources outside the lock. Aborts every still-streaming
+   * agent (per-agent locks; in-flight docker exec is dropped by dispose),
+   * disposes ALL live agent sessions (not just the entry), and keeps the DB
+   * sessions + agent rows so the run is cold-restorable. */
   function teardownRun(
     runId: string,
     opts: { summary?: string; finished?: boolean } = {}
   ) {
     const ts = now()
+    const agents = queries.listAgents(runId)
+    // Best-effort abort of anything still streaming, so no turn keeps running
+    // against a dying run (their settles become no-ops once sessions are gone).
+    for (const agent of agents) {
+      if (agent.status !== "running") continue
+      void lifecycle
+        .get(agent.id)
+        ?.session.abort()
+        .catch(() => undefined)
+      void childSessions
+        .get(agent.id)
+        ?.session.abort()
+        .catch(() => undefined)
+    }
     const patch: Partial<typeof runs.$inferInsert> = {
       status: "closed",
       updatedAt: ts,
@@ -336,7 +399,7 @@ export function createRunService(options: RunServiceOptions) {
     if (opts.finished) patch.completedAt = ts
     updateRun(runId, patch)
     // Any still-running agent lands on `idle` (its live session is gone).
-    for (const agent of queries.listAgents(runId)) {
+    for (const agent of agents) {
       if (agent.status === "running") {
         updateAgent(agent.id, { status: "idle", updatedAt: ts })
       }
@@ -344,17 +407,27 @@ export function createRunService(options: RunServiceOptions) {
     clearRunTimers(runId)
     terminateContainer(runId, containerName(runId))
     childRuntime.abortAll(runId)
-    const entry = entryAgent(runId)
-    if (entry) {
-      const session = lifecycle.get(entry.id)
+    emitters.get(runId)?.close()
+    emitters.delete(runId)
+    // A closed scheduler run stops receiving child-run events; the emitter is
+    // dropped and rebuilt fresh by the next scheduler start (spec §4.2).
+    const row = queries.getRow(runId)
+    if (row?.scopeType === "event") {
+      eventScopes.get(row.eventId)?.close()
+      eventScopes.delete(row.eventId)
+    }
+    // Dispose every live agent session, then drop the run-level context.
+    for (const agent of agents) {
+      const session = lifecycle.get(agent.id)
       if (session) {
         void session.dispose()
-        lifecycle.delete(entry.id)
+        lifecycle.delete(agent.id)
       }
     }
     contexts.delete(runId)
     emitRun(runId)
     emitAgents(runId)
+    if (opts.finished) emitRunEvent(runId, { type: "run.finished", runId })
   }
 
   // --- timeout (spec §8.3: deadline → abort → grace → idle|closed) ---------
@@ -366,16 +439,12 @@ export function createRunService(options: RunServiceOptions) {
     timeoutTimers.delete(runId)
   }
 
+  /** Every agent (declared + spawn children) with an in-flight turn. */
   function streamingAgentIds(runId: string): string[] {
     const ids: string[] = []
-    const entry = entryAgent(runId)
-    if (entry && lifecycle.get(entry.id)?.session.isStreaming)
-      ids.push(entry.id)
     for (const agent of queries.listAgents(runId)) {
-      if (
-        agent.parentAgentId &&
-        childSessions.get(agent.id)?.session.isStreaming
-      ) {
+      if (lifecycle.get(agent.id)?.session.isStreaming) ids.push(agent.id)
+      else if (childSessions.get(agent.id)?.session.isStreaming) {
         ids.push(agent.id)
       }
     }
@@ -384,7 +453,8 @@ export function createRunService(options: RunServiceOptions) {
 
   /** Arm a run's hard-deadline timer. At expiry every streaming agent is
    * aborted; if all settle within the grace the run stays `idle` (warm), else
-   * the container is SIGKILLed and the run goes `closed`. Idempotent. */
+   * the container is SIGKILLed and the run goes `closed`. The outcome is
+   * reported to the event's scheduler (`run.timedOut`). Idempotent. */
   function armRunTimers(runId: string, deadlineAt: string | null): void {
     clearRunTimers(runId)
     if (!deadlineAt) return
@@ -392,16 +462,20 @@ export function createRunService(options: RunServiceOptions) {
     const entry: { deadline?: NodeJS.Timeout; grace?: NodeJS.Timeout } = {}
     entry.deadline = setTimeout(() => {
       for (const agentId of streamingAgentIds(runId)) {
-        void lifecycle.abort(agentId).catch(() => undefined)
         const child = childSessions.get(agentId)
         if (child) void child.session.abort().catch(() => undefined)
+        else void lifecycle.abort(agentId).catch(() => undefined)
       }
       updateRun(runId, { lastTimeoutAt: now() })
       entry.grace = setTimeout(() => {
         // Still streaming after grace → SIGKILL the container → closed.
-        if (streamingAgentIds(runId).length > 0) {
-          teardownRun(runId)
-        }
+        const stillStreaming = streamingAgentIds(runId).length > 0
+        if (stillStreaming) teardownRun(runId)
+        emitRunEvent(runId, {
+          type: "run.timedOut",
+          runId,
+          outcome: stillStreaming ? "closed" : "idle",
+        })
       }, TIMEOUT_GRACE_MS)
     }, delay)
     timeoutTimers.set(runId, entry)
@@ -424,27 +498,10 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
-  function resolveCaps(promptContext: PromptTemplateContext): ToolCapabilities {
-    return {
-      canSubmitFlag: promptContext.capabilities.canSubmitFlag,
-      canManageTarget: promptContext.capabilities.canManageTarget,
-      canSpawnAgent: true,
-    }
-  }
-
-  /** Real tool names granted to the entry agent (snapshotted on the row). File
-   * tools are always on and not listed. */
-  function entryToolNames(caps: ToolCapabilities): string[] {
-    const names = ["finish_run"]
-    if (caps.canSubmitFlag) names.push("submit_flag")
-    if (caps.canManageTarget) {
-      names.push("get_target", "start_target", "extend_target", "stop_target")
-    }
-    if (caps.canSpawnAgent) names.push("spawn_agent", "inspect_agent")
-    return names
-  }
-
-  function buildEntryToolContext(
+  /** Build the per-agent native tool context (spec §5 tool wiring). Peer tools
+   * resolve within this run only; message_agent refuses spawn children (they
+   * run unattended to completion). */
+  function buildAgentToolContext(
     runId: string,
     challengeId: string,
     agentId: string
@@ -468,22 +525,37 @@ export function createRunService(options: RunServiceOptions) {
       },
       spawnChild: (childInput) =>
         childRuntime.spawn(runId, agentId, childInput),
+      messageAgent: async (targetId, text) => {
+        const target = queries.listAgents(runId).find((a) => a.id === targetId)
+        if (!target) return { ok: false, error: "Agent not found in this run" }
+        if (target.parentAgentId) {
+          return {
+            ok: false,
+            error: "Child agents run unattended and cannot receive messages",
+          }
+        }
+        await lifecycle.send(targetId, text)
+        return { ok: true }
+      },
       getAgent: (id) => queries.listAgents(runId).find((a) => a.id === id),
+      listAgents: () => queries.listAgents(runId),
       lastAssistantText: (id) => lastAssistantText(runId, id),
     }
   }
 
   /** Hand a finished child's result text to its parent: steer into the current
    * turn if streaming, otherwise drive a fresh turn. */
-  const deliverToParent = (runId: string, text: string): void => {
-    const entry = entryAgent(runId)
-    if (!entry) return
-    const session = lifecycle.get(entry.id)
+  const deliverToParent = (
+    runId: string,
+    parentAgentId: string,
+    text: string
+  ): void => {
+    const session = lifecycle.get(parentAgentId)
     if (!session) return
     if (session.session.isStreaming) {
       void session.session.steer(text).catch(() => undefined)
     } else {
-      lifecycle.drive(entry.id, text)
+      lifecycle.drive(parentAgentId, text)
     }
   }
 
@@ -507,13 +579,88 @@ export function createRunService(options: RunServiceOptions) {
 
   // --- create --------------------------------------------------------------
 
+  /** Validate plugin params against its declared typebox schema (spec §3.2). */
+  function validatePluginParams(
+    schema: TSchema,
+    params: unknown
+  ): Record<string, unknown> {
+    if (!Value.Check(schema, params)) {
+      const details = Value.Errors(schema, params)
+        .map((error) => `${error.instancePath || "/"}: ${error.keyword}`)
+        .join("; ")
+      throw new RunActionError(
+        "invalid_state",
+        `Invalid plugin params: ${details}`
+      )
+    }
+    return params as Record<string, unknown>
+  }
+
+  /** The EventHandle for an event's scheduler run (spec §3.4/§3.5): subscribes
+   * to the per-event run-lifecycle emitter (created lazily). */
+  function eventHandleFor(eventId: string): EventHandle {
+    let emitter = eventScopes.get(eventId)
+    if (!emitter) {
+      emitter = new EventScopeEmitter()
+      eventScopes.set(eventId, emitter)
+    }
+    return {
+      on: (event, cb) => emitter!.on(event, cb),
+    }
+  }
+
   async function create(input: CreateRunInput): Promise<RunPublic> {
-    const challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, input.challengeId))
-      .get()
-    if (!challenge) throw new RunActionError("not_found", "Challenge not found")
+    const plugin = requirePlugin(input.orchestration ?? "classic")
+    if (plugin.scope !== input.scopeType) {
+      throw new RunActionError(
+        "invalid_state",
+        `Plugin '${plugin.id}' is ${plugin.scope}-scoped, not ${input.scopeType}`
+      )
+    }
+    const params = validatePluginParams(plugin.params, input.params ?? {})
+
+    const challenge =
+      input.scopeType === "challenge"
+        ? db
+            .select()
+            .from(challenges)
+            .where(eq(challenges.id, input.challengeId))
+            .get()
+        : undefined
+    if (input.scopeType === "challenge" && !challenge) {
+      throw new RunActionError("not_found", "Challenge not found")
+    }
+    const event =
+      input.scopeType === "event"
+        ? db.select().from(events).where(eq(events.id, input.eventId)).get()
+        : undefined
+    if (input.scopeType === "event" && !event) {
+      throw new RunActionError("not_found", "Event not found")
+    }
+    // Scheduler runs are never cold-restored and there is at most one per
+    // event: a fresh start replaces any previous closed row (newSession
+    // semantics, spec §4.2) but never steps on a live one.
+    if (input.scopeType === "event") {
+      const existing = db
+        .select()
+        .from(runs)
+        .where(and(eq(runs.eventId, event!.id), eq(runs.scopeType, "event")))
+        .get()
+      if (existing) {
+        if (existing.status === "closed") {
+          await containerManager
+            .remove(containerName(existing.id))
+            .catch(() => undefined)
+          db.delete(runs).where(eq(runs.id, existing.id)).run()
+        } else {
+          throw new RunActionError(
+            "invalid_state",
+            "A scheduler run is already active for this event"
+          )
+        }
+      }
+    }
+
     const model = input.provider.models.find((m) => m.id === input.modelId)
     if (!model?.enabled || !input.provider.enabled) {
       throw new RunActionError("invalid_state", "Model is unavailable")
@@ -536,14 +683,6 @@ export function createRunService(options: RunServiceOptions) {
     mkdirSync(sessAbs, { recursive: true })
     mkdirSync(rtAbs, { recursive: true })
 
-    const remote = getChallengeRemote(db, input.challengeId)
-    const challengeAttachments = copyAttachments(
-      db,
-      dataDir,
-      input.challengeId,
-      wsAbs
-    )
-
     const env: EnvironmentConfig = {
       type: "container",
       image: input.container.image,
@@ -559,27 +698,36 @@ export function createRunService(options: RunServiceOptions) {
       thinkingLevel: input.thinkingLevel,
     }
 
-    const promptContext = buildPromptContext(
-      {
-        runId,
-        challenge,
-        remote,
-        challengeAttachments,
-        environment: env,
-        model: modelConfig,
-      },
-      db,
-      input.container.workspace
-    )
-    const templates = resolvePromptTemplates(options.getSettings())
-    const systemPrompt = renderSystemPrompt(
-      templates.mainSystemPromptTemplate,
-      promptContext
-    )
-    const initialPrompt = renderInitialPrompt(
-      templates.initialPromptTemplate,
-      promptContext
-    )
+    const promptContext =
+      input.scopeType === "challenge"
+        ? buildPromptContext(
+            {
+              runId,
+              challenge: challenge!,
+              remote: getChallengeRemote(db, challenge!.id),
+              challengeAttachments: copyAttachments(
+                db,
+                dataDir,
+                challenge!.id,
+                wsAbs
+              ),
+              environment: env,
+              model: modelConfig,
+            },
+            db,
+            input.container.workspace
+          )
+        : buildEventPromptContext(
+            {
+              runId,
+              eventId: event!.id,
+              instruction: input.instruction,
+              environment: env,
+              model: modelConfig,
+            },
+            db,
+            input.container.workspace
+          )
 
     const modelRuntime = await createRunModelRuntime({
       runtimeDir: rtAbs,
@@ -592,9 +740,6 @@ export function createRunService(options: RunServiceOptions) {
     )
     if (!sdkModel)
       throw new RunStartError("Could not resolve the selected model")
-
-    const caps = resolveCaps(promptContext)
-    const toolNames = entryToolNames(caps)
 
     try {
       await createToolboxContainer(containerManager, {
@@ -619,10 +764,12 @@ export function createRunService(options: RunServiceOptions) {
     db.insert(runs)
       .values({
         id: runId,
-        scopeType: "challenge",
-        eventId: challenge.eventId,
-        challengeId: challenge.id,
-        orchestration: "classic",
+        scopeType: input.scopeType,
+        eventId:
+          input.scopeType === "challenge" ? challenge!.eventId : event!.id,
+        challengeId: challenge?.id ?? null,
+        orchestration: plugin.id,
+        params: JSON.stringify(params),
         status: "running",
         provider: modelConfig.provider,
         providerLabel: modelConfig.providerLabel ?? null,
@@ -645,73 +792,15 @@ export function createRunService(options: RunServiceOptions) {
       })
       .run()
 
-    const agentId = crypto.randomUUID()
-    db.insert(agents)
-      .values({
-        id: agentId,
-        runId,
-        slot: "solver",
-        role: "solver",
-        parentAgentId: null,
-        isEntry: true,
-        provider: modelConfig.provider,
-        providerLabel: modelConfig.providerLabel ?? null,
-        modelId: modelConfig.modelId,
-        modelLabel: modelConfig.modelLabel ?? null,
-        thinkingLevel: modelConfig.thinkingLevel,
-        systemPrompt,
-        tools: JSON.stringify(toolNames),
-        status: "running",
-        sessionFile: null,
-        name: "Solver",
-        task: null,
-        createdAt: ts,
-        startedAt: ts,
-        updatedAt: ts,
-      })
-      .run()
+    // prompt_templates is the render source (spec §3.6); the plugin owns the
+    // agent layout via setup(). The run row + container exist before setup
+    // runs (spec §4.2); agents are declared by the plugin's setup.
+    const templateMap = loadTemplateMap(db, plugin.id)
+    const initialPrompt = renderTemplate(templateMap, "initial", promptContext)
 
-    const toolCtx = buildEntryToolContext(runId, challenge.id, agentId)
-    const nativeTools = createMainTools(toolCtx, caps)
-    let agentSession: HostAgentSession
-    try {
-      agentSession = await createHost({
-        owner: { agentId, runId },
-        channel: runId,
-        agentId,
-        cwd: input.container.workspace,
-        containerName: name,
-        containerManager,
-        modelRuntime,
-        model: sdkModel,
-        thinkingLevel: input.thinkingLevel,
-        agentSettings: agentSettings(),
-        systemPrompt,
-        extraTools: nativeTools,
-        extraToolNames: toolNames,
-        onUsageMaybeChanged: () => emitRun(runId),
-        db,
-        bus,
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      updateAgent(agentId, {
-        status: "failed",
-        error: message,
-        completedAt: now(),
-        updatedAt: now(),
-      })
-      clearForceKill(runId)
-      terminateContainer(runId, name)
-      updateRun(runId, {
-        status: "closed",
-        error: `Failed to start agent: ${message}`,
-        updatedAt: now(),
-      })
-      throw new RunActionError("launch_failed", message)
-    }
-
-    updateAgent(agentId, { sessionFile: agentSession.sessionId ?? null })
+    // Run-level live context: prepareAgent (prime) + spawn children reuse it.
+    // The child prompt comes from the plugin's spawn template (plugin → builtin
+    // resolution; default childSystem).
     contexts.set(runId, {
       containerName: name,
       workspaceHostPath: wsAbs,
@@ -721,27 +810,88 @@ export function createRunService(options: RunServiceOptions) {
       sdkModel,
       model: modelConfig,
       thinkingLevel: input.thinkingLevel,
-      childTemplate: templates.childSystemPromptTemplate,
+      childTemplate:
+        templateMap.get(plugin.spawn?.systemPrompt ?? "childSystem") ?? "",
       promptContext,
-      caps,
-      challengeId: challenge.id,
+      challengeId: challenge?.id ?? "",
     })
-    lifecycle.set(agentId, agentSession)
+
+    const emitter = new RunEmitter()
+    emitters.set(runId, emitter)
+    const defaultModel: ModelSnapshot = {
+      provider: modelConfig.provider,
+      providerLabel: modelConfig.providerLabel ?? null,
+      modelId: modelConfig.modelId,
+      modelLabel: modelConfig.modelLabel ?? null,
+      thinkingLevel: modelConfig.thinkingLevel,
+    }
+
+    const host = buildHandleHost({
+      runId,
+      scope: input.scopeType,
+      params,
+      ctx: promptContext,
+      initialPrompt,
+      templateMap,
+      emitter,
+      defaultModel,
+    })
+    const handle = createRunHandle(host)
+    try {
+      await runSetup(
+        plugin,
+        handle,
+        input.scopeType === "event" ? eventHandleFor(event!.id) : undefined
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      teardownRun(runId)
+      updateRun(runId, {
+        error: `Plugin setup failed: ${message}`,
+        updatedAt: now(),
+      })
+      throw new RunActionError("launch_failed", message)
+    }
+
+    // System auto-prime (spec §4.2): for a fresh run, prepare()+send(prime) each
+    // prime agent. classic primes the solver with run.initialPrompt.
+    try {
+      for (const spec of handle.primeSpecs) {
+        await prepareAgent(runId, spec.agentId)
+        await lifecycle.send(spec.agentId, spec.prime)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      for (const spec of handle.primeSpecs) {
+        updateAgent(spec.agentId, {
+          status: "failed",
+          error: message,
+          completedAt: now(),
+          updatedAt: now(),
+        })
+      }
+      teardownRun(runId)
+      updateRun(runId, {
+        error: `Failed to start agent: ${message}`,
+        updatedAt: now(),
+      })
+      throw new RunActionError("launch_failed", message)
+    }
+
     emitRun(runId)
     emitAgents(runId)
-
     armRunTimers(runId, deadlineAtIso)
-    lifecycle.drive(agentId, initialPrompt)
+    emitRunEvent(runId, { type: "run.started", runId })
     return requireRun(runId)
   }
 
-  /** Esc: abort the entry agent's current turn (settles to idle; warm container). */
-  /** Esc: abort the entry agent's current turn (it settles to idle; the
-   * container stays warm). lifecycle.abort serializes on the entry agent's
-   * lock, so no outer lock is needed. */
+  /** Run-level stop: abort every streaming agent (declared + children). Each
+   * settles to idle; the container stays warm. lifecycle.abort serializes per
+   * agent, so no outer lock is needed. */
   async function stop(runId: string): Promise<RunPublic> {
-    const entry = entryAgent(runId)
-    if (entry) await lifecycle.abort(entry.id)
+    for (const agentId of streamingAgentIds(runId)) {
+      await lifecycle.abort(agentId).catch(() => undefined)
+    }
     return requireRun(runId)
   }
 
@@ -795,25 +945,16 @@ export function createRunService(options: RunServiceOptions) {
     })
   }
 
-  /** Force-finish (HTTP /finish): atomically claim finishing; if the entry is
-   * streaming, its settle tears the run down, otherwise tear down now. No outer
-   * lock — markFinishing is atomic SQL and lifecycle.abort locks the agent. */
+  /** Force-finish (HTTP /finish): the sanctioned closed transition — teardown
+   * aborts every streaming agent and disposes all sessions. Idempotent; the
+   * finish_run tool path (atomic finishing claim + settle-driven teardown)
+   * is separate and already handles the multi-agent race. */
   async function finish(runId: string, summary: string): Promise<RunPublic> {
     const run = requireRun(runId)
     if (run.status === "closed") {
       throw new RunActionError("invalid_state", "Run is already closed")
     }
-    const entry = entryAgent(runId)
-    if (!entry) throw new RunActionError("not_found", "Run has no entry agent")
-    const session = lifecycle.get(entry.id)
-    if (session?.session.isStreaming) {
-      if (markFinishing(runId)) {
-        pendingFinish.set(entry.id, { summary, runId })
-      }
-      await lifecycle.abort(entry.id)
-    } else {
-      teardownRun(runId, { summary, finished: true })
-    }
+    teardownRun(runId, { summary, finished: true })
     return requireRun(runId)
   }
 
@@ -863,26 +1004,33 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   async function deleteRun(runId: string) {
-    // Serialize against the entry agent's turns (direct session.abort below —
-    // not lifecycle.abort — to avoid re-entering the same lock).
-    const entry = entryAgent(runId)
-    await withLock(entry?.id ?? runId, async () => {
+    // Serialize against one agent's turns (direct session.abort below — not
+    // lifecycle.abort — to avoid re-entering the same lock). Disposes every
+    // live session, not just the entry's.
+    const agents = queries.listAgents(runId)
+    const lockKey = agents[0]?.id ?? runId
+    await withLock(lockKey, async () => {
       const row = queries.getRow(runId)
       if (!row) throw new RunActionError("not_found", "Run not found")
-      const session = entry && lifecycle.get(entry.id)
-      if (session?.session.isStreaming) {
-        await session.session.abort().catch(() => undefined)
+      for (const agent of agents) {
+        const session = lifecycle.get(agent.id)
+        if (session?.session.isStreaming) {
+          await session.session.abort().catch(() => undefined)
+        }
       }
       clearForceKill(runId)
       clearRunTimers(runId)
       await containerManager.remove(row.containerName).catch(() => undefined)
       childRuntime.abortAll(runId)
-      if (session) {
-        void session.dispose()
-        lifecycle.delete(entry!.id)
+      for (const agent of agents) {
+        const session = lifecycle.get(agent.id)
+        if (session) {
+          void session.dispose()
+          lifecycle.delete(agent.id)
+        }
+        pendingFinish.delete(agent.id)
       }
       contexts.delete(runId)
-      pendingFinish.delete(entry?.id ?? "")
       rmSync(runDir(runId), { recursive: true, force: true })
       db.delete(runs).where(eq(runs.id, runId)).run()
     })
@@ -911,27 +1059,124 @@ export function createRunService(options: RunServiceOptions) {
     return null
   }
 
-  /** Cold-restore one agent of a closed run: rebuild its container + live
-   * session from the agent row's snapshot (system prompt / tools / model). The
-   * entry agent is restored for run-level sends; spawn children re-open lazily
-   * when their parent drives them. */
-  async function ensureAgentWarm(
-    runId: string,
-    agentId: string
+  /** Run a plugin's setup with scope narrowing (spec §3.1 discriminated union):
+   * challenge scope → setup(run); event scope → setup(run, event) with an
+   * EventHandle wired to the event's run-lifecycle emitter. */
+  async function runSetup(
+    plugin: OrchestrationPlugin,
+    handle: ReturnType<typeof createRunHandle>,
+    eventHandle?: EventHandle
   ): Promise<void> {
-    if (lifecycle.has(agentId)) return
-    const row = queries.getRow(runId)
-    if (!row) throw new RunActionError("not_found", "Run not found")
-    const agentRow = db
-      .select()
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .get()
-    if (!agentRow) throw new RunActionError("not_found", "Agent not found")
-    if (!agentRow.sessionFile) {
+    if (plugin.scope === "challenge") {
+      await plugin.setup(handle)
+      return
+    }
+    if (!eventHandle) {
+      throw new Error(
+        `Event-scope plugin '${plugin.id}' requires an EventHandle`
+      )
+    }
+    await plugin.setup(handle, eventHandle)
+  }
+
+  /** Build the {@link RunHandleHost} callback bundle the plugin-facing handle
+   * delegates through. All callbacks are per-agentId (spec §4.5a): no run-level
+   * lock leaks. Shared by create() (fresh) and restoreRunContext() (cold). */
+  function buildHandleHost(opts: {
+    runId: string
+    scope: "challenge" | "event"
+    params: unknown
+    ctx: PromptContext
+    initialPrompt: string
+    templateMap: Map<string, string>
+    emitter: RunEmitter
+    defaultModel: ModelSnapshot
+  }): RunHandleHost {
+    return {
+      runId: opts.runId,
+      scope: opts.scope,
+      params: opts.params,
+      ctx: opts.ctx,
+      initialPrompt: opts.initialPrompt,
+      templateMap: opts.templateMap,
+      emitter: opts.emitter,
+      findAgentBySlot(slot) {
+        return db
+          .select()
+          .from(agents)
+          .where(and(eq(agents.runId, opts.runId), eq(agents.slot, slot)))
+          .get()
+      },
+      createFreshAgent(input: FreshAgentInput) {
+        const id = crypto.randomUUID()
+        const ts = now()
+        db.insert(agents)
+          .values({
+            id,
+            runId: opts.runId,
+            slot: input.slot,
+            role: input.role,
+            parentAgentId: input.parentAgentId ?? null,
+            isEntry: input.isEntry,
+            provider: input.model.provider,
+            providerLabel: input.model.providerLabel,
+            modelId: input.model.modelId,
+            modelLabel: input.model.modelLabel,
+            thinkingLevel: input.model.thinkingLevel,
+            systemPrompt: input.systemPrompt,
+            tools: JSON.stringify(input.tools),
+            status: "idle",
+            sessionFile: null,
+            name: input.name,
+            task: input.task ?? null,
+            createdAt: ts,
+            updatedAt: ts,
+          })
+          .run()
+        return id
+      },
+      resolveAgentModel(model) {
+        if (model === "default") return opts.defaultModel
+        const provider = providers().find((p) => p.label === model.provider)
+        const pm = provider?.models.find(
+          (m) => m.modelId === model.modelId || m.id === model.modelId
+        )
+        return {
+          provider: provider?.label ?? model.provider,
+          providerLabel: provider?.label ?? model.provider,
+          modelId: pm?.modelId ?? model.modelId,
+          modelLabel: pm?.label ?? null,
+          thinkingLevel: model.thinking,
+        }
+      },
+      isAgentStreaming(agentId) {
+        if (lifecycle.get(agentId)?.session.isStreaming) return true
+        const child = childSessions.get(agentId)
+        return !!child?.session.isStreaming
+      },
+      prepareAgent: (agentId) => prepareAgent(opts.runId, agentId),
+      sendToAgent: (agentId, text, deliverAs) =>
+        lifecycle.send(agentId, text, deliverAs),
+      abortAgent: (agentId) => lifecycle.abort(agentId),
+    }
+  }
+
+  /** Cold-restore a closed run's run-level context: rebuild the container +
+   * model runtime + prompt context, then re-run the plugin's setup (spec §4.2 —
+   * create and resume run the same code). createAgent reuses existing agent
+   * rows (slot idempotent, snapshot priority) and on() re-wires triggers; prime
+   * is ignored on restore. Does NOT create sessions — prepareAgent does, lazily
+   * per agent. */
+  async function restoreRunContext(
+    runId: string,
+    row: typeof runs.$inferSelect
+  ): Promise<void> {
+    // Scheduler (event-scoped) runs are never cold-restored: either fresh
+    // (start) or closed (spec §4.2).
+    if (row.scopeType === "event") {
       throw new RunActionError(
         "invalid_state",
-        "Agent has no session to restore"
+        "Scheduler runs are never cold-restored; start a fresh one"
       )
     }
     const settings = options.getSettings()
@@ -943,14 +1188,16 @@ export function createRunService(options: RunServiceOptions) {
       runtimeDir: rtAbs,
       providers: providers(),
     })
-    // Resolve the model from the agent's snapshot (per-agent; survives switches).
-    const provider = providers().find((p) => p.label === agentRow.providerLabel)
-    const sdkModel = provider
-      ? resolveRunModel(modelRuntime, provider, agentRow.modelId)
+    const runProvider = providers().find(
+      (p) => p.label === (row.providerLabel ?? row.provider)
+    )
+    // Run-level sdkModel is used only by spawn children (classic spawn uses the
+    // run default). Best-effort: a dummy run row modelId (e.g. in tests) must
+    // not fail the whole restore — prepareAgent resolves each agent's model
+    // from its own snapshot.
+    const sdkModel = runProvider
+      ? resolveRunModel(modelRuntime, runProvider, row.modelId)
       : undefined
-    if (!sdkModel) {
-      throw new RunStartError("Could not resolve the agent's model for restore")
-    }
 
     try {
       await createToolboxContainer(containerManager, {
@@ -971,53 +1218,8 @@ export function createRunService(options: RunServiceOptions) {
       )
     }
 
-    const toolCtx = buildEntryToolContext(runId, row.challengeId ?? "", agentId)
-    // Re-derive capabilities from the snapshot's tool list.
-    const snapshotTools = safeParseTools(agentRow.tools)
-    const caps: ToolCapabilities = {
-      canSubmitFlag: snapshotTools.includes("submit_flag"),
-      canManageTarget: snapshotTools.some((t) => t.endsWith("_target")),
-      canSpawnAgent: snapshotTools.includes("spawn_agent"),
-    }
-    const nativeTools = createMainTools(toolCtx, caps)
-
-    let agentSession: HostAgentSession
-    try {
-      agentSession = await createHost({
-        owner: { agentId, runId },
-        channel: runId,
-        agentId,
-        cwd: settings["container.workspace"],
-        containerName: row.containerName,
-        containerManager,
-        modelRuntime,
-        model: sdkModel,
-        thinkingLevel: agentRow.thinkingLevel as ThinkingLevel,
-        agentSettings: agentSettings(),
-        // Cold-restore reuses the snapshot verbatim (no re-render, no default
-        // fallback) — per-agent prompt/model edits survive.
-        systemPrompt: agentRow.systemPrompt,
-        extraTools: nativeTools,
-        extraToolNames: snapshotTools,
-        resumeFrom: {
-          sessionId: agentRow.sessionFile,
-          isJsonl: agentRow.sessionFile.endsWith(".jsonl"),
-          sessionsDir: sessionsAbs(runId),
-        },
-        onUsageMaybeChanged: () => emitRun(runId),
-        db,
-        bus,
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      clearForceKill(runId)
-      terminateContainer(runId, row.containerName)
-      throw new RunActionError("launch_failed", message)
-    }
-
-    // Rebuild the run context (spawn children reuse the runtime/container).
-    // runService owns challenge-scope runs only (P1a); a challenge row is
-    // always present for cold-restore.
+    // runService owns challenge-scope runs; a challenge row is always present
+    // for cold-restore (event-scoped runs are rejected above).
     const challenge = row.challengeId
       ? db
           .select()
@@ -1028,10 +1230,35 @@ export function createRunService(options: RunServiceOptions) {
     if (!challenge) {
       throw new RunActionError("not_found", "Challenge not found for restore")
     }
-    const remote = row.challengeId
-      ? getChallengeRemote(db, row.challengeId)
-      : undefined
-    const templates = resolvePromptTemplates(settings)
+    const promptContext = buildPromptContext(
+      {
+        runId,
+        challenge,
+        remote: getChallengeRemote(db, challenge.id),
+        challengeAttachments: [],
+        environment: {
+          type: "container",
+          image: row.image,
+          cpus: row.cpus,
+          memoryMb: row.memoryMb,
+          pidsLimit: row.pidsLimit,
+        },
+        model: {
+          provider: row.providerLabel ?? row.provider,
+          providerLabel: row.providerLabel ?? undefined,
+          modelId: row.modelId,
+          modelLabel: row.modelLabel ?? undefined,
+          thinkingLevel: row.thinkingLevel as ThinkingLevel,
+        },
+      },
+      db,
+      settings["container.workspace"]
+    )
+
+    const plugin = requirePlugin(row.orchestration)
+    const templateMap = loadTemplateMap(db, plugin.id)
+    const initialPrompt = renderTemplate(templateMap, "initial", promptContext)
+
     contexts.set(runId, {
       containerName: row.containerName,
       workspaceHostPath: wsAbs,
@@ -1040,43 +1267,118 @@ export function createRunService(options: RunServiceOptions) {
       modelRuntime,
       sdkModel,
       model: {
-        provider: agentRow.providerLabel ?? agentRow.provider,
-        providerLabel: agentRow.providerLabel ?? undefined,
-        modelId: agentRow.modelId,
-        modelLabel: agentRow.modelLabel ?? undefined,
-        thinkingLevel: agentRow.thinkingLevel as ThinkingLevel,
+        provider: row.providerLabel ?? row.provider,
+        providerLabel: row.providerLabel ?? undefined,
+        modelId: row.modelId,
+        modelLabel: row.modelLabel ?? undefined,
+        thinkingLevel: row.thinkingLevel as ThinkingLevel,
       },
-      thinkingLevel: agentRow.thinkingLevel as ThinkingLevel,
-      childTemplate: templates.childSystemPromptTemplate,
-      promptContext: buildPromptContext(
-        {
-          runId,
-          challenge,
-          remote,
-          challengeAttachments: [],
-          environment: {
-            type: "container",
-            image: row.image,
-            cpus: row.cpus,
-            memoryMb: row.memoryMb,
-            pidsLimit: row.pidsLimit,
-          },
-          model: {
-            provider: agentRow.providerLabel ?? agentRow.provider,
-            providerLabel: agentRow.providerLabel ?? undefined,
-            modelId: agentRow.modelId,
-            modelLabel: agentRow.modelLabel ?? undefined,
-            thinkingLevel: agentRow.thinkingLevel as ThinkingLevel,
-          },
-        },
-        db,
-        settings["container.workspace"]
-      ),
-      caps,
+      thinkingLevel: row.thinkingLevel as ThinkingLevel,
+      childTemplate:
+        templateMap.get(plugin.spawn?.systemPrompt ?? "childSystem") ?? "",
+      promptContext,
       challengeId: row.challengeId ?? "",
     })
-    lifecycle.set(agentId, agentSession)
+
+    const emitter = new RunEmitter()
+    emitters.set(runId, emitter)
+    const defaultModel: ModelSnapshot = {
+      provider: row.provider,
+      providerLabel: row.providerLabel,
+      modelId: row.modelId,
+      modelLabel: row.modelLabel,
+      thinkingLevel: row.thinkingLevel as ThinkingLevel,
+    }
+
+    const host = buildHandleHost({
+      runId,
+      scope: row.scopeType === "event" ? "event" : "challenge",
+      params: JSON.parse(row.params || "{}"),
+      ctx: promptContext,
+      initialPrompt,
+      templateMap,
+      emitter,
+      defaultModel,
+    })
+    const handle = createRunHandle(host)
+    await runSetup(plugin, handle)
+    // primeSpecs ignored on restore (spec §4.2).
     armRunTimers(runId, row.deadlineAt)
+  }
+  /** Prepare one agent's environment: container online (via the run context,
+   * built lazily on cold-restore) + this agent's session online. Unified for
+   * fresh create (no sessionFile → new session) and cold-restore (sessionFile →
+   * open from snapshot). Idempotent; sends nothing. */
+  async function prepareAgent(runId: string, agentId: string): Promise<void> {
+    if (lifecycle.has(agentId)) return
+    const row = queries.getRow(runId)
+    if (!row) throw new RunActionError("not_found", "Run not found")
+    const agentRow = db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .get()
+    if (!agentRow) throw new RunActionError("not_found", "Agent not found")
+
+    // Ensure the run-level context (container + model runtime + setup) exists.
+    // Fresh create sets it before prepareAgent; cold-restore builds it here.
+    if (!contexts.has(runId)) {
+      await restoreRunContext(runId, row)
+    }
+    const ctx = contexts.get(runId)!
+
+    // Resolve this agent's model from its own snapshot (per-agent; survives
+    // switches). Cold-restore reuses the snapshot verbatim — no re-render.
+    const provider = providers().find((p) => p.label === agentRow.providerLabel)
+    const sdkModel = provider
+      ? resolveRunModel(ctx.modelRuntime, provider, agentRow.modelId)
+      : undefined
+    if (!sdkModel) {
+      throw new RunStartError("Could not resolve the agent's model for restore")
+    }
+
+    const snapshotTools = safeParseTools(agentRow.tools)
+    const toolCtx = buildAgentToolContext(runId, ctx.challengeId, agentId)
+    const nativeTools = createMainTools(toolCtx, snapshotTools)
+
+    let agentSession: HostAgentSession
+    try {
+      agentSession = await createHost({
+        owner: { agentId, runId },
+        channel: runId,
+        agentId,
+        cwd: ctx.containerWorkspace,
+        containerName: ctx.containerName,
+        containerManager,
+        modelRuntime: ctx.modelRuntime,
+        model: sdkModel,
+        thinkingLevel: agentRow.thinkingLevel as ThinkingLevel,
+        agentSettings: agentSettings(),
+        systemPrompt: agentRow.systemPrompt,
+        extraTools: nativeTools,
+        extraToolNames: snapshotTools,
+        ...(agentRow.sessionFile
+          ? {
+              resumeFrom: {
+                sessionId: agentRow.sessionFile,
+                isJsonl: agentRow.sessionFile.endsWith(".jsonl"),
+                sessionsDir: ctx.sessionsDir,
+              },
+            }
+          : {}),
+        onUsageMaybeChanged: () => emitRun(runId),
+        db,
+        bus,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      clearForceKill(runId)
+      terminateContainer(runId, ctx.containerName)
+      throw new RunActionError("launch_failed", message)
+    }
+
+    updateAgent(agentId, { sessionFile: agentSession.sessionId ?? null })
+    lifecycle.set(agentId, agentSession)
   }
 
   async function recoverOnBoot() {
@@ -1110,7 +1412,18 @@ export function createRunService(options: RunServiceOptions) {
       await childSession.dispose()
     childSessions.clear()
     pendingFinish.clear()
+    for (const emitter of emitters.values()) emitter.close()
+    emitters.clear()
+    for (const emitter of eventScopes.values()) emitter.close()
+    eventScopes.clear()
     bus.close()
+  }
+
+  /** Platform-side hook: a flag was accepted for this run — notify the event's
+   * scheduler (spec §3.5 run.flagAccepted). Called by the app after the flag
+   * write; `agentId` is unknown on the platform path, so it stays optional. */
+  function notifyFlagAccepted(runId: string): void {
+    emitRunEvent(runId, { type: "run.flagAccepted", runId })
   }
 
   return {
@@ -1133,6 +1446,7 @@ export function createRunService(options: RunServiceOptions) {
     workspacePath: queries.workspacePath,
     runDirPath: queries.runDirPath,
     bus,
+    notifyFlagAccepted,
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,
   }

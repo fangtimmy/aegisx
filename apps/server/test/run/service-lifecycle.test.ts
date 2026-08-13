@@ -33,6 +33,7 @@ function baseCreateInput(
   provider: ReturnType<typeof makeProvider>
 ) {
   return {
+    scopeType: "challenge" as const,
     challengeId,
     provider: toConnection(provider),
     modelId: "model-1",

@@ -11,7 +11,7 @@ import { Type } from "typebox"
 export type RunToolContext = {
   runId: string
   challengeId: string
-  /** This agent's id (validates child ownership for inspect_agent). */
+  /** This agent's id (peer tools resolve targets within the run). */
   agentId: string
   submitFlag(
     flag: string,
@@ -32,16 +32,17 @@ export type RunToolContext = {
     name: string
     task: string
   }): Promise<{ agentId: string; name: string; status: string }>
-  /** Look up an agent in this run (for inspect_agent). */
+  /** Send a message to another agent in this run (auto-prepares it). */
+  messageAgent(
+    agentId: string,
+    text: string
+  ): Promise<{ ok: boolean; error?: string }>
+  /** Look up an agent in this run (peer read + spawn children). */
   getAgent(agentId: string): AgentSummary | undefined
-  /** Latest assistant text for an agent (for inspect_agent). */
+  /** Enumerate this run's agents. */
+  listAgents(): AgentSummary[]
+  /** Latest assistant text for an agent. */
   lastAssistantText(agentId: string): string | null
-}
-
-export type ToolCapabilities = {
-  canSubmitFlag: boolean
-  canManageTarget: boolean
-  canSpawnAgent: boolean
 }
 
 function textResult(text: string, details?: unknown) {
@@ -51,44 +52,55 @@ function textResult(text: string, details?: unknown) {
   }
 }
 
-/** Build the main agent's native tools based on run capabilities. */
-export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
-  const tools = []
+/**
+ * Build an agent's native tools from its persisted tool-list snapshot. The
+ * snapshot is the single source of truth — the tools created here are exactly
+ * the granted names (finish_run only when the snapshot has it, so a bootstrap
+ * agent truly has no finish capability), and capabilities derived for prompt
+ * rendering come from the same list (§3.7).
+ */
+export function createMainTools(ctx: RunToolContext, tools: string[]) {
+  const has = (name: string) => tools.includes(name)
+  const created = []
 
-  tools.push(
-    defineTool({
-      name: "finish_run",
-      label: "Finish run",
-      description:
-        "Declare the run complete and stop further work. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first.",
-      parameters: Type.Object({
-        summary: Type.String({
-          description:
-            "One-paragraph summary: approach, evidence, flag, outcome.",
-          minLength: 1,
+  if (has("finish_run")) {
+    created.push(
+      defineTool({
+        name: "finish_run",
+        label: "Finish run",
+        description:
+          "Declare the run complete and stop further work. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first.",
+        parameters: Type.Object({
+          summary: Type.String({
+            description:
+              "One-paragraph summary: approach, evidence, flag, outcome.",
+            minLength: 1,
+          }),
         }),
-      }),
-      executionMode: "sequential",
-      execute: async (_id, params) => {
-        if (caps.canManageTarget) {
-          const target = await ctx.targetAction("get")
-          if (isActiveTarget(target)) {
-            throw new Error("Stop the remote target before finishing this Run")
+        executionMode: "sequential",
+        execute: async (_id, params) => {
+          if (has("stop_target")) {
+            const target = await ctx.targetAction("get")
+            if (isActiveTarget(target)) {
+              throw new Error(
+                "Stop the remote target before finishing this Run"
+              )
+            }
           }
-        }
-        ctx.requestFinish(params.summary.trim())
-        return {
-          content: [{ type: "text" as const, text: "Run completed" }],
-          details: {},
-          // Hint the agent loop to stop after this tool batch.
-          terminate: true,
-        }
-      },
-    })
-  )
+          ctx.requestFinish(params.summary.trim())
+          return {
+            content: [{ type: "text" as const, text: "Run completed" }],
+            details: {},
+            // Hint the agent loop to stop after this tool batch.
+            terminate: true,
+          }
+        },
+      })
+    )
+  }
 
-  if (caps.canSubmitFlag) {
-    tools.push(
+  if (has("submit_flag")) {
+    created.push(
       defineTool({
         name: "submit_flag",
         label: "Submit flag",
@@ -129,7 +141,12 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
     )
   }
 
-  if (caps.canManageTarget) {
+  if (
+    has("get_target") ||
+    has("start_target") ||
+    has("extend_target") ||
+    has("stop_target")
+  ) {
     const targetTool = (
       name: "get_target" | "start_target" | "extend_target" | "stop_target",
       label: string,
@@ -148,36 +165,50 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
         },
       })
 
-    tools.push(
-      targetTool(
-        "get_target",
-        "Get target",
-        "Get the current remote challenge target status and endpoints. Call before starting.",
-        "get"
-      ),
-      targetTool(
-        "start_target",
-        "Start target",
-        "Start the remote challenge target.",
-        "start"
-      ),
-      targetTool(
-        "extend_target",
-        "Extend target",
-        "Extend the remote challenge target lifetime. Call before it expires.",
-        "extend"
-      ),
-      targetTool(
-        "stop_target",
-        "Stop target",
-        "Stop the remote challenge target. Call before finishing the run.",
-        "stop"
+    if (has("get_target")) {
+      created.push(
+        targetTool(
+          "get_target",
+          "Get target",
+          "Get the current remote challenge target status and endpoints. Call before starting.",
+          "get"
+        )
       )
-    )
+    }
+    if (has("start_target")) {
+      created.push(
+        targetTool(
+          "start_target",
+          "Start target",
+          "Start the remote challenge target.",
+          "start"
+        )
+      )
+    }
+    if (has("extend_target")) {
+      created.push(
+        targetTool(
+          "extend_target",
+          "Extend target",
+          "Extend the remote challenge target lifetime. Call before it expires.",
+          "extend"
+        )
+      )
+    }
+    if (has("stop_target")) {
+      created.push(
+        targetTool(
+          "stop_target",
+          "Stop target",
+          "Stop the remote challenge target. Call before finishing the run.",
+          "stop"
+        )
+      )
+    }
   }
 
-  if (caps.canSpawnAgent) {
-    tools.push(
+  if (has("spawn_agent")) {
+    created.push(
       defineTool({
         name: "spawn_agent",
         label: "Spawn agent",
@@ -207,31 +238,66 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
             { agentId: child.agentId, status: child.status }
           )
         },
-      }),
+      })
+    )
+  }
+
+  if (has("message_agent")) {
+    created.push(
       defineTool({
-        name: "inspect_agent",
-        label: "Inspect agent",
+        name: "message_agent",
+        label: "Message agent",
         description:
-          "Read a child agent's current status and latest output. Completion is normally delivered automatically; use this only when you must check on a running child.",
+          "Send a message to another agent in this run (by id). While that agent is streaming this steers into its current turn; otherwise it starts a fresh turn for it. Use for coordination (observer → solver, peer → peer); do not poll — events drive the loop.",
         parameters: Type.Object({
           agent_id: Type.String({
-            description: "The child agent id (returned by spawn_agent).",
+            description: "The target agent id (from list_agents / read_agent).",
+            minLength: 1,
+          }),
+          text: Type.String({
+            description: "The guidance or question to send.",
             minLength: 1,
           }),
         }),
         execute: async (_id, params) => {
-          const child = ctx.getAgent(params.agent_id)
-          if (child?.role !== "child" || child?.parentAgentId !== ctx.agentId) {
-            throw new Error("Child agent was not found")
-          }
-          const summary = ctx.lastAssistantText(child.id) ?? "(no output yet)"
+          const result = await ctx.messageAgent(
+            params.agent_id,
+            params.text.trim()
+          )
+          if (!result.ok) throw new Error(result.error ?? "Agent not found")
+          return textResult(`Message delivered to agent ${params.agent_id}.`, {
+            delivered: true,
+          })
+        },
+      })
+    )
+  }
+
+  if (has("read_agent")) {
+    created.push(
+      defineTool({
+        name: "read_agent",
+        label: "Read agent",
+        description:
+          "Read another agent in this run (by id): its status and latest output. Use to review a peer's or child's progress. Completion is normally delivered automatically — use this when you must check in.",
+        parameters: Type.Object({
+          agent_id: Type.String({
+            description: "The agent id (from list_agents / spawn_agent).",
+            minLength: 1,
+          }),
+        }),
+        execute: async (_id, params) => {
+          const agent = ctx.getAgent(params.agent_id)
+          if (!agent) throw new Error("Agent was not found in this run")
+          const summary = ctx.lastAssistantText(agent.id) ?? "(no output yet)"
           return textResult(
             JSON.stringify({
-              id: child.id,
-              name: child.name,
-              status: child.status,
+              id: agent.id,
+              name: agent.name,
+              role: agent.role,
+              status: agent.status,
               summary,
-              error: child.error,
+              error: agent.error,
             }),
             { found: true }
           )
@@ -240,7 +306,28 @@ export function createMainTools(ctx: RunToolContext, caps: ToolCapabilities) {
     )
   }
 
-  return tools
+  if (has("list_agents")) {
+    created.push(
+      defineTool({
+        name: "list_agents",
+        label: "List agents",
+        description:
+          "Enumerate the agents in this run (id, name, role, status). Use to discover agent ids before read_agent / message_agent.",
+        parameters: Type.Object({}, { additionalProperties: false }),
+        execute: async () => {
+          const agents = ctx.listAgents().map((a) => ({
+            id: a.id,
+            name: a.name,
+            role: a.role,
+            status: a.status,
+          }))
+          return textResult(JSON.stringify(agents), { count: agents.length })
+        },
+      })
+    )
+  }
+
+  return created
 }
 
 /**

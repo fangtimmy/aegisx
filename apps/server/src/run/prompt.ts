@@ -5,7 +5,6 @@ import type {
   EnvironmentConfig,
   ModelConfig,
   PromptAttachment,
-  PromptTemplateContext,
 } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
@@ -16,6 +15,7 @@ import {
   eventPlatforms,
   events,
 } from "../db/schema"
+import type { PromptContext } from "../orchestration/types"
 import {
   type ChallengeRemote,
   isPlatformIntegrated,
@@ -36,15 +36,20 @@ export type RunPromptInputs = {
 }
 
 /**
- * Build the handlebars PromptTemplateContext for a run.
- * v4: host-side pi SDK. The main agent can spawn children; capabilities mirror
- * the native tools registered for the run.
+ * Build the run-level {@link PromptContext} for a challenge-scoped run
+ * (scope-aware, spec §3.7). `agent` and per-agent `capabilities` are intentionally
+ * LEFT BLANK here — `agent` is filled per-agent by `createAgent`, and
+ * `capabilities` is the RUN-LEVEL view (challenge-derived) used to render
+ * `initialPrompt`. createAgent OVERRIDES `capabilities` with the value derived
+ * from each agent's own tool list when rendering that agent's system prompt.
+ * For classic (single solver) the two coincide, so the rendered initial prompt
+ * advertises exactly the solver's abilities.
  */
 export function buildPromptContext(
   inputs: RunPromptInputs,
   db: Database,
   containerWorkspace: string
-): PromptTemplateContext {
+): PromptContext {
   const { runId, challenge, remote, challengeAttachments, environment, model } =
     inputs
   const event = db
@@ -61,12 +66,6 @@ export function buildPromptContext(
   const targetSupported = isTargetCapable(remote)
   const platformIntegrated = isPlatformIntegrated(remote)
   return {
-    agent: {
-      role: "main",
-      isMain: true,
-      name: "Main agent",
-      task: null,
-    },
     event: {
       id: event.id,
       name: event.name,
@@ -100,11 +99,66 @@ export function buildPromptContext(
       pidsLimit: environment.pidsLimit,
     },
     capabilities: {
-      canFinishRun: true,
-      canSpawnAgent: true,
+      canFinish: true,
+      canSpawn: true,
       canSubmitFlag: platformIntegrated,
       canManageTarget: targetSupported,
     },
+  }
+}
+
+/**
+ * Build the run-level {@link PromptContext} for an event-scoped (scheduler)
+ * run (spec §3.7). No `challenge` block — the scheduler manages an event, not
+ * one challenge — and no `capabilities` (the scheduler's abilities come from
+ * its own tool list via createAgent). `instruction` carries the user's
+ * strategic direction for the event.
+ */
+export function buildEventPromptContext(
+  inputs: {
+    runId: string
+    eventId: string
+    instruction: string
+    environment: EnvironmentConfig
+    model: ModelConfig
+  },
+  db: Database,
+  containerWorkspace: string
+): PromptContext {
+  const { runId, eventId, instruction, environment, model } = inputs
+  const event = db.select().from(events).where(eq(events.id, eventId)).get()
+  if (!event) throw new RunStartError("Event is unavailable")
+  const platform = db
+    .select({ type: eventPlatforms.type })
+    .from(eventPlatforms)
+    .where(eq(eventPlatforms.eventId, event.id))
+    .get()
+  return {
+    event: {
+      id: event.id,
+      name: event.name,
+      platform: platform?.type ?? null,
+      promptHint: event.promptHint ?? "",
+    },
+    model: {
+      provider: model.providerLabel ?? model.provider,
+      name: model.modelLabel ?? model.modelId,
+      id: model.modelId,
+    },
+    run: {
+      id: runId,
+      environment: "container",
+      isContainer: true,
+      workspace: containerWorkspace,
+      // The scheduler run does not solve challenges — no flag/target context.
+      targetSupported: false,
+      platformIntegrated: false,
+      containerImage: environment.image,
+      cpus: environment.cpus,
+      memoryMb: environment.memoryMb,
+      pidsLimit: environment.pidsLimit,
+    },
+    instruction,
   }
 }
 

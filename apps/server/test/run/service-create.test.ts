@@ -31,6 +31,7 @@ function baseCreateInput(
   provider: CreateRunInput["provider"]
 ) {
   return {
+    scopeType: "challenge" as const,
     challengeId,
     provider,
     modelId: "model-1",

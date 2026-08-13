@@ -8,7 +8,8 @@ import type {
 import type { LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
 import { agents } from "../db/schema"
-import { renderSystemPrompt } from "../settings/prompt-templates"
+import type { PromptContext } from "../orchestration/types"
+import { renderTemplateBody } from "../settings/prompt-templates"
 import type { ContainerManager } from "./container/container-manager"
 import { RunActionError } from "./errors"
 import type { RunContext } from "./service"
@@ -32,7 +33,7 @@ export type ChildAgentDeps = {
   emitRun(runId: string): void
   emitAgents(runId: string): void
   /** Hand a finished child's result text to its parent (steer or new turn). */
-  deliverToParent(runId: string, text: string): void
+  deliverToParent(runId: string, parentAgentId: string, text: string): void
   /** Child turn boundary hooks (status aggregation — spec §4.5e). */
   onChildTurnStart(agentId: string, runId: string): void
   onChildTurnSettled(agentId: string, runId: string, error: string | null): void
@@ -41,6 +42,30 @@ export type ChildAgentDeps = {
 export type ChildAgentRuntime = ReturnType<typeof createChildAgentRuntime>
 
 const now = () => new Date().toISOString()
+
+/**
+ * Render a spawn child's system prompt: the plugin's spawn template with the
+ * child context (role/name/task) and capabilities ZEROED (spec §3.7) — a child
+ * can never finish, submit flags, manage targets, or spawn, so its prompt must
+ * not advertise abilities its tool set lacks.
+ */
+export function renderChildSystemPrompt(
+  template: string,
+  ctx: PromptContext,
+  name: string,
+  task: string
+): string {
+  return renderTemplateBody(template, {
+    ...ctx,
+    agent: { role: "child", isMain: false, name, task },
+    capabilities: {
+      canFinish: false,
+      canSubmitFlag: false,
+      canManageTarget: false,
+      canSpawn: false,
+    },
+  })
+}
 
 /** Background child-agent orchestration for `spawn_agent`. Each run may have
  * background children (capped); each runs to completion, then its result is
@@ -82,7 +107,9 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     deliverResult(runId, childAgentId, childName, status, summary, runError)
   }
 
-  /** Build the child-result message and route it to the parent. */
+  /** Build the child-result message and route it to the child's PARENT (spec
+   * §4.4 rule 1: a finished child's result is delivered to its parent, not the
+   * run's entry — parents are the spawn-capable agents). */
   function deliverResult(
     runId: string,
     childAgentId: string,
@@ -91,6 +118,10 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     summary: string,
     error: string | null
   ): void {
+    const parentAgentId = deps
+      .listAgents(runId)
+      .find((agent) => agent.id === childAgentId)?.parentAgentId
+    if (!parentAgentId) return
     const text = [
       `Background agent ${childName} (${childAgentId}) ${status}.`,
       "",
@@ -98,7 +129,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
       summary,
       ...(error ? ["", `Error: ${error}`] : []),
     ].join("\n")
-    deps.deliverToParent(runId, text)
+    deps.deliverToParent(runId, parentAgentId, text)
   }
 
   /**
@@ -126,15 +157,15 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     const childAgentId = crypto.randomUUID()
     const childName = input.name.trim() || "Child agent"
     const ts = now()
-    const childSystemPrompt = renderSystemPrompt(ctx.childTemplate, {
-      ...ctx.promptContext,
-      agent: {
-        role: "child",
-        isMain: false,
-        name: childName,
-        task: input.task,
-      },
-    })
+    // Spawn children render the plugin's spawn template with capabilities
+    // ZEROED (spec §3.7): a child can never finish/submit/manage targets/spawn,
+    // and its prompt must not advertise abilities its tool set lacks.
+    const childSystemPrompt = renderChildSystemPrompt(
+      ctx.childTemplate,
+      ctx.promptContext,
+      childName,
+      input.task
+    )
     db.insert(agents)
       .values({
         id: childAgentId,
@@ -163,6 +194,13 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
 
     // Children: file tools only (no finish/flag/target/spawn) — they get the
     // common host tool set with no extras, reusing the run's container + model.
+    if (!ctx.sdkModel) {
+      throw new RunActionError(
+        "invalid_state",
+        "Run model is unavailable; cannot spawn a child agent"
+      )
+    }
+    const childSdkModel = ctx.sdkModel
     let childSession: HostAgentSession
     try {
       childSession = await createAgentHost({
@@ -173,7 +211,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
         containerName: ctx.containerName,
         containerManager,
         modelRuntime: ctx.modelRuntime,
-        model: ctx.sdkModel,
+        model: childSdkModel,
         thinkingLevel: ctx.thinkingLevel,
         agentSettings: deps.agentSettings(),
         systemPrompt: childSystemPrompt,

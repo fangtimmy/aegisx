@@ -42,8 +42,8 @@ export const PROMPT_TEMPLATE_VARIABLES = [
   "run.cpus",
   "run.memoryMb",
   "run.pidsLimit",
-  "capabilities.canFinishRun",
-  "capabilities.canSpawnAgent",
+  "capabilities.canFinish",
+  "capabilities.canSpawn",
   "capabilities.canSubmitFlag",
   "capabilities.canManageTarget",
 ] as const
@@ -108,8 +108,8 @@ export const samplePromptContext: PromptTemplateContext = {
     pidsLimit: 256,
   },
   capabilities: {
-    canFinishRun: true,
-    canSpawnAgent: true,
+    canFinish: true,
+    canSpawn: true,
     canSubmitFlag: true,
     canManageTarget: true,
   },
@@ -122,6 +122,17 @@ function render(template: string, context: PromptTemplateContext) {
       allowProtoPropertiesByDefault: false,
     })
     .trim()
+}
+
+/** Render an arbitrary template body with the shared configured handlebars
+ * instance (noEscape, strict, `join` helper). Used by the prompt_templates
+ * store so all rendering goes through one handlebars configuration. The
+ * context is loosely typed — orchestration PromptContext is a superset of the
+ * legacy {@link PromptTemplateContext} shape (challenge optional, capabilities
+ * optional), and the built-in templates only reference fields that the caller
+ * has populated. */
+export function renderTemplateBody(template: string, context: unknown): string {
+  return render(template, context as PromptTemplateContext)
 }
 
 const HIGHLIGHT_START = "\uE000"

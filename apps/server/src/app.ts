@@ -1,12 +1,13 @@
 import { get } from "@aegisx/shared"
 import { Hono } from "hono"
 
+import { createCatalogReader } from ".//events/catalog"
 import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
-import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
 import { createConfigStore } from "./infrastructure/config-store"
 import { createStorage } from "./infrastructure/storage"
+import { bootOrchestration } from "./orchestration/registry"
 import { registerPlatformRoutes } from "./platforms/routes"
 import { createPlatformService } from "./platforms/service"
 import { registerProviderRoutes } from "./providers/routes"
@@ -18,6 +19,10 @@ import { registerSettingsRoutes } from "./settings/routes"
 export function createApp(options: { dataDir: string }) {
   const configStore = createConfigStore(options.dataDir)
   const { db, sqlite, releaseLock } = createDatabase(options.dataDir)
+
+  // Register built-in orchestration plugins + seed prompt template defaults
+  // (idempotent) before any RunHandle is built (spec §3.6).
+  bootOrchestration(db)
   const storage = createStorage(options.dataDir)
   const getSettings = () => configStore.getSettings()
 
@@ -39,10 +44,12 @@ export function createApp(options: { dataDir: string }) {
     getSettings,
   })
 
-  // Flag writes are a side path (platform → DB); refresh the run view after.
+  // Flag writes are a side path (platform → DB); refresh the run view after
+  // and notify the event's scheduler (run.flagAccepted, spec §3.5).
   platformService.setRunHooks({
     onRunFlagAccepted: (runId) => {
       runService.refresh(runId)
+      runService.notifyFlagAccepted(runId)
     },
   })
 

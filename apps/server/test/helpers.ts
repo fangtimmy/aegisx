@@ -87,12 +87,13 @@ export function seedRun(
   overrides: Partial<typeof runs.$inferInsert> & {
     id?: string
     eventId?: string
-    challengeId?: string
+    challengeId?: string | null
   } = {}
 ) {
   const id = overrides.id ?? "run-1"
   const eventId = overrides.eventId ?? "evt-1"
-  const challengeId = overrides.challengeId ?? "ch-1"
+  const challengeId =
+    overrides.challengeId === undefined ? "ch-1" : overrides.challengeId
   db.insert(runs)
     .values({
       id,

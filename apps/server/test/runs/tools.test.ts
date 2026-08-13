@@ -4,11 +4,7 @@ import type { AgentSummary } from "@aegisx/shared/agent"
 import type { TargetState } from "@aegisx/shared/target"
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 
-import {
-  createMainTools,
-  type RunToolContext,
-  type ToolCapabilities,
-} from "../../src/run/tools"
+import { createMainTools, type RunToolContext } from "../../src/run/tools"
 
 function mockCtx(overrides: Partial<RunToolContext> = {}): RunToolContext {
   return {
@@ -27,17 +23,26 @@ function mockCtx(overrides: Partial<RunToolContext> = {}): RunToolContext {
       name: input.name,
       status: "running",
     }),
+    messageAgent: async () => ({ ok: true }),
     getAgent: () => undefined,
+    listAgents: () => [],
     lastAssistantText: () => null,
     ...overrides,
   }
 }
 
-const allCaps: ToolCapabilities = {
-  canSubmitFlag: true,
-  canManageTarget: true,
-  canSpawnAgent: true,
-}
+const fullTools = [
+  "finish_run",
+  "submit_flag",
+  "get_target",
+  "start_target",
+  "extend_target",
+  "stop_target",
+  "spawn_agent",
+  "message_agent",
+  "read_agent",
+  "list_agents",
+]
 
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
   (result.content[0] as { text: string }).text
@@ -54,37 +59,34 @@ const findTool = (tools: ToolDefinition[], name: string): ToolDefinition => {
  * param schema is erased (`as never`) since tests pass ad-hoc objects.
  */
 const invoke = (tool: ToolDefinition, params: object) =>
-  tool.execute("id", params as never, undefined, undefined, undefined as never)
+  Promise.resolve(
+    tool.execute(
+      "id",
+      params as never,
+      undefined,
+      undefined,
+      undefined as never
+    )
+  )
 
 describe("createMainTools", () => {
-  test("tool names use v2 verb_noun targets and include inspect_agent", () => {
-    const tools = createMainTools(mockCtx(), allCaps)
-    const names = tools.map((t) => t.name).sort()
-    expect(names).toEqual(
-      [
-        "finish_run",
-        "submit_flag",
-        "get_target",
-        "start_target",
-        "extend_target",
-        "stop_target",
-        "spawn_agent",
-        "inspect_agent",
-      ].sort()
-    )
+  test("grants exactly the tools listed in the snapshot", () => {
+    const tools = createMainTools(mockCtx(), fullTools)
+    expect(tools.map((t) => t.name).sort()).toEqual([...fullTools].sort())
   })
 
-  test("only finish_run remains when no capabilities are granted", () => {
-    const tools = createMainTools(mockCtx(), {
-      canSubmitFlag: false,
-      canManageTarget: false,
-      canSpawnAgent: false,
-    })
-    expect(tools.map((t) => t.name)).toEqual(["finish_run"])
+  test("empty snapshot grants no native tools (file tools are always on)", () => {
+    const tools = createMainTools(mockCtx(), [])
+    expect(tools).toEqual([])
+  })
+
+  test("no finish_run in the snapshot → no finish_run tool (bootstrap case)", () => {
+    const tools = createMainTools(mockCtx(), ["submit_flag", "read_agent"])
+    expect(tools.map((t) => t.name)).not.toContain("finish_run")
   })
 
   test("executionMode: finish/submit/target sequential, spawn parallel", () => {
-    const tools = createMainTools(mockCtx(), allCaps)
+    const tools = createMainTools(mockCtx(), fullTools)
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]))
     expect(byName.finish_run.executionMode).toBe("sequential")
     expect(byName.submit_flag.executionMode).toBe("sequential")
@@ -102,7 +104,7 @@ describe("createMainTools", () => {
           expiresAt: null,
         }),
       }),
-      { canSubmitFlag: true, canManageTarget: true, canSpawnAgent: false }
+      ["finish_run", "get_target", "stop_target"]
     )
     const finish = findTool(tools, "finish_run")
     await expect(invoke(finish, { summary: "s" })).rejects.toThrow(
@@ -123,7 +125,7 @@ describe("createMainTools", () => {
           finished = s
         },
       }),
-      { canSubmitFlag: true, canManageTarget: true, canSpawnAgent: false }
+      ["finish_run", "get_target", "stop_target"]
     )
     const finish = findTool(tools, "finish_run")
     const result = await invoke(finish, { summary: "  done  " })
@@ -149,53 +151,34 @@ describe("createMainTools", () => {
     }
     const tools = createMainTools(
       mockCtx({ targetAction: async () => state }),
-      { canSubmitFlag: false, canManageTarget: true, canSpawnAgent: false }
+      ["get_target"]
     )
     const getTarget = findTool(tools, "get_target")
     const result = await invoke(getTarget, {})
     expect(textOf(result)).toContain("wsrx connect")
   })
 
-  test("inspect_agent rejects children not owned by this parent", async () => {
-    const foreignChild: AgentSummary = {
-      id: "child",
-      runId: "r",
-      slot: "child-xxxx",
-      role: "child",
-      parentAgentId: "other-parent",
-      isEntry: false,
-      name: "Child",
-      task: "t",
-      status: "completed",
-      sessionFile: null,
-      createdAt: "",
-      startedAt: null,
-      updatedAt: "",
-      completedAt: null,
-      error: null,
-    }
-    const tools = createMainTools(mockCtx({ getAgent: () => foreignChild }), {
-      canSubmitFlag: false,
-      canManageTarget: false,
-      canSpawnAgent: true,
-    })
-    const inspect = findTool(tools, "inspect_agent")
-    await expect(invoke(inspect, { agent_id: "child" })).rejects.toThrow(
-      /not found/
+  test("read_agent rejects agents outside this run", async () => {
+    const tools = createMainTools(mockCtx({ getAgent: () => undefined }), [
+      "read_agent",
+    ])
+    const read = findTool(tools, "read_agent")
+    await expect(invoke(read, { agent_id: "ghost" })).rejects.toThrow(
+      /not found in this run/
     )
   })
 
-  test("inspect_agent returns owned child status + latest output", async () => {
-    const child: AgentSummary = {
-      id: "child",
+  test("read_agent returns peer status + latest output", async () => {
+    const peer: AgentSummary = {
+      id: "peer",
       runId: "r",
-      slot: "child-xxxx",
-      role: "child",
-      parentAgentId: "main",
+      slot: "solver-b",
+      role: "solver",
+      parentAgentId: null,
       isEntry: false,
-      name: "Child",
-      task: "t",
-      status: "completed",
+      name: "Solver B",
+      task: null,
+      status: "idle",
       sessionFile: null,
       createdAt: "",
       startedAt: null,
@@ -204,16 +187,111 @@ describe("createMainTools", () => {
       error: null,
     }
     const tools = createMainTools(
-      mockCtx({ getAgent: () => child, lastAssistantText: () => "flag found" }),
-      { canSubmitFlag: false, canManageTarget: false, canSpawnAgent: true }
+      mockCtx({
+        getAgent: () => peer,
+        lastAssistantText: () => "flag format is flag{...}",
+      }),
+      ["read_agent"]
     )
-    const inspect = findTool(tools, "inspect_agent")
-    const result = await invoke(inspect, { agent_id: "child" })
+    const read = findTool(tools, "read_agent")
+    const result = await invoke(read, { agent_id: "peer" })
     const body = JSON.parse(textOf(result))
     expect(body).toMatchObject({
-      id: "child",
-      status: "completed",
-      summary: "flag found",
+      id: "peer",
+      role: "solver",
+      status: "idle",
+      summary: "flag format is flag{...}",
+    })
+  })
+
+  test("message_agent delivers text to the target agent", async () => {
+    let delivered: { agentId: string; text: string } | null = null
+    const tools = createMainTools(
+      mockCtx({
+        messageAgent: async (agentId, text) => {
+          delivered = { agentId, text }
+          return { ok: true }
+        },
+      }),
+      ["message_agent"]
+    )
+    const message = findTool(tools, "message_agent")
+    const result = await invoke(message, {
+      agent_id: "solver-b",
+      text: "  try the crypto angle  ",
+    })
+    expect(delivered as { agentId: string; text: string } | null).toEqual({
+      agentId: "solver-b",
+      text: "try the crypto angle",
+    })
+    expect(textOf(result)).toContain("solver-b")
+  })
+
+  test("message_agent surfaces delivery failures", async () => {
+    const tools = createMainTools(
+      mockCtx({
+        messageAgent: async () => ({ ok: false, error: "Agent not found" }),
+      }),
+      ["message_agent"]
+    )
+    const message = findTool(tools, "message_agent")
+    await expect(
+      invoke(message, { agent_id: "ghost", text: "hi" })
+    ).rejects.toThrow(/Agent not found/)
+  })
+
+  test("list_agents enumerates this run's agents", async () => {
+    const agents: AgentSummary[] = [
+      {
+        id: "a1",
+        runId: "r",
+        slot: "solver-a",
+        role: "solver",
+        parentAgentId: null,
+        isEntry: true,
+        name: "Solver 1",
+        task: null,
+        status: "running",
+        sessionFile: null,
+        createdAt: "",
+        startedAt: null,
+        updatedAt: "",
+        completedAt: null,
+        error: null,
+      },
+      {
+        id: "a2",
+        runId: "r",
+        slot: "observer",
+        role: "observer",
+        parentAgentId: null,
+        isEntry: false,
+        name: "Observer",
+        task: null,
+        status: "idle",
+        sessionFile: null,
+        createdAt: "",
+        startedAt: null,
+        updatedAt: "",
+        completedAt: null,
+        error: null,
+      },
+    ]
+    const tools = createMainTools(mockCtx({ listAgents: () => agents }), [
+      "list_agents",
+    ])
+    const list = findTool(tools, "list_agents")
+    const result = await invoke(list, {})
+    const body = JSON.parse(textOf(result)) as Array<{
+      id: string
+      role: string
+      status: string
+    }>
+    expect(body).toHaveLength(2)
+    expect(body[0]).toMatchObject({
+      id: "a1",
+      role: "solver",
+      status: "running",
     })
   })
 
@@ -226,7 +304,7 @@ describe("createMainTools", () => {
           return { agentId: "child-1", name: input.name, status: "running" }
         },
       }),
-      { canSubmitFlag: false, canManageTarget: false, canSpawnAgent: true }
+      ["spawn_agent"]
     )
     const spawn = findTool(tools, "spawn_agent")
     const result = await invoke(spawn, { name: "Probe", task: "scan" })
