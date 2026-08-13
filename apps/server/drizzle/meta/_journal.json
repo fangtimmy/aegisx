@@ -15,6 +15,13 @@
       "when": 1785986800000,
       "tag": "0001_challenge_flags_solve_state",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": 7,
+      "when": 1786673600000,
+      "tag": "0002_v8_unified_run",
+      "breakpoints": true
     }
   ]
 }
