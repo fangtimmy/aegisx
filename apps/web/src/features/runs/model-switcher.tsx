@@ -35,6 +35,33 @@ type AvailableModel = {
 
 export type { AvailableModel }
 
+/** Enabled provider models flattened to {@link AvailableModel}, grouped-ready.
+ * Shared by the composer model switcher and the scheduler config editor. */
+export function useAvailableModels() {
+  const providers = useQuery({
+    queryKey: keys.providers.all,
+    queryFn: () => providersApi.listProviders(),
+  })
+  return useMemo<AvailableModel[]>(() => {
+    const items = providers.data?.items ?? []
+    const out: AvailableModel[] = []
+    for (const provider of items) {
+      if (!provider.enabled || !provider.apiKey) continue
+      for (const model of provider.models) {
+        if (!model.enabled) continue
+        out.push({
+          id: model.id,
+          modelId: model.modelId,
+          label: model.label,
+          providerLabel: provider.label,
+          thinkingLevels: model.thinkingLevels,
+        })
+      }
+    }
+    return out
+  }, [providers.data])
+}
+
 /**
  * Compact model + reasoning selectors for the conversation composer footer.
  * Drives a live session switch via `onSwitch` (caller POSTs .../switch-model).
@@ -59,29 +86,7 @@ export function ModelThinkingSwitcher({
   onSwitch: (input: { modelId: string; thinkingLevel: ThinkingLevel }) => void
   className?: string
 }) {
-  const providers = useQuery({
-    queryKey: keys.providers.all,
-    queryFn: () => providersApi.listProviders(),
-  })
-
-  const models = useMemo<AvailableModel[]>(() => {
-    const items = providers.data?.items ?? []
-    const out: AvailableModel[] = []
-    for (const provider of items) {
-      if (!provider.enabled || !provider.apiKey) continue
-      for (const model of provider.models) {
-        if (!model.enabled) continue
-        out.push({
-          id: model.id,
-          modelId: model.modelId,
-          label: model.label,
-          providerLabel: provider.label,
-          thinkingLevels: model.thinkingLevels,
-        })
-      }
-    }
-    return out
-  }, [providers.data])
+  const models = useAvailableModels()
 
   const currentId = findCurrentModelId(models) ?? null
   const [selectedId, setSelectedId] = useState<string | null>(currentId)

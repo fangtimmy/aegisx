@@ -5,6 +5,23 @@ export function getScheduler(eventId: string) {
   return apiRequest<SchedulerInfo>(`/events/${eventId}/scheduler`)
 }
 
+/** PATCH the event-level scheduler config (model / instruction / target cap).
+ * Affects the scheduler run at next start; the live model can also be switched
+ * per-agent on a running scheduler. */
+export function updateSchedulerConfig(
+  eventId: string,
+  patch: {
+    modelId?: string | null
+    instruction?: string
+    maxConcurrentTargets?: number
+  }
+) {
+  return apiRequest<SchedulerInfo>(
+    `/events/${eventId}/scheduler`,
+    jsonRequest("PATCH", patch)
+  )
+}
+
 export function listQueue(eventId: string) {
   return apiRequest<{ items: QueueItem[] }>(`/events/${eventId}/queue`)
 }

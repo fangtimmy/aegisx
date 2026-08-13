@@ -20,6 +20,7 @@ import {
   BrainCircuit,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   Files,
   Flag,
   GitFork,
@@ -33,11 +34,18 @@ import {
   Server,
   Settings2,
   Shrink,
+  SlidersHorizontal,
   Square,
   Timer,
   Users,
 } from "lucide-react"
-import { type ReactNode, useCallback, useMemo, useState } from "react"
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import { Link, useNavigate } from "react-router"
 
 import {
@@ -58,11 +66,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardFrame,
-  CardFrameDescription,
-  CardFrameHeader,
-  CardFrameTitle,
+  CardDescription,
+  CardHeader,
   CardPanel,
+  CardTitle,
 } from "@/components/ui/card"
 import {
   Collapsible,
@@ -83,14 +90,40 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field"
+import {
+  Progress,
+  ProgressIndicator,
+  ProgressTrack,
+} from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import { CreateRunDialog } from "@/features/runs"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
-import { type AvailableModel } from "@/features/runs/model-switcher"
+import {
+  type AvailableModel,
+  useAvailableModels,
+} from "@/features/runs/model-switcher"
 import {
   formatCost,
   formatTokens,
@@ -122,7 +155,13 @@ function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role
 }
 
-type OverviewTab = "summary" | "timeline" | "challenges" | "runs" | "agents"
+type OverviewTab =
+  | "summary"
+  | "plan"
+  | "timeline"
+  | "challenges"
+  | "runs"
+  | "agents"
 
 /** Scheduler endpoint payload + its run's agents (fetched in one query). */
 type SchedulerWithAgents = SchedulerInfo & { agents: AgentSummary[] }
@@ -217,6 +256,9 @@ export function EventOverview({
             <TabsTab className="gap-1.5" value="summary">
               <LayoutPanelTop /> 总览
             </TabsTab>
+            <TabsTab className="gap-1.5" value="plan">
+              <ClipboardList /> 计划
+            </TabsTab>
             <TabsTab className="gap-1.5" value="timeline">
               <ListChecks /> Timeline
             </TabsTab>
@@ -242,6 +284,9 @@ export function EventOverview({
                 usage={usage.data?.usage}
               />
             </TabsPanel>
+            <TabsPanel className="h-full" value="plan">
+              <PlanTab eventId={eventId} queue={queue.data?.items ?? []} />
+            </TabsPanel>
             <TabsPanel className="h-full" value="timeline">
               <TimelineTab
                 challenges={challenges}
@@ -253,11 +298,7 @@ export function EventOverview({
               <ChallengesTreeTab challenges={challenges} />
             </TabsPanel>
             <TabsPanel className="h-full" value="runs">
-              <RunsTab
-                eventId={eventId}
-                queue={queue.data?.items ?? []}
-                runs={runs}
-              />
+              <RunsTab runs={runs} />
             </TabsPanel>
             <TabsPanel className="h-full" value="agents">
               <AgentsTab
@@ -323,22 +364,21 @@ function SummaryTab({
   return (
     <ScrollArea className="h-full pr-1" scrollFade>
       <div className="flex flex-col gap-4 p-1">
-        <CardFrame>
-          <CardFrameHeader>
-            <CardFrameTitle>解题进度</CardFrameTitle>
-            <CardFrameDescription>
+        <Card>
+          <CardHeader>
+            <CardTitle>解题进度</CardTitle>
+            <CardDescription>
               {solved} / {total} 已解决
-            </CardFrameDescription>
-          </CardFrameHeader>
+            </CardDescription>
+          </CardHeader>
           <CardPanel className="pt-0">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-              <div
-                className="h-full rounded-full bg-success transition-all"
-                style={{ width: `${solvedPercent}%` }}
-              />
-            </div>
+            <Progress value={solvedPercent}>
+              <ProgressTrack className="h-2 bg-secondary">
+                <ProgressIndicator className="bg-success" />
+              </ProgressTrack>
+            </Progress>
           </CardPanel>
-        </CardFrame>
+        </Card>
 
         <div className="grid grid-cols-2 gap-3">
           <StatCard
@@ -365,13 +405,13 @@ function SummaryTab({
           />
         </div>
 
-        <CardFrame>
-          <CardFrameHeader>
-            <CardFrameTitle>用量汇总</CardFrameTitle>
-            <CardFrameDescription>
+        <Card>
+          <CardHeader>
+            <CardTitle>用量汇总</CardTitle>
+            <CardDescription>
               赛事内全部运行（含调度者）的 token 与费用
-            </CardFrameDescription>
-          </CardFrameHeader>
+            </CardDescription>
+          </CardHeader>
           <CardPanel>
             {usage ? (
               <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
@@ -421,12 +461,12 @@ function SummaryTab({
               <p className="text-sm text-muted-foreground">暂无用量数据。</p>
             )}
           </CardPanel>
-        </CardFrame>
+        </Card>
 
-        <CardFrame>
-          <CardFrameHeader>
-            <CardFrameTitle>活跃 Agents</CardFrameTitle>
-          </CardFrameHeader>
+        <Card>
+          <CardHeader>
+            <CardTitle>活跃 Agents</CardTitle>
+          </CardHeader>
           <CardPanel className="p-0">
             {activeAgents.length === 0 ? (
               <p className="px-4 py-6 text-center text-sm text-muted-foreground">
@@ -461,7 +501,7 @@ function SummaryTab({
               </div>
             )}
           </CardPanel>
-        </CardFrame>
+        </Card>
       </div>
     </ScrollArea>
   )
@@ -477,7 +517,7 @@ function StatCard({
   value: string
 }) {
   return (
-    <CardFrame>
+    <Card>
       <CardPanel className="gap-1">
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           {icon}
@@ -485,7 +525,7 @@ function StatCard({
         </span>
         <span className="text-xl font-semibold">{value}</span>
       </CardPanel>
-    </CardFrame>
+    </Card>
   )
 }
 
@@ -748,55 +788,66 @@ function ChallengeRow({ challenge }: { challenge: Challenge }) {
   )
 }
 
+// --- 计划队列（调度者）---------------------------------------------------
+
+function PlanTab({ eventId, queue }: { eventId: string; queue: QueueItem[] }) {
+  const navigate = useNavigate()
+  const visibleQueue = queue.filter((item) =>
+    ["pending", "running", "failed"].includes(item.status)
+  )
+  if (visibleQueue.length === 0) {
+    return (
+      <Empty className="py-16">
+        <EmptyHeader>
+          <EmptyTitle>计划队列为空</EmptyTitle>
+          <EmptyDescription>
+            调度者尚未规划任务。在「题目」中开启任务，或启动调度者让它自行排程。
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+  return (
+    <ScrollArea className="h-full pr-1" scrollFade>
+      <div className="flex flex-col gap-3 p-1">
+        <div className="flex items-center gap-2 p-1">
+          <h3 className="text-xs font-medium text-muted-foreground uppercase">
+            计划队列
+          </h3>
+          <Badge size="sm" variant="secondary">
+            {visibleQueue.length}
+          </Badge>
+        </div>
+        <Card>
+          <CardPanel className="p-0">
+            <QueueList
+              eventId={eventId}
+              items={visibleQueue}
+              onChanged={() => undefined}
+              onOpenRun={(runId) =>
+                navigate(`/events/${eventId}/runs/${runId}`)
+              }
+            />
+          </CardPanel>
+        </Card>
+      </div>
+    </ScrollArea>
+  )
+}
+
 // --- Runs 列表 --------------------------------------------------------------
 
-function RunsTab({
-  eventId,
-  runs,
-  queue,
-}: {
-  eventId: string
-  runs: RunPublic[]
-  queue: QueueItem[]
-}) {
-  const navigate = useNavigate()
+function RunsTab({ runs }: { runs: RunPublic[] }) {
   const activeRuns = runs
     .filter((run) => run.status !== "closed")
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   const historyRuns = runs
     .filter((run) => run.status === "closed")
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-  const visibleQueue = queue.filter((item) =>
-    ["pending", "running", "failed"].includes(item.status)
-  )
 
   return (
     <ScrollArea className="h-full pr-1" scrollFade>
       <div className="flex flex-col gap-4 p-1">
-        {visibleQueue.length > 0 && (
-          <section>
-            <div className="flex items-center gap-2 p-1">
-              <h3 className="text-xs font-medium text-muted-foreground uppercase">
-                任务队列
-              </h3>
-              <Badge size="sm" variant="secondary">
-                {visibleQueue.length}
-              </Badge>
-            </div>
-            <Card>
-              <CardPanel className="p-0">
-                <QueueList
-                  eventId={eventId}
-                  items={visibleQueue}
-                  onChanged={() => undefined}
-                  onOpenRun={(runId) =>
-                    navigate(`/events/${eventId}/runs/${runId}`)
-                  }
-                />
-              </CardPanel>
-            </Card>
-          </section>
-        )}
         <section>
           <div className="flex items-center gap-2 p-1">
             <h3 className="text-xs font-medium text-muted-foreground uppercase">
@@ -1096,81 +1147,79 @@ function AgentsGraph({
   )
 
   return (
-    <CardFrame className="flex h-full min-h-0 flex-col">
-      <CardFrameHeader>
-        <CardFrameTitle>
+    <Card className="flex h-full min-h-0 flex-col">
+      <CardHeader>
+        <CardTitle>
           <span className="flex items-center gap-2">
             <Network className="size-4" /> Agents Graph
           </span>
-        </CardFrameTitle>
-        <CardFrameDescription>调度者 → 任务 → agents</CardFrameDescription>
-      </CardFrameHeader>
-      <Card className="min-h-0 flex-1">
-        <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">
-          <ReactFlow
-            edges={graph.edges}
-            fitView
-            fitViewOptions={{ padding: 0.2 }}
-            key={graphKey}
-            maxZoom={1.75}
-            minZoom={0.2}
-            nodeTypes={GRAPH_NODE_TYPES}
-            nodes={graph.nodes}
-            nodesConnectable={false}
-            nodesDraggable={false}
-            onNodeClick={onNodeClick}
-            proOptions={{ hideAttribution: true }}
-          >
-            <Background color="var(--border)" gap={22} size={1} />
-            <Controls position="bottom-right" showInteractive={false} />
-            {/* Scheduler lifecycle controls overlay: start (re)creates the
+        </CardTitle>
+        <CardDescription>调度者 → 任务 → agents</CardDescription>
+      </CardHeader>
+      <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">
+        <ReactFlow
+          edges={graph.edges}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          key={graphKey}
+          maxZoom={1.75}
+          minZoom={0.2}
+          nodeTypes={GRAPH_NODE_TYPES}
+          nodes={graph.nodes}
+          nodesConnectable={false}
+          nodesDraggable={false}
+          onNodeClick={onNodeClick}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background color="var(--border)" gap={22} size={1} />
+          <Controls position="bottom-right" showInteractive={false} />
+          {/* Scheduler lifecycle controls overlay: start (re)creates the
                 event-scoped orchestrator run; stop cancels the current turn;
                 close releases the container. The scheduler agent itself is
                 driven from the AgentDialog like any run agent. */}
-            <Panel
-              className="flex flex-wrap items-center gap-1.5"
-              position="top-right"
-            >
-              {!schedRun || schedRun.status === "closed" ? (
-                <Button
-                  loading={startScheduler.isPending}
-                  onClick={() => startScheduler.mutate()}
-                  size="sm"
-                  type="button"
-                >
-                  <Play /> 启动调度者
-                </Button>
-              ) : (
-                <>
-                  {schedRun.status === "running" && (
-                    <Button
-                      loading={stopScheduler.isPending}
-                      onClick={() => stopScheduler.mutate()}
-                      size="xs"
-                      title="取消当前轮次（容器保留）"
-                      type="button"
-                      variant="destructive-outline"
-                    >
-                      <Square /> 停止
-                    </Button>
-                  )}
+          <Panel
+            className="flex flex-wrap items-center gap-1.5"
+            position="top-right"
+          >
+            {!schedRun || schedRun.status === "closed" ? (
+              <Button
+                loading={startScheduler.isPending}
+                onClick={() => startScheduler.mutate()}
+                size="sm"
+                type="button"
+              >
+                <Play /> 启动调度者
+              </Button>
+            ) : (
+              <>
+                {schedRun.status === "running" && (
                   <Button
-                    loading={closeScheduler.isPending}
-                    onClick={() => closeScheduler.mutate()}
+                    loading={stopScheduler.isPending}
+                    onClick={() => stopScheduler.mutate()}
                     size="xs"
-                    title="释放调度者容器与会话"
+                    title="取消当前轮次（容器保留）"
                     type="button"
-                    variant="outline"
+                    variant="destructive-outline"
                   >
-                    <Archive /> 关闭
+                    <Square /> 停止
                   </Button>
-                </>
-              )}
-            </Panel>
-          </ReactFlow>
-        </CardPanel>
-      </Card>
-    </CardFrame>
+                )}
+                <Button
+                  loading={closeScheduler.isPending}
+                  onClick={() => closeScheduler.mutate()}
+                  size="xs"
+                  title="释放调度者容器与会话"
+                  type="button"
+                  variant="outline"
+                >
+                  <Archive /> 关闭
+                </Button>
+              </>
+            )}
+          </Panel>
+        </ReactFlow>
+      </CardPanel>
+    </Card>
   )
 }
 
@@ -1241,9 +1290,9 @@ function layoutWithDagre(
 ): Node[] {
   const graph = new dagre.graphlib.Graph()
   graph.setGraph({
-    rankdir: "TB",
+    rankdir: "LR",
     nodesep: 28,
-    ranksep: 56,
+    ranksep: 64,
     marginx: 24,
     marginy: 24,
   })
@@ -1370,9 +1419,9 @@ function GraphNodeShell({
       {/* Invisible handles — React Flow anchors edges on them; we hide the
           dots for a cleaner look. Every node carries a target (top) and a
           source (bottom) so edges attach on both sides regardless of role. */}
-      <Handle className="opacity-0!" position={Position.Top} type="target" />
+      <Handle className="opacity-0!" position={Position.Left} type="target" />
       {children}
-      <Handle className="opacity-0!" position={Position.Bottom} type="source" />
+      <Handle className="opacity-0!" position={Position.Right} type="source" />
     </div>
   )
 }
@@ -1468,9 +1517,9 @@ function AgentDialog({
     queryKey: keys.runs.detail(runId),
     queryFn: () => runsApi.getRun(runId),
   })
-  const [view, setView] = useState<"conversation" | "files" | "overview">(
-    "conversation"
-  )
+  const [view, setView] = useState<
+    "conversation" | "files" | "overview" | "config"
+  >("conversation")
 
   const run = detail.data?.run
   const agents = detail.data?.agents ?? []
@@ -1638,7 +1687,7 @@ function AgentDialog({
           <Tabs
             className="flex h-full min-h-0 min-w-0 flex-col"
             onValueChange={(value) =>
-              setView(value as "conversation" | "files" | "overview")
+              setView(value as "conversation" | "files" | "overview" | "config")
             }
             value={view}
           >
@@ -1655,6 +1704,11 @@ function AgentDialog({
               <TabsTab className="gap-2" value="overview">
                 <Settings2 /> 概览
               </TabsTab>
+              {run.scopeType === "event" && (
+                <TabsTab className="gap-2" value="config">
+                  <SlidersHorizontal /> 配置
+                </TabsTab>
+              )}
             </TabsList>
             <TabsPanel
               className="min-h-0 flex-1 overflow-hidden"
@@ -1695,9 +1749,155 @@ function AgentDialog({
                 <RunOverview run={run} />
               </ScrollArea>
             </TabsPanel>
+            {run.scopeType === "event" && (
+              <TabsPanel
+                className="min-h-0 flex-1 overflow-hidden"
+                value="config"
+              >
+                <SchedulerConfigTab eventId={run.eventId} />
+              </TabsPanel>
+            )}
           </Tabs>
         </div>
       </DialogPopup>
     </Dialog>
+  )
+}
+
+// --- 调度者配置（仅 event-scope run）-----------------------------------------
+
+function SchedulerConfigTab({ eventId }: { eventId: string }) {
+  const queryClient = useQueryClient()
+  const scheduler = useQuery({
+    queryKey: keys.scheduler.detail(eventId),
+    queryFn: () => schedulerApi.getScheduler(eventId),
+  })
+  const models = useAvailableModels()
+  const config = scheduler.data?.config
+
+  const [modelId, setModelId] = useState<string | null>(config?.modelId ?? null)
+  const [instruction, setInstruction] = useState(config?.instruction ?? "")
+  const [maxTargets, setMaxTargets] = useState(
+    config?.maxConcurrentTargets ?? 1
+  )
+  useEffect(() => {
+    if (!config) return
+    setModelId(config.modelId)
+    setInstruction(config.instruction)
+    setMaxTargets(config.maxConcurrentTargets)
+  }, [config])
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, AvailableModel[]>()
+    for (const model of models) {
+      const bucket = map.get(model.providerLabel) ?? []
+      bucket.push(model)
+      map.set(model.providerLabel, bucket)
+    }
+    return [...map.entries()]
+  }, [models])
+
+  const save = useMutation({
+    mutationFn: () =>
+      schedulerApi.updateSchedulerConfig(eventId, {
+        modelId,
+        instruction,
+        maxConcurrentTargets: maxTargets,
+      }),
+    onSuccess: () => {
+      toast.success("调度者配置已保存")
+      void queryClient.invalidateQueries({
+        queryKey: keys.scheduler.detail(eventId),
+      })
+    },
+    onError: (error) => toast.error("保存失败", error.message),
+  })
+
+  if (scheduler.isPending || !config) {
+    return (
+      <div
+        className="flex items-center gap-2 px-6 py-8 text-sm text-muted-foreground"
+        role="status"
+      >
+        <Spinner aria-hidden="true" />
+        正在加载配置…
+      </div>
+    )
+  }
+
+  return (
+    <ScrollArea className="h-full" scrollFade>
+      <form
+        className="flex flex-col gap-5 px-6 py-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          save.mutate()
+        }}
+      >
+        <Field>
+          <FieldLabel htmlFor="sched-model">默认模型</FieldLabel>
+          <FieldDescription>
+            调度者下次启动时使用的模型；留空则使用全局默认。
+          </FieldDescription>
+          <Select
+            onValueChange={(value) =>
+              setModelId(value && value !== "" ? value : null)
+            }
+            value={modelId ?? ""}
+          >
+            <SelectTrigger id="sched-model">
+              <SelectValue placeholder="全局默认" />
+            </SelectTrigger>
+            <SelectPopup>
+              <SelectItem value="">全局默认</SelectItem>
+              {grouped.map(([providerLabel, list]) => (
+                <SelectGroup key={providerLabel}>
+                  <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
+                  {list.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectPopup>
+          </Select>
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="sched-instruction">指令</FieldLabel>
+          <FieldDescription>
+            追加到调度者系统提示词末尾的常驻指令。
+          </FieldDescription>
+          <Textarea
+            id="sched-instruction"
+            onChange={(event) => setInstruction(event.target.value)}
+            rows={6}
+            value={instruction}
+          />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="sched-targets">并发靶机上限</FieldLabel>
+          <NumberField
+            id="sched-targets"
+            min={1}
+            onValueChange={(value) => {
+              if (typeof value === "number") setMaxTargets(value)
+            }}
+            value={maxTargets}
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement />
+              <NumberFieldInput />
+              <NumberFieldIncrement />
+            </NumberFieldGroup>
+          </NumberField>
+        </Field>
+        <div className="flex justify-end">
+          <Button loading={save.isPending} type="submit">
+            保存配置
+          </Button>
+        </div>
+      </form>
+    </ScrollArea>
   )
 }
