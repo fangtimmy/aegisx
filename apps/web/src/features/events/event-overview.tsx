@@ -1,7 +1,22 @@
+import dagre from "@dagrejs/dagre"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
+  Background,
+  Controls,
+  Handle,
+  Panel,
+  Position,
+  ReactFlow,
+  type Edge,
+  type Node,
+  type NodeMouseHandler,
+  type NodeProps,
+  type NodeTypes,
+} from "@xyflow/react"
+
+import "@xyflow/react/dist/style.css"
+import {
   Archive,
-  Bot,
   BrainCircuit,
   ChevronDown,
   ChevronRight,
@@ -201,7 +216,7 @@ export function EventOverview({
   const schedulerData = scheduler.data
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_22rem] gap-4">
+    <div className="grid h-full min-h-0 grid-cols-[24rem_minmax(0,1fr)] gap-4">
       <div className="flex min-h-0 min-w-0 flex-col">
         <Tabs className="min-h-0 flex-1" onValueChange={setTab} value={tab}>
           <TabsList className="w-auto justify-start" variant="underline">
@@ -1038,15 +1053,6 @@ function AgentsGraph({
     onError: (error) => toast.error("关闭调度者失败", error.message),
   })
 
-  const toggleRun = (runId: string) => {
-    setOpenRuns((prev) => {
-      const next = new Set(prev)
-      if (next.has(runId)) next.delete(runId)
-      else next.add(runId)
-      return next
-    })
-  }
-
   const sortedRuns = [...runs].sort((left, right) => {
     const activeRank = (run: RunPublic) => (run.status === "closed" ? 1 : 0)
     return (
@@ -1054,6 +1060,47 @@ function AgentsGraph({
       right.updatedAt.localeCompare(left.updatedAt)
     )
   })
+
+  // Build + lay out the graph from the fleet state. Recomputed only when the
+  // underlying data or the expand toggles change; status-only poll updates
+  // with the same node set reuse the cached layout, so nothing jitters.
+  const graph = useMemo(
+    () =>
+      buildAgentsGraph({
+        scheduler,
+        schedRun,
+        schedulerOpen,
+        runs: sortedRuns,
+        detailsById,
+        openRuns,
+      }),
+    [scheduler, schedRun, schedulerOpen, sortedRuns, detailsById, openRuns]
+  )
+  // Remount React Flow (→ re-fit-view) only when the node SET changes
+  // (expand/collapse/spawn). Status-only polls keep the same key, so the
+  // viewport (pan/zoom) is preserved across them.
+  const graphKey = useMemo(
+    () => graph.nodes.map((node) => node.id).join("|"),
+    [graph]
+  )
+  const onNodeClick = useCallback<NodeMouseHandler>(
+    (_, node) => {
+      const data = node.data as GraphNodeData
+      if (data.kind === "scheduler") {
+        setSchedulerOpen((open) => !open)
+      } else if (data.kind === "run") {
+        setOpenRuns((prev) => {
+          const next = new Set(prev)
+          if (next.has(data.run.id)) next.delete(data.run.id)
+          else next.add(data.run.id)
+          return next
+        })
+      } else {
+        onSelectAgent(data.runId, data.agent.id)
+      }
+    },
+    [onSelectAgent]
+  )
 
   return (
     <CardFrame className="flex h-full min-h-0 flex-col">
@@ -1066,200 +1113,357 @@ function AgentsGraph({
         <CardFrameDescription>调度者 → 任务 → agents</CardFrameDescription>
       </CardFrameHeader>
       <Card className="min-h-0 flex-1">
-        <CardPanel className="min-h-0 flex-1 overflow-hidden p-0">
-          <ScrollArea className="h-full" scrollFade scrollbarGutter>
-            <div className="flex flex-col p-3">
-              <GraphNode
-                active={schedulerOpen}
-                icon={<BrainCircuit className="size-4" />}
-                onClick={() => setSchedulerOpen((open) => !open)}
-                title="调度者"
-                trailing={
-                  <Badge size="sm" variant="secondary">
-                    {scheduler?.run
-                      ? runStatusLabel(scheduler.run.status)
-                      : "未启用"}
-                  </Badge>
-                }
-              />
-              {schedulerOpen && (
-                <div className="ml-[1.125rem] flex flex-col gap-2 border-l border-border pl-3">
-                  {schedRun ? (
-                    <>
-                      <GraphNode
-                        active
-                        icon={<Bot className="size-4" />}
-                        onClick={() => toggleRun(schedRun.id)}
-                        title="调度者任务"
-                        trailing={
-                          <Badge
-                            size="sm"
-                            variant={statusVariant(schedRun.status)}
-                          >
-                            {runStatusLabel(schedRun.status)}
-                          </Badge>
-                        }
-                      />
-                      <div className="ml-[1.125rem] flex flex-col border-l border-border pl-3">
-                        {(scheduler?.agents ?? []).map((agent) => (
-                          <AgentNode
-                            agent={agent}
-                            key={agent.id}
-                            onSelect={() =>
-                              onSelectAgent(schedRun.id, agent.id)
-                            }
-                          />
-                        ))}
-                      </div>
-                    </>
-                  ) : null}
-                  {/* Lifecycle controls: start (re)creates the event-scoped
-                      orchestrator run; stop cancels the current turn; close
-                      releases the container. The scheduler agent itself is
-                      driven from the AgentDialog like any run agent. */}
-                  {!schedRun || schedRun.status === "closed" ? (
+        <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">
+          <ReactFlow
+            edges={graph.edges}
+            fitView
+            fitViewOptions={{ padding: 0.2 }}
+            key={graphKey}
+            maxZoom={1.75}
+            minZoom={0.2}
+            nodeTypes={GRAPH_NODE_TYPES}
+            nodes={graph.nodes}
+            nodesConnectable={false}
+            nodesDraggable={false}
+            onNodeClick={onNodeClick}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background color="var(--border)" gap={22} size={1} />
+            <Controls position="bottom-right" showInteractive={false} />
+            {/* Scheduler lifecycle controls overlay: start (re)creates the
+                event-scoped orchestrator run; stop cancels the current turn;
+                close releases the container. The scheduler agent itself is
+                driven from the AgentDialog like any run agent. */}
+            <Panel
+              className="flex flex-wrap items-center gap-1.5"
+              position="top-right"
+            >
+              {!schedRun || schedRun.status === "closed" ? (
+                <Button
+                  loading={startScheduler.isPending}
+                  onClick={() => startScheduler.mutate()}
+                  size="sm"
+                  type="button"
+                >
+                  <Play /> 启动调度者
+                </Button>
+              ) : (
+                <>
+                  {schedRun.status === "running" && (
                     <Button
-                      loading={startScheduler.isPending}
-                      onClick={() => startScheduler.mutate()}
-                      size="sm"
+                      loading={stopScheduler.isPending}
+                      onClick={() => stopScheduler.mutate()}
+                      size="xs"
+                      title="取消当前轮次（容器保留）"
                       type="button"
+                      variant="destructive-outline"
                     >
-                      <Play /> 启动调度者
+                      <Square /> 停止
                     </Button>
-                  ) : (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {schedRun.status === "running" && (
-                        <Button
-                          loading={stopScheduler.isPending}
-                          onClick={() => stopScheduler.mutate()}
-                          size="xs"
-                          title="取消当前轮次（容器保留）"
-                          type="button"
-                          variant="destructive-outline"
-                        >
-                          <Square /> 停止
-                        </Button>
-                      )}
-                      <Button
-                        loading={closeScheduler.isPending}
-                        onClick={() => closeScheduler.mutate()}
-                        size="xs"
-                        title="释放调度者容器与会话"
-                        type="button"
-                        variant="outline"
-                      >
-                        <Archive /> 关闭
-                      </Button>
-                    </div>
                   )}
-                </div>
+                  <Button
+                    loading={closeScheduler.isPending}
+                    onClick={() => closeScheduler.mutate()}
+                    size="xs"
+                    title="释放调度者容器与会话"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Archive /> 关闭
+                  </Button>
+                </>
               )}
-              {sortedRuns.map((run) => {
-                const agents = detailsById.get(run.id)?.agents ?? []
-                const open = openRuns.has(run.id)
-                return (
-                  <div key={run.id}>
-                    <GraphNode
-                      active={open}
-                      icon={
-                        <span className="flex size-4 items-center justify-center">
-                          <Server className="size-3.5" />
-                        </span>
-                      }
-                      onClick={() => toggleRun(run.id)}
-                      title={run.challengeName}
-                      trailing={
-                        <Badge size="sm" variant={statusVariant(run.status)}>
-                          {runStatusLabel(run.status)}
-                        </Badge>
-                      }
-                    />
-                    {open && (
-                      <div className="ml-[1.125rem] flex flex-col border-l border-border pl-3">
-                        {agents.length === 0 ? (
-                          <p className="py-1.5 text-xs text-muted-foreground">
-                            无 agents
-                          </p>
-                        ) : (
-                          agents.map((agent) => (
-                            <AgentNode
-                              agent={agent}
-                              key={agent.id}
-                              onSelect={() => onSelectAgent(run.id, agent.id)}
-                            />
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </ScrollArea>
+            </Panel>
+          </ReactFlow>
         </CardPanel>
       </Card>
     </CardFrame>
   )
 }
 
-function GraphNode({
-  icon,
-  title,
-  trailing,
-  active,
-  onClick,
+// --- Agents Graph: dagre layout + React Flow nodes -------------------------
+//
+// The graph is a hierarchy: 调度者 (root) → runs → agents, with spawn children
+// branching off their parent agent (parentAgentId). dagre ranks the nodes
+// top-to-bottom; React Flow renders them with pan/zoom. Clicking a
+// scheduler/run node toggles whether its children are shown; clicking an
+// agent node opens the AgentDialog.
+
+const SCHED_NODE_ID = "sched"
+const runNodeId = (id: string) => `run:${id}`
+const agentNodeId = (id: string) => `agent:${id}`
+
+type GraphNodeData =
+  | { kind: "scheduler"; active: boolean; label: string; status: string }
+  | { kind: "run"; run: RunPublic; active: boolean }
+  | { kind: "agent"; agent: AgentSummary; runId: string }
+
+// Planned node sizes — used both for the dagre layout spacing and (roughly)
+// matched by the Tailwind widths on each node component.
+const NODE_DIM = {
+  scheduler: { width: 176, height: 56 },
+  run: { width: 224, height: 60 },
+  agent: { width: 192, height: 48 },
+} as const
+
+const EDGE_STYLE = {
+  // scheduler → run: the orchestrator oversees the whole fleet, kept faint.
+  oversee: {
+    stroke: "var(--muted-foreground)",
+    strokeOpacity: 0.3,
+    strokeWidth: 1.5,
+  },
+  // run → entry agent / scheduler → orchestrator: emphasized.
+  entry: { stroke: "var(--primary)", strokeWidth: 2 },
+  // run → non-entry agent.
+  agent: { stroke: "var(--border)", strokeWidth: 1.5 },
+  // agent → spawn child: dashed.
+  spawn: {
+    stroke: "var(--muted-foreground)",
+    strokeOpacity: 0.5,
+    strokeWidth: 1.5,
+    strokeDasharray: "5 3",
+  },
+} as const
+
+const GRAPH_NODE_TYPES = {
+  scheduler: SchedulerGraphNode,
+  run: RunGraphNode,
+  agent: AgentGraphNode,
+} satisfies NodeTypes
+
+/** Lay out nodes top-to-bottom with dagre, writing absolute positions back
+ * onto each node (React Flow needs explicit positions). */
+function layoutWithDagre(
+  nodes: Node[],
+  edges: Edge[],
+  dims: Record<string, { width: number; height: number }>
+): Node[] {
+  const graph = new dagre.graphlib.Graph()
+  graph.setGraph({
+    rankdir: "TB",
+    nodesep: 28,
+    ranksep: 56,
+    marginx: 24,
+    marginy: 24,
+  })
+  graph.setDefaultEdgeLabel(() => ({}))
+  for (const node of nodes) {
+    const dim = dims[node.id] ?? { width: 160, height: 48 }
+    graph.setNode(node.id, { width: dim.width, height: dim.height })
+  }
+  for (const edge of edges) graph.setEdge(edge.source, edge.target)
+  dagre.layout(graph)
+  return nodes.map((node) => {
+    const laid = graph.node(node.id)
+    const dim = dims[node.id] ?? { width: 160, height: 48 }
+    return {
+      ...node,
+      position: { x: laid.x - dim.width / 2, y: laid.y - dim.height / 2 },
+    }
+  })
+}
+
+/** Build the node/edge set for the whole event fleet, then lay it out. */
+function buildAgentsGraph({
+  scheduler,
+  schedRun,
+  schedulerOpen,
+  runs,
+  detailsById,
+  openRuns,
 }: {
-  icon: ReactNode
-  title: string
-  trailing?: ReactNode
-  active: boolean
-  onClick: () => void
+  scheduler?: SchedulerWithAgents
+  schedRun: RunPublic | null
+  schedulerOpen: boolean
+  runs: RunPublic[]
+  detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
+  openRuns: Set<string>
+}): { nodes: Node[]; edges: Edge[] } {
+  const rawNodes: Node[] = []
+  const rawEdges: Edge[] = []
+  const dims: Record<string, { width: number; height: number }> = {}
+  const addNode = (
+    id: string,
+    type: "scheduler" | "run" | "agent",
+    data: GraphNodeData
+  ) => {
+    rawNodes.push({ id, type, data, position: { x: 0, y: 0 } })
+    dims[id] = NODE_DIM[type]
+  }
+
+  // Root: the event scheduler (shows "未启用" when no run exists yet).
+  addNode(SCHED_NODE_ID, "scheduler", {
+    kind: "scheduler",
+    active: schedulerOpen,
+    label: schedRun ? "调度者" : "调度者（未启用）",
+    status: schedRun ? runStatusLabel(schedRun.status) : "未启用",
+  })
+
+  // Scheduler's orchestrator agent(s) when expanded.
+  if (schedulerOpen && schedRun) {
+    for (const agent of scheduler?.agents ?? []) {
+      addNode(agentNodeId(agent.id), "agent", {
+        kind: "agent",
+        agent,
+        runId: schedRun.id,
+      })
+      rawEdges.push({
+        id: `e:sched:${agent.id}`,
+        source: SCHED_NODE_ID,
+        target: agentNodeId(agent.id),
+        type: "smoothstep",
+        style: EDGE_STYLE.entry,
+      })
+    }
+  }
+
+  // Challenge runs (+ their agents when expanded).
+  for (const run of runs) {
+    addNode(runNodeId(run.id), "run", {
+      kind: "run",
+      run,
+      active: openRuns.has(run.id),
+    })
+    if (schedRun) {
+      rawEdges.push({
+        id: `e:sched:run:${run.id}`,
+        source: SCHED_NODE_ID,
+        target: runNodeId(run.id),
+        type: "smoothstep",
+        style: EDGE_STYLE.oversee,
+      })
+    }
+    if (!openRuns.has(run.id)) continue
+    const agents = detailsById.get(run.id)?.agents ?? []
+    for (const agent of agents) {
+      addNode(agentNodeId(agent.id), "agent", {
+        kind: "agent",
+        agent,
+        runId: run.id,
+      })
+    }
+    for (const agent of agents) {
+      if (agent.parentAgentId && dims[agentNodeId(agent.parentAgentId)]) {
+        rawEdges.push({
+          id: `e:spawn:${agent.id}`,
+          source: agentNodeId(agent.parentAgentId),
+          target: agentNodeId(agent.id),
+          type: "smoothstep",
+          style: EDGE_STYLE.spawn,
+        })
+      } else {
+        rawEdges.push({
+          id: `e:run:${run.id}:${agent.id}`,
+          source: runNodeId(run.id),
+          target: agentNodeId(agent.id),
+          type: "smoothstep",
+          style: agent.isEntry ? EDGE_STYLE.entry : EDGE_STYLE.agent,
+        })
+      }
+    }
+  }
+
+  return { nodes: layoutWithDagre(rawNodes, rawEdges, dims), edges: rawEdges }
+}
+
+function GraphNodeShell({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string
 }) {
   return (
-    <button
-      className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent"
-      onClick={onClick}
-      type="button"
+    <div
+      className={cn(
+        "relative flex cursor-pointer items-center gap-2 rounded-lg border bg-popover px-3 py-2 text-popover-foreground shadow-xs/5 transition-colors hover:border-foreground/35",
+        className
+      )}
     >
-      <ChevronDown
-        className={cn(
-          "size-3.5 shrink-0 text-muted-foreground transition-transform",
-          !active && "-rotate-90"
-        )}
-      />
-      <span className="shrink-0 text-muted-foreground">{icon}</span>
-      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-        {title}
-      </span>
-      {trailing}
-    </button>
+      {/* Invisible handles — React Flow anchors edges on them; we hide the
+          dots for a cleaner look. Every node carries a target (top) and a
+          source (bottom) so edges attach on both sides regardless of role. */}
+      <Handle className="opacity-0!" position={Position.Top} type="target" />
+      {children}
+      <Handle className="opacity-0!" position={Position.Bottom} type="source" />
+    </div>
   )
 }
 
-function AgentNode({
-  agent,
-  onSelect,
-}: {
-  agent: AgentSummary
-  onSelect: () => void
-}) {
+function SchedulerGraphNode({ data }: NodeProps) {
+  const d = data as Extract<GraphNodeData, { kind: "scheduler" }>
   return (
-    <button
-      className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent"
-      onClick={onSelect}
-      type="button"
-    >
+    <GraphNodeShell className="w-44">
+      <BrainCircuit className="size-4 shrink-0 text-primary" />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+        {d.label}
+      </span>
+      <Badge size="sm" variant="secondary">
+        {d.status}
+      </Badge>
+      <ChevronDown
+        aria-hidden="true"
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground transition-transform",
+          !d.active && "-rotate-90"
+        )}
+      />
+    </GraphNodeShell>
+  )
+}
+
+function RunGraphNode({ data }: NodeProps) {
+  const d = data as Extract<GraphNodeData, { kind: "run" }>
+  const { run } = d
+  return (
+    <GraphNodeShell className="w-56">
+      <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+        <Server className="size-3.5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm leading-tight font-medium">
+          {run.challengeName}
+        </span>
+        <span className="block truncate font-mono text-[11px] leading-tight text-muted-foreground">
+          {run.orchestration}
+          {run.source === "scheduler" ? " · 调度" : ""}
+        </span>
+      </span>
+      <Badge size="sm" variant={statusVariant(run.status)}>
+        {runStatusLabel(run.status)}
+      </Badge>
+      <ChevronDown
+        aria-hidden="true"
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground transition-transform",
+          !d.active && "-rotate-90"
+        )}
+      />
+    </GraphNodeShell>
+  )
+}
+
+function AgentGraphNode({ data }: NodeProps) {
+  const d = data as Extract<GraphNodeData, { kind: "agent" }>
+  const { agent } = d
+  return (
+    <GraphNodeShell className="w-48">
       <AgentStatusIcon className="[&_svg]:size-3.5" status={agent.status} />
       <span className="min-w-0 flex-1 truncate text-sm">
         {agent.name ?? roleLabel(agent.role)}
       </span>
-      {agent.parentAgentId && (
+      {agent.isEntry ? (
+        <Badge size="sm" variant="secondary">
+          入口
+        </Badge>
+      ) : agent.parentAgentId ? (
         <GitFork
           aria-hidden="true"
           className="size-3.5 shrink-0 text-muted-foreground"
         />
-      )}
-    </button>
+      ) : null}
+    </GraphNodeShell>
   )
 }
 
@@ -1362,7 +1566,13 @@ function AgentDialog({
             {agent.isEntry ? " · 入口" : ""}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex min-h-0 flex-1 flex-col p-0">
+        {/* Plain flex div, NOT DialogPanel: DialogPanel wraps its children in
+            a ScrollArea, which would scroll the tab bar and the composer
+            along with the content. We need the TabsList pinned at top and
+            (for the conversation tab) the composer pinned at bottom, so the
+            body owns the flex layout and each panel scrolls itself — same
+            pattern as run-workspace's CardPanel. */}
+        <div className="flex min-h-0 flex-1 flex-col">
           <Tabs
             className="flex h-full min-h-0 min-w-0 flex-col"
             onValueChange={(value) =>
@@ -1424,7 +1634,7 @@ function AgentDialog({
               </ScrollArea>
             </TabsPanel>
           </Tabs>
-        </DialogPanel>
+        </div>
       </DialogPopup>
     </Dialog>
   )

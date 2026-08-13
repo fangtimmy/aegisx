@@ -136,7 +136,12 @@ export function CreateRunDialog({
           <Button
             className={triggerClassName}
             disabled={available.length === 0}
-            size={trigger ? (triggerSize ?? "icon-xs") : undefined}
+            // Only force an icon size when the caller asks for one; a custom
+            // trigger without a size should render as a normal button so the
+            // caller can drive width/height via triggerClassName (icon-xs
+            // would otherwise lock the button to a fixed square and clip the
+            // content — tailwind-merge won't override size-* with w/h-*).
+            size={trigger ? triggerSize : undefined}
             type="button"
             variant={trigger ? triggerVariant : undefined}
           />
