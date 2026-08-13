@@ -136,7 +136,7 @@ describe("classic plugin end-to-end (service-level parity)", () => {
     }
   })
 
-  test("plain challenge (no platform/target) → no submit_flag, no target tools", async () => {
+  test("plain challenge (no platform/target) → submit_flag granted, no target tools", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
@@ -155,12 +155,15 @@ describe("classic plugin end-to-end (service-level parity)", () => {
 
       const tools = JSON.parse(agent.tools) as string[]
       expect(tools).toContain("finish_run")
+      expect(tools).toContain("submit_flag")
       expect(tools).toContain("spawn_agent")
       expect(tools).toContain("read_agent")
-      expect(tools).not.toContain("submit_flag")
+      // Target tools stay conditional on target capability (spec §6).
       expect(tools.filter((t) => t.endsWith("_target"))).toEqual([])
-      // mainSystem rendered without the submit_flag section (canSubmitFlag false).
+      // mainSystem rendered WITH the submit_flag section — the tool records
+      // non-platform flags as locally accepted (spec §7.1 / flags.ts).
       expect(agent.systemPrompt).toContain("CTF-solving agent")
+      expect(agent.systemPrompt).toContain("submit_flag")
     } finally {
       close()
     }

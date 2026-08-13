@@ -26,7 +26,14 @@ import type {
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
-import { agents, challenges, events, runs, schedulerConfig } from "../db/schema"
+import {
+  agents,
+  challengeFlags,
+  challenges,
+  events,
+  runs,
+  schedulerConfig,
+} from "../db/schema"
 import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
 import {
@@ -188,6 +195,8 @@ export function createRunService(options: RunServiceOptions) {
   const fenceLocks = new Map<string, Promise<unknown>>()
   /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
   const pendingFinish = new Map<string, { summary: string; runId: string }>()
+  /** Runs finish_run already warned about a missing flag (once per run). */
+  const finishFlagWarned = new Set<string>()
   const forceKillTimers = new Map<string, NodeJS.Timeout>()
   /** Per-run hard-deadline timers. */
   const timeoutTimers = new Map<
@@ -445,6 +454,7 @@ export function createRunService(options: RunServiceOptions) {
     if (opts.finished) patch.completedAt = ts
     updateRun(runId, patch)
     // Any still-running agent lands on `idle` (its live session is gone).
+    finishFlagWarned.delete(runId)
     for (const agent of agents) {
       if (agent.status === "running") {
         updateAgent(agent.id, { status: "idle", updatedAt: ts })
@@ -572,6 +582,23 @@ export function createRunService(options: RunServiceOptions) {
         if (markFinishing(runId)) {
           pendingFinish.set(agentId, { summary, runId })
         }
+      },
+      hasAcceptedFlag: () =>
+        Boolean(
+          db
+            .select({ id: challengeFlags.id })
+            .from(challengeFlags)
+            .where(
+              and(
+                eq(challengeFlags.runId, runId),
+                eq(challengeFlags.status, "accepted")
+              )
+            )
+            .get()
+        ),
+      finishFlagWarned: () => finishFlagWarned.has(runId),
+      markFinishFlagWarned: () => {
+        finishFlagWarned.add(runId)
       },
       spawnChild: (childInput) =>
         childRuntime.spawn(runId, agentId, childInput),
@@ -1599,6 +1626,7 @@ export function createRunService(options: RunServiceOptions) {
       await childSession.dispose()
     childSessions.clear()
     pendingFinish.clear()
+    finishFlagWarned.clear()
     for (const emitter of emitters.values()) emitter.close()
     emitters.clear()
     for (const emitter of eventScopes.values()) emitter.close()

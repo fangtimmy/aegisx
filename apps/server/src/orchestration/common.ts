@@ -1,11 +1,12 @@
 import type { PromptContext } from "./types"
 
-/** Platform + target tools, granted conditionally from the challenge context
- * (platform-integrated → submit_flag; target-capable → the four target tools).
- * Keeps v7 parity: a plain challenge gets no flag/target tooling. */
+/** Target tools, granted conditionally from the challenge context
+ * (target-capable → the four target tools). submit_flag is granted to every
+ * solver unconditionally (spec §7.1–§7.4): a non-platform challenge records
+ * the flag as locally accepted (spec §6 / flags.ts), a platform challenge
+ * verifies remotely — the tool itself branches, not the grant. */
 function platformTools(ctx: PromptContext): string[] {
-  const tools: string[] = []
-  if (ctx.run?.platformIntegrated) tools.push("submit_flag")
+  const tools: string[] = ["submit_flag"]
   if (ctx.run?.targetSupported) {
     tools.push("get_target", "start_target", "extend_target", "stop_target")
   }

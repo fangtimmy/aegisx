@@ -18,6 +18,9 @@ function mockCtx(overrides: Partial<RunToolContext> = {}): RunToolContext {
       expiresAt: null,
     }),
     requestFinish: () => {},
+    hasAcceptedFlag: () => true,
+    finishFlagWarned: () => false,
+    markFinishFlagWarned: () => {},
     spawnChild: async (input) => ({
       agentId: "child",
       name: input.name,
@@ -131,6 +134,38 @@ describe("createMainTools", () => {
     const result = await invoke(finish, { summary: "  done  " })
     expect(finished as string | null).toBe("done")
     expect(result.terminate).toBe(true)
+  })
+
+  test("finish_run warns once when no flag accepted, then finishes", async () => {
+    let finished = 0
+    let warned = false
+    const tools = createMainTools(
+      mockCtx({
+        hasAcceptedFlag: () => false,
+        finishFlagWarned: () => warned,
+        markFinishFlagWarned: () => {
+          warned = true
+        },
+        requestFinish: () => {
+          finished += 1
+        },
+      }),
+      ["finish_run"]
+    )
+    const finish = findTool(tools, "finish_run")
+
+    // First call without an accepted flag → warning, no finish, no terminate.
+    const warn = await invoke(finish, { summary: "solved" })
+    expect(finished).toBe(0)
+    expect(warn.terminate).not.toBe(true)
+    const first = warn.content[0]
+    const warnText = first && "text" in first ? String(first.text) : ""
+    expect(warnText).toContain("submit_flag")
+
+    // Second call (still no flag, but already warned) → finishes normally.
+    const done = await invoke(finish, { summary: "unsolved" })
+    expect(finished).toBe(1)
+    expect(done.terminate).toBe(true)
   })
 
   test("target tool surfaces endpoint guidance (wsrx connect hint)", async () => {

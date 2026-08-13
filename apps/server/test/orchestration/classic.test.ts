@@ -118,7 +118,7 @@ describe("classic plugin (spec §7.1, parity)", () => {
     expect(created[0]!.tools).toEqual(expect.arrayContaining(["submit_flag"]))
   })
 
-  test("non-platform, non-target challenge → no submit_flag, no target tools", () => {
+  test("non-platform, non-target challenge → submit_flag granted, no target tools", () => {
     const { created } = runClassic(
       ctxWith({ platformIntegrated: false, targetSupported: false })
     )
@@ -126,7 +126,9 @@ describe("classic plugin (spec §7.1, parity)", () => {
     expect(tools).toContain("finish_run")
     expect(tools).toContain("spawn_agent")
     expect(tools).toContain("read_agent")
-    expect(tools).not.toContain("submit_flag")
+    // submit_flag is unconditional for solvers (spec §7.1); non-platform flags
+    // record as locally accepted. Target tools stay conditional on capability.
+    expect(tools).toContain("submit_flag")
     expect(tools.filter((t) => t.endsWith("_target"))).toEqual([])
   })
 

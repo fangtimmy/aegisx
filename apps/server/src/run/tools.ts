@@ -27,6 +27,11 @@ export type RunToolContext = {
   ): Promise<TargetState>
   /** Schedule a graceful finish after the current tool batch completes. */
   requestFinish(summary: string): void
+  /** Whether this run already recorded an accepted flag (finish_run guard). */
+  hasAcceptedFlag(): boolean
+  /** Whether finish_run already warned this run about a missing flag. */
+  finishFlagWarned(): boolean
+  markFinishFlagWarned(): void
   /** Start a background child agent; resolves immediately with the new agent. */
   spawnChild(input: {
     name: string
@@ -69,7 +74,7 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
         name: "finish_run",
         label: "Finish run",
         description:
-          "Declare the run complete and stop further work. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first.",
+          "Declare the run complete and stop further work. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first. If no flag has been accepted yet, the tool warns once — submit the flag first when you solved the challenge.",
         parameters: Type.Object({
           summary: Type.String({
             description:
@@ -86,6 +91,16 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
                 "Stop the remote target before finishing this Run"
               )
             }
+          }
+          // Don't lose a solved flag: cheap models tend to finish without
+          // submitting. Warn once per run (unsolved runs finish on the second
+          // call); the stop_target check above is the hard variant of the same
+          // guard.
+          if (!ctx.hasAcceptedFlag() && !ctx.finishFlagWarned()) {
+            ctx.markFinishFlagWarned()
+            return textResult(
+              "No accepted flag on this run. If you solved the challenge, call submit_flag with the flag first, then finish_run again. If you did not solve it, call finish_run again to confirm."
+            )
           }
           ctx.requestFinish(params.summary.trim())
           return {
