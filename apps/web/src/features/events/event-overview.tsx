@@ -27,9 +27,11 @@ import {
   type AgentSummary,
   agentsApi,
   type Challenge,
+  eventsApi,
   keys,
   type QueueItem,
   type RunPublic,
+  type RunUsage,
   runsApi,
   schedulerApi,
   type SchedulerInfo,
@@ -71,6 +73,8 @@ import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
 import { type AvailableModel } from "@/features/runs/model-switcher"
 import {
+  formatCost,
+  formatTokens,
   RunOverview,
   runStatusLabel,
   statusVariant,
@@ -154,6 +158,15 @@ export function EventOverview({
         ? 5000
         : false,
   })
+  // Event-wide token usage + cost (spec §10). Usage only grows while agents
+  // stream, so poll alongside the fleet while any run is running.
+  const usage = useQuery({
+    queryKey: keys.events.usage(eventId),
+    queryFn: () => eventsApi.getEventUsage(eventId),
+    refetchInterval: fleet.data?.items.some((run) => run.status === "running")
+      ? 5000
+      : false,
+  })
 
   const detailsById = useMemo(() => {
     const map = new Map<string, { run: RunPublic; agents: AgentSummary[] }>()
@@ -214,6 +227,7 @@ export function EventOverview({
                 runs={runs}
                 scheduler={schedulerData}
                 queue={queue.data?.items ?? []}
+                usage={usage.data?.usage}
               />
             </TabsPanel>
             <TabsPanel className="h-full" value="timeline">
@@ -269,6 +283,7 @@ function SummaryTab({
   detailsById,
   scheduler,
   queue,
+  usage,
   onSelectAgent,
 }: {
   challenges: Challenge[]
@@ -276,6 +291,7 @@ function SummaryTab({
   detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
   scheduler?: SchedulerWithAgents
   queue: QueueItem[]
+  usage?: RunUsage
   onSelectAgent: (runId: string, agentId: string) => void
 }) {
   const solved = challenges.filter(isChallengeSolved).length
@@ -335,6 +351,64 @@ function SummaryTab({
             }
           />
         </div>
+
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>用量汇总</CardFrameTitle>
+            <CardFrameDescription>
+              赛事内全部运行（含调度者）的 token 与费用
+            </CardFrameDescription>
+          </CardFrameHeader>
+          <CardPanel>
+            {usage ? (
+              <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
+                <div>
+                  <dt className="text-xs text-muted-foreground">总 token</dt>
+                  <dd className="mt-0.5 font-mono text-xs">
+                    {formatTokens(usage.totalTokens)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">费用</dt>
+                  <dd className="mt-0.5 font-mono text-xs">
+                    {formatCost(usage.cost)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">轮次</dt>
+                  <dd className="mt-0.5 font-mono text-xs">{usage.turns}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">输入</dt>
+                  <dd className="mt-0.5 font-mono text-xs">
+                    {formatTokens(usage.input)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">输出</dt>
+                  <dd className="mt-0.5 font-mono text-xs">
+                    {formatTokens(usage.output)}
+                    {usage.reasoning > 0 && (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        （{formatTokens(usage.reasoning)} 推理）
+                      </span>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">缓存</dt>
+                  <dd className="mt-0.5 font-mono text-xs">
+                    {formatTokens(usage.cacheRead)} 读 /{" "}
+                    {formatTokens(usage.cacheWrite)} 写
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="text-sm text-muted-foreground">暂无用量数据。</p>
+            )}
+          </CardPanel>
+        </CardFrame>
 
         <CardFrame>
           <CardFrameHeader>

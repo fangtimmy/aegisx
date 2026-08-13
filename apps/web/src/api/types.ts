@@ -32,6 +32,7 @@ export type {
   RunFileEntry,
   RunPublic,
   RunStatus,
+  RunUsage,
   SessionEntry,
   SessionMessageEntry,
   SettingDef,
@@ -113,15 +114,24 @@ export type OrchestrationInfo = {
   templates: Record<string, string>
 }
 
+/** GET/PATCH /api/prompt-templates — one row of the template store (spec §3.6). */
+export type PromptTemplateRow = {
+  plugin: string
+  key: string
+  body: string
+  updatedAt: string
+}
+
 export type SettingsResponse = {
   settings: FlatSettings
   updatedAt: string
   meta: {
-    promptDefaults: {
-      "prompts.mainSystem": string
-      "prompts.childSystem": string
-      "prompts.initial": string
-      "prompts.orchestratorSystem": string
+    /** Builtin template defaults, keyed by template key (reset source). */
+    promptTemplateDefaults: {
+      mainSystem: string
+      childSystem: string
+      initial: string
+      orchestratorSystem: string
     }
     promptVariables: string[]
     orchestratorPromptVariables: string[]

@@ -204,6 +204,20 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     return sumUsageTotals(db, eq(sessionEntries.runId, runId))
   }
 
+  /** Event-wide token usage + cost across every run in the event (scheduler
+   * run included — it burns tokens too). session_entries.runId is the
+   * redundant run-level key kept for exactly this (spec §九). */
+  function usageForEvent(eventId: string): RunUsage | undefined {
+    const runIds = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.eventId, eventId))
+      .all()
+      .map((row) => row.id)
+    if (runIds.length === 0) return undefined
+    return sumUsageTotals(db, inArray(sessionEntries.runId, runIds))
+  }
+
   /** Durable committed entries for a run, paginated by `seq`. Only renderable
    * kinds (message / compaction / branch_summary / model_change /
    * thinking_level_change) are returned; others (custom, ...) are skipped
@@ -234,6 +248,7 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     workspacePath,
     runDirPath,
     usageTotals,
+    usageForEvent,
     listMessages,
   }
 }

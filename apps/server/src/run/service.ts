@@ -31,6 +31,7 @@ import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
 import {
   loadTemplateMap,
+  migrateLegacyPromptSettings,
   renderTemplate,
 } from "../orchestration/prompt-templates-store"
 import { bootOrchestration, requirePlugin } from "../orchestration/registry"
@@ -173,8 +174,11 @@ export function createRunService(options: RunServiceOptions) {
   const bus: LiveBus = createLiveBus()
 
   // Register built-in plugins + seed default prompt templates (idempotent) so
-  // the service is self-sufficient — any RunHandle built here can render.
+  // the service is self-sufficient — any RunHandle built here can render. Then
+  // carry pre-v8 FlatSettings prompt edits into the table (spec §3.6): the
+  // prompt_templates table is the single render source.
   bootOrchestration(db)
+  migrateLegacyPromptSettings(db, configStore.getLegacyPromptTemplates())
 
   /** Per-agent promise-chaining locks (the only concurrency mechanism; spec §4.5). */
   const locks = new Map<string, Promise<unknown>>()
@@ -1507,16 +1511,17 @@ export function createRunService(options: RunServiceOptions) {
 
     const snapshotTools = safeParseTools(agentRow.tools)
     const toolCtx = buildAgentToolContext(runId, ctx.challengeId, agentId)
-    // Solver agents get their tools from createMainTools; the event-scope
-    // orchestrator additionally gets the scheduler/queue management tools
-    // (createSchedulerTools filters by name, so non-orchestrator snapshots add
-    // nothing). Names never overlap, so the two builders compose cleanly.
     const nativeTools = [
       ...createMainTools(toolCtx, snapshotTools),
-      ...createSchedulerTools(
-        buildSchedulerToolContext(runId, agentId),
-        snapshotTools
-      ),
+      // Scheduler tools are granted only to the event-scope orchestrator;
+      // challenge agents never carry their names (spec §6). Gating here skips
+      // the scheduler-tool context (a DB lookup + closures) for every solver.
+      ...(row.scopeType === "event"
+        ? createSchedulerTools(
+            buildSchedulerToolContext(runId, agentId),
+            snapshotTools
+          )
+        : []),
     ]
 
     let agentSession: HostAgentSession
@@ -1975,6 +1980,7 @@ export function createRunService(options: RunServiceOptions) {
     get: queries.get,
     detail: queries.detail,
     listForEvent: queries.listForEvent,
+    usageForEvent: queries.usageForEvent,
     listAgents: queries.listAgents,
     workspacePath: queries.workspacePath,
     runDirPath: queries.runDirPath,

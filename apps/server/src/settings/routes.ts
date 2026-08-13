@@ -1,5 +1,4 @@
 import {
-  type FlatSettings,
   get,
   isConfigDocumentV1,
   parseSettings,
@@ -66,12 +65,11 @@ export function settingsResponse(configStore: ConfigStore) {
     settings: configStore.getSettings(),
     updatedAt: configStore.getUpdatedAt(),
     meta: {
-      promptDefaults: {
-        "prompts.mainSystem": DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-        "prompts.childSystem": DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
-        "prompts.initial": DEFAULT_INITIAL_PROMPT_TEMPLATE,
-        "prompts.orchestratorSystem":
-          DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+      promptTemplateDefaults: {
+        mainSystem: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+        childSystem: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+        initial: DEFAULT_INITIAL_PROMPT_TEMPLATE,
+        orchestratorSystem: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
       },
       promptVariables: [...PROMPT_TEMPLATE_VARIABLES],
       orchestratorPromptVariables: [...ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES],
@@ -120,16 +118,6 @@ export function registerSettingsRoutes(
     return previewInitialPrompt(template, samplePromptContext)
   }
 
-  const validatePromptKeys = (settings: FlatSettings) => {
-    previewPrompt("mainSystemPrompt", get(settings, "prompts.mainSystem"))
-    previewPrompt("childSystemPrompt", get(settings, "prompts.childSystem"))
-    previewPrompt("initialPrompt", get(settings, "prompts.initial"))
-    previewPrompt(
-      "orchestratorSystemPrompt",
-      get(settings, "prompts.orchestratorSystem")
-    )
-  }
-
   const transferModel = (model: ProviderModelData) => ({
     id: model.id,
     modelId: model.modelId,
@@ -157,7 +145,7 @@ export function registerSettingsRoutes(
 
   // Prompt template store (spec §10): GET lists all rows (plugin-grouped by
   // the client), PATCH upserts one (plugin, key) row. Independent of
-  // FlatSettings' prompts.* keys — the settings-page editor UI is P5.
+  // FlatSettings — the settings-page editor edits this store directly.
   app.get("/api/prompt-templates", (c) =>
     c.json({
       items: db
@@ -244,15 +232,6 @@ export function registerSettingsRoutes(
       }
     }
     const next = patchSettings(configStore.getSettings(), patch)
-    try {
-      validatePromptKeys(next)
-    } catch (error) {
-      return badRequest(
-        c,
-        "invalid_prompt_template",
-        error instanceof Error ? error.message : "Prompt template is invalid"
-      )
-    }
     configStore.updateSettings(patch)
     return c.json(settingsResponse(configStore))
   })
@@ -290,7 +269,6 @@ export function registerSettingsRoutes(
     }
     try {
       const settings = parseSettings(body.settings)
-      validatePromptKeys(settings)
       const providerIds = new Set<string>()
       const modelIds = new Set<string>()
       const providerModelIds = new Set<string>()

@@ -7,6 +7,7 @@ import {
   BUILTIN_DEFAULTS,
   BUILTIN_PLUGIN,
   loadTemplateMap,
+  migrateLegacyPromptSettings,
   renderTemplate,
   seedBuiltinTemplates,
   seedPluginTemplates,
@@ -158,6 +159,77 @@ describe("prompt_templates store (spec §3.6)", () => {
         .where(eq(promptTemplates.key, "observerSystem"))
         .get()
       expect(row2?.body).toBe("EDITED")
+    } finally {
+      close()
+    }
+  })
+
+  test("migrateLegacyPromptSettings: carries user edits, leaves the rest", () => {
+    const { db, close } = setupDb()
+    try {
+      seedBuiltinTemplates(db)
+      migrateLegacyPromptSettings(db, {
+        mainSystem: "CUSTOM-MAIN",
+        initial: "CUSTOM-INITIAL",
+      })
+      const main = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .get()
+      expect(main?.body).toBe("CUSTOM-MAIN")
+      const initial = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "initial"))
+        .get()
+      expect(initial?.body).toBe("CUSTOM-INITIAL")
+      // Untouched keys keep the seeded default.
+      const child = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "childSystem"))
+        .get()
+      expect(child?.body).toBe(BUILTIN_DEFAULTS.childSystem)
+    } finally {
+      close()
+    }
+  })
+
+  test("migrateLegacyPromptSettings: never clobbers a table-customized row", () => {
+    const { db, close } = setupDb()
+    try {
+      seedBuiltinTemplates(db)
+      // A v8-era edit made directly in the table wins over legacy config.
+      db.update(promptTemplates)
+        .set({ body: "TABLE-EDIT" })
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .run()
+      migrateLegacyPromptSettings(db, { mainSystem: "LEGACY-EDIT" })
+      const row = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .get()
+      expect(row?.body).toBe("TABLE-EDIT")
+    } finally {
+      close()
+    }
+  })
+
+  test("migrateLegacyPromptSettings: an untouched (default) legacy value is a no-op", () => {
+    const { db, close } = setupDb()
+    try {
+      seedBuiltinTemplates(db)
+      migrateLegacyPromptSettings(db, {
+        mainSystem: BUILTIN_DEFAULTS.mainSystem,
+      })
+      const row = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .get()
+      expect(row?.body).toBe(BUILTIN_DEFAULTS.mainSystem)
     } finally {
       close()
     }

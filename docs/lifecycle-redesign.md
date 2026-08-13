@@ -1,8 +1,9 @@
 # AegisX 会话生命周期重设计（v4 → v5）
 
-Status: **已实施（代码完成、check/test/build 全绿；E2E 待验证）**
+Status: **superseded by v8** — the per-agent lifecycle (惰性 session、per-agent
+锁 + 代次、run 状态 SQL 派生) lives in [orchestration-redesign.md](./orchestration-redesign.md)
+(implemented P0–P5). This document is the v4→v5 plan, kept for history.
 Related: [architecture.md](./architecture.md)、[refactor-v4.md](./refactor-v4.md)
-分支建议：从 `rewrite/v4-sdk-agent` 切 `rewrite/v5-lifecycle`
 
 ## 一、为什么要做
 

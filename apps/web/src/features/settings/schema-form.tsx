@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { BookOpen, Braces, Eye, RotateCcw, Search } from "lucide-react"
+import { RotateCcw, Search } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 
 import {
@@ -14,22 +14,12 @@ import {
   settingsApi,
 } from "@/api"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogDescription,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group"
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "@/components/ui/menu"
 import {
   NumberField,
   NumberFieldDecrement,
@@ -47,22 +37,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
-
-const PROMPT_KIND: Record<
-  string,
-  | "mainSystemPrompt"
-  | "childSystemPrompt"
-  | "initialPrompt"
-  | "orchestratorSystemPrompt"
-> = {
-  "prompts.mainSystem": "mainSystemPrompt",
-  "prompts.childSystem": "childSystemPrompt",
-  "prompts.initial": "initialPrompt",
-  "prompts.orchestratorSystem": "orchestratorSystemPrompt",
-}
 
 function matchesQuery(def: SettingDef, query: string) {
   if (!query) return true
@@ -130,7 +106,6 @@ function SettingRow({
   onReset: () => void
   children: ReactNode
 }) {
-  const fullWidth = def.widget === "prompt"
   const gutter = (
     <div
       aria-hidden
@@ -140,17 +115,6 @@ function SettingRow({
       )}
     />
   )
-
-  if (fullWidth) {
-    return (
-      <div className="grid grid-cols-[2px_minmax(0,1fr)_1.75rem] items-start gap-x-3 gap-y-1.5 py-2 pr-2">
-        <div className="row-span-2">{gutter}</div>
-        <SettingMeta def={def} />
-        <ResetSlot disabled={disabled} modified={modified} onReset={onReset} />
-        <div className="col-span-2 col-start-2 min-w-0">{children}</div>
-      </div>
-    )
-  }
 
   return (
     <div className="grid grid-cols-[2px_minmax(0,1fr)_minmax(12rem,18rem)_1.75rem] items-center gap-x-3 py-2 pr-2">
@@ -299,132 +263,6 @@ function SettingControl({
   return null
 }
 
-function PromptControl({
-  def,
-  value,
-  disabled,
-  onChange,
-  variables,
-}: {
-  def: SettingDef
-  value: string
-  disabled?: boolean
-  onChange: (value: string) => void
-  variables: string[]
-}) {
-  const ref = useRef<HTMLTextAreaElement>(null)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const preview = useMutation({
-    mutationFn: (template: string) =>
-      settingsApi.previewPrompts({
-        kind: PROMPT_KIND[def.key] ?? "mainSystemPrompt",
-        template,
-      }),
-  })
-
-  function insertVariable(variable: string) {
-    const textarea = ref.current
-    const start = textarea?.selectionStart ?? value.length
-    const end = textarea?.selectionEnd ?? value.length
-    const token = `{{${variable}}}`
-    const next = `${value.slice(0, start)}${token}${value.slice(end)}`
-    onChange(next)
-    requestAnimationFrame(() => {
-      textarea?.focus()
-      textarea?.setSelectionRange(start + token.length, start + token.length)
-    })
-  }
-
-  return (
-    <div className="grid gap-2">
-      <div className="flex flex-wrap gap-2">
-        <Menu>
-          <MenuTrigger
-            render={<Button type="button" variant="outline" size="sm" />}
-          >
-            <Braces /> 变量
-          </MenuTrigger>
-          <MenuPopup align="end" className="max-h-72">
-            {variables.map((variable) => (
-              <MenuItem key={variable} onClick={() => insertVariable(variable)}>
-                <code>{`{{${variable}}}`}</code>
-              </MenuItem>
-            ))}
-          </MenuPopup>
-        </Menu>
-        <Button
-          disabled={disabled}
-          loading={preview.isPending}
-          onClick={() => {
-            setPreviewOpen(true)
-            preview.mutate(value)
-          }}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          <Eye /> 预览
-        </Button>
-        <Dialog>
-          <DialogTrigger
-            render={<Button type="button" variant="ghost" size="sm" />}
-          >
-            <BookOpen /> 语法
-          </DialogTrigger>
-          <DialogPopup className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Handlebars 模板语法</DialogTitle>
-              <DialogDescription>
-                留空即保存为空（不回退到内置默认值）。使用「重置」可恢复默认模板。
-              </DialogDescription>
-            </DialogHeader>
-            <DialogPanel className="text-sm">
-              <p className="text-muted-foreground">
-                使用「变量」菜单中的 {"{{variable}}"} 占位符。
-              </p>
-            </DialogPanel>
-          </DialogPopup>
-        </Dialog>
-      </div>
-      <Textarea
-        className="[&_textarea]:max-h-64 [&_textarea]:min-h-32 [&_textarea]:overflow-y-auto [&_textarea]:font-mono [&_textarea]:text-xs"
-        disabled={disabled}
-        maxLength={100_000}
-        onChange={(event) => onChange(event.target.value)}
-        ref={ref}
-        value={value}
-      />
-      <Dialog
-        onOpenChange={(open) => {
-          setPreviewOpen(open)
-          if (!open) preview.reset()
-        }}
-        open={previewOpen}
-      >
-        <DialogPopup className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>预览：{def.title}</DialogTitle>
-            <DialogDescription>带高亮替换内容的示例上下文。</DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="max-h-[60vh] overflow-auto font-mono text-xs whitespace-pre-wrap">
-            {preview.error && (
-              <p className="text-destructive">{preview.error.message}</p>
-            )}
-            {preview.data?.segments.map((segment) => (
-              <span
-                className={segment.highlighted ? "bg-primary/20" : undefined}
-                key={segment.id}
-              >
-                {segment.text}
-              </span>
-            ))}
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
-    </div>
-  )
-}
-
 export function SchemaSettingsForm({
   data,
   providers,
@@ -535,29 +373,6 @@ export function SchemaSettingsForm({
             {defs.map((def) => {
               const value = local[def.key]
               const modified = isSettingModified(local, def.key)
-              if (def.widget === "prompt") {
-                return (
-                  <SettingRow
-                    def={def}
-                    disabled={save.isPending}
-                    key={def.key}
-                    modified={modified}
-                    onReset={() => resetKey(def)}
-                  >
-                    <PromptControl
-                      def={def}
-                      disabled={save.isPending}
-                      onChange={(next) => scheduleSave(def.key, next)}
-                      value={typeof value === "string" ? value : ""}
-                      variables={
-                        def.key === "prompts.orchestratorSystem"
-                          ? data.meta.orchestratorPromptVariables
-                          : data.meta.promptVariables
-                      }
-                    />
-                  </SettingRow>
-                )
-              }
               return (
                 <SettingRow
                   def={def}

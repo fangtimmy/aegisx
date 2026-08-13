@@ -14,6 +14,7 @@ export type {
 export {
   CONFIG_DOCUMENT_VERSION,
   defaultSettings,
+  extractLegacyPromptTemplates,
   get,
   isConfigDocumentV1,
   isSettingKey,

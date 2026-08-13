@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 
-import { get, type RunPublic } from "@aegisx/shared"
+import { get, type RunPublic, type RunUsage } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
@@ -61,6 +61,7 @@ type Storage = ReturnType<typeof createStorage>
 type PlatformService = ReturnType<typeof createPlatformService>
 type RunList = {
   listForEvent(eventId: string): RunPublic[]
+  usageForEvent(eventId: string): RunUsage | undefined
 }
 
 export function registerEventRoutes(
@@ -124,6 +125,14 @@ export function registerEventRoutes(
       return notFound(c, "Event not found")
     }
     return c.json({ items: runManager.listForEvent(eventId) })
+  })
+
+  app.get("/api/events/:eventId/usage", (c) => {
+    const eventId = c.req.param("eventId")
+    if (!getEvent(eventId)) {
+      return notFound(c, "Event not found")
+    }
+    return c.json({ usage: runManager.usageForEvent(eventId) })
   })
 
   app.patch("/api/events/:eventId", validateJson(eventInput), (c) => {

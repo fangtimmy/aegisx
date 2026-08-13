@@ -22,13 +22,13 @@ export function runStatusLabel(status: RunStatus): string {
   return status
 }
 
-function formatTokens(value: number): string {
+export function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
   return String(value)
 }
 
-function formatCost(usd: number): string {
+export function formatCost(usd: number): string {
   if (usd <= 0) return "$0"
   if (usd < 0.01) return `$${usd.toFixed(4)}`
   return `$${usd.toFixed(2)}`

@@ -95,6 +95,7 @@ export function createApp(options: { dataDir: string }) {
     platformService,
     runManager: {
       listForEvent: (eventId: string) => runService.listForEvent(eventId),
+      usageForEvent: (eventId: string) => runService.usageForEvent(eventId),
     },
     getSettings,
     catalog,

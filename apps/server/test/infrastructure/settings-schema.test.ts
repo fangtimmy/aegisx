@@ -25,7 +25,7 @@ describe("settings schema", () => {
     expect(Object.hasOwn(parsed, "unknown")).toBe(false)
   })
 
-  test("parseSettings accepts valid values including blank prompts", () => {
+  test("parseSettings accepts valid values and drops legacy prompt keys", () => {
     const parsed = parseSettings({
       "runtime.maxAttachmentMb": 1024,
       "agent.defaultModelId": "m1",
@@ -35,8 +35,8 @@ describe("settings schema", () => {
     expect(parsed["runtime.maxAttachmentMb"]).toBe(1024)
     expect(parsed["agent.defaultModelId"]).toBe("m1")
     expect(parsed["container.cpus"]).toBe(1.5)
-    expect(parsed["prompts.mainSystem"]).toBe("")
-    expect(isSettingModified(parsed, "prompts.mainSystem")).toBe(true)
+    // prompts.* left FlatSettings in v8 (templates live in prompt_templates).
+    expect(Object.hasOwn(parsed, "prompts.mainSystem")).toBe(false)
   })
 
   test("patchSettings merges partial updates", () => {
@@ -57,18 +57,16 @@ describe("settings schema", () => {
       toolTimeouts: { bash: 99_000 },
       maxAttachmentMb: 256,
       containerImage: "aegisx/solver:kali",
+      // v2-era prompt templates left FlatSettings in v8 (prompt_templates
+      // table); the legacy extractor carries them into the DB at boot instead.
       mainSystemPromptTemplate: "custom main",
       childSystemPromptTemplate: "",
     })
     expect(migrated["agent.defaultModelId"]).toBe("m1")
     expect(migrated["runtime.maxAttachmentMb"]).toBe(256)
     expect(migrated["container.image"]).toBe("aegisx/solver:kali")
-    expect(migrated["prompts.mainSystem"]).toBe("custom main")
-    // legacy empty prompt → materialize schema default
-    expect(migrated["prompts.childSystem"]).toBe(
-      defaultSettings()["prompts.childSystem"]
-    )
     // removed v2 settings are absent from the flat shape
+    expect(Object.hasOwn(migrated, "prompts.mainSystem")).toBe(false)
     expect(Object.hasOwn(migrated, "runtime.maxConcurrency")).toBe(false)
     expect(Object.hasOwn(migrated, "runtime.environment")).toBe(false)
     expect(Object.hasOwn(migrated, "tools.timeout.bash")).toBe(false)

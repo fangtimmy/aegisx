@@ -1,9 +1,9 @@
 # AegisX
 
-AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, and token usage.
+AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, an event task queue (scheduler), and token usage.
 
-> **Schema v6** — wipe any old `data/` directory (or just `data/aegisx.sqlite*`) before first start; older databases are refused.
-> Design notes: [docs/architecture.md](docs/architecture.md) (current). Transitions: [docs/refactor-v4.md](docs/refactor-v4.md) (v3→v4), [docs/refactor-v3.md](docs/refactor-v3.md) (v2→v3); v2 docs live in [docs/archive/](docs/archive/).
+> **Schema v8** — a unified Run/orchestration model (保留目录/历史表，仅 wipe 执行态；migration `0002_v8_unified_run`)。v7 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。
+> Design notes: [docs/orchestration-redesign.md](docs/orchestration-redesign.md) (current, v8). Superseded: [docs/architecture.md](docs/architecture.md) (v4–v6), [docs/refactor-v4.md](docs/refactor-v4.md) (v3→v4).
 
 ## Requirements
 

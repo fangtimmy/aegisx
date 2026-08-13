@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Boxes, CircleAlert, Settings2, SlidersHorizontal } from "lucide-react"
+import {
+  Boxes,
+  CircleAlert,
+  FileText,
+  Settings2,
+  SlidersHorizontal,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 
@@ -28,16 +34,18 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 
 import { GeneralSettings } from "./general-settings"
+import { PromptTemplatesPanel } from "./prompt-templates"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
 import { SchemaSettingsForm } from "./schema-form"
 
-type SettingsSection = "general" | "models" | "settings"
+type SettingsSection = "general" | "models" | "settings" | "templates"
 
 const sectionPaths: Record<SettingsSection, string> = {
   general: "/settings/general",
   models: "/settings/models",
   settings: "/settings/settings",
+  templates: "/settings/templates",
 }
 
 export function SettingsScreen() {
@@ -124,6 +132,9 @@ export function SettingsScreen() {
           <TabsTab value="settings">
             <Settings2 aria-hidden="true" /> 设置
           </TabsTab>
+          <TabsTab value="templates">
+            <FileText aria-hidden="true" /> 提示词模板
+          </TabsTab>
         </TabsList>
       </div>
       <div className="min-w-0 flex-1">
@@ -146,6 +157,9 @@ export function SettingsScreen() {
               </CardPanel>
             </Card>
           </CardFrame>
+        </TabsPanel>
+        <TabsPanel value="templates">
+          <PromptTemplatesPanel />
         </TabsPanel>
         <TabsPanel value="models">
           <div className="grid min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">

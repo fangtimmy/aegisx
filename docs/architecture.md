@@ -1,6 +1,10 @@
 # AegisX Architecture
 
-Status: **current** (v6)
+Status: **superseded by v8** — the authoritative architecture is
+[orchestration-redesign.md](./orchestration-redesign.md) (统一 Run + 编排插件,
+schema v8, implemented P0–P5). This document describes the v4–v6 host-side SDK
+agent model and is kept for history.
+
 Related: [refactor-v4.md](./refactor-v4.md) is the v3→v4 transition plan (host-side SDK agent).
 
 ## What v4 is

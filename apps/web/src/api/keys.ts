@@ -2,6 +2,7 @@ export const keys = {
   events: {
     all: ["events"] as const,
     detail: (id: string) => ["events", id] as const,
+    usage: (id: string) => ["events", id, "usage"] as const,
   },
   runs: {
     byEvent: (eventId: string) => ["runs", "event", eventId] as const,
@@ -27,5 +28,11 @@ export const keys = {
   },
   settings: {
     all: ["settings"] as const,
+  },
+  promptTemplates: {
+    all: ["prompt-templates"] as const,
+  },
+  orchestrations: {
+    all: ["orchestrations"] as const,
   },
 }

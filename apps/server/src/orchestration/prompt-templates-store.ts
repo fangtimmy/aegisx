@@ -4,7 +4,7 @@ import {
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
 } from "@aegisx/shared/prompt-defaults"
-import { inArray } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 
 import type { createDatabase } from "../db"
 import { promptTemplates } from "../db/schema"
@@ -56,6 +56,44 @@ export function seedPluginTemplates(
     db.insert(promptTemplates)
       .values({ plugin: plugin.id, key, body, updatedAt: now })
       .onConflictDoNothing()
+      .run()
+  }
+}
+
+/**
+ * Carry pre-v8 FlatSettings prompt edits into the prompt_templates store
+ * (spec §3.6/§14.1). A legacy value is written only when it differs from the
+ * builtin default AND the current row is still the seed default — edits made
+ * directly in the table during v8 win over legacy config. Idempotent.
+ */
+export function migrateLegacyPromptSettings(
+  db: Database,
+  legacy: Readonly<Record<string, string>> | undefined
+): void {
+  if (!legacy) return
+  const now = new Date().toISOString()
+  for (const [key, body] of Object.entries(legacy)) {
+    if (!(key in BUILTIN_DEFAULTS)) continue
+    if (body === BUILTIN_DEFAULTS[key]) continue // untouched → nothing to migrate
+    const row = db
+      .select({ body: promptTemplates.body })
+      .from(promptTemplates)
+      .where(
+        and(
+          eq(promptTemplates.plugin, BUILTIN_PLUGIN),
+          eq(promptTemplates.key, key)
+        )
+      )
+      .get()
+    if (!row || row.body !== BUILTIN_DEFAULTS[key]) continue // already customized
+    db.update(promptTemplates)
+      .set({ body, updatedAt: now })
+      .where(
+        and(
+          eq(promptTemplates.plugin, BUILTIN_PLUGIN),
+          eq(promptTemplates.key, key)
+        )
+      )
       .run()
   }
 }

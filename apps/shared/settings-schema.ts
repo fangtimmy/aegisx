@@ -1,21 +1,9 @@
-import {
-  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_INITIAL_PROMPT_TEMPLATE,
-  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-} from "./prompt-defaults"
 import type { ThinkingLevel } from "./thinking"
 import { isThinkingLevel } from "./thinking"
 
-export type SettingWidget =
-  | "boolean"
-  | "number"
-  | "text"
-  | "select"
-  | "model"
-  | "prompt"
+export type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
 
-export type SettingGroup = "智能体" | "运行时" | "容器" | "调度器" | "提示词"
+export type SettingGroup = "智能体" | "运行时" | "容器" | "调度器"
 
 type BaseDef = {
   key: SettingKey
@@ -86,10 +74,6 @@ export type FlatSettings = {
   "container.workspace": string
   "container.tmpfsSize": string
   "container.networkMode": string
-  "prompts.mainSystem": string
-  "prompts.childSystem": string
-  "prompts.initial": string
-  "prompts.orchestratorSystem": string
 }
 
 export type SettingKey = keyof FlatSettings
@@ -298,52 +282,6 @@ export const SETTINGS_DEFS: SettingDef[] = [
     widget: "text",
     order: 80,
   },
-  {
-    key: "prompts.mainSystem",
-    type: "string",
-    default: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-    maxLength: 100_000,
-    group: "提示词",
-    title: "主系统提示词",
-    description: "对新任务生效。留空即保存为空（不回退到内置默认值）。",
-    widget: "prompt",
-    order: 10,
-  },
-  {
-    key: "prompts.childSystem",
-    type: "string",
-    default: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
-    maxLength: 100_000,
-    group: "提示词",
-    title: "子系统提示词",
-    description:
-      "主 agent 派生的子 pi 进程的基础系统提示词（参见 aegisx-child 技能）。留空即保存为空（不回退到内置默认值）。",
-    widget: "prompt",
-    order: 20,
-  },
-  {
-    key: "prompts.orchestratorSystem",
-    type: "string",
-    default: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-    maxLength: 100_000,
-    group: "提示词",
-    title: "编排器系统提示词",
-    description:
-      "per-event 编排器（调度大脑）的基础系统提示词。留空即保存为空（不回退到内置默认值）。",
-    widget: "prompt",
-    order: 25,
-  },
-  {
-    key: "prompts.initial",
-    type: "string",
-    default: DEFAULT_INITIAL_PROMPT_TEMPLATE,
-    maxLength: 100_000,
-    group: "提示词",
-    title: "初始用户提示词",
-    description: "新任务的引导消息。留空即保存为空（不回退到内置默认值）。",
-    widget: "prompt",
-    order: 30,
-  },
 ]
 
 const DEF_BY_KEY = new Map(SETTINGS_DEFS.map((def) => [def.key, def] as const))
@@ -404,21 +342,9 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
     pidsLimit: "container.pidsLimit",
     containerWorkspace: "container.workspace",
     tmpfsSize: "container.tmpfsSize",
-    mainSystemPromptTemplate: "prompts.mainSystem",
-    childSystemPromptTemplate: "prompts.childSystem",
-    initialPromptTemplate: "prompts.initial",
   }
   for (const [from, to] of Object.entries(map)) {
     if (from in source) flat[to] = source[from]
-  }
-
-  // Legacy empty prompt meant "use builtin"; materialize defaults.
-  for (const key of [
-    "prompts.mainSystem",
-    "prompts.childSystem",
-    "prompts.initial",
-  ] as const) {
-    if (flat[key] === "") delete flat[key]
   }
 
   // cpuLimit millicores → cpus
@@ -521,6 +447,40 @@ export function patchSettings(
     }
   }
   return out
+}
+
+/**
+ * Pre-v8 prompt templates lived in FlatSettings (`prompts.*`) and, before
+ * flattening, as `*PromptTemplate` keys. v8 keeps them in the prompt_templates
+ * table (spec §3.6); boot reads a raw config document with this helper so user
+ * edits carry across. Values are keyed by template key (mainSystem / …).
+ */
+const LEGACY_PROMPT_TEMPLATE_KEYS: Record<string, string> = {
+  "prompts.mainSystem": "mainSystem",
+  "prompts.childSystem": "childSystem",
+  "prompts.initial": "initial",
+  "prompts.orchestratorSystem": "orchestratorSystem",
+  mainSystemPromptTemplate: "mainSystem",
+  childSystemPromptTemplate: "childSystem",
+  initialPromptTemplate: "initial",
+}
+
+/** Extract user-edited prompt templates from a raw settings object (pre-v8
+ * FlatSettings / unversioned config shapes), keyed by template key. Returns
+ * undefined when no legacy prompt keys are present. */
+export function extractLegacyPromptTemplates(
+  raw: unknown
+): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const source = raw as Record<string, unknown>
+  const found: Record<string, string> = {}
+  for (const [legacyKey, templateKey] of Object.entries(
+    LEGACY_PROMPT_TEMPLATE_KEYS
+  )) {
+    const value = source[legacyKey]
+    if (typeof value === "string") found[templateKey] = value
+  }
+  return Object.keys(found).length > 0 ? found : undefined
 }
 
 export const CONFIG_DOCUMENT_VERSION = 1 as const

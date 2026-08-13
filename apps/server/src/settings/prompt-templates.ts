@@ -48,13 +48,6 @@ export const PROMPT_TEMPLATE_VARIABLES = [
   "capabilities.canManageTarget",
 ] as const
 
-export type PromptTemplates = {
-  mainSystemPromptTemplate: string
-  childSystemPromptTemplate: string
-  initialPromptTemplate: string
-  orchestratorSystemPromptTemplate: string
-}
-
 export type PromptPreviewSegment = {
   id: number
   text: string
@@ -281,23 +274,4 @@ export function previewInitialPrompt(
       markPreviewValues(context) as PromptTemplateContext
     )
   )
-}
-
-export function resolvePromptTemplates(settings: {
-  "prompts.mainSystem"?: string
-  "prompts.childSystem"?: string
-  "prompts.initial"?: string
-  "prompts.orchestratorSystem"?: string
-}): PromptTemplates {
-  return {
-    mainSystemPromptTemplate:
-      settings["prompts.mainSystem"] ?? DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-    childSystemPromptTemplate:
-      settings["prompts.childSystem"] ?? DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
-    initialPromptTemplate:
-      settings["prompts.initial"] ?? DEFAULT_INITIAL_PROMPT_TEMPLATE,
-    orchestratorSystemPromptTemplate:
-      settings["prompts.orchestratorSystem"] ??
-      DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-  }
 }

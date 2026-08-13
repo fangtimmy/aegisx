@@ -67,3 +67,24 @@ Only for a **pre-baseline** database (schema v1–v5, no `__drizzle_migrations`)
 Those predate the migration system and have no forward path. Back the file up,
 remove it, and restart to bootstrap fresh. This does not recur for any database
 created on the current track.
+
+## v8: selective execution-state wipe (migration `0002_v8_unified_run`)
+
+v7 → v8 is the one exception to "migrate forward, never wipe": the unified
+Run/orchestration schema differs so much in the execution state that a
+data-preserving ALTER costs more than it is worth (spec §14.1). The migration
+is a **hand-edited** drizzle script that:
+
+- **Preserves** catalog/history tables untouched: `events`, `event_platforms`,
+  `challenges`, `challenge_remote`, `attachments`, `platform_request_log`.
+- **Keeps** `challenge_flags` rows (一题多解 user asset) by rebuilding the
+  table once — the wipe drops the `runs` FK while keeping the `challenges` FK
+  and the unique flag constraint.
+- **Drops** execution-state tables (`session_entries`, `sessions`, `agents`,
+  `runs`, `orchestrators`) — transient rows, historical `runId` values would
+  dangle under FK-ON.
+- **Creates** the v8 tables: unified `runs`, generalized `agents` (+ snapshots
+  + `isEntry`), `run_queue`, `scheduler_config`, `prompt_templates`.
+
+The usual snapshot-backup-before-migrate guard applies, so a failed run
+restores the v7 DB untouched.

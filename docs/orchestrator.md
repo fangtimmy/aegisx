@@ -1,6 +1,8 @@
 # Orchestrator：基于 LLM 的解题调度
 
-Status: **Phase 0–3 已落地**（Phase 3 剩「closed 冷恢复」一项未做）。本文档为设计定稿，决策已冻结。
+Status: **superseded by v8** — the orchestrator is now a `scope:'event'` run with the
+`scheduler` orchestration plugin ([orchestration-redesign.md](./orchestration-redesign.md),
+implemented P0–P5). This document is the v5/v6-era design, kept for history.
 Related: [architecture.md](./architecture.md)（v5 现状）、[refactor-v4.md](./refactor-v4.md)（v4 SDK 重构）
 
 > 本设计 crystallize 自 2026-07-31 与 2026-08-02 两次会话讨论，并基于已落地的

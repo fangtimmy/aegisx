@@ -156,7 +156,10 @@ export function toConnection(provider: ProviderData): ProviderConnection {
 
 /** ConfigStore stub exposing only what the services read (getProviders). */
 export function stubConfigStore(providers: ProviderData[]): ConfigStore {
-  return { getProviders: () => providers } as unknown as ConfigStore
+  return {
+    getProviders: () => providers,
+    getLegacyPromptTemplates: () => undefined,
+  } as unknown as ConfigStore
 }
 
 export const flatSettings = () => defaultSettings()
