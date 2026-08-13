@@ -26,6 +26,9 @@ export const keys = {
     all: ["providers"] as const,
     piModels: ["providers", "pi-models"] as const,
   },
+  aliases: {
+    all: ["model-aliases"] as const,
+  },
   settings: {
     all: ["settings"] as const,
   },

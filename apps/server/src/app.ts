@@ -1,6 +1,7 @@
 import { get } from "@aegisx/shared"
 import { Hono } from "hono"
 
+import { registerAliasRoutes } from ".//aliases/routes"
 import { createCatalogReader } from ".//events/catalog"
 import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
@@ -83,6 +84,7 @@ export function createApp(options: { dataDir: string }) {
   // provider/settings routes persist config without a live model registry.
   const noopSync = () => {}
   registerProviderRoutes(app, { configStore, syncModels: noopSync })
+  registerAliasRoutes(app, { configStore })
   registerSettingsRoutes(app, {
     db,
     configStore,

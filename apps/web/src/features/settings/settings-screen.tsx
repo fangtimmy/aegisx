@@ -5,6 +5,7 @@ import {
   FileText,
   Settings2,
   SlidersHorizontal,
+  Tags,
 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
@@ -34,6 +35,7 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 
 import { GeneralSettings } from "./general-settings"
+import { ModelAliases } from "./model-aliases"
 import { PromptTemplatesPanel } from "./prompt-templates"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
@@ -53,6 +55,9 @@ export function SettingsScreen() {
   const location = useLocation()
   const navigate = useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  /** When true, the right pane shows the model-alias manager instead of the
+   * selected provider's config + models. */
+  const [aliasView, setAliasView] = useState(false)
   const section =
     (Object.entries(sectionPaths).find(
       ([, path]) => path === location.pathname
@@ -183,19 +188,51 @@ export function SettingsScreen() {
               <Card>
                 <CardPanel className="p-2">
                   <nav aria-label="供应商连接">
+                    <div
+                      className={cn(
+                        "mb-1 flex items-center rounded-lg focus-within:bg-accent/50 hover:bg-accent/50",
+                        aliasView &&
+                          "bg-secondary focus-within:bg-secondary hover:bg-secondary"
+                      )}
+                    >
+                      <Button
+                        aria-pressed={aliasView}
+                        className="h-auto w-full justify-start bg-transparent px-3 py-2 text-left hover:bg-transparent data-pressed:bg-transparent"
+                        onClick={() => {
+                          setAliasView(true)
+                          setSelectedId(null)
+                        }}
+                        type="button"
+                        variant="ghost"
+                      >
+                        <Tags aria-hidden className="size-4 shrink-0" />
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <span className="truncate text-sm font-medium">
+                            模型别名
+                          </span>
+                        </span>
+                      </Button>
+                    </div>
+                    <div aria-hidden className="mx-1 mb-1 border-b" />
                     {items.map((provider) => (
                       <div
                         className={cn(
                           "mb-1 flex items-center rounded-lg focus-within:bg-accent/50 hover:bg-accent/50",
-                          selectedId === provider.id &&
+                          !aliasView &&
+                            selectedId === provider.id &&
                             "bg-secondary focus-within:bg-secondary hover:bg-secondary"
                         )}
                         key={provider.id}
                       >
                         <Button
                           className="h-auto min-w-0 flex-1 justify-start bg-transparent px-3 py-2 text-left hover:bg-transparent data-pressed:bg-transparent"
-                          aria-pressed={selectedId === provider.id}
-                          onClick={() => setSelectedId(provider.id)}
+                          aria-pressed={
+                            !aliasView && selectedId === provider.id
+                          }
+                          onClick={() => {
+                            setAliasView(false)
+                            setSelectedId(provider.id)
+                          }}
                           type="button"
                           variant="ghost"
                         >
@@ -247,7 +284,9 @@ export function SettingsScreen() {
               </Card>
             </CardFrame>
             <div className="min-w-0">
-              {selected ? (
+              {aliasView ? (
+                <ModelAliases />
+              ) : selected ? (
                 <ProviderDetail
                   deleteError={remove.error}
                   deletePending={remove.isPending}

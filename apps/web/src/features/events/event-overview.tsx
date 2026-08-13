@@ -1,3 +1,4 @@
+import { aliasRef } from "@aegisx/shared"
 import dagre from "@dagrejs/dagre"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -123,6 +124,7 @@ import { FilesWorkspace } from "@/features/runs/files-workspace"
 import {
   type AvailableModel,
   useAvailableModels,
+  useResolvedAliases,
 } from "@/features/runs/model-switcher"
 import {
   formatCost,
@@ -139,6 +141,16 @@ import { ErrorState, isChallengeSolved } from "./event-shared"
 import { QueueList } from "./queue-list"
 
 const UNCATEGORIZED = "未分类"
+
+const thinkingLevelLabels: Record<ThinkingLevel, string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Maximum",
+}
 
 /** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
    so the fleet/queue/usage must refresh regardless of locally-known state. */
@@ -1773,6 +1785,7 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
     queryFn: () => schedulerApi.getScheduler(eventId),
   })
   const models = useAvailableModels()
+  const resolvedAliases = useResolvedAliases(models)
   const config = scheduler.data?.config
 
   const [modelId, setModelId] = useState<string | null>(config?.modelId ?? null)
@@ -1850,6 +1863,29 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
             </SelectTrigger>
             <SelectPopup>
               <SelectItem value="">全局默认</SelectItem>
+              {resolvedAliases.length > 0 && (
+                <SelectGroup key="aliases">
+                  <SelectGroupLabel>别名</SelectGroupLabel>
+                  {resolvedAliases.map(({ alias, target }) => (
+                    <SelectItem
+                      key={aliasRef(alias.id)}
+                      value={aliasRef(alias.id)}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className="font-medium">{alias.label}</span>
+                        <span className="text-muted-foreground">
+                          → {target.label}
+                        </span>
+                        {alias.thinkingLevel !== "off" && (
+                          <Badge size="sm" variant="secondary">
+                            {thinkingLevelLabels[alias.thinkingLevel]}
+                          </Badge>
+                        )}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
               {grouped.map(([providerLabel, list]) => (
                 <SelectGroup key={providerLabel}>
                   <SelectGroupLabel>{providerLabel}</SelectGroupLabel>

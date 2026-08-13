@@ -1,6 +1,8 @@
 import {
   get,
+  isAliasRef,
   isConfigDocumentV1,
+  parseAliases,
   parseSettings,
   patchSettings,
 } from "@aegisx/shared"
@@ -186,6 +188,7 @@ export function registerSettingsRoutes(
         version: 1,
         settings: configStore.getSettings(),
         providers: transferProviders(),
+        aliases: configStore.getAliases(),
       },
       null,
       2
@@ -223,11 +226,20 @@ export function registerSettingsRoutes(
             "Default model id is invalid"
           )
         }
-        const exists = configStore
-          .getProviders()
-          .some((p) => p.models.some((m) => m.id === modelId))
-        if (!exists) {
-          return notFound(c, "Default model not found")
+        // An alias ref must reference a configured alias; a raw id must
+        // reference a configured provider model.
+        if (isAliasRef(modelId)) {
+          const aliasId = modelId.slice("alias:".length)
+          if (!configStore.getAliases().some((a) => a.id === aliasId)) {
+            return notFound(c, "Default model alias not found")
+          }
+        } else {
+          const exists = configStore
+            .getProviders()
+            .some((p) => p.models.some((m) => m.id === modelId))
+          if (!exists) {
+            return notFound(c, "Default model not found")
+          }
         }
       }
     }
@@ -374,15 +386,40 @@ export function registerSettingsRoutes(
         })
       }
       const defaultModelId = get(settings, "agent.defaultModelId")
-      if (defaultModelId !== null && !modelIds.has(defaultModelId)) {
-        throw new Error("Default model not found in imported configuration")
+      // Aliases travel with the document; validate their model refs against the
+      // imported model ids before persisting.
+      const importedAliases = parseAliases(
+        (body as Record<string, unknown>).aliases
+      )
+      const aliasIds = new Set(importedAliases.map((a) => a.id))
+      for (const alias of importedAliases) {
+        if (!alias.label.trim()) {
+          throw new Error("Alias name is required")
+        }
+        for (const id of alias.modelIds) {
+          if (!modelIds.has(id)) {
+            throw new Error("Alias references an unknown model")
+          }
+        }
       }
-      configStore.replaceAll(settings, newProviders)
+      if (defaultModelId !== null) {
+        if (isAliasRef(defaultModelId)) {
+          if (!aliasIds.has(defaultModelId.slice("alias:".length))) {
+            throw new Error(
+              "Default model alias not found in imported configuration"
+            )
+          }
+        } else if (!modelIds.has(defaultModelId)) {
+          throw new Error("Default model not found in imported configuration")
+        }
+      }
+      configStore.replaceAll(settings, newProviders, importedAliases)
       syncModels()
       return c.json({
         version: 1,
         settings: configStore.getSettings(),
         providers: transferProviders(),
+        aliases: configStore.getAliases(),
       })
     } catch (error) {
       return badRequest(

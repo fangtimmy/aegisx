@@ -1,6 +1,8 @@
 export * as challengesApi from "./challenges"
 export { apiRequest, jsonRequest } from "./client"
 export * as agentsApi from "./agents"
+export * as aliasesApi from "./aliases"
+export type { CreateAliasInput, PatchAliasInput } from "./aliases"
 export * as eventsApi from "./events"
 export { keys } from "./keys"
 export * as orchestrationsApi from "./orchestrations"

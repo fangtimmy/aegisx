@@ -1,4 +1,4 @@
-import type { SwitchModelInput } from "@aegisx/shared"
+import type { ModelAlias, SwitchModelInput } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 
@@ -27,12 +27,14 @@ import type { SwitchTarget } from "./model-switch"
 export async function applyModelSwitch(
   host: HostAgentSession,
   providers: ProviderConnection[],
+  aliases: ModelAlias[],
   input: SwitchModelInput,
   isUnchanged: (target: SwitchTarget) => boolean
 ): Promise<{ target: SwitchTarget; thinkingLevel: ThinkingLevel }> {
   const target = resolveSwitchTarget(
     host.session.modelRuntime,
     providers,
+    aliases,
     input.modelId
   )
   if (!isUnchanged(target)) await host.session.setModel(target.sdkModel)

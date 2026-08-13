@@ -1,18 +1,23 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { aliasRef, resolveAliasToModel } from "@aegisx/shared"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { RotateCcw, Search } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 
 import {
+  aliasesApi,
   type FlatSettings,
   isSettingModified,
   keys,
+  type ModelAlias,
   type ProviderConnection,
   SETTINGS_DEFS,
   type SettingDef,
   type SettingKey,
   type SettingsResponse,
   settingsApi,
+  type ThinkingLevel,
 } from "@/api"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -39,6 +44,16 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
+
+const thinkingLevelLabels: Record<ThinkingLevel, string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Maximum",
+}
 
 function matchesQuery(def: SettingDef, query: string) {
   if (!query) return true
@@ -135,6 +150,114 @@ function SettingRow({
   )
 }
 
+function ModelSettingControl({
+  value,
+  disabled,
+  onChange,
+  providers,
+}: {
+  value: unknown
+  disabled?: boolean
+  onChange: (value: unknown) => void
+  providers?: ProviderConnection[]
+}) {
+  const aliasesQuery = useQuery({
+    queryKey: keys.aliases.all,
+    queryFn: () => aliasesApi.listAliases(),
+  })
+  const models = useMemo(
+    () =>
+      (providers ?? []).flatMap((provider) =>
+        provider.enabled && provider.apiKey
+          ? provider.models
+              .filter((model) => model.enabled)
+              .map((model) => ({ ...model, provider }))
+          : []
+      ),
+    [providers]
+  )
+  const aliases = aliasesQuery.data?.items ?? []
+  // Aliases that resolve to an available model (the live default follows an
+  // alias, so only show ones that currently resolve).
+  const resolvedAliases = useMemo(() => {
+    const byId = new Map(models.map((m) => [m.id, m]))
+    return aliases
+      .map((alias) => {
+        const target = resolveAliasToModel(alias, (id) => byId.get(id))
+        return target ? { alias, target } : null
+      })
+      .filter(
+        (
+          entry
+        ): entry is { alias: ModelAlias; target: (typeof models)[number] } =>
+          entry !== null
+      )
+  }, [aliases, models])
+
+  const current = typeof value === "string" ? value : ""
+  return (
+    <Select
+      disabled={disabled}
+      items={Object.fromEntries([
+        ["", "无默认模型"],
+        ...resolvedAliases.map(({ alias, target }) => [
+          aliasRef(alias.id),
+          `${alias.label} (→ ${target.provider.label} / ${target.label})`,
+        ]),
+        ...models.map((model) => [
+          model.id,
+          `${model.provider.label} / ${model.label}`,
+        ]),
+      ])}
+      onValueChange={(next) => onChange(next || null)}
+      value={current}
+    >
+      <SelectTrigger>
+        <SelectValue placeholder="无默认模型" />
+      </SelectTrigger>
+      <SelectPopup>
+        <SelectItem value="">无默认模型</SelectItem>
+        {resolvedAliases.length > 0 && (
+          <SelectGroup key="aliases">
+            <SelectGroupLabel>别名</SelectGroupLabel>
+            {resolvedAliases.map(({ alias, target }) => (
+              <SelectItem key={aliasRef(alias.id)} value={aliasRef(alias.id)}>
+                <span className="flex items-center gap-1.5">
+                  <span className="font-medium">{alias.label}</span>
+                  <span className="text-muted-foreground">
+                    → {target.provider.label} / {target.label}
+                  </span>
+                  {alias.thinkingLevel !== "off" && (
+                    <Badge size="sm" variant="secondary">
+                      {thinkingLevelLabels[alias.thinkingLevel]}
+                    </Badge>
+                  )}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        )}
+        {(providers ?? []).map((provider) => {
+          const providerModels = models.filter(
+            (model) => model.provider.id === provider.id
+          )
+          if (providerModels.length === 0) return null
+          return (
+            <SelectGroup key={provider.id}>
+              <SelectGroupLabel>{provider.label}</SelectGroupLabel>
+              {providerModels.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {model.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          )
+        })}
+      </SelectPopup>
+    </Select>
+  )
+}
+
 function SettingControl({
   def,
   value,
@@ -205,50 +328,13 @@ function SettingControl({
     )
   }
   if (def.widget === "model") {
-    const models = (providers ?? []).flatMap((provider) =>
-      provider.enabled && provider.apiKey
-        ? provider.models
-            .filter((model) => model.enabled)
-            .map((model) => ({ ...model, provider }))
-        : []
-    )
-    const current = typeof value === "string" ? value : ""
     return (
-      <Select
+      <ModelSettingControl
         disabled={disabled}
-        items={Object.fromEntries([
-          ["", "无默认模型"],
-          ...models.map((model) => [
-            model.id,
-            `${model.provider.label} / ${model.label}`,
-          ]),
-        ])}
-        onValueChange={(next) => onChange(next || null)}
-        value={current}
-      >
-        <SelectTrigger>
-          <SelectValue placeholder="无默认模型" />
-        </SelectTrigger>
-        <SelectPopup>
-          <SelectItem value="">无默认模型</SelectItem>
-          {(providers ?? []).map((provider) => {
-            const providerModels = models.filter(
-              (model) => model.provider.id === provider.id
-            )
-            if (providerModels.length === 0) return null
-            return (
-              <SelectGroup key={provider.id}>
-                <SelectGroupLabel>{provider.label}</SelectGroupLabel>
-                {providerModels.map((model) => (
-                  <SelectItem key={model.id} value={model.id}>
-                    {model.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            )
-          })}
-        </SelectPopup>
-      </Select>
+        onChange={onChange}
+        providers={providers}
+        value={value}
+      />
     )
   }
   if (def.widget === "text") {

@@ -217,10 +217,17 @@ export function registerProviderRoutes(
     const defaultModelId = settings["agent.defaultModelId"]
     if (
       defaultModelId &&
+      !defaultModelId.startsWith("alias:") &&
       provider.models.some((m) => m.id === defaultModelId)
     ) {
       configStore.updateSettings({ "agent.defaultModelId": null })
     }
+    // Drop any alias refs to this provider's models; dangling model ids are
+    // tolerated at resolve time, but writing keeps the store clean.
+    pruneAliasModelIds(
+      configStore,
+      provider.models.map((m) => m.id)
+    )
     providers.splice(idx, 1)
     configStore.updateProviders(providers)
     syncModels()
@@ -382,6 +389,7 @@ export function registerProviderRoutes(
     if (settings["agent.defaultModelId"] === model.id) {
       configStore.updateSettings({ "agent.defaultModelId": null })
     }
+    pruneAliasModelIds(configStore, [model.id])
     provider.models = provider.models.filter((m) => m.id !== model.id)
     configStore.updateProviders(providers)
     syncModels()
@@ -443,4 +451,25 @@ function findProviderModel(
     if (model) return { provider, model }
   }
   return { provider: undefined, model: undefined }
+}
+
+/** Remove the given model ids from every alias's ordered model list, dropping
+ * aliases that end up empty. Keeps the alias store clean when a model is
+ * deleted (resolve-time tolerates dangling refs, but write-time prunes). */
+function pruneAliasModelIds(
+  configStore: ConfigStore,
+  modelIds: string[]
+): void {
+  const remove = new Set(modelIds)
+  const current = configStore.getAliases()
+  const next = current
+    .map((a) => ({
+      ...a,
+      modelIds: a.modelIds.filter((id) => !remove.has(id)),
+    }))
+    .filter((a) => a.modelIds.length > 0)
+  const changed =
+    next.length !== current.length ||
+    next.some((a, i) => a.modelIds.length !== current[i].modelIds.length)
+  if (changed) configStore.updateAliases(next)
 }

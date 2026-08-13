@@ -1,4 +1,5 @@
 export * from "./agent"
+export * from "./alias"
 export * from "./challenge"
 export * from "./event"
 export * from "./live-event"

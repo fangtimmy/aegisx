@@ -1,3 +1,4 @@
+import { aliasRef, isAliasRef, type ModelAlias } from "@aegisx/shared"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Box,
@@ -10,6 +11,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { Link } from "react-router"
 
 import {
+  aliasesApi,
   type Challenge,
   keys,
   orchestrationsApi,
@@ -19,6 +21,7 @@ import {
   type ThinkingLevel,
 } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button, type ButtonProps } from "@/components/ui/button"
 import {
   Dialog,
@@ -92,6 +95,8 @@ type SchemaNode = {
 }
 
 type ModelOption = {
+  /** ProviderModel.id (UUID) — used to resolve alias refs. */
+  id: string
   provider: string
   modelId: string
   label: string
@@ -221,6 +226,7 @@ function CreateRunDialogContent({
       for (const model of provider.models) {
         if (!model.enabled) continue
         options.push({
+          id: model.id,
           provider: provider.label,
           modelId: model.modelId,
           label: `${provider.label} / ${model.label}`,
@@ -690,8 +696,11 @@ function renderParamsFields(
   return null
 }
 
-/** Model-ref (provider + modelId + thinking) picker — a grouped model select
- * plus a thinking-level select. */
+/** Model-ref (provider + modelId + thinking) picker — a leading "别名" group
+ * followed by a grouped model select, plus a thinking-level select. Selecting
+ * an alias resolves it (now) to a concrete provider/modelId and fills the
+ * params snapshot with the alias's reasoning level (run params freeze at
+ * creation, so aliases are a convenience here, not a live reference). */
 function ModelRefFields({
   value,
   onChange,
@@ -701,6 +710,10 @@ function ModelRefFields({
   onChange: (next: Record<string, unknown>) => void
   modelOptions: ModelOption[]
 }) {
+  const aliasesQuery = useQuery({
+    queryKey: keys.aliases.all,
+    queryFn: () => aliasesApi.listAliases(),
+  })
   const provider = typeof value.provider === "string" ? value.provider : ""
   const modelId = typeof value.modelId === "string" ? value.modelId : ""
   const thinking =
@@ -709,7 +722,30 @@ function ModelRefFields({
       : "off"
   const modelKey = `${provider}${MODEL_KEY_SEP}${modelId}`
 
+  const aliases = aliasesQuery.data?.items ?? []
+  const byId = new Map(modelOptions.map((option) => [option.id, option]))
+
   const selectModel = (key: string) => {
+    // An alias ref fills the snapshot with the concrete model + the alias's
+    // reasoning level.
+    const alias = isAliasRef(key)
+      ? aliases.find((a) => aliasRef(a.id) === key)
+      : null
+    if (alias) {
+      for (const id of alias.modelIds) {
+        const option = byId.get(id)
+        if (option) {
+          onChange({
+            ...value,
+            provider: option.provider,
+            modelId: option.modelId,
+            thinking: alias.thinkingLevel,
+          })
+          return
+        }
+      }
+      return
+    }
     const [selectedProvider, selectedModelId] = key.split(MODEL_KEY_SEP)
     onChange({ ...value, provider: selectedProvider, modelId: selectedModelId })
   }
@@ -734,6 +770,7 @@ function ModelRefFields({
             <SelectValue placeholder="选择模型" />
           </SelectTrigger>
           <SelectPopup>
+            <AliasModelGroup aliases={aliases} modelOptions={modelOptions} />
             {groupModelOptions(modelOptions).map((group) => (
               <SelectGroup key={group.provider}>
                 <SelectGroupLabel>{group.provider}</SelectGroupLabel>
@@ -770,6 +807,51 @@ function ModelRefFields({
         </Select>
       </Field>
     </div>
+  )
+}
+
+/** The leading "别名" group for the params model picker. Each alias resolves to
+ * the first available model option (matched by ProviderModel.id UUID) and is
+ * labeled `alias → model`. Select values are `alias:<id>`; ModelRefFields
+ * resolves them (snapshot model + alias thinking) on select. */
+function AliasModelGroup({
+  aliases,
+  modelOptions,
+}: {
+  aliases: ModelAlias[]
+  modelOptions: ModelOption[]
+}) {
+  const byId = new Map(modelOptions.map((option) => [option.id, option]))
+  const resolved = aliases
+    .map((alias) => {
+      for (const id of alias.modelIds) {
+        const option = byId.get(id)
+        if (option) return { alias, option }
+      }
+      return null
+    })
+    .filter(
+      (entry): entry is { alias: ModelAlias; option: ModelOption } =>
+        entry !== null
+    )
+  if (resolved.length === 0) return null
+  return (
+    <SelectGroup key="aliases">
+      <SelectGroupLabel>别名</SelectGroupLabel>
+      {resolved.map(({ alias, option }) => (
+        <SelectItem key={aliasRef(alias.id)} value={aliasRef(alias.id)}>
+          <span className="flex items-center gap-1.5">
+            <span className="font-medium">{alias.label}</span>
+            <span className="text-muted-foreground">→ {option.label}</span>
+            {alias.thinkingLevel !== "off" && (
+              <Badge size="sm" variant="secondary">
+                {thinkingLevelLabels[alias.thinkingLevel]}
+              </Badge>
+            )}
+          </span>
+        </SelectItem>
+      ))}
+    </SelectGroup>
   )
 }
 

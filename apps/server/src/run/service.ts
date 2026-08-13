@@ -8,7 +8,7 @@ import type {
   RunPublic,
   SwitchModelInput,
 } from "@aegisx/shared"
-import { get, normalizeThinkingLevel } from "@aegisx/shared"
+import { get, normalizeThinkingLevel, resolveRefTarget } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
@@ -551,6 +551,39 @@ export function createRunService(options: RunServiceOptions) {
     return getProviderConnections(configStore)
   }
 
+  /** Resolve a stored model ref (`alias:<id>` or a raw ProviderModel.id) to the
+   * first currently-enabled provider+model. Returns null when the ref is empty
+   * or resolves to nothing available. Alias refs are resolved against the
+   * configured aliases; re-pointing an alias is therefore a live, global change
+   * for any default slot (agent.defaultModelId / scheduler modelId). */
+  function resolveDefaultModel(ref: string | null): {
+    provider: ProviderConnection
+    model: ProviderConnection["models"][number]
+    /** The alias's reasoning level, or null for a raw model id (caller falls
+     * back to its own default thinking setting). */
+    thinkingLevel: ThinkingLevel | null
+  } | null {
+    const available = providers()
+      .filter((p) => p.enabled && p.apiKey)
+      .flatMap((p) =>
+        p.models
+          .filter((m) => m.enabled)
+          .map((m) => ({ provider: p, model: m }))
+      )
+    const byId = new Map(available.map((e) => [e.model.id, e]))
+    const target = resolveRefTarget(
+      ref,
+      (id) => byId.get(id),
+      configStore.getAliases()
+    )
+    if (!target) return null
+    return {
+      provider: target.model.provider,
+      model: target.model.model,
+      thinkingLevel: target.thinkingLevel,
+    }
+  }
+
   function agentSettings(): AgentLoopSettings {
     const s = options.getSettings()
     return {
@@ -1026,6 +1059,7 @@ export function createRunService(options: RunServiceOptions) {
         ;({ target, thinkingLevel } = await applyModelSwitch(
           session,
           providers(),
+          configStore.getAliases(),
           input,
           (t) => agentRow?.modelId === t.model.modelId
         ))
@@ -1113,6 +1147,7 @@ export function createRunService(options: RunServiceOptions) {
         ;({ target, thinkingLevel } = await applyModelSwitch(
           session,
           providers(),
+          configStore.getAliases(),
           input,
           (t) => agentRow?.modelId === t.model.modelId
         ))
@@ -1734,12 +1769,7 @@ export function createRunService(options: RunServiceOptions) {
     queueItemId?: string
   }): Promise<RunPublic> {
     const settings = options.getSettings()
-    const all = getProviderConnections(configStore)
-    const modelId = get(settings, "agent.defaultModelId")
-    const selected = all
-      .filter((p) => p.enabled && p.apiKey)
-      .flatMap((p) => p.models.map((m) => ({ provider: p, model: m })))
-      .find(({ model }) => model.enabled && model.id === modelId)
+    const selected = resolveDefaultModel(get(settings, "agent.defaultModelId"))
     if (!selected) {
       throw new RunActionError(
         "invalid_state",
@@ -1754,7 +1784,7 @@ export function createRunService(options: RunServiceOptions) {
       provider: selected.provider,
       modelId: selected.model.id,
       thinkingLevel: normalizeThinkingLevel(
-        get(settings, "agent.defaultThinkingLevel")
+        selected.thinkingLevel ?? get(settings, "agent.defaultThinkingLevel")
       ),
       container: {
         image: get(settings, "container.image"),
@@ -1929,12 +1959,9 @@ export function createRunService(options: RunServiceOptions) {
   async function startScheduler(eventId: string): Promise<RunPublic> {
     const config = getSchedulerConfig(eventId)
     const settings = options.getSettings()
-    const modelId = config.modelId ?? get(settings, "agent.defaultModelId")
-    const all = getProviderConnections(configStore)
-    const selected = all
-      .filter((p) => p.enabled && p.apiKey)
-      .flatMap((p) => p.models.map((m) => ({ provider: p, model: m })))
-      .find(({ model }) => model.enabled && model.id === modelId)
+    const selected = resolveDefaultModel(
+      config.modelId ?? get(settings, "agent.defaultModelId")
+    )
     if (!selected) {
       throw new RunActionError(
         "invalid_state",
@@ -1942,7 +1969,7 @@ export function createRunService(options: RunServiceOptions) {
       )
     }
     const thinking = normalizeThinkingLevel(
-      get(settings, "agent.defaultThinkingLevel")
+      selected.thinkingLevel ?? get(settings, "agent.defaultThinkingLevel")
     )
     return create({
       scopeType: "event",
