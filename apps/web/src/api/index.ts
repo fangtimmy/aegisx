@@ -3,6 +3,7 @@ export { apiRequest, jsonRequest } from "./client"
 export * as agentsApi from "./agents"
 export * as eventsApi from "./events"
 export { keys } from "./keys"
+export * as orchestrationsApi from "./orchestrations"
 export * as platformsApi from "./platforms"
 export * as providersApi from "./providers"
 export * as runsApi from "./runs"
@@ -10,6 +11,7 @@ export * as schedulerApi from "./scheduler"
 export * as settingsApi from "./settings"
 export type * from "./types"
 export type {
+  OrchestrationInfo,
   QueueItem,
   RunDetail,
   SchedulerInfo,

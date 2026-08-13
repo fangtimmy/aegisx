@@ -1,17 +1,22 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
   MessageList,
+  QueueItem,
   RunDetail,
   RunFile,
   RunPublic,
   SwitchModelInput,
-  ThinkingLevel,
 } from "./types"
 
 export type CreateRunInput = {
-  modelId?: string
-  image?: string
-  thinkingLevel?: ThinkingLevel
+  /** Orchestration plugin id (defaults to 'classic' server-side). */
+  orchestration?: string
+  /** Plugin input snapshot (validated against the plugin's params schema). */
+  params?: Record<string, unknown>
+  /** Overrides the rendered `initial` template as the run's first prompt. */
+  prompt?: string
+  /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
+  timeoutMs?: number
 }
 
 export type SendMessageInput = {
@@ -23,8 +28,10 @@ export function listEventRuns(eventId: string) {
   return apiRequest<{ items: RunPublic[] }>(`/events/${eventId}/runs`)
 }
 
+/** Enqueue a run (spec §10: POST /api/challenges/:id/runs returns a queue
+ * item, 202 — the drainer launches it when a fence slot is free). */
 export function createRun(challengeId: string, input: CreateRunInput) {
-  return apiRequest<RunPublic>(
+  return apiRequest<QueueItem>(
     `/challenges/${challengeId}/runs`,
     jsonRequest("POST", input)
   )

@@ -10,7 +10,13 @@ import {
 import { useCallback } from "react"
 import { useSearchParams } from "react-router"
 
-import { type Challenge, type ThinkingLevel, keys, runsApi } from "@/api"
+import {
+  type Challenge,
+  type ThinkingLevel,
+  agentsApi,
+  keys,
+  runsApi,
+} from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -154,23 +160,30 @@ export function RunWorkspace({
   const agents = detail.data?.agents ?? []
 
   // Conversation adapter — stable callbacks so the SSE connection effect
-  // does not reconnect on re-render. Model switch refreshes the run list so
+  // does not reconnect on re-render. Send/switch target the *selected* agent
+  // (per-agent endpoints, spec §10); model switch refreshes the run list so
   // the header + switcher re-derive the current model.
   const loadMessages = useCallback(
     () => runsApi.listMessages(runId, 0).then((list) => list.items),
     [runId]
   )
   const sendMessage = useCallback(
-    (text: string, deliverAs?: "steer" | "followUp") =>
-      runsApi.sendMessage(runId, { text, deliverAs }),
-    [runId]
+    (agentId: string, text: string, deliverAs?: "steer" | "followUp") =>
+      agentsApi.sendMessage(agentId, { text, deliverAs }),
+    []
   )
   const switchModel = useCallback(
-    (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      runsApi
-        .switchModel(runId, input)
+    (
+      agentId: string,
+      input: {
+        modelId: string
+        thinkingLevel: ThinkingLevel
+      }
+    ) =>
+      agentsApi
+        .switchModel(agentId, input)
         .then(() => invalidate(queryClient, eventId)),
-    [runId, eventId, queryClient]
+    [eventId, queryClient]
   )
   const setQueue = useCallback(
     (_agentId: string, body: { steering: string[]; followUp: string[] }) =>

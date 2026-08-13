@@ -104,6 +104,15 @@ export type SchedulerInfo = {
   }
 }
 
+/** GET /api/orchestrations — plugin id/scope + TypeBox params schema + templates. */
+export type OrchestrationInfo = {
+  id: string
+  scope: "challenge" | "event"
+  /** TypeBox JSON schema for the plugin's input snapshot (spec §3.2). */
+  params: Record<string, unknown>
+  templates: Record<string, string>
+}
+
 export type SettingsResponse = {
   settings: FlatSettings
   updatedAt: string

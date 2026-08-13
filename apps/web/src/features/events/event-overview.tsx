@@ -11,7 +11,6 @@ import {
   LayoutPanelTop,
   ListChecks,
   ListOrdered,
-  LoaderCircle,
   MessageSquare,
   Network,
   Play,
@@ -80,6 +79,7 @@ import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { ErrorState, isChallengeSolved } from "./event-shared"
+import { QueueList } from "./queue-list"
 
 const UNCATEGORIZED = "未分类"
 
@@ -145,6 +145,14 @@ export function EventOverview({
   const queue = useQuery({
     queryKey: keys.scheduler.queue(eventId),
     queryFn: () => schedulerApi.listQueue(eventId),
+    // Poll while anything is pending/running so launch progress (pending →
+    // running → done) and edits stay current without manual refreshes.
+    refetchInterval: (query) =>
+      (query.state.data?.items ?? []).some((item) =>
+        ["pending", "running"].includes(item.status)
+      )
+        ? 5000
+        : false,
   })
 
   const detailsById = useMemo(() => {
@@ -684,18 +692,14 @@ function RunsTab({
             </div>
             <Card>
               <CardPanel className="p-0">
-                <div className="flex flex-col">
-                  {visibleQueue.map((item) => (
-                    <QueueRow
-                      item={item}
-                      key={item.id}
-                      onOpenRun={() => {
-                        if (item.runId)
-                          navigate(`/events/${eventId}/runs/${item.runId}`)
-                      }}
-                    />
-                  ))}
-                </div>
+                <QueueList
+                  eventId={eventId}
+                  items={visibleQueue}
+                  onChanged={() => undefined}
+                  onOpenRun={(runId) =>
+                    navigate(`/events/${eventId}/runs/${runId}`)
+                  }
+                />
               </CardPanel>
             </Card>
           </section>
@@ -740,48 +744,6 @@ function RunsTab({
         )}
       </div>
     </ScrollArea>
-  )
-}
-
-function QueueRow({
-  item,
-  onOpenRun,
-}: {
-  item: QueueItem
-  onOpenRun: () => void
-}) {
-  return (
-    <button
-      className="flex min-w-0 items-center gap-2.5 border-b px-3 py-2 text-left last:border-b-0 hover:bg-accent"
-      onClick={onOpenRun}
-      type="button"
-    >
-      <span className="shrink-0 font-mono text-xs text-muted-foreground">
-        #{item.ord}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
-          {item.challengeName}
-        </span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {item.orchestration}
-          {item.source === "scheduler" ? " · 调度者" : ""}
-        </span>
-      </span>
-      {item.status === "running" ? (
-        <Badge size="sm" variant="info" className="gap-1">
-          <LoaderCircle className="size-3 animate-spin" /> 运行中
-        </Badge>
-      ) : item.status === "failed" ? (
-        <Badge size="sm" variant="destructive">
-          失败
-        </Badge>
-      ) : (
-        <Badge size="sm" variant="secondary">
-          排队中
-        </Badge>
-      )}
-    </button>
   )
 }
 
@@ -1184,18 +1146,18 @@ function AgentDialog({
   }
 
   const sendMessage = useCallback(
-    (text: string, deliverAs?: "steer" | "followUp") =>
-      agentsApi.sendMessage(agentId, { text, deliverAs }),
-    [agentId]
+    (id: string, text: string, deliverAs?: "steer" | "followUp") =>
+      agentsApi.sendMessage(id, { text, deliverAs }),
+    []
   )
   const switchModel = useCallback(
-    (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      agentsApi.switchModel(agentId, input).then(() =>
+    (id: string, input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
+      agentsApi.switchModel(id, input).then(() =>
         queryClient.invalidateQueries({
           queryKey: keys.runs.fleet(run.eventId),
         })
       ),
-    [agentId, run.eventId, queryClient]
+    [run.eventId, queryClient]
   )
   const loadMessages = useCallback(
     () => runsApi.listMessages(runId, 0, agentId).then((list) => list.items),

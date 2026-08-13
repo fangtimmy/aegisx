@@ -74,16 +74,17 @@ export type ConversationProps = {
   canEditQueue: boolean
   /** Load durable committed messages (raw list; Conversation buckets by agent). */
   loadMessages: () => Promise<MessageListItem[]>
-  /** Send a message (steer / followUp / new turn). */
+  /** Send a message to one agent (steer / followUp / new turn). */
   sendMessage: (
+    agentId: string,
     text: string,
     deliverAs?: "steer" | "followUp"
   ) => Promise<unknown>
-  /** Switch the live model (main agent). Parent owns success invalidation. */
-  switchModel: (input: {
-    modelId: string
-    thinkingLevel: ThinkingLevel
-  }) => Promise<unknown>
+  /** Switch an agent's live model (entry agent in the run workspace). */
+  switchModel: (
+    agentId: string,
+    input: { modelId: string; thinkingLevel: ThinkingLevel }
+  ) => Promise<unknown>
   /** Replace an agent's steer/followUp queue (run main agent only). */
   setQueue?: (
     agentId: string,
@@ -111,7 +112,7 @@ export function Conversation(props: ConversationProps) {
   const store = storeRef.current
 
   const mainAgent = useMemo(
-    () => agents.find((a) => a.role === "main") ?? agents[0],
+    () => agents.find((a) => a.isEntry) ?? agents[0],
     [agents]
   )
   const [selectedAgentId, setSelectedAgentId] = useState<string>(
@@ -149,7 +150,7 @@ export function Conversation(props: ConversationProps) {
   )
   const showSteerQueue =
     running &&
-    selectedAgent?.role === "main" &&
+    selectedAgent?.isEntry &&
     canEditQueue &&
     setQueue !== undefined &&
     queuedMessages !== null &&
@@ -194,14 +195,14 @@ export function Conversation(props: ConversationProps) {
   }, [agents.length, loadMessages])
 
   const send = useMutation({
-    mutationFn: () => sendMessageFn(draft.trim(), deliverAs),
+    mutationFn: () => sendMessageFn(effectiveAgentId, draft.trim(), deliverAs),
     onSuccess: () => setDraft(""),
     onError: (error) => toast.error("发送消息失败", error.message),
   })
 
   const switchModel = useMutation({
     mutationFn: (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      switchModelFn(input),
+      switchModelFn(effectiveAgentId, input),
     onError: (error) => toast.error("切换模型失败", error.message),
   })
 
@@ -224,13 +225,13 @@ export function Conversation(props: ConversationProps) {
           >
             {agents.map((agent) => (
               <TabsTab className="gap-1.5 px-2" key={agent.id} value={agent.id}>
-                {agent.role === "main" ? (
+                {agent.isEntry ? (
                   <Bot aria-hidden="true" className="size-3.5" />
                 ) : (
                   <GitFork aria-hidden="true" className="size-3.5" />
                 )}
                 <span className="max-w-40 truncate">
-                  {agent.role === "main" ? "主" : (agent.name ?? "子")}
+                  {agent.isEntry ? "主" : (agent.name ?? "子")}
                 </span>
                 <AgentStatusIcon
                   className="[&_svg]:size-3.5"
@@ -289,7 +290,7 @@ export function Conversation(props: ConversationProps) {
               </CardPanel>
             </Card>
             <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
-              {selectedAgent.role === "main" && (
+              {selectedAgent.isEntry && (
                 <ModelThinkingSwitcher
                   findCurrentModelId={findCurrentModelId}
                   thinkingLevel={thinkingLevel}
