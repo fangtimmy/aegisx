@@ -32,6 +32,7 @@ import {
   Puzzle,
   Server,
   Settings2,
+  Shrink,
   Square,
   Timer,
   Users,
@@ -106,6 +107,10 @@ import { QueueList } from "./queue-list"
 
 const UNCATEGORIZED = "未分类"
 
+/** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
+   so the fleet/queue/usage must refresh regardless of locally-known state. */
+const POLL_INTERVAL_MS = 5000
+
 const ROLE_LABELS: Record<string, string> = {
   solver: "求解者",
   observer: "观察者",
@@ -142,7 +147,8 @@ export function EventOverview({
   }, [])
 
   // Fleet: every challenge run + its agents (the overview's single source of
-  // truth). Polls while any run is active so statuses stay current.
+  // truth). Always polls — the scheduler can start/stop runs server-side at
+  // any time, so the overview must stay current unconditionally.
   const fleet = useQuery({
     queryKey: keys.runs.fleet(eventId),
     queryFn: async () => {
@@ -152,10 +158,7 @@ export function EventOverview({
       )
       return { items, details }
     },
-    refetchInterval: (query) =>
-      (query.state.data?.items ?? []).some((run) => run.status === "running")
-        ? 5000
-        : false,
+    refetchInterval: POLL_INTERVAL_MS,
   })
   // Scheduler (event-scoped run) + its agents; the queue snapshot.
   const scheduler = useQuery({
@@ -165,29 +168,20 @@ export function EventOverview({
       const agents = data.run ? (await runsApi.getRun(data.run.id)).agents : []
       return { ...data, agents }
     },
-    refetchInterval: (query) =>
-      query.state.data?.run?.status === "running" ? 5000 : false,
+    refetchInterval: POLL_INTERVAL_MS,
   })
   const queue = useQuery({
     queryKey: keys.scheduler.queue(eventId),
     queryFn: () => schedulerApi.listQueue(eventId),
-    // Poll while anything is pending/running so launch progress (pending →
-    // running → done) and edits stay current without manual refreshes.
-    refetchInterval: (query) =>
-      (query.state.data?.items ?? []).some((item) =>
-        ["pending", "running"].includes(item.status)
-      )
-        ? 5000
-        : false,
+    // Always poll: launch progress (pending → running → done) and edits stay
+    // current without manual refreshes.
+    refetchInterval: POLL_INTERVAL_MS,
   })
-  // Event-wide token usage + cost (spec §10). Usage only grows while agents
-  // stream, so poll alongside the fleet while any run is running.
+  // Event-wide token usage + cost (spec §10).
   const usage = useQuery({
     queryKey: keys.events.usage(eventId),
     queryFn: () => eventsApi.getEventUsage(eventId),
-    refetchInterval: fleet.data?.items.some((run) => run.status === "running")
-      ? 5000
-      : false,
+    refetchInterval: POLL_INTERVAL_MS,
   })
 
   const detailsById = useMemo(() => {
@@ -1004,7 +998,6 @@ function AgentsGraph({
   onSelectAgent: (runId: string, agentId: string) => void
 }) {
   const queryClient = useQueryClient()
-  const [schedulerOpen, setSchedulerOpen] = useState(true)
   const [openRuns, setOpenRuns] = useState<Set<string>>(() => {
     // Default-expand active runs.
     return new Set(
@@ -1069,12 +1062,11 @@ function AgentsGraph({
       buildAgentsGraph({
         scheduler,
         schedRun,
-        schedulerOpen,
         runs: sortedRuns,
         detailsById,
         openRuns,
       }),
-    [scheduler, schedRun, schedulerOpen, sortedRuns, detailsById, openRuns]
+    [scheduler, schedRun, sortedRuns, detailsById, openRuns]
   )
   // Remount React Flow (→ re-fit-view) only when the node SET changes
   // (expand/collapse/spawn). Status-only polls keep the same key, so the
@@ -1087,7 +1079,8 @@ function AgentsGraph({
     (_, node) => {
       const data = node.data as GraphNodeData
       if (data.kind === "scheduler") {
-        setSchedulerOpen((open) => !open)
+        // The scheduler node IS the orchestrator agent — open its conversation.
+        if (data.runId && data.agentId) onSelectAgent(data.runId, data.agentId)
       } else if (data.kind === "run") {
         setOpenRuns((prev) => {
           const next = new Set(prev)
@@ -1194,7 +1187,14 @@ const runNodeId = (id: string) => `run:${id}`
 const agentNodeId = (id: string) => `agent:${id}`
 
 type GraphNodeData =
-  | { kind: "scheduler"; active: boolean; label: string; status: string }
+  | {
+      kind: "scheduler"
+      /** The scheduler run + its orchestrator agent, when active. Null when
+       * no scheduler run exists (placeholder "未启用" node, not clickable). */
+      runId: string | null
+      agentId: string | null
+      status: string
+    }
   | { kind: "run"; run: RunPublic; active: boolean }
   | { kind: "agent"; agent: AgentSummary; runId: string }
 
@@ -1268,14 +1268,12 @@ function layoutWithDagre(
 function buildAgentsGraph({
   scheduler,
   schedRun,
-  schedulerOpen,
   runs,
   detailsById,
   openRuns,
 }: {
   scheduler?: SchedulerWithAgents
   schedRun: RunPublic | null
-  schedulerOpen: boolean
   runs: RunPublic[]
   detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
   openRuns: Set<string>
@@ -1292,33 +1290,21 @@ function buildAgentsGraph({
     dims[id] = NODE_DIM[type]
   }
 
-  // Root: the event scheduler (shows "未启用" when no run exists yet).
+  // Root: the event scheduler. When a scheduler run exists, this node IS its
+  // orchestrator agent (click opens that agent's conversation) and the
+  // challenge runs hang off it. When no run exists it is a non-clickable
+  // "未启用" placeholder — the start control lives in the graph overlay.
+  const orchAgent =
+    scheduler?.agents?.find((a) => a.isEntry) ?? scheduler?.agents?.[0] ?? null
   addNode(SCHED_NODE_ID, "scheduler", {
     kind: "scheduler",
-    active: schedulerOpen,
-    label: schedRun ? "调度者" : "调度者（未启用）",
+    runId: schedRun?.id ?? null,
+    agentId: orchAgent?.id ?? null,
     status: schedRun ? runStatusLabel(schedRun.status) : "未启用",
   })
 
-  // Scheduler's orchestrator agent(s) when expanded.
-  if (schedulerOpen && schedRun) {
-    for (const agent of scheduler?.agents ?? []) {
-      addNode(agentNodeId(agent.id), "agent", {
-        kind: "agent",
-        agent,
-        runId: schedRun.id,
-      })
-      rawEdges.push({
-        id: `e:sched:${agent.id}`,
-        source: SCHED_NODE_ID,
-        target: agentNodeId(agent.id),
-        type: "smoothstep",
-        style: EDGE_STYLE.entry,
-      })
-    }
-  }
-
-  // Challenge runs (+ their agents when expanded).
+  // Challenge runs hang off the scheduler node when one is active; otherwise
+  // they stand alone. Each expanded run exposes its agents.
   for (const run of runs) {
     addNode(runNodeId(run.id), "run", {
       kind: "run",
@@ -1393,22 +1379,21 @@ function GraphNodeShell({
 
 function SchedulerGraphNode({ data }: NodeProps) {
   const d = data as Extract<GraphNodeData, { kind: "scheduler" }>
+  const active = d.agentId !== null
   return (
-    <GraphNodeShell className="w-44">
-      <BrainCircuit className="size-4 shrink-0 text-primary" />
+    <GraphNodeShell className={cn("w-44", !active && "opacity-70")}>
+      <BrainCircuit
+        className={cn(
+          "size-4 shrink-0",
+          active ? "text-primary" : "text-muted-foreground"
+        )}
+      />
       <span className="min-w-0 flex-1 truncate text-sm font-medium">
-        {d.label}
+        {active ? "调度者" : "调度者（未启用）"}
       </span>
       <Badge size="sm" variant="secondary">
         {d.status}
       </Badge>
-      <ChevronDown
-        aria-hidden="true"
-        className={cn(
-          "size-3.5 shrink-0 text-muted-foreground transition-transform",
-          !d.active && "-rotate-90"
-        )}
-      />
     </GraphNodeShell>
   )
 }
@@ -1523,6 +1508,42 @@ function AgentDialog({
     [run?.modelId, run?.provider]
   )
 
+  // Agent-level controls (spec §10). Stop aborts the current turn (container
+  // kept warm); compact runs a manual context summarization (requires an idle
+  // session); close releases a challenge run's container. The scheduler run
+  // is closed via its graph overlay instead.
+  const invalidateAgent = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
+      queryClient.invalidateQueries({
+        queryKey: keys.runs.fleet(run?.eventId ?? ""),
+      }),
+    ])
+  const stop = useMutation({
+    mutationFn: () => agentsApi.stopAgent(agentId),
+    onSuccess: () => {
+      toast.success("已停止当前轮")
+      void invalidateAgent()
+    },
+    onError: (error) => toast.error("停止失败", error.message),
+  })
+  const compact = useMutation({
+    mutationFn: () => agentsApi.compactAgent(agentId),
+    onSuccess: () => {
+      toast.success("上下文已压缩")
+      void invalidateAgent()
+    },
+    onError: (error) => toast.error("压缩失败", error.message),
+  })
+  const close = useMutation({
+    mutationFn: () => runsApi.closeRun(runId),
+    onSuccess: () => {
+      toast.success("已关闭容器")
+      void invalidateAgent()
+    },
+    onError: (error) => toast.error("关闭失败", error.message),
+  })
+
   if (detail.isPending || !run || !agent) {
     return (
       <Dialog onOpenChange={(open) => !open && onClose()} open>
@@ -1565,6 +1586,47 @@ function AgentDialog({
             {run.provider} / {run.modelId}
             {agent.isEntry ? " · 入口" : ""}
           </DialogDescription>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {run.status === "running" && (
+              <Button
+                loading={stop.isPending}
+                onClick={() => stop.mutate()}
+                size="xs"
+                title="中止当前轮（容器保留）"
+                type="button"
+                variant="destructive-outline"
+              >
+                <Square /> 停止
+              </Button>
+            )}
+            <Button
+              disabled={run.status === "running"}
+              loading={compact.isPending}
+              onClick={() => compact.mutate()}
+              size="xs"
+              title={
+                run.status === "running"
+                  ? "运行中无法压缩，请先停止"
+                  : "手动压缩上下文"
+              }
+              type="button"
+              variant="outline"
+            >
+              <Shrink /> 压缩
+            </Button>
+            {run.scopeType === "challenge" && run.status !== "closed" && (
+              <Button
+                loading={close.isPending}
+                onClick={() => close.mutate()}
+                size="xs"
+                title="释放容器（之后发消息可冷恢复）"
+                type="button"
+                variant="outline"
+              >
+                <Archive /> 关闭容器
+              </Button>
+            )}
+          </div>
         </DialogHeader>
         {/* Plain flex div, NOT DialogPanel: DialogPanel wraps its children in
             a ScrollArea, which would scroll the tab bar and the composer

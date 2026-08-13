@@ -192,3 +192,24 @@
   border: none;
   padding: calc(var(--spacing) * 2);
 }
+
+/* React Flow: map its theme variables onto ours so the graph + controls adapt
+   to dark mode (RF's defaults are hardcoded light). Applied on .react-flow so
+   they inherit to the controls/attribution. */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-controls-button-background-color: var(--popover);
+  --xy-controls-button-color: var(--muted-foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-button-background-color-hover: var(--accent);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-box-shadow: var(--shadow-xs);
+  --xy-attribution-background-color: transparent;
+  --xy-attribution-color: var(--muted-foreground);
+}
+.react-flow__controls-button {
+  border-bottom: 1px solid var(--border);
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}

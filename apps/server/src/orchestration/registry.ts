@@ -1,3 +1,8 @@
+import {
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+} from "@aegisx/shared/prompt-defaults"
+
 import type { createDatabase } from "../db"
 import bootstrapSolver from "./bootstrap-solver"
 import classic from "./classic"
@@ -5,10 +10,16 @@ import observerSolver from "./observer-solver"
 import {
   seedBuiltinTemplates,
   seedPluginTemplates,
+  upgradeBuiltinTemplate,
 } from "./prompt-templates-store"
 import scheduler from "./scheduler"
 import trio from "./trio"
-import type { OrchestrationPlugin } from "./types"
+import type {
+  ChallengePlugin,
+  OrchestrationInfo,
+  OrchestrationPlugin,
+} from "./types"
+import { pluginNeedsModels } from "./types"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
@@ -40,6 +51,22 @@ export function listPlugins(): OrchestrationPlugin[] {
   return [...plugins.values()]
 }
 
+/** Compact catalog of challenge-scope orchestrations for the scheduler's prompt
+ * (spec §3.7 `orchestrations`). Filters out the event-scope scheduler itself
+ * and collapses to {id,label,description,needsModels} so the scheduler never
+ * has to guess a plugin name or invent params. */
+export function challengeOrchestrationCatalog(): OrchestrationInfo[] {
+  return listPlugins()
+    .filter((plugin): plugin is ChallengePlugin => plugin.scope === "challenge")
+    .map((plugin) => ({
+      id: plugin.id,
+      label: plugin.label ?? plugin.id,
+      description: plugin.description ?? "",
+      needsModels: pluginNeedsModels(plugin.params),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id))
+}
+
 let builtinRegistered = false
 
 /** Register the built-in orchestration plugins. Idempotent — safe to call on
@@ -65,5 +92,14 @@ export function registerOrchestrationPlugins(): void {
 export function bootOrchestration(db: Database): void {
   registerOrchestrationPlugins()
   seedBuiltinTemplates(db)
+  // Refresh the scheduler system prompt on existing DBs that still carry the
+  // pre-catalog default (adds the orchestration catalog + enqueue-first
+  // guidance). User edits are preserved (upgrade skips non-matching rows).
+  upgradeBuiltinTemplate(
+    db,
+    "orchestratorSystem",
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
   for (const plugin of listPlugins()) seedPluginTemplates(db, plugin)
 }

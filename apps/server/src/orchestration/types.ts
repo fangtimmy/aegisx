@@ -97,6 +97,9 @@ export type PromptContext = {
   capabilities?: Capabilities
   /** event-scoped only (scheduler instruction). */
   instruction?: string
+  /** event-scoped only: the challenge orchestrations the scheduler may launch
+   * (id/label/description/needsModels), so it never invents plugin names. */
+  orchestrations?: OrchestrationInfo[]
 }
 
 // --- model reference ------------------------------------------------------
@@ -247,6 +250,10 @@ export type SpawnTemplate = {
 
 interface PluginBase {
   id: string
+  /** Human-readable name shown in the picker / scheduler catalog. */
+  label?: string
+  /** One-line description for the picker / scheduler catalog. */
+  description?: string
   /** Input declaration (typebox); UI/enqueue render against it. */
   params: TSchema
   /** Default template bodies, upserted at registration (only when no user edit
@@ -254,6 +261,55 @@ interface PluginBase {
   templates?: Record<string, string>
   /** spawn_agent derived template; omitted = default (file tools only, 'child'). */
   spawn?: SpawnTemplate
+}
+
+/** Compact orchestration descriptor for the scheduler's prompt catalog. */
+export type OrchestrationInfo = {
+  id: string
+  label: string
+  description: string
+  /** Whether the plugin's params include model refs (so the scheduler knows
+   * it must not invent params — omit them to use defaults). */
+  needsModels: boolean
+}
+
+/** Whether a plugin's params schema contains any model-ref ({provider,modelId}).
+ * Pure schema walk — shared by the scheduler catalog and the run-create form. */
+export function pluginNeedsModels(params: TSchema): boolean {
+  const isModelRef = (node: TSchema): boolean => {
+    if (!node || typeof node !== "object") return false
+    const props = (node as { properties?: Record<string, unknown> }).properties
+    return (
+      !!props &&
+      typeof props.provider === "object" &&
+      typeof props.modelId === "object"
+    )
+  }
+  const walk = (node: TSchema): boolean => {
+    if (!node || typeof node !== "object") return false
+    const n = node as {
+      type?: string
+      properties?: Record<string, TSchema>
+      items?: TSchema
+    }
+    if (n.type === "object" && n.properties) {
+      if (isModelRef(node as TSchema)) return true
+      return Object.values(n.properties).some(walk)
+    }
+    if (n.type === "array" && n.items) {
+      const items = n.items
+      const arr = node as { minItems?: number; maxItems?: number }
+      const count =
+        arr.maxItems !== undefined &&
+        arr.minItems !== undefined &&
+        arr.maxItems === arr.minItems
+          ? arr.maxItems
+          : (arr.minItems ?? 1)
+      return count > 0 && walk(items)
+    }
+    return false
+  }
+  return walk(params)
 }
 
 export interface ChallengePlugin<P = any> extends PluginBase {

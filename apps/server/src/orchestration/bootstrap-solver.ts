@@ -12,6 +12,8 @@ import { defineOrchestration } from "./types"
  */
 export default defineOrchestration({
   id: "bootstrap-solver",
+  label: "Bootstrap-Solver",
+  description: "先探测再解题：单独探测 agent 先摸清攻击面，再交给求解者。",
   scope: "challenge",
   params: Type.Object({}),
   templates: { bootstrapSystem: DEFAULT_BOOTSTRAP_SYSTEM_PROMPT_TEMPLATE },

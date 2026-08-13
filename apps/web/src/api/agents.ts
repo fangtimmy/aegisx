@@ -28,3 +28,12 @@ export function stopAgent(agentId: string) {
     jsonRequest("POST", {})
   )
 }
+
+/** Manually compact an agent's context (POST /api/agents/:agentId/compact).
+ * Requires an active, idle session; the server rejects a running turn. */
+export function compactAgent(agentId: string) {
+  return apiRequest<RunPublic>(
+    `/agents/${agentId}/compact`,
+    jsonRequest("POST", {})
+  )
+}

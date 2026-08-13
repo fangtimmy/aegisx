@@ -40,6 +40,40 @@ export function seedBuiltinTemplates(db: Database): void {
   }
 }
 
+/** One-time refresh of built-in template rows that still hold a known prior
+ * default body. A row is updated only if its current body exactly equals the
+ * `fromBody` (i.e. the user has not customized it), so user edits always
+ * survive. Used to ship prompt improvements (e.g. the scheduler catalog) to
+ * existing databases without a schema bump. */
+export function upgradeBuiltinTemplate(
+  db: Database,
+  key: string,
+  fromBody: string,
+  toBody: string
+): void {
+  if (fromBody === toBody) return
+  const row = db
+    .select({ body: promptTemplates.body })
+    .from(promptTemplates)
+    .where(
+      and(
+        eq(promptTemplates.plugin, BUILTIN_PLUGIN),
+        eq(promptTemplates.key, key)
+      )
+    )
+    .get()
+  if (!row || row.body !== fromBody) return // absent (seeded fresh) or customized
+  db.update(promptTemplates)
+    .set({ body: toBody, updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(promptTemplates.plugin, BUILTIN_PLUGIN),
+        eq(promptTemplates.key, key)
+      )
+    )
+    .run()
+}
+
 /**
  * Seed a plugin's declared default templates (spec §3.6: upsert at registration
  * only when no user edit exists for (plugin,key)). Idempotent via ON CONFLICT

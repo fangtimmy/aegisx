@@ -41,7 +41,11 @@ import {
   migrateLegacyPromptSettings,
   renderTemplate,
 } from "../orchestration/prompt-templates-store"
-import { bootOrchestration, requirePlugin } from "../orchestration/registry"
+import {
+  bootOrchestration,
+  challengeOrchestrationCatalog,
+  requirePlugin,
+} from "../orchestration/registry"
 import {
   createRunHandle,
   EventScopeEmitter,
@@ -801,6 +805,7 @@ export function createRunService(options: RunServiceOptions) {
               instruction: input.instruction,
               environment: env,
               model: modelConfig,
+              orchestrations: challengeOrchestrationCatalog(),
             },
             db,
             input.container.workspace
@@ -1136,6 +1141,32 @@ export function createRunService(options: RunServiceOptions) {
     const runId = runIdOf(agentId)
     if (!runId) throw new RunActionError("not_found", "Agent not found")
     await lifecycle.abort(agentId).catch(() => undefined)
+    return requireRun(runId)
+  }
+
+  /** Manually compact an agent's context (pi SDK `session.compact()`). The
+   * session must be live (prepared) and idle — compaction runs a model turn,
+   * so it can't overlap a running turn. Summarizes the history in place; the
+   * SSE pipeline emits a context snapshot so the UI updates. */
+  async function compactAgent(agentId: string): Promise<RunPublic> {
+    const runId = runIdOf(agentId)
+    if (!runId) throw new RunActionError("not_found", "Agent not found")
+    await withLock(agentId, async () => {
+      const session = lifecycle.get(agentId)
+      if (!session) {
+        throw new RunActionError(
+          "invalid_state",
+          "Agent session is not active — send a message first"
+        )
+      }
+      if (session.session.isStreaming) {
+        throw new RunActionError(
+          "invalid_state",
+          "Cannot compact while a turn is running — stop it first"
+        )
+      }
+      await session.session.compact()
+    })
     return requireRun(runId)
   }
 
@@ -1989,6 +2020,7 @@ export function createRunService(options: RunServiceOptions) {
     sendAgentMessage,
     switchAgentModel,
     stopAgent,
+    compactAgent,
     setQueue,
     setRunTimeout,
     closeRun,

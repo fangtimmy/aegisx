@@ -31,6 +31,8 @@ function wire(run: RunHandle): void {
  */
 export default defineOrchestration<{ observerModel: ModelRef }>({
   id: "observer-solver",
+  label: "Observer-Solver",
+  description: "求解者 + 观察者，观察者按轮复查并纠偏。",
   scope: "challenge",
   params: Type.Object({ observerModel: ModelRefSchema }),
   templates: { observerSystem: DEFAULT_OBSERVER_SYSTEM_PROMPT_TEMPLATE },

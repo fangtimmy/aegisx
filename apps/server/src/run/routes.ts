@@ -249,6 +249,18 @@ export function registerRunRoutes(
     }
   })
 
+  app.post(
+    "/api/agents/:agentId/compact",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        return c.json(await runService.compactAgent(c.req.param("agentId")))
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
   app.put("/api/runs/:runId/queue", validateJson(queueInput), async (c) => {
     try {
       const body = c.req.valid("json")

@@ -16,6 +16,7 @@ import {
   events,
 } from "../db/schema"
 import type { PromptContext } from "../orchestration/types"
+import type { OrchestrationInfo } from "../orchestration/types"
 import {
   type ChallengeRemote,
   isPlatformIntegrated,
@@ -121,6 +122,9 @@ export function buildEventPromptContext(
     instruction: string
     environment: EnvironmentConfig
     model: ModelConfig
+    /** Challenge orchestrations the scheduler may launch (spec §3.7), so it
+     * never invents plugin names. Built by the service from the registry. */
+    orchestrations: OrchestrationInfo[]
   },
   db: Database,
   containerWorkspace: string
@@ -159,6 +163,7 @@ export function buildEventPromptContext(
       pidsLimit: environment.pidsLimit,
     },
     instruction,
+    orchestrations: inputs.orchestrations,
   }
 }
 

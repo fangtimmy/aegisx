@@ -20,6 +20,8 @@ import { defineOrchestration } from "./types"
  */
 export default defineOrchestration({
   id: "classic",
+  label: "Classic",
+  description: "单个求解者，适合大多数题目。",
   scope: "challenge",
   params: Type.Object({}),
   setup(run) {

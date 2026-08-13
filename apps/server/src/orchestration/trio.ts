@@ -13,6 +13,8 @@ import { defineOrchestration, ModelRefSchema, type ModelRef } from "./types"
  */
 export default defineOrchestration<{ models: ModelRef[] }>({
   id: "trio",
+  label: "Trio",
+  description: "三个并行求解者（不同模型），共享容器与工作区。",
   scope: "challenge",
   params: Type.Object({
     models: Type.Array(ModelRefSchema, { minItems: 3, maxItems: 3 }),
