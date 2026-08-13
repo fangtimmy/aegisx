@@ -7,7 +7,7 @@ import {
   ListTree,
   Maximize2,
   Minimize2,
-  Play,
+  Puzzle,
   Settings,
   TriangleAlert,
 } from "lucide-react"
@@ -40,10 +40,11 @@ import {
 } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { RunsView } from "@/features/runs"
+import { RunWorkspace } from "@/features/runs/run-workspace"
 
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
+import { EventOverview } from "./event-overview"
 import { EventSettings } from "./event-settings"
 import {
   ErrorState,
@@ -59,23 +60,16 @@ import {
 } from "./event-view-prefs"
 import { ImportChallengesDialog } from "./platform-binding"
 
-type EventTab = "overview" | "run" | "settings"
+type EventTab = "overview" | "challenges" | "settings"
 
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
-  if (
-    pathname === `/events/${eventId}/run` ||
-    pathname.startsWith(`/events/${eventId}/runs/`)
-  ) {
-    return "run"
-  }
+  if (pathname === `/events/${eventId}/challenges`) return "challenges"
   return "overview"
 }
 
-function pathForTab(eventId: string, tab: EventTab, runId?: string) {
-  if (tab === "run") {
-    return runId ? `/events/${eventId}/runs/${runId}` : `/events/${eventId}/run`
-  }
+function pathForTab(eventId: string, tab: EventTab) {
+  if (tab === "challenges") return `/events/${eventId}/challenges`
   if (tab === "settings") return `/events/${eventId}/settings`
   return `/events/${eventId}`
 }
@@ -221,7 +215,7 @@ export function EventPage() {
 
   if (!eventId) return null
   const tab = tabFromPath(location.pathname, eventId)
-  const workspace = tab === "run"
+  const workspace = Boolean(runId)
 
   return (
     <AppLayout
@@ -252,7 +246,7 @@ export function EventPage() {
               : "items-start gap-4"
           }
           onValueChange={(value) =>
-            navigate(pathForTab(eventId, value as EventTab, runId))
+            navigate(pathForTab(eventId, value as EventTab))
           }
           orientation="vertical"
           value={tab}
@@ -268,8 +262,8 @@ export function EventPage() {
               <TabsTab className="justify-start gap-2" value="overview">
                 <LayoutPanelTop /> 概览
               </TabsTab>
-              <TabsTab className="justify-start gap-2" value="run">
-                <Play /> 任务
+              <TabsTab className="justify-start gap-2" value="challenges">
+                <Puzzle /> 题目
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="settings">
                 <Settings /> 设置
@@ -291,266 +285,287 @@ export function EventPage() {
                 : "min-w-0 flex-1"
             }
           >
-            <TabsPanel value="overview">
-              <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <h1 className="truncate text-2xl font-semibold">
-                    {eventQuery.data.event.name}
-                  </h1>
-                  <Badge variant="secondary">
-                    {activeFilterCount > 0
-                      ? `${filteredChallenges.length} / ${eventQuery.data.challenges.length}`
-                      : eventQuery.data.challenges.length}{" "}
-                    个题目
-                  </Badge>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  {eventQuery.data.challenges.length > 0 && (
-                    <>
-                      <Menu>
-                        <MenuTrigger
-                          render={<Button type="button" variant="outline" />}
-                        >
-                          <ListFilter />
-                          筛选
-                          {activeFilterCount > 0 && (
-                            <Badge size="sm" variant="secondary">
-                              {activeFilterCount}
-                            </Badge>
-                          )}
-                        </MenuTrigger>
-                        <MenuPopup align="end" className="min-w-56">
-                          <MenuGroup>
-                            <MenuGroupLabel>分类</MenuGroupLabel>
-                            {categoryOptions.map((category) => (
-                              <MenuCheckboxItem
-                                checked={categoryFilter.includes(category)}
-                                key={category}
-                                onCheckedChange={(checked) =>
-                                  setPrefs((prev) => ({
-                                    ...prev,
-                                    categoryFilter: toggleInSet(
-                                      prev.categoryFilter,
-                                      category,
-                                      checked
-                                    ),
-                                  }))
-                                }
-                              >
-                                {category}
-                              </MenuCheckboxItem>
-                            ))}
-                          </MenuGroup>
-                          <MenuSeparator />
-                          <MenuGroup>
-                            <MenuGroupLabel>本地状态</MenuGroupLabel>
-                            {LOCAL_STATUS_OPTIONS.map((option) => (
-                              <MenuCheckboxItem
-                                checked={localFilter.includes(option.value)}
-                                key={option.value}
-                                onCheckedChange={(checked) =>
-                                  setPrefs((prev) => ({
-                                    ...prev,
-                                    localFilter: toggleInSet(
-                                      prev.localFilter,
-                                      option.value,
-                                      checked
-                                    ),
-                                  }))
-                                }
-                              >
-                                {option.label}
-                              </MenuCheckboxItem>
-                            ))}
-                          </MenuGroup>
-                          <MenuSeparator />
-                          <MenuGroup>
-                            <MenuGroupLabel>远端状态</MenuGroupLabel>
-                            {REMOTE_STATUS_OPTIONS.map((option) => (
-                              <MenuCheckboxItem
-                                checked={remoteFilter.includes(option.value)}
-                                key={option.value}
-                                onCheckedChange={(checked) =>
-                                  setPrefs((prev) => ({
-                                    ...prev,
-                                    remoteFilter: toggleInSet(
-                                      prev.remoteFilter,
-                                      option.value,
-                                      checked
-                                    ),
-                                  }))
-                                }
-                              >
-                                {option.label}
-                              </MenuCheckboxItem>
-                            ))}
-                          </MenuGroup>
-                          {activeFilterCount > 0 && (
-                            <>
-                              <MenuSeparator />
-                              <MenuItem
-                                onClick={() =>
-                                  setPrefs((prev) => ({
-                                    ...prev,
-                                    categoryFilter: [],
-                                    localFilter: [],
-                                    remoteFilter: [],
-                                  }))
-                                }
-                              >
-                                清除筛选
-                              </MenuItem>
-                            </>
-                          )}
-                        </MenuPopup>
-                      </Menu>
-                      <Menu>
-                        <MenuTrigger
-                          render={<Button type="button" variant="outline" />}
-                        >
-                          <ListTree />
-                          {group === "category"
-                            ? "按分类"
-                            : group === "status"
-                              ? "按状态"
-                              : "不分组"}
-                        </MenuTrigger>
-                        <MenuPopup align="end">
-                          <MenuRadioGroup
-                            onValueChange={(value) =>
-                              setPrefs((prev) => ({
-                                ...prev,
-                                group: value as ChallengeGroup,
-                              }))
-                            }
-                            value={group}
-                          >
-                            <MenuRadioItem value="category">
-                              按分类
-                            </MenuRadioItem>
-                            <MenuRadioItem value="status">按状态</MenuRadioItem>
-                            <MenuRadioItem value="none">不分组</MenuRadioItem>
-                          </MenuRadioGroup>
-                        </MenuPopup>
-                      </Menu>
-                      <Menu>
-                        <MenuTrigger
-                          render={<Button type="button" variant="outline" />}
-                        >
-                          <ArrowUpDown />
-                          {sort === "event"
-                            ? "赛事顺序"
-                            : sort === "name"
-                              ? "名称"
-                              : "分值"}
-                        </MenuTrigger>
-                        <MenuPopup align="end">
-                          <MenuRadioGroup
-                            onValueChange={(value) =>
-                              setPrefs((prev) => ({
-                                ...prev,
-                                sort: value as ChallengeSort,
-                              }))
-                            }
-                            value={sort}
-                          >
-                            <MenuRadioItem value="event">
-                              赛事顺序
-                            </MenuRadioItem>
-                            <MenuRadioItem value="name">名称</MenuRadioItem>
-                            <MenuRadioItem value="points">
-                              分值：从高到低
-                            </MenuRadioItem>
-                          </MenuRadioGroup>
-                        </MenuPopup>
-                      </Menu>
-                    </>
-                  )}
-                  {eventQuery.data.event.platform && (
-                    <ImportChallengesDialog eventId={eventId} />
-                  )}
-                  <ChallengeDialog
-                    eventId={eventId}
-                    onUploadError={setUploadError}
-                  />
-                </div>
-              </div>
-              {uploadError && (
-                <Alert className="mb-4" variant="warning">
-                  <TriangleAlert />
-                  <AlertTitle>附件上传失败</AlertTitle>
-                  <AlertDescription>{uploadError}</AlertDescription>
-                </Alert>
-              )}
-              {eventQuery.data.challenges.length === 0 ? (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Flag />
-                    </EmptyMedia>
-                    <EmptyTitle>暂无题目</EmptyTitle>
-                    <EmptyDescription>
-                      为本赛事添加第一个题目。
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : filteredChallenges.length === 0 ? (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <ListFilter />
-                    </EmptyMedia>
-                    <EmptyTitle>没有匹配的题目</EmptyTitle>
-                    <EmptyDescription>
-                      清除或调整筛选条件以重新查看题目。
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : (
-                <div className="grid gap-6">
-                  {challengeGroups(filteredChallenges, sort, group).map(
-                    (challengeGroup) => (
-                      <section key={challengeGroup.key}>
-                        {challengeGroup.label && (
-                          <div className="mb-3 flex items-center gap-2 border-b pb-2">
-                            <h2 className="text-sm font-medium">
-                              {challengeGroup.label}
-                            </h2>
-                            <Badge size="sm" variant="secondary">
-                              {challengeGroup.items.length}
-                            </Badge>
-                          </div>
-                        )}
-                        <div className="grid grid-cols-3 items-stretch gap-4">
-                          {challengeGroup.items.map((challenge) => (
-                            <ChallengeCard
-                              challenge={challenge}
-                              eventId={eventId}
-                              key={challenge.id}
-                              managed={Boolean(
-                                eventQuery.data.event.platform &&
-                                challenge.remoteId
-                              )}
-                              onUploadError={setUploadError}
-                            />
-                          ))}
-                        </div>
-                      </section>
-                    )
-                  )}
-                </div>
-              )}
-            </TabsPanel>
-            <TabsPanel className="min-h-0" value="run">
-              <RunsView
+            {workspace && runId ? (
+              <RunWorkspace
                 challenges={eventQuery.data.challenges}
                 eventId={eventId}
                 runId={runId}
               />
-            </TabsPanel>
-            <TabsPanel className="pt-0" value="settings">
-              <EventSettings event={eventQuery.data.event} />
-            </TabsPanel>
+            ) : (
+              <>
+                <TabsPanel className="h-[calc(100svh-5.5rem)]" value="overview">
+                  <EventOverview
+                    challenges={eventQuery.data.challenges}
+                    eventId={eventId}
+                  />
+                </TabsPanel>
+                <TabsPanel value="challenges">
+                  <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <h1 className="truncate text-2xl font-semibold">
+                        {eventQuery.data.event.name}
+                      </h1>
+                      <Badge variant="secondary">
+                        {activeFilterCount > 0
+                          ? `${filteredChallenges.length} / ${eventQuery.data.challenges.length}`
+                          : eventQuery.data.challenges.length}{" "}
+                        个题目
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {eventQuery.data.challenges.length > 0 && (
+                        <>
+                          <Menu>
+                            <MenuTrigger
+                              render={
+                                <Button type="button" variant="outline" />
+                              }
+                            >
+                              <ListFilter />
+                              筛选
+                              {activeFilterCount > 0 && (
+                                <Badge size="sm" variant="secondary">
+                                  {activeFilterCount}
+                                </Badge>
+                              )}
+                            </MenuTrigger>
+                            <MenuPopup align="end" className="min-w-56">
+                              <MenuGroup>
+                                <MenuGroupLabel>分类</MenuGroupLabel>
+                                {categoryOptions.map((category) => (
+                                  <MenuCheckboxItem
+                                    checked={categoryFilter.includes(category)}
+                                    key={category}
+                                    onCheckedChange={(checked) =>
+                                      setPrefs((prev) => ({
+                                        ...prev,
+                                        categoryFilter: toggleInSet(
+                                          prev.categoryFilter,
+                                          category,
+                                          checked
+                                        ),
+                                      }))
+                                    }
+                                  >
+                                    {category}
+                                  </MenuCheckboxItem>
+                                ))}
+                              </MenuGroup>
+                              <MenuSeparator />
+                              <MenuGroup>
+                                <MenuGroupLabel>本地状态</MenuGroupLabel>
+                                {LOCAL_STATUS_OPTIONS.map((option) => (
+                                  <MenuCheckboxItem
+                                    checked={localFilter.includes(option.value)}
+                                    key={option.value}
+                                    onCheckedChange={(checked) =>
+                                      setPrefs((prev) => ({
+                                        ...prev,
+                                        localFilter: toggleInSet(
+                                          prev.localFilter,
+                                          option.value,
+                                          checked
+                                        ),
+                                      }))
+                                    }
+                                  >
+                                    {option.label}
+                                  </MenuCheckboxItem>
+                                ))}
+                              </MenuGroup>
+                              <MenuSeparator />
+                              <MenuGroup>
+                                <MenuGroupLabel>远端状态</MenuGroupLabel>
+                                {REMOTE_STATUS_OPTIONS.map((option) => (
+                                  <MenuCheckboxItem
+                                    checked={remoteFilter.includes(
+                                      option.value
+                                    )}
+                                    key={option.value}
+                                    onCheckedChange={(checked) =>
+                                      setPrefs((prev) => ({
+                                        ...prev,
+                                        remoteFilter: toggleInSet(
+                                          prev.remoteFilter,
+                                          option.value,
+                                          checked
+                                        ),
+                                      }))
+                                    }
+                                  >
+                                    {option.label}
+                                  </MenuCheckboxItem>
+                                ))}
+                              </MenuGroup>
+                              {activeFilterCount > 0 && (
+                                <>
+                                  <MenuSeparator />
+                                  <MenuItem
+                                    onClick={() =>
+                                      setPrefs((prev) => ({
+                                        ...prev,
+                                        categoryFilter: [],
+                                        localFilter: [],
+                                        remoteFilter: [],
+                                      }))
+                                    }
+                                  >
+                                    清除筛选
+                                  </MenuItem>
+                                </>
+                              )}
+                            </MenuPopup>
+                          </Menu>
+                          <Menu>
+                            <MenuTrigger
+                              render={
+                                <Button type="button" variant="outline" />
+                              }
+                            >
+                              <ListTree />
+                              {group === "category"
+                                ? "按分类"
+                                : group === "status"
+                                  ? "按状态"
+                                  : "不分组"}
+                            </MenuTrigger>
+                            <MenuPopup align="end">
+                              <MenuRadioGroup
+                                onValueChange={(value) =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    group: value as ChallengeGroup,
+                                  }))
+                                }
+                                value={group}
+                              >
+                                <MenuRadioItem value="category">
+                                  按分类
+                                </MenuRadioItem>
+                                <MenuRadioItem value="status">
+                                  按状态
+                                </MenuRadioItem>
+                                <MenuRadioItem value="none">
+                                  不分组
+                                </MenuRadioItem>
+                              </MenuRadioGroup>
+                            </MenuPopup>
+                          </Menu>
+                          <Menu>
+                            <MenuTrigger
+                              render={
+                                <Button type="button" variant="outline" />
+                              }
+                            >
+                              <ArrowUpDown />
+                              {sort === "event"
+                                ? "赛事顺序"
+                                : sort === "name"
+                                  ? "名称"
+                                  : "分值"}
+                            </MenuTrigger>
+                            <MenuPopup align="end">
+                              <MenuRadioGroup
+                                onValueChange={(value) =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    sort: value as ChallengeSort,
+                                  }))
+                                }
+                                value={sort}
+                              >
+                                <MenuRadioItem value="event">
+                                  赛事顺序
+                                </MenuRadioItem>
+                                <MenuRadioItem value="name">名称</MenuRadioItem>
+                                <MenuRadioItem value="points">
+                                  分值：从高到低
+                                </MenuRadioItem>
+                              </MenuRadioGroup>
+                            </MenuPopup>
+                          </Menu>
+                        </>
+                      )}
+                      {eventQuery.data.event.platform && (
+                        <ImportChallengesDialog eventId={eventId} />
+                      )}
+                      <ChallengeDialog
+                        eventId={eventId}
+                        onUploadError={setUploadError}
+                      />
+                    </div>
+                  </div>
+                  {uploadError && (
+                    <Alert className="mb-4" variant="warning">
+                      <TriangleAlert />
+                      <AlertTitle>附件上传失败</AlertTitle>
+                      <AlertDescription>{uploadError}</AlertDescription>
+                    </Alert>
+                  )}
+                  {eventQuery.data.challenges.length === 0 ? (
+                    <Empty>
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <Flag />
+                        </EmptyMedia>
+                        <EmptyTitle>暂无题目</EmptyTitle>
+                        <EmptyDescription>
+                          为本赛事添加第一个题目。
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : filteredChallenges.length === 0 ? (
+                    <Empty>
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <ListFilter />
+                        </EmptyMedia>
+                        <EmptyTitle>没有匹配的题目</EmptyTitle>
+                        <EmptyDescription>
+                          清除或调整筛选条件以重新查看题目。
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : (
+                    <div className="grid gap-6">
+                      {challengeGroups(filteredChallenges, sort, group).map(
+                        (challengeGroup) => (
+                          <section key={challengeGroup.key}>
+                            {challengeGroup.label && (
+                              <div className="mb-3 flex items-center gap-2 border-b pb-2">
+                                <h2 className="text-sm font-medium">
+                                  {challengeGroup.label}
+                                </h2>
+                                <Badge size="sm" variant="secondary">
+                                  {challengeGroup.items.length}
+                                </Badge>
+                              </div>
+                            )}
+                            <div className="grid grid-cols-3 items-stretch gap-4">
+                              {challengeGroup.items.map((challenge) => (
+                                <ChallengeCard
+                                  challenge={challenge}
+                                  eventId={eventId}
+                                  key={challenge.id}
+                                  managed={Boolean(
+                                    eventQuery.data.event.platform &&
+                                    challenge.remoteId
+                                  )}
+                                  onUploadError={setUploadError}
+                                />
+                              ))}
+                            </div>
+                          </section>
+                        )
+                      )}
+                    </div>
+                  )}
+                </TabsPanel>
+                <TabsPanel className="pt-0" value="settings">
+                  <EventSettings event={eventQuery.data.event} />
+                </TabsPanel>
+              </>
+            )}
           </div>
         </Tabs>
       )}
