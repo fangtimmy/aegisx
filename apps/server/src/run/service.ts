@@ -1035,6 +1035,79 @@ export function createRunService(options: RunServiceOptions) {
     return requireRun(runId)
   }
 
+  /** Per-agent send (spec §10: POST /api/agents/:agentId/message). The target
+   * agent's run is resolved from the agent row; a closed (cold) run goes
+   * through lifecycle.send → onResume → prepareAgent (fence → restore →
+   * session), so this single path covers warm + cold targets. */
+  async function sendAgentMessage(
+    agentId: string,
+    input: SendMessageInput
+  ): Promise<RunPublic> {
+    const runId = runIdOf(agentId)
+    if (!runId) throw new RunActionError("not_found", "Agent not found")
+    await lifecycle.send(agentId, input.text, input.deliverAs)
+    return requireRun(runId)
+  }
+
+  /** Per-agent model switch (spec §10: POST /api/agents/:agentId/model).
+   * Unlike the run-level switchModel (which always targets the entry agent),
+   * this switches the named agent's own snapshot; takes effect next turn. */
+  async function switchAgentModel(
+    agentId: string,
+    input: SwitchModelInput
+  ): Promise<RunPublic> {
+    const runId = runIdOf(agentId)
+    if (!runId) throw new RunActionError("not_found", "Agent not found")
+    return withLock(agentId, async () => {
+      const session = lifecycle.get(agentId)
+      if (!session) {
+        throw new RunActionError(
+          "invalid_state",
+          "Agent has no live session; start or reopen its run first"
+        )
+      }
+      const agentRow = db
+        .select({ modelId: agents.modelId })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .get()
+      let target: SwitchTarget
+      let thinkingLevel: ThinkingLevel
+      try {
+        ;({ target, thinkingLevel } = await applyModelSwitch(
+          session,
+          providers(),
+          input,
+          (t) => agentRow?.modelId === t.model.modelId
+        ))
+      } catch (error) {
+        throw new RunActionError(
+          "invalid_state",
+          error instanceof Error ? error.message : String(error)
+        )
+      }
+      updateAgent(agentId, {
+        provider: target.provider.label,
+        providerLabel: target.provider.label,
+        modelId: target.model.modelId,
+        modelLabel: target.model.label,
+        thinkingLevel,
+        updatedAt: now(),
+      })
+      emitAgents(runId)
+      return requireRun(runId)
+    })
+  }
+
+  /** Per-agent stop (spec §10: POST /api/agents/:agentId/stop): abort the
+   * agent's current turn; it settles to idle (the run stays warm). */
+  async function stopAgent(agentId: string): Promise<RunPublic> {
+    const runId = runIdOf(agentId)
+    if (!runId) throw new RunActionError("not_found", "Agent not found")
+    await lifecycle.abort(agentId).catch(() => undefined)
+    return requireRun(runId)
+  }
+
   /** Replace the entry agent's steer/followUp queue. Serialized on the entry
    * agent's lock against its turns; uses the SDK queue API directly. */
   function setQueue(
@@ -1880,6 +1953,9 @@ export function createRunService(options: RunServiceOptions) {
     switchModel,
     finish,
     sendMessage,
+    sendAgentMessage,
+    switchAgentModel,
+    stopAgent,
     setQueue,
     setRunTimeout,
     closeRun,

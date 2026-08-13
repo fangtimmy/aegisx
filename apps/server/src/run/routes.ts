@@ -201,6 +201,54 @@ export function registerRunRoutes(
     }
   )
 
+  // Per-agent actions (spec §10): message / model / stop address one agent
+  // (messageing a closed run's agent cold-restores it, same as the run-level
+  // path but targeting the named agent).
+  app.post(
+    "/api/agents/:agentId/message",
+    validateJson(messageInput),
+    async (c) => {
+      try {
+        const body = c.req.valid("json")
+        const run = await runService.sendAgentMessage(c.req.param("agentId"), {
+          text: body.text,
+          deliverAs: body.deliverAs,
+        })
+        return c.json(run)
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  app.post(
+    "/api/agents/:agentId/model",
+    validateJson(switchModelInput),
+    async (c) => {
+      try {
+        const body = c.req.valid("json")
+        return c.json(
+          await runService.switchAgentModel(c.req.param("agentId"), {
+            modelId: body.modelId,
+            ...(body.thinkingLevel !== undefined
+              ? { thinkingLevel: body.thinkingLevel }
+              : {}),
+          })
+        )
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  app.post("/api/agents/:agentId/stop", validateJson(emptyInput), async (c) => {
+    try {
+      return c.json(await runService.stopAgent(c.req.param("agentId")))
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
   app.put("/api/runs/:runId/queue", validateJson(queueInput), async (c) => {
     try {
       const body = c.req.valid("json")

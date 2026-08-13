@@ -5,9 +5,12 @@ import {
   parseSettings,
   patchSettings,
 } from "@aegisx/shared"
+import { asc } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
 
+import type { createDatabase } from "../db"
+import { promptTemplates } from "../db/schema"
 import type {
   ConfigStore,
   ProviderData,
@@ -48,6 +51,16 @@ const promptPreviewInput = Type.Object(
   { additionalProperties: false }
 )
 
+/** PATCH /api/prompt-templates body: one (plugin, key) row upsert. */
+const promptTemplateInput = Type.Object(
+  {
+    plugin: Type.String({ minLength: 1, maxLength: 80 }),
+    key: Type.String({ minLength: 1, maxLength: 80 }),
+    body: Type.String({ maxLength: 100_000 }),
+  },
+  { additionalProperties: false }
+)
+
 export function settingsResponse(configStore: ConfigStore) {
   return {
     settings: configStore.getSettings(),
@@ -69,11 +82,12 @@ export function settingsResponse(configStore: ConfigStore) {
 export function registerSettingsRoutes(
   app: Hono,
   options: {
+    db: ReturnType<typeof createDatabase>["db"]
     configStore: ConfigStore
     syncModels(): void
   }
 ) {
-  const { configStore, syncModels } = options
+  const { db, configStore, syncModels } = options
   const childSampleContext = {
     ...samplePromptContext,
     agent: {
@@ -140,6 +154,43 @@ export function registerSettingsRoutes(
     }))
 
   app.get("/api/settings", (c) => c.json(settingsResponse(configStore)))
+
+  // Prompt template store (spec §10): GET lists all rows (plugin-grouped by
+  // the client), PATCH upserts one (plugin, key) row. Independent of
+  // FlatSettings' prompts.* keys — the settings-page editor UI is P5.
+  app.get("/api/prompt-templates", (c) =>
+    c.json({
+      items: db
+        .select()
+        .from(promptTemplates)
+        .orderBy(asc(promptTemplates.plugin), asc(promptTemplates.key))
+        .all(),
+    })
+  )
+
+  app.patch("/api/prompt-templates", validateJson(promptTemplateInput), (c) => {
+    const input = c.req.valid("json")
+    const updatedAt = new Date().toISOString()
+    db.insert(promptTemplates)
+      .values({
+        plugin: input.plugin,
+        key: input.key,
+        body: input.body,
+        updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: [promptTemplates.plugin, promptTemplates.key],
+        set: { body: input.body, updatedAt },
+      })
+      .run()
+    return c.json({
+      items: db
+        .select()
+        .from(promptTemplates)
+        .orderBy(asc(promptTemplates.plugin), asc(promptTemplates.key))
+        .all(),
+    })
+  })
 
   app.get("/api/settings/export", () => {
     const content = JSON.stringify(

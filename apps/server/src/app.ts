@@ -84,6 +84,7 @@ export function createApp(options: { dataDir: string }) {
   const noopSync = () => {}
   registerProviderRoutes(app, { configStore, syncModels: noopSync })
   registerSettingsRoutes(app, {
+    db,
     configStore,
     syncModels: noopSync,
   })

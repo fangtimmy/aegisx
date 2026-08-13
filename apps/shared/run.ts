@@ -50,6 +50,9 @@ export type RunPublic = {
   startedAt: string | null
   updatedAt: string
   completedAt: string | null
+  /** When the hard deadline last fired (abort branch); null until the first
+   * timeout. Timeline source (spec §十一: run.timedOut{outcome}). */
+  lastTimeoutAt: string | null
   error: string | null
   summary: string | null
   flags: ChallengeFlag[]
