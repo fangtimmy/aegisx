@@ -101,6 +101,7 @@ type CreateRunDialogProps = {
   challenges?: Challenge[]
   challenge?: Pick<Challenge, "id" | "name">
   trigger?: ReactNode
+  triggerClassName?: string
   triggerLabel?: string
   triggerSize?: ButtonProps["size"]
   triggerVariant?: ButtonProps["variant"]
@@ -113,6 +114,7 @@ export function CreateRunDialog({
   challenges,
   challenge,
   trigger,
+  triggerClassName,
   triggerLabel,
   triggerSize,
   triggerVariant,
@@ -132,6 +134,7 @@ export function CreateRunDialog({
         }
         render={
           <Button
+            className={triggerClassName}
             disabled={available.length === 0}
             size={trigger ? (triggerSize ?? "icon-xs") : undefined}
             type="button"

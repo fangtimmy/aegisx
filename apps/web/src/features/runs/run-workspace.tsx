@@ -104,6 +104,50 @@ export function RunWorkspace({
     onError: (error) => toast.error("关闭任务失败", error.message),
   })
 
+  // The selected run is derived here (before any early return) so the
+  // conversation callbacks below can close over it without violating the
+  // Rules-of-hooks — hooks must not sit behind a conditional return.
+  const run = runs.data?.items.find((item) => item.id === runId)
+
+  // Conversation adapter — stable callbacks so the SSE connection effect
+  // does not reconnect on re-render. Send/switch target the *selected* agent
+  // (per-agent endpoints, spec §10); model switch refreshes the run list so
+  // the header + switcher re-derive the current model.
+  const loadMessages = useCallback(
+    () => runsApi.listMessages(runId ?? "", 0).then((list) => list.items),
+    [runId]
+  )
+  const sendMessage = useCallback(
+    (agentId: string, text: string, deliverAs?: "steer" | "followUp") =>
+      agentsApi.sendMessage(agentId, { text, deliverAs }),
+    []
+  )
+  const switchModel = useCallback(
+    (
+      agentId: string,
+      input: {
+        modelId: string
+        thinkingLevel: ThinkingLevel
+      }
+    ) =>
+      agentsApi
+        .switchModel(agentId, input)
+        .then(() => invalidate(queryClient, eventId)),
+    [eventId, queryClient]
+  )
+  const setQueue = useCallback(
+    (_agentId: string, body: { steering: string[]; followUp: string[] }) =>
+      runsApi.setQueue(runId ?? "", body),
+    [runId]
+  )
+  const findCurrentModelId = useCallback(
+    (models: AvailableModel[]) =>
+      models.find(
+        (m) => m.modelId === run?.modelId && m.providerLabel === run?.provider
+      )?.id,
+    [run?.modelId, run?.provider]
+  )
+
   if (!runId) {
     return (
       <div className="flex min-h-96 items-center justify-center p-6">
@@ -123,7 +167,6 @@ export function RunWorkspace({
       </div>
     )
   }
-  const run = runs.data?.items.find((item) => item.id === runId)
   if (runs.isPending) {
     return (
       <div
@@ -158,45 +201,6 @@ export function RunWorkspace({
 
   const running = run.status === "running"
   const agents = detail.data?.agents ?? []
-
-  // Conversation adapter — stable callbacks so the SSE connection effect
-  // does not reconnect on re-render. Send/switch target the *selected* agent
-  // (per-agent endpoints, spec §10); model switch refreshes the run list so
-  // the header + switcher re-derive the current model.
-  const loadMessages = useCallback(
-    () => runsApi.listMessages(runId, 0).then((list) => list.items),
-    [runId]
-  )
-  const sendMessage = useCallback(
-    (agentId: string, text: string, deliverAs?: "steer" | "followUp") =>
-      agentsApi.sendMessage(agentId, { text, deliverAs }),
-    []
-  )
-  const switchModel = useCallback(
-    (
-      agentId: string,
-      input: {
-        modelId: string
-        thinkingLevel: ThinkingLevel
-      }
-    ) =>
-      agentsApi
-        .switchModel(agentId, input)
-        .then(() => invalidate(queryClient, eventId)),
-    [eventId, queryClient]
-  )
-  const setQueue = useCallback(
-    (_agentId: string, body: { steering: string[]; followUp: string[] }) =>
-      runsApi.setQueue(runId, body),
-    [runId]
-  )
-  const findCurrentModelId = useCallback(
-    (models: AvailableModel[]) =>
-      models.find(
-        (m) => m.modelId === run.modelId && m.providerLabel === run.provider
-      )?.id,
-    [run.modelId, run.provider]
-  )
 
   const requestedView = searchParams.get("view")
   const view =

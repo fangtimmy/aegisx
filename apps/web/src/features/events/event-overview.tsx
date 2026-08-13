@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Archive,
   Bot,
@@ -17,6 +17,7 @@ import {
   Puzzle,
   Server,
   Settings2,
+  Square,
   Timer,
   Users,
 } from "lucide-react"
@@ -38,6 +39,7 @@ import {
   type ThinkingLevel,
 } from "@/api"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardFrame,
@@ -68,6 +70,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { CreateRunDialog } from "@/features/runs"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
@@ -80,6 +83,7 @@ import {
   statusVariant,
 } from "@/features/runs/run-overview"
 import { formatTime } from "@/lib/format"
+import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 
 import { ErrorState, isChallengeSolved } from "./event-shared"
@@ -199,7 +203,7 @@ export function EventOverview({
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_22rem] gap-4">
       <div className="flex min-h-0 min-w-0 flex-col">
-        <Tabs onValueChange={setTab} value={tab}>
+        <Tabs className="min-h-0 flex-1" onValueChange={setTab} value={tab}>
           <TabsList className="w-auto justify-start" variant="underline">
             <TabsTab className="gap-1.5" value="summary">
               <LayoutPanelTop /> 总览
@@ -259,6 +263,7 @@ export function EventOverview({
       </div>
       <AgentsGraph
         detailsById={detailsById}
+        eventId={eventId}
         onSelectAgent={onSelectAgent}
         runs={runs}
         scheduler={schedulerData}
@@ -703,28 +708,34 @@ function ChallengesTreeTab({ challenges }: { challenges: Challenge[] }) {
 function ChallengeRow({ challenge }: { challenge: Challenge }) {
   const solved = isChallengeSolved(challenge)
   return (
-    <Link
-      className="flex min-w-0 items-center gap-2 rounded-md px-7 py-2 hover:bg-accent"
-      to={`/events/${challenge.eventId}/challenges`}
-    >
-      <span
-        className={cn(
-          "size-2 shrink-0 rounded-full",
-          solved ? "bg-success" : "bg-muted-foreground/40"
-        )}
-      />
-      <span className="min-w-0 flex-1 truncate text-sm">{challenge.name}</span>
-      {challenge.points !== null && (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {challenge.points}
-        </span>
-      )}
-      {solved && (
-        <Badge size="sm" variant="success">
-          <Flag /> 已解决
-        </Badge>
-      )}
-    </Link>
+    <CreateRunDialog
+      challenge={challenge}
+      trigger={
+        <>
+          <span
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              solved ? "bg-success" : "bg-muted-foreground/40"
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate text-sm">
+            {challenge.name}
+          </span>
+          {challenge.points !== null && (
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {challenge.points}
+            </span>
+          )}
+          {solved && (
+            <Badge size="sm" variant="success">
+              <Flag /> 已解决
+            </Badge>
+          )}
+        </>
+      }
+      triggerClassName="h-auto w-full min-w-0 justify-start rounded-md px-7 py-2 font-normal"
+      triggerVariant="ghost"
+    />
   )
 }
 
@@ -965,16 +976,19 @@ function AgentsTab({
 // --- Agents Graph ----------------------------------------------------------
 
 function AgentsGraph({
+  eventId,
   runs,
   detailsById,
   scheduler,
   onSelectAgent,
 }: {
+  eventId: string
   runs: RunPublic[]
   detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
   scheduler?: SchedulerWithAgents
   onSelectAgent: (runId: string, agentId: string) => void
 }) {
+  const queryClient = useQueryClient()
   const [schedulerOpen, setSchedulerOpen] = useState(true)
   const [openRuns, setOpenRuns] = useState<Set<string>>(() => {
     // Default-expand active runs.
@@ -983,6 +997,46 @@ function AgentsGraph({
     )
   })
   const schedRun = scheduler?.run ?? null
+
+  // Scheduler lifecycle: start creates the event-scoped orchestrator run;
+  // stop cancels the current turn (container kept); close releases it. The
+  // scheduler agent itself is interacted with via the same AgentDialog as
+  // any run agent — these are the only run-level controls the graph needs.
+  const invalidateScheduler = () =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: keys.scheduler.detail(eventId),
+      }),
+      queryClient.invalidateQueries({
+        queryKey: keys.scheduler.queue(eventId),
+      }),
+      queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) }),
+      queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
+    ])
+  const startScheduler = useMutation({
+    mutationFn: () => schedulerApi.startScheduler(eventId),
+    onSuccess: () => {
+      toast.success("调度者已启动")
+      void invalidateScheduler()
+    },
+    onError: (error) => toast.error("启动调度者失败", error.message),
+  })
+  const stopScheduler = useMutation({
+    mutationFn: () => schedulerApi.stopScheduler(eventId),
+    onSuccess: () => {
+      toast.success("调度者正在停止")
+      void invalidateScheduler()
+    },
+    onError: (error) => toast.error("停止调度者失败", error.message),
+  })
+  const closeScheduler = useMutation({
+    mutationFn: () => schedulerApi.closeScheduler(eventId),
+    onSuccess: () => {
+      toast.success("调度者已关闭")
+      void invalidateScheduler()
+    },
+    onError: (error) => toast.error("关闭调度者失败", error.message),
+  })
 
   const toggleRun = (runId: string) => {
     setOpenRuns((prev) => {
@@ -1029,7 +1083,7 @@ function AgentsGraph({
                 }
               />
               {schedulerOpen && (
-                <div className="ml-[1.125rem] flex flex-col border-l border-border pl-3">
+                <div className="ml-[1.125rem] flex flex-col gap-2 border-l border-border pl-3">
                   {schedRun ? (
                     <>
                       <GraphNode
@@ -1058,10 +1112,45 @@ function AgentsGraph({
                         ))}
                       </div>
                     </>
+                  ) : null}
+                  {/* Lifecycle controls: start (re)creates the event-scoped
+                      orchestrator run; stop cancels the current turn; close
+                      releases the container. The scheduler agent itself is
+                      driven from the AgentDialog like any run agent. */}
+                  {!schedRun || schedRun.status === "closed" ? (
+                    <Button
+                      loading={startScheduler.isPending}
+                      onClick={() => startScheduler.mutate()}
+                      size="sm"
+                      type="button"
+                    >
+                      <Play /> 启动调度者
+                    </Button>
                   ) : (
-                    <p className="py-2 text-xs text-muted-foreground">
-                      未启动。在概览页启动调度者后显示。
-                    </p>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {schedRun.status === "running" && (
+                        <Button
+                          loading={stopScheduler.isPending}
+                          onClick={() => stopScheduler.mutate()}
+                          size="xs"
+                          title="取消当前轮次（容器保留）"
+                          type="button"
+                          variant="destructive-outline"
+                        >
+                          <Square /> 停止
+                        </Button>
+                      )}
+                      <Button
+                        loading={closeScheduler.isPending}
+                        onClick={() => closeScheduler.mutate()}
+                        size="xs"
+                        title="释放调度者容器与会话"
+                        type="button"
+                        variant="outline"
+                      >
+                        <Archive /> 关闭
+                      </Button>
+                    </div>
                   )}
                 </div>
               )}
@@ -1197,6 +1286,39 @@ function AgentDialog({
   const run = detail.data?.run
   const agents = detail.data?.agents ?? []
   const agent = agents.find((item) => item.id === agentId)
+
+  // Conversation adapter — declared before the loading guard so hooks are
+  // not placed behind a conditional return (Rules-of-hooks). The callbacks
+  // are only invoked once run/agent are defined, so the optional chaining in
+  // the deps is safe.
+  const sendMessage = useCallback(
+    (id: string, text: string, deliverAs?: "steer" | "followUp") =>
+      agentsApi.sendMessage(id, { text, deliverAs }),
+    []
+  )
+  const switchModel = useCallback(
+    (id: string, input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
+      agentsApi.switchModel(id, input).then(() =>
+        queryClient.invalidateQueries({
+          queryKey: keys.runs.fleet(run?.eventId ?? ""),
+        })
+      ),
+    [run?.eventId, queryClient]
+  )
+  const loadMessages = useCallback(
+    () => runsApi.listMessages(runId, 0, agentId).then((list) => list.items),
+    [runId, agentId]
+  )
+  const findCurrentModelId = useCallback(
+    (models: AvailableModel[]) =>
+      models.find(
+        (model) =>
+          model.modelId === run?.modelId &&
+          model.providerLabel === run?.provider
+      )?.id,
+    [run?.modelId, run?.provider]
+  )
+
   if (detail.isPending || !run || !agent) {
     return (
       <Dialog onOpenChange={(open) => !open && onClose()} open>
@@ -1217,33 +1339,6 @@ function AgentDialog({
       </Dialog>
     )
   }
-
-  const sendMessage = useCallback(
-    (id: string, text: string, deliverAs?: "steer" | "followUp") =>
-      agentsApi.sendMessage(id, { text, deliverAs }),
-    []
-  )
-  const switchModel = useCallback(
-    (id: string, input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      agentsApi.switchModel(id, input).then(() =>
-        queryClient.invalidateQueries({
-          queryKey: keys.runs.fleet(run.eventId),
-        })
-      ),
-    [run.eventId, queryClient]
-  )
-  const loadMessages = useCallback(
-    () => runsApi.listMessages(runId, 0, agentId).then((list) => list.items),
-    [runId, agentId]
-  )
-  const findCurrentModelId = useCallback(
-    (models: AvailableModel[]) =>
-      models.find(
-        (model) =>
-          model.modelId === run.modelId && model.providerLabel === run.provider
-      )?.id,
-    [run.modelId, run.provider]
-  )
 
   return (
     <Dialog onOpenChange={(open) => !open && onClose()} open>
