@@ -1,6 +1,6 @@
 import type { Context } from "hono"
 
-type ErrorStatus = 400 | 404 | 409 | 413 | 415 | 500 | 502
+type ErrorStatus = 400 | 404 | 409 | 413 | 415 | 429 | 500 | 502
 
 export function jsonError(
   c: Context,

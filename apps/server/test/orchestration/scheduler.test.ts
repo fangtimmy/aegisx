@@ -93,7 +93,24 @@ describe("scheduler plugin (spec §7.5)", () => {
     expect(orch.role).toBe("orchestrator")
     expect(orch.name).toBe("Scheduler")
     expect(orch.isEntry).toBe(true)
-    expect(orch.tools).toEqual(["list_agents"])
+    expect(orch.tools).toEqual([
+      "enqueue_run",
+      "list_queue",
+      "remove_queue",
+      "clear_queue",
+      "reorder_queue",
+      "start_run",
+      "stop_run",
+      "message_run",
+      "close_run",
+      "read_run",
+      "set_run_timeout",
+      "list_challenges",
+      "get_challenge",
+      "list_runs",
+      "get_status",
+      "list_agents",
+    ])
   })
 
   test("wakes the orchestrator on run lifecycle events", () => {

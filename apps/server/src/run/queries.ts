@@ -4,10 +4,11 @@ import type {
   ChallengeFlag,
   MessageList,
   RunPublic,
+  RunStatus,
   RunUsage,
 } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
-import { and, asc, desc, eq, inArray } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
 
 import {
   listRenderableEntries,
@@ -124,14 +125,47 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     )
   }
 
-  function listAgents(runId: string): AgentSummary[] {
-    return db
+  /** Filter runs by any combination of event / challenge / scope / status
+   * (challenge-scope only by default — scheduler runs are excluded unless
+   * `includeScheduler` is set). Recent-first. */
+  function listRuns(
+    filter: {
+      eventId?: string
+      challengeId?: string
+      status?: RunStatus
+      includeScheduler?: boolean
+    } = {}
+  ): RunPublic[] {
+    const conds = []
+    if (filter.eventId) conds.push(eq(runs.eventId, filter.eventId))
+    if (filter.challengeId) conds.push(eq(runs.challengeId, filter.challengeId))
+    if (filter.status) conds.push(eq(runs.status, filter.status))
+    if (!filter.includeScheduler) conds.push(eq(runs.scopeType, "challenge"))
+    const rows = db
       .select()
-      .from(agents)
-      .where(eq(agents.runId, runId))
-      .orderBy(agents.createdAt)
+      .from(runs)
+      .where(conds.length > 0 ? and(...conds) : undefined)
+      .orderBy(desc(runs.updatedAt))
       .all()
-      .map((row) => toAgentSummary(row))
+    const flagsByRun = groupFlagsByRun(
+      db,
+      rows.map((row) => row.id)
+    )
+    return rows.map((row) => mapRow(row, flagsByRun.get(row.id) ?? []))
+  }
+
+  function listAgents(runId: string): AgentSummary[] {
+    return (
+      db
+        .select()
+        .from(agents)
+        .where(eq(agents.runId, runId))
+        // createdAt can tie when setup declares several agents within one
+        // millisecond; rowid (monotonic by insertion) is a deterministic tiebreak.
+        .orderBy(agents.createdAt, sql`rowid`)
+        .all()
+        .map((row) => toAgentSummary(row))
+    )
   }
 
   function entryAgent(runId: string): AgentSummary | undefined {
@@ -193,6 +227,7 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     get,
     getRow,
     listForEvent,
+    listRuns,
     listAgents,
     entryAgent,
     detail,

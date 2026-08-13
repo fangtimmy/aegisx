@@ -1,14 +1,9 @@
-import type { FlatSettings } from "@aegisx/shared"
-import { get, normalizeThinkingLevel } from "@aegisx/shared"
-import type { LiveEvent } from "@aegisx/shared/live-event"
 import { eq } from "drizzle-orm"
 import type { Context, Hono } from "hono"
-import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 
 import type { createDatabase } from "../db"
 import { challenges } from "../db/schema"
-import type { ConfigStore } from "../infrastructure/config-store"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import {
@@ -17,29 +12,30 @@ import {
   workspaceDownload,
 } from "../infrastructure/workspace-files"
 import { EmptyInputSchema, ThinkingLevelSchema } from "../lib/schemas"
-import { listPlugins, requirePlugin } from "../orchestration/registry"
+import { listPlugins } from "../orchestration/registry"
 import { platformActionHttpError } from "../platforms/errors"
-import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
 import type { RunService } from "./service"
+import { streamRun } from "./sse"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
+/** Manual enqueue body (spec §10: POST /api/challenges/:id/runs enqueues,
+ * returns a queue item). Model/container come from global defaults at launch. */
 const runInput = Type.Object(
   {
     orchestration: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
     /** Plugin input snapshot (validated against the plugin's params schema). */
     params: Type.Optional(Type.Unknown()),
-    modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-    image: Type.Optional(
-      Type.String({
-        minLength: 1,
-        maxLength: 300,
-        pattern: "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$",
-      })
-    ),
-    thinkingLevel: Type.Optional(ThinkingLevelSchema),
+    /** Overrides the rendered `initial` template as the run's first prompt. */
+    prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
   },
+  { additionalProperties: false }
+)
+
+const timeoutInput = Type.Object(
+  { timeoutMs: Type.Integer({ minimum: 60_000 }) },
   { additionalProperties: false }
 )
 
@@ -87,11 +83,9 @@ export function registerRunRoutes(
     db: Database
     dataDir: string
     runService: RunService
-    getSettings(): FlatSettings
-    configStore: ConfigStore
   }
 ) {
-  const { db, runService, getSettings, configStore } = options
+  const { db, runService } = options
 
   app.post(
     "/api/challenges/:challengeId/runs",
@@ -99,36 +93,6 @@ export function registerRunRoutes(
     async (c) => {
       try {
         const input = c.req.valid("json")
-        const defaults = getSettings()
-        const providers = getProviderConnections(configStore)
-        const selectedModelId =
-          input.modelId ?? get(defaults, "agent.defaultModelId") ?? undefined
-        const selected = selectedModelId
-          ? (() => {
-              for (const provider of providers) {
-                const model = provider.models.find(
-                  (m) => m.id === selectedModelId
-                )
-                if (model) return { model, provider }
-              }
-              return undefined
-            })()
-          : undefined
-        if (!selected?.model.enabled || !selected.provider.enabled) {
-          return badRequest(
-            c,
-            "model_unavailable",
-            "Choose an enabled model and provider"
-          )
-        }
-        if (!selected.provider.apiKey) {
-          return badRequest(
-            c,
-            "credentials_unavailable",
-            "Enter an API key for the selected provider"
-          )
-        }
-
         const challengeId = c.req.param("challengeId")
         const challenge = db
           .select()
@@ -137,36 +101,23 @@ export function registerRunRoutes(
           .get()
         if (!challenge) return notFound(c, "Challenge not found")
 
-        const orchestration = input.orchestration ?? "classic"
-        const plugin = requirePlugin(orchestration)
-        if (plugin.scope !== "challenge") {
-          return badRequest(
-            c,
-            "invalid_scope",
-            `Plugin '${plugin.id}' is event-scoped; it cannot start a challenge run`
-          )
-        }
-
-        const run = await runService.create({
-          scopeType: "challenge",
+        // Enqueue (spec §10), then run one drain pass so a launchable task is
+        // started synchronously; the item stays pending if the fence is full.
+        const queue = runService.queue()
+        const item = queue.enqueue({
+          eventId: challenge.eventId,
           challengeId,
-          orchestration: plugin.id,
+          orchestration: input.orchestration ?? "classic",
           params: input.params as Record<string, unknown> | undefined,
-          provider: selected.provider,
-          modelId: selected.model.id,
-          thinkingLevel:
-            input.thinkingLevel ??
-            normalizeThinkingLevel(get(defaults, "agent.defaultThinkingLevel")),
-          container: {
-            image: input.image?.trim() || get(defaults, "container.image"),
-            cpus: get(defaults, "container.cpus"),
-            memoryMb: get(defaults, "container.memoryMb"),
-            pidsLimit: get(defaults, "container.pidsLimit"),
-            tmpfsSize: get(defaults, "container.tmpfsSize"),
-            workspace: get(defaults, "container.workspace"),
-          },
+          prompt: input.prompt,
+          timeoutMs: input.timeoutMs,
+          source: "manual",
         })
-        return c.json(run, 202)
+        await queue.drainOnce()
+        return c.json(
+          queue.list(challenge.eventId).find((i) => i.id === item.id) ?? item,
+          202
+        )
       } catch (error) {
         return runError(c, error)
       }
@@ -229,72 +180,9 @@ export function registerRunRoutes(
 
   // Live event stream (EventSource). Ephemeral progress; reconnect re-reads
   // committed messages via GET .../messages.
-  app.get("/api/runs/:runId/stream", (c) => {
-    const runId = c.req.param("runId")
-    const detail = runService.detail(runId)
-    if (!detail) return notFound(c, "Run not found")
-    const mainAgent = detail.agents.find((a) => a.isEntry)
-    const bus = runService.bus
-
-    return streamSSE(c, async (stream) => {
-      let aborted = false
-      const queue: LiveEvent[] = []
-      let resolveNext: (() => void) | null = null
-      const drain = () => {
-        if (resolveNext) {
-          const fn = resolveNext
-          resolveNext = null
-          fn()
-        }
-      }
-      // Wake a pending idle wait on abort too — otherwise the await never
-      // resolves, the loop never exits, and the subscription leaks.
-      stream.onAbort(() => {
-        aborted = true
-        drain()
-      })
-      const unsubscribe = bus.subscribe(runId, (event) => {
-        queue.push(event)
-        drain()
-      })
-
-      // Initial snapshot so a fresh connection sees current state immediately.
-      queue.push({ type: "ready", runId, agentId: mainAgent?.id ?? "" })
-      queue.push({ type: "run.updated", run: detail.run })
-      for (const agent of detail.agents) {
-        queue.push({ type: "agent.updated", agent })
-        const context = bus.getContext(agent.id)
-        if (context) queue.push(context)
-        const queueState = bus.getQueue(agent.id)
-        if (queueState) queue.push(queueState)
-        const activity = bus.getActivity(agent.id)
-        if (activity) queue.push(activity)
-        // Replay in-flight tools (with their latest partial result) so a fresh
-        // connection sees an executing bash command's streamed output right
-        // away, not only events that arrive after connect.
-        for (const tool of bus.getToolProgress(agent.id)) queue.push(tool)
-      }
-
-      try {
-        while (!aborted) {
-          if (queue.length === 0) {
-            await new Promise<void>((resolve) => {
-              resolveNext = resolve
-            })
-            if (aborted) break
-          }
-          while (queue.length > 0) {
-            const event = queue.shift() as LiveEvent
-            await stream.writeSSE({ data: JSON.stringify(event) })
-          }
-        }
-      } catch {
-        // client gone
-      } finally {
-        unsubscribe()
-      }
-    })
-  })
+  app.get("/api/runs/:runId/stream", (c) =>
+    streamRun(c, runService, c.req.param("runId"))
+  )
 
   app.post(
     "/api/runs/:runId/message",
@@ -333,6 +221,23 @@ export function registerRunRoutes(
       return runError(c, error)
     }
   })
+
+  app.post(
+    "/api/runs/:runId/timeout",
+    validateJson(timeoutInput),
+    async (c) => {
+      try {
+        return c.json(
+          runService.setRunTimeout(
+            c.req.param("runId"),
+            c.req.valid("json").timeoutMs
+          )
+        )
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
 
   app.post(
     "/api/runs/:runId/switch-model",
@@ -443,7 +348,9 @@ function runError(c: Context, error: unknown) {
       ? 404
       : error.code === "launch_failed"
         ? 500
-        : 409
+        : error.code === "capacity"
+          ? 429
+          : 409
   )
 }
 

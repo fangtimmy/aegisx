@@ -8,7 +8,8 @@ import type {
   RunPublic,
   SwitchModelInput,
 } from "@aegisx/shared"
-import { get } from "@aegisx/shared"
+import { get, normalizeThinkingLevel } from "@aegisx/shared"
+import type { AgentSummary } from "@aegisx/shared/agent"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
@@ -25,7 +26,8 @@ import type {
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { createDatabase } from "../db"
-import { agents, challenges, events, runs } from "../db/schema"
+import { agents, challenges, events, runs, schedulerConfig } from "../db/schema"
+import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
 import {
   loadTemplateMap,
@@ -53,6 +55,7 @@ import { createChildAgentRuntime } from "./child-agents"
 import type { ContainerManager } from "./container/container-manager"
 import { createToolboxContainer } from "./container/container-manager"
 import { RunActionError, RunStartError } from "./errors"
+import { checkLaunchFence, fenceSnapshot } from "./fence"
 import {
   createRunModelRuntime,
   type RunModelRuntime,
@@ -64,6 +67,11 @@ import {
   copyAttachments,
 } from "./prompt"
 import { createRunQueries } from "./queries"
+import { createQueueService, type QueueService } from "./queue"
+import {
+  createSchedulerTools,
+  type RunSchedulerToolContext,
+} from "./scheduler-tools"
 import { createMainTools, type RunToolContext } from "./tools"
 
 type Database = ReturnType<typeof createDatabase>["db"]
@@ -88,6 +96,8 @@ export type RunServiceOptions = {
   getSettings(): import("@aegisx/shared").FlatSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost?: typeof createAgentHost
+  /** Test seam: grace between deadline-abort and a forced SIGKILL (spec §8.3). */
+  timeoutGraceMs?: number
 }
 
 /** Reusable per-run handles for spawn children (model runtime, container, the
@@ -128,6 +138,13 @@ export type CreateRunInput = {
   source?: "manual" | "scheduler"
   /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
   timeoutMs?: number
+  /** Back-filled when the scheduler drainer launches this run from the queue;
+   * stamped on the run row to guard the run→queue done transition. */
+  queueItemId?: string
+  /** Overrides the rendered `initial` template as the run's first prompt. Set
+   * by the queue (queue.prompt) or the scheduler's start_run; omitted → render
+   * the default `initial` template. */
+  initialPromptOverride?: string
 } & (
   | { scopeType: "challenge"; challengeId: string }
   | { scopeType: "event"; eventId: string; instruction: string }
@@ -152,6 +169,7 @@ export function createRunService(options: RunServiceOptions) {
   } = options
   const createHost = options.createHost ?? createAgentHost
   const queries = createRunQueries({ db, dataDir })
+  const catalog = createCatalogReader(db, platformService)
   const bus: LiveBus = createLiveBus()
 
   // Register built-in plugins + seed default prompt templates (idempotent) so
@@ -160,6 +178,10 @@ export function createRunService(options: RunServiceOptions) {
 
   /** Per-agent promise-chaining locks (the only concurrency mechanism; spec §4.5). */
   const locks = new Map<string, Promise<unknown>>()
+  /** Global fence lock: serializes fence check + slot reservation across all
+   *  launches (drainer / direct start / cold-restore) so the concurrency caps
+   *  hold under interleaving (spec §8.2). One key — local single-user. */
+  const fenceLocks = new Map<string, Promise<unknown>>()
   /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
   const pendingFinish = new Map<string, { summary: string; runId: string }>()
   const forceKillTimers = new Map<string, NodeJS.Timeout>()
@@ -176,10 +198,22 @@ export function createRunService(options: RunServiceOptions) {
    * event's scheduler run. Created lazily at scheduler setup; cleared on its
    * close (a fresh scheduler run rebuilds a fresh emitter). */
   const eventScopes = new Map<string, EventScopeEmitter>()
+  /** Scheduler task queue + drainer. Assigned after construction (it calls back
+   * into {@link launchQueued}); read via closures (teardownRun, routes). */
+  let queue: QueueService | undefined
   /** Live spawn-child sessions, keyed by child agent id. */
   const childSessions = new Map<string, HostAgentSession>()
   let closed = false
-  const now = () => new Date().toISOString()
+  /** Monotonic timestamp: never returns the same value twice, so agents/runs
+   * declared within one millisecond still get a strictly-ordered `createdAt`
+   * (deterministic ordering by createdAt alone). */
+  let lastNowMs = 0
+  const now = () => {
+    let ms = Date.now()
+    if (ms <= lastNowMs) ms = lastNowMs + 1
+    lastNowMs = ms
+    return new Date(ms).toISOString()
+  }
 
   function withLock<T>(agentId: string, op: () => T | Promise<T>): Promise<T> {
     if (closed) {
@@ -188,6 +222,14 @@ export function createRunService(options: RunServiceOptions) {
       )
     }
     return chainLock(locks, agentId, op)
+  }
+
+  /** Global fence critical section (spec §8.2). Serializes the fence check +
+   * slot reservation so concurrent launches can't overshoot the caps. Holds
+   * only the quick DB op (row insert / status flip); container builds and
+   * setup run outside. */
+  async function withFence<T>(op: () => T | Promise<T>): Promise<T> {
+    return chainLock(fenceLocks, "global-fence", op)
   }
 
   const runDir = (runId: string) => join(dataDir, RUNS_SUBDIR, runId)
@@ -428,6 +470,10 @@ export function createRunService(options: RunServiceOptions) {
     emitRun(runId)
     emitAgents(runId)
     if (opts.finished) emitRunEvent(runId, { type: "run.finished", runId })
+    // A queue-sourced run closing/finishing transitions its item to done
+    // (guarded by id + runId, spec §8.1); freeing a slot re-drains the queue.
+    queue?.markDone(row?.queueItemId, runId)
+    queue?.scheduleDrain()
   }
 
   // --- timeout (spec §8.3: deadline → abort → grace → idle|closed) ---------
@@ -476,7 +522,7 @@ export function createRunService(options: RunServiceOptions) {
           runId,
           outcome: stillStreaming ? "closed" : "idle",
         })
-      }, TIMEOUT_GRACE_MS)
+      }, options.timeoutGraceMs ?? TIMEOUT_GRACE_MS)
     }, delay)
     timeoutTimers.set(runId, entry)
   }
@@ -741,6 +787,56 @@ export function createRunService(options: RunServiceOptions) {
     if (!sdkModel)
       throw new RunStartError("Could not resolve the selected model")
 
+    // Reserve the concurrency slot + persist the run row atomically under the
+    // global fence (spec §8.2). Challenge-scope launches are checked against
+    // the caps; scheduler (event-scope) runs neither count nor consume slots.
+    const ts = now()
+    await withFence(async () => {
+      if (input.scopeType === "challenge") {
+        const decision = checkLaunchFence(db, options.getSettings(), {
+          scopeType: "challenge",
+          eventId: challenge!.eventId,
+          challengeId: challenge!.id,
+        })
+        if (!decision.ok) {
+          throw new RunActionError("capacity", decision.message)
+        }
+      }
+      db.insert(runs)
+        .values({
+          id: runId,
+          scopeType: input.scopeType,
+          eventId:
+            input.scopeType === "challenge" ? challenge!.eventId : event!.id,
+          challengeId: challenge?.id ?? null,
+          orchestration: plugin.id,
+          params: JSON.stringify(params),
+          status: "running",
+          provider: modelConfig.provider,
+          providerLabel: modelConfig.providerLabel ?? null,
+          modelId: modelConfig.modelId,
+          modelLabel: modelConfig.modelLabel ?? null,
+          thinkingLevel: modelConfig.thinkingLevel,
+          image: env.image,
+          cpus: env.cpus,
+          memoryMb: env.memoryMb,
+          pidsLimit: env.pidsLimit,
+          containerName: name,
+          workspacePath: relative(dataDir, wsAbs),
+          sessionDir: relative(dataDir, sessAbs),
+          source: runSource,
+          timeoutMs: runTimeoutMs,
+          deadlineAt: deadlineAtIso,
+          queueItemId: input.queueItemId ?? null,
+          createdAt: ts,
+          startedAt: ts,
+          updatedAt: ts,
+        })
+        .run()
+    })
+
+    // Build the container outside the fence lock (slow I/O). On failure drop
+    // the reserved row so the slot is freed, then surface a launch error.
     try {
       await createToolboxContainer(containerManager, {
         name,
@@ -754,49 +850,20 @@ export function createRunService(options: RunServiceOptions) {
         networkMode: get(options.getSettings(), "container.networkMode"),
       })
     } catch (error) {
+      db.delete(runs).where(eq(runs.id, runId)).run()
       throw new RunActionError(
         "launch_failed",
         error instanceof Error ? error.message : String(error)
       )
     }
 
-    const ts = now()
-    db.insert(runs)
-      .values({
-        id: runId,
-        scopeType: input.scopeType,
-        eventId:
-          input.scopeType === "challenge" ? challenge!.eventId : event!.id,
-        challengeId: challenge?.id ?? null,
-        orchestration: plugin.id,
-        params: JSON.stringify(params),
-        status: "running",
-        provider: modelConfig.provider,
-        providerLabel: modelConfig.providerLabel ?? null,
-        modelId: modelConfig.modelId,
-        modelLabel: modelConfig.modelLabel ?? null,
-        thinkingLevel: modelConfig.thinkingLevel,
-        image: env.image,
-        cpus: env.cpus,
-        memoryMb: env.memoryMb,
-        pidsLimit: env.pidsLimit,
-        containerName: name,
-        workspacePath: relative(dataDir, wsAbs),
-        sessionDir: relative(dataDir, sessAbs),
-        source: runSource,
-        timeoutMs: runTimeoutMs,
-        deadlineAt: deadlineAtIso,
-        createdAt: ts,
-        startedAt: ts,
-        updatedAt: ts,
-      })
-      .run()
-
     // prompt_templates is the render source (spec §3.6); the plugin owns the
     // agent layout via setup(). The run row + container exist before setup
     // runs (spec §4.2); agents are declared by the plugin's setup.
     const templateMap = loadTemplateMap(db, plugin.id)
-    const initialPrompt = renderTemplate(templateMap, "initial", promptContext)
+    const initialPrompt = input.initialPromptOverride
+      ? input.initialPromptOverride
+      : renderTemplate(templateMap, "initial", promptContext)
 
     // Run-level live context: prepareAgent (prime) + spawn children reuse it.
     // The child prompt comes from the plugin's spawn template (plugin → builtin
@@ -1180,26 +1247,43 @@ export function createRunService(options: RunServiceOptions) {
       )
     }
     const settings = options.getSettings()
-    const wsAbs = workspaceAbs(runId)
-    const rtAbs = runtimeAbs(runId)
-    mkdirSync(rtAbs, { recursive: true })
 
-    const modelRuntime = await createRunModelRuntime({
-      runtimeDir: rtAbs,
-      providers: providers(),
+    // Cold-restoring a closed run occupies a concurrency slot (spec §8.2,
+    // third fence enforcement point). Reserve it atomically: check the fence +
+    // flip the run row to running so concurrent launches count it. Any later
+    // failure reverts to closed (releasing the slot) below.
+    await withFence(async () => {
+      const decision = checkLaunchFence(db, settings, {
+        scopeType: "challenge",
+        eventId: row.eventId,
+        challengeId: row.challengeId,
+      })
+      if (!decision.ok) {
+        throw new RunActionError("capacity", decision.message)
+      }
+      updateRun(runId, { status: "running", updatedAt: now() })
     })
-    const runProvider = providers().find(
-      (p) => p.label === (row.providerLabel ?? row.provider)
-    )
-    // Run-level sdkModel is used only by spawn children (classic spawn uses the
-    // run default). Best-effort: a dummy run row modelId (e.g. in tests) must
-    // not fail the whole restore — prepareAgent resolves each agent's model
-    // from its own snapshot.
-    const sdkModel = runProvider
-      ? resolveRunModel(modelRuntime, runProvider, row.modelId)
-      : undefined
 
     try {
+      const wsAbs = workspaceAbs(runId)
+      const rtAbs = runtimeAbs(runId)
+      mkdirSync(rtAbs, { recursive: true })
+
+      const modelRuntime = await createRunModelRuntime({
+        runtimeDir: rtAbs,
+        providers: providers(),
+      })
+      const runProvider = providers().find(
+        (p) => p.label === (row.providerLabel ?? row.provider)
+      )
+      // Run-level sdkModel is used only by spawn children (classic spawn uses
+      // the run default). Best-effort: a dummy run row modelId (e.g. in tests)
+      // must not fail the whole restore — prepareAgent resolves each agent's
+      // model from its own snapshot.
+      const sdkModel = runProvider
+        ? resolveRunModel(modelRuntime, runProvider, row.modelId)
+        : undefined
+
       await createToolboxContainer(containerManager, {
         name: row.containerName,
         image: row.image,
@@ -1211,38 +1295,59 @@ export function createRunService(options: RunServiceOptions) {
         tmpfsSize: settings["container.tmpfsSize"],
         networkMode: get(settings, "container.networkMode"),
       })
-    } catch (error) {
-      throw new RunActionError(
-        "launch_failed",
-        error instanceof Error ? error.message : String(error)
-      )
-    }
 
-    // runService owns challenge-scope runs; a challenge row is always present
-    // for cold-restore (event-scoped runs are rejected above).
-    const challenge = row.challengeId
-      ? db
-          .select()
-          .from(challenges)
-          .where(eq(challenges.id, row.challengeId))
-          .get()
-      : undefined
-    if (!challenge) {
-      throw new RunActionError("not_found", "Challenge not found for restore")
-    }
-    const promptContext = buildPromptContext(
-      {
-        runId,
-        challenge,
-        remote: getChallengeRemote(db, challenge.id),
-        challengeAttachments: [],
-        environment: {
-          type: "container",
-          image: row.image,
-          cpus: row.cpus,
-          memoryMb: row.memoryMb,
-          pidsLimit: row.pidsLimit,
+      // runService owns challenge-scope runs; a challenge row is always
+      // present for cold-restore (event-scoped runs are rejected above).
+      const challenge = row.challengeId
+        ? db
+            .select()
+            .from(challenges)
+            .where(eq(challenges.id, row.challengeId))
+            .get()
+        : undefined
+      if (!challenge) {
+        throw new RunActionError("not_found", "Challenge not found for restore")
+      }
+      const promptContext = buildPromptContext(
+        {
+          runId,
+          challenge,
+          remote: getChallengeRemote(db, challenge.id),
+          challengeAttachments: [],
+          environment: {
+            type: "container",
+            image: row.image,
+            cpus: row.cpus,
+            memoryMb: row.memoryMb,
+            pidsLimit: row.pidsLimit,
+          },
+          model: {
+            provider: row.providerLabel ?? row.provider,
+            providerLabel: row.providerLabel ?? undefined,
+            modelId: row.modelId,
+            modelLabel: row.modelLabel ?? undefined,
+            thinkingLevel: row.thinkingLevel as ThinkingLevel,
+          },
         },
+        db,
+        settings["container.workspace"]
+      )
+
+      const plugin = requirePlugin(row.orchestration)
+      const templateMap = loadTemplateMap(db, plugin.id)
+      const initialPrompt = renderTemplate(
+        templateMap,
+        "initial",
+        promptContext
+      )
+
+      contexts.set(runId, {
+        containerName: row.containerName,
+        workspaceHostPath: wsAbs,
+        containerWorkspace: settings["container.workspace"],
+        sessionsDir: sessionsAbs(runId),
+        modelRuntime,
+        sdkModel,
         model: {
           provider: row.providerLabel ?? row.provider,
           providerLabel: row.providerLabel ?? undefined,
@@ -1250,60 +1355,50 @@ export function createRunService(options: RunServiceOptions) {
           modelLabel: row.modelLabel ?? undefined,
           thinkingLevel: row.thinkingLevel as ThinkingLevel,
         },
-      },
-      db,
-      settings["container.workspace"]
-    )
-
-    const plugin = requirePlugin(row.orchestration)
-    const templateMap = loadTemplateMap(db, plugin.id)
-    const initialPrompt = renderTemplate(templateMap, "initial", promptContext)
-
-    contexts.set(runId, {
-      containerName: row.containerName,
-      workspaceHostPath: wsAbs,
-      containerWorkspace: settings["container.workspace"],
-      sessionsDir: sessionsAbs(runId),
-      modelRuntime,
-      sdkModel,
-      model: {
-        provider: row.providerLabel ?? row.provider,
-        providerLabel: row.providerLabel ?? undefined,
-        modelId: row.modelId,
-        modelLabel: row.modelLabel ?? undefined,
         thinkingLevel: row.thinkingLevel as ThinkingLevel,
-      },
-      thinkingLevel: row.thinkingLevel as ThinkingLevel,
-      childTemplate:
-        templateMap.get(plugin.spawn?.systemPrompt ?? "childSystem") ?? "",
-      promptContext,
-      challengeId: row.challengeId ?? "",
-    })
+        childTemplate:
+          templateMap.get(plugin.spawn?.systemPrompt ?? "childSystem") ?? "",
+        promptContext,
+        challengeId: row.challengeId ?? "",
+      })
 
-    const emitter = new RunEmitter()
-    emitters.set(runId, emitter)
-    const defaultModel: ModelSnapshot = {
-      provider: row.provider,
-      providerLabel: row.providerLabel,
-      modelId: row.modelId,
-      modelLabel: row.modelLabel,
-      thinkingLevel: row.thinkingLevel as ThinkingLevel,
+      const emitter = new RunEmitter()
+      emitters.set(runId, emitter)
+      const defaultModel: ModelSnapshot = {
+        provider: row.provider,
+        providerLabel: row.providerLabel,
+        modelId: row.modelId,
+        modelLabel: row.modelLabel,
+        thinkingLevel: row.thinkingLevel as ThinkingLevel,
+      }
+
+      const host = buildHandleHost({
+        runId,
+        scope: row.scopeType === "event" ? "event" : "challenge",
+        params: JSON.parse(row.params || "{}"),
+        ctx: promptContext,
+        initialPrompt,
+        templateMap,
+        emitter,
+        defaultModel,
+      })
+      const handle = createRunHandle(host)
+      await runSetup(plugin, handle)
+      // primeSpecs ignored on restore (spec §4.2).
+      armRunTimers(runId, row.deadlineAt)
+    } catch (error) {
+      // Restore failed after reserving the slot: release it so the fence and
+      // run state stay consistent, then surface the error.
+      contexts.delete(runId)
+      emitters.get(runId)?.close()
+      emitters.delete(runId)
+      updateRun(runId, { status: "closed", updatedAt: now() })
+      if (error instanceof RunActionError) throw error
+      throw new RunActionError(
+        "launch_failed",
+        error instanceof Error ? error.message : String(error)
+      )
     }
-
-    const host = buildHandleHost({
-      runId,
-      scope: row.scopeType === "event" ? "event" : "challenge",
-      params: JSON.parse(row.params || "{}"),
-      ctx: promptContext,
-      initialPrompt,
-      templateMap,
-      emitter,
-      defaultModel,
-    })
-    const handle = createRunHandle(host)
-    await runSetup(plugin, handle)
-    // primeSpecs ignored on restore (spec §4.2).
-    armRunTimers(runId, row.deadlineAt)
   }
   /** Prepare one agent's environment: container online (via the run context,
    * built lazily on cold-restore) + this agent's session online. Unified for
@@ -1339,7 +1434,17 @@ export function createRunService(options: RunServiceOptions) {
 
     const snapshotTools = safeParseTools(agentRow.tools)
     const toolCtx = buildAgentToolContext(runId, ctx.challengeId, agentId)
-    const nativeTools = createMainTools(toolCtx, snapshotTools)
+    // Solver agents get their tools from createMainTools; the event-scope
+    // orchestrator additionally gets the scheduler/queue management tools
+    // (createSchedulerTools filters by name, so non-orchestrator snapshots add
+    // nothing). Names never overlap, so the two builders compose cleanly.
+    const nativeTools = [
+      ...createMainTools(toolCtx, snapshotTools),
+      ...createSchedulerTools(
+        buildSchedulerToolContext(runId, agentId),
+        snapshotTools
+      ),
+    ]
 
     let agentSession: HostAgentSession
     try {
@@ -1394,6 +1499,9 @@ export function createRunService(options: RunServiceOptions) {
         updateAgent(agent.id, { status: "idle", updatedAt: ts })
       }
     }
+    // Boot closed every live run; pending queue items may now find capacity —
+    // kick a drain (debounced, fires after recoverOnBoot returns).
+    queue?.scheduleDrain()
   }
 
   async function close() {
@@ -1407,6 +1515,7 @@ export function createRunService(options: RunServiceOptions) {
       if (t.grace) clearTimeout(t.grace)
     }
     timeoutTimers.clear()
+    queue?.cancelDrain()
     await lifecycle.closeAll()
     for (const childSession of childSessions.values())
       await childSession.dispose()
@@ -1426,19 +1535,367 @@ export function createRunService(options: RunServiceOptions) {
     emitRunEvent(runId, { type: "run.flagAccepted", runId })
   }
 
+  // --- scheduler policy + run management (P3) -----------------------------
+
+  /** Build the scheduler-tool context for the event-scope orchestrator agent.
+   * The orchestrator manages the queue + sibling challenge runs in its event. */
+  function buildSchedulerToolContext(
+    runId: string,
+    agentId: string
+  ): RunSchedulerToolContext {
+    const row = queries.getRow(runId)
+    const eventId = row?.eventId ?? ""
+    return {
+      runId,
+      eventId,
+      agentId,
+      enqueue: (input) =>
+        queue!.enqueue({
+          ...input,
+          orchestration: input.orchestration ?? "classic",
+          eventId,
+          source: "scheduler",
+        }),
+      listQueue: () => queue!.list(eventId),
+      removeQueue: (itemId) => queue!.remove(itemId),
+      clearQueue: () => queue!.clear(eventId),
+      reorderQueue: (itemIds) => queue!.reorder(eventId, itemIds),
+      startRun: async (input) => {
+        const run = await resolveAndCreate({
+          ...input,
+          orchestration: input.orchestration ?? "classic",
+          source: "scheduler",
+        })
+        return runSummary(run)
+      },
+      stopRun: async (id) => runSummary(await stop(id)),
+      messageRun: async (id, text, deliverAs) =>
+        runSummary(await sendMessage(id, { text, deliverAs })),
+      closeRun: async (id) => runSummary(await closeRun(id)),
+      readRun: (id) => readRun(id),
+      listRuns: (filter) =>
+        queries.listRuns({ eventId, ...filter }).map(runSummary),
+      setRunTimeout: (id, timeoutMs) =>
+        runSummary(setRunTimeout(id, timeoutMs)),
+      getStatus: () => getStatusSnapshot(eventId),
+      listChallenges: () => catalog.listChallengesForEvent(eventId),
+      getChallenge: (id) => catalog.getChallenge(id),
+      listAgents: (id) => queries.listAgents(id),
+      lastAssistantText: (id, targetId) => lastAssistantText(id, targetId),
+    }
+  }
+
+  /** Resolve the global default model + container settings and launch a
+   * challenge run (direct start: scheduler start_run + queue drainer). */
+  async function resolveAndCreate(input: {
+    challengeId: string
+    orchestration: string
+    params?: Record<string, unknown>
+    prompt?: string
+    timeoutMs?: number | null
+    source: "manual" | "scheduler"
+    queueItemId?: string
+  }): Promise<RunPublic> {
+    const settings = options.getSettings()
+    const all = getProviderConnections(configStore)
+    const modelId = get(settings, "agent.defaultModelId")
+    const selected = all
+      .filter((p) => p.enabled && p.apiKey)
+      .flatMap((p) => p.models.map((m) => ({ provider: p, model: m })))
+      .find(({ model }) => model.enabled && model.id === modelId)
+    if (!selected) {
+      throw new RunActionError(
+        "invalid_state",
+        "No enabled default model is configured"
+      )
+    }
+    return create({
+      scopeType: "challenge",
+      challengeId: input.challengeId,
+      orchestration: input.orchestration,
+      params: input.params,
+      provider: selected.provider,
+      modelId: selected.model.id,
+      thinkingLevel: normalizeThinkingLevel(
+        get(settings, "agent.defaultThinkingLevel")
+      ),
+      container: {
+        image: get(settings, "container.image"),
+        cpus: get(settings, "container.cpus"),
+        memoryMb: get(settings, "container.memoryMb"),
+        pidsLimit: get(settings, "container.pidsLimit"),
+        tmpfsSize: get(settings, "container.tmpfsSize"),
+        workspace: get(settings, "container.workspace"),
+      },
+      source: input.source,
+      timeoutMs: input.timeoutMs ?? undefined,
+      queueItemId: input.queueItemId,
+      initialPromptOverride: input.prompt,
+    })
+  }
+
+  /** Set / extend / shorten a run's hard deadline (spec §8.3). Persists the new
+   * deadline + re-arms the timer for live (warm) runs; cold runs pick it up on
+   * restore. Usable on closed runs (pre-sets the deadline for the next resume). */
+  function setRunTimeout(runId: string, timeoutMs: number): RunPublic {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new RunActionError("invalid_state", "timeoutMs must be positive")
+    }
+    const deadlineAt = new Date(Date.now() + timeoutMs).toISOString()
+    updateRun(runId, { timeoutMs, deadlineAt, updatedAt: now() })
+    if (contexts.has(runId)) armRunTimers(runId, deadlineAt)
+    emitRun(runId)
+    return requireRun(runId)
+  }
+
+  /** Read a run for the scheduler: run + agents + the entry agent's latest
+   * assistant text (reasoning/progress at a glance). */
+  function readRun(runId: string): {
+    run: RunPublic
+    agents: AgentSummary[]
+    entryAgentId: string | null
+    lastAssistant: string | null
+  } {
+    const run = queries.get(runId)
+    if (!run) throw new RunActionError("not_found", "Run not found")
+    const agentRows = queries.listAgents(runId)
+    const entry = agentRows.find((a) => a.isEntry)
+    return {
+      run,
+      agents: agentRows,
+      entryAgentId: entry?.id ?? null,
+      lastAssistant: entry ? lastAssistantText(runId, entry.id) : null,
+    }
+  }
+
+  /** Fence snapshot augmented with active run details (challenge names). */
+  function getStatusSnapshot(eventId: string): {
+    maxConcurrentRuns: number
+    runningCount: number
+    maxConcurrentTargets: number
+    activeTargetChallenges: string[]
+    activeRuns: Array<{
+      id: string
+      challengeId: string | null
+      challengeName: string
+      status: string
+      orchestration: string
+    }>
+  } {
+    const snap = fenceSnapshot(db, options.getSettings(), eventId)
+    const active = db
+      .select({
+        id: runs.id,
+        challengeId: runs.challengeId,
+        status: runs.status,
+        orchestration: runs.orchestration,
+      })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.scopeType, "challenge"),
+          inArray(runs.status, ["running", "idle"])
+        )
+      )
+      .all()
+    const activeRuns = active.map((row) => ({
+      id: row.id,
+      challengeId: row.challengeId,
+      challengeName:
+        db
+          .select({ name: challenges.name })
+          .from(challenges)
+          .where(eq(challenges.id, row.challengeId ?? ""))
+          .get()?.name ?? "",
+      status: row.status,
+      orchestration: row.orchestration,
+    }))
+    return { ...snap, activeRuns }
+  }
+
+  /** The event's scheduler (event-scoped) run, if any. */
+  function getSchedulerRun(eventId: string): RunPublic | undefined {
+    const row = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.scopeType, "event"), eq(runs.eventId, eventId)))
+      .get()
+    return row ? queries.get(row.id) : undefined
+  }
+
+  /** Read the event's scheduler policy (defaults if unset). */
+  function getSchedulerConfig(eventId: string): {
+    eventId: string
+    modelId: string | null
+    instruction: string
+    maxConcurrentTargets: number
+  } {
+    const row = db
+      .select()
+      .from(schedulerConfig)
+      .where(eq(schedulerConfig.eventId, eventId))
+      .get()
+    return {
+      eventId,
+      modelId: row?.modelId ?? null,
+      instruction: row?.instruction ?? "",
+      maxConcurrentTargets: row?.maxConcurrentTargets ?? 1,
+    }
+  }
+
+  /** Upsert the event's scheduler policy (creates with defaults if missing). */
+  function upsertSchedulerConfig(patch: {
+    eventId: string
+    modelId?: string | null
+    instruction?: string
+    maxConcurrentTargets?: number
+  }) {
+    const ts = now()
+    const existing = db
+      .select()
+      .from(schedulerConfig)
+      .where(eq(schedulerConfig.eventId, patch.eventId))
+      .get()
+    if (existing) {
+      const update: Partial<typeof schedulerConfig.$inferInsert> = {
+        updatedAt: ts,
+      }
+      if (patch.modelId !== undefined) update.modelId = patch.modelId
+      if (patch.instruction !== undefined)
+        update.instruction = patch.instruction
+      if (patch.maxConcurrentTargets !== undefined) {
+        update.maxConcurrentTargets = patch.maxConcurrentTargets
+      }
+      db.update(schedulerConfig)
+        .set(update)
+        .where(eq(schedulerConfig.eventId, patch.eventId))
+        .run()
+    } else {
+      db.insert(schedulerConfig)
+        .values({
+          eventId: patch.eventId,
+          modelId: patch.modelId ?? null,
+          instruction: patch.instruction ?? "",
+          maxConcurrentTargets: patch.maxConcurrentTargets ?? 1,
+          createdAt: ts,
+          updatedAt: ts,
+        })
+        .run()
+    }
+    return getSchedulerConfig(patch.eventId)
+  }
+
+  /** Start (or replace) the event's scheduler run from its config (spec §10
+   * scheduler/start). Resolves the configured model into the scheduler plugin's
+   * params snapshot; a fresh start replaces any previous closed scheduler run
+   * (newSession semantics handled by create). */
+  async function startScheduler(eventId: string): Promise<RunPublic> {
+    const config = getSchedulerConfig(eventId)
+    const settings = options.getSettings()
+    const modelId = config.modelId ?? get(settings, "agent.defaultModelId")
+    const all = getProviderConnections(configStore)
+    const selected = all
+      .filter((p) => p.enabled && p.apiKey)
+      .flatMap((p) => p.models.map((m) => ({ provider: p, model: m })))
+      .find(({ model }) => model.enabled && model.id === modelId)
+    if (!selected) {
+      throw new RunActionError(
+        "invalid_state",
+        "Configure an enabled model for the scheduler"
+      )
+    }
+    const thinking = normalizeThinkingLevel(
+      get(settings, "agent.defaultThinkingLevel")
+    )
+    return create({
+      scopeType: "event",
+      eventId,
+      instruction: config.instruction,
+      orchestration: "scheduler",
+      params: {
+        model: {
+          provider: selected.provider.label,
+          modelId: selected.model.modelId,
+          thinking,
+        },
+      },
+      provider: selected.provider,
+      modelId: selected.model.id,
+      thinkingLevel: thinking,
+      container: {
+        image: get(settings, "container.image"),
+        cpus: get(settings, "container.cpus"),
+        memoryMb: get(settings, "container.memoryMb"),
+        pidsLimit: get(settings, "container.pidsLimit"),
+        tmpfsSize: get(settings, "container.tmpfsSize"),
+        workspace: get(settings, "container.workspace"),
+      },
+      source: "manual",
+    })
+  }
+
+  /** Notify the event's scheduler orchestrator that a queued launch failed
+   * (spec §8.1: avoid a pending death-loop). No-op if no live scheduler run. */
+  function notifySchedulerOfFailure(
+    eventId: string,
+    item: { id: string; challengeId: string; orchestration: string },
+    error: string
+  ): void {
+    const sched = getSchedulerRun(eventId)
+    if (!sched || sched.status === "closed") return
+    const text =
+      `Queue item ${item.id} (challenge ${item.challengeId}, ` +
+      `${item.orchestration}) failed to launch: ${error}. ` +
+      `Marked failed — remove_queue to clear or enqueue_run to retry.`
+    void sendMessage(sched.id, { text }).catch(() => undefined)
+  }
+
+  // Construct the queue service now that resolveAndCreate + the failure
+  // notifier exist (function declarations are hoisted). The drainer's launch
+  // callback builds the run from the queue item's snapshot.
+  queue = createQueueService({
+    db,
+    getSettings: options.getSettings,
+    isDisposed: () => closed,
+    launch: async (item) => {
+      const run = await resolveAndCreate({
+        challengeId: item.challengeId,
+        orchestration: item.orchestration,
+        params: safeParseObject(item.params),
+        prompt: item.prompt,
+        timeoutMs: item.timeoutMs,
+        source: item.source as "manual" | "scheduler",
+        queueItemId: item.id,
+      })
+      return run.id
+    },
+    onLaunchFailed: (eventId, item, error) =>
+      notifySchedulerOfFailure(eventId, item, error),
+  })
+
   return {
     create,
+    resolveAndCreate,
     stop,
     switchModel,
     finish,
     sendMessage,
     setQueue,
+    setRunTimeout,
     closeRun,
     delete: deleteRun,
+    readRun,
+    getStatus: getStatusSnapshot,
+    getSchedulerRun,
+    getSchedulerConfig,
+    upsertSchedulerConfig,
+    startScheduler,
+    queue: () => queue!,
     refresh: queries.get,
     recoverOnBoot,
     close,
     listMessages: queries.listMessages,
+    listRuns: queries.listRuns,
     get: queries.get,
     detail: queries.detail,
     listForEvent: queries.listForEvent,
@@ -1460,5 +1917,40 @@ function safeParseTools(raw: string): string[] {
       : []
   } catch {
     return []
+  }
+}
+
+function safeParseObject(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Compact run summary for the scheduler's read-only tools (list_runs /
+ * start_run / ...): enough to identify a run + its outcome without the full
+ * flag/usage payload. */
+function runSummary(run: RunPublic) {
+  return {
+    id: run.id,
+    scopeType: run.scopeType,
+    eventId: run.eventId,
+    challengeId: run.challengeId,
+    challengeName: run.challengeName,
+    orchestration: run.orchestration,
+    status: run.status,
+    source: run.source,
+    modelId: run.modelId,
+    modelName: run.modelName,
+    summary: run.summary,
+    error: run.error,
+    hasAcceptedFlag: run.hasAcceptedFlag,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    completedAt: run.completedAt,
   }
 }

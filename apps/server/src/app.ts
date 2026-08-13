@@ -14,6 +14,7 @@ import { registerProviderRoutes } from "./providers/routes"
 import { createContainerManager } from "./run/container/container-manager"
 import { registerRunRoutes } from "./run/routes"
 import { createRunService } from "./run/service"
+import { registerSchedulerRoutes } from "./scheduler/routes"
 import { registerSettingsRoutes } from "./settings/routes"
 
 export function createApp(options: { dataDir: string }) {
@@ -101,9 +102,8 @@ export function createApp(options: { dataDir: string }) {
     db,
     dataDir: options.dataDir,
     runService,
-    getSettings,
-    configStore,
   })
+  registerSchedulerRoutes(app, { db, runService })
 
   app.get("/api/platform/status", (c) => c.json({ available: true }))
 

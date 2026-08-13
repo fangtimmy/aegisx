@@ -22,11 +22,9 @@ function wire(run: RunHandle, event: EventHandle): void {
 
 /**
  * scheduler — the event-scoped orchestrator run (spec §7.5). One 'orchestrator'
- * agent holds the event's strategy; child-run lifecycle events wake it to
- * read + decide. The queue/run-management tools (enqueue_run, start_run,
- * message_run, ...) land with the P3 scheduler-queue work; P2 grants only the
- * tools that exist today (list_agents; file tools are always on), so the run
- * can be created and its event loop exercised end-to-end.
+ * agent holds the event's strategy; it manages the task queue + sibling
+ * challenge runs via the scheduler tools, and is woken on child-run lifecycle
+ * events (idle / flagAccepted / timedOut) to read + decide.
  */
 export default defineOrchestration<{ model: ModelRef }>({
   id: "scheduler",
@@ -43,7 +41,27 @@ export default defineOrchestration<{ model: ModelRef }>({
       name: "Scheduler",
       entry: true,
       systemPrompt: "orchestratorSystem",
-      tools: ["list_agents"],
+      tools: [
+        // Queue CRUD (the plan = queue content).
+        "enqueue_run",
+        "list_queue",
+        "remove_queue",
+        "clear_queue",
+        "reorder_queue",
+        // Direct run management (escape hatch + read).
+        "start_run",
+        "stop_run",
+        "message_run",
+        "close_run",
+        "read_run",
+        "set_run_timeout",
+        // Read-only inventory.
+        "list_challenges",
+        "get_challenge",
+        "list_runs",
+        "get_status",
+        "list_agents",
+      ],
       model: run.params.model,
       prime: run.initialPrompt,
     })

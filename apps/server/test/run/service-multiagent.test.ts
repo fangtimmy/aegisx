@@ -239,7 +239,9 @@ describe("multi-agent orchestration (service level)", () => {
       expect(rows[0]!.slot).toBe("orchestrator")
       expect(rows[0]!.role).toBe("orchestrator")
       expect(rows[0]!.isEntry).toBe(true)
-      expect(JSON.parse(rows[0]!.tools)).toEqual(["list_agents"])
+      expect(JSON.parse(rows[0]!.tools)).toContain("enqueue_run")
+      expect(JSON.parse(rows[0]!.tools)).toContain("start_run")
+      expect(JSON.parse(rows[0]!.tools)).toContain("get_status")
       await runService.close()
     } finally {
       close()
