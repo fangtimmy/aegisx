@@ -118,6 +118,9 @@ export function EventOverview({
     runId: string
     agentId: string
   } | null>(null)
+  const onSelectAgent = useCallback((runId: string, agentId: string) => {
+    setSelection({ runId, agentId })
+  }, [])
 
   // Fleet: every challenge run + its agents (the overview's single source of
   // truth). Polls while any run is active so statuses stay current.
@@ -192,10 +195,6 @@ export function EventOverview({
 
   const runs = fleet.data?.items ?? []
   const schedulerData = scheduler.data
-
-  const onSelectAgent = useCallback((runId: string, agentId: string) => {
-    setSelection({ runId, agentId })
-  }, [])
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_22rem] gap-4">

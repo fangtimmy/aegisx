@@ -6,7 +6,7 @@ import { EventPage } from "@/features/events/event-page"
 import { HomePage } from "@/features/events/home-page"
 import { SettingsPage } from "@/features/settings/settings-page"
 
-const settingsSections = ["general", "models", "settings"] as const
+const settingsSections = ["general", "models", "settings", "templates"] as const
 const eventTabs = ["challenges", "settings"] as const
 
 const router = createBrowserRouter([
