@@ -89,7 +89,7 @@ export type DbClassification =
  * newer-than-binary guard (set after every migrate) and a quick
  * `PRAGMA user_version` inspection handle.
  */
-export function classifyDatabaseState(
+function classifyDatabaseState(
   tables: Set<string>,
   userVersion: number,
   schemaVersion: number
@@ -114,7 +114,7 @@ function readJournalMigrationCount(migrationsFolder: string): number {
 }
 
 /** Pure pending-count: journal migrations not yet recorded as applied. */
-export function pendingMigrationCount(
+function pendingMigrationCount(
   knownMigrations: number,
   appliedMigrations: number
 ): number {
