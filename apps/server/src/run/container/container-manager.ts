@@ -260,7 +260,8 @@ export function createContainerManager(options?: { socketPath?: string }) {
 
   /**
    * Run a command inside a running container, capturing stdout and stderr
-   * separately. Used by workspace file tools (read/grep/find/ls) which need
+   * separately. Used by the workspace file backend (read = cat, list = ls,
+   * exec = bash — the read/write/edit + bash host tool set) which needs
    * structured output, unlike the streaming bash tool.
    */
   async function capture(

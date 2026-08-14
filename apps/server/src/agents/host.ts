@@ -5,7 +5,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { createBashTool } from "../run/bash-tool"
 import type { ContainerManager } from "../run/container/container-manager"
 import { createDockerExecBackend } from "../run/workspace/backend"
@@ -18,8 +18,6 @@ import {
   type SessionResume,
 } from "./host-session"
 import type { LiveBus } from "./live"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 /**
  * Builtin file/coding tools every host agent gets. They operate on the shared

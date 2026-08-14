@@ -3,7 +3,7 @@ import type { Hono } from "hono"
 import type { Context } from "hono"
 import { Type } from "typebox"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { events } from "../db/schema"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
@@ -11,8 +11,6 @@ import { EmptyInputSchema } from "../lib/schemas"
 import { RunActionError } from "../run/errors"
 import type { RunService } from "../run/service"
 import { streamRun } from "../run/sse"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 const enqueueInput = Type.Object(
   {

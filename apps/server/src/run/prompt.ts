@@ -8,7 +8,7 @@ import type {
 } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import {
   attachments,
   type challenges,
@@ -24,7 +24,6 @@ import {
 } from "../platforms/challenge-state"
 import { RunStartError } from "./errors"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type Challenge = typeof challenges.$inferSelect
 
 export type RunPromptInputs = {

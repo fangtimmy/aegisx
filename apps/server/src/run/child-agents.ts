@@ -6,7 +6,7 @@ import type {
   HostAgentSession,
 } from "../agents/host-session"
 import type { LiveBus } from "../agents/live"
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { agents } from "../db/schema"
 import type { PromptContext } from "../orchestration/types"
 import { renderTemplateBody } from "../settings/prompt-templates"
@@ -14,7 +14,6 @@ import type { ContainerManager } from "./container/container-manager"
 import { RunActionError } from "./errors"
 import type { RunContext } from "./service"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type AgentPatch = Partial<typeof agents.$inferInsert>
 
 export type ChildAgentDeps = {

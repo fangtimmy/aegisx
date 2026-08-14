@@ -14,7 +14,7 @@ import {
   listRenderableEntries,
   sumUsageTotals,
 } from "../agents/session-queries"
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import {
   agents,
   challengeFlags,
@@ -54,8 +54,6 @@ function groupFlagsByRun(
   }
   return map
 }
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 export type RunQueries = ReturnType<typeof createRunQueries>
 

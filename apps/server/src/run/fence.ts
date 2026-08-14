@@ -1,7 +1,7 @@
 import { get, type FlatSettings } from "@aegisx/shared"
 import { and, eq, sql } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import {
   challengeFlags,
   challengeRemote,
@@ -9,8 +9,6 @@ import {
   runs,
   schedulerConfig,
 } from "../db/schema"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 export type FenceDecision =
   | { ok: true }

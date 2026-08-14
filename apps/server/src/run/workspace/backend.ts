@@ -9,7 +9,8 @@ import type { ContainerManager } from "../container/container-manager"
  * loop runs host-side; all file tools go through this backend so the workspace
  * can live either in a local container (bind-mounted) or a remote one (no host
  * filesystem access). Every method executes inside the run's tool-box
- * container via `docker exec`.
+ * container: read/list/exec via `docker exec`, write via `putArchive`. The
+ * host tool set is read/write/edit (workspace/tools.ts) + bash (bash-tool.ts).
  */
 export type WorkspaceEntry = {
   name: string
@@ -136,10 +137,10 @@ export function createDockerExecBackend(
     },
     async list(path, signal) {
       const target = resolvePath(path)
-      const result = await run(
-        `ls -1Ap ${shellQuote(target)} 2>/dev/null || ls -1A ${shellQuote(target)}`,
-        { signal }
-      )
+      // Single `ls -1Ap`: the trailing `-p` marks directories with a `/` (the
+      // old `|| ls -1A` fallback dropped it, losing the directory flag on
+      // non-GNU ls). Kali ships GNU ls, which always supports `-p`.
+      const result = await run(`ls -1Ap ${shellQuote(target)}`, { signal })
       // Non-zero just means empty/missing; surface as empty list.
       const entries: WorkspaceEntry[] = []
       for (const line of result.stdout.toString("utf8").split("\n")) {

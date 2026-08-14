@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 
 import { eq } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { challengeRemote, challenges, type eventPlatforms } from "../db/schema"
 import { getChallengeRemote, isTargetCapable } from "./challenge-state"
 import {
@@ -12,7 +12,6 @@ import {
 } from "./core"
 import { PlatformActionError, platformError } from "./errors"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type StoredPlatform = typeof eventPlatforms.$inferSelect
 
 /** Polling cadence while a target transitions starting → running. */
@@ -83,14 +82,16 @@ export function createPlatformTargets(
         "Event is not connected to a platform"
       )
     }
+    // Reference through bound methods: adapter methods are plain functions,
+    // so passing them detached would lose `this` (oxlint unbound-method).
     const method =
       action === "get"
-        ? adapter.getTarget
+        ? adapter.getTarget?.bind(adapter)
         : action === "start"
-          ? adapter.startTarget
+          ? adapter.startTarget?.bind(adapter)
           : action === "extend"
-            ? adapter.extendTarget
-            : adapter.stopTarget
+            ? adapter.extendTarget?.bind(adapter)
+            : adapter.stopTarget?.bind(adapter)
     if (!method) {
       throw new PlatformActionError(
         "invalid_state",

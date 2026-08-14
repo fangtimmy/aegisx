@@ -208,6 +208,24 @@ type PromptContext = {
 
 ---
 
+### 3.8 附录：插件 API 现状（v12 演进，以 `orchestration/types.ts` 为准）
+
+本节 §3.1–§3.3 的 `setup()` / `createAgent()` / `prime` 文本为 v8 设计稿，已**被声明式 `agents` + `wire()` 取代**（v10–v12 演进，无独立迁移文档）：
+
+- 插件在定义时声明 `agents: AgentSlotSpec[]`（slot / role / name / isEntry / parent / systemPrompt 模板键 / tools / prime），不再在 `setup()` 里逐个 `createAgent()`；`createAgent` 的幂等键、快照优先级、systemPrompt 渲染收进 `createRunHandle`（`orchestration/run-handle.ts`）。
+- `setup()` 改名为 **`wire(run)`**（challenge-scope）/**`wire(run, event)`**（event-scope），只做事件接线；不创建 agent、不 drive。
+- `prime` 声明式保留：新建 run 时系统对 prime agent 自动 `prepare()+send(initialPrompt)`，恢复时忽略。
+- 插件注册仍用 `defineOrchestration`（判别联合）；运行时行为以 `orchestration/types.ts` + `orchestration/registry.ts` + `run-handle.ts` 的实现为准，本节其余签名（PromptContext / capabilities / spawn 模板）仍然有效。
+
+### 3.9 安全备注：已接受的提示注入面（2025-08 记录，不改代码）
+
+以下面为**已接受的风险**（本地单兵 CTF 场景），仅记录不治理：
+
+1. **远端平台内容注入 prompt**：challenge 名称/描述来自远端平台，经 handlebars `noEscape` 进入 system prompt / initial prompt（`prompt-templates-store.ts` 的 renderTemplate）。恶意平台数据理论上可注入指令文本；单用户本地部署下信任已配置的平台源。
+2. **scheduler 强工具面**：event-scope 调度者持 `start_run` / `enqueue_run` / `close_run` / `set_run_timeout` 等强工具；若平台可注入调度者 prompt，理论上可间接驱动其烧 token / 操作 run。CTF 场景接受；若未来接入不可信平台，需在此处加净化层（模板渲染前对远端字段做转义/白名单）。
+
+---
+
 ## 四、生命周期
 
 ### 4.1 Run 三态（SQL 派生 + 显式 closed 转换）

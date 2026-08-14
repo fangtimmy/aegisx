@@ -1,7 +1,7 @@
 import { type EventPlatform, get } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import {
   challengeRemote,
   challenges,
@@ -45,7 +45,6 @@ export function createPlatformAdapter(
   return new A1CtfAdapter(config, onError, timeoutMs)
 }
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type Storage = ReturnType<typeof createStorage>
 
 export function createPlatformService(
@@ -322,7 +321,9 @@ export function createPlatformService(
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
     setRunHooks(hooks: { onRunFlagAccepted?(runId: string): void }) {
-      onRunFlagAccepted = hooks.onRunFlagAccepted
+      // Bound via a closure: the hook is a method on the caller's object, so
+      // storing it detached would lose `this` (oxlint unbound-method).
+      onRunFlagAccepted = (runId: string) => hooks.onRunFlagAccepted?.(runId)
     },
     addManualFlag: platformFlags.addManualFlag,
     deleteFlag: platformFlags.deleteFlag,

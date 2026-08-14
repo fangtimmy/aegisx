@@ -12,7 +12,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { DbSessionManager } from "./db-session-manager"
 import {
   type AgentEventPipeline,
@@ -20,8 +20,6 @@ import {
   createAgentEventPipeline,
 } from "./event-pipeline"
 import type { LiveBus } from "./live"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 /**
  * Who a host-side session belongs to: exactly one agent (and, redundantly

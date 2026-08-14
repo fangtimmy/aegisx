@@ -89,7 +89,9 @@ export function registerSettingsRoutes(
     syncModels(): void
   }
 ) {
-  const { db, configStore, syncModels } = options
+  const { db, configStore } = options
+  // Reference through the options object (not destructured) so `this` survives.
+  const syncModels = () => options.syncModels()
   const childSampleContext = {
     ...samplePromptContext,
     agent: {

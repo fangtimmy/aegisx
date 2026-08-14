@@ -9,7 +9,7 @@ import type {
 import { asc, count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
 import { Value } from "typebox/value"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import {
   attachments,
   challengeFlags,
@@ -22,7 +22,6 @@ import { RemoteTargetInfoSchema } from "../lib/schemas"
 import type { ChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type PlatformService = ReturnType<typeof createPlatformService>
 
 export function createCatalogReader(

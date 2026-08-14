@@ -3,7 +3,7 @@ import {
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
 } from "@aegisx/shared/prompt-defaults"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import bootstrapSolver from "./bootstrap-solver"
 import classic from "./classic"
 import observerSolver from "./observer-solver"
@@ -19,8 +19,6 @@ import type {
   OrchestrationInfo,
   OrchestrationPlugin,
 } from "./types"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 /**
  * Orchestration plugin registry. Plugins register an id + scope + declared

@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm"
 import type { Context, Hono } from "hono"
 import { Type } from "typebox"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { challenges } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
@@ -21,8 +21,6 @@ import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
 import type { RunService } from "./service"
 import { streamRun } from "./sse"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 /** Manual enqueue body (spec §10: POST /api/challenges/:id/runs enqueues,
  * returns a queue item). Models come from the orchestration settings at

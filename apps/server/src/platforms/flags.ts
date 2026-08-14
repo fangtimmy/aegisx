@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import type { ChallengeFlag } from "@aegisx/shared"
 import { and, asc, eq } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import {
   challengeFlags,
   challengeRemote,
@@ -18,7 +18,6 @@ import {
 } from "./core"
 import { PlatformActionError, platformError } from "./errors"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type StoredPlatform = typeof eventPlatforms.$inferSelect
 
 /** Async-judge polling cadence (a1ctf/ret2 return a judge id then resolve). */

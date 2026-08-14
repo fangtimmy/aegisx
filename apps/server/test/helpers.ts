@@ -9,14 +9,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { defaultSettings } from "@aegisx/shared"
-
-import { createDatabase } from "../src/db"
-
-type Database = ReturnType<typeof createDatabase>["db"]
-
 import type { ProviderConnection } from "@aegisx/shared/provider"
 
 import type { HostAgentSession } from "../src/agents/host-session"
+import { createDatabase, type Database } from "../src/db"
 import { challenges, events, runs } from "../src/db/schema"
 import type {
   ConfigStore,

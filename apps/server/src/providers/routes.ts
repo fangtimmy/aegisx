@@ -134,7 +134,9 @@ export function registerProviderRoutes(
     syncModels(): void
   }
 ) {
-  const { configStore, syncModels } = options
+  const { configStore } = options
+  // Reference through the options object (not destructured) so `this` survives.
+  const syncModels = () => options.syncModels()
 
   app.get("/api/providers", (c) =>
     c.json({

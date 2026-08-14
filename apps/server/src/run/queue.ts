@@ -1,11 +1,10 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { challenges, runQueue } from "../db/schema"
 import { RunActionError } from "./errors"
 import { checkLaunchFence, type FenceCandidate } from "./fence"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type QueueRow = typeof runQueue.$inferSelect
 
 /** Public queue item shape (REST + tools). */
@@ -98,7 +97,7 @@ function safeParseObject(raw: string): Record<string, unknown> {
 const now = () => new Date().toISOString()
 
 export function createQueueService(deps: QueueServiceDeps) {
-  const { db, getSettings } = deps
+  const { db } = deps
 
   /** Next ord value for an event (max + 1). */
   function nextOrd(eventId: string): number {
@@ -258,7 +257,15 @@ export function createQueueService(deps: QueueServiceDeps) {
     })
   }
 
-  /** Pending items across all events, FIFO by ord (global drain order). */
+  /** Pending items across all events, FIFO by ord (global drain order).
+   *
+   * Note (accepted decision): `ord` is PER-EVENT (nextOrd scopes by eventId,
+   * reorder too), so this cross-event ordering is only approximate — the
+   * drainer does not promise strict cross-event FIFO. That is fine: the order
+   * is non-starvation (a low-ord item is always launchable once capacity
+   * frees; no item is skipped forever) and single-user has no cross-event
+   * fairness requirement. A global ord was deliberately NOT introduced — it
+   * would break the per-event reorder semantics. */
   function pendingItems(): QueueRow[] {
     return db
       .select()
@@ -345,7 +352,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       for (const item of pendingItems()) {
         const decision = checkLaunchFence(
           db,
-          getSettings(),
+          deps.getSettings(),
           candidateFromItem(item)
         )
         if (!decision.ok) {

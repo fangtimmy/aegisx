@@ -4,6 +4,7 @@ import { defaultSettings } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
 import { runs } from "../../src/db/schema"
+import { RunActionError } from "../../src/run/errors"
 import { createRunService } from "../../src/run/service"
 import {
   makeProvider,
@@ -122,9 +123,14 @@ describe("fresh-turn capacity gate (code-review P3.1)", () => {
       expect(runStatus(db, runA.id)).toBe("running")
 
       // A fresh turn on warm-idle B is a new compute round → capacity reject.
-      await expect(
-        service.sendMessage(runB.id, { text: "wake" })
-      ).rejects.toThrow(/Concurrency cap/)
+      const wakeError: unknown = await service
+        .sendMessage(runB.id, { text: "wake" })
+        .then(
+          () => null,
+          (error) => error
+        )
+      expect(wakeError).toBeInstanceOf(RunActionError)
+      expect((wakeError as RunActionError).message).toMatch(/Concurrency cap/)
       // The reject leaves B idle (the placeholder flip never happened) and the
       // message was never driven.
       expect(runStatus(db, runB.id)).toBe("idle")
@@ -171,12 +177,11 @@ describe("fresh-turn capacity gate (code-review P3.1)", () => {
 
       // Cap is full (2/2 running); steering into B's in-flight turn must pass
       // (the streaming branch never consults the gate).
-      await expect(
-        service.sendMessage(runB.id, {
-          text: "nudge",
-          deliverAs: "steer",
-        })
-      ).resolves.toBeDefined()
+      const steered = await service.sendMessage(runB.id, {
+        text: "nudge",
+        deliverAs: "steer",
+      })
+      expect(steered.status).toBe("running")
       await service.close()
     } finally {
       close()

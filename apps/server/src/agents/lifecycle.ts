@@ -72,7 +72,7 @@ export type SessionLifecycle = {
 export function createSessionLifecycle(
   options: SessionLifecycleOptions
 ): SessionLifecycle {
-  const { kind, withLock } = options
+  const { kind } = options
   const sessions = new Map<string, HostAgentSession>()
   /** Monotonic per-id turn counter; a stale turn's settle is a no-op. */
   const turnGeneration = new Map<string, number>()
@@ -104,7 +104,7 @@ export function createSessionLifecycle(
     error: string | null,
     gen: number
   ): void {
-    void withLock(id, () => {
+    void options.withLock(id, () => {
       if (turnGeneration.get(id) !== gen) return
       if (sessions.get(id) !== driven) return
       options.onTurnSettled(id, error)
@@ -116,7 +116,7 @@ export function createSessionLifecycle(
     text: string,
     deliverAs?: "steer" | "followUp"
   ): Promise<void> {
-    await withLock(id, async () => {
+    await options.withLock(id, async () => {
       let session = sessions.get(id)
       if (!session) {
         if (!options.onResume) return
@@ -136,7 +136,7 @@ export function createSessionLifecycle(
   }
 
   async function abort(id: string): Promise<void> {
-    await withLock(id, async () => {
+    await options.withLock(id, async () => {
       const session = sessions.get(id)
       if (session) await session.session.abort().catch(() => undefined)
     })

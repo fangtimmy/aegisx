@@ -5,7 +5,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { attachments, challenges, events, runs } from "../db/schema"
 import {
   badRequest,
@@ -56,7 +56,6 @@ const manualFlagInput = Type.Object(
   { additionalProperties: false }
 )
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type Storage = ReturnType<typeof createStorage>
 type PlatformService = ReturnType<typeof createPlatformService>
 type RunList = {
@@ -78,9 +77,16 @@ export function registerEventRoutes(
     >
   }
 ) {
-  const { db, storage, platformService, runManager, getSettings, catalog } =
-    options
-  const { getEvent, getChallenge, listEvents, listChallengesForEvent } = catalog
+  const { db, storage, platformService, runManager, catalog } = options
+  // Method references through the options/catalog objects (not destructured)
+  // so `this` survives (oxlint unbound-method).
+  const getSettings = () => options.getSettings()
+  const getEvent = (eventId: string) => catalog.getEvent(eventId)
+  const getChallenge = (challengeId: string) =>
+    catalog.getChallenge(challengeId)
+  const listEvents = () => catalog.listEvents()
+  const listChallengesForEvent = (eventId: string) =>
+    catalog.listChallengesForEvent(eventId)
 
   app.get("/api/events", (c) => c.json({ items: listEvents() }))
 

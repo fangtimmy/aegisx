@@ -8,12 +8,10 @@ import {
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { and, asc, desc, eq, gt, sql, type SQL } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { sessionEntries } from "../db/schema"
-import { accumulateEntryUsage, type EntryUsageTotals } from "./entry-usage"
+import { type EntryUsageTotals } from "./entry-usage"
 import { entryKeyOf } from "./event-pipeline"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 /** Only renderable session-entry kinds are surfaced to message lists. */
 const RENDERABLE_TYPES = new Set([

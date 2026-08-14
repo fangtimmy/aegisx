@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite"
+import { Database as SqliteDatabase } from "bun:sqlite"
 import {
   copyFileSync,
   mkdirSync,
@@ -58,7 +58,7 @@ function acquireDataDirLock(dataDir: string) {
   }
 }
 
-function tableNames(sqlite: Database): Set<string> {
+function tableNames(sqlite: SqliteDatabase): Set<string> {
   const rows = sqlite
     .query(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`
@@ -127,7 +127,7 @@ export function pendingMigrationCount(
  * nothing is pending to guard (no copy is made).
  */
 function backupDatabase(
-  sqlite: Database,
+  sqlite: SqliteDatabase,
   dataDir: string,
   pending: number
 ): string | null {
@@ -147,7 +147,7 @@ export function createDatabase(dataDir: string) {
   const releaseLock = acquireDataDirLock(dataDir)
   try {
     const dbPath = join(dataDir, "aegisx.sqlite")
-    const sqlite = new Database(dbPath, { create: true })
+    const sqlite = new SqliteDatabase(dbPath, { create: true })
     sqlite.run("PRAGMA busy_timeout = 5000")
     sqlite.run("PRAGMA foreign_keys = ON")
     sqlite.run("PRAGMA journal_mode = WAL")
@@ -223,3 +223,7 @@ export function createDatabase(dataDir: string) {
     throw error
   }
 }
+
+/** The drizzle db handle type, exported once so services/tests stop repeating
+ * `ReturnType<typeof createDatabase>["db"]` (8+ local aliases drifted). */
+export type Database = ReturnType<typeof createDatabase>["db"]

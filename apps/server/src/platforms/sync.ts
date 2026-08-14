@@ -7,7 +7,7 @@ import type {
 } from "@aegisx/shared"
 import { and, eq } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import {
   attachments,
   challengeRemote,
@@ -25,7 +25,6 @@ import {
 } from "./core"
 import { PlatformActionError, platformError } from "./errors"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 type Storage = ReturnType<typeof createStorage>
 type StoredPlatform = typeof eventPlatforms.$inferSelect
 

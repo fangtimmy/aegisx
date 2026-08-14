@@ -1,9 +1,8 @@
 import { eq } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { challengeRemote } from "../db/schema"
 
-type Database = ReturnType<typeof createDatabase>["db"]
 export type ChallengeRemote = typeof challengeRemote.$inferSelect
 
 export function getChallengeRemote(

@@ -6,11 +6,9 @@ import {
 } from "@aegisx/shared/prompt-defaults"
 import { and, eq, inArray } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { promptTemplates } from "../db/schema"
 import { renderTemplateBody } from "../settings/prompt-templates"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 /** plugin id for the four built-in templates. */
 export const BUILTIN_PLUGIN = "builtin"

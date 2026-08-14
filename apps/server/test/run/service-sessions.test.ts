@@ -305,7 +305,7 @@ describe("multi-session + flat backtrack (v12)", () => {
 
       // Unknown target seq is rejected and changes nothing.
       await expect(service.backtrackAgent(agent.id, 99)).rejects.toThrow(
-        "目标消息不存在"
+        "Target message not found"
       )
       expect(remainingSeqs(db, "sess-1")).toEqual([1, 2])
       await service.close()
@@ -328,7 +328,7 @@ describe("multi-session + flat backtrack (v12)", () => {
         .where(eq(agents.id, agent.id))
         .run()
       await expect(service.backtrackAgent(agent.id, 1)).rejects.toThrow(
-        "旧版 jsonl 会话不支持回溯"
+        "Legacy jsonl sessions do not support backtracking"
       )
       await service.close()
     } finally {
@@ -368,7 +368,9 @@ describe("multi-session + flat backtrack (v12)", () => {
         () => service.activateAgentSession("child-1", "sess-1"),
         () => service.backtrackAgent("child-1", 1),
       ]) {
-        await expect(op()).rejects.toThrow("子 agent 不支持会话操作")
+        await expect(op()).rejects.toThrow(
+          "Child agents run unattended and do not support session operations"
+        )
       }
       // listAgentSessions is synchronous (read-only query).
       expect(() => service.listAgentSessions("ghost")).toThrow(

@@ -11,7 +11,7 @@ import {
   sumUsageTotals,
   usageTotalsSql,
 } from "../../src/agents/session-queries"
-import { agents, runs, sessionEntries, sessions } from "../../src/db/schema"
+import { agents, sessionEntries, sessions } from "../../src/db/schema"
 import { seedChallenge, seedEvent, seedRun, setupDb, now } from "../helpers"
 
 /** Assistant-message usage payload (entry-usage.ts accumulator shape). */
@@ -38,7 +38,7 @@ function insertEntry(
   seq: number,
   entry: {
     type: string
-    message?: { role: string; usage?: EntryUsage | unknown }
+    message?: { role: string; usage?: unknown }
     usage?: EntryUsage
   }
 ) {
@@ -58,8 +58,8 @@ function insertEntry(
 
 function setup(
   db: ReturnType<typeof setupDb>["db"],
-  sqlite: ReturnType<typeof setupDb>["sqlite"],
-  dir: string
+  _sqlite: ReturnType<typeof setupDb>["sqlite"],
+  _dir: string
 ) {
   seedEvent(db, "evt-1")
   seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
@@ -91,7 +91,7 @@ function setup(
     .run()
 }
 
-const scopeOf = (db: ReturnType<typeof setupDb>["db"]) =>
+const scopeOf = (_db: ReturnType<typeof setupDb>["db"]) =>
   eq(sessionEntries.runId, "run-1")
 
 describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {

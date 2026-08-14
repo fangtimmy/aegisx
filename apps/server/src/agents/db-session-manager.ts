@@ -14,10 +14,8 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { asc, eq } from "drizzle-orm"
 
-import type { createDatabase } from "../db"
+import type { Database } from "../db"
 import { sessionEntries, sessions } from "../db/schema"
-
-type Database = ReturnType<typeof createDatabase>["db"]
 
 /** Short unique id with collision check (mirrors pi's generateId). */
 function generateId(byId: Map<string, unknown>): string {
