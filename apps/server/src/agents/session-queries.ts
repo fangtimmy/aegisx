@@ -45,9 +45,23 @@ export function readSessionEntries(
   return entries
 }
 
+/** One usage field value, JSON-validity guarded: malformed `data` rows are
+ * skipped (json_extract raises on invalid JSON; readSessionEntries skips
+ * them, so the SQL must contribute 0 the same way). */
+const usageField = (path: string) => sql<number>`
+    CAST(
+      COALESCE(
+        json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${path}),
+        0
+      ) AS REAL
+    )
+  `
+/** Extract `$.message.role` with the same guard (null when data is invalid). */
+const roleField = sql`json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${"$.message.role"})`
+
 /** One aggregate SQL pass over session_entries matching `where`: token/cost
- * sums + the latest assistant cache-hit rate (the parity twin of
- * {@link accumulateEntryUsage} — see {@link sumUsageTotals}).
+ * sums (the parity twin of {@link accumulateEntryUsage} — see
+ * {@link sumUsageTotals}).
  *
  * Reads only the needed fields via SQLite JSON1 (json_extract) instead of
  * parsing every `data` blob: the denormalized `type` column picks the usage
@@ -61,24 +75,7 @@ export function readSessionEntries(
 export function usageTotalsSql(
   db: Database,
   where: SQL | undefined
-): {
-  totals: EntryUsageTotals & { turns: number }
-  cacheHitRate: number | null
-} {
-  /** One usage field value, JSON-validity guarded: malformed `data` rows are
-   * skipped (json_extract raises on invalid JSON; readSessionEntries skips
-   * them, so the SQL must contribute 0 the same way). */
-  const usageField = (path: string) => sql<number>`
-    CAST(
-      COALESCE(
-        json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${path}),
-        0
-      ) AS REAL
-    )
-  `
-  /** Extract `$.message.role` with the same guard (null when data is invalid). */
-  const roleField = sql`json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${"$.message.role"})`
-
+): EntryUsageTotals & { turns: number } {
   /** SUM of one usage field: top-level path for compaction/branch_summary,
    * message path for assistant/toolResult messages. */
   const sumField = (msgPath: string, entryPath: string) => sql<number>`
@@ -121,10 +118,18 @@ export function usageTotalsSql(
   }
   totals.totalTokens =
     totals.input + totals.output + totals.cacheRead + totals.cacheWrite
+  return totals
+}
 
-  // Latest assistant message with prompt tokens (input + cacheRead +
-  // cacheWrite) drives the cache-hit rate (cacheRead / prompt * 100) — the
-  // same walk accumulateEntryUsage does, in insertion (rowid) order.
+/** Latest assistant message with prompt tokens (input + cacheRead +
+ * cacheWrite) drives the cache-hit rate (cacheRead / prompt * 100) — the
+ * same walk accumulateEntryUsage does, in insertion (rowid) order. Kept
+ * separate from usageTotalsSql: the run-level sum has no consumer for the
+ * rate (only the parity test does), so the hot path skips this query. */
+export function cacheHitRateSql(
+  db: Database,
+  where: SQL | undefined
+): number | null {
   const cacheRow = db
     .select({
       input: usageField("$.message.usage.input"),
@@ -143,12 +148,9 @@ export function usageTotalsSql(
     .orderBy(desc(sql`rowid`))
     .limit(1)
     .get()
-  let cacheHitRate: number | null = null
-  if (cacheRow) {
-    const prompt = cacheRow.input + cacheRow.cacheRead + cacheRow.cacheWrite
-    if (prompt > 0) cacheHitRate = (cacheRow.cacheRead / prompt) * 100
-  }
-  return { totals, cacheHitRate }
+  if (!cacheRow) return null
+  const prompt = cacheRow.input + cacheRow.cacheRead + cacheRow.cacheWrite
+  return prompt > 0 ? (cacheRow.cacheRead / prompt) * 100 : null
 }
 
 /** Sum token usage + cost across entries matching `where`. Returns undefined
@@ -159,7 +161,7 @@ export function sumUsageTotals(
   db: Database,
   where: SQL | undefined
 ): RunUsage | undefined {
-  const { totals } = usageTotalsSql(db, where)
+  const totals = usageTotalsSql(db, where)
   if (totals.turns === 0 && totals.cost === 0 && totals.totalTokens === 0) {
     return undefined
   }

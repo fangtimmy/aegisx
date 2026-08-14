@@ -1,13 +1,6 @@
-import type { NodeTypes } from "@xyflow/react"
 import { Archive, Flag, Play, Puzzle, Timer } from "lucide-react"
 
 import type { AgentStatus, AgentSummary, SchedulerInfo } from "@/api"
-
-import {
-  AgentGraphNode,
-  RunGraphNode,
-  SchedulerGraphNode,
-} from "./agents-graph"
 
 export const UNCATEGORIZED = "未分类"
 
@@ -97,9 +90,3 @@ export const EDGE_STYLE = {
     strokeDasharray: "5 3",
   },
 } as const
-
-export const GRAPH_NODE_TYPES = {
-  scheduler: SchedulerGraphNode,
-  run: RunGraphNode,
-  agent: AgentGraphNode,
-} satisfies NodeTypes

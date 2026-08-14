@@ -7,6 +7,7 @@ import {
   type EntryUsage,
 } from "../../src/agents/entry-usage"
 import {
+  cacheHitRateSql,
   readSessionEntries,
   sumUsageTotals,
   usageTotalsSql,
@@ -144,7 +145,8 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
         .run()
 
       const js = accumulateEntryUsage(readSessionEntries(db, scopeOf(db)))
-      const { totals, cacheHitRate } = usageTotalsSql(db, scopeOf(db))
+      const totals = usageTotalsSql(db, scopeOf(db))
+      const cacheHitRate = cacheHitRateSql(db, scopeOf(db))
 
       expect(totals.input).toBe(js.input)
       expect(totals.output).toBe(js.output)
@@ -186,7 +188,8 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
       })
 
       const js = accumulateEntryUsage(readSessionEntries(db, scopeOf(db)))
-      const { totals, cacheHitRate } = usageTotalsSql(db, scopeOf(db))
+      const totals = usageTotalsSql(db, scopeOf(db))
+      const cacheHitRate = cacheHitRateSql(db, scopeOf(db))
       expect(totals.turns).toBe(js.turns)
       expect(totals.input).toBe(js.input)
       expect(totals.cost).toBe(js.cost)
@@ -228,7 +231,7 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
       })
 
       const js = accumulateEntryUsage(readSessionEntries(db, scopeOf(db)))
-      const { cacheHitRate } = usageTotalsSql(db, scopeOf(db))
+      const cacheHitRate = cacheHitRateSql(db, scopeOf(db))
       expect(cacheHitRate).toBe(js.cacheHitRate)
       // prompt = input + cacheRead + cacheWrite = 125 → 25/125 = 20%.
       expect(cacheHitRate).toBe(20)

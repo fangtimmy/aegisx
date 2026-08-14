@@ -11,6 +11,7 @@ import {
   type Node,
   type NodeMouseHandler,
   type NodeProps,
+  type NodeTypes,
 } from "@xyflow/react"
 
 import "@xyflow/react/dist/style.css"
@@ -42,7 +43,6 @@ import { cn } from "@/lib/utils"
 import {
   agentFinishBadge,
   EDGE_STYLE,
-  GRAPH_NODE_TYPES,
   NODE_DIM,
   roleLabel,
   SCHED_NODE_ID,
@@ -291,6 +291,15 @@ export function AgentGraphNode({ data }: NodeProps) {
     </GraphNodeShell>
   )
 }
+
+// React Flow node-type registry — lives here (not in event-agents-shared)
+// because only the graph uses it, and defining it in shared would import the
+// node components back from this module (an ESM cycle).
+const GRAPH_NODE_TYPES = {
+  scheduler: SchedulerGraphNode,
+  run: RunGraphNode,
+  agent: AgentGraphNode,
+} satisfies NodeTypes
 
 export function AgentsGraph({
   eventId,
