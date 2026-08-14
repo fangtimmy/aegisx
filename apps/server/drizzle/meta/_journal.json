@@ -36,6 +36,13 @@
       "when": 1788100000000,
       "tag": "0004_v10_session_meta",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": 11,
+      "when": 1788800000000,
+      "tag": "0005_v11_tool_definitions",
+      "breakpoints": true
     }
   ]
 }

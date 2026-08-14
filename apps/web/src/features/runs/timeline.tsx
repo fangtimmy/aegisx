@@ -464,11 +464,62 @@ const ConversationRow = memo(function ConversationRow({
   )
 })
 
+/** One tool's definition, expandable to its description + JSON-schema. */
+function ToolDefinitionRow({
+  tool,
+}: {
+  tool: AgentSummary["toolDefinitions"][number]
+}) {
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className={activityTriggerClass}>
+        <Wrench
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 flex-1 truncate">
+          <span className="font-mono">{tool.name}</span>
+          {tool.description ? (
+            <span className="ml-1.5 text-muted-foreground">
+              {tool.description}
+            </span>
+          ) : null}
+        </span>
+        <ChevronRight className="size-3.5 shrink-0 transition-transform" />
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <div className="mt-1 ml-5 min-w-0 pb-2">
+          {tool.description ? (
+            <p className="mb-2 text-xs text-muted-foreground">
+              {tool.description}
+            </p>
+          ) : null}
+          {tool.promptGuidelines && tool.promptGuidelines.length > 0 ? (
+            <ul className="mb-2 list-disc pl-4 text-xs text-muted-foreground">
+              {tool.promptGuidelines.map((guideline, index) => (
+                <li key={index}>{guideline}</li>
+              ))}
+            </ul>
+          ) : null}
+          <pre className="font-mono text-xs leading-5 wrap-break-word whitespace-pre-wrap">
+            {JSON.stringify(tool.parameters, null, 2)}
+          </pre>
+        </div>
+      </CollapsiblePanel>
+    </Collapsible>
+  )
+}
+
 /** Head-of-timeline agent config: the snapshotted system prompt (plain text)
- * and the tool allowlist, as two MetaActivity rows that sit before the first
- * user message. Both are immutable per run (createAgent writes them once).
- * Collapsed by default — system prompts are long. */
+ * and the tool definitions (name/description/JSON-schema), as two MetaActivity
+ * rows that sit before the first user message. Both are immutable per run
+ * (createAgent writes them once). Collapsed by default — system prompts are
+ * long. Falls back to name-only chips when no definition snapshot exists. */
 function AgentConfig({ agent }: { agent: AgentSummary }) {
+  const toolCount =
+    agent.toolDefinitions.length > 0
+      ? agent.toolDefinitions.length
+      : agent.tools.length
   return (
     <>
       <MetaActivity
@@ -482,7 +533,13 @@ function AgentConfig({ agent }: { agent: AgentSummary }) {
       />
       <MetaActivity
         body={
-          agent.tools.length > 0 ? (
+          agent.toolDefinitions.length > 0 ? (
+            <div className="space-y-0.5">
+              {agent.toolDefinitions.map((tool) => (
+                <ToolDefinitionRow key={tool.name} tool={tool} />
+              ))}
+            </div>
+          ) : agent.tools.length > 0 ? (
             <div className="flex flex-wrap gap-1">
               {agent.tools.map((name) => (
                 <span
@@ -499,7 +556,7 @@ function AgentConfig({ agent }: { agent: AgentSummary }) {
         }
         icon={Boxes}
         label="工具定义"
-        meta={`${agent.tools.length} 工具`}
+        meta={`${toolCount} 工具`}
       />
     </>
   )

@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 10
+export const SCHEMA_VERSION = 11
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -236,6 +236,11 @@ export const agents = sqliteTable(
     systemPrompt: text("system_prompt").notNull(),
     /** JSON array of real tool names (file tools always on, not listed). */
     tools: text("tools").notNull(),
+    /** JSON array of active tool-definition snapshots (name / description /
+     * JSON-Schema parameters), written when the host session is created so the
+     * timeline can render real tool schemas incl. the always-on file tools.
+     * Null on pre-v11 rows / agents never brought online. */
+    toolDefinitions: text("tool_definitions"),
     status: text("status").notNull(),
     /** DB session id (or legacy jsonl path) for this agent (resume + audit). */
     sessionFile: text("session_file"),

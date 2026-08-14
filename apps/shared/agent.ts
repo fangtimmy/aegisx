@@ -1,5 +1,14 @@
 import type { AgentStatus } from "./run-status"
 
+/** One active tool's definition snapshot (for the timeline 工具定义 panel).
+ * `parameters` is the tool's TypeBox schema serialized to JSON Schema. */
+export type ToolDefinitionSnapshot = {
+  name: string
+  description: string
+  parameters: unknown
+  promptGuidelines?: string[]
+}
+
 /** v8 agent: a pi session + role + model + prompt + tools, snapshotted on the
  * row at createAgent time. A run declares N agents (classic = 1 solver);
  * spawn adds child agents (parentAgentId set). */
@@ -26,6 +35,9 @@ export type AgentSummary = {
   /** Tool allowlist snapshot (real tool names; file tools always on, not
    * listed). JSON-parsed from the agents row. */
   tools: string[]
+  /** Active tool-definition snapshots (name/description/JSON-schema), incl.
+   * the always-on file tools. Empty for pre-v11 rows without a snapshot. */
+  toolDefinitions: ToolDefinitionSnapshot[]
   status: AgentStatus
   /** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
   sessionFile: string | null

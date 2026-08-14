@@ -1694,7 +1694,10 @@ export function createRunService(options: RunServiceOptions) {
       throw new RunActionError("launch_failed", message)
     }
 
-    updateAgent(agentId, { sessionFile: agentSession.sessionId ?? null })
+    updateAgent(agentId, {
+      sessionFile: agentSession.sessionId ?? null,
+      toolDefinitions: snapshotActiveToolDefinitions(agentSession.session),
+    })
     lifecycle.set(agentId, agentSession)
   }
 
@@ -2096,6 +2099,34 @@ function safeParseTools(raw: string): string[] {
       : []
   } catch {
     return []
+  }
+}
+
+/** Snapshot the active tools' definitions (name/description/JSON-schema) for
+ * the timeline 工具定义 panel. getAllTools returns every registered tool;
+ * filtering by getActiveToolNames keeps the always-on file tools and drops
+ * inactive/override duplicates. TypeBox parameters serialize to JSON Schema
+ * (symbol-keyed metadata is dropped by JSON.stringify). Defensive: → "[]". */
+function snapshotActiveToolDefinitions(
+  session: HostAgentSession["session"]
+): string {
+  try {
+    const active = new Set(session.getActiveToolNames())
+    return JSON.stringify(
+      session
+        .getAllTools()
+        .filter((tool) => active.has(tool.name))
+        .map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+          ...(tool.promptGuidelines
+            ? { promptGuidelines: tool.promptGuidelines }
+            : {}),
+        }))
+    )
+  } catch {
+    return "[]"
   }
 }
 

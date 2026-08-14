@@ -1,5 +1,5 @@
 import type { ChallengeFlag, RunPublic, RunUsage } from "@aegisx/shared"
-import type { AgentSummary } from "@aegisx/shared/agent"
+import type { AgentSummary, ToolDefinitionSnapshot } from "@aegisx/shared/agent"
 
 import type { agents, challengeFlags, runs } from "../db/schema"
 
@@ -95,6 +95,7 @@ export function toAgentSummary(row: AgentRow): AgentSummary {
     // timeline renders a system-config card from them).
     systemPrompt: row.systemPrompt,
     tools: parseAgentTools(row.tools),
+    toolDefinitions: parseAgentToolDefinitions(row.toolDefinitions),
     status: row.status as AgentSummary["status"],
     sessionFile: row.sessionFile,
     createdAt: row.createdAt,
@@ -113,6 +114,39 @@ function parseAgentTools(value: string): string[] {
     return Array.isArray(parsed)
       ? parsed.filter((t): t is string => typeof t === "string")
       : []
+  } catch {
+    return []
+  }
+}
+
+/** Parse the agents.tool_definitions JSON array (name/description/schema).
+ * Defensive: null / malformed → []. */
+function parseAgentToolDefinitions(
+  value: string | null | undefined
+): ToolDefinitionSnapshot[] {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" && item !== null && !Array.isArray(item)
+      )
+      .map((item) => {
+        const tool: ToolDefinitionSnapshot = {
+          name: typeof item.name === "string" ? item.name : "",
+          description:
+            typeof item.description === "string" ? item.description : "",
+          parameters: item.parameters,
+        }
+        if (Array.isArray(item.promptGuidelines)) {
+          tool.promptGuidelines = item.promptGuidelines.filter(
+            (g): g is string => typeof g === "string"
+          )
+        }
+        return tool
+      })
   } catch {
     return []
   }

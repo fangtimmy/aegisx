@@ -50,7 +50,7 @@ function buildV7Database(dir: string) {
 }
 
 describe("schema bootstrap", () => {
-  test("fresh database migrates to v10 and drops the merged orchestrators table", () => {
+  test("fresh database migrates to v11 and drops the merged orchestrators table", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
       const { db, sqlite, releaseLock } = createDatabase(dir)
@@ -124,6 +124,8 @@ describe("schema bootstrap", () => {
       for (const c of ["slot", "is_entry", "system_prompt", "tools", "model"]) {
         expect(agentCols.has(c)).toBe(true)
       }
+      // v11: tool-definition snapshot column (nullable)
+      expect(agentCols.has("tool_definitions")).toBe(true)
       expect(agentCols.has("model_id")).toBe(false)
       expect(agentCols.has("provider")).toBe(false)
 
