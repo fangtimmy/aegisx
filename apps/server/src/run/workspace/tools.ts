@@ -4,6 +4,7 @@ import {
   type AgentToolResult,
   defineTool,
 } from "@earendil-works/pi-coding-agent"
+import { type Detector, fileTypeFromBuffer } from "file-type"
 import { Type } from "typebox"
 
 import { type WorkspaceBackend } from "./backend"
@@ -65,49 +66,28 @@ function formatNumberedLines(
   }
 }
 
-function detectImageMime(bytes: Uint8Array): string | null {
-  if (
-    bytes.length >= 3 &&
-    bytes[0] === 0xff &&
-    bytes[1] === 0xd8 &&
-    bytes[2] === 0xff
-  ) {
-    return "image/jpeg"
-  }
-  if (
-    bytes.length >= 8 &&
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47
-  ) {
-    return "image/png"
-  }
-  if (
-    bytes.length >= 6 &&
-    bytes[0] === 0x47 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x38 &&
-    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
-    bytes[5] === 0x61
-  ) {
-    return "image/gif"
-  }
-  if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x46 &&
-    bytes[8] === 0x57 &&
-    bytes[9] === 0x45 &&
-    bytes[10] === 0x42 &&
-    bytes[11] === 0x50
-  ) {
-    return "image/webp"
-  }
-  return null
+/**
+ * Signature-only PNG detector, kept for equivalence with the legacy
+ * magic-byte image check the read tool used before file-type: file-type's
+ * core PNG detector requires a structurally valid IHDR/IDAT stream, which
+ * would change the read tool's behavior for truncated / signature-only PNG
+ * files (the read-image tests pin the legacy behavior down). Runs before the
+ * core detectors.
+ */
+const pngSignatureDetector: Detector = {
+  id: "png-signature",
+  async detect(tokenizer) {
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+    const buffer = new Uint8Array(signature.length)
+    await tokenizer.peekBuffer(buffer, {
+      length: signature.length,
+      mayBeLess: true,
+    })
+    if (signature.every((value, index) => value === buffer[index])) {
+      return { ext: "png", mime: "image/png" }
+    }
+    return undefined
+  },
 }
 
 function looksBinary(bytes: Uint8Array) {
@@ -254,7 +234,10 @@ export function createWorkspaceTools(
             : ""
         throw new Error(`File not found: ${params.filePath}. ${message}${hint}`)
       }
-      const mime = detectImageMime(bytes)
+      const detected = await fileTypeFromBuffer(bytes, {
+        customDetectors: [pngSignatureDetector],
+      })
+      const mime = detected?.mime.startsWith("image/") ? detected.mime : null
       if (mime) {
         // Attach the image when the active model accepts image input AND it is
         // under the size cap; otherwise fall back to a text hint so a text-only
