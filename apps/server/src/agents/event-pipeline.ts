@@ -8,6 +8,7 @@ import type {
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
 
+import { isRecord } from "../lib/guards"
 import { accumulateEntryUsage } from "./entry-usage"
 import type { LiveBus } from "./live"
 
@@ -82,10 +83,6 @@ function terminalOf(
         ? "failed"
         : undefined
   return { terminal, isError: terminal !== undefined }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function isTerminalValue(value: unknown): boolean {

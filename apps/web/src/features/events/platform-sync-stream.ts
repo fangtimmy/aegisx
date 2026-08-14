@@ -4,6 +4,7 @@ import {
   type ChallengeSyncResult,
   jsonRequest,
 } from "@/api"
+import { isRecord } from "@/domain/conversation"
 
 export type SyncStreamEvent =
   | {
@@ -18,10 +19,6 @@ export type SyncStreamEvent =
     }
   | { type: "complete"; syncedAt: string }
   | { type: "error"; message: string }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
 
 function isAttachment(value: unknown) {
   if (!isRecord(value)) return false

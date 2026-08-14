@@ -5,10 +5,7 @@ import {
   type LiveEvent,
   type RunPublic,
 } from "@/api"
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
+import { isRecord } from "@/domain/conversation"
 
 function numberValue(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
