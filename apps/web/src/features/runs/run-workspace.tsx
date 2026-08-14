@@ -47,7 +47,6 @@ import { toast } from "@/lib/toast"
 import { Conversation } from "./conversation"
 import { CreateRunDialog } from "./create-run-dialog"
 import { FilesWorkspace } from "./files-workspace"
-import { type AvailableModel } from "./model-switcher"
 import { RunOverview, runStatusLabel, statusVariant } from "./run-overview"
 
 export function RunWorkspace({
@@ -134,13 +133,6 @@ export function RunWorkspace({
         .compactAgent(agentId)
         .then(() => invalidate(queryClient, eventId)),
     [eventId, queryClient]
-  )
-  const findCurrentModelId = useCallback(
-    (models: AvailableModel[]) =>
-      models.find(
-        (m) => m.modelId === run?.modelId && m.providerLabel === run?.provider
-      )?.id,
-    [run?.modelId, run?.provider]
   )
 
   if (!runId) {
@@ -304,14 +296,12 @@ export function RunWorkspace({
                 channel={runId}
                 closedReopenable
                 compactAgent={compactAgent}
-                findCurrentModelId={findCurrentModelId}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
                 status={run.status}
                 streamPath={`/api/runs/${runId}/stream`}
                 switchModel={switchModel}
                 setQueue={setQueue}
-                thinkingLevel={run.thinkingLevel}
               />
             </TabsPanel>
             <TabsPanel

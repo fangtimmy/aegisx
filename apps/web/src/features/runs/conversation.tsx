@@ -18,12 +18,7 @@ import {
   useSyncExternalStore,
 } from "react"
 
-import type {
-  AgentSummary,
-  MessageListItem,
-  ModelRef,
-  ThinkingLevel,
-} from "@/api"
+import type { AgentSummary, MessageListItem, ModelRef } from "@/api"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -50,7 +45,7 @@ import { ConversationStore } from "@/stream/conversation-store"
 
 import { AgentActivityBadge } from "./agent-activity-badge"
 import { AgentStatusIcon } from "./agent-status-icon"
-import { type AvailableModel, ModelThinkingSwitcher } from "./model-switcher"
+import { ModelRefPicker } from "./model-switcher"
 import { Timeline } from "./timeline"
 
 /**
@@ -73,10 +68,6 @@ export type ConversationProps = {
    * When false (orchestrator), the composer is locked while closed and the
    * user must (re)start it via the header action. */
   closedReopenable: boolean
-  /** Resolve the current model id (UUID) from the providers list, for the
-   * model switcher. Only used for the main agent. */
-  findCurrentModelId: (models: AvailableModel[]) => string | null | undefined
-  thinkingLevel: ThinkingLevel
   /** Offer steer/followUp queue editing (run main agent only). */
   canEditQueue: boolean
   /** Load durable committed messages (raw list; Conversation buckets by agent). */
@@ -117,8 +108,6 @@ export function Conversation(props: ConversationProps) {
     streamPath,
     agents,
     status,
-    findCurrentModelId,
-    thinkingLevel,
     canEditQueue,
     loadMessages: loadMessagesFn,
     sendMessage: sendMessageFn,
@@ -158,6 +147,15 @@ export function Conversation(props: ConversationProps) {
   const effectiveAgentId =
     agents.find((a) => a.id === selectedAgentId)?.id ?? mainAgent?.id ?? ""
   const selectedAgent = agents.find((a) => a.id === effectiveAgentId) ?? null
+
+  // Optimistic model-ref echo for the live switcher: echo the user's pick
+  // immediately and reset when the agent (or its server-confirmed snapshot)
+  // changes — on success the snapshot update clears the draft so the select
+  // reflects the persisted ref.
+  const [modelDraft, setModelDraft] = useState<ModelRef | null>(null)
+  useEffect(() => {
+    setModelDraft(null)
+  }, [selectedAgent?.id, selectedAgent?.model])
 
   const queueAgentId = selectedAgent?.id ?? ""
   const queuedMessages = useSyncExternalStore(
@@ -341,11 +339,15 @@ export function Conversation(props: ConversationProps) {
             </Card>
             <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
               {selectedAgent.isEntry && (
-                <ModelThinkingSwitcher
-                  findCurrentModelId={findCurrentModelId}
-                  thinkingLevel={thinkingLevel}
+                <ModelRefPicker
                   disabled={locked}
-                  onSwitch={(ref) => switchModel.mutate(ref)}
+                  onChange={(ref) => {
+                    if (!ref) return
+                    setModelDraft(ref)
+                    switchModel.mutate(ref)
+                  }}
+                  size="sm"
+                  value={modelDraft ?? selectedAgent.model ?? null}
                 />
               )}
               {running && (

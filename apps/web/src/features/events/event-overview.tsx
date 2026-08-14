@@ -1,4 +1,3 @@
-import { aliasRef } from "@aegisx/shared"
 import dagre from "@dagrejs/dagre"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -62,7 +61,6 @@ import {
   runsApi,
   schedulerApi,
   type SchedulerInfo,
-  type ThinkingLevel,
 } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -106,15 +104,6 @@ import {
   ProgressTrack,
 } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Select,
-  SelectGroup,
-  SelectGroupLabel,
-  SelectItem,
-  SelectPopup,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
@@ -122,11 +111,7 @@ import { CreateRunDialog } from "@/features/runs"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
-import {
-  type AvailableModel,
-  useAvailableModels,
-  useResolvedAliases,
-} from "@/features/runs/model-switcher"
+import { ModelRefPicker } from "@/features/runs/model-switcher"
 import {
   formatCost,
   formatTokens,
@@ -142,16 +127,6 @@ import { ErrorState, isChallengeSolved } from "./event-shared"
 import { QueueList } from "./queue-list"
 
 const UNCATEGORIZED = "未分类"
-
-const thinkingLevelLabels: Record<ThinkingLevel, string> = {
-  off: "Off",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra high",
-  max: "Maximum",
-}
 
 /** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
    so the fleet/queue/usage must refresh regardless of locally-known state. */
@@ -1560,15 +1535,6 @@ function AgentDialog({
     () => runsApi.listMessages(runId, 0, agentId).then((list) => list.items),
     [runId, agentId]
   )
-  const findCurrentModelId = useCallback(
-    (models: AvailableModel[]) =>
-      models.find(
-        (model) =>
-          model.modelId === run?.modelId &&
-          model.providerLabel === run?.provider
-      )?.id,
-    [run?.modelId, run?.provider]
-  )
 
   // Agent-level controls (spec §10). Stop aborts the current turn (container
   // kept warm); compact runs a manual context summarization (requires an idle
@@ -1742,14 +1708,12 @@ function AgentDialog({
                 channel={runId}
                 closedReopenable={run.scopeType === "challenge"}
                 compactAgent={compactRun}
-                findCurrentModelId={findCurrentModelId}
                 key={`${runId}:${agentId}`}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
                 status={run.status}
                 streamPath={`/api/runs/${runId}/stream`}
                 switchModel={switchModel}
-                thinkingLevel={run.thinkingLevel}
               />
             </TabsPanel>
             <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="files">
@@ -1795,8 +1759,6 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
     queryKey: keys.scheduler.detail(eventId),
     queryFn: () => schedulerApi.getScheduler(eventId),
   })
-  const models = useAvailableModels()
-  const resolvedAliases = useResolvedAliases(models)
   const config = scheduler.data?.config
 
   const [modelId, setModelId] = useState<string | null>(config?.modelId ?? null)
@@ -1810,16 +1772,6 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
     setInstruction(config.instruction)
     setMaxTargets(config.maxConcurrentTargets)
   }, [config])
-
-  const grouped = useMemo(() => {
-    const map = new Map<string, AvailableModel[]>()
-    for (const model of models) {
-      const bucket = map.get(model.providerLabel) ?? []
-      bucket.push(model)
-      map.set(model.providerLabel, bucket)
-    }
-    return [...map.entries()]
-  }, [models])
 
   const save = useMutation({
     mutationFn: () =>
@@ -1859,56 +1811,16 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
         }}
       >
         <Field>
-          <FieldLabel htmlFor="sched-model">默认模型</FieldLabel>
+          <FieldLabel>默认模型</FieldLabel>
           <FieldDescription>
             调度者下次启动时使用的模型；留空则使用全局默认。
           </FieldDescription>
-          <Select
-            onValueChange={(value) =>
-              setModelId(value && value !== "" ? value : null)
-            }
-            value={modelId ?? ""}
-          >
-            <SelectTrigger id="sched-model">
-              <SelectValue placeholder="全局默认" />
-            </SelectTrigger>
-            <SelectPopup>
-              <SelectItem value="">全局默认</SelectItem>
-              {resolvedAliases.length > 0 && (
-                <SelectGroup key="aliases">
-                  <SelectGroupLabel>别名</SelectGroupLabel>
-                  {resolvedAliases.map(({ alias, target }) => (
-                    <SelectItem
-                      key={aliasRef(alias.id)}
-                      value={aliasRef(alias.id)}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span className="font-medium">{alias.label}</span>
-                        <span className="text-muted-foreground">
-                          → {target.label}
-                        </span>
-                        {alias.thinkingLevel !== "off" && (
-                          <Badge size="sm" variant="secondary">
-                            {thinkingLevelLabels[alias.thinkingLevel]}
-                          </Badge>
-                        )}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              )}
-              {grouped.map(([providerLabel, list]) => (
-                <SelectGroup key={providerLabel}>
-                  <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
-                  {list.map((model) => (
-                    <SelectItem key={model.id} value={model.address}>
-                      {model.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectPopup>
-          </Select>
+          <ModelRefPicker
+            allowEmpty
+            emptyLabel="全局默认"
+            onChange={setModelId}
+            value={modelId}
+          />
         </Field>
         <Field>
           <FieldLabel htmlFor="sched-instruction">指令</FieldLabel>

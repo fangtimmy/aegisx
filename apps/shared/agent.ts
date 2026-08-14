@@ -17,6 +17,9 @@ export type AgentSummary = {
   name: string | null
   /** Delegated task text (spawn children). */
   task: string | null
+  /** Canonical model ref snapshot (`<providerKey>/<modelId>:<effort>` | alias),
+   * persisted on the agent row at createAgent/switch time. */
+  model: string | null
   status: AgentStatus
   /** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
   sessionFile: string | null

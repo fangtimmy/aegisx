@@ -204,6 +204,7 @@ function SettingControl({
   if (def.widget === "model") {
     return (
       <ModelRefPicker
+        allowEmpty
         disabled={disabled}
         emptyLabel="无默认模型"
         onChange={(next) => onChange(next)}

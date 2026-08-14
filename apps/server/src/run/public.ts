@@ -90,6 +90,7 @@ export function toAgentSummary(row: AgentRow): AgentSummary {
     isEntry: row.isEntry,
     name: row.name,
     task: row.task,
+    model: row.model,
     status: row.status as AgentSummary["status"],
     sessionFile: row.sessionFile,
     createdAt: row.createdAt,

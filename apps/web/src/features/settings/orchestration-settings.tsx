@@ -252,9 +252,10 @@ function OrchestrationCard({
                       <FieldLabel>{agent.name} 模型</FieldLabel>
                     </span>
                     <ModelRefPicker
-                      compact
+                      allowEmpty
                       disabled={patchPending}
                       onChange={(ref) => onSlotChange(agent.slot, ref)}
+                      size="sm"
                       value={agent.model}
                     />
                   </Field>
