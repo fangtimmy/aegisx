@@ -5,7 +5,7 @@ import type { SessionLifecycle } from "../agents/lifecycle"
 import type { Database } from "../db"
 import { agents, sessionEntries, sessions } from "../db/schema"
 import { RunActionError } from "./errors"
-import type { RunContext } from "./service"
+import type { RunContext } from "./run-factory"
 
 /** Dependencies the run service injects — the ops share its db, per-agent
  * locks, lifecycle map and run context, and call back into prepareAgent /

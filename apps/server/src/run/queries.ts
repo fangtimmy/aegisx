@@ -55,7 +55,7 @@ function groupFlagsByRun(
   return map
 }
 
-type RunQueries = ReturnType<typeof createRunQueries>
+export type RunQueries = ReturnType<typeof createRunQueries>
 
 export function createRunQueries(options: {
   db: Database

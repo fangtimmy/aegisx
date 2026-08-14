@@ -5,7 +5,7 @@ import { Type } from "typebox"
 import type { QueueItemPublic } from "./queue"
 
 /** Compact run view for the scheduler's read-only tools. */
-type RunSummary = {
+export type RunSummary = {
   id: string
   scopeType: "challenge" | "event"
   eventId: string
@@ -25,7 +25,7 @@ type RunSummary = {
 }
 
 /** Fence + active-run snapshot returned by get_status. */
-type SchedulerStatusSnapshot = {
+export type SchedulerStatusSnapshot = {
   maxConcurrentRuns: number
   runningCount: number
   maxConcurrentTargets: number

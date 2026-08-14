@@ -12,7 +12,7 @@ import { renderTemplateBody } from "../orchestration/prompt-templates"
 import type { PromptContext } from "../orchestration/types"
 import type { ContainerManager } from "./container/container-manager"
 import { RunActionError } from "./errors"
-import type { RunContext } from "./service"
+import type { RunContext } from "./run-factory"
 
 type AgentPatch = Partial<typeof agents.$inferInsert>
 
@@ -42,7 +42,7 @@ export type ChildAgentDeps = {
   onChildTurnSettled(agentId: string, runId: string, error: string | null): void
 }
 
-type ChildAgentRuntime = ReturnType<typeof createChildAgentRuntime>
+export type ChildAgentRuntime = ReturnType<typeof createChildAgentRuntime>
 
 const now = () => new Date().toISOString()
 

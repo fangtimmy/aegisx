@@ -24,7 +24,7 @@ export type ModelResolverDeps = {
   getAgentModels(): AgentModels
 }
 
-type ModelResolver = ReturnType<typeof createModelResolver>
+export type ModelResolver = ReturnType<typeof createModelResolver>
 
 /** Model-ref resolution, isolated from the service so both the run service
  * and (potentially) the routes share one implementation. All functions are
