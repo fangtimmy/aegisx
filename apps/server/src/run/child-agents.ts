@@ -28,6 +28,10 @@ export type ChildAgentDeps = {
   /** Cap on concurrent child agents per run. */
   maxChildrenPerRun: number
   agentSettings: () => AgentLoopSettings
+  /** Test seam: child host-session factory (default = createAgentHost). The
+   * run service threads its own createHost through so tests stub children the
+   * same way they stub main agents. */
+  createHost?: typeof createAgentHost
   listAgents(runId: string): AgentSummary[]
   updateAgent(agentId: string, patch: AgentPatch): void
   emitRun(runId: string): void
@@ -73,6 +77,7 @@ export function renderChildSystemPrompt(
  * the caller's — this module only builds the result text and hands it over. */
 export function createChildAgentRuntime(deps: ChildAgentDeps) {
   const { db, bus, containerManager } = deps
+  const createHost = deps.createHost ?? createAgentHost
 
   /** Drive a child to completion, then settle + deliver its result. */
   async function runInBackground(
@@ -88,6 +93,15 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
       await childSession.session.prompt(task)
     } catch (error) {
       runError = error instanceof Error ? error.message : String(error)
+    }
+    // External teardown (run close / finish / timeout / delete) has already
+    // disposed this session and removed it from childSessions (abortAll deletes
+    // first; the normal path is this function deleting last). The teardown
+    // persists the agent state (idle), so settle here would overwrite it with
+    // failed and emit against a closed run — exit instead. Single-threaded
+    // event loop: no race between the check and the delete.
+    if (!deps.childSessions.has(childAgentId)) {
+      return
     }
     const settled = now()
     const summary =
@@ -199,7 +213,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     const childSdkModel = ctx.sdkModel
     let childSession: HostAgentSession
     try {
-      childSession = await createAgentHost({
+      childSession = await createHost({
         owner: { agentId: childAgentId, runId },
         channel: runId,
         agentId: childAgentId,

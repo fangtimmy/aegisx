@@ -330,10 +330,12 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Atomically claim the finish for a run. Returns true for the one agent whose
-   * UPDATE hit (rows-affected = 1); that agent tears the run down (spec §4.4). */
+   * UPDATE hit (rows-affected = 1); that agent tears the run down (spec §4.4).
+   * Guarded on status: a closed run (already torn down) can never be claimed
+   * again — a late finish_run must not double-teardown. */
   function markFinishing(runId: string): boolean {
     const res = sqlite.run(
-      `UPDATE runs SET finishing = 1 WHERE id = ? AND finishing = 0`,
+      `UPDATE runs SET finishing = 1 WHERE id = ? AND finishing = 0 AND status IN ('running', 'idle')`,
       [runId]
     )
     return res.changes > 0
@@ -739,6 +741,7 @@ export function createRunService(options: RunServiceOptions) {
     childSessions,
     maxChildrenPerRun: MAX_CHILDREN_PER_RUN,
     agentSettings,
+    createHost: options.createHost,
     listAgents: queries.listAgents,
     updateAgent,
     emitRun,
@@ -1659,6 +1662,11 @@ export function createRunService(options: RunServiceOptions) {
     // (same as create). Reserve atomically: check the fence (challenge only) +
     // flip the run row to running so concurrent launches count it. Any later
     // failure reverts to closed (releasing the slot) below.
+    //
+    // `finishing` is reset here too: a crash between finish_run's atomic claim
+    // and its teardown leaves finishing=1 on a closed row (recoverOnBoot only
+    // wrote closed). Restoring is a NEW lifecycle — the stale finish intent is
+    // void, so the run must be claimable by finish_run again.
     await withFence(async () => {
       if (row.scopeType === "challenge") {
         const decision = checkLaunchFence(db, settings, {
@@ -1670,7 +1678,11 @@ export function createRunService(options: RunServiceOptions) {
           throw new RunActionError("capacity", decision.message)
         }
       }
-      updateRun(runId, { status: "running", updatedAt: now() })
+      updateRun(runId, {
+        status: "running",
+        finishing: false,
+        updatedAt: now(),
+      })
     })
 
     try {
@@ -1931,7 +1943,15 @@ export function createRunService(options: RunServiceOptions) {
       // any orphan container; mark the run closed + its agents idle (spec §12).
       await containerManager.remove(row.containerName).catch(() => undefined)
       const ts = now()
-      updateRun(row.id, { status: "closed", updatedAt: ts })
+      // Reset finishing on the closed transition: a crash may have left the
+      // flag set between finish_run's atomic claim and its teardown — without
+      // this the cold-restored run would stay permanently un-finishable (the
+      // finish_run claim WHERE finishing=0 would never match again).
+      updateRun(row.id, {
+        status: "closed",
+        finishing: false,
+        updatedAt: ts,
+      })
       for (const agent of queries.listAgents(row.id)) {
         updateAgent(agent.id, { status: "idle", updatedAt: ts })
       }
@@ -2314,6 +2334,9 @@ export function createRunService(options: RunServiceOptions) {
     notifyFlagAccepted,
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,
+    /** Test seam: the atomic finish claim (spec §4.4). Exposed so tests can
+     * verify the closed-run guard directly; no route reaches it. */
+    markFinishing,
   }
 }
 
