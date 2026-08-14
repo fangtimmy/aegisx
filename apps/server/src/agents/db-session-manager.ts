@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 
+import type { TimingMeta } from "@aegisx/shared"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { ImageContent, TextContent, Usage } from "@earendil-works/pi-ai"
 import {
@@ -62,14 +63,17 @@ export class DbSessionManager {
   private readonly createdAt: string
   private readonly fileEntries: SessionEntry[] = []
   private readonly byId = new Map<string, SessionEntry>()
-  private readonly labelsById = new Map<string, string>()
-  private readonly labelTimestampsById = new Map<string, string>()
   private leafId: string | null = null
   /** Fired at the end of commit() for every persisted entry (with its seq).
    * The event pipeline uses this as the authoritative "entry just persisted"
    * signal — pi emits no such event for regular messages, so the storage layer
    * owns it. Set by the agent-session wiring. */
   onAppend?: (entry: SessionEntry, seq: number) => void
+  /** Pre-commit timing provider (v10): called inside commit() BEFORE db.insert
+   * to compute the `meta` column for the row. Returns null for rows with no
+   * timing (non-message kinds, or messages the pipeline didn't time — e.g.
+   * legacy resumes). Injected by the agent-session wiring (the event pipeline). */
+  metaProvider?: (entry: SessionEntry) => TimingMeta | null
 
   private constructor(opts: {
     sessionId: string
@@ -163,15 +167,6 @@ export class DbSessionManager {
       this.fileEntries.push(entry)
       this.byId.set(entry.id, entry)
       this.leafId = entry.id
-      if (entry.type === "label") {
-        if (entry.label) {
-          this.labelsById.set(entry.targetId, entry.label)
-          this.labelTimestampsById.set(entry.targetId, entry.timestamp)
-        } else {
-          this.labelsById.delete(entry.targetId)
-          this.labelTimestampsById.delete(entry.targetId)
-        }
-      }
     }
   }
 
@@ -188,6 +183,9 @@ export class DbSessionManager {
     this.byId.set(entry.id, entry)
     this.leafId = entry.id
     const seq = this.fileEntries.length
+    // meta is injected pre-commit (NOT onAppend, which is post-insert) so it
+    // lands in the row itself and survives a refresh.
+    const meta = this.metaProvider?.(entry) ?? null
     this.db
       .insert(sessionEntries)
       .values({
@@ -199,6 +197,7 @@ export class DbSessionManager {
         seq,
         type: entry.type,
         data: JSON.stringify(entry),
+        ...(meta ? { meta: JSON.stringify(meta) } : {}),
         createdAt: entry.timestamp,
       })
       .run()
@@ -265,15 +264,9 @@ export class DbSessionManager {
     if (!this.byId.has(targetId)) {
       throw new Error(`Entry ${targetId} not found`)
     }
-    const entry = this.commit("label", { targetId, label })
-    if (label) {
-      this.labelsById.set(targetId, label)
-      this.labelTimestampsById.set(targetId, entry.timestamp)
-    } else {
-      this.labelsById.delete(targetId)
-      this.labelTimestampsById.delete(targetId)
-    }
-    return entry.id
+    // The label entry is persisted (resume + getTree/getLabel derive from it).
+    // The two in-memory maps are gone; labels are read on demand.
+    return this.commit("label", { targetId, label }).id
   }
 
   // --- reads --------------------------------------------------------------
@@ -326,7 +319,30 @@ export class DbSessionManager {
   }
 
   getLabel(id: string): string | undefined {
-    return this.labelsById.get(id)
+    return this.labelFor(id).label
+  }
+
+  /** Latest label applied to an entry id, scanning entries in append order
+   * (the last set wins; an explicit clear → undefined). Replaces the two
+   * in-memory maps; labels are rare so this is acceptable. */
+  private labelFor(targetId: string): {
+    label?: string
+    labelTimestamp?: string
+  } {
+    let label: string | undefined
+    let labelTimestamp: string | undefined
+    for (const entry of this.fileEntries) {
+      if (entry.type === "label" && entry.targetId === targetId) {
+        if (entry.label) {
+          label = entry.label
+          labelTimestamp = entry.timestamp
+        } else {
+          label = undefined
+          labelTimestamp = undefined
+        }
+      }
+    }
+    return label !== undefined ? { label, labelTimestamp } : {}
   }
 
   /** Walk from an entry (default: leaf) to root, in path order. */
@@ -362,16 +378,28 @@ export class DbSessionManager {
 
   getTree(): SessionTreeNode[] {
     const entries = this.getEntries()
+    // Latest label per target id in one pass (replaces the two maps).
+    const labels = new Map<string, { label: string; labelTimestamp: string }>()
+    for (const entry of entries) {
+      if (entry.type === "label") {
+        if (entry.label) {
+          labels.set(entry.targetId, {
+            label: entry.label,
+            labelTimestamp: entry.timestamp,
+          })
+        } else {
+          labels.delete(entry.targetId)
+        }
+      }
+    }
     const nodeMap = new Map<string, SessionTreeNode>()
     const roots: SessionTreeNode[] = []
     for (const entry of entries) {
-      const label = this.labelsById.get(entry.id)
-      const labelTimestamp = this.labelTimestampsById.get(entry.id)
+      const l = labels.get(entry.id)
       const node: SessionTreeNode = {
         entry,
         children: [],
-        ...(label !== undefined ? { label } : {}),
-        ...(labelTimestamp !== undefined ? { labelTimestamp } : {}),
+        ...(l ? { label: l.label, labelTimestamp: l.labelTimestamp } : {}),
       }
       nodeMap.set(entry.id, node)
     }

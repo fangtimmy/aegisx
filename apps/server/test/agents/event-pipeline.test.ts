@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, setSystemTime, test } from "bun:test"
 
 import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
@@ -302,5 +302,198 @@ describe("createAgentEventPipeline message / activity", () => {
     expect("tokensBefore" in act[0]).toBe(false)
     expect("tokensAfter" in act[0]).toBe(false)
     expect("aborted" in act[0]).toBe(false)
+  })
+})
+
+// --- v10 timing state machine ---------------------------------------------
+// Two paths: assistant (message_start → deltas → message_end) and toolResult
+// (tool_execution_start → tool_execution_end). setSystemTime makes the
+// Date.now()-based offsets deterministic.
+
+function assistantMessage(timestamp: number): AgentMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: "test",
+    provider: "test",
+    model: "test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp,
+  } as unknown as AgentMessage
+}
+
+function assistantEntry(msg: AgentMessage): SessionEntry {
+  return {
+    type: "message",
+    id: "e",
+    parentId: null,
+    timestamp: "t",
+    message: msg,
+  } as unknown as SessionEntry
+}
+
+function toolResultEntry(toolCallId: string): SessionEntry {
+  return {
+    type: "message",
+    id: "e",
+    parentId: null,
+    timestamp: "t",
+    message: {
+      role: "toolResult",
+      toolCallId,
+      content: [],
+      isError: false,
+    } as unknown as AgentMessage,
+  } as unknown as SessionEntry
+}
+
+function assistantEvents(message: AgentMessage): {
+  start: () => AgentSessionEvent
+  end: () => AgentSessionEvent
+  update: (ae: unknown) => AgentSessionEvent
+} {
+  return {
+    start: () => ({ type: "message_start", message }) as AgentSessionEvent,
+    end: () => ({ type: "message_end", message }) as AgentSessionEvent,
+    update: (ae: unknown) =>
+      ({
+        type: "message_update",
+        message,
+        assistantMessageEvent: ae,
+      }) as AgentSessionEvent,
+  }
+}
+
+describe("createAgentEventPipeline timing state machine", () => {
+  test("assistant message: durationMs + per-block timing (thinking/text/toolCall)", () => {
+    setSystemTime(0)
+    const { pipeline } = setup()
+    const msg = assistantMessage(1000)
+    const e = assistantEvents(msg)
+
+    setSystemTime(10_000)
+    pipeline.handle(e.start())
+    // thinking @ index 0: 500..700
+    setSystemTime(10_500)
+    pipeline.handle(e.update({ type: "thinking_start", contentIndex: 0 }))
+    setSystemTime(10_600)
+    pipeline.handle(e.update({ type: "thinking_delta", contentIndex: 0 }))
+    setSystemTime(10_700)
+    pipeline.handle(e.update({ type: "thinking_end", contentIndex: 0 }))
+    // text @ index 1: 800..900
+    setSystemTime(10_800)
+    pipeline.handle(e.update({ type: "text_start", contentIndex: 1 }))
+    setSystemTime(10_900)
+    pipeline.handle(e.update({ type: "text_end", contentIndex: 1 }))
+    // toolCall @ index 2: 1000..1100
+    setSystemTime(11_000)
+    pipeline.handle(e.update({ type: "toolcall_start", contentIndex: 2 }))
+    setSystemTime(11_100)
+    pipeline.handle(e.update({ type: "toolcall_end", contentIndex: 2 }))
+    setSystemTime(11_100)
+    pipeline.handle(e.end())
+
+    const meta = pipeline.metaFor(assistantEntry(msg))
+    expect(meta).not.toBeNull()
+    expect(meta?.durationMs).toBe(1100)
+    expect(meta?.blocks).toEqual([
+      { type: "thinking", index: 0, startMs: 500, endMs: 700 },
+      { type: "text", index: 1, startMs: 800, endMs: 900 },
+      { type: "toolCall", index: 2, startMs: 1000, endMs: 1100 },
+    ])
+    setSystemTime()
+  })
+
+  test("parallel tool executions: callIds don't cross", () => {
+    setSystemTime(0)
+    const { pipeline } = setup()
+    setSystemTime(50_000)
+    pipeline.handle({
+      type: "tool_execution_start",
+      toolCallId: "tc-a",
+      toolName: "bash",
+      args: {},
+    } as AgentSessionEvent)
+    setSystemTime(51_000)
+    pipeline.handle({
+      type: "tool_execution_start",
+      toolCallId: "tc-b",
+      toolName: "read",
+      args: {},
+    } as AgentSessionEvent)
+    setSystemTime(52_000)
+    pipeline.handle({
+      type: "tool_execution_end",
+      toolCallId: "tc-a",
+      toolName: "bash",
+      result: {},
+      isError: false,
+    } as AgentSessionEvent)
+    setSystemTime(53_000)
+    pipeline.handle({
+      type: "tool_execution_end",
+      toolCallId: "tc-b",
+      toolName: "read",
+      result: {},
+      isError: false,
+    } as AgentSessionEvent)
+
+    expect(pipeline.metaFor(toolResultEntry("tc-a"))).toEqual({
+      durationMs: 2000,
+    })
+    expect(pipeline.metaFor(toolResultEntry("tc-b"))).toEqual({
+      durationMs: 2000,
+    })
+    setSystemTime()
+  })
+
+  test("toolResult duration uses tool execution only (skipped message_start sets no assistant t0)", () => {
+    setSystemTime(0)
+    const { pipeline } = setup()
+    // A toolResult message_start is skipped by the pipeline (no streaming
+    // draft). It must NOT seed the assistant t0 — otherwise a later assistant
+    // message would inherit a bogus start.
+    setSystemTime(100_000)
+    pipeline.handle({
+      type: "message_start",
+      message: {
+        role: "toolResult",
+        toolCallId: "tc-x",
+        content: [],
+        isError: false,
+        timestamp: 999,
+      } as unknown as AgentMessage,
+    } as AgentSessionEvent)
+    // No assistant message has started → assistant meta is null (no pollution).
+    expect(pipeline.metaFor(assistantEntry(assistantMessage(999)))).toBeNull()
+
+    setSystemTime(101_000)
+    pipeline.handle({
+      type: "tool_execution_start",
+      toolCallId: "tc-x",
+      toolName: "bash",
+      args: {},
+    } as AgentSessionEvent)
+    setSystemTime(102_000)
+    pipeline.handle({
+      type: "tool_execution_end",
+      toolCallId: "tc-x",
+      toolName: "bash",
+      result: {},
+      isError: false,
+    } as AgentSessionEvent)
+
+    expect(pipeline.metaFor(toolResultEntry("tc-x"))).toEqual({
+      durationMs: 1000,
+    })
+    setSystemTime()
   })
 })

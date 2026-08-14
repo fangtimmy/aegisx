@@ -13,6 +13,7 @@ import {
   Play,
   RotateCw,
   Search,
+  Settings,
   Shrink,
   Square,
   Terminal,
@@ -28,6 +29,7 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 
+import type { AgentSummary } from "@/api"
 import { Markdown } from "@/components/markdown"
 import { Button } from "@/components/ui/button"
 import {
@@ -176,6 +178,16 @@ function terminalLabel(tool: ToolBlock): string | null {
   }
 }
 
+/** Committed tool "参数生成 · 执行" double-duration badge text, or null when
+ * neither is recorded (still running, or a pre-v10 row with no meta). */
+function toolDuration(tool: ToolBlock): string | null {
+  const parts: string[] = []
+  if (tool.genMs !== undefined) parts.push(`参数 ${formatDuration(tool.genMs)}`)
+  if (tool.execMs !== undefined)
+    parts.push(`执行 ${formatDuration(tool.execMs)}`)
+  return parts.length > 0 ? parts.join(" · ") : null
+}
+
 function ToolActivity({
   tool,
   separated = false,
@@ -228,6 +240,11 @@ function ToolActivity({
           }
         />
         <span className="min-w-0 flex-1 truncate">{toolSummary(tool)}</span>
+        {toolDuration(tool) && (
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {toolDuration(tool)}
+          </span>
+        )}
         {elapsed !== null && (
           <span className="shrink-0 text-xs text-muted-foreground">
             {formatDuration(elapsed)}
@@ -393,6 +410,55 @@ const ConversationRow = memo(function ConversationRow({
   )
 })
 
+/** Collapsible system-config card at the head of the timeline: the agent's
+ * snapshotted model, tool allowlist, and full system prompt (markdown). All
+ * three are immutable per run (createAgent writes them once), so this reflects
+ * the initial config the agent is operating under. Collapsed by default —
+ * system prompts are long. */
+function SystemConfigCard({ agent }: { agent: AgentSummary }) {
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className={activityTriggerClass}>
+        <Settings
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 flex-1 truncate font-medium">
+          系统配置
+          {agent.model ? (
+            <span className="ml-2 font-mono font-normal text-muted-foreground">
+              {agent.model}
+            </span>
+          ) : null}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {agent.tools.length} 工具
+        </span>
+        <ChevronRight className="size-3.5 shrink-0 transition-transform" />
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <div className="mt-1 mb-3 ml-5 min-w-0 space-y-2 text-sm">
+          {agent.tools.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {agent.tools.map((name) => (
+                <span
+                  className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs text-secondary-foreground"
+                  key={name}
+                >
+                  {name}
+                </span>
+              ))}
+            </div>
+          )}
+          <ScrollArea className="h-auto max-h-96" scrollFade scrollbarGutter>
+            <Markdown>{agent.systemPrompt || "（无系统提示词）"}</Markdown>
+          </ScrollArea>
+        </div>
+      </CollapsiblePanel>
+    </Collapsible>
+  )
+}
+
 /**
  * Scrollable conversation timeline for one agent. Merges durable committed
  * messages with ephemeral live progress from the store. Must be rendered inside
@@ -402,9 +468,11 @@ const ConversationRow = memo(function ConversationRow({
 export function Timeline({
   agentId,
   stream,
+  agent,
 }: {
   agentId: string
   stream: ConversationStore
+  agent?: AgentSummary
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -512,6 +580,7 @@ export function Timeline({
       className="relative mx-auto min-h-full w-full max-w-3xl px-6 pb-6"
       ref={rootRef}
     >
+      {agent && <SystemConfigCard agent={agent} />}
       {scrollContainer &&
         createPortal(
           <div

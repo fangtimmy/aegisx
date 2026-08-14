@@ -27,6 +27,7 @@ export {
   get,
   isSessionEntry,
   isSettingModified,
+  isTimingMeta,
   SETTINGS_DEFS,
   settingDef,
 } from "./types"

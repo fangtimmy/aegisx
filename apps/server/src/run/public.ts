@@ -91,6 +91,10 @@ export function toAgentSummary(row: AgentRow): AgentSummary {
     name: row.name,
     task: row.task,
     model: row.model,
+    // System prompt + tool allowlist snapshot (createAgent writes once; the
+    // timeline renders a system-config card from them).
+    systemPrompt: row.systemPrompt,
+    tools: parseAgentTools(row.tools),
     status: row.status as AgentSummary["status"],
     sessionFile: row.sessionFile,
     createdAt: row.createdAt,
@@ -98,5 +102,18 @@ export function toAgentSummary(row: AgentRow): AgentSummary {
     updatedAt: row.updatedAt,
     completedAt: row.completedAt,
     error: row.error,
+  }
+}
+
+/** Parse the agents.tools JSON array string (defensively — a malformed value
+ * yields [] rather than a render crash). */
+function parseAgentTools(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed)
+      ? parsed.filter((t): t is string => typeof t === "string")
+      : []
+  } catch {
+    return []
   }
 }

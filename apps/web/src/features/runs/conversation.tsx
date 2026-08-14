@@ -293,6 +293,7 @@ export function Conversation(props: ConversationProps) {
       <div className="min-h-0 flex-1">
         <ScrollArea className="relative h-full" scrollFade>
           <Timeline
+            agent={selectedAgent ?? undefined}
             agentId={effectiveAgentId}
             key={effectiveAgentId}
             stream={store}

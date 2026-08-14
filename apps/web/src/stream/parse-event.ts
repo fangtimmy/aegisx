@@ -1,6 +1,7 @@
 import {
   type AgentSummary,
   isSessionEntry,
+  isTimingMeta,
   type LiveEvent,
   type RunPublic,
 } from "@/api"
@@ -188,7 +189,12 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
     return {
       type: "message.committed",
       agentId: value.agentId,
-      item: { entry: item.entry, seq, key: item.key },
+      item: {
+        entry: item.entry,
+        seq,
+        key: item.key,
+        ...(isTimingMeta(item.meta) ? { meta: item.meta } : {}),
+      },
     }
   }
   return undefined

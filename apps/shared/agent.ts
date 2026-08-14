@@ -20,6 +20,12 @@ export type AgentSummary = {
   /** Canonical model ref snapshot (`<providerKey>/<modelId>:<effort>` | alias),
    * persisted on the agent row at createAgent/switch time. */
   model: string | null
+  /** Full system prompt snapshot (createAgent writes once; cold-restore
+   * reuses). Exposed so the timeline can render a system-config card. */
+  systemPrompt: string
+  /** Tool allowlist snapshot (real tool names; file tools always on, not
+   * listed). JSON-parsed from the agents row. */
+  tools: string[]
   status: AgentStatus
   /** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
   sessionFile: string | null

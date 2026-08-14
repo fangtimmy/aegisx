@@ -215,9 +215,12 @@ export async function createHostAgentSession(
     onUsageMaybeChanged: input.onUsageMaybeChanged,
   })
 
-  // Legacy jsonl backends have no onAppend; their runs have no session_entries
-  // rows either (the pipeline only carries ephemeral SSE for them).
+  // Legacy jsonl backends have no onAppend/metaProvider; their runs have no
+  // session_entries rows either (the pipeline only carries ephemeral SSE).
+  // metaProvider is pre-commit (writes the meta column); onAppend stays
+  // post-insert (SSE notification only).
   if (dbSession) {
+    dbSession.metaProvider = (entry) => pipeline.metaFor(entry)
     dbSession.onAppend = (entry, seq) => pipeline.commitEntry(entry, seq)
   }
 

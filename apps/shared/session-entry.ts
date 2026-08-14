@@ -5,6 +5,8 @@ import type {
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
 
+import type { TimingMeta } from "./timing"
+
 export type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -37,6 +39,10 @@ export type EntryItem = {
   entry: SessionEntry
   seq: number
   key: string
+  /** Timing metadata (the `meta` column, v10). Present for new message rows
+   * (assistant: durationMs + blocks; toolResult: durationMs); absent for
+   * pre-v10 rows (meta=null) and non-message rows. */
+  meta?: TimingMeta
 }
 
 /** One entry in a `GET /runs/:id/messages` response (an `EntryItem` tagged with

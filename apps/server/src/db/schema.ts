@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -302,6 +302,11 @@ export const sessionEntries = sqliteTable(
     type: text("type").notNull(),
     /** Full SessionEntry JSON (byte-for-byte a pi jsonl line). */
     data: text("data").notNull(),
+    /** Timing metadata JSON (nullable; v10). Assistant message rows carry
+     * durationMs + per-block timing; toolResult rows carry durationMs; all
+     * other rows + pre-v10 rows are null. Produced by the event pipeline and
+     * injected pre-commit via DbSessionManager.metaProvider. */
+    meta: text("meta"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [

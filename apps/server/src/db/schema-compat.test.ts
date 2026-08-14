@@ -50,7 +50,7 @@ function buildV7Database(dir: string) {
 }
 
 describe("schema bootstrap", () => {
-  test("fresh database migrates to v9 and drops the merged orchestrators table", () => {
+  test("fresh database migrates to v10 and drops the merged orchestrators table", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
       const { db, sqlite, releaseLock } = createDatabase(dir)
@@ -91,7 +91,7 @@ describe("schema bootstrap", () => {
     }
   })
 
-  test("fresh runs/agents/sessions carry the v9 columns (single model ref; no halfway_notified)", () => {
+  test("fresh runs/agents/sessions carry the v9 columns (single model ref; no halfway_notified) and v10 session_entries.meta", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-cols-"))
     try {
       const { sqlite, releaseLock } = createDatabase(dir)
@@ -133,6 +133,16 @@ describe("schema bootstrap", () => {
         }>
       ).map((c) => c.name)
       expect(sessionCols).toEqual(["id", "agent_id", "cwd", "created_at"])
+
+      // v10: session_entries.meta (nullable timing JSON column)
+      const entryCols = new Set(
+        (
+          sqlite.query(`PRAGMA table_info(session_entries)`).all() as Array<{
+            name: string
+          }>
+        ).map((c) => c.name)
+      )
+      expect(entryCols.has("meta")).toBe(true)
       sqlite.close()
       releaseLock()
     } finally {

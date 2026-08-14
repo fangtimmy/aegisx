@@ -1,0 +1,14 @@
+-- v10: add session_entries.meta (timing metadata).
+--
+-- A single nullable TEXT column holding the timing JSON produced by the event
+-- pipeline: assistant message rows carry { durationMs, blocks[] } (per-block
+-- thinking/text/toolCall timing), toolResult rows carry { durationMs } (the
+-- tool execution time), all other rows + pre-v10 rows stay null. Additive
+-- ALTER TABLE — zero structural change to existing columns; the frontend
+-- tolerates meta=null (no duration badge) so old sessions keep rendering.
+--
+-- The data column is untouched: pi SessionEntry JSON is still stored
+-- byte-for-byte, so usage (seven dimensions), toolResult.details, and
+-- stopReason (`toolUse`) stay complete. Timing is the only thing this column
+-- adds; it is produced pre-commit via DbSessionManager.metaProvider.
+ALTER TABLE `session_entries` ADD COLUMN `meta` text;

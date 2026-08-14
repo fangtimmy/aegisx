@@ -45,12 +45,15 @@ export type {
   SwitchModelInput,
   TargetState,
   ThinkingLevel,
+  TimingBlock,
+  TimingMeta,
 } from "@aegisx/shared"
 export {
   defaultSettings,
   get,
   isSessionEntry,
   isSettingModified,
+  isTimingMeta,
   SETTINGS_DEFS,
   settingDef,
 } from "@aegisx/shared"

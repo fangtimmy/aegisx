@@ -3,6 +3,8 @@ import type {
   EntryItem,
   SessionEntry,
   SessionMessageEntry,
+  TimingBlock,
+  TimingMeta,
 } from "@/api"
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -135,6 +137,10 @@ export type ToolBlock = {
   status: "pending" | "running" | "done" | "error"
   terminal?: "timed_out" | "cancelled" | "failed"
   terminalMessage?: string
+  /** Argument-generation time (the assistant toolCall block timing). */
+  genMs?: number
+  /** Tool execution time (the toolResult meta.durationMs). */
+  execMs?: number
 }
 
 type AgentBlock =
@@ -244,7 +250,8 @@ function terminalOfDetails(
 function applyToolResult(
   entry: SessionMessageEntry,
   tools: Map<string, ToolBlock>,
-  currentAgent: (timestamp?: string | number) => ConversationAgentItem
+  currentAgent: (timestamp?: string | number) => ConversationAgentItem,
+  meta?: TimingMeta
 ) {
   const message = entry.message
   if (message.role !== "toolResult") return
@@ -270,6 +277,7 @@ function applyToolResult(
   const terminal = terminalOfDetails(message.details)
   block.status = message.isError || terminal ? "error" : "done"
   if (terminal) block.terminal = terminal
+  if (meta) block.execMs = meta.durationMs
   if (!existing) {
     currentAgent(entry.timestamp).blocks.push(block)
     tools.set(id, block)
@@ -280,13 +288,16 @@ function applyAssistant(
   entry: SessionMessageEntry,
   tools: Map<string, ToolBlock>,
   currentAgent: (timestamp?: string | number) => ConversationAgentItem,
-  stableKey: string
+  stableKey: string,
+  meta?: TimingMeta
 ) {
   const message = entry.message
   if (message.role !== "assistant") return
   const timestamp = entry.timestamp
   const blocks = currentAgent(timestamp).blocks
   const blockPrefix = stableKey
+  const blockTiming = new Map<number, TimingBlock>()
+  if (meta?.blocks) for (const b of meta.blocks) blockTiming.set(b.index, b)
   for (const [index, part] of message.content.entries()) {
     const key = `${blockPrefix}:${index}`
     if (!isRecord(part)) continue
@@ -295,9 +306,18 @@ function applyAssistant(
       if (body.trim()) blocks.push({ key, type: "text", body })
     } else if (part.type === "thinking") {
       const body = text(part.thinking)
-      if (body.trim()) blocks.push({ key, type: "reasoning", body })
+      if (body.trim()) {
+        const bt = blockTiming.get(index)
+        blocks.push({
+          key,
+          type: "reasoning",
+          body,
+          ...(bt ? { durationMs: bt.endMs - bt.startMs } : {}),
+        })
+      }
     } else if (part.type === "toolCall") {
       const id = text(part.id)
+      const bt = blockTiming.get(index)
       const block: ToolBlock = {
         key: `tool:${id}`,
         type: "tool",
@@ -306,6 +326,7 @@ function applyAssistant(
         args: part.arguments,
         output: "",
         status: "pending",
+        ...(bt ? { genMs: bt.endMs - bt.startMs } : {}),
       }
       blocks.push(block)
       tools.set(id, block)
@@ -340,7 +361,11 @@ export function buildConversation(
     return agent
   }
 
-  const applyEntry = (entry: SessionEntry, stableKey: string) => {
+  const applyEntry = (
+    entry: SessionEntry,
+    stableKey: string,
+    meta?: TimingMeta
+  ) => {
     if (entry.type === "message") {
       const message = entry.message
       if (message.role === "user") {
@@ -349,11 +374,11 @@ export function buildConversation(
         return
       }
       if (message.role === "assistant") {
-        applyAssistant(entry, tools, currentAgent, stableKey)
+        applyAssistant(entry, tools, currentAgent, stableKey, meta)
         return
       }
       if (message.role === "toolResult") {
-        applyToolResult(entry, tools, currentAgent)
+        applyToolResult(entry, tools, currentAgent, meta)
         return
       }
       // bashExecution / custom / branchSummary / compactionSummary roles are
@@ -399,7 +424,7 @@ export function buildConversation(
   }
 
   for (const item of history) {
-    applyEntry(item.entry, item.key)
+    applyEntry(item.entry, item.key, item.meta)
   }
 
   for (const entry of live) {

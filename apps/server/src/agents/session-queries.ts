@@ -1,4 +1,10 @@
-import type { MessageList, MessageListItem, RunUsage } from "@aegisx/shared"
+import {
+  isTimingMeta,
+  type MessageList,
+  type MessageListItem,
+  type RunUsage,
+  type TimingMeta,
+} from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { and, asc, gt, type SQL } from "drizzle-orm"
 
@@ -86,11 +92,21 @@ export function listRenderableEntries(
       continue
     }
     if (!RENDERABLE_TYPES.has(entry.type)) continue
+    let meta: TimingMeta | undefined
+    if (row.meta) {
+      try {
+        const parsed = JSON.parse(row.meta)
+        if (isTimingMeta(parsed)) meta = parsed
+      } catch {
+        // skip malformed meta; the row still renders without timing
+      }
+    }
     items.push({
       entry,
       seq: row.seq,
       key: entryKeyOf(row.agentId, entry),
       agentId: row.agentId,
+      ...(meta ? { meta } : {}),
     })
   }
   return {
