@@ -1,5 +1,5 @@
 import type { Hono } from "hono"
-import { streamText } from "hono/streaming"
+import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 
 import { validateJson } from "../infrastructure/validation"
@@ -136,48 +136,48 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
     "/api/events/:eventId/platform/challenges/sync/stream",
     validateJson(importInput),
     (c) =>
-      streamText(c, async (stream) => {
+      streamSSE(c, async (stream) => {
         try {
           const result = await service.syncChallenges(
             c.req.param("eventId"),
             c.req.valid("json").remoteIds,
             async (event) => {
               if (event.type === "progress") {
-                await stream.writeln(
-                  JSON.stringify({
+                await stream.writeSSE({
+                  data: JSON.stringify({
                     type: "progress",
                     progress: event.progress,
-                  })
-                )
+                  }),
+                })
                 return
               }
-              await stream.writeln(
-                JSON.stringify({
+              await stream.writeSSE({
+                data: JSON.stringify({
                   type: "item",
                   item: event.item,
                   completed: event.completed,
                   total: event.total,
-                })
-              )
+                }),
+              })
             }
           )
-          await stream.writeln(
-            JSON.stringify({
+          await stream.writeSSE({
+            data: JSON.stringify({
               type: "complete",
               syncedAt: result.syncedAt,
               total: result.results.length,
-            })
-          )
+            }),
+          })
         } catch (error) {
-          await stream.writeln(
-            JSON.stringify({
+          await stream.writeSSE({
+            data: JSON.stringify({
               type: "error",
               message:
                 error instanceof PlatformActionError
                   ? error.message
                   : "Challenge sync failed",
-            })
-          )
+            }),
+          })
         }
       })
   )

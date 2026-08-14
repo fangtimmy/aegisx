@@ -47,6 +47,7 @@
         "@aegisx/shared": "workspace:*",
         "@base-ui/react": "^1.6.0",
         "@dagrejs/dagre": "^3.1.1",
+        "@microsoft/fetch-event-source": "^2.0.1",
         "@streamdown/cjk": "^1.0.3",
         "@streamdown/math": "^1.0.2",
         "@streamdown/mermaid": "^1.0.2",
@@ -278,6 +279,8 @@
     "@mariozechner/clipboard-win32-x64-msvc": ["@mariozechner/clipboard-win32-x64-msvc@0.3.9", "https://registry.npmmirror.com/@mariozechner/clipboard-win32-x64-msvc/-/clipboard-win32-x64-msvc-0.3.9.tgz", { "os": "win32", "cpu": "x64" }, "sha512-ihQC3EufqEY81vhXBgVBtK4prL+wc62zJsSvxrgz7K1hsdt6OObz6v9p3Rn1OG3GJksTTKMJF0u/guMISHPhSA=="],
 
     "@mermaid-js/parser": ["@mermaid-js/parser@1.2.0", "https://registry.npmmirror.com/@mermaid-js/parser/-/parser-1.2.0.tgz", { "dependencies": { "@chevrotain/types": "~11.1.2" } }, "sha512-oYPyv8A4As1yH5Bx+04iQEQxXuIQDe0GKCNSRgao6z8AM9jixXIfP0vsppRLvGf+nKIOb9/LdpWA4YuJiVvESA=="],
+
+    "@microsoft/fetch-event-source": ["@microsoft/fetch-event-source@2.0.1", "https://registry.npmmirror.com/@microsoft/fetch-event-source/-/fetch-event-source-2.0.1.tgz", {}, "sha512-W6CLUJ2eBMw3Rec70qrsEW0jOm/3twwJv21mrmj2yORiaVmVYGS4sSS5yUwvQc1ZlDLYGPnClVWmUUMagKNsfA=="],
 
     "@mistralai/mistralai": ["@mistralai/mistralai@2.2.6", "https://registry.npmmirror.com/@mistralai/mistralai/-/mistralai-2.2.6.tgz", { "dependencies": { "@opentelemetry/semantic-conventions": "^1.40.0", "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.25.0" }, "peerDependencies": { "@opentelemetry/api": "^1.9.0" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-W8pX7zHxjJvMIpw8JMxeJEleapXX0Q9NPszdNzqkM3MIEoIGPObdodujj+WHteXEvGfaP/AMwlNyRfEzSY6dQQ=="],
 

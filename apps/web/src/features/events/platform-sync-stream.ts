@@ -1,8 +1,9 @@
+import { fetchEventSource } from "@microsoft/fetch-event-source"
+
 import {
   type ChallengeSyncItem,
   type ChallengeSyncProgress,
   type ChallengeSyncResult,
-  jsonRequest,
 } from "@/api"
 import { isRecord } from "@/domain/conversation"
 
@@ -149,20 +150,10 @@ export async function syncChallengeStream(
     event: Extract<SyncStreamEvent, { type: "progress" | "item" }>
   ) => void
 ) {
-  const response = await fetch(
-    `/api/events/${eventId}/platform/challenges/sync/stream`,
-    jsonRequest("POST", { remoteIds })
-  )
-  if (!response.ok) throw new Error(`同步失败（${response.status}）`)
-  if (!response.body) throw new Error("同步流不可用")
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
   const results: ChallengeSyncResult["results"] = []
-  let buffer = ""
   let syncedAt = ""
-  const consume = (line: string) => {
-    const event = parseSyncStreamLine(line)
+  const consume = (data: string) => {
+    const event = parseSyncStreamLine(data)
     if (!event) return
     if (event.type === "error") throw new Error(event.message)
     if (event.type === "complete") {
@@ -175,15 +166,28 @@ export async function syncChallengeStream(
     onEvent(event)
   }
 
-  while (true) {
-    const { done, value } = await reader.read()
-    buffer += decoder.decode(value, { stream: !done })
-    const lines = buffer.split("\n")
-    buffer = lines.pop() ?? ""
-    for (const line of lines) consume(line)
-    if (done) break
-  }
-  consume(buffer)
-  if (!syncedAt) throw new Error("同步流意外结束")
+  await fetchEventSource(
+    `/api/events/${eventId}/platform/challenges/sync/stream`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remoteIds }),
+      // The library auto-retries on any error by re-sending the POST, which
+      // would restart the whole sync; rethrow to interrupt it.
+      onerror: (error) => {
+        throw error
+      },
+      // The library aborts the stream while the page is hidden; keep the
+      // previous plain-fetch semantics (visibility-insensitive).
+      openWhenHidden: true,
+      onopen: async (response) => {
+        if (!response.ok) throw new Error(`同步失败（${response.status}）`)
+      },
+      onmessage: (message) => consume(message.data),
+      onclose: () => {
+        if (!syncedAt) throw new Error("同步流意外结束")
+      },
+    }
+  )
   return { syncedAt, results }
 }
