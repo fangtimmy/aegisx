@@ -1,7 +1,6 @@
 # 编排插件架构（v8 重构）规格
 
 状态：**已实施（P0–P5 全部完成；schema v8 上线，191 测试全绿）**
-取代：[architecture.md](./architecture.md)（当前 v7）、[orchestrator.md](./orchestrator.md)、[lifecycle-redesign.md](./lifecycle-redesign.md)
 Schema：**v8（已上线）**（**保留目录/历史表，仅 wipe 执行态 runs/agents/sessions，不写执行态迁移**；见 §十四迁移策略与 `apps/server/drizzle/0002_v8_unified_run.sql`）
 
 > 本设计经「统一 Run + 编排插件」系列讨论 + 四轮子代理批判性审查合并而成。核心论断：

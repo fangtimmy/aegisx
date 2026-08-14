@@ -3,7 +3,7 @@
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, an event task queue (scheduler), and token usage.
 
 > **Schema v8** — a unified Run/orchestration model (保留目录/历史表，仅 wipe 执行态；migration `0002_v8_unified_run`)。v7 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。
-> Design notes: [docs/orchestration-redesign.md](docs/orchestration-redesign.md) (current, v8). Superseded: [docs/architecture.md](docs/architecture.md) (v4–v6), [docs/refactor-v4.md](docs/refactor-v4.md) (v3→v4).
+> Design notes: [docs/orchestration-redesign.md](docs/orchestration-redesign.md) (current, v8).
 
 ## Requirements
 

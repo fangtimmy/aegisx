@@ -3,8 +3,6 @@
 AegisX uses drizzle-kit migrations as the real schema-evolution path — existing
 data is migrated forward, not wiped. This document is the dev/operator workflow.
 
-Related: [architecture.md](./architecture.md).
-
 ## How versioning works
 
 - **Source of truth**: the drizzle migration journal
