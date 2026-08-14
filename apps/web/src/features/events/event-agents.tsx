@@ -32,9 +32,7 @@ import {
   Puzzle,
   Server,
   Settings2,
-  Shrink,
   SlidersHorizontal,
-  Square,
   Timer,
   Users,
 } from "lucide-react"
@@ -870,11 +868,9 @@ function AgentsGraph({
   // instruction / target cap) before creating the orchestrator run.
   const [startOpen, setStartOpen] = useState(false)
 
-  // Scheduler lifecycle: start (via the dialog) creates the event-scoped
-  // orchestrator run; stop cancels the current turn (container kept); close
-  // releases it. The scheduler agent itself is interacted with via the same
-  // AgentDialog as any run agent — these are the only run-level controls the
-  // graph needs.
+  // Scheduler lifecycle: the graph only hosts the start entry (there is no
+  // run entity to click before start). Stop / close and the orchestrator
+  // conversation live in the AgentDialog, exactly like any other run's agent.
   const invalidateScheduler = () =>
     Promise.all([
       queryClient.invalidateQueries({
@@ -886,22 +882,6 @@ function AgentsGraph({
       queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) }),
       queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
     ])
-  const stopScheduler = useMutation({
-    mutationFn: () => schedulerApi.stopScheduler(eventId),
-    onSuccess: () => {
-      toast.success("调度者正在停止")
-      void invalidateScheduler()
-    },
-    onError: (error) => toast.error("停止调度者失败", error.message),
-  })
-  const closeScheduler = useMutation({
-    mutationFn: () => schedulerApi.closeScheduler(eventId),
-    onSuccess: () => {
-      toast.success("调度者已关闭")
-      void invalidateScheduler()
-    },
-    onError: (error) => toast.error("关闭调度者失败", error.message),
-  })
 
   const sortedRuns = [...runs].sort((left, right) => {
     const activeRank = (run: RunPublic) => (run.status === "closed" ? 1 : 0)
@@ -981,15 +961,15 @@ function AgentsGraph({
         >
           <Background color="var(--border)" gap={22} size={1} />
           <Controls position="bottom-right" showInteractive={false} />
-          {/* Scheduler lifecycle controls overlay: start (re)creates the
-                event-scoped orchestrator run; stop cancels the current turn;
-                close releases the container. The scheduler agent itself is
-                driven from the AgentDialog like any run agent. */}
+          {/* Scheduler lifecycle: the graph only hosts the start entry (there
+                is no run entity to click before start). Stop / close and the
+                orchestrator conversation live in the AgentDialog, exactly like
+                any other run's agent. */}
           <Panel
             className="flex flex-wrap items-center gap-1.5"
             position="top-right"
           >
-            {!schedRun || schedRun.status === "closed" ? (
+            {(!schedRun || schedRun.status === "closed") && (
               <Button
                 onClick={() => setStartOpen(true)}
                 size="sm"
@@ -997,31 +977,6 @@ function AgentsGraph({
               >
                 <Play /> 启动调度者
               </Button>
-            ) : (
-              <>
-                {schedRun.status === "running" && (
-                  <Button
-                    loading={stopScheduler.isPending}
-                    onClick={() => stopScheduler.mutate()}
-                    size="xs"
-                    title="取消当前轮次（容器保留）"
-                    type="button"
-                    variant="destructive-outline"
-                  >
-                    <Square /> 停止
-                  </Button>
-                )}
-                <Button
-                  loading={closeScheduler.isPending}
-                  onClick={() => closeScheduler.mutate()}
-                  size="xs"
-                  title="释放调度者容器与会话"
-                  type="button"
-                  variant="outline"
-                >
-                  <Archive /> 关闭
-                </Button>
-              </>
             )}
           </Panel>
         </ReactFlow>
@@ -1338,6 +1293,12 @@ function AgentDialog({
   const detail = useQuery({
     queryKey: keys.runs.detail(runId),
     queryFn: () => runsApi.getRun(runId),
+    // Poll while running so the composer's send→stop swap and the dialog
+    // status stay live (the fleet query doesn't feed this cache key).
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.run.status === "running"
+        ? POLL_INTERVAL_MS
+        : false,
   })
   const [view, setView] = useState<
     "conversation" | "files" | "overview" | "config"
@@ -1370,10 +1331,9 @@ function AgentDialog({
     [runId, agentId]
   )
 
-  // Agent-level controls (spec §10). Stop aborts the current turn (container
-  // kept warm); compact runs a manual context summarization (requires an idle
-  // session); close releases a challenge run's container. The scheduler run
-  // is closed via its graph overlay instead.
+  // Agent-level controls now live in the composer: stop (send→stop swap),
+  // compact (/compact), close (/close). The header is identity-only; the
+  // graph only hosts the scheduler start entry.
   const invalidateAgent = useCallback(
     () =>
       Promise.all([
@@ -1399,36 +1359,22 @@ function AgentDialog({
     }),
     [invalidateAgent]
   )
-  const stop = useMutation({
-    mutationFn: () => agentsApi.stopAgent(agentId),
-    onSuccess: () => {
-      toast.success("已停止当前轮")
-      void invalidateAgent()
-    },
-    onError: (error) => toast.error("停止失败", error.message),
-  })
-  // Shared compact action for the header button and the composer command
-  // panel; toasts live at each call site (mutation / Conversation), so this
-  // stays silent and just does API + invalidation.
+  // Silent host callbacks for the composer: stop (send→stop swap) + close
+  // (/close). Toasts live at the Conversation call site.
+  const stopAgent = useCallback(
+    (id: string) => agentsApi.stopAgent(id).then(() => invalidateAgent()),
+    [invalidateAgent]
+  )
+  const closeRun = useCallback(
+    () => runsApi.closeRun(runId).then(() => invalidateAgent()),
+    [runId, invalidateAgent]
+  )
+  // Shared compact action (composer /compact command); toasts live at the
+  // Conversation call site.
   const compactRun = useCallback(
     () => agentsApi.compactAgent(agentId).then(() => invalidateAgent()),
     [agentId, invalidateAgent]
   )
-  const compact = useMutation({
-    mutationFn: compactRun,
-    onSuccess: () => {
-      toast.success("上下文已压缩")
-    },
-    onError: (error) => toast.error("压缩失败", error.message),
-  })
-  const close = useMutation({
-    mutationFn: () => runsApi.closeRun(runId),
-    onSuccess: () => {
-      toast.success("已关闭容器")
-      void invalidateAgent()
-    },
-    onError: (error) => toast.error("关闭失败", error.message),
-  })
 
   if (detail.isPending || !run || !agent) {
     return (
@@ -1472,47 +1418,6 @@ function AgentDialog({
             {run.provider} / {run.modelId}
             {agent.isEntry ? " · 入口" : ""}
           </DialogDescription>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {run.status === "running" && (
-              <Button
-                loading={stop.isPending}
-                onClick={() => stop.mutate()}
-                size="xs"
-                title="中止当前轮（容器保留）"
-                type="button"
-                variant="destructive-outline"
-              >
-                <Square /> 停止
-              </Button>
-            )}
-            <Button
-              disabled={run.status === "running"}
-              loading={compact.isPending}
-              onClick={() => compact.mutate()}
-              size="xs"
-              title={
-                run.status === "running"
-                  ? "运行中无法压缩，请先停止"
-                  : "手动压缩上下文"
-              }
-              type="button"
-              variant="outline"
-            >
-              <Shrink /> 压缩
-            </Button>
-            {run.scopeType === "challenge" && run.status !== "closed" && (
-              <Button
-                loading={close.isPending}
-                onClick={() => close.mutate()}
-                size="xs"
-                title="释放容器（之后发消息可冷恢复）"
-                type="button"
-                variant="outline"
-              >
-                <Archive /> 关闭容器
-              </Button>
-            )}
-          </div>
         </DialogHeader>
         {/* Plain flex div, NOT DialogPanel: DialogPanel wraps its children in
             a ScrollArea, which would scroll the tab bar and the composer
@@ -1555,13 +1460,15 @@ function AgentDialog({
                 agents={[agent]}
                 canEditQueue={false}
                 channel={runId}
-                closedReopenable={run.scopeType === "challenge"}
+                closedReopenable
+                closeRun={closeRun}
                 compactAgent={compactRun}
                 key={`${runId}:${agentId}`}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
                 sessionOps={sessionOps}
                 status={run.status}
+                stopAgent={stopAgent}
                 streamPath={`/api/runs/${runId}/stream`}
                 switchModel={switchModel}
               />

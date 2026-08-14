@@ -238,7 +238,7 @@ type PromptContext = {
 - **setup 在创建和恢复时跑同一段代码**；温热下不跑。
 - 插件**无从区分 create/resume**，无从藏只建一次的可变状态。
 - **close 清空 EventEmitter**；resume 重建全新 emitter。
-- **scheduler run 永不做冷恢复**：要么 fresh（start）要么 closed；start 遇已存在 closed 行 → 删旧行 + 全新 run（newSession 语义）。
+- **scheduler run 冷恢复与 challenge run 一致**：给 closed 调度者发消息 → 冷恢复（保留历史）；start 仍是 newSession 语义——遇已存在 closed 行 → 删旧行 + 全新 run。
 
 ### 4.3 惰性 session 物化（用持久化快照）
 
@@ -719,7 +719,7 @@ prompt_templates
 - **冷恢复**（给 closed run 的某 agent 发消息）：**围栏检查（§8.2，全局 fence-lock 内原子，占并发槽）** → 建 container → `setup(run)`（全新 emitter，重挂接线，零 session 操作）→ `prepare(该 agent)`（用 agent 行的 systemPrompt/tools/model **快照**从 DB open session）→ `send(消息)` → 按 `deadlineAt` 剩余值重武装超时定时器。其它 agent 不碰，触发器按需 open。
 - **emitter 清理**：close 清空 run 实例 EventEmitter；setup 重建全新。
 - **跨重启 agent id 稳定**：agent 行持久化，id 不变。
-- **scheduler 永不冷恢复**：要么 fresh（start）要么 closed。
+- **scheduler 冷恢复**：给 closed 调度者某 agent 发消息 → 走与 challenge run 相同的 restoreRunContext 路径（重建容器 + eventHandle + 快照 open session）；手动 start 仍是全新 run（删旧行）。
 - **create/setup 原子性**：多 agent 建立任一失败 → 全回滚。
 
 ---

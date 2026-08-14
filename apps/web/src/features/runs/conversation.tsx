@@ -7,6 +7,7 @@ import {
   LoaderCircle,
   Plus,
   Send,
+  Square,
   X,
 } from "lucide-react"
 import {
@@ -102,6 +103,13 @@ export type ConversationProps = {
   /** Manually compact an agent's context (composer /compact command). The
    * server rejects a running turn; hosts wire API + invalidation. */
   compactAgent?: (agentId: string) => Promise<unknown>
+  /** Abort the agent's current turn (composer stop button — the send button
+   * becomes a stop button while the run is running and the input is empty).
+   * Hosts wire API + invalidation; the composer handles the toast. */
+  stopAgent?: (agentId: string) => Promise<unknown>
+  /** Close the run's container (composer /close command). Hosts wire API +
+   * invalidation; the composer handles the toast. */
+  closeRun?: () => Promise<unknown>
   /** Multi-session + flat-backtrack ops (v12). Optional — the composer /new,
    * the session bar, and the timeline backtrack affordance render only when
    * present. All ops are agent-scoped (spawn children are rejected
@@ -127,6 +135,7 @@ type ComposerCommand = {
 const COMPOSER_COMMANDS: ComposerCommand[] = [
   { command: "/compact", label: "压缩上下文" },
   { command: "/new", label: "新会话" },
+  { command: "/close", label: "关闭容器" },
 ]
 
 export function Conversation(props: ConversationProps) {
@@ -284,6 +293,30 @@ export function Conversation(props: ConversationProps) {
     onError: (error) => toast.error("压缩失败", error.message),
   })
 
+  // Composer-driven run/agent controls: stop (send→stop swap, Esc-equivalent)
+  // and close (/close command). Both are silent host callbacks; toasts live
+  // here so the header stays identity-only.
+  const stop = useMutation({
+    mutationFn: () => {
+      if (!props.stopAgent) throw new Error("停止功能不可用")
+      return props.stopAgent(effectiveAgentId)
+    },
+    onSuccess: () => toast.success("已停止当前轮"),
+    onError: (error) => toast.error("停止失败", error.message),
+  })
+
+  const close = useMutation({
+    mutationFn: () => {
+      if (!props.closeRun) throw new Error("关闭功能不可用")
+      return props.closeRun()
+    },
+    onSuccess: () => {
+      setDraft("")
+      toast.success("任务已关闭")
+    },
+    onError: (error) => toast.error("关闭失败", error.message),
+  })
+
   // --- multi-session + flat backtrack (v12) --------------------------------
   // All three reset the store for the agent and reload committed messages:
   // the store's committed map is append-only, so a truncated session (or a
@@ -360,6 +393,14 @@ export function Conversation(props: ConversationProps) {
         return
       }
       newSession.mutate()
+      return
+    }
+    if (command === "/close") {
+      if (closed) {
+        toast.error("任务已关闭，无需再次关闭")
+        return
+      }
+      close.mutate()
       return
     }
     send.mutate()
@@ -482,8 +523,10 @@ export function Conversation(props: ConversationProps) {
                   draft={draft}
                   onDeliverAsChange={setDeliverAs}
                   onDraftChange={setDraft}
+                  onStop={props.stopAgent ? () => stop.mutate() : undefined}
                   onSubmit={onSubmit}
                   running={running}
+                  stopping={stop.isPending}
                 />
               </CardPanel>
             </Card>
@@ -553,8 +596,10 @@ function MessageInput({
   closed,
   closedReopenable,
   running,
+  stopping,
   onDraftChange,
   onDeliverAsChange,
+  onStop,
   onSubmit,
 }: {
   draft: string
@@ -563,11 +608,17 @@ function MessageInput({
   closed: boolean
   closedReopenable: boolean
   running: boolean
+  stopping: boolean
   onDraftChange: (value: string) => void
   onDeliverAsChange: (value: "steer" | "followUp") => void
+  onStop?: () => void
   onSubmit: () => void
 }) {
   const locked = closed && !closedReopenable
+  // While the agent is running and the composer is empty, the send button
+  // becomes a stop button (Esc-equivalent: the turn is aborted, the container
+  // stays warm). Typing any text reverts it to send.
+  const showStop = running && !draft.trim() && !busy && Boolean(onStop)
   const placeholder = locked
     ? "已关闭，请重新启动以开始"
     : closed
@@ -605,7 +656,9 @@ function MessageInput({
           <Plus />
         </MenuTrigger>
         <MenuPopup align="start">
-          {COMPOSER_COMMANDS.map((command) => (
+          {COMPOSER_COMMANDS.filter(
+            (command) => command.command !== "/close" || !closed
+          ).map((command) => (
             <MenuItem
               key={command.command}
               onClick={() => pickCommand(command.command)}
@@ -627,15 +680,30 @@ function MessageInput({
         value={draft}
       />
       <ButtonGroup>
-        <Button
-          aria-label="发送消息"
-          disabled={!draft.trim() || busy || locked}
-          loading={busy}
-          size="icon"
-          type="submit"
-        >
-          <Send />
-        </Button>
+        {showStop ? (
+          <Button
+            aria-label="停止当前轮"
+            disabled={stopping || locked}
+            loading={stopping}
+            onClick={onStop}
+            size="icon"
+            title="停止当前轮（容器保留）"
+            type="button"
+            variant="destructive-outline"
+          >
+            <Square />
+          </Button>
+        ) : (
+          <Button
+            aria-label="发送消息"
+            disabled={!draft.trim() || busy || locked}
+            loading={busy}
+            size="icon"
+            type="submit"
+          >
+            <Send />
+          </Button>
+        )}
         {running && (
           <>
             <GroupSeparator />

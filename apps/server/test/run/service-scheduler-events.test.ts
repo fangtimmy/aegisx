@@ -413,4 +413,87 @@ describe("scheduler event wiring (spec §3.5)", () => {
       close()
     }
   })
+
+  test("closed scheduler run cold-restores via message (history + wiring preserved)", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = makeProvider()
+      const promptLog = new Map<string, string[]>()
+      const { manager } = stubContainerManager()
+      const runService = createRunService({
+        db,
+        sqlite,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: {
+          submitFlag: async () => undefined,
+          targetAction: async () => ({
+            status: "running",
+            endpoints: [],
+            expiresAt: null,
+          }),
+        } as never,
+        configStore: stubConfigStore([provider]),
+        getSettings: flatSettingsWithDefaultModel,
+        createHost: mock(async (input: { agentId: string }) => {
+          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
+          const list: string[] = []
+          promptLog.set(input.agentId, list)
+          const sdk = stub.session as unknown as {
+            prompt: (text: string) => Promise<void>
+          }
+          sdk.prompt = async (text: string) => {
+            list.push(text)
+          }
+          return stub
+        }),
+      })
+
+      const sched = await runService.create({
+        scopeType: "event" as const,
+        eventId: "evt-1",
+        orchestration: "scheduler",
+        instruction: "focus crypto",
+        container: containerInput,
+      })
+      await settle()
+      const orch = db
+        .select()
+        .from(agents)
+        .where(eq(agents.runId, sched.id))
+        .get()!
+
+      // Close the scheduler: container released, event wiring torn down.
+      await runService.closeRun(sched.id)
+      expect(runService.get(sched.id)!.status).toBe("closed")
+
+      // Messaging the orchestrator cold-restores the SAME run (history kept)
+      // and re-wires the event subscriptions — no fresh start required.
+      await runService.sendAgentMessage(orch.id, { text: "继续" })
+      await settle()
+      expect(runService.get(sched.id)!.id).toBe(sched.id)
+      expect(runService.get(sched.id)!.status).toBe("idle")
+      const texts = promptLog.get(orch.id) ?? []
+      expect(texts.some((t) => t.includes("继续"))).toBe(true)
+
+      // Wiring rebuilt: a challenge run going idle wakes the restored
+      // scheduler's orchestrator.
+      const challenge = await runService.create({
+        scopeType: "challenge" as const,
+        challengeId: "ch-1",
+        orchestration: "classic",
+        container: containerInput,
+      })
+      await settle()
+      const after = promptLog.get(orch.id) ?? []
+      expect(
+        after.some((t) => t.includes(challenge.id) && t.includes("idle"))
+      ).toBe(true)
+      await runService.close()
+    } finally {
+      close()
+    }
+  })
 })

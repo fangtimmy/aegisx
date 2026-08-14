@@ -71,19 +71,3 @@ export function startScheduler(eventId: string) {
     jsonRequest("POST", {})
   )
 }
-
-/** Stop the scheduler run's current turn (container kept). */
-export function stopScheduler(eventId: string) {
-  return apiRequest<void>(
-    `/events/${eventId}/scheduler/stop`,
-    jsonRequest("POST", {})
-  )
-}
-
-/** Close the scheduler run (releases container + session). */
-export function closeScheduler(eventId: string) {
-  return apiRequest<void>(
-    `/events/${eventId}/scheduler/close`,
-    jsonRequest("POST", {})
-  )
-}

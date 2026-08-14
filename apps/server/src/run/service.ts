@@ -1648,28 +1648,27 @@ export function createRunService(options: RunServiceOptions) {
     runId: string,
     row: typeof runs.$inferSelect
   ): Promise<void> {
-    // Scheduler (event-scoped) runs are never cold-restored: either fresh
-    // (start) or closed (spec §4.2).
-    if (row.scopeType === "event") {
-      throw new RunActionError(
-        "invalid_state",
-        "Scheduler runs are never cold-restored; start a fresh one"
-      )
-    }
+    // Scheduler (event-scoped) runs cold-restore like challenge runs: a
+    // message to a closed run's agent rebuilds the container + session and
+    // re-runs the plugin wiring. A manual `start` remains a fresh (newSession)
+    // replacement — create() deletes the closed row first (spec §4.2).
     const settings = options.getSettings()
 
-    // Cold-restoring a closed run occupies a concurrency slot (spec §8.2,
-    // third fence enforcement point). Reserve it atomically: check the fence +
+    // Cold-restoring a closed challenge run occupies a concurrency slot
+    // (spec §8.2, third fence enforcement point); scheduler runs do not count
+    // (same as create). Reserve atomically: check the fence (challenge only) +
     // flip the run row to running so concurrent launches count it. Any later
     // failure reverts to closed (releasing the slot) below.
     await withFence(async () => {
-      const decision = checkLaunchFence(db, settings, {
-        scopeType: "challenge",
-        eventId: row.eventId,
-        challengeId: row.challengeId,
-      })
-      if (!decision.ok) {
-        throw new RunActionError("capacity", decision.message)
+      if (row.scopeType === "challenge") {
+        const decision = checkLaunchFence(db, settings, {
+          scopeType: "challenge",
+          eventId: row.eventId,
+          challengeId: row.challengeId,
+        })
+        if (!decision.ok) {
+          throw new RunActionError("capacity", decision.message)
+        }
       }
       updateRun(runId, { status: "running", updatedAt: now() })
     })
@@ -1677,6 +1676,9 @@ export function createRunService(options: RunServiceOptions) {
     try {
       const wsAbs = workspaceAbs(runId)
       const rtAbs = runtimeAbs(runId)
+      // A stale SIGKILL grace timer from the prior close must not fire against
+      // the freshly rebuilt container (same name).
+      clearForceKill(runId)
       mkdirSync(rtAbs, { recursive: true })
 
       const modelRuntime = await createRunModelRuntime({
@@ -1708,42 +1710,63 @@ export function createRunService(options: RunServiceOptions) {
         networkMode: get(settings, "container.networkMode"),
       })
 
-      // runService owns challenge-scope runs; a challenge row is always
-      // present for cold-restore (event-scoped runs are rejected above).
-      const challenge = row.challengeId
-        ? db
-            .select()
-            .from(challenges)
-            .where(eq(challenges.id, row.challengeId))
-            .get()
-        : undefined
-      if (!challenge) {
-        throw new RunActionError("not_found", "Challenge not found for restore")
-      }
       const modelDisplay = resolveModelDisplay(row.model)
-      const promptContext = buildPromptContext(
-        {
-          runId,
-          challenge,
-          remote: getChallengeRemote(db, challenge.id),
-          challengeAttachments: [],
-          environment: {
-            type: "container",
-            image: row.image,
-            cpus: row.cpus,
-            memoryMb: row.memoryMb,
-            pidsLimit: row.pidsLimit,
+      const environment: EnvironmentConfig = {
+        type: "container",
+        image: row.image,
+        cpus: row.cpus,
+        memoryMb: row.memoryMb,
+        pidsLimit: row.pidsLimit,
+      }
+      const model = {
+        provider: modelDisplay.provider,
+        modelId: modelDisplay.modelId,
+        modelLabel: modelDisplay.modelName,
+        thinkingLevel: modelDisplay.thinkingLevel,
+      }
+      // Scope-aware prompt context: challenge runs render the challenge block;
+      // scheduler (event-scope) runs render the event + instruction block.
+      let promptContext: PromptContext
+      if (row.scopeType === "challenge") {
+        const challenge = row.challengeId
+          ? db
+              .select()
+              .from(challenges)
+              .where(eq(challenges.id, row.challengeId))
+              .get()
+          : undefined
+        if (!challenge) {
+          throw new RunActionError(
+            "not_found",
+            "Challenge not found for restore"
+          )
+        }
+        promptContext = buildPromptContext(
+          {
+            runId,
+            challenge,
+            remote: getChallengeRemote(db, challenge.id),
+            challengeAttachments: [],
+            environment,
+            model,
           },
-          model: {
-            provider: modelDisplay.provider,
-            modelId: modelDisplay.modelId,
-            modelLabel: modelDisplay.modelName,
-            thinkingLevel: modelDisplay.thinkingLevel,
+          db,
+          settings["container.workspace"]
+        )
+      } else {
+        promptContext = buildEventPromptContext(
+          {
+            runId,
+            eventId: row.eventId,
+            instruction: getSchedulerConfig(row.eventId).instruction,
+            environment,
+            model,
+            orchestrations: challengeOrchestrationCatalog(),
           },
-        },
-        db,
-        settings["container.workspace"]
-      )
+          db,
+          settings["container.workspace"]
+        )
+      }
 
       const plugin = requirePlugin(row.orchestration)
       const templateMap = loadTemplateMap(db, plugin.id)
@@ -1781,7 +1804,11 @@ export function createRunService(options: RunServiceOptions) {
         emitter,
       })
       const handle = createRunHandle(host)
-      await runSetup(plugin, handle)
+      await runSetup(
+        plugin,
+        handle,
+        row.scopeType === "event" ? eventHandleFor(row.eventId) : undefined
+      )
       // primeSpecs ignored on restore (spec §4.2).
       armRunTimers(runId, row.deadlineAt)
       // The run is live again — notify the event's scheduler so it does not

@@ -134,6 +134,20 @@ export function RunWorkspace({
         .then(() => invalidate(queryClient, eventId)),
     [eventId, queryClient]
   )
+  // Composer-driven controls (send→stop swap + /close command): silent here —
+  // the Conversation owns the toasts.
+  const stopAgent = useCallback(
+    (agentId: string) =>
+      agentsApi.stopAgent(agentId).then(() => invalidate(queryClient, eventId)),
+    [eventId, queryClient]
+  )
+  const closeRun = useCallback(
+    () =>
+      runsApi
+        .closeRun(runId ?? "")
+        .then(() => invalidate(queryClient, eventId)),
+    [runId, eventId, queryClient]
+  )
   // Multi-session + flat backtrack (v12): per-agent ops wired to the API with
   // run-list invalidation so the header/agent list re-derive after a switch.
   const sessionOps = useMemo(
@@ -316,11 +330,13 @@ export function RunWorkspace({
                 canEditQueue
                 channel={runId}
                 closedReopenable
+                closeRun={closeRun}
                 compactAgent={compactAgent}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
                 sessionOps={sessionOps}
                 status={run.status}
+                stopAgent={stopAgent}
                 streamPath={`/api/runs/${runId}/stream`}
                 switchModel={switchModel}
                 setQueue={setQueue}
