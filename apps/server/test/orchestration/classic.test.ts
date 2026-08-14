@@ -47,7 +47,6 @@ function runClassic(ctx: PromptContext): {
   const host: RunHandleHost = {
     runId: "run-1",
     scope: "challenge",
-    params: {},
     ctx,
     initialPrompt: "INITIAL-PROMPT",
     templateMap: new Map([
@@ -56,30 +55,26 @@ function runClassic(ctx: PromptContext): {
       ["initial", "INITIAL"],
     ]),
     emitter: new RunEmitter(),
+    agents: classic.agents,
     findAgentBySlot: () => undefined,
     createFreshAgent: (input) => {
       created.push(input)
       return `a-${created.length}`
     },
-    resolveAgentModel: () => ({
-      provider: "P",
-      providerLabel: "P",
-      modelId: "m",
-      modelLabel: "M",
+    resolveSlotModel: () => ({
+      ref: "p/m:off",
       thinkingLevel: "off",
+      providerLabel: "P",
+      modelLabel: "M",
+      modelId: "m",
     }),
     isAgentStreaming: () => false,
     prepareAgent: async () => {},
     sendToAgent: async () => {},
     abortAgent: async () => {},
   }
-  const handle = createRunHandle(host)
-  // classic setup is challenge-scope: setup(run). Narrow the union so the
-  // 1-arg call typechecks (EventPlugin.setup needs (run, event)).
-  if (classic.scope !== "challenge") {
-    throw new Error("classic must be challenge-scoped")
-  }
-  void classic.setup(handle)
+  // createRunHandle materializes the plugin's declared agents (challenge-scope).
+  createRunHandle(host)
   return { created, initialPrompt: "INITIAL-PROMPT" }
 }
 

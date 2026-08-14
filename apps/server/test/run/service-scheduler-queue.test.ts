@@ -29,11 +29,11 @@ const containerInput = {
 
 type Db = ReturnType<typeof setupDb>["db"]
 
-/** flatSettings with a default model id so resolveAndCreate / startScheduler
- * can resolve a provider+model. */
+/** flatSettings with a default model ref so resolveAndCreate / startScheduler
+ * can resolve a provider+model (the test provider is pi-bound openai/*). */
 const settingsWithModel = () => ({
   ...defaultSettings(),
-  "agent.defaultModelId": "model-1",
+  "agent.defaultModelId": "openai/gpt-4o-mini:off",
 })
 
 function makeService(
@@ -184,10 +184,7 @@ describe("scheduler queue integration (P3)", () => {
           slot: "solver",
           role: "solver",
           isEntry: true,
-          provider: "Test Provider",
-          providerLabel: "Test Provider",
-          modelId: "gpt-4o-mini",
-          thinkingLevel: "off",
+          model: "openai/gpt-4o-mini:off",
           systemPrompt: "sp",
           tools: "[]",
           status: "idle",
@@ -294,10 +291,7 @@ describe("scheduler queue integration (P3)", () => {
           slot: "orchestrator",
           role: "orchestrator",
           isEntry: true,
-          provider: "Test Provider",
-          providerLabel: "Test Provider",
-          modelId: "gpt-4o-mini",
-          thinkingLevel: "off",
+          model: "openai/gpt-4o-mini:off",
           systemPrompt: "sp",
           tools: "[]",
           status: "idle",

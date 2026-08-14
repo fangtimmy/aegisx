@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm"
 import { agents, challengeRemote } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
-  flatSettings,
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -13,7 +13,6 @@ import {
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  toConnection,
 } from "../helpers"
 
 const containerInput = {
@@ -26,17 +25,13 @@ const containerInput = {
 }
 
 function baseCreateInput(challengeId: string) {
-  const provider = makeProvider()
   return {
     input: {
       scopeType: "challenge" as const,
       challengeId,
-      provider: toConnection(provider),
-      modelId: "model-1",
-      thinkingLevel: "off" as const,
       container: containerInput,
     },
-    provider,
+    provider: makeProvider(),
   }
 }
 
@@ -88,7 +83,7 @@ function makeService(
       }),
     } as never,
     configStore: stubConfigStore([provider]),
-    getSettings: flatSettings,
+    getSettings: flatSettingsWithDefaultModel,
     createHost: mock(async () =>
       stubHostAgentSession("sess-1", { hang: true })
     ),

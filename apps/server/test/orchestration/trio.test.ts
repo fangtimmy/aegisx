@@ -7,7 +7,7 @@ import {
   type RunHandleHost,
 } from "../../src/orchestration/run-handle"
 import trio from "../../src/orchestration/trio"
-import type { PromptContext } from "../../src/orchestration/types"
+import type { PromptContext, SlotModel } from "../../src/orchestration/types"
 
 const baseCtx: PromptContext = {
   event: { id: "e1", name: "Ev", platform: "ctfd", promptHint: "" },
@@ -34,11 +34,31 @@ const baseCtx: PromptContext = {
   },
 }
 
-const MODELS = [
-  { provider: "P", modelId: "m-a", thinking: "off" as const },
-  { provider: "P", modelId: "m-b", thinking: "low" as const },
-  { provider: "P", modelId: "m-c", thinking: "high" as const },
-]
+/** Per-slot model the system injects from the orchestration settings
+ * (agentModels.trio.{solver-a,b,c}) — each slot snapshots its own ref. */
+const SLOT_MODELS: Record<string, SlotModel> = {
+  "solver-a": {
+    ref: "P/m-a:off",
+    thinkingLevel: "off",
+    providerLabel: "P",
+    modelLabel: "M-A",
+    modelId: "m-a",
+  },
+  "solver-b": {
+    ref: "P/m-b:low",
+    thinkingLevel: "low",
+    providerLabel: "P",
+    modelLabel: "M-B",
+    modelId: "m-b",
+  },
+  "solver-c": {
+    ref: "P/m-c:high",
+    thinkingLevel: "high",
+    providerLabel: "P",
+    modelLabel: "M-C",
+    modelId: "m-c",
+  },
+}
 
 function runSetup(): {
   created: FreshAgentInput[]
@@ -48,7 +68,7 @@ function runSetup(): {
   const host: RunHandleHost = {
     runId: "run-1",
     scope: "challenge",
-    params: { models: MODELS },
+    agents: trio.agents,
     ctx: baseCtx,
     initialPrompt: "INITIAL",
     templateMap: new Map([
@@ -62,32 +82,18 @@ function runSetup(): {
       created.push(input)
       return `a-${created.length}`
     },
-    resolveAgentModel: (m) =>
-      m === "default"
-        ? {
-            provider: "P",
-            providerLabel: "P",
-            modelId: "m",
-            modelLabel: "M",
-            thinkingLevel: "off",
-          }
-        : {
-            provider: m.provider,
-            providerLabel: m.provider,
-            modelId: m.modelId,
-            modelLabel: null,
-            thinkingLevel: m.thinking,
-          },
+    resolveSlotModel: (slot) => SLOT_MODELS[slot]!,
     isAgentStreaming: () => false,
     prepareAgent: async () => {},
     sendToAgent: async () => {},
     abortAgent: async () => {},
   }
-  const handle = createRunHandle(host)
   if (trio.scope !== "challenge") {
     throw new Error("trio must be challenge-scoped")
   }
-  void trio.setup(handle)
+  const handle = createRunHandle(host)
+  // trio has no event wiring; createRunHandle materializes its agents.
+  void handle
   return { created, primeAgentIds: handle.primeSpecs.map((p) => p.agentId) }
 }
 
@@ -111,13 +117,12 @@ describe("trio plugin (spec §7.4)", () => {
     expect(primeAgentIds).toEqual(["a-1", "a-2", "a-3"])
   })
 
-  test("each solver snapshots its own model from params.models", () => {
+  test("each solver snapshots its own model ref from the slot settings", () => {
     const { created } = runSetup()
-    expect(created.map((a) => a.model.modelId)).toEqual(["m-a", "m-b", "m-c"])
-    expect(created.map((a) => a.model.thinkingLevel)).toEqual([
-      "off",
-      "low",
-      "high",
+    expect(created.map((a) => a.model)).toEqual([
+      "P/m-a:off",
+      "P/m-b:low",
+      "P/m-c:high",
     ])
   })
 

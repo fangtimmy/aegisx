@@ -19,14 +19,14 @@ import type {
   OrchestrationInfo,
   OrchestrationPlugin,
 } from "./types"
-import { pluginNeedsModels } from "./types"
 
 type Database = ReturnType<typeof createDatabase>["db"]
 
 /**
- * Orchestration plugin registry. Plugins register an id + scope + setup; the
- * run service resolves a run's plugin by `runs.orchestration` and runs its
- * `setup` for both create and cold-restore (spec §4.2).
+ * Orchestration plugin registry. Plugins register an id + scope + declared
+ * agent slots; the run service resolves a run's plugin by `runs.orchestration`
+ * and materializes its agents (model injected from the orchestration settings)
+ * for both create and cold-restore (spec §4.2).
  *
  * The registry is process-global (one set of plugins per server). Registration
  * is idempotent; app boot calls {@link registerOrchestrationPlugins} once.
@@ -53,8 +53,8 @@ export function listPlugins(): OrchestrationPlugin[] {
 
 /** Compact catalog of challenge-scope orchestrations for the scheduler's prompt
  * (spec §3.7 `orchestrations`). Filters out the event-scope scheduler itself
- * and collapses to {id,label,description,needsModels} so the scheduler never
- * has to guess a plugin name or invent params. */
+ * and collapses to {id,label,description} so the scheduler never has to guess a
+ * plugin name. */
 export function challengeOrchestrationCatalog(): OrchestrationInfo[] {
   return listPlugins()
     .filter((plugin): plugin is ChallengePlugin => plugin.scope === "challenge")
@@ -62,7 +62,6 @@ export function challengeOrchestrationCatalog(): OrchestrationInfo[] {
       id: plugin.id,
       label: plugin.label ?? plugin.id,
       description: plugin.description ?? "",
-      needsModels: pluginNeedsModels(plugin.params),
     }))
     .sort((left, right) => left.id.localeCompare(right.id))
 }
@@ -70,8 +69,7 @@ export function challengeOrchestrationCatalog(): OrchestrationInfo[] {
 let builtinRegistered = false
 
 /** Register the built-in orchestration plugins. Idempotent — safe to call on
- * every app boot. P1c registered `classic`; P2 adds observer-solver /
- * bootstrap-solver / trio / scheduler. */
+ * every app boot. */
 export function registerOrchestrationPlugins(): void {
   if (builtinRegistered) return
   for (const plugin of [

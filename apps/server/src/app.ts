@@ -106,6 +106,7 @@ export function createApp(options: { dataDir: string }) {
     db,
     dataDir: options.dataDir,
     runService,
+    configStore,
   })
   registerSchedulerRoutes(app, { db, runService })
 

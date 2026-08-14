@@ -6,7 +6,7 @@ import type { HostAgentSession } from "../../src/agents/host-session"
 import { agents, runs } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
-  flatSettings,
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -14,7 +14,6 @@ import {
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  toConnection,
 } from "../helpers"
 
 const containerInput = {
@@ -24,12 +23,6 @@ const containerInput = {
   pidsLimit: 128,
   tmpfsSize: "128m",
   workspace: "/workspace",
-}
-
-const MODEL = {
-  provider: "Test Provider",
-  modelId: "model-1",
-  thinking: "off" as const,
 }
 
 type Db = ReturnType<typeof setupDb>
@@ -90,7 +83,7 @@ async function createHangingRun(
       }),
     } as never,
     configStore: stubConfigStore([provider]),
-    getSettings: flatSettings,
+    getSettings: flatSettingsWithDefaultModel,
     timeoutGraceMs: 40,
     createHost: mock(async () => streamingSession(abortResolves)),
   })
@@ -98,9 +91,6 @@ async function createHangingRun(
     scopeType: "challenge" as const,
     challengeId: "ch-1",
     orchestration: "classic",
-    provider: toConnection(provider),
-    modelId: "model-1",
-    thinkingLevel: "off",
     container: containerInput,
     timeoutMs: 30,
   })
@@ -181,7 +171,7 @@ describe("run timeout (spec §8.3)", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         timeoutGraceMs: 40,
         createHost: mock(async (input: { agentId: string }) => {
           hostCalls++
@@ -205,11 +195,7 @@ describe("run timeout (spec §8.3)", () => {
         scopeType: "event" as const,
         eventId: "evt-1",
         orchestration: "scheduler",
-        params: { model: MODEL },
         instruction: "",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
       const orch = db
@@ -222,9 +208,6 @@ describe("run timeout (spec §8.3)", () => {
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         orchestration: "classic",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
         timeoutMs: 30,
       })

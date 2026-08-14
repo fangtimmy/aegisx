@@ -39,7 +39,7 @@ function runSetup(): {
   const host: RunHandleHost = {
     runId: "run-1",
     scope: "event",
-    params: { model: { provider: "P", modelId: "m", thinking: "off" } },
+    agents: scheduler.agents,
     ctx: eventCtx,
     initialPrompt: "SCHED-INIT",
     templateMap: new Map([
@@ -53,22 +53,13 @@ function runSetup(): {
       created.push(input)
       return `a-${created.length}`
     },
-    resolveAgentModel: (m) =>
-      m === "default"
-        ? {
-            provider: "P",
-            providerLabel: "P",
-            modelId: "m",
-            modelLabel: "M",
-            thinkingLevel: "off",
-          }
-        : {
-            provider: m.provider,
-            providerLabel: m.provider,
-            modelId: m.modelId,
-            modelLabel: null,
-            thinkingLevel: m.thinking,
-          },
+    resolveSlotModel: () => ({
+      ref: "P/m:off",
+      thinkingLevel: "off",
+      providerLabel: "P",
+      modelLabel: "M",
+      modelId: "m",
+    }),
     isAgentStreaming: () => false,
     prepareAgent: async () => {},
     sendToAgent: async (agentId, text) => {
@@ -80,7 +71,7 @@ function runSetup(): {
   if (scheduler.scope !== "event") {
     throw new Error("scheduler must be event-scoped")
   }
-  void scheduler.setup(handle, event)
+  void scheduler.wire?.(handle, event)
   return { created, sends, event }
 }
 

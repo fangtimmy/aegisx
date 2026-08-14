@@ -1,13 +1,6 @@
 import { DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE } from "@aegisx/shared/prompt-defaults"
-import { Type } from "typebox"
 
-import {
-  defineOrchestration,
-  ModelRefSchema,
-  type EventHandle,
-  type ModelRef,
-  type RunHandle,
-} from "./types"
+import { defineOrchestration, type EventHandle, type RunHandle } from "./types"
 
 /** Scheduler wiring (spec §7.5): wake the orchestrator on child-run lifecycle
  * events. Each wake-up sends the orchestrator a fresh turn to read + decide. */
@@ -25,17 +18,16 @@ function wire(run: RunHandle, event: EventHandle): void {
  * agent holds the event's strategy; it manages the task queue + sibling
  * challenge runs via the scheduler tools, and is woken on child-run lifecycle
  * events (idle / flagAccepted / timedOut) to read + decide.
+ *
+ * The orchestrator's model defaults to the global orchestration setting
+ * (`agentModels.scheduler.orchestrator`); a per-event `scheduler_config.model`
+ * overrides it.
  */
-export default defineOrchestration<{ model: ModelRef }>({
+export default defineOrchestration({
   id: "scheduler",
   scope: "event",
-  params: Type.Object({ model: ModelRefSchema }),
-  // Event-scope runs have no challenge context; the builtin `initial` template
-  // renders {{challenge.*}}, so the scheduler overrides `initial` with an
-  // event + instruction variant (render order: plugin → builtin).
-  templates: { initial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE },
-  setup(run, event) {
-    run.createAgent({
+  agents: [
+    {
       slot: "orchestrator",
       role: "orchestrator",
       name: "Scheduler",
@@ -62,9 +54,12 @@ export default defineOrchestration<{ model: ModelRef }>({
         "get_status",
         "list_agents",
       ],
-      model: run.params.model,
-      prime: run.initialPrompt,
-    })
-    wire(run, event)
-  },
+      prime: true,
+    },
+  ],
+  // Event-scope runs have no challenge context; the builtin `initial` template
+  // renders {{challenge.*}}, so the scheduler overrides `initial` with an
+  // event + instruction variant (render order: plugin → builtin).
+  templates: { initial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE },
+  wire,
 })

@@ -4,18 +4,21 @@ import { join, relative } from "node:path"
 
 import type {
   EnvironmentConfig,
-  ModelConfig,
+  ModelRef,
   RunPublic,
   SwitchModelInput,
 } from "@aegisx/shared"
-import { get, normalizeThinkingLevel, resolveRefTarget } from "@aegisx/shared"
+import {
+  formatModelRef,
+  get,
+  parseModelRef,
+  resolveModelRef,
+} from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { and, eq, inArray, sql } from "drizzle-orm"
-import type { TSchema } from "typebox"
-import { Value } from "typebox/value"
 
 import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -56,9 +59,9 @@ import {
 import type {
   EventHandle,
   EventScopePayload,
-  ModelSnapshot,
   OrchestrationPlugin,
   PromptContext,
+  SlotModel,
 } from "../orchestration/types"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
@@ -121,8 +124,9 @@ export type RunContext = {
   sessionsDir: string
   modelRuntime: RunModelRuntime
   sdkModel: Model<Api> | undefined
-  /** Run default model config (spawn children snapshot this). */
-  model: ModelConfig
+  /** Run default model ref (the entry agent's concrete ref) — spawn children
+   * resolve + snapshot it at spawn time. */
+  defaultModelRef: ModelRef
   thinkingLevel: ThinkingLevel
   childTemplate: string
   promptContext: PromptContext
@@ -132,12 +136,10 @@ export type RunContext = {
 export type CreateRunInput = {
   /** Orchestration plugin id (challenge runs default to 'classic'). */
   orchestration?: string
-  /** Plugin input snapshot, validated against the plugin's params schema. */
-  params?: Record<string, unknown>
-  provider: ProviderConnection
-  /** ProviderModel.id */
-  modelId: string
-  thinkingLevel: ThinkingLevel
+  /** Per-slot model overrides (highest precedence), keyed by slot id. Used by
+   * the scheduler to apply a per-event model override on top of the global
+   * orchestration setting. */
+  slotModelOverrides?: Record<string, ModelRef>
   container: {
     image: string
     cpus: number
@@ -180,7 +182,7 @@ export function createRunService(options: RunServiceOptions) {
     configStore,
   } = options
   const createHost = options.createHost ?? createAgentHost
-  const queries = createRunQueries({ db, dataDir })
+  const queries = createRunQueries({ db, dataDir, resolveModelDisplay })
   const catalog = createCatalogReader(db, platformService)
   const bus: LiveBus = createLiveBus()
 
@@ -551,37 +553,79 @@ export function createRunService(options: RunServiceOptions) {
     return getProviderConnections(configStore)
   }
 
-  /** Resolve a stored model ref (`alias:<id>` or a raw ProviderModel.id) to the
-   * first currently-enabled provider+model. Returns null when the ref is empty
-   * or resolves to nothing available. Alias refs are resolved against the
-   * configured aliases; re-pointing an alias is therefore a live, global change
-   * for any default slot (agent.defaultModelId / scheduler modelId). */
-  function resolveDefaultModel(ref: string | null): {
-    provider: ProviderConnection
-    model: ProviderConnection["models"][number]
-    /** The alias's reasoning level, or null for a raw model id (caller falls
-     * back to its own default thinking setting). */
-    thinkingLevel: ThinkingLevel | null
-  } | null {
-    const available = providers()
-      .filter((p) => p.enabled && p.apiKey)
-      .flatMap((p) =>
-        p.models
-          .filter((m) => m.enabled)
-          .map((m) => ({ provider: p, model: m }))
+  /** The global default model ref string (setting `agent.defaultModelId`), or
+   * null when unset. May be a concrete `<key>/<id>:<effort>` or `alias:<id>`. */
+  function defaultModelRef(): ModelRef | null {
+    const ref = get(options.getSettings(), "agent.defaultModelId")
+    return typeof ref === "string" && ref.length > 0 ? ref : null
+  }
+
+  /** Resolve a model ref to a concrete enabled provider+model+effort, or null
+   * when it is empty / malformed / every referenced model is unavailable. */
+  function resolveModelTarget(ref: ModelRef | null | undefined) {
+    return resolveModelRef(ref, providers(), configStore.getAliases())
+  }
+
+  /** Resolve a model ref to a CONCRETE {@link SlotModel} snapshot (aliases
+   * resolved to the first available model so per-agent rows do not follow later
+   * alias edits, spec §4.3). Throws when nothing resolves. */
+  function resolveSlotModelFromRef(
+    ref: ModelRef | null | undefined
+  ): SlotModel {
+    const target = resolveModelTarget(ref)
+    if (!target) {
+      throw new RunActionError(
+        "invalid_state",
+        ref
+          ? `Configured model "${ref}" is unavailable`
+          : "No enabled default model is configured"
       )
-    const byId = new Map(available.map((e) => [e.model.id, e]))
-    const target = resolveRefTarget(
-      ref,
-      (id) => byId.get(id),
-      configStore.getAliases()
-    )
-    if (!target) return null
-    return {
-      provider: target.model.provider,
-      model: target.model.model,
-      thinkingLevel: target.thinkingLevel,
     }
+    return {
+      ref: formatModelRef(target.provider, target.model, target.thinkingLevel),
+      thinkingLevel: target.thinkingLevel,
+      providerLabel: target.provider.label,
+      modelLabel: target.model.label,
+      modelId: target.model.modelId,
+    }
+  }
+
+  /** Resolve a plugin slot's model from the orchestration settings, falling
+   * back to the global default. */
+  function resolveSlotModel(pluginId: string, slot: string): SlotModel {
+    return resolveSlotModelFromRef(
+      configStore.getAgentModels()[pluginId]?.[slot] ?? defaultModelRef()
+    )
+  }
+
+  /** Derive the run-level model display fields (provider/modelId/modelName/
+   * thinkingLevel) for {@link toRunPublic} from a stored ref string. Falls back
+   * to parsing the ref when no provider matches (e.g. provider since disabled). */
+  function resolveModelDisplay(ref: ModelRef): {
+    provider: string
+    modelId: string
+    modelName: string
+    thinkingLevel: ThinkingLevel
+  } {
+    const target = resolveModelTarget(ref)
+    if (target) {
+      return {
+        provider: target.provider.label,
+        modelId: target.model.modelId,
+        modelName: target.model.label,
+        thinkingLevel: target.thinkingLevel,
+      }
+    }
+    const parsed = parseModelRef(ref)
+    if (parsed?.kind === "model") {
+      return {
+        provider: parsed.providerKey,
+        modelId: parsed.modelId,
+        modelName: parsed.modelId,
+        thinkingLevel: parsed.effort,
+      }
+    }
+    return { provider: "", modelId: "", modelName: ref, thinkingLevel: "off" }
   }
 
   function agentSettings(): AgentLoopSettings {
@@ -693,23 +737,6 @@ export function createRunService(options: RunServiceOptions) {
 
   // --- create --------------------------------------------------------------
 
-  /** Validate plugin params against its declared typebox schema (spec §3.2). */
-  function validatePluginParams(
-    schema: TSchema,
-    params: unknown
-  ): Record<string, unknown> {
-    if (!Value.Check(schema, params)) {
-      const details = Value.Errors(schema, params)
-        .map((error) => `${error.instancePath || "/"}: ${error.keyword}`)
-        .join("; ")
-      throw new RunActionError(
-        "invalid_state",
-        `Invalid plugin params: ${details}`
-      )
-    }
-    return params as Record<string, unknown>
-  }
-
   /** The EventHandle for an event's scheduler run (spec §3.4/§3.5): subscribes
    * to the per-event run-lifecycle emitter (created lazily). */
   function eventHandleFor(eventId: string): EventHandle {
@@ -731,7 +758,6 @@ export function createRunService(options: RunServiceOptions) {
         `Plugin '${plugin.id}' is ${plugin.scope}-scoped, not ${input.scopeType}`
       )
     }
-    const params = validatePluginParams(plugin.params, input.params ?? {})
 
     const challenge =
       input.scopeType === "challenge"
@@ -775,13 +801,39 @@ export function createRunService(options: RunServiceOptions) {
       }
     }
 
-    const model = input.provider.models.find((m) => m.id === input.modelId)
-    if (!model?.enabled || !input.provider.enabled) {
-      throw new RunActionError("invalid_state", "Model is unavailable")
+    // The run default model = the entry agent's configured model (the
+    // conversation target the UI shows / switches; spawn children fall back to
+    // it). Resolved from the orchestration settings, falling back to the global
+    // default; snapshotted as a CONCRETE ref (aliases resolved away, spec §4.3).
+    const entrySlot =
+      plugin.agents.find((agent) => agent.entry) ?? plugin.agents[0]
+    if (!entrySlot) {
+      throw new RunActionError(
+        "invalid_state",
+        `Plugin '${plugin.id}' declares no agents`
+      )
     }
-    if (!input.provider.apiKey) {
+    const entryConfigured =
+      input.slotModelOverrides?.[entrySlot.slot] ??
+      configStore.getAgentModels()[plugin.id]?.[entrySlot.slot] ??
+      defaultModelRef()
+    const entryTarget = resolveModelTarget(entryConfigured)
+    if (!entryTarget) {
+      throw new RunActionError(
+        "invalid_state",
+        entryConfigured
+          ? `Configured model "${entryConfigured}" is unavailable`
+          : "No enabled default model is configured"
+      )
+    }
+    if (!entryTarget.provider.apiKey) {
       throw new RunActionError("invalid_state", "Provider API key is required")
     }
+    const entryModelRef = formatModelRef(
+      entryTarget.provider,
+      entryTarget.model,
+      entryTarget.thinkingLevel
+    )
 
     const runId = crypto.randomUUID()
     const runSource = input.source ?? "manual"
@@ -804,12 +856,11 @@ export function createRunService(options: RunServiceOptions) {
       memoryMb: input.container.memoryMb,
       pidsLimit: input.container.pidsLimit,
     }
-    const modelConfig: ModelConfig = {
-      provider: input.provider.label,
-      providerLabel: input.provider.label,
-      modelId: model.modelId,
-      modelLabel: model.label,
-      thinkingLevel: input.thinkingLevel,
+    const modelConfig = {
+      provider: entryTarget.provider.label,
+      modelId: entryTarget.model.modelId,
+      modelLabel: entryTarget.model.label,
+      thinkingLevel: entryTarget.thinkingLevel,
     }
 
     const promptContext =
@@ -850,8 +901,8 @@ export function createRunService(options: RunServiceOptions) {
     })
     const sdkModel = resolveRunModel(
       modelRuntime,
-      input.provider,
-      input.modelId
+      entryTarget.provider,
+      entryTarget.model.id
     )
     if (!sdkModel)
       throw new RunStartError("Could not resolve the selected model")
@@ -879,13 +930,9 @@ export function createRunService(options: RunServiceOptions) {
             input.scopeType === "challenge" ? challenge!.eventId : event!.id,
           challengeId: challenge?.id ?? null,
           orchestration: plugin.id,
-          params: JSON.stringify(params),
+          params: "{}",
           status: "running",
-          provider: modelConfig.provider,
-          providerLabel: modelConfig.providerLabel ?? null,
-          modelId: modelConfig.modelId,
-          modelLabel: modelConfig.modelLabel ?? null,
-          thinkingLevel: modelConfig.thinkingLevel,
+          model: entryModelRef,
           image: env.image,
           cpus: env.cpus,
           memoryMb: env.memoryMb,
@@ -944,8 +991,8 @@ export function createRunService(options: RunServiceOptions) {
       sessionsDir: sessAbs,
       modelRuntime,
       sdkModel,
-      model: modelConfig,
-      thinkingLevel: input.thinkingLevel,
+      defaultModelRef: entryModelRef,
+      thinkingLevel: entryTarget.thinkingLevel,
       childTemplate:
         templateMap.get(plugin.spawn?.systemPrompt ?? "childSystem") ?? "",
       promptContext,
@@ -954,23 +1001,16 @@ export function createRunService(options: RunServiceOptions) {
 
     const emitter = new RunEmitter()
     emitters.set(runId, emitter)
-    const defaultModel: ModelSnapshot = {
-      provider: modelConfig.provider,
-      providerLabel: modelConfig.providerLabel ?? null,
-      modelId: modelConfig.modelId,
-      modelLabel: modelConfig.modelLabel ?? null,
-      thinkingLevel: modelConfig.thinkingLevel,
-    }
 
     const host = buildHandleHost({
       runId,
       scope: input.scopeType,
-      params,
+      plugin,
       ctx: promptContext,
       initialPrompt,
       templateMap,
       emitter,
-      defaultModel,
+      slotOverrides: input.slotModelOverrides,
     })
     const handle = createRunHandle(host)
     try {
@@ -1049,20 +1089,21 @@ export function createRunService(options: RunServiceOptions) {
         )
       }
       const agentRow = db
-        .select({ modelId: agents.modelId })
+        .select({ model: agents.model })
         .from(agents)
         .where(eq(agents.id, entry.id))
         .get()
       let target: SwitchTarget
-      let thinkingLevel: ThinkingLevel
       try {
-        ;({ target, thinkingLevel } = await applyModelSwitch(
-          session,
-          providers(),
-          configStore.getAliases(),
-          input,
-          (t) => agentRow?.modelId === t.model.modelId
-        ))
+        target = (
+          await applyModelSwitch(
+            session,
+            providers(),
+            configStore.getAliases(),
+            input.model,
+            agentRow?.model ?? null
+          )
+        ).target
       } catch (error) {
         throw new RunActionError(
           "invalid_state",
@@ -1070,11 +1111,11 @@ export function createRunService(options: RunServiceOptions) {
         )
       }
       updateAgent(entry.id, {
-        provider: target.provider.label,
-        providerLabel: target.provider.label,
-        modelId: target.model.modelId,
-        modelLabel: target.model.label,
-        thinkingLevel,
+        model: formatModelRef(
+          target.provider,
+          target.model,
+          target.thinkingLevel
+        ),
         updatedAt: now(),
       })
       emitAgents(runId)
@@ -1137,20 +1178,21 @@ export function createRunService(options: RunServiceOptions) {
         )
       }
       const agentRow = db
-        .select({ modelId: agents.modelId })
+        .select({ model: agents.model })
         .from(agents)
         .where(eq(agents.id, agentId))
         .get()
       let target: SwitchTarget
-      let thinkingLevel: ThinkingLevel
       try {
-        ;({ target, thinkingLevel } = await applyModelSwitch(
-          session,
-          providers(),
-          configStore.getAliases(),
-          input,
-          (t) => agentRow?.modelId === t.model.modelId
-        ))
+        target = (
+          await applyModelSwitch(
+            session,
+            providers(),
+            configStore.getAliases(),
+            input.model,
+            agentRow?.model ?? null
+          )
+        ).target
       } catch (error) {
         throw new RunActionError(
           "invalid_state",
@@ -1158,11 +1200,11 @@ export function createRunService(options: RunServiceOptions) {
         )
       }
       updateAgent(agentId, {
-        provider: target.provider.label,
-        providerLabel: target.provider.label,
-        modelId: target.model.modelId,
-        modelLabel: target.model.label,
-        thinkingLevel,
+        model: formatModelRef(
+          target.provider,
+          target.model,
+          target.thinkingLevel
+        ),
         updatedAt: now(),
       })
       emitAgents(runId)
@@ -1296,16 +1338,18 @@ export function createRunService(options: RunServiceOptions) {
     return null
   }
 
-  /** Run a plugin's setup with scope narrowing (spec §3.1 discriminated union):
-   * challenge scope → setup(run); event scope → setup(run, event) with an
-   * EventHandle wired to the event's run-lifecycle emitter. */
+  /** Run a plugin's event wiring with scope narrowing (spec §3.1 discriminated
+   * union): challenge scope → wire(run); event scope → wire(run, event) with an
+   * EventHandle wired to the event's run-lifecycle emitter. Agent creation is
+   * automatic (from the plugin's declared `agents`); this only fires the
+   * plugin's optional triggers. */
   async function runSetup(
     plugin: OrchestrationPlugin,
     handle: ReturnType<typeof createRunHandle>,
     eventHandle?: EventHandle
   ): Promise<void> {
     if (plugin.scope === "challenge") {
-      await plugin.setup(handle)
+      await plugin.wire?.(handle)
       return
     }
     if (!eventHandle) {
@@ -1313,7 +1357,7 @@ export function createRunService(options: RunServiceOptions) {
         `Event-scope plugin '${plugin.id}' requires an EventHandle`
       )
     }
-    await plugin.setup(handle, eventHandle)
+    await plugin.wire?.(handle, eventHandle)
   }
 
   /** Build the {@link RunHandleHost} callback bundle the plugin-facing handle
@@ -1322,21 +1366,22 @@ export function createRunService(options: RunServiceOptions) {
   function buildHandleHost(opts: {
     runId: string
     scope: "challenge" | "event"
-    params: unknown
+    plugin: OrchestrationPlugin
     ctx: PromptContext
     initialPrompt: string
     templateMap: Map<string, string>
     emitter: RunEmitter
-    defaultModel: ModelSnapshot
+    slotOverrides?: Record<string, ModelRef>
   }): RunHandleHost {
+    const plugin = opts.plugin
     return {
       runId: opts.runId,
       scope: opts.scope,
-      params: opts.params,
       ctx: opts.ctx,
       initialPrompt: opts.initialPrompt,
       templateMap: opts.templateMap,
       emitter: opts.emitter,
+      agents: plugin.agents,
       findAgentBySlot(slot) {
         return db
           .select()
@@ -1355,11 +1400,7 @@ export function createRunService(options: RunServiceOptions) {
             role: input.role,
             parentAgentId: input.parentAgentId ?? null,
             isEntry: input.isEntry,
-            provider: input.model.provider,
-            providerLabel: input.model.providerLabel,
-            modelId: input.model.modelId,
-            modelLabel: input.model.modelLabel,
-            thinkingLevel: input.model.thinkingLevel,
+            model: input.model,
             systemPrompt: input.systemPrompt,
             tools: JSON.stringify(input.tools),
             status: "idle",
@@ -1372,19 +1413,11 @@ export function createRunService(options: RunServiceOptions) {
           .run()
         return id
       },
-      resolveAgentModel(model) {
-        if (model === "default") return opts.defaultModel
-        const provider = providers().find((p) => p.label === model.provider)
-        const pm = provider?.models.find(
-          (m) => m.modelId === model.modelId || m.id === model.modelId
-        )
-        return {
-          provider: provider?.label ?? model.provider,
-          providerLabel: provider?.label ?? model.provider,
-          modelId: pm?.modelId ?? model.modelId,
-          modelLabel: pm?.label ?? null,
-          thinkingLevel: model.thinking,
-        }
+      resolveSlotModel(slot) {
+        const override = opts.slotOverrides?.[slot]
+        return override
+          ? resolveSlotModelFromRef(override)
+          : resolveSlotModel(plugin.id, slot)
       },
       isAgentStreaming(agentId) {
         if (lifecycle.get(agentId)?.session.isStreaming) return true
@@ -1443,15 +1476,17 @@ export function createRunService(options: RunServiceOptions) {
         runtimeDir: rtAbs,
         providers: providers(),
       })
-      const runProvider = providers().find(
-        (p) => p.label === (row.providerLabel ?? row.provider)
-      )
-      // Run-level sdkModel is used only by spawn children (classic spawn uses
-      // the run default). Best-effort: a dummy run row modelId (e.g. in tests)
-      // must not fail the whole restore — prepareAgent resolves each agent's
-      // model from its own snapshot.
-      const sdkModel = runProvider
-        ? resolveRunModel(modelRuntime, runProvider, row.modelId)
+      // Resolve the run default model (stored as a ref string) for spawn
+      // children + prompt context. Best-effort: an unresolvable stored ref must
+      // not fail the whole restore — prepareAgent resolves each agent's model
+      // from its own snapshot.
+      const defaultTarget = resolveModelTarget(row.model)
+      const sdkModel = defaultTarget
+        ? resolveRunModel(
+            modelRuntime,
+            defaultTarget.provider,
+            defaultTarget.model.id
+          )
         : undefined
 
       await createToolboxContainer(containerManager, {
@@ -1478,6 +1513,7 @@ export function createRunService(options: RunServiceOptions) {
       if (!challenge) {
         throw new RunActionError("not_found", "Challenge not found for restore")
       }
+      const modelDisplay = resolveModelDisplay(row.model)
       const promptContext = buildPromptContext(
         {
           runId,
@@ -1492,11 +1528,10 @@ export function createRunService(options: RunServiceOptions) {
             pidsLimit: row.pidsLimit,
           },
           model: {
-            provider: row.providerLabel ?? row.provider,
-            providerLabel: row.providerLabel ?? undefined,
-            modelId: row.modelId,
-            modelLabel: row.modelLabel ?? undefined,
-            thinkingLevel: row.thinkingLevel as ThinkingLevel,
+            provider: modelDisplay.provider,
+            modelId: modelDisplay.modelId,
+            modelLabel: modelDisplay.modelName,
+            thinkingLevel: modelDisplay.thinkingLevel,
           },
         },
         db,
@@ -1518,14 +1553,8 @@ export function createRunService(options: RunServiceOptions) {
         sessionsDir: sessionsAbs(runId),
         modelRuntime,
         sdkModel,
-        model: {
-          provider: row.providerLabel ?? row.provider,
-          providerLabel: row.providerLabel ?? undefined,
-          modelId: row.modelId,
-          modelLabel: row.modelLabel ?? undefined,
-          thinkingLevel: row.thinkingLevel as ThinkingLevel,
-        },
-        thinkingLevel: row.thinkingLevel as ThinkingLevel,
+        defaultModelRef: row.model,
+        thinkingLevel: modelDisplay.thinkingLevel,
         childTemplate:
           templateMap.get(plugin.spawn?.systemPrompt ?? "childSystem") ?? "",
         promptContext,
@@ -1534,23 +1563,15 @@ export function createRunService(options: RunServiceOptions) {
 
       const emitter = new RunEmitter()
       emitters.set(runId, emitter)
-      const defaultModel: ModelSnapshot = {
-        provider: row.provider,
-        providerLabel: row.providerLabel,
-        modelId: row.modelId,
-        modelLabel: row.modelLabel,
-        thinkingLevel: row.thinkingLevel as ThinkingLevel,
-      }
 
       const host = buildHandleHost({
         runId,
         scope: row.scopeType === "event" ? "event" : "challenge",
-        params: JSON.parse(row.params || "{}"),
+        plugin,
         ctx: promptContext,
         initialPrompt,
         templateMap,
         emitter,
-        defaultModel,
       })
       const handle = createRunHandle(host)
       await runSetup(plugin, handle)
@@ -1592,12 +1613,17 @@ export function createRunService(options: RunServiceOptions) {
     }
     const ctx = contexts.get(runId)!
 
-    // Resolve this agent's model from its own snapshot (per-agent; survives
+    // Resolve this agent's model from its own snapshot ref (per-agent; survives
     // switches). Cold-restore reuses the snapshot verbatim — no re-render.
-    const provider = providers().find((p) => p.label === agentRow.providerLabel)
-    const sdkModel = provider
-      ? resolveRunModel(ctx.modelRuntime, provider, agentRow.modelId)
-      : undefined
+    const agentTarget = resolveModelTarget(agentRow.model)
+    if (!agentTarget) {
+      throw new RunStartError("Could not resolve the agent's model for restore")
+    }
+    const sdkModel = resolveRunModel(
+      ctx.modelRuntime,
+      agentTarget.provider,
+      agentTarget.model.id
+    )
     if (!sdkModel) {
       throw new RunStartError("Could not resolve the agent's model for restore")
     }
@@ -1628,7 +1654,7 @@ export function createRunService(options: RunServiceOptions) {
         containerManager,
         modelRuntime: ctx.modelRuntime,
         model: sdkModel,
-        thinkingLevel: agentRow.thinkingLevel as ThinkingLevel,
+        thinkingLevel: agentTarget.thinkingLevel,
         agentSettings: agentSettings(),
         systemPrompt: agentRow.systemPrompt,
         extraTools: nativeTools,
@@ -1757,35 +1783,22 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
-  /** Resolve the global default model + container settings and launch a
-   * challenge run (direct start: scheduler start_run + queue drainer). */
+  /** Resolve container settings and launch a challenge run (direct start:
+   * scheduler start_run + queue drainer). Per-agent models come from the
+   * orchestration settings (computed inside create()). */
   async function resolveAndCreate(input: {
     challengeId: string
     orchestration: string
-    params?: Record<string, unknown>
     prompt?: string
     timeoutMs?: number | null
     source: "manual" | "scheduler"
     queueItemId?: string
   }): Promise<RunPublic> {
     const settings = options.getSettings()
-    const selected = resolveDefaultModel(get(settings, "agent.defaultModelId"))
-    if (!selected) {
-      throw new RunActionError(
-        "invalid_state",
-        "No enabled default model is configured"
-      )
-    }
     return create({
       scopeType: "challenge",
       challengeId: input.challengeId,
       orchestration: input.orchestration,
-      params: input.params,
-      provider: selected.provider,
-      modelId: selected.model.id,
-      thinkingLevel: normalizeThinkingLevel(
-        selected.thinkingLevel ?? get(settings, "agent.defaultThinkingLevel")
-      ),
       container: {
         image: get(settings, "container.image"),
         cpus: get(settings, "container.cpus"),
@@ -1953,39 +1966,22 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Start (or replace) the event's scheduler run from its config (spec §10
-   * scheduler/start). Resolves the configured model into the scheduler plugin's
-   * params snapshot; a fresh start replaces any previous closed scheduler run
-   * (newSession semantics handled by create). */
+   * scheduler/start). The orchestrator's model is the per-event
+   * `scheduler_config.modelId` override when set, else the global orchestration
+   * setting (`agentModels.scheduler.orchestrator`), else the global default —
+   * resolved inside create() via the slot override. A fresh start replaces any
+   * previous closed scheduler run (newSession semantics handled by create). */
   async function startScheduler(eventId: string): Promise<RunPublic> {
     const config = getSchedulerConfig(eventId)
     const settings = options.getSettings()
-    const selected = resolveDefaultModel(
-      config.modelId ?? get(settings, "agent.defaultModelId")
-    )
-    if (!selected) {
-      throw new RunActionError(
-        "invalid_state",
-        "Configure an enabled model for the scheduler"
-      )
-    }
-    const thinking = normalizeThinkingLevel(
-      selected.thinkingLevel ?? get(settings, "agent.defaultThinkingLevel")
-    )
     return create({
       scopeType: "event",
       eventId,
       instruction: config.instruction,
       orchestration: "scheduler",
-      params: {
-        model: {
-          provider: selected.provider.label,
-          modelId: selected.model.modelId,
-          thinking,
-        },
-      },
-      provider: selected.provider,
-      modelId: selected.model.id,
-      thinkingLevel: thinking,
+      slotModelOverrides: config.modelId
+        ? { orchestrator: config.modelId }
+        : undefined,
       container: {
         image: get(settings, "container.image"),
         cpus: get(settings, "container.cpus"),
@@ -2025,7 +2021,6 @@ export function createRunService(options: RunServiceOptions) {
       const run = await resolveAndCreate({
         challengeId: item.challengeId,
         orchestration: item.orchestration,
-        params: safeParseObject(item.params),
         prompt: item.prompt,
         timeoutMs: item.timeoutMs,
         source: item.source as "manual" | "scheduler",
@@ -2086,17 +2081,6 @@ function safeParseTools(raw: string): string[] {
       : []
   } catch {
     return []
-  }
-}
-
-function safeParseObject(raw: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {}
-  } catch {
-    return {}
   }
 }
 

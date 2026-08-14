@@ -6,7 +6,7 @@ import { agents, runs } from "../../src/db/schema"
 import type { CreateRunInput } from "../../src/run/service"
 import { createRunService } from "../../src/run/service"
 import {
-  flatSettings,
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -14,7 +14,6 @@ import {
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  toConnection,
 } from "../helpers"
 
 const containerInput = {
@@ -26,16 +25,10 @@ const containerInput = {
   workspace: "/workspace",
 }
 
-function baseCreateInput(
-  challengeId: string,
-  provider: CreateRunInput["provider"]
-) {
+function baseCreateInput(challengeId: string): CreateRunInput {
   return {
     scopeType: "challenge" as const,
     challengeId,
-    provider,
-    modelId: "model-1",
-    thinkingLevel: "off" as const,
     container: containerInput,
   }
 }
@@ -68,13 +61,11 @@ describe("runService.create", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost,
       })
 
-      const run = await runService.create(
-        baseCreateInput("ch-1", toConnection(provider))
-      )
+      const run = await runService.create(baseCreateInput("ch-1"))
       await runService.close()
 
       // Run row
@@ -82,7 +73,7 @@ describe("runService.create", () => {
       const row = db.select().from(runs).where(eq(runs.id, run.id)).get()
       expect(row).toBeDefined()
       expect(row?.challengeId).toBe("ch-1")
-      expect(row?.modelId).toBe("gpt-4o-mini")
+      expect(row?.model).toBe("openai/gpt-4o-mini:off")
       expect(row?.image).toBe(containerInput.image)
       expect(row?.containerName).toBe(`aegisx-run-${run.id}`)
 
@@ -149,13 +140,13 @@ describe("runService.create", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost,
       })
 
-      await expect(
-        runService.create(baseCreateInput("ch-1", toConnection(provider)))
-      ).rejects.toThrow("agent session boom")
+      await expect(runService.create(baseCreateInput("ch-1"))).rejects.toThrow(
+        "agent session boom"
+      )
       await runService.close()
 
       // The run row exists but is closed with the failure recorded.
@@ -200,11 +191,11 @@ describe("runService.create", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost: async () => stubHostAgentSession(),
       })
       await expect(
-        runService.create(baseCreateInput("missing", toConnection(provider)))
+        runService.create(baseCreateInput("missing"))
       ).rejects.toThrow("Challenge not found")
       await runService.close()
     } finally {

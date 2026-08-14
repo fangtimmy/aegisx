@@ -12,6 +12,7 @@ import {
   defaultSettings,
   extractLegacyPromptTemplates,
   type FlatSettings,
+  type ModelRef,
   migrateLegacySettings,
   type ModelAlias,
   type ProviderType,
@@ -49,11 +50,17 @@ export type ProviderData = {
   models: ProviderModelData[]
 }
 
+/** Per-orchestration, per-slot model refs: `{ [pluginId]: { [slot]: ModelRef } }`.
+ * A slot with no entry falls back to the global default model. Stored alongside
+ * providers/aliases in config.json (no DB table). */
+export type AgentModels = Record<string, Record<string, ModelRef>>
+
 export type ConfigData = {
   version: typeof CONFIG_DOCUMENT_VERSION
   settings: FlatSettings
   providers: ProviderData[]
   aliases: AliasData[]
+  agentModels: AgentModels
   updatedAt: string
 }
 
@@ -117,8 +124,29 @@ function defaultConfig(): ConfigData {
     settings,
     providers: defaultProviders(),
     aliases: [],
+    agentModels: {},
     updatedAt: now(),
   }
+}
+
+/** Coerce a raw agentModels value into a clean `{ plugin → { slot → ref } }`
+ * map, dropping any non-string refs. */
+function normalizeAgentModels(raw: unknown): AgentModels {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+  const result: AgentModels = {}
+  for (const [plugin, slots] of Object.entries(
+    raw as Record<string, unknown>
+  )) {
+    if (!slots || typeof slots !== "object" || Array.isArray(slots)) continue
+    const clean: Record<string, ModelRef> = {}
+    for (const [slot, ref] of Object.entries(
+      slots as Record<string, unknown>
+    )) {
+      if (typeof ref === "string" && ref.length > 0) clean[slot] = ref
+    }
+    if (Object.keys(clean).length > 0) result[plugin] = clean
+  }
+  return result
 }
 
 function normalizeModel(raw: unknown): ProviderModelData | undefined {
@@ -187,6 +215,7 @@ export function createConfigStore(dataDir: string) {
           settings: data.settings,
           providers: data.providers,
           aliases: data.aliases,
+          agentModels: data.agentModels,
           updatedAt: data.updatedAt,
         },
         null,
@@ -221,6 +250,7 @@ export function createConfigStore(dataDir: string) {
           settings: parseSettings(doc.settings),
           providers: normalizeProviders(doc.providers),
           aliases: parseAliases(doc.aliases),
+          agentModels: normalizeAgentModels(doc.agentModels),
           updatedAt:
             typeof doc.updatedAt === "string" && doc.updatedAt
               ? doc.updatedAt
@@ -235,6 +265,7 @@ export function createConfigStore(dataDir: string) {
           settings: migrateLegacySettings(doc.settings),
           providers: normalizeProviders(doc.providers),
           aliases: parseAliases(doc.aliases),
+          agentModels: normalizeAgentModels(doc.agentModels),
           updatedAt: now(),
         }
         save(migrated)
@@ -283,6 +314,9 @@ export function createConfigStore(dataDir: string) {
     getAliases(): AliasData[] {
       return data.aliases
     },
+    getAgentModels(): AgentModels {
+      return data.agentModels
+    },
     updateSettings(patch: Partial<FlatSettings> | unknown): FlatSettings {
       data = {
         ...data,
@@ -300,16 +334,22 @@ export function createConfigStore(dataDir: string) {
       data = { ...data, aliases, updatedAt: now() }
       save(data)
     },
+    updateAgentModels(agentModels: AgentModels): void {
+      data = { ...data, agentModels, updatedAt: now() }
+      save(data)
+    },
     replaceAll(
       settings: FlatSettings,
       providers: ProviderData[],
-      aliases: AliasData[] = data.aliases
+      aliases: AliasData[] = data.aliases,
+      agentModels: AgentModels = data.agentModels
     ): void {
       data = {
         version: CONFIG_DOCUMENT_VERSION,
         settings: parseSettings(settings),
         providers,
         aliases,
+        agentModels,
         updatedAt: now(),
       }
       save(data)
@@ -320,6 +360,7 @@ export function createConfigStore(dataDir: string) {
         settings: data.settings,
         providers: data.providers,
         aliases: data.aliases,
+        agentModels: data.agentModels,
       }
     },
     get path() {

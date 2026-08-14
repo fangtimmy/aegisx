@@ -1,14 +1,14 @@
-import type { ThinkingLevel } from "./thinking"
+import type { ModelRef } from "./model-ref"
 
 /**
- * Body for a runtime model switch (run main agent + per-event orchestrator).
- *
- * `modelId` is the `ProviderModel.id` (UUID) of the new model. `thinkingLevel`
- * is optional; the SDK clamps it to the new model's supported levels. Both
- * fields are persisted by the SDK as `model_change` / `thinking_level_change`
- * session entries, so the switch is visible in the timeline.
+ * Body for a runtime model switch (run entry agent + per-agent + event
+ * orchestrator). `model` is a canonical model ref string
+ * (`<providerKey>/<modelId>:<effort>` or `alias:<id>`) — the resolved provider
+ * + model + effort are snapshotted onto the agent row, and the SDK model is
+ * swapped on the live session. Both are persisted by the SDK as
+ * `model_change` / `thinking_level_change` session entries, so the switch is
+ * visible in the timeline.
  */
 export type SwitchModelInput = {
-  modelId: string
-  thinkingLevel?: ThinkingLevel
+  model: ModelRef
 }

@@ -1,17 +1,15 @@
 import type { PromptAttachment } from "@aegisx/shared"
+import type { ModelRef } from "@aegisx/shared/model-ref"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
-import { Type, type TSchema } from "typebox"
-
-import { ThinkingLevelSchema } from "../lib/schemas"
 
 /**
- * Orchestration plugin API (v8). A Run = one scope (challenge or event) + one
- * orchestration plugin + a shared container + N agents. The plugin owns the
- * agent layout: a single {@link OrchestrationPlugin.setup} runs for BOTH
- * create and cold-restore (the plugin cannot tell them apart), declaring agents
- * via {@link RunHandle.createAgent} and wiring triggers via {@link RunHandle.on}.
- * First-turn startup is expressed declaratively via {@link AgentSpec.prime}
- * (the system auto prepare()+send(prime) on fresh runs; restore ignores it).
+ * Orchestration plugin API (v8 + declarative slots). A Run = one scope
+ * (challenge or event) + one orchestration plugin + a shared container + N
+ * agents. The plugin DECLARES its agent layout via {@link PluginBase.agents}
+ * (slot / role / tools / system-prompt template key / prime); the system
+ * materializes those agents and injects each slot's model from the
+ * orchestration settings. The plugin only OWNS the event wiring
+ * ({@link ChallengePlugin.wire} / {@link EventPlugin.wire}).
  *
  * See `docs/orchestration-redesign.md` §三 (plugin API), §四 (lifecycle).
  */
@@ -49,10 +47,9 @@ export function deriveCapabilities(tools: string[]): Capabilities {
 /**
  * Unified render context. Scope-aware: `challenge` is present only for
  * challenge-scoped runs; `instruction` only for event-scoped (scheduler) runs.
- * `agent` and `capabilities` are per-agent — filled by {@link RunHandle.createAgent}
- * when rendering that agent's system prompt (capabilities derived from the
- * agent's tools). Field names match the built-in handlebars templates
- * (`canFinish`/`canSpawn` per spec §3.7).
+ * `agent` and `capabilities` are per-agent — filled when the system renders
+ * that agent's system prompt (capabilities derived from the agent's tools).
+ * Field names match the built-in handlebars templates.
  */
 export type PromptContext = {
   event: {
@@ -98,60 +95,52 @@ export type PromptContext = {
   /** event-scoped only (scheduler instruction). */
   instruction?: string
   /** event-scoped only: the challenge orchestrations the scheduler may launch
-   * (id/label/description/needsModels), so it never invents plugin names. */
+   * (id/label/description), so it never invents plugin names. */
   orchestrations?: OrchestrationInfo[]
 }
 
-// --- model reference ------------------------------------------------------
+// --- declarative agent slot ------------------------------------------------
 
-/** Typebox schema for a per-agent model reference (plugin `params` declare
- * models with this; `AgentSpec.model` accepts ModelRef literals). */
-export const ModelRefSchema = Type.Object(
-  {
-    provider: Type.String({ minLength: 1 }),
-    modelId: Type.String({ minLength: 1 }),
-    thinking: ThinkingLevelSchema,
-  },
-  { additionalProperties: false }
-)
-
-export type ModelRef = {
-  provider: string
-  modelId: string
-  thinking: ThinkingLevel
-}
-
-/** A persisted model snapshot (the run default or a per-agent override). */
-export type ModelSnapshot = {
-  provider: string
-  providerLabel: string | null
-  modelId: string
-  modelLabel: string | null
-  thinkingLevel: ThinkingLevel
-}
-
-// --- agent spec + handles (spec §3.2/§3.3) --------------------------------
-
-export type AgentSpec = {
+/** A plugin's declared agent slot. The system creates one agent per slot
+ * (createAgent slot-idempotent) for BOTH create and cold-restore, injecting
+ * the slot's model from the orchestration settings. The slot's `tools` may be
+ * a static list or a ctx-aware builder (e.g. conditional target tools). */
+export type AgentSlotSpec = {
   /** Run-unique createAgent idempotency key. */
   slot: string
   name: string
   /** Default = slot. 'orchestrator' reserved by convention. */
   role?: string
-  /** Prompt template KEY (e.g. "mainSystem"). createAgent renders it with this
-   * agent's per-agent capabilities (spec §3.7). Resolution order at render:
-   * current-plugin templates → builtin → throw. */
-  systemPrompt: string
-  /** Real tool names granted to this agent (file tools always on, not listed). */
-  tools: string[]
-  /** 'default' = the run's default model (snapshot at createAgent). */
-  model: "default" | ModelRef
-  /** First-turn startup text; the system prepare()+send(prime) on fresh runs.
-   * Ignored on restore. */
-  prime?: string
   /** Entry agent (run-level default conversation target); at most one per run. */
   entry?: boolean
+  /** Prompt template KEY (e.g. "mainSystem"). Rendered with this agent's
+   * per-agent capabilities (spec §3.7). Resolution order at render:
+   * current-plugin templates → builtin → throw. */
+  systemPrompt: string
+  /** Real tool names granted to this agent (file tools always on, not listed).
+   * A builder is invoked with the run's PromptContext so tools can be
+   * conditional on challenge/target support. */
+  tools: string[] | ((ctx: PromptContext) => string[])
+  /** true = use `run.initialPrompt` as this agent's first-turn prime (system
+   * prepare()+send(prime) on fresh runs; ignored on restore). */
+  prime?: boolean
 }
+
+/** A slot's resolved model — what the system injects from the orchestration
+ * settings at createAgent time. `ref` is persisted on the agent row (snapshot
+ * priority on cold-restore); the display fields feed the per-agent prompt
+ * context's `model` variable. */
+export type SlotModel = {
+  /** Canonical model ref string (`<providerKey>/<modelId>:<effort>` | alias). */
+  ref: ModelRef
+  thinkingLevel: ThinkingLevel
+  /** Display: provider label, model label, pi model id (prompt `model` var). */
+  providerLabel: string
+  modelLabel: string
+  modelId: string
+}
+
+// --- agent handles (spec §3.2/§3.3) ----------------------------------------
 
 export type AgentEvent =
   | "turnEnded"
@@ -205,17 +194,12 @@ export interface RunHandle<P = any> {
   readonly id: string
   readonly scope: "challenge" | "event"
   readonly ctx: PromptContext
-  readonly params: P
   /** Scope-aware rendered first-turn prompt. Manual/scheduler enqueue overrides
    * it via queue.prompt (P3); plugins express `prime: run.initialPrompt`. */
   readonly initialPrompt: string
   /** Render a template key against this run's context (current-plugin → builtin
    * → throw). Templates are loaded once into memory at handle construction. */
   render(templateKey: string, extraVars?: Partial<PromptContext>): string
-  /** Declare an agent (slot idempotent): first time persists the row with a
-   * systemPrompt/tools/model snapshot; restore reuses the existing row with
-   * snapshot priority. Does NOT create a session — prepare() materializes it. */
-  createAgent(spec: AgentSpec): AgentHandle
   agent(slot: string): AgentHandle
   readonly agents: AgentHandle[]
   /** Subscribe to ANY agent's events in this run. Returns an unsubscribe. */
@@ -240,10 +224,9 @@ export type SpawnTemplate = {
   /** Default 'child'. */
   role?: string
   /** Template key; rendered with the parent ctx + { agent: { role, name, task } }
-   * and capabilities zeroed (P2 refines; P1c routes via builtin childSystem). */
+   * and capabilities zeroed. */
   systemPrompt: string
   tools: string[]
-  model: "default" | ModelRef
 }
 
 // --- plugin definition (discriminated union on scope) ---------------------
@@ -254,8 +237,9 @@ interface PluginBase {
   label?: string
   /** One-line description for the picker / scheduler catalog. */
   description?: string
-  /** Input declaration (typebox); UI/enqueue render against it. */
-  params: TSchema
+  /** Declared agent layout — the system creates one agent per slot and injects
+   * each slot's model from the orchestration settings. */
+  agents: AgentSlotSpec[]
   /** Default template bodies, upserted at registration (only when no user edit
    * exists for (plugin,key)). */
   templates?: Record<string, string>
@@ -268,67 +252,87 @@ export type OrchestrationInfo = {
   id: string
   label: string
   description: string
-  /** Whether the plugin's params include model refs (so the scheduler knows
-   * it must not invent params — omit them to use defaults). */
-  needsModels: boolean
 }
 
-/** Whether a plugin's params schema contains any model-ref ({provider,modelId}).
- * Pure schema walk — shared by the scheduler catalog and the run-create form. */
-export function pluginNeedsModels(params: TSchema): boolean {
-  const isModelRef = (node: TSchema): boolean => {
-    if (!node || typeof node !== "object") return false
-    const props = (node as { properties?: Record<string, unknown> }).properties
-    return (
-      !!props &&
-      typeof props.provider === "object" &&
-      typeof props.modelId === "object"
-    )
-  }
-  const walk = (node: TSchema): boolean => {
-    if (!node || typeof node !== "object") return false
-    const n = node as {
-      type?: string
-      properties?: Record<string, TSchema>
-      items?: TSchema
-    }
-    if (n.type === "object" && n.properties) {
-      if (isModelRef(node as TSchema)) return true
-      return Object.values(n.properties).some(walk)
-    }
-    if (n.type === "array" && n.items) {
-      const items = n.items
-      const arr = node as { minItems?: number; maxItems?: number }
-      const count =
-        arr.maxItems !== undefined &&
-        arr.minItems !== undefined &&
-        arr.maxItems === arr.minItems
-          ? arr.maxItems
-          : (arr.minItems ?? 1)
-      return count > 0 && walk(items)
-    }
-    return false
-  }
-  return walk(params)
+// --- public introspection (GET /api/orchestrations, settings page) ---------
+
+/** A declared slot, as exposed for the settings page / create-run picker. */
+export type OrchestrationSlotInfo = {
+  slot: string
+  role: string
+  name: string
+  entry: boolean
 }
 
-export interface ChallengePlugin<P = any> extends PluginBase {
+/** Full public descriptor of a plugin: its slots + the prompt-template keys it
+ * uses (own registered defaults + builtin keys its slots/spawn/initial
+ * reference), so the orchestration-settings page can render a model picker per
+ * slot and a prompt-editor dialog per template key. */
+export type OrchestrationPublic = {
+  id: string
+  scope: "challenge" | "event"
+  label: string
+  description: string
+  agents: OrchestrationSlotInfo[]
+  templates: Record<string, string>
+  templateKeys: string[]
+}
+
+/** Template keys a plugin references: every slot's system prompt, the spawn
+ * template, the always-rendered `initial`, plus its own registered defaults. */
+export function pluginTemplateKeys(plugin: {
+  agents: AgentSlotSpec[]
+  spawn?: SpawnTemplate
+  templates?: Record<string, string>
+}): string[] {
+  const keys = new Set<string>(["initial"])
+  for (const agent of plugin.agents) keys.add(agent.systemPrompt)
+  if (plugin.spawn?.systemPrompt) keys.add(plugin.spawn.systemPrompt)
+  if (plugin.templates)
+    for (const key of Object.keys(plugin.templates)) keys.add(key)
+  return [...keys]
+}
+
+/** Project a plugin to its public descriptor. */
+export function toOrchestrationPublic(
+  plugin: OrchestrationPlugin
+): OrchestrationPublic {
+  return {
+    id: plugin.id,
+    scope: plugin.scope,
+    label: plugin.label ?? plugin.id,
+    description: plugin.description ?? "",
+    agents: plugin.agents.map((agent) => ({
+      slot: agent.slot,
+      role: agent.role ?? agent.slot,
+      name: agent.name,
+      entry: !!agent.entry,
+    })),
+    templates: { ...plugin.templates },
+    templateKeys: pluginTemplateKeys(plugin),
+  }
+}
+
+export interface ChallengePlugin extends PluginBase {
   scope: "challenge"
-  setup(run: RunHandle<P>): void | Promise<void>
+  /** Event wiring only — createAgent is automatic from `agents`. Runs for both
+   * create and cold-restore (the plugin cannot tell them apart). */
+  wire?(run: RunHandle): void | Promise<void>
 }
 
-export interface EventPlugin<P = any> extends PluginBase {
+export interface EventPlugin extends PluginBase {
   scope: "event"
-  setup(run: RunHandle<P>, event: EventHandle): void | Promise<void>
+  /** Event wiring only; receives the EventHandle for child-run lifecycle. */
+  wire?(run: RunHandle, event: EventHandle): void | Promise<void>
 }
 
-export type OrchestrationPlugin<P = any> = ChallengePlugin<P> | EventPlugin<P>
+export type OrchestrationPlugin = ChallengePlugin | EventPlugin
 
 /** Identity helper: registers a plugin literal and narrows its type. The
- * discriminated union on `scope` makes a challenge plugin's `setup(run)` vs an
- * event plugin's `setup(run, event)` a compile-time distinction. */
-export function defineOrchestration<P>(
-  plugin: OrchestrationPlugin<P>
-): OrchestrationPlugin<P> {
+ * discriminated union on `scope` makes a challenge plugin's `wire(run)` vs an
+ * event plugin's `wire(run, event)` a compile-time distinction. */
+export function defineOrchestration(
+  plugin: OrchestrationPlugin
+): OrchestrationPlugin {
   return plugin
 }

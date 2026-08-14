@@ -385,7 +385,6 @@ export function createSchedulerTools(
             ...(params.orchestration
               ? { orchestration: params.orchestration }
               : {}),
-            ...(params.params ? { params: params.params } : {}),
             ...(params.prompt ? { prompt: params.prompt } : {}),
             ...(params.timeout_ms ? { timeoutMs: params.timeout_ms } : {}),
           })

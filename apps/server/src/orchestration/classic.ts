@@ -1,5 +1,3 @@
-import { Type } from "typebox"
-
 import { solverTools } from "./common"
 import { defineOrchestration } from "./types"
 
@@ -14,26 +12,23 @@ import { defineOrchestration } from "./types"
  * injected into the rendered `mainSystem` prompt — so a non-platform run's
  * prompt advertises no flag capability, identical to before.
  *
- * The spec's §7.1 literal shows a fixed full tool array; that is simplified.
- * The conditional assembly here preserves single-solver parity (the explicit
- * P1c goal) while keeping capabilities tool-derived.
+ * The solver's model comes from the orchestration settings
+ * (`agentModels.classic.solver`), falling back to the global default.
  */
 export default defineOrchestration({
   id: "classic",
   label: "Classic",
   description: "单个求解者，适合大多数题目。",
   scope: "challenge",
-  params: Type.Object({}),
-  setup(run) {
-    run.createAgent({
+  agents: [
+    {
       slot: "solver",
       name: "Solver",
       entry: true,
       systemPrompt: "mainSystem",
-      tools: solverTools(run.ctx),
-      model: "default",
-      prime: run.initialPrompt,
-    })
-  },
-  spawn: { systemPrompt: "childSystem", tools: [], model: "default" },
+      tools: solverTools,
+      prime: true,
+    },
+  ],
+  spawn: { systemPrompt: "childSystem", tools: [] },
 })

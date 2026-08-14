@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm"
 import { agents, runs } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
-  flatSettings,
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -14,7 +14,7 @@ import {
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  toConnection,
+  TEST_MODEL_REF,
 } from "../helpers"
 
 const containerInput = {
@@ -26,10 +26,12 @@ const containerInput = {
   workspace: "/workspace",
 }
 
-const MODEL = {
-  provider: "Test Provider",
-  modelId: "model-1",
-  thinking: "off" as const,
+/** Per-slot model refs for trio (one model, three reasoning levels) — the
+ * typical trio setup, now expressed as slot overrides instead of params. */
+const TRIO_SLOT_REFS = {
+  "solver-a": `${TEST_MODEL_REF}:off`,
+  "solver-b": `${TEST_MODEL_REF}:low`,
+  "solver-c": `${TEST_MODEL_REF}:high`,
 }
 
 type Db = ReturnType<typeof setupDb>
@@ -58,7 +60,7 @@ function makeService(
       }),
     } as never,
     configStore: stubConfigStore([provider]),
-    getSettings: flatSettings,
+    getSettings: flatSettingsWithDefaultModel,
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
         hang,
@@ -91,16 +93,7 @@ describe("multi-agent orchestration (service level)", () => {
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         orchestration: "trio",
-        params: {
-          models: [
-            MODEL,
-            { ...MODEL, thinking: "low" },
-            { ...MODEL, thinking: "high" },
-          ],
-        },
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
+        slotModelOverrides: TRIO_SLOT_REFS,
         container: containerInput,
       })
 
@@ -117,7 +110,12 @@ describe("multi-agent orchestration (service level)", () => {
         "solver-c",
       ])
       expect(rows.filter((a) => a.isEntry)).toHaveLength(1)
-      expect(rows.map((a) => a.thinkingLevel)).toEqual(["off", "low", "high"])
+      // Each agent snapshots its own model ref (effort suffix per slot).
+      expect(rows.map((a) => a.model)).toEqual([
+        TRIO_SLOT_REFS["solver-a"],
+        TRIO_SLOT_REFS["solver-b"],
+        TRIO_SLOT_REFS["solver-c"],
+      ])
       // All three prime the initial prompt (hang sessions → still running).
       expect(rows.map((a) => a.status)).toEqual([
         "running",
@@ -142,10 +140,6 @@ describe("multi-agent orchestration (service level)", () => {
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         orchestration: "observer-solver",
-        params: { observerModel: MODEL },
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
 
@@ -183,9 +177,6 @@ describe("multi-agent orchestration (service level)", () => {
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         orchestration: "bootstrap-solver",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
 
@@ -221,11 +212,7 @@ describe("multi-agent orchestration (service level)", () => {
         scopeType: "event" as const,
         eventId: "evt-1",
         orchestration: "scheduler",
-        params: { model: MODEL },
         instruction: "",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
 
@@ -267,11 +254,7 @@ describe("multi-agent orchestration (service level)", () => {
         scopeType: "event" as const,
         eventId: "evt-1",
         orchestration: "scheduler",
-        params: { model: MODEL },
         instruction: "",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
 
@@ -310,11 +293,7 @@ describe("multi-agent orchestration (service level)", () => {
           scopeType: "event" as const,
           eventId: "evt-1",
           orchestration: "scheduler",
-          params: { model: MODEL },
           instruction: "",
-          provider: toConnection(provider),
-          modelId: "model-1",
-          thinkingLevel: "off",
           container: containerInput,
         })
       ).rejects.toThrow(/already active/)
@@ -336,16 +315,7 @@ describe("multi-agent orchestration (service level)", () => {
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         orchestration: "trio",
-        params: {
-          models: [
-            MODEL,
-            { ...MODEL, thinking: "low" },
-            { ...MODEL, thinking: "high" },
-          ],
-        },
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
+        slotModelOverrides: TRIO_SLOT_REFS,
         container: containerInput,
       })
 

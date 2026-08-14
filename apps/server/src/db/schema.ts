@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 8
+export const SCHEMA_VERSION = 9
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -154,12 +154,10 @@ export const runs = sqliteTable(
     workspacePath: text("workspace_path").notNull(),
     /** SessionManager root dir relative to dataDir (data/runs/<id>/sessions). */
     sessionDir: text("session_dir").notNull(),
-    // Default model snapshot (per-agent model on `agents` may override)
-    provider: text("provider").notNull(),
-    providerLabel: text("provider_label"),
-    modelId: text("model_id").notNull(),
-    modelLabel: text("model_label"),
-    thinkingLevel: text("thinking_level").notNull().default("off"),
+    /** Canonical model ref string (`<providerKey>/<modelId>:<effort>` | alias).
+     * The run default model — spawn children fall back to it; per-agent models
+     * on `agents` override. Resolved to a provider+model at use time. */
+    model: text("model").notNull(),
     // Challenge-domain scheduling metadata
     source: text("source").notNull().default("manual"),
     timeoutMs: integer("timeout_ms"),
@@ -230,12 +228,10 @@ export const agents = sqliteTable(
     /** Entry agent flag (run-level default conversation target). At most one
      * per run (partial unique index). */
     isEntry: integer("is_entry", { mode: "boolean" }).notNull().default(false),
-    // Model snapshot (per-agent; overrides the run default)
-    provider: text("provider").notNull(),
-    providerLabel: text("provider_label"),
-    modelId: text("model_id").notNull(),
-    modelLabel: text("model_label"),
-    thinkingLevel: text("thinking_level").notNull().default("off"),
+    /** Canonical model ref string (`<providerKey>/<modelId>:<effort>` | alias).
+     * Per-agent snapshot — createAgent writes it once; cold-restore reuses it
+     * verbatim (per-agent model switches survive). */
+    model: text("model").notNull(),
     // Prompt + tools snapshot (createAgent writes once; cold-restore reuses)
     systemPrompt: text("system_prompt").notNull(),
     /** JSON array of real tool names (file tools always on, not listed). */
@@ -379,7 +375,10 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
   eventId: text("event_id")
     .primaryKey()
     .references(() => events.id, { onDelete: "cascade" }),
-  /** ProviderModel.id; null = fall back to the global default model. */
+  /** Per-event scheduler model override (canonical model ref string
+   * `<providerKey>/<modelId>:<effort>` | alias); null = fall back to the global
+   * orchestration setting (`agentModels.scheduler.orchestrator`) then the
+   * global default model. */
   modelId: text("model_id"),
   /** Natural-language steering ("hit crypto first, leave pwn for last"). */
   instruction: text("instruction").notNull().default(""),

@@ -6,7 +6,7 @@ import type { AgentHostInput } from "../../src/agents/host"
 import { agents, runs } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
-  flatSettings,
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -100,7 +100,7 @@ describe("run lifecycle (v8)", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost,
       })
 
@@ -142,7 +142,7 @@ describe("run lifecycle (v8)", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost,
       })
 
@@ -187,7 +187,7 @@ describe("run lifecycle (v8)", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost,
       })
 
@@ -218,9 +218,7 @@ describe("run lifecycle (v8)", () => {
           slot: "solver",
           role: "solver",
           isEntry: true,
-          provider: "Test Provider",
-          modelId: "test-model",
-          thinkingLevel: "off",
+          model: "openai/gpt-4o-mini:off",
           systemPrompt: "sp",
           tools: "[]",
           status: "running",
@@ -244,7 +242,7 @@ describe("run lifecycle (v8)", () => {
           }),
         } as never,
         configStore: stubConfigStore([makeProvider()]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost: async () => stubHostAgentSession(),
       })
 
@@ -278,11 +276,7 @@ describe("run lifecycle (v8)", () => {
           slot: "solver",
           role: "solver",
           isEntry: true,
-          provider: "Test Provider",
-          providerLabel: "Test Provider",
-          modelId: "gpt-4o-mini",
-          modelLabel: "Test Model",
-          thinkingLevel: "off",
+          model: "openai/gpt-4o-mini:off",
           systemPrompt: "EDITED-SNAPSHOT-PROMPT",
           tools: JSON.stringify(["finish_run", "submit_flag"]),
           status: "idle",
@@ -313,7 +307,7 @@ describe("run lifecycle (v8)", () => {
           }),
         } as never,
         configStore: stubConfigStore([makeProvider()]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost,
       })
 

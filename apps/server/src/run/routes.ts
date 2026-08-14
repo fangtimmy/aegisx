@@ -1,9 +1,11 @@
+import { resolveModelRef } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 import type { Context, Hono } from "hono"
 import { Type } from "typebox"
 
 import type { createDatabase } from "../db"
 import { challenges } from "../db/schema"
+import type { ConfigStore } from "../infrastructure/config-store"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import {
@@ -11,9 +13,11 @@ import {
   WorkspaceFileError,
   workspaceDownload,
 } from "../infrastructure/workspace-files"
-import { EmptyInputSchema, ThinkingLevelSchema } from "../lib/schemas"
-import { listPlugins } from "../orchestration/registry"
+import { EmptyInputSchema } from "../lib/schemas"
+import { listPlugins, requirePlugin } from "../orchestration/registry"
+import { toOrchestrationPublic } from "../orchestration/types"
 import { platformActionHttpError } from "../platforms/errors"
+import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
 import type { RunService } from "./service"
 import { streamRun } from "./sse"
@@ -21,12 +25,11 @@ import { streamRun } from "./sse"
 type Database = ReturnType<typeof createDatabase>["db"]
 
 /** Manual enqueue body (spec §10: POST /api/challenges/:id/runs enqueues,
- * returns a queue item). Model/container come from global defaults at launch. */
+ * returns a queue item). Models come from the orchestration settings at
+ * launch; the first-turn prompt may be overridden. */
 const runInput = Type.Object(
   {
     orchestration: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-    /** Plugin input snapshot (validated against the plugin's params schema). */
-    params: Type.Optional(Type.Unknown()),
     /** Overrides the rendered `initial` template as the run's first prompt. */
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
@@ -44,11 +47,10 @@ const finishInput = Type.Object(
   { additionalProperties: false }
 )
 
+/** Model-switch body: a canonical model ref string
+ * (`<providerKey>/<modelId>:<effort>` or `alias:<id>`). */
 const switchModelInput = Type.Object(
-  {
-    modelId: Type.String({ minLength: 1, maxLength: 200 }),
-    thinkingLevel: Type.Optional(ThinkingLevelSchema),
-  },
+  { model: Type.String({ minLength: 1, maxLength: 300 }) },
   { additionalProperties: false }
 )
 
@@ -83,9 +85,10 @@ export function registerRunRoutes(
     db: Database
     dataDir: string
     runService: RunService
+    configStore: ConfigStore
   }
 ) {
-  const { db, runService } = options
+  const { db, runService, configStore } = options
 
   app.post(
     "/api/challenges/:challengeId/runs",
@@ -108,7 +111,6 @@ export function registerRunRoutes(
           eventId: challenge.eventId,
           challengeId,
           orchestration: input.orchestration ?? "classic",
-          params: input.params as Record<string, unknown> | undefined,
           prompt: input.prompt,
           timeoutMs: input.timeoutMs,
           source: "manual",
@@ -124,17 +126,10 @@ export function registerRunRoutes(
     }
   )
 
-  /** Orchestration plugin registry (id, scope, params schema, templates) — the
-   * create-run dialog renders against it (spec §10). */
+  /** Orchestration plugin registry (id, scope, agents, templates) — the
+   * orchestration-settings page + create-run picker render against it. */
   app.get("/api/orchestrations", (c) =>
-    c.json({
-      items: listPlugins().map((plugin) => ({
-        id: plugin.id,
-        scope: plugin.scope,
-        params: plugin.params,
-        templates: plugin.templates ?? {},
-      })),
-    })
+    c.json({ items: listPlugins().map(toOrchestrationPublic) })
   )
 
   app.get("/api/runs/:runId", (c) => {
@@ -229,10 +224,7 @@ export function registerRunRoutes(
         const body = c.req.valid("json")
         return c.json(
           await runService.switchAgentModel(c.req.param("agentId"), {
-            modelId: body.modelId,
-            ...(body.thinkingLevel !== undefined
-              ? { thinkingLevel: body.thinkingLevel }
-              : {}),
+            model: body.model,
           })
         )
       } catch (error) {
@@ -307,10 +299,7 @@ export function registerRunRoutes(
         const body = c.req.valid("json")
         return c.json(
           await runService.switchModel(c.req.param("runId"), {
-            modelId: body.modelId,
-            ...(body.thinkingLevel !== undefined
-              ? { thinkingLevel: body.thinkingLevel }
-              : {}),
+            model: body.model,
           })
         )
       } catch (error) {
@@ -397,6 +386,90 @@ export function registerRunRoutes(
       return runError(c, error)
     }
   })
+
+  // --- orchestration settings (per-plugin, per-slot model refs) -------------
+
+  /** Validate that a model ref resolves to an enabled provider+model (or a
+   * configured alias). Throws with a user-facing message otherwise. */
+  function requireResolvableRef(ref: string): void {
+    const target = resolveModelRef(
+      ref,
+      getProviderConnections(configStore),
+      configStore.getAliases()
+    )
+    if (!target) {
+      throw new RunActionError("invalid_state", `Unknown model "${ref}"`)
+    }
+  }
+
+  /** GET /api/orchestration-config — every plugin with its declared slots and
+   * the currently-configured model ref per slot (null = global default). */
+  app.get("/api/orchestration-config", (c) => {
+    const configured = configStore.getAgentModels()
+    return c.json({
+      items: listPlugins().map((plugin) => ({
+        ...toOrchestrationPublic(plugin),
+        agents: plugin.agents.map((agent) => ({
+          slot: agent.slot,
+          role: agent.role ?? agent.slot,
+          name: agent.name,
+          entry: !!agent.entry,
+          model: configured[plugin.id]?.[agent.slot] ?? null,
+        })),
+      })),
+    })
+  })
+
+  const slotModelPatchInput = Type.Object(
+    {
+      /** slot → model ref. A null value clears the slot (fall back to the
+       * global default). */
+      slots: Type.Record(
+        Type.String(),
+        Type.Union([Type.String(), Type.Null()])
+      ),
+    },
+    { additionalProperties: false }
+  )
+
+  /** PATCH /api/orchestration-config/:pluginId — set one or more slot model
+   * refs for a plugin. Validates each non-null ref resolves. */
+  app.patch(
+    "/api/orchestration-config/:pluginId",
+    validateJson(slotModelPatchInput),
+    (c) => {
+      const plugin = requirePlugin(c.req.param("pluginId"))
+      const body = c.req.valid("json")
+      const knownSlots = new Set(plugin.agents.map((agent) => agent.slot))
+      const agentModels = { ...configStore.getAgentModels() }
+      const current = { ...agentModels[plugin.id] }
+      try {
+        for (const [slot, ref] of Object.entries(body.slots)) {
+          if (!knownSlots.has(slot)) {
+            throw new RunActionError(
+              "invalid_state",
+              `Plugin '${plugin.id}' has no slot '${slot}'`
+            )
+          }
+          if (ref === null || ref === "") {
+            delete current[slot]
+          } else {
+            requireResolvableRef(ref)
+            current[slot] = ref
+          }
+        }
+      } catch (error) {
+        return runError(c, error)
+      }
+      if (Object.keys(current).length > 0) {
+        agentModels[plugin.id] = current
+      } else {
+        delete agentModels[plugin.id]
+      }
+      configStore.updateAgentModels(agentModels)
+      return c.json({ [plugin.id]: current })
+    }
+  )
 }
 
 function runError(c: Context, error: unknown) {

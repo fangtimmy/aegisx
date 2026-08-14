@@ -5,6 +5,7 @@ import {
   parseAliases,
   parseSettings,
   patchSettings,
+  resolveModelRef,
 } from "@aegisx/shared"
 import { asc } from "drizzle-orm"
 import type { Hono } from "hono"
@@ -25,6 +26,7 @@ import {
   normalizeModelMetadata,
   parseModelMetadata,
 } from "../providers/builtin-models"
+import { getProviderConnections } from "../providers/public"
 import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
@@ -226,20 +228,15 @@ export function registerSettingsRoutes(
             "Default model id is invalid"
           )
         }
-        // An alias ref must reference a configured alias; a raw id must
-        // reference a configured provider model.
-        if (isAliasRef(modelId)) {
-          const aliasId = modelId.slice("alias:".length)
-          if (!configStore.getAliases().some((a) => a.id === aliasId)) {
-            return notFound(c, "Default model alias not found")
-          }
-        } else {
-          const exists = configStore
-            .getProviders()
-            .some((p) => p.models.some((m) => m.id === modelId))
-          if (!exists) {
-            return notFound(c, "Default model not found")
-          }
+        // The default model is a canonical ref string (`<key>/<id>:<effort>`
+        // or `alias:<id>`); it must resolve to an enabled provider+model.
+        const target = resolveModelRef(
+          modelId,
+          getProviderConnections(configStore),
+          configStore.getAliases()
+        )
+        if (!target) {
+          return notFound(c, "Default model not found")
         }
       }
     }
@@ -409,9 +406,10 @@ export function registerSettingsRoutes(
               "Default model alias not found in imported configuration"
             )
           }
-        } else if (!modelIds.has(defaultModelId)) {
-          throw new Error("Default model not found in imported configuration")
         }
+        // Concrete default-model refs (`<key>/<id>:<effort>`) are validated at
+        // use time against the imported providers; importing cannot cheaply
+        // rebuild the pi provider keys, so only alias refs are checked here.
       }
       configStore.replaceAll(settings, newProviders, importedAliases)
       syncModels()

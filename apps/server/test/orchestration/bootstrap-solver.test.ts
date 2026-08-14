@@ -45,7 +45,7 @@ function runSetup(): {
   const host: RunHandleHost = {
     runId: "run-1",
     scope: "challenge",
-    params: {},
+    agents: bootstrapSolver.agents,
     ctx: baseCtx,
     initialPrompt: "INITIAL",
     templateMap: new Map([
@@ -65,12 +65,12 @@ function runSetup(): {
       created.push(input)
       return `a-${created.length}`
     },
-    resolveAgentModel: () => ({
-      provider: "P",
-      providerLabel: "P",
-      modelId: "m",
-      modelLabel: "M",
+    resolveSlotModel: () => ({
+      ref: "P/m:off",
       thinkingLevel: "off",
+      providerLabel: "P",
+      modelLabel: "M",
+      modelId: "m",
     }),
     isAgentStreaming: () => false,
     prepareAgent: async () => {},
@@ -83,7 +83,7 @@ function runSetup(): {
   if (bootstrapSolver.scope !== "challenge") {
     throw new Error("bootstrap-solver must be challenge-scoped")
   }
-  void bootstrapSolver.setup(handle)
+  void bootstrapSolver.wire?.(handle)
   return { created, sends, emitter }
 }
 

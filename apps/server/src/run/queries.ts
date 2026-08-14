@@ -29,6 +29,7 @@ import {
   toAgentSummary,
   toFlagPublic,
   toRunPublic,
+  type RunModelDisplay,
 } from "./public"
 
 /** Group flags by their originating run id (runId-sourced flags only). */
@@ -58,8 +59,15 @@ type Database = ReturnType<typeof createDatabase>["db"]
 
 export type RunQueries = ReturnType<typeof createRunQueries>
 
-export function createRunQueries(options: { db: Database; dataDir: string }) {
-  const { db, dataDir } = options
+export function createRunQueries(options: {
+  db: Database
+  dataDir: string
+  /** Derive the run model display (provider/modelId/modelName/thinkingLevel)
+   * from the run row's `model` ref string. Needs the provider list — supplied by
+   * the service. */
+  resolveModelDisplay: (ref: string) => RunModelDisplay
+}) {
+  const { db, dataDir, resolveModelDisplay } = options
 
   function challengeMeta(
     challengeId: string | null
@@ -83,7 +91,13 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
     row: typeof runs.$inferSelect,
     flags: ChallengeFlag[] = []
   ): RunPublic {
-    return toRunPublic(row, challengeMeta(row.challengeId), flags)
+    return toRunPublic(
+      row,
+      challengeMeta(row.challengeId),
+      flags,
+      undefined,
+      resolveModelDisplay(row.model)
+    )
   }
 
   function get(runId: string): RunPublic | undefined {
@@ -100,7 +114,8 @@ export function createRunQueries(options: { db: Database; dataDir: string }) {
       row,
       challengeMeta(row.challengeId),
       flags,
-      usageTotals(runId)
+      usageTotals(runId),
+      resolveModelDisplay(row.model)
     )
   }
 

@@ -7,7 +7,11 @@ import {
   type FreshAgentInput,
   type RunHandleHost,
 } from "../../src/orchestration/run-handle"
-import type { PromptContext } from "../../src/orchestration/types"
+import type {
+  AgentSlotSpec,
+  PromptContext,
+  SlotModel,
+} from "../../src/orchestration/types"
 
 type AgentRow = typeof agents.$inferSelect
 
@@ -42,18 +46,27 @@ const baseCtx: PromptContext = {
   },
 }
 
+const fixedSlotModel: SlotModel = {
+  ref: "p/m:off",
+  thinkingLevel: "off",
+  providerLabel: "P",
+  modelLabel: "M",
+  modelId: "m",
+}
+
 function fakeHost(opts: {
   ctx?: PromptContext
   initialPrompt?: string
   templateMap?: Map<string, string>
   existing?: Record<string, { id: string; role: string }>
+  agents: AgentSlotSpec[]
+  resolveSlotModel?: (slot: string) => SlotModel
 }): { host: RunHandleHost; created: FreshAgentInput[] } {
   const created: FreshAgentInput[] = []
   const existing = new Map(Object.entries(opts.existing ?? {}))
   const host: RunHandleHost = {
     runId: "run-1",
     scope: "challenge",
-    params: {},
     ctx: opts.ctx ?? baseCtx,
     initialPrompt: opts.initialPrompt ?? "GO",
     templateMap:
@@ -65,27 +78,13 @@ function fakeHost(opts: {
         ],
       ]),
     emitter: new RunEmitter(),
+    agents: opts.agents,
     findAgentBySlot: (slot) => existing.get(slot) as AgentRow | undefined,
     createFreshAgent: (input) => {
       created.push(input)
       return `a-${created.length}`
     },
-    resolveAgentModel: (m) =>
-      m === "default"
-        ? {
-            provider: "P",
-            providerLabel: "P",
-            modelId: "m",
-            modelLabel: "M",
-            thinkingLevel: "off",
-          }
-        : {
-            provider: m.provider,
-            providerLabel: m.provider,
-            modelId: m.modelId,
-            modelLabel: null,
-            thinkingLevel: m.thinking,
-          },
+    resolveSlotModel: opts.resolveSlotModel ?? (() => fixedSlotModel),
     isAgentStreaming: () => false,
     prepareAgent: async () => {},
     sendToAgent: async () => {},
@@ -94,19 +93,21 @@ function fakeHost(opts: {
   return { host, created }
 }
 
-describe("createRunHandle / createAgent (spec §3.2/§4.3)", () => {
-  test("fresh: persists snapshot, renders systemPrompt with per-agent caps, tracks prime", () => {
-    const { host, created } = fakeHost({})
-    const handle = createRunHandle(host)
-    handle.createAgent({
-      slot: "solver",
-      name: "Solver",
-      entry: true,
-      systemPrompt: "mainSystem",
-      tools: ["finish_run", "submit_flag"],
-      model: "default",
-      prime: "GO",
+describe("createRunHandle (declarative slots, spec §3.2/§4.3)", () => {
+  test("fresh: materializes declared agents, renders per-agent caps, tracks prime", () => {
+    const { host, created } = fakeHost({
+      agents: [
+        {
+          slot: "solver",
+          name: "Solver",
+          entry: true,
+          systemPrompt: "mainSystem",
+          tools: ["finish_run", "submit_flag"],
+          prime: true,
+        },
+      ],
     })
+    const handle = createRunHandle(host)
 
     expect(created).toHaveLength(1)
     const agent = created[0]!
@@ -114,6 +115,7 @@ describe("createRunHandle / createAgent (spec §3.2/§4.3)", () => {
     expect(agent.role).toBe("solver")
     expect(agent.isEntry).toBe(true)
     expect(agent.tools).toEqual(["finish_run", "submit_flag"])
+    expect(agent.model).toBe("p/m:off")
     // capabilities derived from the tool list injected into the render.
     expect(agent.systemPrompt).toBe("PROMPT Solver flag=true finish=true")
     expect(handle.primeSpecs).toEqual([
@@ -122,54 +124,51 @@ describe("createRunHandle / createAgent (spec §3.2/§4.3)", () => {
   })
 
   test("fresh: caps derived from tools, not from run-level ctx", () => {
-    // Run-level ctx advertises canSubmitFlag=true, but this agent has no
-    // submit_flag tool → rendered prompt must show flag=false.
-    const { host, created } = fakeHost({})
-    const handle = createRunHandle(host)
-    handle.createAgent({
-      slot: "probe",
-      name: "Probe",
-      systemPrompt: "mainSystem",
-      tools: ["finish_run"], // no submit_flag
-      model: "default",
+    const { host, created } = fakeHost({
+      agents: [
+        {
+          slot: "probe",
+          name: "Probe",
+          systemPrompt: "mainSystem",
+          tools: ["finish_run"], // no submit_flag
+        },
+      ],
     })
+    createRunHandle(host)
     expect(created[0]!.systemPrompt).toBe("PROMPT Probe flag=false finish=true")
   })
 
   test("restore: reuses existing row (snapshot priority), does NOT re-persist", () => {
     const { host, created } = fakeHost({
       existing: { solver: { id: "existing-1", role: "solver" } },
+      agents: [
+        {
+          slot: "solver",
+          name: "Solver",
+          entry: true,
+          systemPrompt: "mainSystem", // ignored on restore
+          tools: ["finish_run"], // ignored on restore
+          prime: true,
+        },
+      ],
     })
     const handle = createRunHandle(host)
-    const agent = handle.createAgent({
-      slot: "solver",
-      name: "Solver",
-      entry: true,
-      systemPrompt: "mainSystem", // ignored on restore
-      tools: ["finish_run"], // ignored on restore
-      model: "default",
-      prime: "GO",
-    })
-    // No fresh insert happened.
+    // No fresh insert happened (snapshot priority).
     expect(created).toHaveLength(0)
     // The existing id/role are reused.
-    expect(agent.id).toBe("existing-1")
-    expect(agent.role).toBe("solver")
-    // prime is still collected; the SERVICE ignores it on restore (verified by
-    // the lifecycle cold-restore test not re-driving).
+    expect(handle.agent("solver").id).toBe("existing-1")
+    expect(handle.agent("solver").role).toBe("solver")
+    // prime is still collected; the SERVICE ignores it on restore.
     expect(handle.primeSpecs.map((p) => p.agentId)).toContain("existing-1")
   })
 
   test("agent(slot) / agents return declared handles; unknown slot throws", () => {
-    const { host } = fakeHost({})
-    const handle = createRunHandle(host)
-    handle.createAgent({
-      slot: "solver",
-      name: "S",
-      systemPrompt: "mainSystem",
-      tools: [],
-      model: "default",
+    const { host } = fakeHost({
+      agents: [
+        { slot: "solver", name: "S", systemPrompt: "mainSystem", tools: [] },
+      ],
     })
+    const handle = createRunHandle(host)
     expect(handle.agent("solver").slot).toBe("solver")
     expect(handle.agents).toHaveLength(1)
     expect(() => handle.agent("nope")).toThrow(
@@ -177,9 +176,33 @@ describe("createRunHandle / createAgent (spec §3.2/§4.3)", () => {
     )
   })
 
+  test("tools builder receives the run context (conditional target tools)", () => {
+    const seen: boolean[] = []
+    const { host, created } = fakeHost({
+      ctx: { ...baseCtx, run: { ...baseCtx.run!, targetSupported: false } },
+      agents: [
+        {
+          slot: "solver",
+          name: "S",
+          systemPrompt: "mainSystem",
+          tools: (ctx) => {
+            seen.push(ctx.run?.targetSupported ?? false)
+            return ["finish_run"]
+          },
+        },
+      ],
+    })
+    createRunHandle(host)
+    expect(seen).toEqual([false])
+    expect(created[0]!.tools).toEqual(["finish_run"])
+  })
+
   test("render: resolves against the in-memory map with extraVars overlay", () => {
     const map = new Map([["greet", "Hi {{agent.name}} on {{run.id}}"]])
-    const { host } = fakeHost({ templateMap: map })
+    const { host } = fakeHost({
+      templateMap: map,
+      agents: [],
+    })
     const handle = createRunHandle(host)
     expect(
       handle.render("greet", {
@@ -192,21 +215,18 @@ describe("createRunHandle / createAgent (spec §3.2/§4.3)", () => {
   })
 
   test("on(): run-level + agent-level filtering, callbacks wrapped in try/catch", () => {
-    const { host } = fakeHost({})
+    const { host } = fakeHost({
+      agents: [
+        { slot: "solver", name: "S", systemPrompt: "mainSystem", tools: [] },
+      ],
+    })
     const handle = createRunHandle(host)
     const runSeen: string[] = []
     const agentSeen: string[] = []
     handle.on("turnEnded", () => {
       runSeen.push("run")
     })
-    const solver = handle.createAgent({
-      slot: "solver",
-      name: "S",
-      systemPrompt: "mainSystem",
-      tools: [],
-      model: "default",
-    })
-    solver.on("turnEnded", () => {
+    handle.agent("solver").on("turnEnded", () => {
       agentSeen.push("agent")
     })
     // A throwing callback must not abort dispatch to the others.

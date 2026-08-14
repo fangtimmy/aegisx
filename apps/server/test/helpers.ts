@@ -102,8 +102,7 @@ export function seedRun(
       challengeId,
       orchestration: "classic",
       status: "closed",
-      provider: "Test Provider",
-      modelId: "test-model",
+      model: `${TEST_MODEL_REF}:off`,
       image: "img",
       cpus: 1,
       memoryMb: 512,
@@ -159,11 +158,25 @@ export function stubConfigStore(providers: ProviderData[]): ConfigStore {
   return {
     getProviders: () => providers,
     getAliases: () => [],
+    getAgentModels: () => ({}),
     getLegacyPromptTemplates: () => undefined,
   } as unknown as ConfigStore
 }
 
 export const flatSettings = () => defaultSettings()
+
+/** Canonical model ref for the {@link makeProvider} test provider (pi-bound
+ * openai/gpt-4o-mini). Used as the default-model ref and per-slot overrides
+ * so the service's slot-model resolution succeeds in tests. */
+export const TEST_MODEL_REF = "openai/gpt-4o-mini"
+
+/** flatSettings with the default model set to the test provider's model, so
+ * runService.create() can resolve slot models without an explicit override. */
+export function flatSettingsWithDefaultModel(
+  ref: string = `${TEST_MODEL_REF}:off`
+) {
+  return { ...defaultSettings(), "agent.defaultModelId": ref }
+}
 
 /** Records create/kill/remove calls; all methods are no-ops that succeed. */
 export function stubContainerManager() {

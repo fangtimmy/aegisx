@@ -27,7 +27,8 @@ function applyMigrationFile(sqlite: Database, tag: string): string {
 }
 
 /** Build a real v7 database (0000 + 0001 applied, hashes recorded, user_version
- * = 7) so createDatabase sees a recognized DB with the v8 migration pending. */
+ * = 7) so createDatabase sees a recognized DB with the v8/v9 migrations
+ * pending. */
 function buildV7Database(dir: string) {
   const sqlite = new Database(join(dir, "aegisx.sqlite"), { create: true })
   sqlite.run("PRAGMA foreign_keys = ON")
@@ -49,7 +50,7 @@ function buildV7Database(dir: string) {
 }
 
 describe("schema bootstrap", () => {
-  test("fresh database migrates to v8 and drops the merged orchestrators table", () => {
+  test("fresh database migrates to v9 and drops the merged orchestrators table", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
       const { db, sqlite, releaseLock } = createDatabase(dir)
@@ -66,7 +67,7 @@ describe("schema bootstrap", () => {
             .all() as Array<{ name: string }>
         ).map((row) => row.name)
       )
-      // v8 execution + new tables present
+      // v8/v9 execution + new tables present
       for (const t of [
         "runs",
         "agents",
@@ -90,7 +91,7 @@ describe("schema bootstrap", () => {
     }
   })
 
-  test("fresh runs/agents/sessions carry the v8 columns (no halfway_notified; agent-scoped sessions)", () => {
+  test("fresh runs/agents/sessions carry the v9 columns (single model ref; no halfway_notified)", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-cols-"))
     try {
       const { sqlite, releaseLock } = createDatabase(dir)
@@ -107,6 +108,10 @@ describe("schema bootstrap", () => {
       expect(runCols.has("queue_item_id")).toBe(true)
       expect(runCols.has("params")).toBe(true)
       expect(runCols.has("last_timeout_at")).toBe(true)
+      // v9: single canonical model ref column (not provider/model_id/etc.)
+      expect(runCols.has("model")).toBe(true)
+      expect(runCols.has("provider")).toBe(false)
+      expect(runCols.has("model_id")).toBe(false)
       expect(runCols.has("halfway_notified_at")).toBe(false)
 
       const agentCols = new Set(
@@ -116,15 +121,11 @@ describe("schema bootstrap", () => {
           }>
         ).map((c) => c.name)
       )
-      for (const c of [
-        "slot",
-        "is_entry",
-        "system_prompt",
-        "tools",
-        "model_id",
-      ]) {
+      for (const c of ["slot", "is_entry", "system_prompt", "tools", "model"]) {
         expect(agentCols.has(c)).toBe(true)
       }
+      expect(agentCols.has("model_id")).toBe(false)
+      expect(agentCols.has("provider")).toBe(false)
 
       const sessionCols = (
         sqlite.query(`PRAGMA table_info(sessions)`).all() as Array<{
@@ -140,7 +141,7 @@ describe("schema bootstrap", () => {
   })
 })
 
-describe("v7 → v8 migration (preserve catalog, wipe execution state)", () => {
+describe("v7 → v9 migration (preserve catalog, wipe execution state)", () => {
   test("catalog/history rows survive; execution-state tables are wiped; challenge_flags keep a historical runId", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-upg-"))
     try {
@@ -174,7 +175,7 @@ describe("v7 → v8 migration (preserve catalog, wipe execution state)", () => {
       expect(
         (sqlite.query("PRAGMA user_version").get() as { user_version: number })
           .user_version
-      ).toBe(8)
+      ).toBe(SCHEMA_VERSION)
 
       // catalog preserved
       expect(
@@ -233,8 +234,9 @@ describe("v7 → v8 migration (preserve catalog, wipe execution state)", () => {
   })
 })
 
-describe("v8 constraints", () => {
-  // A fresh v8 run + a sample challenge to satisfy FKs.
+describe("schema constraints", () => {
+  // A fresh run + a sample challenge to satisfy FKs. v9 stores the model as a
+  // single canonical ref string column (no provider/model_id columns).
   function freshRun(sqlite: Database, runId = "r1") {
     sqlite.run(
       `INSERT INTO events (id, name, prompt_hint, created_at, updated_at) VALUES ('ev1','E','','t','t')`
@@ -243,7 +245,7 @@ describe("v8 constraints", () => {
       `INSERT INTO challenges (id, event_id, name, description, manual_solve_state, created_at, updated_at) VALUES ('ch1','ev1','C','d','unsolved','t','t')`
     )
     sqlite.run(
-      `INSERT INTO runs (id, scope_type, event_id, challenge_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('${runId}','challenge','ev1','ch1','classic','idle','p','m','img',1,1,1,'c','w','s','manual','t','t')`
+      `INSERT INTO runs (id, scope_type, event_id, challenge_id, orchestration, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('${runId}','challenge','ev1','ch1','classic','idle','p/m:off','img',1,1,1,'c','w','s','manual','t','t')`
     )
   }
 
@@ -254,7 +256,7 @@ describe("v8 constraints", () => {
     isEntry: boolean
   ) {
     sqlite.run(
-      `INSERT INTO agents (id, run_id, slot, role, is_entry, provider, model_id, system_prompt, tools, status, created_at, updated_at) VALUES ('${id}','${runId}','${id}','solver',${isEntry ? 1 : 0},'p','m','sp','[]','idle','t','t')`
+      `INSERT INTO agents (id, run_id, slot, role, is_entry, model, system_prompt, tools, status, created_at, updated_at) VALUES ('${id}','${runId}','${id}','solver',${isEntry ? 1 : 0},'p/m:off','sp','[]','idle','t','t')`
     )
   }
 
@@ -283,7 +285,7 @@ describe("v8 constraints", () => {
       // same slot, different id → rejected
       expect(() =>
         sqlite.run(
-          `INSERT INTO agents (id, run_id, slot, role, is_entry, provider, model_id, system_prompt, tools, status, created_at, updated_at) VALUES ('a2','r1','a1','solver',0,'p','m','sp','[]','idle','t','t')`
+          `INSERT INTO agents (id, run_id, slot, role, is_entry, model, system_prompt, tools, status, created_at, updated_at) VALUES ('a2','r1','a1','solver',0,'p/m:off','sp','[]','idle','t','t')`
         )
       ).toThrow()
       sqlite.close()
@@ -301,11 +303,11 @@ describe("v8 constraints", () => {
         `INSERT INTO events (id, name, prompt_hint, created_at, updated_at) VALUES ('ev1','E','','t','t')`
       )
       sqlite.run(
-        `INSERT INTO runs (id, scope_type, event_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s1','event','ev1','scheduler','idle','p','m','img',1,1,1,'c','w','s','manual','t','t')`
+        `INSERT INTO runs (id, scope_type, event_id, orchestration, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s1','event','ev1','scheduler','idle','p/m:off','img',1,1,1,'c','w','s','manual','t','t')`
       )
       expect(() =>
         sqlite.run(
-          `INSERT INTO runs (id, scope_type, event_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s2','event','ev1','scheduler','idle','p','m','img',1,1,1,'c','w','s','manual','t','t')`
+          `INSERT INTO runs (id, scope_type, event_id, orchestration, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s2','event','ev1','scheduler','idle','p/m:off','img',1,1,1,'c','w','s','manual','t','t')`
         )
       ).toThrow()
       // a challenge-scope run for the same event is unrelated and allowed
@@ -314,7 +316,7 @@ describe("v8 constraints", () => {
       )
       expect(() =>
         sqlite.run(
-          `INSERT INTO runs (id, scope_type, event_id, challenge_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('c1','challenge','ev1','ch1','classic','idle','p','m','img',1,1,1,'c','w','s','manual','t','t')`
+          `INSERT INTO runs (id, scope_type, event_id, challenge_id, orchestration, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('c1','challenge','ev1','ch1','classic','idle','p/m:off','img',1,1,1,'c','w','s','manual','t','t')`
         )
       ).not.toThrow()
       sqlite.close()
@@ -331,7 +333,7 @@ describe("v8 constraints", () => {
       freshRun(sqlite)
       expect(() =>
         sqlite.run(
-          `INSERT INTO agents (id, run_id, slot, role, provider, model_id, system_prompt, tools, status, created_at, updated_at) VALUES ('a1','r1','s1','solver','p','m','sp','[]','aborted','t','t')`
+          `INSERT INTO agents (id, run_id, slot, role, model, system_prompt, tools, status, created_at, updated_at) VALUES ('a1','r1','s1','solver','p/m:off','sp','[]','aborted','t','t')`
         )
       ).not.toThrow()
       sqlite.close()
@@ -350,12 +352,12 @@ describe("v8 constraints", () => {
       )
       expect(() =>
         sqlite.run(
-          `INSERT INTO runs (id, scope_type, event_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s1','event','ev1','scheduler','idle','p','m','img',1,1,1,'c','w','s','scheduler','t','t')`
+          `INSERT INTO runs (id, scope_type, event_id, orchestration, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s1','event','ev1','scheduler','idle','p/m:off','img',1,1,1,'c','w','s','scheduler','t','t')`
         )
       ).not.toThrow()
       expect(() =>
         sqlite.run(
-          `INSERT INTO runs (id, scope_type, event_id, orchestration, status, provider, model_id, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s2','event','ev1','scheduler','idle','p','m','img',1,1,1,'c','w','s','orchestrator','t','t')`
+          `INSERT INTO runs (id, scope_type, event_id, orchestration, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) VALUES ('s2','event','ev1','scheduler','idle','p/m:off','img',1,1,1,'c','w','s','orchestrator','t','t')`
         )
       ).toThrow()
       sqlite.close()

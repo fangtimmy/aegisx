@@ -1,8 +1,7 @@
 import { DEFAULT_BOOTSTRAP_SYSTEM_PROMPT_TEMPLATE } from "@aegisx/shared/prompt-defaults"
-import { Type } from "typebox"
 
 import { bootstrapTools, solverTools } from "./common"
-import { defineOrchestration } from "./types"
+import { defineOrchestration, type RunHandle } from "./types"
 
 /**
  * bootstrap-solver — serial recon then solve (spec §7.3). The bootstrap agent
@@ -15,25 +14,25 @@ export default defineOrchestration({
   label: "Bootstrap-Solver",
   description: "先探测再解题：单独探测 agent 先摸清攻击面，再交给求解者。",
   scope: "challenge",
-  params: Type.Object({}),
-  templates: { bootstrapSystem: DEFAULT_BOOTSTRAP_SYSTEM_PROMPT_TEMPLATE },
-  setup(run) {
-    run.createAgent({
+  agents: [
+    {
       slot: "bootstrap",
       name: "Bootstrap",
       systemPrompt: "bootstrapSystem",
-      tools: bootstrapTools(run.ctx),
-      model: "default",
-      prime: run.initialPrompt,
-    })
-    run.createAgent({
+      tools: bootstrapTools,
+      prime: true,
+    },
+    {
       slot: "solver",
       name: "Solver",
       entry: true,
       systemPrompt: "mainSystem",
-      tools: solverTools(run.ctx),
-      model: "default",
-    })
+      tools: solverTools,
+    },
+  ],
+  templates: { bootstrapSystem: DEFAULT_BOOTSTRAP_SYSTEM_PROMPT_TEMPLATE },
+  spawn: { systemPrompt: "childSystem", tools: [] },
+  wire(run: RunHandle) {
     run
       .agent("bootstrap")
       .on("turnEnded", () =>
@@ -42,5 +41,4 @@ export default defineOrchestration({
           .send("Bootstrap 探测完成，结果在 /workspace。开始解题。")
       )
   },
-  spawn: { systemPrompt: "childSystem", tools: [], model: "default" },
 })

@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm"
 import { agents } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
-  flatSettings,
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -13,7 +13,6 @@ import {
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  toConnection,
 } from "../helpers"
 
 const containerInput = {
@@ -23,12 +22,6 @@ const containerInput = {
   pidsLimit: 128,
   tmpfsSize: "128m",
   workspace: "/workspace",
-}
-
-const MODEL = {
-  provider: "Test Provider",
-  modelId: "model-1",
-  thinking: "off" as const,
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
@@ -57,7 +50,7 @@ describe("scheduler event wiring (spec §3.5)", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -76,11 +69,7 @@ describe("scheduler event wiring (spec §3.5)", () => {
         scopeType: "event" as const,
         eventId: "evt-1",
         orchestration: "scheduler",
-        params: { model: MODEL },
         instruction: "",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
       await settle()
@@ -96,9 +85,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         orchestration: "classic",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
       await settle()
@@ -139,7 +125,7 @@ describe("scheduler event wiring (spec §3.5)", () => {
           }),
         } as never,
         configStore: stubConfigStore([provider]),
-        getSettings: flatSettings,
+        getSettings: flatSettingsWithDefaultModel,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -158,11 +144,7 @@ describe("scheduler event wiring (spec §3.5)", () => {
         scopeType: "event" as const,
         eventId: "evt-1",
         orchestration: "scheduler",
-        params: { model: MODEL },
         instruction: "",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
       await settle()
@@ -178,9 +160,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         orchestration: "classic",
-        provider: toConnection(provider),
-        modelId: "model-1",
-        thinkingLevel: "off",
         container: containerInput,
       })
       await settle()

@@ -34,7 +34,12 @@ export function aliasRef(id: string): string {
   return `${ALIAS_REF_PREFIX}${id}`
 }
 
-export function isAliasRef(ref: string | null | undefined): ref is string {
+/** Type-test whether a value is an `alias:<id>` ref string. The predicate is a
+ * template-literal type so callers branching on an already-`string` value keep
+ * the non-alias branch as `string` (not `never`). */
+export function isAliasRef(
+  ref: string | null | undefined
+): ref is `alias:${string}` {
   return typeof ref === "string" && ref.startsWith(ALIAS_REF_PREFIX)
 }
 

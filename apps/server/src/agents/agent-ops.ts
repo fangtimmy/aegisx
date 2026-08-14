@@ -1,4 +1,5 @@
-import type { ModelAlias, SwitchModelInput } from "@aegisx/shared"
+import { modelAddress, parseModelRef } from "@aegisx/shared"
+import type { ModelAlias, ModelRef } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 
@@ -9,35 +10,42 @@ import { resolveSwitchTarget } from "./model-switch"
 export type { SwitchTarget } from "./model-switch"
 import type { SwitchTarget } from "./model-switch"
 
+/** Extract the pi address (`<providerKey>/<modelId>`) of a stored ref, or "" if
+ * it is not a concrete model ref. Used to detect an effort-only switch (same
+ * model address) so the SDK `setModel` marker is skipped. */
+function refAddress(ref: ModelRef | null | undefined): string {
+  const parsed = parseModelRef(ref)
+  return parsed?.kind === "model"
+    ? `${parsed.providerKey}/${parsed.modelId}`
+    : ""
+}
+
 /**
- * Apply a live model (and optionally thinking-level) switch to a host session,
- * factoring out the mechanics shared by the run and orchestrator services:
- * resolve the target against the live session's own runtime, skip `setModel`
- * when the model is unchanged (avoids a spurious model_change marker), and
- * apply the optional thinking level.
+ * Apply a live model switch to a host session: resolve the ref against the live
+ * session's own runtime, skip `setModel` when only the reasoning level changes
+ * (avoids a spurious model_change marker), and apply the new thinking level.
  *
- * Returns the resolved target + the session's resulting thinking level. The
- * caller owns error wrapping (its bespoke action-error type) and persistence
- * (each service stores a different id shape on its row).
- *
- * `isUnchanged` lets each service compare against its own stored id: the run
- * row stores the underlying `modelId` string, the orchestrator row stores the
- * `ProviderModel.id` UUID.
+ * `currentRef` is the agent row's currently-stored concrete ref, used for the
+ * unchanged-model check. Returns the resolved target + resulting thinking
+ * level. The caller owns error wrapping + persistence (it writes the concrete
+ * ref string to its row).
  */
 export async function applyModelSwitch(
   host: HostAgentSession,
   providers: ProviderConnection[],
   aliases: ModelAlias[],
-  input: SwitchModelInput,
-  isUnchanged: (target: SwitchTarget) => boolean
+  ref: ModelRef,
+  currentRef: ModelRef | null
 ): Promise<{ target: SwitchTarget; thinkingLevel: ThinkingLevel }> {
   const target = resolveSwitchTarget(
     host.session.modelRuntime,
     providers,
     aliases,
-    input.modelId
+    ref
   )
-  if (!isUnchanged(target)) await host.session.setModel(target.sdkModel)
-  if (input.thinkingLevel) host.session.setThinkingLevel(input.thinkingLevel)
-  return { target, thinkingLevel: host.session.thinkingLevel }
+  if (refAddress(currentRef) !== modelAddress(target.provider, target.model)) {
+    await host.session.setModel(target.sdkModel)
+  }
+  host.session.setThinkingLevel(target.thinkingLevel)
+  return { target, thinkingLevel: target.thinkingLevel }
 }

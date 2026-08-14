@@ -6,7 +6,7 @@ import { agents } from "../../src/db/schema"
 import type { CreateRunInput } from "../../src/run/service"
 import { createRunService } from "../../src/run/service"
 import {
-  flatSettings,
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -14,7 +14,7 @@ import {
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  toConnection,
+  TEST_MODEL_REF,
 } from "../helpers"
 
 const containerInput = {
@@ -26,16 +26,10 @@ const containerInput = {
   workspace: "/workspace",
 }
 
-function baseCreateInput(
-  challengeId: string,
-  provider: CreateRunInput["provider"]
-) {
+function baseCreateInput(challengeId: string): CreateRunInput {
   return {
     scopeType: "challenge" as const,
     challengeId,
-    provider,
-    modelId: "model-1",
-    thinkingLevel: "off" as const,
     container: containerInput,
   }
 }
@@ -67,6 +61,10 @@ function twoModelProvider() {
   })
 }
 
+/** Canonical model refs for the two test models (pi-bound openai/*). */
+const MODEL_1_REF = `${TEST_MODEL_REF}:off` // openai/gpt-4o-mini:off
+const MODEL_2_REF = "openai/gpt-4o:high" // openai/gpt-4o:high
+
 /** Records host-session calls: which agents were prepared (createHost) and
  * which were aborted, and wires the real run-level model runtime into the stub
  * session so applyModelSwitch can resolve pi models offline. */
@@ -93,7 +91,7 @@ function makeService(
       }),
     } as never,
     configStore: stubConfigStore([provider]),
-    getSettings: flatSettings,
+    getSettings: flatSettingsWithDefaultModel,
     createHost: mock(
       async (input: { agentId: string; modelRuntime: unknown }) => {
         prepared.push(input.agentId)
@@ -130,9 +128,7 @@ describe("per-agent actions (spec §10)", () => {
       const provider = twoModelProvider()
       const { service, prepared } = makeService(db, sqlite, dir, provider)
 
-      const run = await service.create(
-        baseCreateInput("ch-1", toConnection(provider))
-      )
+      const run = await service.create(baseCreateInput("ch-1"))
       const [agent] = service.listAgents(run.id)
       expect(prepared).toHaveLength(1)
 
@@ -165,22 +161,18 @@ describe("per-agent actions (spec §10)", () => {
       const provider = twoModelProvider()
       const { service } = makeService(db, sqlite, dir, provider)
 
-      const run = await service.create(
-        baseCreateInput("ch-1", toConnection(provider))
-      )
+      const run = await service.create(baseCreateInput("ch-1"))
       const [agent] = service.listAgents(run.id)
       expect(
-        db.select().from(agents).where(eq(agents.id, agent.id)).get()!.modelId
-      ).toBe("gpt-4o-mini")
+        db.select().from(agents).where(eq(agents.id, agent.id)).get()!.model
+      ).toBe(MODEL_1_REF)
 
       const switched = await service.switchAgentModel(agent.id, {
-        modelId: "model-2",
-        thinkingLevel: "high",
+        model: MODEL_2_REF,
       })
       expect(switched.id).toBe(run.id)
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
-      expect(row.modelId).toBe("gpt-4o")
-      expect(row.thinkingLevel).toBe("high")
+      expect(row.model).toBe(MODEL_2_REF)
       await service.close()
     } finally {
       close()
@@ -195,9 +187,7 @@ describe("per-agent actions (spec §10)", () => {
       const provider = twoModelProvider()
       const { service, aborted } = makeService(db, sqlite, dir, provider)
 
-      const run = await service.create(
-        baseCreateInput("ch-1", toConnection(provider))
-      )
+      const run = await service.create(baseCreateInput("ch-1"))
       const [agent] = service.listAgents(run.id)
       expect(run.status).toBe("running") // prime hangs → turn in flight
 
@@ -222,7 +212,7 @@ describe("per-agent actions (spec §10)", () => {
         service.sendAgentMessage("ghost", { text: "hi" })
       ).rejects.toThrow("Agent not found")
       await expect(
-        service.switchAgentModel("ghost", { modelId: "model-2" })
+        service.switchAgentModel("ghost", { model: MODEL_2_REF })
       ).rejects.toThrow("Agent not found")
       await expect(service.stopAgent("ghost")).rejects.toThrow(
         "Agent not found"

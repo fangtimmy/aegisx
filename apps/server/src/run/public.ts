@@ -12,6 +12,15 @@ export type ChallengeMeta = {
   targetSupported: boolean
 }
 
+/** Resolved model display fields for {@link toRunPublic}, derived from the run
+ * row's `model` ref string by the caller (it needs the provider list). */
+export type RunModelDisplay = {
+  provider: string
+  modelId: string
+  modelName: string
+  thinkingLevel: RunPublic["thinkingLevel"]
+}
+
 export function toFlagPublic(
   row: typeof challengeFlags.$inferSelect
 ): ChallengeFlag {
@@ -33,7 +42,8 @@ export function toRunPublic(
   row: RunRow,
   challenge?: ChallengeMeta,
   flags: ChallengeFlag[] = [],
-  usage?: RunUsage
+  usage?: RunUsage,
+  model?: RunModelDisplay
 ): RunPublic {
   return {
     id: row.id,
@@ -46,10 +56,11 @@ export function toRunPublic(
     finishing: row.finishing,
     source: row.source as RunPublic["source"],
     targetSupported: challenge?.targetSupported ?? false,
-    provider: row.provider,
-    modelId: row.modelId,
-    modelName: row.modelLabel ?? row.modelId,
-    thinkingLevel: row.thinkingLevel as RunPublic["thinkingLevel"],
+    provider: model?.provider ?? "",
+    modelId: model?.modelId ?? "",
+    modelName: model?.modelName ?? row.model,
+    thinkingLevel: (model?.thinkingLevel ??
+      "off") as RunPublic["thinkingLevel"],
     environment: "container",
     image: row.image,
     cpus: row.cpus,

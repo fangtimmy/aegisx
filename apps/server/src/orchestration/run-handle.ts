@@ -1,26 +1,26 @@
+import type { ModelRef } from "@aegisx/shared/model-ref"
+
 import type { agents } from "../db/schema"
 import { renderTemplate } from "./prompt-templates-store"
 import type {
   AgentEvent,
   AgentEventPayload,
   AgentHandle,
-  AgentSpec,
+  AgentSlotSpec,
   Capabilities,
   EventScopeEvent,
   EventScopePayload,
-  ModelRef,
-  ModelSnapshot,
   PromptContext,
   RunHandle,
+  SlotModel,
 } from "./types"
 import { deriveCapabilities } from "./types"
 
 type AgentRow = typeof agents.$inferSelect
 
 /** Fields the handle asks the service to persist for a freshly declared agent.
- * The rendered system prompt, the tool list, and the resolved model snapshot
- * are all written once here and reused verbatim on cold-restore (snapshot
- * priority, spec §4.3). */
+ * The rendered system prompt, the tool list, and the model ref are all written
+ * once here and reused verbatim on cold-restore (snapshot priority, spec §4.3). */
 export type FreshAgentInput = {
   slot: string
   role: string
@@ -30,7 +30,8 @@ export type FreshAgentInput = {
   task?: string | null
   systemPrompt: string
   tools: string[]
-  model: ModelSnapshot
+  /** Canonical model ref string, persisted on the agent row. */
+  model: ModelRef
 }
 
 /**
@@ -42,18 +43,20 @@ export type FreshAgentInput = {
 export type RunHandleHost = {
   runId: string
   scope: "challenge" | "event"
-  params: unknown
   ctx: PromptContext
   initialPrompt: string
   templateMap: Map<string, string>
   emitter: RunEmitter
+  /** The plugin's declared agent slots — the handle creates one agent each. */
+  agents: AgentSlotSpec[]
 
   /** Existing agent row for a slot (createAgent idempotency / restore reuse). */
   findAgentBySlot(slot: string): AgentRow | undefined
   /** Persist a freshly declared agent; returns its new id. */
   createFreshAgent(input: FreshAgentInput): string
-  /** Resolve an AgentSpec.model ('default' | ModelRef) to a snapshot. */
-  resolveAgentModel(model: "default" | ModelRef): ModelSnapshot
+  /** Resolve a slot's model from the orchestration settings (fresh create
+   * only; restore reuses the persisted snapshot). Throws if unresolvable. */
+  resolveSlotModel(slot: string): SlotModel
   /** Whether the agent currently has an in-flight turn. */
   isAgentStreaming(agentId: string): boolean
   /** Ensure the container + this agent's session are online (create or open). */
@@ -73,9 +76,6 @@ export type RunHandleHost = {
  * in try/catch so a throwing callback never escapes (log + swallow). Callbacks
  * are expected to be cheap and side-effect-free except for `send()`; the
  * service emits from the generation-gated settle critical section.
- *
- * P1c wires the infrastructure (subscribe + emit turnEnded); classic subscribes
- * to nothing, so emit is a no-op until P2 plugins wire triggers.
  */
 export class RunEmitter {
   private readonly runLevel = new Map<
@@ -194,9 +194,9 @@ export class EventScopeEmitter {
   }
 }
 
-/** Build capabilities for a freshly declared agent (spec §3.7). */
-function capabilitiesOf(spec: AgentSpec): Capabilities {
-  return deriveCapabilities(spec.tools)
+/** Resolve a slot spec's tool list (static or ctx-aware builder). */
+function slotTools(spec: AgentSlotSpec, ctx: PromptContext): string[] {
+  return typeof spec.tools === "function" ? spec.tools(ctx) : spec.tools
 }
 
 /** Create an {@link AgentHandle} bound to one agent id + the host callbacks. */
@@ -227,29 +227,35 @@ export type RunHandleImpl = RunHandle & {
 }
 
 /**
- * Build a {@link RunHandle} over a host. The handle owns the createAgent slot
- * idempotency logic (fresh = persist snapshot; restore = reuse with snapshot
- * priority) and the in-memory template map. It does NOT own sessions, locks,
- * or containers — those live in the service and are reached through the host.
+ * Build a {@link RunHandle} over a host. The handle owns the per-slot
+ * createAgent idempotency logic (fresh = persist snapshot; restore = reuse with
+ * snapshot priority) and the in-memory template map. It does NOT own sessions,
+ * locks, or containers — those live in the service and are reached through the
+ * host.
+ *
+ * The plugin's declared `agents` are materialized here: one createAgent per
+ * slot, each with its model injected from the orchestration settings.
  */
 export function createRunHandle(host: RunHandleHost): RunHandleImpl {
   const declared = new Map<string, AgentHandle>()
   const primeSpecs: { agentId: string; slot: string; prime: string }[] = []
 
-  function createAgent(spec: AgentSpec): AgentHandle {
+  for (const spec of host.agents) {
     const existing = host.findAgentBySlot(spec.slot)
     let agentId: string
     let role: string
     if (existing) {
       // Restore: reuse the existing row verbatim (snapshot priority — spec
-      // §4.3). The spec's systemPrompt/tools/model are ignored; the row's
-      // persisted snapshot wins (per-agent edits / model switches survive).
+      // §4.3). The slot's model spec is ignored; the row's persisted snapshot
+      // wins (per-agent model switches survive).
       agentId = existing.id
       role = existing.role
     } else {
       // Fresh: derive per-agent caps, render the system prompt template with
-      // this agent's caps injected, and persist the snapshot.
-      const capabilities = capabilitiesOf(spec)
+      // this agent's caps + model injected, and persist the snapshot.
+      const tools = slotTools(spec, host.ctx)
+      const capabilities: Capabilities = deriveCapabilities(tools)
+      const slotModel = host.resolveSlotModel(spec.slot)
       const ctxForAgent: PromptContext = {
         ...host.ctx,
         agent: {
@@ -260,6 +266,11 @@ export function createRunHandle(host: RunHandleHost): RunHandleImpl {
           ...(spec.entry !== undefined ? { isEntry: spec.entry } : {}),
         },
         capabilities,
+        model: {
+          provider: slotModel.providerLabel,
+          name: slotModel.modelLabel,
+          id: slotModel.modelId,
+        },
       }
       const systemPrompt = renderTemplate(
         host.templateMap,
@@ -272,29 +283,26 @@ export function createRunHandle(host: RunHandleHost): RunHandleImpl {
         name: spec.name,
         isEntry: !!spec.entry,
         systemPrompt,
-        tools: spec.tools,
-        model: host.resolveAgentModel(spec.model),
+        tools,
+        model: slotModel.ref,
       })
       role = spec.role ?? spec.slot
     }
 
     const handle = makeAgentHandle(agentId, spec.slot, role, host)
     declared.set(spec.slot, handle)
-    if (spec.prime !== undefined && spec.prime !== "") {
-      primeSpecs.push({ agentId, slot: spec.slot, prime: spec.prime })
+    if (spec.prime) {
+      primeSpecs.push({ agentId, slot: spec.slot, prime: host.initialPrompt })
     }
-    return handle
   }
 
   const impl: RunHandleImpl = {
     id: host.runId,
     scope: host.scope,
     ctx: host.ctx,
-    params: host.params as never,
     initialPrompt: host.initialPrompt,
     render: (key, extraVars) =>
       renderTemplate(host.templateMap, key, { ...host.ctx, ...extraVars }),
-    createAgent,
     agent: (slot) => {
       const handle = declared.get(slot)
       if (!handle) throw new Error(`No agent declared for slot: ${slot}`)

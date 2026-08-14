@@ -34,11 +34,9 @@ const baseCtx: PromptContext = {
   },
 }
 
-const OBSERVER_MODEL = {
-  provider: "P2",
-  modelId: "obs-1",
-  thinking: "low" as const,
-}
+/** Observer slot's configured model ref (agentModels.observer-solver.observer),
+ * distinct from the run default so the snapshot is observable. */
+const OBSERVER_MODEL_REF = "P2/obs-1:low"
 
 function runSetup(): {
   created: FreshAgentInput[]
@@ -52,7 +50,7 @@ function runSetup(): {
   const host: RunHandleHost = {
     runId: "run-1",
     scope: "challenge",
-    params: { observerModel: OBSERVER_MODEL },
+    agents: observerSolver.agents,
     ctx: baseCtx,
     initialPrompt: "INITIAL",
     templateMap: new Map([
@@ -72,21 +70,21 @@ function runSetup(): {
       created.push(input)
       return `a-${created.length}`
     },
-    resolveAgentModel: (m) =>
-      m === "default"
+    resolveSlotModel: (slot) =>
+      slot === "observer"
         ? {
-            provider: "P",
-            providerLabel: "P",
-            modelId: "m",
-            modelLabel: "M",
-            thinkingLevel: "off",
+            ref: OBSERVER_MODEL_REF,
+            thinkingLevel: "low",
+            providerLabel: "P2",
+            modelLabel: "Obs",
+            modelId: "obs-1",
           }
         : {
-            provider: m.provider,
-            providerLabel: m.provider,
-            modelId: m.modelId,
-            modelLabel: null,
-            thinkingLevel: m.thinking,
+            ref: "P/m:off",
+            thinkingLevel: "off",
+            providerLabel: "P",
+            modelLabel: "M",
+            modelId: "m",
           },
     isAgentStreaming: () => false,
     prepareAgent: async () => {},
@@ -99,7 +97,7 @@ function runSetup(): {
   if (observerSolver.scope !== "challenge") {
     throw new Error("observer-solver must be challenge-scoped")
   }
-  void observerSolver.setup(handle)
+  void observerSolver.wire?.(handle)
   return { created, sends, emitter, solverId: "a-1" }
 }
 
@@ -134,12 +132,8 @@ describe("observer-solver plugin (spec §7.2)", () => {
       "read_agent",
       "list_agents",
     ])
-    // Observer model comes from params.observerModel, not the run default.
-    expect(observer.model).toMatchObject({
-      provider: "P2",
-      modelId: "obs-1",
-      thinkingLevel: "low",
-    })
+    // Observer model comes from the observer slot setting, not the run default.
+    expect(observer.model).toBe(OBSERVER_MODEL_REF)
   })
 
   test("observer has no finish/spawn capability — rendered prompt advertises zeroed caps", () => {
