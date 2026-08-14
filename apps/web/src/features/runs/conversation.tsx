@@ -47,8 +47,8 @@ import { SteerQueue } from "./steer-queue"
 import { Timeline } from "./timeline"
 
 /**
- * Data + lifecycle adapter for {@link Conversation}. Both the solver run
- * (run-workspace) and the per-event orchestrator (orchestrator-view) implement
+ * Data + lifecycle adapter for {@link Conversation}. The per-event
+ * orchestrator (orchestrator-view) and any run-level consumer implement
  * this; Conversation itself is agent-agnostic. The callbacks should be stable
  * (useCallback) so the SSE connection effect does not reconnect on re-render.
  */

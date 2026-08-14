@@ -128,7 +128,7 @@ export const SETTINGS_DEFS: SettingDef[] = [
     group: "调度器",
     title: "最大并发任务数",
     description:
-      "同时进行的解题任务的全局上限（受本地容器资源限制）。由编排器强制限制。",
+      "同时存活的解题容器上限（运行中 + 空闲保温）。由编排器强制限制。",
     widget: "number",
     order: 10,
   },

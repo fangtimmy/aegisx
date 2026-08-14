@@ -218,14 +218,16 @@ function ToolActivity({
       setElapsed(null)
       return
     }
-    if (startedRef.current === null) startedRef.current = Date.now()
+    // W6: prefer the server-known start (true elapsed, incl. time before the
+    // dialog opened); fall back to first-seen local time for legacy data.
+    startedRef.current = tool.startedAt ?? Date.now()
     setElapsed(Date.now() - startedRef.current)
     const id = setInterval(() => {
       if (startedRef.current !== null)
         setElapsed(Date.now() - startedRef.current)
     }, 1000)
     return () => clearInterval(id)
-  }, [tool.status])
+  }, [tool.status, tool.startedAt])
   return (
     <Collapsible className={separated ? "mt-3" : undefined}>
       <CollapsibleTrigger className={activityTriggerClass}>

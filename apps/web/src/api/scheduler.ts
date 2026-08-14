@@ -1,5 +1,10 @@
 import { apiRequest, jsonRequest } from "./client"
-import type { QueueItem, SchedulerInfo } from "./types"
+import type {
+  QueueItem,
+  QueueSnapshot,
+  RunPublic,
+  SchedulerInfo,
+} from "./types"
 
 export function getScheduler(eventId: string) {
   return apiRequest<SchedulerInfo>(`/events/${eventId}/scheduler`)
@@ -23,7 +28,23 @@ export function updateSchedulerConfig(
 }
 
 export function listQueue(eventId: string) {
-  return apiRequest<{ items: QueueItem[] }>(`/events/${eventId}/queue`)
+  return apiRequest<QueueSnapshot>(`/events/${eventId}/queue`)
+}
+
+/** Pause the event's queue: blocks FUTURE launches (running runs keep going). */
+export function pauseQueue(eventId: string) {
+  return apiRequest<{ state: "paused" }>(
+    `/events/${eventId}/queue/pause`,
+    jsonRequest("POST", {})
+  )
+}
+
+/** Resume the event's queue (re-enables the drainer). */
+export function resumeQueue(eventId: string) {
+  return apiRequest<{ state: "running" }>(
+    `/events/${eventId}/queue/resume`,
+    jsonRequest("POST", {})
+  )
 }
 
 /** Edit a pending queue item's prompt / timeout / params (running rejects). */
@@ -64,10 +85,38 @@ export function clearQueue(eventId: string) {
   )
 }
 
-/** Start the event-scoped scheduler run (creates the orchestrator run + agent). */
-export function startScheduler(eventId: string) {
+/** Start the event-scoped scheduler run. W3.2: default = restore semantics
+ * (closed run → cold-restore keeping memory); `reset: true` deletes the closed
+ * run (cascade agents/sessions) and starts fresh. */
+export function startScheduler(eventId: string, reset = false) {
   return apiRequest<SchedulerInfo>(
     `/events/${eventId}/scheduler/start`,
+    jsonRequest("POST", { reset })
+  )
+}
+
+/** W3.1: disable the scheduler (paused flag + abort current turn, container
+ * kept warm). The flag is written even with no scheduler run. */
+export function pauseScheduler(eventId: string) {
+  return apiRequest<RunPublic | null>(
+    `/events/${eventId}/scheduler/pause`,
+    jsonRequest("POST", {})
+  )
+}
+
+/** W3.1: re-enable the scheduler (clear flag + tell the orchestrator to
+ * re-sync before acting). */
+export function resumeScheduler(eventId: string) {
+  return apiRequest<RunPublic | null>(
+    `/events/${eventId}/scheduler/resume`,
+    jsonRequest("POST", {})
+  )
+}
+
+/** Close the scheduler run (→ closed; cold-restorable via start). */
+export function closeScheduler(eventId: string) {
+  return apiRequest<RunPublic>(
+    `/events/${eventId}/scheduler/close`,
     jsonRequest("POST", {})
   )
 }

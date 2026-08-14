@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -334,6 +334,22 @@ export const sessionEntries = sqliteTable(
  * → failed (error recorded + scheduler notified). DELETE allowed on
  * pending/done/cancelled/failed (running rejected).
  */
+/**
+ * Per-event queue state (W2). One row per event; absent row = `running`
+ * (a fresh event's queue drains immediately, no explicit enable needed).
+ * `paused` blocks future launches only — already-running runs are untouched
+ * (pause ≠ kill) and enqueue/edit/reorder/remove still work. Boot recovery
+ * upserts `paused` for every event with visible items; the user resumes.
+ */
+export const queueState = sqliteTable("queue_state", {
+  eventId: text("event_id")
+    .primaryKey()
+    .references(() => events.id, { onDelete: "cascade" }),
+  /** 'running' | 'paused'. */
+  status: text("status").notNull().default("running"),
+  updatedAt: text("updated_at").notNull(),
+})
+
 export const runQueue = sqliteTable(
   "run_queue",
   {
@@ -393,6 +409,11 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
   /** Natural-language steering ("hit crypto first, leave pwn for last"). */
   instruction: text("instruction").notNull().default(""),
   maxConcurrentTargets: integer("max_concurrent_targets").notNull().default(1),
+  /** Scheduler disabled (W3): while 1 the event's run-lifecycle events are
+   * dropped before they reach the orchestrator (silent; the container is kept
+   * warm). The flag is writable even with no scheduler run — presets the next
+   * start. */
+  paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 })

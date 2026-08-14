@@ -1,14 +1,67 @@
 import { describe, expect, test } from "bun:test"
 
 import {
+  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_INITIAL_PROMPT_TEMPLATE,
+  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+} from "../../src/orchestration/prompt-defaults"
+import {
   previewInitialPrompt,
   previewSystemPrompt,
   renderSystemPrompt,
+  renderTemplateBody,
   samplePromptContext,
 } from "../../src/orchestration/prompt-templates"
 
 const highlightedText = (segments: { highlighted: boolean; text: string }[]) =>
   segments.filter((s) => s.highlighted).map((s) => s.text)
+
+describe("W1 prompt fixes", () => {
+  test("initial renders Challenge/Environment + a Strategy section when strategy is injected (W1.1)", () => {
+    const rendered = renderTemplateBody(DEFAULT_INITIAL_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      strategy: "Focus on the attachment's crypto; try z3 first.",
+    })
+    // The standard blocks are always present — the strategy is appended, not
+    // a whole-prompt replacement.
+    expect(rendered).toContain("## Challenge")
+    expect(rendered).toContain("## Environment")
+    expect(rendered).toContain("## Strategy")
+    expect(rendered).toContain(
+      "Focus on the attachment's crypto; try z3 first."
+    )
+  })
+
+  test("initial renders WITHOUT a Strategy section when no strategy is injected", () => {
+    const rendered = renderTemplateBody(
+      DEFAULT_INITIAL_PROMPT_TEMPLATE,
+      samplePromptContext
+    )
+    expect(rendered).toContain("## Challenge")
+    expect(rendered).toContain("## Environment")
+    expect(rendered).not.toContain("## Strategy")
+  })
+
+  test("mainSystem + childSystem carry the ENVIRONMENT.md quick-reference (W1.2)", () => {
+    expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain(
+      "/opt/solver/ENVIRONMENT.md"
+    )
+    expect(DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE).toContain(
+      "/opt/solver/ENVIRONMENT.md"
+    )
+    const main = renderSystemPrompt(
+      DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+      samplePromptContext
+    )
+    const child = renderSystemPrompt(
+      DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+      samplePromptContext
+    )
+    expect(main).toContain("/opt/solver/ENVIRONMENT.md")
+    expect(main).toContain("/opt/solver/knowledges")
+    expect(child).toContain("/opt/solver/ENVIRONMENT.md")
+  })
+})
 
 describe("prompt preview", () => {
   test("highlights interpolated variable values", () => {

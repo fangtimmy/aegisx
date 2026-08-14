@@ -353,7 +353,11 @@ export function createAgentEventPipeline(options: {
         return
       }
       case "tool_execution_start": {
-        toolExecStart.set(event.toolCallId, Date.now())
+        // W6: the emitted event carries the server-side start time (the same
+        // value the timing state machine records), so the frontend can render
+        // the true elapsed time even when the dialog opened mid-execution.
+        const startedAt = Date.now()
+        toolExecStart.set(event.toolCallId, startedAt)
         bus.emit(channel, {
           type: "tool.progress",
           agentId,
@@ -362,6 +366,7 @@ export function createAgentEventPipeline(options: {
           toolName: event.toolName,
           args: event.args,
           status: "running",
+          startedAt,
         })
         return
       }

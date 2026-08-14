@@ -171,8 +171,8 @@ export function AgentDialog({
             a ScrollArea, which would scroll the tab bar and the composer
             along with the content. We need the TabsList pinned at top and
             (for the conversation tab) the composer pinned at bottom, so the
-            body owns the flex layout and each panel scrolls itself — same
-            pattern as run-workspace's CardPanel. */}
+            body owns the flex layout and each panel scrolls itself (the
+            layout formerly shared with run-workspace's CardPanel). */}
         <div className="flex min-h-0 flex-1 flex-col">
           <Tabs
             className="flex h-full min-h-0 min-w-0 flex-col"

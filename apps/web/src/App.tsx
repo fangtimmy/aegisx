@@ -34,7 +34,6 @@ const router = createBrowserRouter([
     path: `/events/:eventId/${tab}`,
     Component: EventPage,
   })),
-  { path: "/events/:eventId/runs/:runId", Component: EventPage },
 ])
 
 function App() {

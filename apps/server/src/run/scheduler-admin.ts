@@ -161,7 +161,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       source: input.source,
       timeoutMs: input.timeoutMs ?? undefined,
       queueItemId: input.queueItemId,
-      initialPromptOverride: input.prompt,
+      strategy: input.prompt,
     })
   }
 
@@ -242,12 +242,14 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return row ? queries.get(row.id) : undefined
   }
 
-  /** Read the event's scheduler policy (defaults if unset). */
+  /** Read the event's scheduler policy (defaults if unset). `paused` gates
+   * the event's run-lifecycle events (W3). */
   function getSchedulerConfig(eventId: string): {
     eventId: string
     modelId: string | null
     instruction: string
     maxConcurrentTargets: number
+    paused: boolean
   } {
     const row = db
       .select()
@@ -259,7 +261,47 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       modelId: row?.modelId ?? null,
       instruction: row?.instruction ?? "",
       maxConcurrentTargets: row?.maxConcurrentTargets ?? 1,
+      paused: row?.paused ?? false,
     }
+  }
+
+  /** Write the paused flag (upsert — also creates a default config row).
+   * Writable with no scheduler run, so pause/resume can preset the next start. */
+  function setSchedulerPaused(eventId: string, paused: boolean): void {
+    const ts = now()
+    const existing = db
+      .select()
+      .from(schedulerConfig)
+      .where(eq(schedulerConfig.eventId, eventId))
+      .get()
+    if (existing) {
+      db.update(schedulerConfig)
+        .set({ paused, updatedAt: ts })
+        .where(eq(schedulerConfig.eventId, eventId))
+        .run()
+    } else {
+      db.insert(schedulerConfig)
+        .values({
+          eventId,
+          modelId: null,
+          instruction: "",
+          maxConcurrentTargets: 1,
+          paused,
+          createdAt: ts,
+          updatedAt: ts,
+        })
+        .run()
+    }
+  }
+
+  /** Whether the event's scheduler is paused (the run-status emit gate). */
+  function isSchedulerPaused(eventId: string): boolean {
+    const row = db
+      .select({ paused: schedulerConfig.paused })
+      .from(schedulerConfig)
+      .where(eq(schedulerConfig.eventId, eventId))
+      .get()
+    return row?.paused ?? false
   }
 
   /** Upsert the event's scheduler policy (creates with defaults if missing). */
@@ -304,13 +346,79 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return getSchedulerConfig(patch.eventId)
   }
 
-  /** Start (or replace) the event's scheduler run from its config. The
+  /** Wake text sent on resume / cold-restore so the orchestrator re-syncs. */
+  const SCHEDULER_RESUME_MESSAGE =
+    "调度已恢复。请重新同步状态（get_status / list_runs / read_run）后再行动。"
+
+  /** Disable the scheduler (W3): set paused=1 (event gate drops its
+   * run-lifecycle notifications) + abort the current turn (container stays
+   * warm). The flag is written even with no scheduler run — presets the next
+   * start. */
+  async function pauseScheduler(eventId: string): Promise<RunPublic | null> {
+    setSchedulerPaused(eventId, true)
+    const sched = getSchedulerRun(eventId)
+    if (sched && sched.status !== "closed") {
+      await deps.stop(sched.id)
+      return deps.requireRun(sched.id)
+    }
+    return null
+  }
+
+  /** Re-enable the scheduler (W3): set paused=0 + tell the orchestrator to
+   * re-sync before acting. No-op messaging when the run is absent/closed
+   * (the flag is still written). */
+  async function resumeScheduler(eventId: string): Promise<RunPublic | null> {
+    setSchedulerPaused(eventId, false)
+    const sched = getSchedulerRun(eventId)
+    if (sched && sched.status !== "closed") {
+      await deps.sendMessage(sched.id, { text: SCHEDULER_RESUME_MESSAGE })
+      return deps.requireRun(sched.id)
+    }
+    return null
+  }
+
+  /** Start (or restart) the event's scheduler run from its config. The
    * orchestrator's model is the per-event `scheduler_config.modelId` override
    * when set, else the global orchestration setting, else the global default —
-   * resolved inside create() via the slot override. A fresh start replaces any
-   * previous closed scheduler run (newSession semantics handled by create). */
-  async function startScheduler(eventId: string): Promise<RunPublic> {
+   * resolved inside create() via the slot override.
+   *
+   * W3.2 (start = restore):
+   *  - live run (running/idle): paused → resume (un-pause + wake); else error.
+   *  - closed run: cold-restore — wake the entry agent (onResume →
+   *    prepareAgent → restoreRunContext), rebuilding the container + wiring
+   *    while keeping the session/memory. `reset: true` deletes the closed row
+   *    (cascade agents/sessions) and creates fresh.
+   *  - no run: fresh create (also clears paused). */
+  async function startScheduler(
+    eventId: string,
+    opts: { reset?: boolean } = {}
+  ): Promise<RunPublic> {
     const config = getSchedulerConfig(eventId)
+    const existing = getSchedulerRun(eventId)
+    if (
+      existing &&
+      (existing.status === "running" || existing.status === "idle")
+    ) {
+      if (config.paused) {
+        await resumeScheduler(eventId)
+        return deps.requireRun(existing.id)
+      }
+      throw new RunActionError(
+        "invalid_state",
+        "A scheduler run is already active for this event"
+      )
+    }
+    if (existing && existing.status === "closed" && !opts.reset) {
+      // Cold-restore keeps memory — wake the orchestrator (onResume →
+      // prepareAgent → restoreRunContext: container + wiring rebuilt, session
+      // kept). Same mechanism as messaging a closed run.
+      setSchedulerPaused(eventId, false)
+      await deps.sendMessage(existing.id, { text: SCHEDULER_RESUME_MESSAGE })
+      return deps.requireRun(existing.id)
+    }
+    // Fresh create (reset=true on a closed run, or no run at all) also clears
+    // any paused flag so the new run starts live.
+    setSchedulerPaused(eventId, false)
     const settings = getSettings()
     return deps.create({
       scopeType: "event",
@@ -358,6 +466,9 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     getSchedulerConfig,
     upsertSchedulerConfig,
     startScheduler,
+    pauseScheduler,
+    resumeScheduler,
+    isSchedulerPaused,
     notifySchedulerOfFailure,
   }
 }

@@ -94,6 +94,11 @@ export type PromptContext = {
   capabilities?: Capabilities
   /** event-scoped only (scheduler instruction). */
   instruction?: string
+  /** challenge-scope initial only: the per-run strategy appended as a
+   * `## Strategy` section (queue/scheduler `prompt` override). Injected by
+   * buildRunContext when a strategy was supplied; the standard blocks
+   * (challenge, environment, submission) are always rendered. */
+  strategy?: string
   /** event-scoped only: the challenge orchestrations the scheduler may launch
    * (id/label/description), so it never invents plugin names. */
   orchestrations?: OrchestrationInfo[]
@@ -165,12 +170,43 @@ export type EventScopeEvent =
   | "run.resumed"
 
 export type EventScopePayload =
-  | { type: "run.started"; runId: string; agentId?: string }
-  | { type: "run.idle"; runId: string; agentId?: string; failed?: boolean }
-  | { type: "run.flagAccepted"; runId: string; agentId?: string }
-  | { type: "run.finished"; runId: string; agentId?: string }
-  | { type: "run.timedOut"; runId: string; outcome: "idle" | "closed" }
-  | { type: "run.resumed"; runId: string; agentId?: string }
+  | {
+      type: "run.started"
+      runId: string
+      agentId?: string
+      source?: "manual" | "scheduler"
+    }
+  | {
+      type: "run.idle"
+      runId: string
+      agentId?: string
+      failed?: boolean
+      source?: "manual" | "scheduler"
+    }
+  | {
+      type: "run.flagAccepted"
+      runId: string
+      agentId?: string
+      source?: "manual" | "scheduler"
+    }
+  | {
+      type: "run.finished"
+      runId: string
+      agentId?: string
+      source?: "manual" | "scheduler"
+    }
+  | {
+      type: "run.timedOut"
+      runId: string
+      outcome: "idle" | "closed"
+      source?: "manual" | "scheduler"
+    }
+  | {
+      type: "run.resumed"
+      runId: string
+      agentId?: string
+      source?: "manual" | "scheduler"
+    }
 
 export interface AgentHandle {
   readonly id: string

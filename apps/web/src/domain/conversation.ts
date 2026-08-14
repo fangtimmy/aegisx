@@ -115,6 +115,9 @@ export type LiveEntry =
       toolName: string
       args: unknown
       result?: unknown
+      /** Server-side execution start (epoch ms) — true elapsed time for a
+       * dialog opened mid-execution. Absent on legacy data. */
+      startedAt?: number
       isError: boolean
       status: "running" | "done"
       terminal?: "timed_out" | "cancelled" | "failed"
@@ -137,6 +140,9 @@ export type ToolBlock = {
   status: "pending" | "running" | "done" | "error"
   terminal?: "timed_out" | "cancelled" | "failed"
   terminalMessage?: string
+  /** Server-side execution start (epoch ms) — set from the live event when
+   * present; the timeline uses it as the elapsed-time anchor. */
+  startedAt?: number
   /** Argument-generation time (the assistant toolCall block timing). */
   genMs?: number
   /** Tool execution time (the toolResult meta.durationMs). */
@@ -483,6 +489,7 @@ export function buildConversation(
       block.output = resultText(entry.result)
       if (isRecord(entry.result) && "details" in entry.result)
         block.details = entry.result.details
+      if (entry.startedAt !== undefined) block.startedAt = entry.startedAt
       block.status = entry.isError
         ? "error"
         : entry.status === "done"

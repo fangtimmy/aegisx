@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
-import { challenges, runQueue } from "../db/schema"
+import { challenges, queueState, runQueue } from "../db/schema"
 import { RunActionError } from "./errors"
 import { checkLaunchFence, type FenceCandidate } from "./fence"
 
@@ -37,8 +37,10 @@ export type EnqueueInput = {
   challengeId: string
   orchestration: string
   params?: Record<string, unknown>
-  /** Overrides the rendered `initial` template as the run's first prompt.
-   * Empty/undefined → the launched run renders the default `initial`. */
+  /** Per-run strategy. Appended to the launched run's default `initial`
+   * template as a `## Strategy` section — the standard blocks (challenge,
+   * environment, submission) are always included. Empty/undefined → the
+   * default `initial` renders as-is. */
   prompt?: string
   timeoutMs?: number | null
   source: "manual" | "scheduler"
@@ -260,6 +262,10 @@ export function createQueueService(deps: QueueServiceDeps) {
 
   /** Pending items across all events, FIFO by ord (global drain order).
    *
+   * Events paused via {@link queue_state} are skipped (their pending items
+   * stay put — enqueue/edit/reorder/remove still work, only launching is
+   * blocked until resume).
+   *
    * Note (accepted decision): `ord` is PER-EVENT (nextOrd scopes by eventId,
    * reorder too), so this cross-event ordering is only approximate — the
    * drainer does not promise strict cross-event FIFO. That is fine: the order
@@ -268,12 +274,19 @@ export function createQueueService(deps: QueueServiceDeps) {
    * fairness requirement. A global ord was deliberately NOT introduced — it
    * would break the per-event reorder semantics. */
   function pendingItems(): QueueRow[] {
-    return db
-      .select()
+    const rows = db
+      .select({ item: runQueue })
       .from(runQueue)
-      .where(eq(runQueue.status, "pending"))
+      .leftJoin(queueState, eq(queueState.eventId, runQueue.eventId))
+      .where(
+        and(
+          eq(runQueue.status, "pending"),
+          sql`${queueState.status} is null or ${queueState.status} != 'paused'`
+        )
+      )
       .orderBy(asc(runQueue.ord), asc(runQueue.createdAt))
       .all()
+    return rows.map((row) => row.item)
   }
 
   /** Mark an item running once its run launched (back-fills runId). */
@@ -386,6 +399,39 @@ export function createQueueService(deps: QueueServiceDeps) {
     }
   }
 
+  // --- per-event queue state (W2) -----------------------------------------
+  // Absent row = `running` (a fresh event's queue drains immediately). pause
+  // blocks FUTURE launches only — already-running runs keep going (pause ≠
+  // kill) and enqueue/edit/reorder/remove still work.
+
+  function stateOf(eventId: string): "running" | "paused" {
+    const row = db
+      .select({ status: queueState.status })
+      .from(queueState)
+      .where(eq(queueState.eventId, eventId))
+      .get()
+    return row?.status === "paused" ? "paused" : "running"
+  }
+
+  function setState(eventId: string, status: "running" | "paused"): void {
+    const ts = now()
+    db.insert(queueState)
+      .values({ eventId, status, updatedAt: ts })
+      .onConflictDoUpdate({
+        target: queueState.eventId,
+        set: { status, updatedAt: ts },
+      })
+      .run()
+  }
+
+  function pause(eventId: string): void {
+    setState(eventId, "paused")
+  }
+
+  function resume(eventId: string): void {
+    setState(eventId, "running")
+  }
+
   return {
     enqueue,
     list,
@@ -397,6 +443,9 @@ export function createQueueService(deps: QueueServiceDeps) {
     scheduleDrain,
     drainOnce,
     cancelDrain,
+    pause,
+    resume,
+    stateOf,
   }
 }
 

@@ -254,7 +254,7 @@ export function createSchedulerTools(
           const s = ctx.getStatus()
           return textResult(
             JSON.stringify({
-              concurrency: `${s.runningCount}/${s.maxConcurrentRuns} challenge runs running`,
+              concurrency: `${s.runningCount}/${s.maxConcurrentRuns} live solver containers`,
               targetSlots: `${s.activeTargetChallenges.length}/${s.maxConcurrentTargets} distinct targets under attack`,
               activeTargetChallenges: s.activeTargetChallenges,
               activeRuns: s.activeRuns,
@@ -272,7 +272,7 @@ export function createSchedulerTools(
         name: "enqueue_run",
         label: "Enqueue run",
         description:
-          "Add (or re-arm) a task in the queue. Upserts by (challenge, orchestration): a hit — including done/cancelled/failed — resets to pending. The queue drains FIFO under the concurrency caps; if a slot is free the run launches right away. `prompt` overrides the run's default first prompt with your per-run strategy.",
+          "Add (or re-arm) a task in the queue. Upserts by (challenge, orchestration): a hit — including done/cancelled/failed — resets to pending. The queue drains FIFO under the concurrency caps; if a slot is free the run launches right away. `prompt` is appended to the run's default initial prompt as a Strategy section — the standard blocks (challenge, environment, submission) are always included.",
         parameters: Type.Object({
           challenge_id: Type.String({
             minLength: 1,
@@ -296,7 +296,7 @@ export function createSchedulerTools(
             Type.String({
               maxLength: 20_000,
               description:
-                "Per-run strategy that overrides the run's default first prompt.",
+                "Per-run strategy; appended to the run's default initial prompt as a Strategy section (the standard blocks stay).",
             })
           ),
           timeout_ms: Type.Optional(
@@ -433,7 +433,7 @@ export function createSchedulerTools(
             Type.String({
               maxLength: 20_000,
               description:
-                "Per-run strategy that overrides the run's default first prompt.",
+                "Per-run strategy; appended to the run's default initial prompt as a Strategy section (the standard blocks stay).",
             })
           ),
           timeout_ms: Type.Optional(

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
+import { eq } from "drizzle-orm"
+
 import { challengeRemote, runs, schedulerConfig } from "../../src/db/schema"
 import { checkLaunchFence, maxConcurrentRunsSetting } from "../../src/run/fence"
 import {
@@ -17,7 +19,11 @@ type Db = ReturnType<typeof setupDb>["db"]
 function seedTarget(
   db: Db,
   challengeId: string,
-  opts: { solved?: boolean; targetSupported?: boolean } = {}
+  opts: {
+    solved?: boolean
+    targetSupported?: boolean
+    targetIgnored?: boolean
+  } = {}
 ) {
   db.insert(challengeRemote)
     .values({
@@ -27,7 +33,7 @@ function seedTarget(
       available: true,
       solved: opts.solved ?? false,
       targetSupported: opts.targetSupported ?? true,
-      targetIgnored: false,
+      targetIgnored: opts.targetIgnored ?? false,
       targetCount: 1,
       targetInfo: "[]",
       syncedAt: now(),
@@ -66,21 +72,35 @@ describe("launch fence (spec §8.2)", () => {
         challenge("evt-1", "ch-1")
       )
       expect(decision.ok).toBe(false)
-      if (!decision.ok) expect(decision.code).toBe("global_capacity")
+      if (!decision.ok) {
+        expect(decision.code).toBe("global_capacity")
+        expect(decision.message).toMatch(/Live container cap reached/)
+      }
     } finally {
       close()
     }
   })
 
-  test("idle runs do not count; only running consumes a global slot", () => {
+  test("idle runs count toward the live container cap (W4.1)", () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      // 4 idle runs (warm containers, no compute) → a new launch is admitted.
+      // 4 idle runs (warm containers — still live, still consuming a slot) →
+      // a new launch is REJECTED.
       for (let i = 1; i <= 4; i++) {
         seedRun(db, { id: `r${i}`, status: "idle", challengeId: "ch-1" })
       }
+      const decision = checkLaunchFence(
+        db,
+        flatSettings(),
+        challenge("evt-1", "ch-1")
+      )
+      expect(decision.ok).toBe(false)
+      if (!decision.ok) expect(decision.code).toBe("global_capacity")
+      // Closing one frees the slot.
+      seedRun(db, { id: "r5", status: "closed", challengeId: "ch-1" })
+      db.update(runs).set({ status: "closed" }).where(eq(runs.id, "r4")).run()
       expect(
         checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-1")).ok
       ).toBe(true)
@@ -158,6 +178,47 @@ describe("launch fence (spec §8.2)", () => {
       // Another run on the SAME challenge reuses the slot.
       expect(
         checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-a")).ok
+      ).toBe(true)
+    } finally {
+      close()
+    }
+  })
+
+  test("an idle run on a target-capable challenge occupies its slot (W4.2)", () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      seedTarget(db, "ch-a")
+      seedTarget(db, "ch-b")
+      // An IDLE run attacking ch-a still holds the slot (its target is very
+      // likely still running on the platform).
+      seedRun(db, { id: "ra", status: "idle", challengeId: "ch-a" })
+      const decision = checkLaunchFence(
+        db,
+        flatSettings(),
+        challenge("evt-1", "ch-b")
+      )
+      expect(decision.ok).toBe(false)
+      if (!decision.ok) expect(decision.code).toBe("target_slots")
+    } finally {
+      close()
+    }
+  })
+
+  test("an ignored target-capable challenge occupies no slot", () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      seedTarget(db, "ch-a", { targetIgnored: true })
+      seedTarget(db, "ch-b")
+      seedRun(db, { id: "ra", status: "running", challengeId: "ch-a" })
+      // ch-a's target is ignored → not under attack → ch-b may launch.
+      expect(
+        checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-b")).ok
       ).toBe(true)
     } finally {
       close()

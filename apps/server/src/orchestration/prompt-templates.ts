@@ -208,6 +208,7 @@ export const PROMPT_TEMPLATE_VARIABLES = [
   "capabilities.canSpawn",
   "capabilities.canSubmitFlag",
   "capabilities.canManageTarget",
+  "strategy",
 ] as const
 
 export type PromptPreviewSegment = {

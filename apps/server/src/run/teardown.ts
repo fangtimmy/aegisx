@@ -42,6 +42,10 @@ export type RunTeardownDeps = {
   emitRun(runId: string): void
   emitAgents(runId: string): void
   emitRunEvent(runId: string, payload: EventScopePayload): void
+  /** W4.3: stop the challenge's platform target when this teardown orphans it
+   * (no other live run on the same challenge). Fire-and-forget, errors
+   * swallowed. Provided by the run service. */
+  stopTargetIfOrphaned(runId: string, challengeId: string | null): void
 }
 
 export type RunTeardown = ReturnType<typeof createRunTeardown>
@@ -71,6 +75,7 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     emitRun,
     emitAgents,
     emitRunEvent,
+    stopTargetIfOrphaned,
   } = deps
   const forceKillTimers = new Map<string, NodeJS.Timeout>()
 
@@ -168,6 +173,9 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     emitRun(runId)
     emitAgents(runId)
     if (opts.finished) emitRunEvent(runId, { type: "run.finished", runId })
+    // W4.3: a sanctioned teardown on the last live run of a target-capable
+    // challenge orphans its platform target — stop it (fire-and-forget).
+    stopTargetIfOrphaned(runId, row?.challengeId ?? null)
     // A queue-sourced run closing/finishing transitions its item to done
     // (guarded by id + runId); freeing a slot re-drains the queue.
     queue()?.markDone(row?.queueItemId, runId)

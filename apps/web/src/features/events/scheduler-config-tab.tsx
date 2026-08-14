@@ -3,6 +3,7 @@ import { Play } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { keys, schedulerApi, type SchedulerInfo } from "@/api"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -22,6 +23,7 @@ import {
 } from "@/components/ui/number-field"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { ModelRefPicker } from "@/features/runs/model-switcher"
 import { toast } from "@/lib/toast"
@@ -83,6 +85,10 @@ export function SchedulerConfigTab({ eventId }: { eventId: string }) {
           save.mutate()
         }}
       >
+        <SchedulerStateBadge
+          paused={config.paused}
+          run={scheduler.data?.run ?? null}
+        />
         <SchedulerConfigFields
           instruction={instruction}
           maxTargets={maxTargets}
@@ -98,6 +104,28 @@ export function SchedulerConfigTab({ eventId }: { eventId: string }) {
         </div>
       </form>
     </ScrollArea>
+  )
+}
+
+/** W3.3: read-only scheduler state on the config page (controls live in the
+ * graph panel — no duplicate buttons here). */
+function SchedulerStateBadge({
+  paused,
+  run,
+}: {
+  paused: boolean
+  run: SchedulerInfo["run"]
+}) {
+  const active = run !== null && run.status !== "closed"
+  const label = active ? (paused ? "已暂停" : "运行中") : "未启用"
+  const variant = active ? (paused ? "warning" : "success") : "secondary"
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">调度者状态</span>
+      <Badge size="sm" variant={variant}>
+        {label}
+      </Badge>
+    </div>
   )
 }
 
@@ -179,6 +207,9 @@ export function StartSchedulerDialog({
   const [maxTargets, setMaxTargets] = useState(
     config?.maxConcurrentTargets ?? 1
   )
+  // W3.2: reset=true discards the closed run's history (fresh start); the
+  // default start cold-restores the closed scheduler keeping memory.
+  const [reset, setReset] = useState(false)
 
   const saveConfig = useMutation({
     mutationFn: () =>
@@ -189,9 +220,9 @@ export function StartSchedulerDialog({
       }),
   })
   const start = useMutation({
-    mutationFn: () => schedulerApi.startScheduler(eventId),
+    mutationFn: () => schedulerApi.startScheduler(eventId, reset),
     onSuccess: () => {
-      toast.success("调度者已启动")
+      toast.success(reset ? "调度者已重建" : "调度者已启动")
       void onStarted()
       onClose()
     },
@@ -233,6 +264,21 @@ export function StartSchedulerDialog({
               onMaxTargetsChange={setMaxTargets}
               onModelChange={setModelId}
             />
+            <Field>
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <FieldLabel>重建调度者</FieldLabel>
+                  <FieldDescription>
+                    勾选后丢弃已关闭调度者的历史与会话，全新启动；默认保留记忆（冷恢复）。
+                  </FieldDescription>
+                </div>
+                <Switch
+                  aria-label="重建调度者（丢弃历史）"
+                  checked={reset}
+                  onCheckedChange={setReset}
+                />
+              </div>
+            </Field>
             <div className="flex justify-end gap-2">
               <Button
                 disabled={launching}

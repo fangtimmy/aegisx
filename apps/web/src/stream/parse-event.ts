@@ -90,6 +90,9 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
           ...(value.args !== undefined ? { args: value.args } : {}),
           ...("result" in value ? { result: value.result } : {}),
           status,
+          ...(optNum(value.startedAt) !== undefined
+            ? { startedAt: value.startedAt as number }
+            : {}),
           ...(value.isError === true ? { isError: true } : {}),
           ...(isTerminal(value.terminal)
             ? {

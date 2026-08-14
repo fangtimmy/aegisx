@@ -11,7 +11,7 @@ import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 
 import { createAgentHost } from "../agents/host"
 import type {
@@ -21,7 +21,15 @@ import type {
 import type { SessionLifecycle } from "../agents/lifecycle"
 import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
-import { agents, challengeFlags, challenges, events, runs } from "../db/schema"
+import {
+  agents,
+  challengeFlags,
+  challenges,
+  events,
+  queueState,
+  runQueue,
+  runs,
+} from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import {
   loadTemplateMap,
@@ -63,7 +71,6 @@ import {
   copyAttachments,
 } from "./prompt"
 import type { RunQueries } from "./queries"
-import type { QueueService } from "./queue"
 import type { RunSchedulerToolContext } from "./scheduler-tools"
 import { createSchedulerTools } from "./scheduler-tools"
 import { createMainTools, type RunToolContext } from "./tools"
@@ -110,10 +117,10 @@ export type CreateRunInput = {
   /** Back-filled when the scheduler drainer launches this run from the queue;
    * stamped on the run row to guard the run→queue done transition. */
   queueItemId?: string
-  /** Overrides the rendered `initial` template as the run's first prompt. Set
-   * by the queue (queue.prompt) or the scheduler's start_run; omitted → render
-   * the default `initial` template. */
-  initialPromptOverride?: string
+  /** Per-run strategy (the queue/scheduler `prompt`). Never replaces the
+   * rendered `initial` template — it is injected as a `strategy` variable that
+   * renders a `## Strategy` section (the standard blocks stay). */
+  strategy?: string
 } & (
   | { scopeType: "challenge"; challengeId: string }
   | { scopeType: "event"; eventId: string; instruction: string }
@@ -180,8 +187,6 @@ export type RunFactoryDeps = {
     instruction: string
     maxConcurrentTargets: number
   }
-  /** Scheduler task queue (assigned after construction; read via getter). */
-  queue: () => QueueService | undefined
 }
 
 export type RunFactory = ReturnType<typeof createRunFactory>
@@ -437,13 +442,18 @@ export function createRunFactory(deps: RunFactoryDeps) {
     thinkingLevel: ThinkingLevel
     promptContext: PromptContext
     slotOverrides?: Record<string, ModelRef>
-    initialPromptOverride?: string
+    strategy?: string
   }): Promise<ReturnType<typeof createRunHandle>> {
     const plugin = requirePlugin(opts.orchestration)
     const templateMap = loadTemplateMap(db, plugin.id)
-    const initialPrompt =
-      opts.initialPromptOverride ??
-      renderTemplate(templateMap, "initial", opts.promptContext)
+    // The initial template is ALWAYS rendered — a strategy (queue/scheduler
+    // `prompt`) is injected as a variable (appended as a `## Strategy`
+    // section), never a whole-prompt replacement, so the standard blocks
+    // (challenge, environment, submission) can't be lost.
+    const initialPrompt = renderTemplate(templateMap, "initial", {
+      ...opts.promptContext,
+      ...(opts.strategy ? { strategy: opts.strategy } : {}),
+    })
 
     // Run-level live context: prepareAgent (prime) + spawn children reuse it.
     // The child prompt comes from the plugin's spawn template (plugin → builtin
@@ -726,7 +736,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
       thinkingLevel: entryTarget.thinkingLevel,
       promptContext,
       slotOverrides: input.slotModelOverrides,
-      initialPromptOverride: input.initialPromptOverride,
+      strategy: input.strategy,
     }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
       deps.teardownRun(runId)
@@ -780,15 +790,18 @@ export function createRunFactory(deps: RunFactoryDeps) {
   ): Promise<void> {
     // Scheduler (event-scoped) runs cold-restore like challenge runs: a
     // message to a closed run's agent rebuilds the container + session and
-    // re-runs the plugin wiring. A manual `start` remains a fresh (newSession)
-    // replacement — create() deletes the closed row first.
+    // re-runs the plugin wiring. `start` on a closed scheduler is now a
+    // cold-restore too (W3.2 — memory kept); only `start reset:true` goes
+    // fresh — create() deletes the closed row first.
     const settings = getSettings()
 
-    // Cold-restoring a closed challenge run occupies a concurrency slot
-    // (third fence enforcement point); scheduler runs do not count (same as
-    // create). Reserve atomically: check the fence (challenge only) + flip the
-    // run row to running so concurrent launches count it. Any later failure
-    // reverts to closed (releasing the slot) below.
+    // Cold-restoring a closed challenge run occupies a concurrency slot (one
+    // of the TWO fence enforcement points — create() for new containers and
+    // this restore path; the old onTurnGate fresh-turn gate was removed, so a
+    // warm idle run wakes without re-checking). Scheduler runs do not count
+    // (same as create). Reserve atomically: check the fence (challenge only) +
+    // flip the run row to running so concurrent launches count it. Any later
+    // failure reverts to closed (releasing the slot) below.
     //
     // `finishing` is reset here too: a crash between finish_run's atomic claim
     // and its teardown leaves finishing=1 on a closed row (recoverOnBoot only
@@ -1080,10 +1093,40 @@ export function createRunFactory(deps: RunFactoryDeps) {
       for (const agent of queries.listAgents(row.id)) {
         updateAgent(agent.id, { status: "idle", updatedAt: ts })
       }
+      // Crash-recovery fix: the item stayed `running` forever because boot
+      // recovery never tears down (no markDone). Reset it to pending so a
+      // future resume re-launches it (the old closed run stays in history).
+      if (row.queueItemId) {
+        db.update(runQueue)
+          .set({ status: "pending", runId: null, updatedAt: ts })
+          .where(
+            and(
+              eq(runQueue.id, row.queueItemId),
+              eq(runQueue.status, "running")
+            )
+          )
+          .run()
+      }
     }
-    // Boot closed every live run; pending queue items may now find capacity —
-    // kick a drain (debounced, fires after recoverOnBoot returns).
-    deps.queue()?.scheduleDrain()
+    // Boot leaves every queue paused: events with visible items (pending /
+    // running / failed) get queue_state='paused' and nothing drains until the
+    // user resumes. No scheduleDrain here — boot never auto-drains.
+    const ts = now()
+    const pausedEvents = db
+      .select({ eventId: runQueue.eventId })
+      .from(runQueue)
+      .where(inArray(runQueue.status, ["pending", "running", "failed"]))
+      .groupBy(runQueue.eventId)
+      .all()
+    for (const { eventId } of pausedEvents) {
+      db.insert(queueState)
+        .values({ eventId, status: "paused", updatedAt: ts })
+        .onConflictDoUpdate({
+          target: queueState.eventId,
+          set: { status: "paused", updatedAt: ts },
+        })
+        .run()
+    }
   }
 
   return {

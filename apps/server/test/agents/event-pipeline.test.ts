@@ -136,7 +136,7 @@ describe("createAgentEventPipeline commitEntry", () => {
 })
 
 describe("createAgentEventPipeline tool progress", () => {
-  test("tool_execution_start emits a running tool.progress with args", () => {
+  test("tool_execution_start emits a running tool.progress with args + server startedAt (W6)", () => {
     const { pipeline, emitted } = setup()
     pipeline.handle({
       type: "tool_execution_start",
@@ -150,6 +150,10 @@ describe("createAgentEventPipeline tool progress", () => {
     expect(tp.length).toBe(1)
     expect(tp[0].status).toBe("running")
     expect(tp[0].args).toEqual({ command: "echo hi" })
+    // W6: the event carries the server-side execution start (epoch ms), so a
+    // dialog opened mid-execution shows the true elapsed time.
+    expect(typeof tp[0].startedAt).toBe("number")
+    expect(tp[0].startedAt).toBeGreaterThan(0)
   })
 
   test("tool_execution_update carries the partial result (intermediate output)", () => {

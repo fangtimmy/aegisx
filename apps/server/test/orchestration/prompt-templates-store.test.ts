@@ -4,6 +4,12 @@ import { eq } from "drizzle-orm"
 
 import { promptTemplates } from "../../src/db/schema"
 import {
+  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  LEGACY_CHILD_SYSTEM_PROMPT_TEMPLATE,
+  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE,
+} from "../../src/orchestration/prompt-defaults"
+import {
   BUILTIN_DEFAULTS,
   BUILTIN_PLUGIN,
   loadTemplateMap,
@@ -11,6 +17,7 @@ import {
   renderTemplate,
   seedBuiltinTemplates,
   seedPluginTemplates,
+  upgradeBuiltinTemplate,
 } from "../../src/orchestration/prompt-templates"
 import { setupDb } from "../helpers"
 
@@ -159,6 +166,58 @@ describe("prompt_templates store (spec §3.6)", () => {
         .where(eq(promptTemplates.key, "observerSystem"))
         .get()
       expect(row2?.body).toBe("EDITED")
+    } finally {
+      close()
+    }
+  })
+
+  test("upgradeBuiltinTemplate refreshes only rows still equal to the legacy default (W1.3)", () => {
+    const { db, close } = setupDb()
+    try {
+      seedBuiltinTemplates(db)
+      // mainSystem: simulate a pre-upgrade DB (row still carries the legacy
+      // default body). childSystem: user-edited — must survive untouched.
+      db.update(promptTemplates)
+        .set({ body: LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE, updatedAt: "x" })
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .run()
+      db.update(promptTemplates)
+        .set({ body: "USER-EDITED", updatedAt: "x" })
+        .where(eq(promptTemplates.key, "childSystem"))
+        .run()
+
+      upgradeBuiltinTemplate(
+        db,
+        "mainSystem",
+        LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE,
+        DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
+      )
+      upgradeBuiltinTemplate(
+        db,
+        "childSystem",
+        LEGACY_CHILD_SYSTEM_PROMPT_TEMPLATE,
+        DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE
+      )
+
+      const main = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .get()
+      expect(main?.body).toBe(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE)
+      const child = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "childSystem"))
+        .get()
+      expect(child?.body).toBe("USER-EDITED")
+      // A row with the CURRENT default is left alone too (not the legacy body).
+      const initial = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "initial"))
+        .get()
+      expect(initial?.body).toBe(BUILTIN_DEFAULTS.initial)
     } finally {
       close()
     }

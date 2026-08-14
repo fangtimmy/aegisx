@@ -1,10 +1,11 @@
 import { resolveModelRef } from "@aegisx/shared"
-import { eq } from "drizzle-orm"
+import type { AgentSummary } from "@aegisx/shared/agent"
+import { eq, inArray } from "drizzle-orm"
 import type { Context, Hono } from "hono"
 import { Type } from "typebox"
 
 import type { Database } from "../db"
-import { challenges } from "../db/schema"
+import { agents, challenges, events } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
@@ -19,6 +20,7 @@ import { toOrchestrationPublic } from "../orchestration/types"
 import { platformActionHttpError } from "../platforms/errors"
 import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
+import { toAgentSummary } from "./public"
 import type { RunService } from "./service"
 import { streamRun } from "./sse"
 
@@ -28,7 +30,8 @@ import { streamRun } from "./sse"
 const runInput = Type.Object(
   {
     orchestration: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-    /** Overrides the rendered `initial` template as the run's first prompt. */
+    /** Per-run strategy — appended to the run's default initial prompt as a
+     * Strategy section (the standard blocks are always included). */
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
   },
@@ -141,6 +144,48 @@ export function registerRunRoutes(
     const detail = runService.detail(c.req.param("runId"))
     if (!detail) return notFound(c, "Run not found")
     return c.json(detail)
+  })
+
+  /** W7.3 fleet endpoint: everything the event overview polls in ONE request
+   * (was listEventRuns + N× getRun + GET /scheduler). Runs are the light
+   * `listForEvent` shape (no per-run usage — the fleet view doesn't need it;
+   * the detail path keeps it). Agents come from one `runId IN (...)` query;
+   * the scheduler run + its agents are included so the fleet query fully
+   * replaces the old fleet + scheduler pair. */
+  app.get("/api/events/:eventId/fleet", (c) => {
+    const eventId = c.req.param("eventId")
+    const event = db
+      .select({ id: events.id })
+      .from(events)
+      .where(eq(events.id, eventId))
+      .get()
+    if (!event) return notFound(c, "Event not found")
+    const runs = runService.listForEvent(eventId)
+    const agentsByRun: Record<string, AgentSummary[]> = {}
+    const runIds = runs.map((run) => run.id)
+    if (runIds.length > 0) {
+      for (const row of db
+        .select()
+        .from(agents)
+        .where(inArray(agents.runId, runIds))
+        .all()) {
+        const list = agentsByRun[row.runId] ?? []
+        list.push(toAgentSummary(row))
+        agentsByRun[row.runId] = list
+      }
+    }
+    const schedulerRun = runService.getSchedulerRun(eventId) ?? null
+    return c.json({
+      runs,
+      agentsByRun,
+      schedulerRun,
+      schedulerAgents: schedulerRun
+        ? runService.listAgents(schedulerRun.id)
+        : [],
+      // The merged scheduler query also carried config + status.
+      config: runService.getSchedulerConfig(eventId),
+      status: runService.getStatus(eventId),
+    })
   })
 
   app.get("/api/runs/:runId/files", (c) => {

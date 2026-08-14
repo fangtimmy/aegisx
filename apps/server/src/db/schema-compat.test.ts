@@ -35,6 +35,7 @@ describe("schema bootstrap", () => {
         "scheduler_config",
         "prompt_templates",
         "challenge_flags",
+        "queue_state",
       ]) {
         expect(names.has(t)).toBe(true)
       }
@@ -103,6 +104,26 @@ describe("schema bootstrap", () => {
         ).map((c) => c.name)
       )
       expect(entryCols.has("meta")).toBe(true)
+
+      // 0006: queue_state rows + scheduler_config.paused (W2/W3)
+      const queueStateCols = new Set(
+        (
+          sqlite.query(`PRAGMA table_info(queue_state)`).all() as Array<{
+            name: string
+          }>
+        ).map((c) => c.name)
+      )
+      expect([...queueStateCols]).toEqual(
+        expect.arrayContaining(["event_id", "status", "updated_at"])
+      )
+      const configCols = new Set(
+        (
+          sqlite.query(`PRAGMA table_info(scheduler_config)`).all() as Array<{
+            name: string
+          }>
+        ).map((c) => c.name)
+      )
+      expect(configCols.has("paused")).toBe(true)
       sqlite.close()
       releaseLock()
     } finally {

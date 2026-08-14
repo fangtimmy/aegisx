@@ -5,7 +5,7 @@ import { join } from "node:path"
 import type { RunPublic, SwitchModelInput } from "@aegisx/shared"
 import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
-import { eq } from "drizzle-orm"
+import { and, eq, inArray, ne } from "drizzle-orm"
 
 import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -19,9 +19,26 @@ import type { Database } from "../db"
 import { agents, runs } from "../db/schema"
 import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
-import { migrateLegacyPromptSettings } from "../orchestration/prompt-templates"
+import {
+  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_INITIAL_PROMPT_TEMPLATE,
+  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  LEGACY_CHILD_SYSTEM_PROMPT_TEMPLATE,
+  LEGACY_INITIAL_PROMPT_TEMPLATE,
+  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V2,
+} from "../orchestration/prompt-defaults"
+import {
+  migrateLegacyPromptSettings,
+  upgradeBuiltinTemplate,
+} from "../orchestration/prompt-templates"
 import { bootOrchestration } from "../orchestration/registry"
 import { EventScopeEmitter, RunEmitter } from "../orchestration/run-handle"
+import {
+  getChallengeRemote,
+  isTargetCapable,
+} from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 import { getProviderConnections } from "../providers/public"
 import { createAgentSessionOps } from "./agent-session-ops"
@@ -29,7 +46,6 @@ import { createChildAgentRuntime } from "./child-agents"
 import type { ContainerManager } from "./container/container-manager"
 import { createRunDeadlines, type RunDeadlines } from "./deadlines"
 import { RunActionError } from "./errors"
-import { checkLaunchFence } from "./fence"
 import { createModelResolver } from "./model-resolver"
 import { createRunQueries } from "./queries"
 import { createQueueService, type QueueService } from "./queue"
@@ -108,6 +124,35 @@ export function createRunService(options: RunServiceOptions) {
   // table is the single render source.
   bootOrchestration(db)
   migrateLegacyPromptSettings(db, configStore.getLegacyPromptTemplates())
+  // One-time refresh of built-in rows still carrying the previous default
+  // bodies (W1.3/W5): mainSystem/childSystem gained the ENVIRONMENT.md
+  // quick-reference, initial gained the Strategy section, orchestratorSystem
+  // gained the Manual-runs section. upgradeBuiltinTemplate only touches rows
+  // that exactly equal the legacy body — user edits survive untouched.
+  upgradeBuiltinTemplate(
+    db,
+    "mainSystem",
+    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE,
+    DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
+  )
+  upgradeBuiltinTemplate(
+    db,
+    "childSystem",
+    LEGACY_CHILD_SYSTEM_PROMPT_TEMPLATE,
+    DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE
+  )
+  upgradeBuiltinTemplate(
+    db,
+    "initial",
+    LEGACY_INITIAL_PROMPT_TEMPLATE,
+    DEFAULT_INITIAL_PROMPT_TEMPLATE
+  )
+  upgradeBuiltinTemplate(
+    db,
+    "orchestratorSystem",
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V2,
+    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
 
   /** Per-agent promise-chaining locks (the only concurrency mechanism). */
   const locks = new Map<string, Promise<unknown>>()
@@ -156,10 +201,13 @@ export function createRunService(options: RunServiceOptions) {
    * quick DB op (row insert / status flip); container builds and setup run
    * outside.
    *
-   * Lock order (agent → fence): every fence critical section runs either
-   * outside any agent lock (create / restoreRunContext) or inside one (the
-   * onTurnGate hook — send() holds the target agent's lock). No fence section
-   * ever acquires an agent lock, so the order is acyclic (no deadlock). */
+   * Lock order: every fence critical section (create / restoreRunContext)
+   * runs OUTSIDE any agent lock — no fence section ever acquires an agent
+   * lock, so the order is acyclic (no deadlock). The former onTurnGate fence
+   * hook is gone (W4): waking a warm idle run adds no container and no target
+   * slot (its challenge is already counted), so fresh turns are never
+   * capacity-rejected. The fence lives only at the two container-creating
+   * points: create() and restoreRunContext(). */
   async function withFence<T>(op: () => T | Promise<T>): Promise<T> {
     return chainLock(fenceLocks, "global-fence", op)
   }
@@ -209,6 +257,9 @@ export function createRunService(options: RunServiceOptions) {
     bus,
     emitters,
     eventScopes,
+    // W3: a paused scheduler's run-lifecycle events are dropped before they
+    // reach the orchestrator (late-bound schedulerAdmin, read at call time).
+    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
     now,
     updateAgent,
   })
@@ -246,33 +297,11 @@ export function createRunService(options: RunServiceOptions) {
     onBeforeNewTurn(agentId) {
       pendingFinish.delete(agentId)
     },
-    /** Fresh-turn gate (fourth fence enforcement point): waking a warm idle
-     * run starts a new compute round, so it must be admitted by the fence like
-     * a fresh launch. Runs a quick fence check + status flip under the GLOBAL
-     * fence while holding this agent's lock (agent → fence order, see
-     * withFence). A capacity reject propagates out of send() as RunActionError
-     * → HTTP 429 / tool result. steer/followUp (streaming branch) and drive()
-     * (child result delivery / prime) skip this hook. */
-    async onTurnGate(agentId) {
-      const runId = runIdOf(agentId)
-      if (!runId) return
-      const row = queries.getRow(runId)
-      if (!row || row.scopeType !== "challenge" || row.status !== "idle") {
-        return
-      }
-      await withFence(async () => {
-        const decision = checkLaunchFence(db, getSettings(), {
-          scopeType: "challenge",
-          eventId: row.eventId,
-          challengeId: row.challengeId,
-        })
-        if (!decision.ok) throw new RunActionError("capacity", decision.message)
-        // Atomic placeholder: same reservation semantics as create / restore.
-        // If the gate throws, the run stays idle (no slot consumed). The
-        // subsequent agentTurnStart's recompute maintains it as running.
-        updateRun(runId, { status: "running", updatedAt: now() })
-      })
-    },
+    // No onTurnGate (W4): waking a warm idle run adds no container and no
+    // target slot — its challenge is already counted by the fence — so fresh
+    // turns are never capacity-rejected. Fence enforcement lives only at the
+    // two container-creating points (create / restoreRunContext);
+    // agentTurnStart's status recompute below still maintains run status.
     async onResume(agentId) {
       const runId = runIdOf(agentId)
       if (runId) await runFactory.prepareAgent(runId, agentId)
@@ -361,6 +390,7 @@ export function createRunService(options: RunServiceOptions) {
     emitRun: status.emitRun,
     emitAgents: status.emitAgents,
     emitRunEvent: status.emitRunEvent,
+    stopTargetIfOrphaned,
   })
 
   // --- multi-session + flat backtrack (v12) --------------------------------
@@ -585,6 +615,9 @@ export function createRunService(options: RunServiceOptions) {
     await withLock(lockKey, async () => {
       const row = queries.getRow(runId)
       if (!row) throw new RunActionError("not_found", "Run not found")
+      // W4.3: deleting the last live run on a target-capable challenge
+      // orphans its platform target — stop it before the row is gone.
+      stopTargetIfOrphaned(runId, row.challengeId)
       for (const agent of agents) {
         const session = lifecycle.get(agent.id)
         if (session?.session.isStreaming) {
@@ -607,6 +640,34 @@ export function createRunService(options: RunServiceOptions) {
       rmSync(runDir(runId), { recursive: true, force: true })
       db.delete(runs).where(eq(runs.id, runId)).run()
     })
+  }
+
+  /** W4.3: stop the challenge's platform target when a teardown orphans it —
+   * the challenge is target-capable and no OTHER live (running/idle) run is
+   * still attacking it. Fire-and-forget; errors swallowed. Only sanctioned
+   * teardowns call this (close/finish/timeout via teardownRun, plus
+   * deleteRun). */
+  function stopTargetIfOrphaned(
+    runId: string,
+    challengeId: string | null
+  ): void {
+    if (!challengeId) return
+    if (!isTargetCapable(getChallengeRemote(db, challengeId))) return
+    const other = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.challengeId, challengeId),
+          inArray(runs.status, ["running", "idle"]),
+          ne(runs.id, runId)
+        )
+      )
+      .get()
+    if (other) return
+    void platformService
+      .targetAction(challengeId, "stop")
+      .catch(() => undefined)
   }
 
   async function close() {
@@ -688,7 +749,6 @@ export function createRunService(options: RunServiceOptions) {
     buildSchedulerToolContext: (runId, agentId) =>
       schedulerAdmin.buildSchedulerToolContext(runId, agentId),
     getSchedulerConfig: (eventId) => schedulerAdmin.getSchedulerConfig(eventId),
-    queue: () => queue,
   })
 
   schedulerAdmin = createSchedulerAdmin({
@@ -759,6 +819,8 @@ export function createRunService(options: RunServiceOptions) {
     getSchedulerConfig: schedulerAdmin.getSchedulerConfig,
     upsertSchedulerConfig: schedulerAdmin.upsertSchedulerConfig,
     startScheduler: schedulerAdmin.startScheduler,
+    pauseScheduler: schedulerAdmin.pauseScheduler,
+    resumeScheduler: schedulerAdmin.resumeScheduler,
     queue: () => queue!,
     refresh: queries.get,
     recoverOnBoot: runFactory.recoverOnBoot,

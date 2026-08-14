@@ -1,5 +1,4 @@
 import { useMemo } from "react"
-import { Link } from "react-router"
 
 import type { Challenge, RunPublic } from "@/api"
 import {
@@ -84,11 +83,13 @@ function buildTimeline(
 export function TimelineTab({
   challenges,
   runs,
-  eventId,
+  onSelectRun,
 }: {
   challenges: Challenge[]
   runs: RunPublic[]
-  eventId: string
+  /** W7: click a run-linked entry → select the run's entry agent (highlight,
+   * no dialog). */
+  onSelectRun?: (runId: string) => void
 }) {
   const events = useMemo(
     () => buildTimeline(challenges, runs),
@@ -148,12 +149,14 @@ export function TimelineTab({
           )
           return event.runId ? (
             <li className="border-b py-2.5 last:border-b-0" key={event.id}>
-              <Link
-                className="block rounded-md hover:bg-accent"
-                to={`/events/${eventId}/runs/${event.runId}`}
+              <button
+                className="block w-full cursor-pointer rounded-md text-left hover:bg-accent"
+                disabled={!onSelectRun}
+                onClick={() => onSelectRun?.(event.runId!)}
+                type="button"
               >
                 {row}
-              </Link>
+              </button>
             </li>
           ) : (
             <li className="border-b py-2.5 last:border-b-0" key={event.id}>

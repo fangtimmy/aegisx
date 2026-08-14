@@ -20,6 +20,9 @@ export type RunStatusDeps = {
   emitters: Map<string, RunEmitter>
   /** Per-event run-lifecycle emitters (scheduler observation). */
   eventScopes: Map<string, EventScopeEmitter>
+  /** Whether the event's scheduler is paused (W3): paused → the run-lifecycle
+   * events are dropped before they reach the orchestrator. */
+  isSchedulerPaused(eventId: string): boolean
   now(): string
   updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
 }
@@ -49,11 +52,17 @@ export function createRunStatus(deps: RunStatusDeps) {
 
   /** Dispatch a run lifecycle event to its event's scheduler. Only
    * challenge-scoped runs emit — the scheduler observes its child runs, never
-   * itself (an event-scoped run's own turns don't re-notify it). */
+   * itself (an event-scoped run's own turns don't re-notify it). The payload
+   * carries the run's `source` (W5) so the scheduler can tell manual runs
+   * apart. A paused scheduler (W3) is silent: events are dropped here (no
+   * memory buildup) — it re-syncs on resume. */
   function emitRunEvent(runId: string, payload: EventScopePayload): void {
     const run = queries.getRow(runId)
     if (run?.scopeType !== "challenge") return
-    eventScopes.get(run.eventId)?.emit(payload)
+    if (deps.isSchedulerPaused(run.eventId)) return
+    eventScopes
+      .get(run.eventId)
+      ?.emit({ ...payload, source: run.source as "manual" | "scheduler" })
   }
 
   /** Recompute a run's status from its agents' statuses. No-op once the run is

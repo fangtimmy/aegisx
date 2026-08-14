@@ -55,6 +55,7 @@ export {
 export type { ContextSnapshot } from "@aegisx/shared/live-event"
 
 import type { FlatSettings } from "@aegisx/shared"
+import type { AgentSummary } from "@aegisx/shared/agent"
 
 import type { RunPublic } from "./types"
 
@@ -77,6 +78,15 @@ export type QueueItem = {
   updatedAt: string
 }
 
+/** Per-event queue state (absent row = running). */
+export type QueueState = "running" | "paused"
+
+/** GET /api/events/:id/queue — items + the event's queue state. */
+export type QueueSnapshot = {
+  items: QueueItem[]
+  state: QueueState
+}
+
 /** GET /api/events/:id/scheduler — config + run + fence status snapshot. */
 export type SchedulerInfo = {
   config: {
@@ -84,6 +94,8 @@ export type SchedulerInfo = {
     modelId: string | null
     instruction: string
     maxConcurrentTargets: number
+    /** W3: scheduler disabled (run-lifecycle events gated). */
+    paused: boolean
   }
   run: RunPublic | null
   status: {
@@ -99,6 +111,17 @@ export type SchedulerInfo = {
       orchestration: string
     }>
   }
+}
+
+/** W7.3: GET /api/events/:id/fleet — the overview's single poll (runs +
+ * agents + scheduler run/agents + scheduler config/status). */
+export type FleetInfo = {
+  runs: RunPublic[]
+  agentsByRun: Record<string, AgentSummary[]>
+  schedulerRun: RunPublic | null
+  schedulerAgents: AgentSummary[]
+  config: SchedulerInfo["config"]
+  status: SchedulerInfo["status"]
 }
 
 /** GET /api/orchestrations — plugin id/scope + declared slots + templates. */

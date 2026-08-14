@@ -10,7 +10,13 @@ import { defineOrchestration, type EventHandle, type RunHandle } from "./types"
  * stale state; `run.started` confirms external/manual launches. */
 function wire(run: RunHandle, event: EventHandle): void {
   const orch = run.agent("orchestrator")
-  event.on("run.started", (e) => orch.send(`Run ${e.runId} 已启动。`))
+  // W5: manual runs are flagged so the scheduler observes but never operates
+  // on them (unless its instruction explicitly authorizes it).
+  event.on("run.started", (e) =>
+    orch.send(
+      `Run ${e.runId} 已启动${e.source === "manual" ? "（手动启动，由用户管理）" : ""}。`
+    )
+  )
   event.on("run.idle", (e) =>
     orch.send(
       `Run ${e.runId} 转入 idle${e.failed ? "（有 agent 失败）" : ""}。`

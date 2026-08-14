@@ -1,5 +1,5 @@
 import dagre from "@dagrejs/dagre"
-import { useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Background,
   Controls,
@@ -7,6 +7,8 @@ import {
   Panel,
   Position,
   ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
   type Edge,
   type Node,
   type NodeMouseHandler,
@@ -16,17 +18,20 @@ import {
 
 import "@xyflow/react/dist/style.css"
 import {
+  Archive,
   BrainCircuit,
   ChevronDown,
   GitFork,
   Network,
+  Pause,
   Play,
   Server,
+  Users,
 } from "lucide-react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { AgentSummary, RunPublic } from "@/api"
-import { keys } from "@/api"
+import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -38,11 +43,14 @@ import {
 } from "@/components/ui/card"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import { runStatusLabel, statusVariant } from "@/features/runs/run-overview"
+import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 
 import {
   agentFinishBadge,
+  ARCHIVE_NODE_ID,
   EDGE_STYLE,
+  MANUAL_NODE_ID,
   NODE_DIM,
   roleLabel,
   SCHED_NODE_ID,
@@ -53,6 +61,8 @@ import { StartSchedulerDialog } from "./scheduler-config-tab"
 const runNodeId = (id: string) => `run:${id}`
 const agentNodeId = (id: string) => `agent:${id}`
 
+type SelectedAgent = { runId: string; agentId: string } | null
+
 type GraphNodeData =
   | {
       kind: "scheduler"
@@ -62,8 +72,10 @@ type GraphNodeData =
       agentId: string | null
       status: string
     }
+  | { kind: "manual" }
+  | { kind: "archive"; count: number; open: boolean }
   | { kind: "run"; run: RunPublic; active: boolean }
-  | { kind: "agent"; agent: AgentSummary; runId: string }
+  | { kind: "agent"; agent: AgentSummary; runId: string; selected: boolean }
 
 /** Lay out nodes top-to-bottom with dagre, writing absolute positions back
  * onto each node (React Flow needs explicit positions). */
@@ -97,36 +109,43 @@ function layoutWithDagre(
   })
 }
 
-/** Build the node/edge set for the whole event fleet, then lay it out. */
+/** W7.2: three top-level groups — 调度者 (scheduler root + its active
+ * scheduler-source runs), 手动 (group root + active manual runs), 已归档
+ * (aggregate node, collapsed by default; expanded shows closed runs). Active
+ * run count is bounded by the container cap (W4), the archive stays collapsed
+ * unless opened, so the steady-state node count is bounded. */
 function buildAgentsGraph({
   scheduler,
   schedRun,
   runs,
   detailsById,
   openRuns,
+  archiveOpen,
+  selected,
 }: {
   scheduler?: SchedulerWithAgents
   schedRun: RunPublic | null
   runs: RunPublic[]
   detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
   openRuns: Set<string>
+  archiveOpen: boolean
+  selected: SelectedAgent
 }): { nodes: Node[]; edges: Edge[] } {
   const rawNodes: Node[] = []
   const rawEdges: Edge[] = []
   const dims: Record<string, { width: number; height: number }> = {}
   const addNode = (
     id: string,
-    type: "scheduler" | "run" | "agent",
+    type: "scheduler" | "manual" | "archive" | "run" | "agent",
     data: GraphNodeData
   ) => {
     rawNodes.push({ id, type, data, position: { x: 0, y: 0 } })
     dims[id] = NODE_DIM[type]
   }
 
-  // Root: the event scheduler. When a scheduler run exists, this node IS its
-  // orchestrator agent (click opens that agent's conversation) and the
-  // challenge runs hang off it. When no run exists it is a non-clickable
-  // "未启用" placeholder — the start control lives in the graph overlay.
+  // Group 1: the scheduler. When a scheduler run exists, this node IS its
+  // orchestrator agent (click opens that agent's conversation) and the active
+  // scheduler-source runs hang off it. No run → non-clickable "未启用" node.
   const orchAgent =
     scheduler?.agents?.find((a) => a.isEntry) ?? scheduler?.agents?.[0] ?? null
   addNode(SCHED_NODE_ID, "scheduler", {
@@ -136,30 +155,44 @@ function buildAgentsGraph({
     status: schedRun ? runStatusLabel(schedRun.status) : "未启用",
   })
 
-  // Challenge runs hang off the scheduler node when one is active; otherwise
-  // they stand alone. Each expanded run exposes its agents.
-  for (const run of runs) {
+  const active = runs.filter((run) => run.status !== "closed")
+  const schedulerActive = active.filter((run) => run.source === "scheduler")
+  const manualActive = active.filter((run) => run.source !== "scheduler")
+  const closed = runs.filter((run) => run.status === "closed")
+
+  // Group 2 + 3 roots only when they have content.
+  if (manualActive.length > 0) {
+    addNode(MANUAL_NODE_ID, "manual", { kind: "manual" })
+  }
+  if (closed.length > 0) {
+    addNode(ARCHIVE_NODE_ID, "archive", {
+      kind: "archive",
+      count: closed.length,
+      open: archiveOpen,
+    })
+  }
+
+  const addRun = (run: RunPublic, root: string) => {
     addNode(runNodeId(run.id), "run", {
       kind: "run",
       run,
       active: openRuns.has(run.id),
     })
-    if (schedRun) {
-      rawEdges.push({
-        id: `e:sched:run:${run.id}`,
-        source: SCHED_NODE_ID,
-        target: runNodeId(run.id),
-        type: "smoothstep",
-        style: EDGE_STYLE.oversee,
-      })
-    }
-    if (!openRuns.has(run.id)) continue
+    rawEdges.push({
+      id: `e:root:run:${run.id}`,
+      source: root,
+      target: runNodeId(run.id),
+      type: "smoothstep",
+      style: EDGE_STYLE.oversee,
+    })
+    if (!openRuns.has(run.id)) return
     const agents = detailsById.get(run.id)?.agents ?? []
     for (const agent of agents) {
       addNode(agentNodeId(agent.id), "agent", {
         kind: "agent",
         agent,
         runId: run.id,
+        selected: selected?.agentId === agent.id,
       })
     }
     for (const agent of agents) {
@@ -183,20 +216,27 @@ function buildAgentsGraph({
     }
   }
 
+  for (const run of schedulerActive) addRun(run, SCHED_NODE_ID)
+  for (const run of manualActive) addRun(run, MANUAL_NODE_ID)
+  if (archiveOpen) for (const run of closed) addRun(run, ARCHIVE_NODE_ID)
+
   return { nodes: layoutWithDagre(rawNodes, rawEdges, dims), edges: rawEdges }
 }
 
 function GraphNodeShell({
   children,
   className,
+  selected = false,
 }: {
   children: React.ReactNode
   className?: string
+  selected?: boolean
 }) {
   return (
     <div
       className={cn(
         "relative flex cursor-pointer items-center gap-2 rounded-lg border bg-popover px-3 py-2 text-popover-foreground shadow-xs/5 transition-colors hover:border-foreground/35",
+        selected && "ring-2 ring-primary",
         className
       )}
     >
@@ -227,6 +267,36 @@ function SchedulerGraphNode({ data }: NodeProps) {
       <Badge size="sm" variant="secondary">
         {d.status}
       </Badge>
+    </GraphNodeShell>
+  )
+}
+
+function ManualGroupNode() {
+  return (
+    <GraphNodeShell className="w-44">
+      <Users className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+        手动任务
+      </span>
+    </GraphNodeShell>
+  )
+}
+
+function ArchiveGraphNode({ data }: NodeProps) {
+  const d = data as Extract<GraphNodeData, { kind: "archive" }>
+  return (
+    <GraphNodeShell className="w-44">
+      <Archive className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+        已归档 ×{d.count}
+      </span>
+      <ChevronDown
+        aria-hidden="true"
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground transition-transform",
+          !d.open && "-rotate-90"
+        )}
+      />
     </GraphNodeShell>
   )
 }
@@ -269,7 +339,10 @@ function AgentGraphNode({ data }: NodeProps) {
   const { agent } = d
   const finish = agentFinishBadge(agent.status)
   return (
-    <GraphNodeShell className={cn("w-48", finish && "opacity-60")}>
+    <GraphNodeShell
+      className={cn("w-48", finish && "opacity-60")}
+      selected={d.selected}
+    >
       <AgentStatusIcon className="[&_svg]:size-3.5" status={agent.status} />
       <span className="min-w-0 flex-1 truncate text-sm">
         {agent.name ?? roleLabel(agent.role)}
@@ -297,22 +370,169 @@ function AgentGraphNode({ data }: NodeProps) {
 // node components back from this module (an ESM cycle).
 const GRAPH_NODE_TYPES = {
   scheduler: SchedulerGraphNode,
+  manual: ManualGroupNode,
+  archive: ArchiveGraphNode,
   run: RunGraphNode,
   agent: AgentGraphNode,
 } satisfies NodeTypes
+
+/** The ReactFlow canvas (inside the provider so useReactFlow can focus the
+ * selected node). Split out from AgentsGraph because useReactFlow needs the
+ * provider above it. */
+function GraphCanvas({
+  graph,
+  graphKey,
+  schedRun,
+  paused,
+  pausePending,
+  resumePending,
+  closePending,
+  selected,
+  onOpenAgent,
+  onToggleRun,
+  onToggleArchive,
+  onPauseScheduler,
+  onResumeScheduler,
+  onCloseScheduler,
+  onStartOpen,
+}: {
+  graph: { nodes: Node[]; edges: Edge[] }
+  graphKey: string
+  schedRun: RunPublic | null
+  paused: boolean
+  pausePending: boolean
+  resumePending: boolean
+  closePending: boolean
+  selected: SelectedAgent
+  onOpenAgent: (runId: string, agentId: string) => void
+  onToggleRun: (runId: string) => void
+  onToggleArchive: () => void
+  onPauseScheduler: () => void
+  onResumeScheduler: () => void
+  onCloseScheduler: () => void
+  onStartOpen: () => void
+}) {
+  const flow = useReactFlow()
+  /** W7.2 viewport focus: center the selected agent once per selection (not on
+   * every poll — polls change graph.nodes identity). */
+  const focusedAgentId = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selected) return
+    if (focusedAgentId.current === selected.agentId) return
+    const node = graph.nodes.find((n) => n.id === agentNodeId(selected.agentId))
+    if (!node) return
+    focusedAgentId.current = selected.agentId
+    const dim = NODE_DIM.agent
+    void flow.setCenter(
+      node.position.x + dim.width / 2,
+      node.position.y + dim.height / 2,
+      { zoom: 1, duration: 300 }
+    )
+  }, [selected, graph, flow])
+
+  const onNodeClick = useCallback<NodeMouseHandler>(
+    (_, node) => {
+      const data = node.data as GraphNodeData
+      if (data.kind === "scheduler") {
+        // The scheduler node IS the orchestrator agent — open its conversation.
+        if (data.runId && data.agentId) onOpenAgent(data.runId, data.agentId)
+      } else if (data.kind === "run") {
+        onToggleRun(data.run.id)
+      } else if (data.kind === "agent") {
+        onOpenAgent(data.runId, data.agent.id)
+      } else if (data.kind === "archive") {
+        onToggleArchive()
+      }
+      // manual → group label, no-op.
+    },
+    [onOpenAgent, onToggleRun, onToggleArchive]
+  )
+
+  return (
+    <ReactFlow
+      edges={graph.edges}
+      fitView
+      fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
+      key={graphKey}
+      minZoom={0.2}
+      nodeTypes={GRAPH_NODE_TYPES}
+      nodes={graph.nodes}
+      nodesConnectable={false}
+      nodesDraggable={false}
+      onNodeClick={onNodeClick}
+      onlyRenderVisibleElements
+      panOnScroll
+      panOnScrollSpeed={1}
+      proOptions={{ hideAttribution: true }}
+      zoomOnScroll={false}
+    >
+      <Background color="var(--border)" gap={22} size={1} />
+      <Controls position="bottom-right" showInteractive={false} />
+      {/* W3.3 scheduler lifecycle, state-driven: active+not paused → 暂停 /
+          关闭; paused → 恢复; closed/no run → 启动 (restore semantics). */}
+      <Panel
+        className="flex flex-wrap items-center gap-1.5"
+        position="top-right"
+      >
+        {schedRun && schedRun.status !== "closed" ? (
+          paused ? (
+            <Button
+              loading={resumePending}
+              onClick={onResumeScheduler}
+              size="sm"
+              type="button"
+            >
+              <Play /> 恢复
+            </Button>
+          ) : (
+            <>
+              <Button
+                loading={pausePending}
+                onClick={onPauseScheduler}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Pause /> 暂停
+              </Button>
+              <Button
+                loading={closePending}
+                onClick={onCloseScheduler}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Archive /> 关闭
+              </Button>
+            </>
+          )
+        ) : (
+          <Button onClick={onStartOpen} size="sm" type="button">
+            <Play /> 启动调度者
+          </Button>
+        )}
+      </Panel>
+    </ReactFlow>
+  )
+}
 
 export function AgentsGraph({
   eventId,
   runs,
   detailsById,
   scheduler,
-  onSelectAgent,
+  onOpenAgent,
+  selected,
 }: {
   eventId: string
   runs: RunPublic[]
   detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
   scheduler?: SchedulerWithAgents
-  onSelectAgent: (runId: string, agentId: string) => void
+  /** W7.1: graph node click → open the agent dialog (the ONLY dialog entry). */
+  onOpenAgent: (runId: string, agentId: string) => void
+  /** W7.2: highlighted agent (from the left panel / timeline / queue); the
+   * graph auto-expands its run + focuses it, but does NOT open a dialog. */
+  selected: SelectedAgent
 }) {
   const queryClient = useQueryClient()
   const [openRuns, setOpenRuns] = useState<Set<string>>(() => {
@@ -321,14 +541,12 @@ export function AgentsGraph({
       runs.filter((run) => run.status !== "closed").map((run) => run.id)
     )
   })
-  const schedRun = scheduler?.run ?? null
-  // Start-open state: the launch dialog persists the pre-start policy (model /
-  // instruction / target cap) before creating the orchestrator run.
+  const [archiveOpen, setArchiveOpen] = useState(false)
   const [startOpen, setStartOpen] = useState(false)
+  const schedRun = scheduler?.run ?? null
+  const config = scheduler?.config
+  const paused = config?.paused ?? false
 
-  // Scheduler lifecycle: the graph only hosts the start entry (there is no
-  // run entity to click before start). Stop / close and the orchestrator
-  // conversation live in the AgentDialog, exactly like any other run's agent.
   const invalidateScheduler = () =>
     Promise.all([
       queryClient.invalidateQueries({
@@ -337,9 +555,35 @@ export function AgentsGraph({
       queryClient.invalidateQueries({
         queryKey: keys.scheduler.queue(eventId),
       }),
-      queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) }),
-      queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
+      queryClient.invalidateQueries({ queryKey: keys.runs.fleet(eventId) }),
     ])
+
+  // W3.3 lifecycle actions (pause keeps the container warm; close releases it
+  // — the run stays cold-restorable; start restores memory by default).
+  const pauseScheduler = useMutation({
+    mutationFn: () => schedulerApi.pauseScheduler(eventId),
+    onSuccess: () => {
+      toast.success("调度者已暂停")
+      void invalidateScheduler()
+    },
+    onError: (error) => toast.error("暂停调度者失败", error.message),
+  })
+  const resumeScheduler = useMutation({
+    mutationFn: () => schedulerApi.resumeScheduler(eventId),
+    onSuccess: () => {
+      toast.success("调度者已恢复")
+      void invalidateScheduler()
+    },
+    onError: (error) => toast.error("恢复调度者失败", error.message),
+  })
+  const closeScheduler = useMutation({
+    mutationFn: () => schedulerApi.closeScheduler(eventId),
+    onSuccess: () => {
+      toast.success("调度者已关闭")
+      void invalidateScheduler()
+    },
+    onError: (error) => toast.error("关闭调度者失败", error.message),
+  })
 
   const sortedRuns = [...runs].sort((left, right) => {
     const activeRank = (run: RunPublic) => (run.status === "closed" ? 1 : 0)
@@ -360,8 +604,18 @@ export function AgentsGraph({
         runs: sortedRuns,
         detailsById,
         openRuns,
+        archiveOpen,
+        selected,
       }),
-    [scheduler, schedRun, sortedRuns, detailsById, openRuns]
+    [
+      scheduler,
+      schedRun,
+      sortedRuns,
+      detailsById,
+      openRuns,
+      archiveOpen,
+      selected,
+    ]
   )
   // Remount React Flow (→ re-fit-view) only when the node SET changes
   // (expand/collapse/spawn). Status-only polls keep the same key, so the
@@ -370,25 +624,32 @@ export function AgentsGraph({
     () => graph.nodes.map((node) => node.id).join("|"),
     [graph]
   )
-  const onNodeClick = useCallback<NodeMouseHandler>(
-    (_, node) => {
-      const data = node.data as GraphNodeData
-      if (data.kind === "scheduler") {
-        // The scheduler node IS the orchestrator agent — open its conversation.
-        if (data.runId && data.agentId) onSelectAgent(data.runId, data.agentId)
-      } else if (data.kind === "run") {
-        setOpenRuns((prev) => {
-          const next = new Set(prev)
-          if (next.has(data.run.id)) next.delete(data.run.id)
-          else next.add(data.run.id)
-          return next
-        })
-      } else {
-        onSelectAgent(data.runId, data.agent.id)
-      }
-    },
-    [onSelectAgent]
-  )
+
+  // W7.2: the selected run is auto-expanded (and the archive opened when the
+  // run is closed) so its agent node is visible for the viewport focus.
+  useEffect(() => {
+    if (!selected) return
+    setOpenRuns((prev) => {
+      if (prev.has(selected.runId)) return prev
+      const next = new Set(prev)
+      next.add(selected.runId)
+      return next
+    })
+    const run = runs.find((r) => r.id === selected.runId)
+    if (run?.status === "closed") setArchiveOpen(true)
+  }, [selected, runs])
+
+  const onToggleRun = useCallback((runId: string) => {
+    setOpenRuns((prev) => {
+      const next = new Set(prev)
+      if (next.has(runId)) next.delete(runId)
+      else next.add(runId)
+      return next
+    })
+  }, [])
+  const onToggleArchive = useCallback(() => {
+    setArchiveOpen((prev) => !prev)
+  }, [])
 
   return (
     <Card className="flex h-full min-h-0 flex-col">
@@ -401,47 +662,29 @@ export function AgentsGraph({
         <CardDescription>调度者 → 任务 → agents</CardDescription>
       </CardHeader>
       <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">
-        <ReactFlow
-          edges={graph.edges}
-          fitView
-          fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
-          key={graphKey}
-          minZoom={0.2}
-          nodeTypes={GRAPH_NODE_TYPES}
-          nodes={graph.nodes}
-          nodesConnectable={false}
-          nodesDraggable={false}
-          onNodeClick={onNodeClick}
-          panOnScroll
-          panOnScrollSpeed={1}
-          proOptions={{ hideAttribution: true }}
-          zoomOnScroll={false}
-        >
-          <Background color="var(--border)" gap={22} size={1} />
-          <Controls position="bottom-right" showInteractive={false} />
-          {/* Scheduler lifecycle: the graph only hosts the start entry (there
-                is no run entity to click before start). Stop / close and the
-                orchestrator conversation live in the AgentDialog, exactly like
-                any other run's agent. */}
-          <Panel
-            className="flex flex-wrap items-center gap-1.5"
-            position="top-right"
-          >
-            {(!schedRun || schedRun.status === "closed") && (
-              <Button
-                onClick={() => setStartOpen(true)}
-                size="sm"
-                type="button"
-              >
-                <Play /> 启动调度者
-              </Button>
-            )}
-          </Panel>
-        </ReactFlow>
+        <ReactFlowProvider>
+          <GraphCanvas
+            closePending={closeScheduler.isPending}
+            graph={graph}
+            graphKey={graphKey}
+            onCloseScheduler={() => closeScheduler.mutate()}
+            onOpenAgent={onOpenAgent}
+            onPauseScheduler={() => pauseScheduler.mutate()}
+            onResumeScheduler={() => resumeScheduler.mutate()}
+            onStartOpen={() => setStartOpen(true)}
+            onToggleArchive={onToggleArchive}
+            onToggleRun={onToggleRun}
+            pausePending={pauseScheduler.isPending}
+            paused={paused}
+            resumePending={resumeScheduler.isPending}
+            schedRun={schedRun}
+            selected={selected}
+          />
+        </ReactFlowProvider>
       </CardPanel>
       {startOpen && (
         <StartSchedulerDialog
-          config={scheduler?.config}
+          config={config}
           eventId={eventId}
           onClose={() => setStartOpen(false)}
           onStarted={invalidateScheduler}

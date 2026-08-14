@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowUpDown,
   ClipboardList,
@@ -6,10 +6,11 @@ import {
   LayoutPanelTop,
   ListChecks,
   ListFilter,
-  ListOrdered,
   ListTree,
   Maximize2,
   Minimize2,
+  Pause,
+  Play,
   Puzzle,
   Settings,
   TriangleAlert,
@@ -22,6 +23,7 @@ import {
   type AgentSummary,
   type Challenge,
   type QueueItem,
+  type QueueState,
   type RunPublic,
   eventsApi,
   keys,
@@ -55,7 +57,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { RunWorkspace } from "@/features/runs/run-workspace"
+import { toast } from "@/lib/toast"
 
 import { AgentDialog } from "./agent-dialog"
 import { AgentsGraph } from "./agents-graph"
@@ -83,7 +85,6 @@ import {
 } from "./event-view-prefs"
 import { ImportChallengesDialog } from "./platform-binding"
 import { QueueList } from "./queue-list"
-import { RunsTab } from "./runs-tab"
 import { TimelineTab } from "./timeline-tab"
 
 type EventTab = "overview" | "agents" | "challenges" | "settings"
@@ -199,31 +200,51 @@ function challengeGroups(
   }))
 }
 
-type OverviewTab = "plan" | "timeline" | "challenges" | "runs" | "agents"
+type OverviewTab = "plan" | "timeline" | "challenges" | "agents"
 
+function invalidateQueue(
+  queryClient: ReturnType<typeof useQueryClient>,
+  eventId: string
+) {
+  void queryClient.invalidateQueries({
+    queryKey: keys.scheduler.queue(eventId),
+  })
+  void queryClient.invalidateQueries({ queryKey: keys.runs.fleet(eventId) })
+}
+
+/** W2.3: queue header with the per-event state badge + pause/resume controls;
+ * paused shows a banner (resume re-enables the drainer). */
 function PlanPanel({
   eventId,
   queue,
+  state,
+  onOpenRun,
 }: {
   eventId: string
   queue: QueueItem[]
+  state: QueueState
+  onOpenRun: (runId: string) => void
 }) {
-  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const pause = useMutation({
+    mutationFn: () => schedulerApi.pauseQueue(eventId),
+    onSuccess: () => {
+      toast.success("队列已暂停")
+      invalidateQueue(queryClient, eventId)
+    },
+    onError: (error) => toast.error("暂停队列失败", error.message),
+  })
+  const resume = useMutation({
+    mutationFn: () => schedulerApi.resumeQueue(eventId),
+    onSuccess: () => {
+      toast.success("队列已恢复")
+      invalidateQueue(queryClient, eventId)
+    },
+    onError: (error) => toast.error("恢复队列失败", error.message),
+  })
   const visibleQueue = queue.filter((item) =>
     ["pending", "running", "failed"].includes(item.status)
   )
-  if (visibleQueue.length === 0) {
-    return (
-      <Empty className="py-16">
-        <EmptyHeader>
-          <EmptyTitle>计划队列为空</EmptyTitle>
-          <EmptyDescription>
-            调度者尚未规划任务。在「题目」中开启任务，或启动调度者让它自行排程。
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    )
-  }
   return (
     <ScrollArea className="h-full pr-1" scrollFade>
       <div className="flex flex-col gap-3 p-1">
@@ -234,18 +255,60 @@ function PlanPanel({
           <Badge size="sm" variant="secondary">
             {visibleQueue.length}
           </Badge>
+          <Badge size="sm" variant={state === "paused" ? "warning" : "success"}>
+            {state === "paused" ? "已暂停" : "运行中"}
+          </Badge>
+          <span className="ml-auto">
+            {state === "paused" ? (
+              <Button
+                loading={resume.isPending}
+                onClick={() => resume.mutate()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Play /> 恢复
+              </Button>
+            ) : (
+              <Button
+                loading={pause.isPending}
+                onClick={() => pause.mutate()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Pause /> 暂停
+              </Button>
+            )}
+          </span>
         </div>
-        <Card>
-          <CardPanel className="p-0">
-            <QueueList
-              eventId={eventId}
-              items={visibleQueue}
-              onOpenRun={(runId) =>
-                navigate(`/events/${eventId}/runs/${runId}`)
-              }
-            />
-          </CardPanel>
-        </Card>
+        {state === "paused" && (
+          <Alert variant="warning">
+            <TriangleAlert />
+            <AlertTitle>队列已暂停</AlertTitle>
+            <AlertDescription>队列已暂停，恢复后排空。</AlertDescription>
+          </Alert>
+        )}
+        {visibleQueue.length === 0 ? (
+          <Empty className="py-16">
+            <EmptyHeader>
+              <EmptyTitle>计划队列为空</EmptyTitle>
+              <EmptyDescription>
+                调度者尚未规划任务。在「题目」中开启任务，或启动调度者让它自行排程。
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <Card>
+            <CardPanel className="p-0">
+              <QueueList
+                eventId={eventId}
+                items={visibleQueue}
+                onOpenRun={onOpenRun}
+              />
+            </CardPanel>
+          </Card>
+        )}
       </div>
     </ScrollArea>
   )
@@ -259,53 +322,73 @@ function EventAgentsPanel({
   challenges: Challenge[]
 }) {
   const [tab, setTab] = useState<OverviewTab>("agents")
-  const [selection, setSelection] = useState<{
+  // W7.1: two independent states — `selected` highlights on the graph (no
+  // dialog; sources: AgentsTab click, TimelineTab entry, QueueList 打开) and
+  // `dialog` opens AgentDialog (ONLY from graph node clicks).
+  const [selected, setSelected] = useState<{
     runId: string
     agentId: string
   } | null>(null)
-  const onSelectAgent = useCallback((runId: string, agentId: string) => {
-    setSelection({ runId, agentId })
-  }, [])
+  const [dialog, setDialog] = useState<{
+    runId: string
+    agentId: string
+  } | null>(null)
 
-  // Fleet: every challenge run + its agents (the overview's single source of
-  // truth). Always polls — the scheduler can start/stop runs server-side at
-  // any time, so the overview must stay current unconditionally.
+  // Fleet: the overview's single source of truth (runs + per-run agents +
+  // scheduler run/agents + config/status) — W7.3 merged the old fleet +
+  // scheduler query pair into one endpoint. Always polls: the scheduler can
+  // start/stop runs server-side at any time.
   const fleet = useQuery({
     queryKey: keys.runs.fleet(eventId),
-    queryFn: async () => {
-      const items = (await runsApi.listEventRuns(eventId)).items
-      const details = await Promise.all(
-        items.map((run) => runsApi.getRun(run.id))
-      )
-      return { items, details }
-    },
+    queryFn: () => runsApi.getFleet(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
-  // Scheduler (event-scoped run) + its agents; the queue snapshot.
-  const scheduler = useQuery({
-    queryKey: keys.scheduler.detail(eventId),
-    queryFn: async (): Promise<SchedulerWithAgents> => {
-      const data = await schedulerApi.getScheduler(eventId)
-      const agents = data.run ? (await runsApi.getRun(data.run.id)).agents : []
-      return { ...data, agents }
-    },
-    refetchInterval: POLL_INTERVAL_MS,
-  })
+  // The queue snapshot (independent: plan tab + pause/resume controls).
   const queue = useQuery({
     queryKey: keys.scheduler.queue(eventId),
     queryFn: () => schedulerApi.listQueue(eventId),
-    // Always poll: launch progress (pending → running → done) and edits stay
-    // current without manual refreshes.
     refetchInterval: POLL_INTERVAL_MS,
   })
+
   const detailsById = useMemo(() => {
     const map = new Map<string, { run: RunPublic; agents: AgentSummary[] }>()
-    for (const detail of fleet.data?.details ?? [])
-      map.set(detail.run.id, detail)
+    for (const run of fleet.data?.runs ?? []) {
+      map.set(run.id, {
+        run,
+        agents: fleet.data?.agentsByRun[run.id] ?? [],
+      })
+    }
     return map
   }, [fleet.data])
 
-  if (fleet.isPending || scheduler.isPending) {
+  const schedulerData = useMemo<SchedulerWithAgents | undefined>(() => {
+    const data = fleet.data
+    if (!data) return undefined
+    return {
+      config: data.config,
+      run: data.schedulerRun,
+      status: data.status,
+      agents: data.schedulerAgents,
+    }
+  }, [fleet.data])
+
+  const onSelectAgent = useCallback((runId: string, agentId: string) => {
+    setSelected({ runId, agentId })
+  }, [])
+  const onOpenAgent = useCallback((runId: string, agentId: string) => {
+    setDialog({ runId, agentId })
+  }, [])
+  /** W7.1: TimelineTab / QueueList entries select the run's ENTRY agent. */
+  const handleSelectRun = useCallback(
+    (runId: string) => {
+      const agents = fleet.data?.agentsByRun[runId] ?? []
+      const entry = agents.find((agent) => agent.isEntry) ?? agents[0]
+      if (entry) setSelected({ runId, agentId: entry.id })
+    },
+    [fleet.data]
+  )
+
+  if (fleet.isPending) {
     return (
       <div
         className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
@@ -320,8 +403,7 @@ function EventAgentsPanel({
     return <ErrorState error={fleet.error} retry={() => fleet.refetch()} />
   }
 
-  const runs = fleet.data?.items ?? []
-  const schedulerData = scheduler.data
+  const runs = fleet.data?.runs ?? []
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[24rem_minmax(0,1fr)] gap-4">
@@ -337,29 +419,28 @@ function EventAgentsPanel({
             <TabsTab className="gap-1.5" value="challenges">
               <Puzzle /> 题目
             </TabsTab>
-            <TabsTab className="gap-1.5" value="runs">
-              <ListOrdered /> 任务
-            </TabsTab>
             <TabsTab className="gap-1.5" value="agents">
               <Users /> Agents
             </TabsTab>
           </TabsList>
           <div className="mt-2 min-h-0 flex-1">
             <TabsPanel className="h-full" value="plan">
-              <PlanPanel eventId={eventId} queue={queue.data?.items ?? []} />
+              <PlanPanel
+                eventId={eventId}
+                onOpenRun={handleSelectRun}
+                queue={queue.data?.items ?? []}
+                state={queue.data?.state ?? "running"}
+              />
             </TabsPanel>
             <TabsPanel className="h-full" value="timeline">
               <TimelineTab
                 challenges={challenges}
-                eventId={eventId}
+                onSelectRun={handleSelectRun}
                 runs={runs}
               />
             </TabsPanel>
             <TabsPanel className="h-full" value="challenges">
               <ChallengesTreeTab challenges={challenges} />
-            </TabsPanel>
-            <TabsPanel className="h-full" value="runs">
-              <RunsTab runs={runs} />
             </TabsPanel>
             <TabsPanel className="h-full" value="agents">
               <AgentsTab
@@ -375,15 +456,16 @@ function EventAgentsPanel({
       <AgentsGraph
         detailsById={detailsById}
         eventId={eventId}
-        onSelectAgent={onSelectAgent}
+        onOpenAgent={onOpenAgent}
         runs={runs}
         scheduler={schedulerData}
+        selected={selected}
       />
-      {selection && (
+      {dialog && (
         <AgentDialog
-          agentId={selection.agentId}
-          onClose={() => setSelection(null)}
-          runId={selection.runId}
+          agentId={dialog.agentId}
+          onClose={() => setDialog(null)}
+          runId={dialog.runId}
         />
       )}
     </div>
@@ -391,7 +473,7 @@ function EventAgentsPanel({
 }
 
 export function EventPage() {
-  const { eventId, runId } = useParams()
+  const { eventId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -434,14 +516,9 @@ export function EventPage() {
 
   if (!eventId) return null
   const tab = tabFromPath(location.pathname, eventId)
-  const workspace = Boolean(runId)
 
   return (
-    <AppLayout
-      eventName={eventQuery.data?.event.name}
-      fullWidth={fullWidth}
-      workspace={workspace}
-    >
+    <AppLayout eventName={eventQuery.data?.event.name} fullWidth={fullWidth}>
       {eventQuery.isPending && (
         <div
           className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
@@ -459,24 +536,14 @@ export function EventPage() {
       )}
       {eventQuery.data && (
         <Tabs
-          className={
-            workspace
-              ? "size-full min-h-0 items-start gap-4"
-              : "items-start gap-4"
-          }
+          className="items-start gap-4"
           onValueChange={(value) =>
             navigate(pathForTab(eventId, value as EventTab))
           }
           orientation="vertical"
           value={tab}
         >
-          <aside
-            className={
-              workspace
-                ? "flex w-40 shrink-0 flex-col self-stretch border-r pr-3"
-                : "sticky top-[4.5rem] flex h-[calc(100svh-5.5rem)] w-40 shrink-0 flex-col self-start border-r pr-3"
-            }
-          >
+          <aside className="sticky top-[4.5rem] flex h-[calc(100svh-5.5rem)] w-40 shrink-0 flex-col self-start border-r pr-3">
             <TabsList className="w-full items-stretch" variant="underline">
               <TabsTab className="justify-start gap-2" value="overview">
                 <LayoutPanelTop /> 概览
@@ -500,300 +567,272 @@ export function EventPage() {
               {fullWidth ? "标准宽度" : "全宽"}
             </button>
           </aside>
-          <div
-            className={
-              workspace
-                ? "flex min-h-0 min-w-0 flex-1 self-stretch"
-                : "min-w-0 flex-1"
-            }
-          >
-            {workspace && runId ? (
-              <RunWorkspace
+          <div className="min-w-0 flex-1">
+            <TabsPanel className="h-[calc(100svh-5.5rem)]" value="overview">
+              <EventSummary
                 challenges={eventQuery.data.challenges}
                 eventId={eventId}
-                runId={runId}
               />
-            ) : (
-              <>
-                <TabsPanel className="h-[calc(100svh-5.5rem)]" value="overview">
-                  <EventSummary
-                    challenges={eventQuery.data.challenges}
-                    eventId={eventId}
-                  />
-                </TabsPanel>
-                <TabsPanel className="h-[calc(100svh-5.5rem)]" value="agents">
-                  <EventAgentsPanel
-                    challenges={eventQuery.data.challenges}
-                    eventId={eventId}
-                  />
-                </TabsPanel>
-                <TabsPanel value="challenges">
-                  <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <h1 className="truncate text-2xl font-semibold">
-                        {eventQuery.data.event.name}
-                      </h1>
-                      <Badge variant="secondary">
-                        {activeFilterCount > 0
-                          ? `${filteredChallenges.length} / ${eventQuery.data.challenges.length}`
-                          : eventQuery.data.challenges.length}{" "}
-                        个题目
-                      </Badge>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      {eventQuery.data.challenges.length > 0 && (
-                        <>
-                          <Menu>
-                            <MenuTrigger
-                              render={
-                                <Button type="button" variant="outline" />
-                              }
-                            >
-                              <ListFilter />
-                              筛选
-                              {activeFilterCount > 0 && (
-                                <Badge size="sm" variant="secondary">
-                                  {activeFilterCount}
-                                </Badge>
-                              )}
-                            </MenuTrigger>
-                            <MenuPopup align="end" className="min-w-56">
-                              <MenuGroup>
-                                <MenuGroupLabel>分类</MenuGroupLabel>
-                                {categoryOptions.map((category) => (
-                                  <MenuCheckboxItem
-                                    checked={categoryFilter.includes(category)}
-                                    key={category}
-                                    onCheckedChange={(checked) =>
-                                      setPrefs((prev) => ({
-                                        ...prev,
-                                        categoryFilter: toggleInSet(
-                                          prev.categoryFilter,
-                                          category,
-                                          checked
-                                        ),
-                                      }))
-                                    }
-                                  >
-                                    {category}
-                                  </MenuCheckboxItem>
-                                ))}
-                              </MenuGroup>
-                              <MenuSeparator />
-                              <MenuGroup>
-                                <MenuGroupLabel>本地状态</MenuGroupLabel>
-                                {LOCAL_STATUS_OPTIONS.map((option) => (
-                                  <MenuCheckboxItem
-                                    checked={localFilter.includes(option.value)}
-                                    key={option.value}
-                                    onCheckedChange={(checked) =>
-                                      setPrefs((prev) => ({
-                                        ...prev,
-                                        localFilter: toggleInSet(
-                                          prev.localFilter,
-                                          option.value,
-                                          checked
-                                        ),
-                                      }))
-                                    }
-                                  >
-                                    {option.label}
-                                  </MenuCheckboxItem>
-                                ))}
-                              </MenuGroup>
-                              <MenuSeparator />
-                              <MenuGroup>
-                                <MenuGroupLabel>远端状态</MenuGroupLabel>
-                                {REMOTE_STATUS_OPTIONS.map((option) => (
-                                  <MenuCheckboxItem
-                                    checked={remoteFilter.includes(
-                                      option.value
-                                    )}
-                                    key={option.value}
-                                    onCheckedChange={(checked) =>
-                                      setPrefs((prev) => ({
-                                        ...prev,
-                                        remoteFilter: toggleInSet(
-                                          prev.remoteFilter,
-                                          option.value,
-                                          checked
-                                        ),
-                                      }))
-                                    }
-                                  >
-                                    {option.label}
-                                  </MenuCheckboxItem>
-                                ))}
-                              </MenuGroup>
-                              {activeFilterCount > 0 && (
-                                <>
-                                  <MenuSeparator />
-                                  <MenuItem
-                                    onClick={() =>
-                                      setPrefs((prev) => ({
-                                        ...prev,
-                                        categoryFilter: [],
-                                        localFilter: [],
-                                        remoteFilter: [],
-                                      }))
-                                    }
-                                  >
-                                    清除筛选
-                                  </MenuItem>
-                                </>
-                              )}
-                            </MenuPopup>
-                          </Menu>
-                          <Menu>
-                            <MenuTrigger
-                              render={
-                                <Button type="button" variant="outline" />
-                              }
-                            >
-                              <ListTree />
-                              {group === "category"
-                                ? "按分类"
-                                : group === "status"
-                                  ? "按状态"
-                                  : "不分组"}
-                            </MenuTrigger>
-                            <MenuPopup align="end">
-                              <MenuRadioGroup
-                                onValueChange={(value) =>
-                                  setPrefs((prev) => ({
-                                    ...prev,
-                                    group: value as ChallengeGroup,
-                                  }))
-                                }
-                                value={group}
-                              >
-                                <MenuRadioItem value="category">
-                                  按分类
-                                </MenuRadioItem>
-                                <MenuRadioItem value="status">
-                                  按状态
-                                </MenuRadioItem>
-                                <MenuRadioItem value="none">
-                                  不分组
-                                </MenuRadioItem>
-                              </MenuRadioGroup>
-                            </MenuPopup>
-                          </Menu>
-                          <Menu>
-                            <MenuTrigger
-                              render={
-                                <Button type="button" variant="outline" />
-                              }
-                            >
-                              <ArrowUpDown />
-                              {sort === "event"
-                                ? "赛事顺序"
-                                : sort === "name"
-                                  ? "名称"
-                                  : "分值"}
-                            </MenuTrigger>
-                            <MenuPopup align="end">
-                              <MenuRadioGroup
-                                onValueChange={(value) =>
-                                  setPrefs((prev) => ({
-                                    ...prev,
-                                    sort: value as ChallengeSort,
-                                  }))
-                                }
-                                value={sort}
-                              >
-                                <MenuRadioItem value="event">
-                                  赛事顺序
-                                </MenuRadioItem>
-                                <MenuRadioItem value="name">名称</MenuRadioItem>
-                                <MenuRadioItem value="points">
-                                  分值：从高到低
-                                </MenuRadioItem>
-                              </MenuRadioGroup>
-                            </MenuPopup>
-                          </Menu>
-                        </>
-                      )}
-                      {eventQuery.data.event.platform && (
-                        <ImportChallengesDialog eventId={eventId} />
-                      )}
-                      <ChallengeDialog
-                        eventId={eventId}
-                        onUploadError={setUploadError}
-                      />
-                    </div>
-                  </div>
-                  {uploadError && (
-                    <Alert className="mb-4" variant="warning">
-                      <TriangleAlert />
-                      <AlertTitle>附件上传失败</AlertTitle>
-                      <AlertDescription>{uploadError}</AlertDescription>
-                    </Alert>
-                  )}
-                  {eventQuery.data.challenges.length === 0 ? (
-                    <Empty>
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
-                          <Flag />
-                        </EmptyMedia>
-                        <EmptyTitle>暂无题目</EmptyTitle>
-                        <EmptyDescription>
-                          为本赛事添加第一个题目。
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
-                  ) : filteredChallenges.length === 0 ? (
-                    <Empty>
-                      <EmptyHeader>
-                        <EmptyMedia variant="icon">
+            </TabsPanel>
+            <TabsPanel className="h-[calc(100svh-5.5rem)]" value="agents">
+              <EventAgentsPanel
+                challenges={eventQuery.data.challenges}
+                eventId={eventId}
+              />
+            </TabsPanel>
+            <TabsPanel value="challenges">
+              <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <h1 className="truncate text-2xl font-semibold">
+                    {eventQuery.data.event.name}
+                  </h1>
+                  <Badge variant="secondary">
+                    {activeFilterCount > 0
+                      ? `${filteredChallenges.length} / ${eventQuery.data.challenges.length}`
+                      : eventQuery.data.challenges.length}{" "}
+                    个题目
+                  </Badge>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {eventQuery.data.challenges.length > 0 && (
+                    <>
+                      <Menu>
+                        <MenuTrigger
+                          render={<Button type="button" variant="outline" />}
+                        >
                           <ListFilter />
-                        </EmptyMedia>
-                        <EmptyTitle>没有匹配的题目</EmptyTitle>
-                        <EmptyDescription>
-                          清除或调整筛选条件以重新查看题目。
-                        </EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
-                  ) : (
-                    <div className="grid gap-6">
-                      {challengeGroups(filteredChallenges, sort, group).map(
-                        (challengeGroup) => (
-                          <section key={challengeGroup.key}>
-                            {challengeGroup.label && (
-                              <div className="mb-3 flex items-center gap-2 border-b pb-2">
-                                <h2 className="text-sm font-medium">
-                                  {challengeGroup.label}
-                                </h2>
-                                <Badge size="sm" variant="secondary">
-                                  {challengeGroup.items.length}
-                                </Badge>
-                              </div>
-                            )}
-                            <div className="grid grid-cols-3 items-stretch gap-4">
-                              {challengeGroup.items.map((challenge) => (
-                                <ChallengeCard
-                                  challenge={challenge}
-                                  eventId={eventId}
-                                  key={challenge.id}
-                                  managed={Boolean(
-                                    eventQuery.data.event.platform &&
-                                    challenge.remoteId
-                                  )}
-                                  onUploadError={setUploadError}
-                                />
-                              ))}
-                            </div>
-                          </section>
-                        )
-                      )}
-                    </div>
+                          筛选
+                          {activeFilterCount > 0 && (
+                            <Badge size="sm" variant="secondary">
+                              {activeFilterCount}
+                            </Badge>
+                          )}
+                        </MenuTrigger>
+                        <MenuPopup align="end" className="min-w-56">
+                          <MenuGroup>
+                            <MenuGroupLabel>分类</MenuGroupLabel>
+                            {categoryOptions.map((category) => (
+                              <MenuCheckboxItem
+                                checked={categoryFilter.includes(category)}
+                                key={category}
+                                onCheckedChange={(checked) =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    categoryFilter: toggleInSet(
+                                      prev.categoryFilter,
+                                      category,
+                                      checked
+                                    ),
+                                  }))
+                                }
+                              >
+                                {category}
+                              </MenuCheckboxItem>
+                            ))}
+                          </MenuGroup>
+                          <MenuSeparator />
+                          <MenuGroup>
+                            <MenuGroupLabel>本地状态</MenuGroupLabel>
+                            {LOCAL_STATUS_OPTIONS.map((option) => (
+                              <MenuCheckboxItem
+                                checked={localFilter.includes(option.value)}
+                                key={option.value}
+                                onCheckedChange={(checked) =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    localFilter: toggleInSet(
+                                      prev.localFilter,
+                                      option.value,
+                                      checked
+                                    ),
+                                  }))
+                                }
+                              >
+                                {option.label}
+                              </MenuCheckboxItem>
+                            ))}
+                          </MenuGroup>
+                          <MenuSeparator />
+                          <MenuGroup>
+                            <MenuGroupLabel>远端状态</MenuGroupLabel>
+                            {REMOTE_STATUS_OPTIONS.map((option) => (
+                              <MenuCheckboxItem
+                                checked={remoteFilter.includes(option.value)}
+                                key={option.value}
+                                onCheckedChange={(checked) =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    remoteFilter: toggleInSet(
+                                      prev.remoteFilter,
+                                      option.value,
+                                      checked
+                                    ),
+                                  }))
+                                }
+                              >
+                                {option.label}
+                              </MenuCheckboxItem>
+                            ))}
+                          </MenuGroup>
+                          {activeFilterCount > 0 && (
+                            <>
+                              <MenuSeparator />
+                              <MenuItem
+                                onClick={() =>
+                                  setPrefs((prev) => ({
+                                    ...prev,
+                                    categoryFilter: [],
+                                    localFilter: [],
+                                    remoteFilter: [],
+                                  }))
+                                }
+                              >
+                                清除筛选
+                              </MenuItem>
+                            </>
+                          )}
+                        </MenuPopup>
+                      </Menu>
+                      <Menu>
+                        <MenuTrigger
+                          render={<Button type="button" variant="outline" />}
+                        >
+                          <ListTree />
+                          {group === "category"
+                            ? "按分类"
+                            : group === "status"
+                              ? "按状态"
+                              : "不分组"}
+                        </MenuTrigger>
+                        <MenuPopup align="end">
+                          <MenuRadioGroup
+                            onValueChange={(value) =>
+                              setPrefs((prev) => ({
+                                ...prev,
+                                group: value as ChallengeGroup,
+                              }))
+                            }
+                            value={group}
+                          >
+                            <MenuRadioItem value="category">
+                              按分类
+                            </MenuRadioItem>
+                            <MenuRadioItem value="status">按状态</MenuRadioItem>
+                            <MenuRadioItem value="none">不分组</MenuRadioItem>
+                          </MenuRadioGroup>
+                        </MenuPopup>
+                      </Menu>
+                      <Menu>
+                        <MenuTrigger
+                          render={<Button type="button" variant="outline" />}
+                        >
+                          <ArrowUpDown />
+                          {sort === "event"
+                            ? "赛事顺序"
+                            : sort === "name"
+                              ? "名称"
+                              : "分值"}
+                        </MenuTrigger>
+                        <MenuPopup align="end">
+                          <MenuRadioGroup
+                            onValueChange={(value) =>
+                              setPrefs((prev) => ({
+                                ...prev,
+                                sort: value as ChallengeSort,
+                              }))
+                            }
+                            value={sort}
+                          >
+                            <MenuRadioItem value="event">
+                              赛事顺序
+                            </MenuRadioItem>
+                            <MenuRadioItem value="name">名称</MenuRadioItem>
+                            <MenuRadioItem value="points">
+                              分值：从高到低
+                            </MenuRadioItem>
+                          </MenuRadioGroup>
+                        </MenuPopup>
+                      </Menu>
+                    </>
                   )}
-                </TabsPanel>
-                <TabsPanel className="pt-0" value="settings">
-                  <EventSettings event={eventQuery.data.event} />
-                </TabsPanel>
-              </>
-            )}
+                  {eventQuery.data.event.platform && (
+                    <ImportChallengesDialog eventId={eventId} />
+                  )}
+                  <ChallengeDialog
+                    eventId={eventId}
+                    onUploadError={setUploadError}
+                  />
+                </div>
+              </div>
+              {uploadError && (
+                <Alert className="mb-4" variant="warning">
+                  <TriangleAlert />
+                  <AlertTitle>附件上传失败</AlertTitle>
+                  <AlertDescription>{uploadError}</AlertDescription>
+                </Alert>
+              )}
+              {eventQuery.data.challenges.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Flag />
+                    </EmptyMedia>
+                    <EmptyTitle>暂无题目</EmptyTitle>
+                    <EmptyDescription>
+                      为本赛事添加第一个题目。
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : filteredChallenges.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <ListFilter />
+                    </EmptyMedia>
+                    <EmptyTitle>没有匹配的题目</EmptyTitle>
+                    <EmptyDescription>
+                      清除或调整筛选条件以重新查看题目。
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <div className="grid gap-6">
+                  {challengeGroups(filteredChallenges, sort, group).map(
+                    (challengeGroup) => (
+                      <section key={challengeGroup.key}>
+                        {challengeGroup.label && (
+                          <div className="mb-3 flex items-center gap-2 border-b pb-2">
+                            <h2 className="text-sm font-medium">
+                              {challengeGroup.label}
+                            </h2>
+                            <Badge size="sm" variant="secondary">
+                              {challengeGroup.items.length}
+                            </Badge>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-3 items-stretch gap-4">
+                          {challengeGroup.items.map((challenge) => (
+                            <ChallengeCard
+                              challenge={challenge}
+                              eventId={eventId}
+                              key={challenge.id}
+                              managed={Boolean(
+                                eventQuery.data.event.platform &&
+                                challenge.remoteId
+                              )}
+                              onUploadError={setUploadError}
+                            />
+                          ))}
+                        </div>
+                      </section>
+                    )
+                  )}
+                </div>
+              )}
+            </TabsPanel>
+            <TabsPanel className="pt-0" value="settings">
+              <EventSettings event={eventQuery.data.event} />
+            </TabsPanel>
           </div>
         </Tabs>
       )}

@@ -3,9 +3,16 @@ import { describe, expect, mock, test } from "bun:test"
 import { defaultSettings } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
-import { agents, runQueue, runs } from "../../src/db/schema"
+import {
+  agents,
+  challengeRemote,
+  queueState,
+  runQueue,
+  runs,
+} from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
+  flatSettingsWithDefaultModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -198,7 +205,7 @@ describe("scheduler queue integration (P3)", () => {
       const { service } = makeService(db, sqlite, dir)
       await expect(
         service.sendMessage("cold", { text: "ping" })
-      ).rejects.toThrow(/Concurrency cap/)
+      ).rejects.toThrow(/Live container cap reached/)
       // The run is unchanged (still closed) — the slot reservation reverted.
       const row = db.select().from(runs).where(eq(runs.id, "cold")).get()!
       expect(row.status).toBe("closed")
@@ -319,6 +326,206 @@ describe("scheduler queue integration (P3)", () => {
         .get()!
       expect(failed.status).toBe("failed")
       expect(failed.error).toBeTruthy()
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("queue prompt is appended as a Strategy section, not a replacement (W1.1)", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      const provider = makeProvider()
+      const { manager } = stubContainerManager()
+      const promptLog = new Map<string, string[]>()
+      const service = createRunService({
+        db,
+        sqlite,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: {
+          submitFlag: async () => undefined,
+          targetAction: async () => ({
+            status: "running",
+            endpoints: [],
+            expiresAt: null,
+          }),
+        } as never,
+        configStore: stubConfigStore([provider]),
+        getSettings: settingsWithModel,
+        createHost: mock(async (input: { agentId: string }) => {
+          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
+          const list: string[] = []
+          promptLog.set(input.agentId, list)
+          const sdk = stub.session as unknown as {
+            prompt: (text: string) => Promise<void>
+          }
+          sdk.prompt = async (text: string) => {
+            list.push(text)
+          }
+          return stub
+        }),
+      })
+
+      const queue = service.queue()
+      queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-a",
+        orchestration: "classic",
+        source: "scheduler",
+        prompt: "Hit crypto first; try z3.",
+      })
+      await queue.drainOnce()
+      const runId = queue.list("evt-1")[0]!.runId!
+      const agentId = db
+        .select()
+        .from(agents)
+        .where(eq(agents.runId, runId))
+        .get()!.id
+      const prime = promptLog.get(agentId)?.[0] ?? ""
+      // The standard blocks are always rendered; the strategy is a section.
+      expect(prime).toContain("## Challenge")
+      expect(prime).toContain("## Environment")
+      expect(prime).toContain("## Strategy")
+      expect(prime).toContain("Hit crypto first; try z3.")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("recoverOnBoot closes live runs, resets stuck queue items, pauses queues (W2.2)", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      const { service } = makeService(db, sqlite, dir)
+      const queue = service.queue()
+      const item = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-a",
+        orchestration: "classic",
+        source: "scheduler",
+        prompt: "go",
+      })
+      await queue.drainOnce()
+      const runId = queue.list("evt-1").find((i) => i.id === item.id)!.runId!
+      // The launched run is live (hang host) with its item linked `running`.
+      expect(
+        db.select().from(runs).where(eq(runs.id, runId)).get()!.status
+      ).toBe("running")
+      expect(
+        db.select().from(runQueue).where(eq(runQueue.id, item.id)).get()!.status
+      ).toBe("running")
+
+      await service.recoverOnBoot()
+
+      // All live runs closed (crash recovery).
+      expect(
+        db.select().from(runs).where(eq(runs.id, runId)).get()!.status
+      ).toBe("closed")
+      // The stuck `running` queue item was reset to pending (runId cleared).
+      const resetItem = db
+        .select()
+        .from(runQueue)
+        .where(eq(runQueue.id, item.id))
+        .get()!
+      expect(resetItem.status).toBe("pending")
+      expect(resetItem.runId).toBeNull()
+      // The event's queue was paused and NOT auto-drained: the item stays
+      // pending (boot never schedules a drain).
+      const state = db
+        .select()
+        .from(queueState)
+        .where(eq(queueState.eventId, "evt-1"))
+        .get()!
+      expect(state.status).toBe("paused")
+      expect(
+        db.select().from(runQueue).where(eq(runQueue.id, item.id)).get()!.status
+      ).toBe("pending")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("closing the last live run on a target-capable challenge stops its target (W4.3)", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      db.insert(challengeRemote)
+        .values({
+          challengeId: "ch-a",
+          sourceKey: "src",
+          remoteId: "r-a",
+          available: true,
+          solved: false,
+          targetSupported: true,
+          targetIgnored: false,
+          targetCount: 1,
+          targetInfo: "[]",
+          syncedAt: now(),
+        })
+        .run()
+      const provider = makeProvider()
+      const { manager } = stubContainerManager()
+      const targetCalls: string[] = []
+      const service = createRunService({
+        db,
+        sqlite,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: {
+          submitFlag: async () => undefined,
+          targetAction: async (_challengeId: string, action: string) => {
+            targetCalls.push(action)
+            return { status: "running", endpoints: [], expiresAt: null }
+          },
+        } as never,
+        configStore: stubConfigStore([provider]),
+        getSettings: settingsWithModel,
+        createHost: mock(async (input: { agentId: string }) =>
+          stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
+        ),
+      })
+
+      // Last live run on the challenge closes → target stopped.
+      const run1 = await service.create({
+        scopeType: "challenge",
+        challengeId: "ch-a",
+        orchestration: "classic",
+        container: containerInput,
+      })
+      await settle()
+      await service.closeRun(run1.id)
+      await settle()
+      expect(targetCalls).toContain("stop")
+
+      // A second run on the SAME challenge → closing one must NOT stop the
+      // target (the other is still active).
+      const run2 = await service.create({
+        scopeType: "challenge",
+        challengeId: "ch-a",
+        orchestration: "classic",
+        container: containerInput,
+      })
+      const run3 = await service.create({
+        scopeType: "challenge",
+        challengeId: "ch-a",
+        orchestration: "classic",
+        container: containerInput,
+      })
+      await settle()
+      targetCalls.length = 0
+      await service.closeRun(run2.id)
+      await settle()
+      expect(targetCalls).not.toContain("stop")
+      await service.closeRun(run3.id)
+      await settle()
+      expect(targetCalls).toContain("stop")
       await service.close()
     } finally {
       close()

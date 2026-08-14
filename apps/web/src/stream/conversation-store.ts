@@ -29,6 +29,9 @@ type ToolProgress = {
   toolCallId: string
   revision: number
   toolName: string
+  /** Server-side execution start (epoch ms) — true elapsed time even when the
+   * dialog opened mid-execution. Absent on legacy data. */
+  startedAt?: number
   args?: unknown
   result?: unknown
   status: "running" | "done" | "error"
@@ -238,6 +241,9 @@ export class ConversationStore {
         result: entry.result,
         isError: entry.isError,
         status: entry.status === "error" ? "done" : entry.status,
+        ...("startedAt" in entry && entry.startedAt !== undefined
+          ? { startedAt: entry.startedAt }
+          : {}),
         ...("terminal" in entry ? { terminal: entry.terminal } : {}),
         ...("terminalMessage" in entry
           ? { terminalMessage: entry.terminalMessage }

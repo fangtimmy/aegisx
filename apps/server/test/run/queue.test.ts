@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { runQueue } from "../../src/db/schema"
+import { queueState, runQueue } from "../../src/db/schema"
 import { RunActionError } from "../../src/run/errors"
 import { createQueueService } from "../../src/run/queue"
 import {
@@ -212,6 +212,114 @@ describe("queue CRUD (spec §8.1)", () => {
       // Correct guard → done.
       svc.markDone(it.id, "r1")
       expect(item(db, it.id).status).toBe("done")
+    } finally {
+      close()
+    }
+  })
+})
+
+describe("queue per-event state (W2.1)", () => {
+  test("stateOf defaults to running; pause/resume round-trip via upsert", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      const { svc } = makeQueue(db, async () => "run-x")
+      expect(svc.stateOf("evt-1")).toBe("running")
+      svc.pause("evt-1")
+      expect(svc.stateOf("evt-1")).toBe("paused")
+      svc.resume("evt-1")
+      expect(svc.stateOf("evt-1")).toBe("running")
+      // No row = running; resume after pause leaves an explicit running row.
+      const row = db
+        .select()
+        .from(queueState)
+        .where(eq(queueState.eventId, "evt-1"))
+        .get()
+      expect(row?.status).toBe("running")
+    } finally {
+      close()
+    }
+  })
+
+  test("drain skips a paused event's pending items; resume drains them", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedEvent(db, "evt-2")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-2" })
+      let n = 0
+      const { svc, launches } = makeQueue(db, async () => `run-${++n}`)
+      svc.cancelDrain()
+      const a = svc.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-a",
+        orchestration: "classic",
+        source: "manual",
+        prompt: "p",
+      })
+      const b = svc.enqueue({
+        eventId: "evt-2",
+        challengeId: "ch-b",
+        orchestration: "classic",
+        source: "manual",
+        prompt: "p",
+      })
+      svc.pause("evt-1")
+      await svc.drainOnce()
+      // Only evt-2's item launches; evt-1's stays pending (still visible).
+      expect(launches).toEqual([b.id])
+      expect(item(db, a.id).status).toBe("pending")
+      expect(item(db, b.id).status).toBe("running")
+      // Resume → the pending item now launches.
+      svc.resume("evt-1")
+      await svc.drainOnce()
+      expect(launches).toEqual([b.id, a.id])
+      expect(item(db, a.id).status).toBe("running")
+    } finally {
+      close()
+    }
+  })
+
+  test("pause does not touch an already-running item (pause ≠ kill)", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      let n = 0
+      const { svc, launches } = makeQueue(db, async () => `run-${++n}`)
+      svc.cancelDrain()
+      const a = svc.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-a",
+        orchestration: "classic",
+        source: "manual",
+        prompt: "p",
+      })
+      await svc.drainOnce() // launches a → running
+      svc.pause("evt-1")
+      await svc.drainOnce()
+      expect(launches).toHaveLength(1) // no re-launch
+      expect(item(db, a.id).status).toBe("running")
+    } finally {
+      close()
+    }
+  })
+
+  test("enqueue/edit/reorder/remove still work on a paused event", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      const { svc } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      svc.pause("evt-1")
+      const a = enqueue(svc, "evt-1", "ch-a", 1)
+      const updated = svc.update(a.id, { prompt: "edited" })
+      expect(updated.prompt).toBe("edited")
+      expect(svc.list("evt-1").map((i) => i.id)).toEqual([a.id])
+      svc.remove(a.id)
+      expect(svc.list("evt-1")).toHaveLength(0)
     } finally {
       close()
     }

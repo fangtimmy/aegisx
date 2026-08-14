@@ -89,6 +89,10 @@ export type LiveEvent =
       toolCallId: string
       revision: number
       toolName: string
+      /** Server-side execution start (epoch ms) — the tool's TRUE start, so a
+       * dialog opened mid-execution shows the real elapsed time instead of
+       * counting from the dialog open. Absent on old snapshots/replays. */
+      startedAt?: number
       /** Omitted on the terminal (tool_execution_end) event — the SDK's
        * tool_execution_end carries no args, so the store keeps the args from
        * the earlier tool_execution_start/_update instead of clobbering them. */

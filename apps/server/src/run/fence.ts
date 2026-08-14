@@ -1,5 +1,5 @@
 import { get, type FlatSettings } from "@aegisx/shared"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
@@ -48,26 +48,32 @@ export function fenceSnapshot(
 } {
   return {
     maxConcurrentRuns: maxConcurrentRunsSetting(settings),
-    runningCount: runningChallengeRunCount(db),
+    runningCount: liveChallengeRunCount(db),
     maxConcurrentTargets: maxConcurrentTargetsFor(db, eventId),
     activeTargetChallenges: [...activeTargetSlots(db, eventId)],
   }
 }
 
-/** Count challenge-scope runs currently `running` (only running
- * counts — idle keeps a warm container but consumes no compute slot; scheduler
- * runs never count). */
-function runningChallengeRunCount(db: Database): number {
+/** Count challenge-scope runs currently LIVE (running + idle). Idle keeps a
+ * warm container and its target may still run on the platform, so it consumes
+ * a container slot until closed (W4.1). Scheduler runs never count. */
+function liveChallengeRunCount(db: Database): number {
   const row = db
     .select({ n: sql<number>`count(*)` })
     .from(runs)
-    .where(and(eq(runs.scopeType, "challenge"), eq(runs.status, "running")))
+    .where(
+      and(
+        eq(runs.scopeType, "challenge"),
+        inArray(runs.status, ["running", "idle"])
+      )
+    )
     .get()
   return row?.n ?? 0
 }
 
-/** Distinct target-capable AND unsolved challenges with a running run in this
- * event ("different target-capable challenges under attack"). Solved
+/** Distinct target-capable AND unsolved challenges with a LIVE run in this
+ * event ("different target-capable challenges under attack"; W4.2 counts idle
+ * too — its target is very likely still running on the platform). Solved
  * challenges free their slot; the same challenge attacked by several runs
  * shares one slot (DISTINCT). */
 function activeTargetSlots(db: Database, eventId: string): Set<string> {
@@ -79,7 +85,7 @@ function activeTargetSlots(db: Database, eventId: string): Set<string> {
     .where(
       and(
         eq(runs.scopeType, "challenge"),
-        eq(runs.status, "running"),
+        inArray(runs.status, ["running", "idle"]),
         eq(runs.eventId, eventId),
         eq(challengeRemote.available, true),
         eq(challengeRemote.targetSupported, true),
@@ -141,10 +147,12 @@ function occupiesTargetSlot(db: Database, challengeId: string): boolean {
  * Decide whether a candidate run may launch under the concurrency fence.
  * Two independent caps:
  *
- *  1. Global: challenge-scope running runs ≤ `scheduler.maxConcurrentRuns`.
- *  2. Per-event: distinct target-capable unsolved challenges under attack ≤
- *     `scheduler_config.maxConcurrentTargets`. The candidate shares its slot
- *     if its challenge is already under attack; otherwise it adds one.
+ *  1. Global: challenge-scope LIVE runs (running + idle — idle keeps a warm
+ *     container) ≤ `scheduler.maxConcurrentRuns`.
+ *  2. Per-event: distinct target-capable unsolved challenges under attack
+ *     (running + idle runs) ≤ `scheduler_config.maxConcurrentTargets`. The
+ *     candidate shares its slot if its challenge is already under attack;
+ *     otherwise it adds one.
  *
  * Scheduler (event-scope) runs are always admitted — they neither count nor
  * consume slots. Pure (reads only); the caller wraps check + launch in the
@@ -158,12 +166,12 @@ export function checkLaunchFence(
   if (candidate.scopeType === "event") return { ok: true }
 
   const cap = maxConcurrentRunsSetting(settings)
-  const running = runningChallengeRunCount(db)
-  if (running + 1 > cap) {
+  const live = liveChallengeRunCount(db)
+  if (live + 1 > cap) {
     return {
       ok: false,
       code: "global_capacity",
-      message: `Concurrency cap reached (${running}/${cap} challenge runs running). Close or wait for a run to free a slot.`,
+      message: `Live container cap reached (${live}/${cap} solver containers). Close or wait for a run to free a slot.`,
     }
   }
 

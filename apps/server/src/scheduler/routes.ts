@@ -57,6 +57,13 @@ const schedulerMessageInput = Type.Object(
   { additionalProperties: false }
 )
 
+/** W3.2: `reset: true` deletes the closed scheduler run (cascade agents /
+ * sessions) and starts fresh; default (false) cold-restores keeping memory. */
+const schedulerStartInput = Type.Object(
+  { reset: Type.Optional(Type.Boolean()) },
+  { additionalProperties: false }
+)
+
 const emptyInput = EmptyInputSchema
 
 export function registerSchedulerRoutes(
@@ -77,8 +84,38 @@ export function registerSchedulerRoutes(
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
     if (miss) return miss
-    return c.json({ items: runService.queue().list(eventId) })
+    const queue = runService.queue()
+    return c.json({
+      items: queue.list(eventId),
+      state: queue.stateOf(eventId),
+    })
   })
+
+  app.post(
+    "/api/events/:eventId/queue/pause",
+    validateJson(emptyInput),
+    (c) => {
+      const eventId = c.req.param("eventId")
+      const miss = requireEvent(c, eventId)
+      if (miss) return miss
+      // Blocks future launches only — running runs keep going (pause ≠ kill).
+      runService.queue().pause(eventId)
+      return c.json({ state: "paused" })
+    }
+  )
+
+  app.post(
+    "/api/events/:eventId/queue/resume",
+    validateJson(emptyInput),
+    (c) => {
+      const eventId = c.req.param("eventId")
+      const miss = requireEvent(c, eventId)
+      if (miss) return miss
+      runService.queue().resume(eventId)
+      runService.queue().scheduleDrain()
+      return c.json({ state: "running" })
+    }
+  )
 
   app.post(
     "/api/events/:eventId/queue",
@@ -201,13 +238,17 @@ export function registerSchedulerRoutes(
 
   app.post(
     "/api/events/:eventId/scheduler/start",
-    validateJson(emptyInput),
+    validateJson(schedulerStartInput),
     async (c) => {
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       try {
-        return c.json(await runService.startScheduler(eventId), 201)
+        const { reset } = c.req.valid("json")
+        return c.json(
+          await runService.startScheduler(eventId, { reset: reset ?? false }),
+          201
+        )
       } catch (error) {
         return runError(c, error)
       }
@@ -242,6 +283,39 @@ export function registerSchedulerRoutes(
       if (!sched) return notFound(c, "No scheduler run for this event")
       try {
         return c.json(await runService.closeRun(sched.id))
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  // W3.1: pause = paused flag + stop (abort the current turn, container warm);
+  // resume = clear flag + re-sync message to the orchestrator. Both write the
+  // flag even with no scheduler run (presets the next start).
+  app.post(
+    "/api/events/:eventId/scheduler/pause",
+    validateJson(emptyInput),
+    async (c) => {
+      const eventId = c.req.param("eventId")
+      const miss = requireEvent(c, eventId)
+      if (miss) return miss
+      try {
+        return c.json(await runService.pauseScheduler(eventId))
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  app.post(
+    "/api/events/:eventId/scheduler/resume",
+    validateJson(emptyInput),
+    async (c) => {
+      const eventId = c.req.param("eventId")
+      const miss = requireEvent(c, eventId)
+      if (miss) return miss
+      try {
+        return c.json(await runService.resumeScheduler(eventId))
       } catch (error) {
         return runError(c, error)
       }

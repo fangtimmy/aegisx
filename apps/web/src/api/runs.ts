@@ -1,5 +1,6 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
+  FleetInfo,
   MessageList,
   QueueItem,
   RunDetail,
@@ -18,6 +19,13 @@ export type CreateRunInput = {
 
 export function listEventRuns(eventId: string) {
   return apiRequest<{ items: RunPublic[] }>(`/events/${eventId}/runs`)
+}
+
+/** W7.3: the event overview's single fleet poll (runs + agents + scheduler
+ * run/agents + config/status) — replaces listEventRuns + N× getRun + GET
+ * /scheduler for the fleet view. */
+export function getFleet(eventId: string) {
+  return apiRequest<FleetInfo>(`/events/${eventId}/fleet`)
 }
 
 /** Enqueue a run (POST /api/challenges/:id/runs returns a queue
