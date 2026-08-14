@@ -140,6 +140,13 @@ export function RunWorkspace({
       runsApi.setQueue(runId ?? "", body),
     [runId]
   )
+  const compactAgent = useCallback(
+    (agentId: string) =>
+      agentsApi
+        .compactAgent(agentId)
+        .then(() => invalidate(queryClient, eventId)),
+    [eventId, queryClient]
+  )
   const findCurrentModelId = useCallback(
     (models: AvailableModel[]) =>
       models.find(
@@ -308,6 +315,7 @@ export function RunWorkspace({
                 canEditQueue
                 channel={runId}
                 closedReopenable
+                compactAgent={compactAgent}
                 findCurrentModelId={findCurrentModelId}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}

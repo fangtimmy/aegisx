@@ -5,6 +5,7 @@ import {
   CircleAlert,
   GitFork,
   LoaderCircle,
+  Plus,
   Send,
   X,
 } from "lucide-react"
@@ -30,6 +31,7 @@ import { ButtonGroup, GroupSeparator } from "@/components/ui/group"
 import { Input } from "@/components/ui/input"
 import {
   Menu,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -90,7 +92,22 @@ export type ConversationProps = {
     agentId: string,
     body: { steering: string[]; followUp: string[] }
   ) => Promise<unknown>
+  /** Manually compact an agent's context (composer /compact command). The
+   * server rejects a running turn; hosts wire API + invalidation. */
+  compactAgent?: (agentId: string) => Promise<unknown>
 }
+
+/** Composer command panel entry (slash-command style): clicking inserts the
+ * command text into the composer; Conversation dispatches it on submit. */
+type ComposerCommand = {
+  command: string
+  label: string
+}
+
+const COMPOSER_COMMANDS: ComposerCommand[] = [
+  { command: "/compact", label: "压缩上下文" },
+  { command: "/new", label: "新会话（暂未实现）" },
+]
 
 export function Conversation(props: ConversationProps) {
   const {
@@ -105,6 +122,7 @@ export function Conversation(props: ConversationProps) {
     sendMessage: sendMessageFn,
     switchModel: switchModelFn,
     setQueue,
+    compactAgent: compactAgentFn,
   } = props
 
   const storeRef = useRef<ConversationStore | null>(null)
@@ -206,8 +224,39 @@ export function Conversation(props: ConversationProps) {
     onError: (error) => toast.error("切换模型失败", error.message),
   })
 
+  const compact = useMutation({
+    mutationFn: () => {
+      if (!compactAgentFn) throw new Error("压缩功能不可用")
+      return compactAgentFn(effectiveAgentId)
+    },
+    onSuccess: () => {
+      setDraft("")
+      toast.success("上下文已压缩")
+    },
+    onError: (error) => toast.error("压缩失败", error.message),
+  })
+
   const onSubmit = () => {
-    if (!draft.trim()) return
+    const trimmed = draft.trim()
+    if (!trimmed) return
+    const command = trimmed.split(/\s+/)[0]?.toLowerCase()
+    if (command === "/compact") {
+      if (running) {
+        toast.error("运行中无法压缩，请先停止")
+        return
+      }
+      if (!compactAgentFn) {
+        toast.error("压缩功能不可用")
+        return
+      }
+      compact.mutate()
+      return
+    }
+    if (command === "/new") {
+      setDraft("")
+      toast.info("新会话功能暂未实现")
+      return
+    }
     send.mutate()
   }
 
@@ -343,6 +392,13 @@ function MessageInput({
       : running
         ? "引导或追问 agent…"
         : "向 agent 发送消息…"
+  const inputRef = useRef<HTMLInputElement>(null)
+  const pickCommand = (command: string) => {
+    onDraftChange(command)
+    // Menu restores focus to its trigger on close; move it back to the
+    // composer so the user can edit or send the command immediately.
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
   return (
     <form
       className="flex w-full items-center gap-2"
@@ -351,12 +407,39 @@ function MessageInput({
         onSubmit()
       }}
     >
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              aria-label="打开命令面板"
+              disabled={busy || locked}
+              size="icon"
+              type="button"
+              variant="ghost"
+            />
+          }
+        >
+          <Plus />
+        </MenuTrigger>
+        <MenuPopup align="start">
+          {COMPOSER_COMMANDS.map((command) => (
+            <MenuItem
+              key={command.command}
+              onClick={() => pickCommand(command.command)}
+            >
+              <span className="font-mono">{command.command}</span>
+              <span className="text-muted-foreground">{command.label}</span>
+            </MenuItem>
+          ))}
+        </MenuPopup>
+      </Menu>
       <Input
         aria-label="向 agent 发送消息"
         className="flex-1"
         disabled={busy || locked}
         onChange={(e) => onDraftChange(e.target.value)}
         placeholder={placeholder}
+        ref={inputRef}
         unstyled
         value={draft}
       />

@@ -1573,13 +1573,16 @@ function AgentDialog({
   // kept warm); compact runs a manual context summarization (requires an idle
   // session); close releases a challenge run's container. The scheduler run
   // is closed via its graph overlay instead.
-  const invalidateAgent = () =>
-    Promise.all([
-      queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
-      queryClient.invalidateQueries({
-        queryKey: keys.runs.fleet(run?.eventId ?? ""),
-      }),
-    ])
+  const invalidateAgent = useCallback(
+    () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
+        queryClient.invalidateQueries({
+          queryKey: keys.runs.fleet(run?.eventId ?? ""),
+        }),
+      ]),
+    [queryClient, runId, run?.eventId]
+  )
   const stop = useMutation({
     mutationFn: () => agentsApi.stopAgent(agentId),
     onSuccess: () => {
@@ -1588,11 +1591,17 @@ function AgentDialog({
     },
     onError: (error) => toast.error("停止失败", error.message),
   })
+  // Shared compact action for the header button and the composer command
+  // panel; toasts live at each call site (mutation / Conversation), so this
+  // stays silent and just does API + invalidation.
+  const compactRun = useCallback(
+    () => agentsApi.compactAgent(agentId).then(() => invalidateAgent()),
+    [agentId, invalidateAgent]
+  )
   const compact = useMutation({
-    mutationFn: () => agentsApi.compactAgent(agentId),
+    mutationFn: compactRun,
     onSuccess: () => {
       toast.success("上下文已压缩")
-      void invalidateAgent()
     },
     onError: (error) => toast.error("压缩失败", error.message),
   })
@@ -1731,6 +1740,7 @@ function AgentDialog({
                 canEditQueue={false}
                 channel={runId}
                 closedReopenable={run.scopeType === "challenge"}
+                compactAgent={compactRun}
                 findCurrentModelId={findCurrentModelId}
                 key={`${runId}:${agentId}`}
                 loadMessages={loadMessages}
