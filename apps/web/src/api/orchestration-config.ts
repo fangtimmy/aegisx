@@ -1,7 +1,7 @@
 import { apiRequest, jsonRequest } from "./client"
 
 /** GET /api/orchestration-config — one declared slot's resolved state. */
-export type ConfigSlot = {
+type ConfigSlot = {
   slot: string
   role: string
   name: string

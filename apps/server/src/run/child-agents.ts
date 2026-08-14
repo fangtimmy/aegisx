@@ -42,7 +42,7 @@ export type ChildAgentDeps = {
   onChildTurnSettled(agentId: string, runId: string, error: string | null): void
 }
 
-export type ChildAgentRuntime = ReturnType<typeof createChildAgentRuntime>
+type ChildAgentRuntime = ReturnType<typeof createChildAgentRuntime>
 
 const now = () => new Date().toISOString()
 

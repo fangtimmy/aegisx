@@ -16,7 +16,7 @@ import Docker from "dockerode"
  * dockerode+stdin exec hang fixed only in Bun 1.4.0 (oven-sh/bun#29012).
  */
 
-export type ContainerLimits = {
+type ContainerLimits = {
   cpus: number
   memoryMb: number
   pidsLimit: number

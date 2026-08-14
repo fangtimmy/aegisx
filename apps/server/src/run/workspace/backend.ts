@@ -12,13 +12,13 @@ import type { ContainerManager } from "../container/container-manager"
  * container: read/list/exec via `docker exec`, write via `putArchive`. The
  * host tool set is read/write/edit (workspace/tools.ts) + bash (bash-tool.ts).
  */
-export type WorkspaceEntry = {
+type WorkspaceEntry = {
   name: string
   path: string
   directory: boolean
 }
 
-export type ExecResult = {
+type ExecResult = {
   stdout: string
   stderr: string
   exitCode: number
@@ -26,7 +26,7 @@ export type ExecResult = {
   truncated: boolean
 }
 
-export type BackendExecOptions = {
+type BackendExecOptions = {
   signal?: AbortSignal
   timeout?: number
   workdir?: string

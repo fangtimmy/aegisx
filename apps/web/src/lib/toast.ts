@@ -17,5 +17,3 @@ export const toast = {
     return toastManager.add({ type: "loading", title, description })
   },
 }
-
-export { toastManager }

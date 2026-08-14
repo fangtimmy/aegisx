@@ -1,20 +1,5 @@
 import { Type } from "typebox"
 
-export const ThinkingLevelSchema = Type.Union([
-  Type.Literal("off"),
-  Type.Literal("minimal"),
-  Type.Literal("low"),
-  Type.Literal("medium"),
-  Type.Literal("high"),
-  Type.Literal("xhigh"),
-  Type.Literal("max"),
-])
-
-export const EnvironmentSchema = Type.Union([
-  Type.Literal("local"),
-  Type.Literal("container"),
-])
-
 /** No body allowed (action endpoints that only take path params). */
 export const EmptyInputSchema = Type.Object({}, { additionalProperties: false })
 

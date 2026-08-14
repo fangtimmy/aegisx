@@ -222,7 +222,7 @@ export interface EventHandle {
 
 // --- spawn template -------------------------------------------------------
 
-export type SpawnTemplate = {
+type SpawnTemplate = {
   /** Default 'child'. */
   role?: string
   /** Template key; rendered with the parent ctx + { agent: { role, name, task } }
@@ -259,7 +259,7 @@ export type OrchestrationInfo = {
 // --- public introspection (GET /api/orchestrations, settings page) ---------
 
 /** A declared slot, as exposed for the settings page / create-run picker. */
-export type OrchestrationSlotInfo = {
+type OrchestrationSlotInfo = {
   slot: string
   role: string
   name: string
@@ -282,7 +282,7 @@ export type OrchestrationPublic = {
 
 /** Template keys a plugin references: every slot's system prompt, the spawn
  * template, the always-rendered `initial`, plus its own registered defaults. */
-export function pluginTemplateKeys(plugin: {
+function pluginTemplateKeys(plugin: {
   agents: AgentSlotSpec[]
   spawn?: SpawnTemplate
   templates?: Record<string, string>
@@ -322,7 +322,7 @@ export interface ChallengePlugin extends PluginBase {
   wire?(run: RunHandle): void | Promise<void>
 }
 
-export interface EventPlugin extends PluginBase {
+interface EventPlugin extends PluginBase {
   scope: "event"
   /** Event wiring only; receives the EventHandle for child-run lifecycle. */
   wire?(run: RunHandle, event: EventHandle): void | Promise<void>

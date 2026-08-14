@@ -24,7 +24,7 @@ import type { LiveBus } from "./live"
  * container workspace (the agent's cwd). Profile-specific tools (CTF / run
  * management) are layered on top via {@link createAgentHost}'s `extraTools`.
  */
-export const HOST_FILE_TOOLS = ["read", "bash", "edit", "write"] as const
+const HOST_FILE_TOOLS = ["read", "bash", "edit", "write"] as const
 
 /**
  * Build the container-backed bash + file-workspace tool pair shared by every
@@ -34,7 +34,7 @@ export const HOST_FILE_TOOLS = ["read", "bash", "edit", "write"] as const
  * `multimodal` (derived from the model's `input` modalities) gates whether
  * `read` attaches image bytes for image files; pass false for text-only models.
  */
-export function buildHostFileTools(
+function buildHostFileTools(
   cwd: string,
   containerName: string,
   containerManager: ContainerManager,

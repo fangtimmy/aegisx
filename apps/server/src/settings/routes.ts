@@ -64,7 +64,7 @@ const promptTemplateInput = Type.Object(
   { additionalProperties: false }
 )
 
-export function settingsResponse(configStore: ConfigStore) {
+function settingsResponse(configStore: ConfigStore) {
   return {
     settings: configStore.getSettings(),
     updatedAt: configStore.getUpdatedAt(),

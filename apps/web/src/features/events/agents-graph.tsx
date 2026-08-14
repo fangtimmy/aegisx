@@ -210,7 +210,7 @@ function GraphNodeShell({
   )
 }
 
-export function SchedulerGraphNode({ data }: NodeProps) {
+function SchedulerGraphNode({ data }: NodeProps) {
   const d = data as Extract<GraphNodeData, { kind: "scheduler" }>
   const active = d.agentId !== null
   return (
@@ -231,7 +231,7 @@ export function SchedulerGraphNode({ data }: NodeProps) {
   )
 }
 
-export function RunGraphNode({ data }: NodeProps) {
+function RunGraphNode({ data }: NodeProps) {
   const d = data as Extract<GraphNodeData, { kind: "run" }>
   const { run } = d
   return (
@@ -264,7 +264,7 @@ export function RunGraphNode({ data }: NodeProps) {
   )
 }
 
-export function AgentGraphNode({ data }: NodeProps) {
+function AgentGraphNode({ data }: NodeProps) {
   const d = data as Extract<GraphNodeData, { kind: "agent" }>
   const { agent } = d
   const finish = agentFinishBadge(agent.status)

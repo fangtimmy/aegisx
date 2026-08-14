@@ -18,7 +18,7 @@ const OSC = new RegExp(`${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, "g")
 const CHARSET = new RegExp(`${ESC}[()][0-9A-Za-z]`, "g")
 
 /** Strip CSI / OSC ANSI sequences for terminal-like tool output. */
-export function stripAnsi(value: string): string {
+function stripAnsi(value: string): string {
   return value.replace(CSI, "").replace(OSC, "").replace(CHARSET, "")
 }
 
@@ -27,7 +27,7 @@ function patchPath(filePath: string) {
 }
 
 /** Prefer details.diff → content (already a patch) → rebuild from old/new. */
-export function toolDiff(tool: ToolBlock): string | null {
+function toolDiff(tool: ToolBlock): string | null {
   if (
     isRecord(tool.details) &&
     typeof tool.details.diff === "string" &&

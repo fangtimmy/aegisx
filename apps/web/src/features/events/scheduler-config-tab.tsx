@@ -101,7 +101,7 @@ export function SchedulerConfigTab({ eventId }: { eventId: string }) {
   )
 }
 
-export function SchedulerConfigFields({
+function SchedulerConfigFields({
   modelId,
   instruction,
   maxTargets,

@@ -9,7 +9,7 @@ export function updateSettings(input: Partial<FlatSettings>) {
   return apiRequest<SettingsResponse>("/settings", jsonRequest("PATCH", input))
 }
 
-export type PromptPreviewSegment = {
+type PromptPreviewSegment = {
   id: number
   text: string
   highlighted: boolean

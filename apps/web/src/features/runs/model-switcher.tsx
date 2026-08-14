@@ -33,9 +33,7 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   max: "Maximum",
 }
 
-export const THINKING_LEVELS = Object.keys(
-  thinkingLevelLabels
-) as ThinkingLevel[]
+const THINKING_LEVELS = Object.keys(thinkingLevelLabels) as ThinkingLevel[]
 
 type AvailableModel = {
   /** ProviderModel.id (UUID) — alias model ids reference this. */
@@ -53,7 +51,7 @@ export type { AvailableModel }
 
 /** Configured model aliases (GET /api/model-aliases). Shared by every model
  * selector that surfaces an "别名" group. */
-export function useModelAliases(): ModelAlias[] {
+function useModelAliases(): ModelAlias[] {
   const aliases = useQuery({
     queryKey: keys.aliases.all,
     queryFn: () => aliasesApi.listAliases(),
@@ -63,7 +61,7 @@ export function useModelAliases(): ModelAlias[] {
 
 /** Aliases that currently resolve to an enabled available model, paired with
  * their resolved model. Aliases resolving to nothing are hidden. */
-export function useResolvedAliases(models: AvailableModel[]) {
+function useResolvedAliases(models: AvailableModel[]) {
   const aliases = useModelAliases()
   return useMemo(() => {
     const byId = new Map(models.map((m) => [m.id, m]))
@@ -82,7 +80,7 @@ export function useResolvedAliases(models: AvailableModel[]) {
 /** Enabled provider models flattened to {@link AvailableModel} (with the pi
  * address needed to build canonical refs), grouped-ready. Shared by every
  * model ref selector. */
-export function useAvailableModels() {
+function useAvailableModels() {
   const providers = useQuery({
     queryKey: keys.providers.all,
     queryFn: () => providersApi.listProviders(),
@@ -123,7 +121,7 @@ function modelAddress(
 }
 
 /** Models grouped by provider label (for grouped selects). */
-export function groupByProvider(models: AvailableModel[]) {
+function groupByProvider(models: AvailableModel[]) {
   const map = new Map<string, AvailableModel[]>()
   for (const m of models) {
     const bucket = map.get(m.providerLabel) ?? []

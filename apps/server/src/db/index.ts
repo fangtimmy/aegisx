@@ -102,7 +102,7 @@ export function classifyDatabaseState(
 }
 
 /** Number of migrations the binary knows about, from the drizzle journal. */
-export function readJournalMigrationCount(migrationsFolder: string): number {
+function readJournalMigrationCount(migrationsFolder: string): number {
   try {
     const journal = JSON.parse(
       readFileSync(join(migrationsFolder, "meta", "_journal.json"), "utf8")

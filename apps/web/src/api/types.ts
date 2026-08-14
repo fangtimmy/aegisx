@@ -6,8 +6,6 @@ export type {
   Challenge,
   ChallengeFlag,
   ChallengeInput,
-  ChallengeSolved,
-  ChallengeSyncAttachment,
   ChallengeSyncItem,
   ChallengeSyncProgress,
   ChallengeSyncResult,
@@ -39,9 +37,7 @@ export type {
   SessionEntry,
   SessionMessageEntry,
   SettingDef,
-  SettingGroup,
   SettingKey,
-  SettingWidget,
   SolveState,
   SwitchModelInput,
   TargetState,
@@ -50,19 +46,13 @@ export type {
   TimingMeta,
 } from "@aegisx/shared"
 export {
-  defaultSettings,
-  get,
   isSessionEntry,
   isSettingModified,
   isTimingMeta,
   SETTINGS_DEFS,
-  settingDef,
 } from "@aegisx/shared"
 
-export type {
-  CompactionReason,
-  ContextSnapshot,
-} from "@aegisx/shared/live-event"
+export type { ContextSnapshot } from "@aegisx/shared/live-event"
 
 import type { FlatSettings } from "@aegisx/shared"
 

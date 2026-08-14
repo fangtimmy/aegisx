@@ -221,7 +221,7 @@ export function renderSystemPrompt(
   return render(template, context)
 }
 
-export function renderOrchestratorSystemPrompt(
+function renderOrchestratorSystemPrompt(
   template: string,
   context: OrchestratorPromptContext
 ) {
@@ -233,10 +233,7 @@ export function renderOrchestratorSystemPrompt(
     .trim()
 }
 
-export function renderInitialPrompt(
-  template: string,
-  context: PromptTemplateContext
-) {
+function renderInitialPrompt(template: string, context: PromptTemplateContext) {
   return render(template, context)
 }
 

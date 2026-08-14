@@ -175,7 +175,7 @@ async function writeOverflow(
   return `${overflowDirAbs}/${name}`
 }
 
-export const BASH_DESCRIPTION = `Run a shell command inside the Kali container (stdout and stderr are merged into one output).
+const BASH_DESCRIPTION = `Run a shell command inside the Kali container (stdout and stderr are merged into one output).
 
 ## Working directory & paths
 - The shell starts in the workspace (/workspace), where your file tools also operate — reference files as workspace-relative or /workspace/<path>. Do NOT prefix commands with \`cd /workspace\`.

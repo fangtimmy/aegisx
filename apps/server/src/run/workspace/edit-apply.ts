@@ -1,8 +1,8 @@
-export function normalizeToLf(text: string) {
+function normalizeToLf(text: string) {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
 }
 
-export function detectLineEnding(content: string): "\r\n" | "\n" {
+function detectLineEnding(content: string): "\r\n" | "\n" {
   const crlf = content.indexOf("\r\n")
   const lf = content.indexOf("\n")
   if (lf === -1) return "\n"
@@ -10,18 +10,18 @@ export function detectLineEnding(content: string): "\r\n" | "\n" {
   return crlf < lf ? "\r\n" : "\n"
 }
 
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n") {
+function restoreLineEndings(text: string, ending: "\r\n" | "\n") {
   return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text
 }
 
-export function stripBom(content: string): { bom: string; text: string } {
+function stripBom(content: string): { bom: string; text: string } {
   return content.startsWith("\uFEFF")
     ? { bom: "\uFEFF", text: content.slice(1) }
     : { bom: "", text: content }
 }
 
 /** Normalize quotes/dashes/spaces and strip trailing whitespace per line (pi/claude style). */
-export function normalizeForFuzzyMatch(text: string): string {
+function normalizeForFuzzyMatch(text: string): string {
   return (
     text
       .normalize("NFKC")

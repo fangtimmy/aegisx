@@ -8,7 +8,7 @@ export const UNCATEGORIZED = "未分类"
    so the fleet/queue/usage must refresh regardless of locally-known state. */
 export const POLL_INTERVAL_MS = 5000
 
-export const ROLE_LABELS: Record<string, string> = {
+const ROLE_LABELS: Record<string, string> = {
   solver: "求解者",
   observer: "观察者",
   orchestrator: "调度者",

@@ -28,9 +28,7 @@ import { createPlatformFlags } from "./flags"
 import { createPlatformSync } from "./sync"
 import { createPlatformTargets } from "./targets"
 
-export { PlatformActionError } from "./errors"
-
-export function createPlatformAdapter(
+function createPlatformAdapter(
   config: PlatformConfig,
   onCredential?: (credential: string) => void,
   onError?: (info: PlatformRequestError) => void,

@@ -16,7 +16,7 @@ export type EventViewPrefs = {
   remoteFilter: RemoteChallengeStatus[]
 }
 
-export const DEFAULT_EVENT_VIEW_PREFS: EventViewPrefs = {
+const DEFAULT_EVENT_VIEW_PREFS: EventViewPrefs = {
   sort: "event",
   group: "category",
   categoryFilter: [],
@@ -83,7 +83,7 @@ function sanitize(raw: unknown): EventViewPrefs {
   }
 }
 
-export function loadEventViewPrefs(eventId: string): EventViewPrefs {
+function loadEventViewPrefs(eventId: string): EventViewPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_PREFIX + eventId)
     if (!raw) return { ...DEFAULT_EVENT_VIEW_PREFS }
@@ -93,10 +93,7 @@ export function loadEventViewPrefs(eventId: string): EventViewPrefs {
   }
 }
 
-export function saveEventViewPrefs(
-  eventId: string,
-  prefs: EventViewPrefs
-): void {
+function saveEventViewPrefs(eventId: string, prefs: EventViewPrefs): void {
   try {
     localStorage.setItem(STORAGE_PREFIX + eventId, JSON.stringify(prefs))
   } catch {

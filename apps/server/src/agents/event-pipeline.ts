@@ -36,7 +36,7 @@ export function entryKeyOf(agentId: string, entry: SessionEntry): string {
 }
 
 /** Deterministic, stable key for an SDK AgentMessage (it has none of its own). */
-export function messageIdOf(agentId: string, msg: AgentMessage): string {
+function messageIdOf(agentId: string, msg: AgentMessage): string {
   if (msg.role === "toolResult") {
     return `${agentId}:toolResult:${msg.toolCallId}`
   }

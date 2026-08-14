@@ -12,7 +12,7 @@ import {
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all"
 
-export type { ModelThinkingLevel, ThinkingLevelMap }
+export type { ThinkingLevelMap }
 
 export type ModelMetadata = {
   reasoning: boolean
@@ -197,7 +197,7 @@ export function parseModelMetadata(value: string): ModelMetadata {
   }
 }
 
-export function parseThinkingLevelMap(value: string): ThinkingLevelMap {
+function parseThinkingLevelMap(value: string): ThinkingLevelMap {
   try {
     const parsed = JSON.parse(value) as unknown
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {

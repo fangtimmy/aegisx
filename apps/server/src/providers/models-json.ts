@@ -15,12 +15,9 @@ import { providerApi, type ThinkingLevelMap } from "./builtin-models"
  * provider apiKey. The container has no auth.json and we control env, so the
  * literal apiKey written here is authoritative.
  */
-export type PiApi =
-  | "openai-completions"
-  | "openai-responses"
-  | "anthropic-messages"
+type PiApi = "openai-completions" | "openai-responses" | "anthropic-messages"
 
-export type PiModel = {
+type PiModel = {
   id: string
   name: string
   reasoning?: boolean
@@ -33,7 +30,7 @@ export type PiModel = {
   compat?: Record<string, unknown>
 }
 
-export type PiProvider = {
+type PiProvider = {
   baseUrl?: string
   api?: PiApi
   apiKey?: string
@@ -49,12 +46,12 @@ export type PiModelsJson = {
 }
 
 /** Provider key used in pi models.json for a bound pi built-in provider. */
-export function piProviderKeyBound(model: ProviderModel): string {
+function piProviderKeyBound(model: ProviderModel): string {
   return model.piBinding?.providerId ?? ""
 }
 
 /** Provider key used in pi models.json for a fully custom provider. */
-export function piProviderKeyCustom(provider: ProviderConnection): string {
+function piProviderKeyCustom(provider: ProviderConnection): string {
   return `aegisx-${provider.id}`
 }
 
@@ -72,14 +69,6 @@ export function resolvePiModelRef(
         modelId: model.piBinding.modelId,
       }
     : { providerKey: piProviderKeyCustom(provider), modelId: model.modelId }
-}
-
-export function piModelRef(
-  provider: ProviderConnection,
-  model: ProviderModel
-): string {
-  const { providerKey, modelId } = resolvePiModelRef(provider, model)
-  return `${providerKey}/${modelId}`
 }
 
 function modelToPiModel(model: ProviderModel): PiModel {
@@ -163,17 +152,4 @@ export function generateModelsJson(
   }
 
   return json
-}
-
-/** `<providerKey>/<modelId>` refs for settings.json enabledModels. */
-export function enabledModelRefs(providers: ProviderConnection[]): string[] {
-  const refs: string[] = []
-  for (const provider of providers) {
-    if (!provider.enabled || !provider.apiKey) continue
-    for (const model of provider.models) {
-      if (!model.enabled) continue
-      refs.push(piModelRef(provider, model))
-    }
-  }
-  return refs
 }

@@ -118,7 +118,7 @@ export type ConversationProps = {
 }
 
 /** Per-agent session + backtrack ops (v12). */
-export type SessionOps = {
+type SessionOps = {
   listSessions: (agentId: string) => Promise<AgentSessionSummary[]>
   createSession: (agentId: string) => Promise<unknown>
   activateSession: (agentId: string, sessionId: string) => Promise<unknown>

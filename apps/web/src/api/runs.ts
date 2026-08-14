@@ -5,7 +5,6 @@ import type {
   RunDetail,
   RunFile,
   RunPublic,
-  SwitchModelInput,
 } from "./types"
 
 export type CreateRunInput = {
@@ -15,11 +14,6 @@ export type CreateRunInput = {
   prompt?: string
   /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
   timeoutMs?: number
-}
-
-export type SendMessageInput = {
-  text: string
-  deliverAs?: "steer" | "followUp"
 }
 
 export function listEventRuns(eventId: string) {
@@ -47,36 +41,11 @@ export function closeRun(runId: string) {
   return apiRequest<RunPublic>(`/runs/${runId}/close`, jsonRequest("POST", {}))
 }
 
-export function deleteRun(runId: string) {
-  return apiRequest<void>(`/runs/${runId}`, { method: "DELETE" })
-}
-
-export function sendMessage(runId: string, input: SendMessageInput) {
-  return apiRequest<RunPublic>(
-    `/runs/${runId}/message`,
-    jsonRequest("POST", input)
-  )
-}
-
 export function setQueue(
   runId: string,
   input: { steering: string[]; followUp: string[] }
 ) {
   return apiRequest<void>(`/runs/${runId}/queue`, jsonRequest("PUT", input))
-}
-
-export function switchModel(runId: string, input: SwitchModelInput) {
-  return apiRequest<RunPublic>(
-    `/runs/${runId}/switch-model`,
-    jsonRequest("POST", input)
-  )
-}
-
-export function finishRun(runId: string, summary: string) {
-  return apiRequest<RunPublic>(
-    `/runs/${runId}/finish`,
-    jsonRequest("POST", { summary })
-  )
 }
 
 /**

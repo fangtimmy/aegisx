@@ -1,6 +1,5 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
-  ChallengeSyncResult,
   EventPlatform,
   PlatformType,
   RemoteChallengeSummary,
@@ -52,12 +51,5 @@ export function discoverChallenges(eventId: string) {
   return apiRequest<{ syncedAt: string; items: RemoteChallengeSummary[] }>(
     `/events/${eventId}/platform/challenges/discover`,
     { method: "POST" }
-  )
-}
-
-export function syncChallenges(eventId: string, remoteIds: string[]) {
-  return apiRequest<ChallengeSyncResult>(
-    `/events/${eventId}/platform/challenges/sync`,
-    jsonRequest("POST", { remoteIds })
   )
 }

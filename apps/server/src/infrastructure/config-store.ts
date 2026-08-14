@@ -25,7 +25,7 @@ import { Value } from "typebox/value"
 
 import { ProviderTypeSchema } from "../lib/schemas"
 
-export type { FlatSettings, ProviderType }
+export type { FlatSettings }
 
 /** Stored model alias shape (see @aegisx/shared/alias). */
 export type AliasData = ModelAlias

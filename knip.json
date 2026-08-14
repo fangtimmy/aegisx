@@ -1,0 +1,8 @@
+{
+  "workspaces": {
+    ".": { "entry": ["apps/server/src/index.ts", "apps/web/src/main.tsx"] },
+    "apps/server": { "entry": ["src/index.ts"], "project": ["src/**/*.ts", "test/**/*.ts"] },
+    "apps/web": { "entry": ["src/main.tsx", "src/App.tsx"], "project": ["src/**/*.{ts,tsx}"] },
+    "apps/shared": { "entry": ["index.ts"], "project": ["*.ts"] }
+  }
+}

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs"
 import { dirname, join } from "node:path"
 
-export const defaultMaxAttachmentBytes = 512 * 1024 * 1024
+const defaultMaxAttachmentBytes = 512 * 1024 * 1024
 
 export class StorageLimitError extends Error {
   constructor(readonly limitBytes: number) {

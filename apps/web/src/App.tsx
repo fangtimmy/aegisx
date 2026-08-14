@@ -37,7 +37,7 @@ const router = createBrowserRouter([
   { path: "/events/:eventId/runs/:runId", Component: EventPage },
 ])
 
-export function App() {
+function App() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>

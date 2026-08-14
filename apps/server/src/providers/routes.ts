@@ -74,8 +74,6 @@ const modelUpdateInput = Type.Partial(
   { additionalProperties: false }
 )
 
-export const providerName = (id: string) => `aegisx-${id}`
-
 function cloneProviders(store: ConfigStore): ProviderData[] {
   return store.getProviders().map((p) => ({
     ...p,

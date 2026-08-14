@@ -31,11 +31,11 @@ import type {
  */
 const plugins = new Map<string, OrchestrationPlugin>()
 
-export function registerPlugin(plugin: OrchestrationPlugin): void {
+function registerPlugin(plugin: OrchestrationPlugin): void {
   plugins.set(plugin.id, plugin)
 }
 
-export function getPlugin(id: string): OrchestrationPlugin | undefined {
+function getPlugin(id: string): OrchestrationPlugin | undefined {
   return plugins.get(id)
 }
 
@@ -68,7 +68,7 @@ let builtinRegistered = false
 
 /** Register the built-in orchestration plugins. Idempotent — safe to call on
  * every app boot. */
-export function registerOrchestrationPlugins(): void {
+function registerOrchestrationPlugins(): void {
   if (builtinRegistered) return
   for (const plugin of [
     classic,

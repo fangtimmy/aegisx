@@ -166,7 +166,7 @@ export function buildEventPromptContext(
   }
 }
 
-export function attachmentFiles(db: Database, challengeId: string) {
+function attachmentFiles(db: Database, challengeId: string) {
   const rows = db
     .select()
     .from(attachments)
