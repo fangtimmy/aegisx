@@ -79,6 +79,13 @@ export function finishRun(runId: string, summary: string) {
   )
 }
 
+/**
+ * List a run's committed messages, paginated. The `after` cursor is opaque —
+ * echo back `nextAfter` from the previous response. Two semantics server-side:
+ * run-level (no `agentId`) → SQLite rowid (insertion order across all agents'
+ * active sessions); per-agent → the per-session seq. `after=0` (default) is a
+ * full pull, which is what all current call sites use.
+ */
 export function listMessages(runId: string, after = 0, agentId?: string) {
   const params = new URLSearchParams()
   if (after > 0) params.set("after", String(after))

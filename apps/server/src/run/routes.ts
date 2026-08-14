@@ -171,6 +171,12 @@ export function registerRunRoutes(
     }
   })
 
+  // Run-level message list with an opaque pagination cursor (`after` →
+  // `nextAfter`). Two cursor semantics: run-level (no agentId) uses SQLite
+  // rowid (insertion order across all agents' active sessions — per-session
+  // seqs interleave and would silently drop later entries); per-agent (with
+  // agentId) uses the per-session seq (also the backtrack API's target key).
+  // Clients echo nextAfter back as after; after=0 is a full pull.
   app.get("/api/runs/:runId/messages", (c) => {
     const runId = c.req.param("runId")
     if (!runService.get(runId)) return notFound(c, "Run not found")

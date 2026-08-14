@@ -233,17 +233,23 @@ export function createRunQueries(options: {
     return sumUsageTotals(db, inArray(sessionEntries.runId, runIds))
   }
 
-  /** Durable committed entries for a run, paginated by `seq`. Only renderable
+  /** Durable committed entries for a run, paginated by cursor. Only renderable
    * kinds (message / compaction / branch_summary / model_change /
-   * thinking_level_change) are returned; others (custom, ...) are skipped
-   * but still count toward seq (positional cursor). `after` is the highest seq
-   * already seen.
+   * thinking_level_change) are returned; others (custom, ...) are skipped but
+   * still advance the cursor.
    *
    * Multi-session (v12): each agent contributes only its ACTIVE session's
    * entries (its `agents.sessionFile` pointer). A per-agent query takes the
    * explicit `sessionId` override when given, else the active one; the
    * run-level query is the union of every agent's active session. Legacy jsonl
-   * sessions have no session_entries rows and contribute nothing. */
+   * sessions have no session_entries rows and contribute nothing.
+   *
+   * Cursor semantics: per-agent queries paginate by `seq` (per-session append
+   * position — the backtrack API's target key, correct within one session);
+   * the run-level query paginates by SQLite `rowid` (insertion order across
+   * the union of sessions, where per-session seqs interleave and a seq cursor
+   * would silently drop later entries of lower-seq sessions). `nextAfter` is
+   * opaque to callers — echo it back as `after`. */
   function listMessages(
     runId: string,
     opts: { after?: number; agentId?: string; sessionId?: string }
@@ -288,7 +294,7 @@ export function createRunQueries(options: {
     return listRenderableEntries(
       db,
       and(eq(sessionEntries.runId, runId), or(...scopes)),
-      { after }
+      { after, cursor: { column: "rowid" } }
     )
   }
 

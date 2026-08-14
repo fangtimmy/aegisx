@@ -6,7 +6,7 @@ import {
   type TimingMeta,
 } from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { and, asc, gt, type SQL } from "drizzle-orm"
+import { and, asc, gt, sql, type SQL } from "drizzle-orm"
 
 import type { createDatabase } from "../db"
 import { sessionEntries } from "../db/schema"
@@ -69,21 +69,52 @@ export function sumUsageTotals(
   }
 }
 
-/** List renderable entries (seq > after, matching `scopeWhere`) as message
- * items, ordered by seq. `scopeWhere` is the scoping condition WITHOUT the seq
- * filter (this adds it). Every row carries its agent_id (v8: notNull). */
+/** List renderable entries after the given cursor, matching `scopeWhere`.
+ * `scopeWhere` is the scoping condition WITHOUT the cursor filter (this adds
+ * it). Every row carries its agent_id (v8: notNull).
+ *
+ * Cursor semantics (`opts.cursor`, default `seq`):
+ *  - `seq` — per-session append position (`unique(sessionId, seq)`). Correct
+ *    for single-session scopes (per-agent queries + backtrack's seq target);
+ *    `nextAfter` is a seq.
+ *  - `rowid` — SQLite rowid (monotonic on an append-only rowid table). Used
+ *    for run-level queries that union several sessions' entries, where
+ *    per-session seqs interleave and cannot order a single stream (a seq
+ *    cursor there silently drops whole sessions' later entries). Items still
+ *    carry their own `seq` (the per-agent pagination / backtrack key).
+ *
+ * Known boundary (accepted): flat backtrack deletes the tail of a session and
+ * a later insert can reuse a freed rowid, so a client holding a stale rowid
+ * cursor could theoretically skip new rows. Harmless in practice: backtrack
+ * re-pulls via the store reset + full reload, and SSE `message.committed`
+ * pushes new entries to live subscribers. */
 export function listRenderableEntries(
   db: Database,
   scopeWhere: SQL | undefined,
-  opts: { after: number }
+  opts: { after: number; cursor?: { column: "seq" } | { column: "rowid" } }
 ): MessageList {
+  const cursor = opts.cursor?.column ?? "seq"
   const rows = db
-    .select()
+    .select({
+      data: sessionEntries.data,
+      meta: sessionEntries.meta,
+      seq: sessionEntries.seq,
+      agentId: sessionEntries.agentId,
+      rowid: sql<number>`rowid`,
+    })
     .from(sessionEntries)
-    .where(and(scopeWhere, gt(sessionEntries.seq, opts.after)))
-    .orderBy(asc(sessionEntries.seq))
+    .where(
+      and(
+        scopeWhere,
+        cursor === "rowid"
+          ? gt(sql`rowid`, opts.after)
+          : gt(sessionEntries.seq, opts.after)
+      )
+    )
+    .orderBy(cursor === "rowid" ? asc(sql`rowid`) : asc(sessionEntries.seq))
     .all()
   const items: MessageListItem[] = []
+  let nextCursor = opts.after
   for (const row of rows) {
     let entry: SessionEntry
     try {
@@ -108,9 +139,10 @@ export function listRenderableEntries(
       agentId: row.agentId,
       ...(meta ? { meta } : {}),
     })
+    nextCursor = cursor === "rowid" ? row.rowid : row.seq
   }
   return {
     items,
-    nextAfter: items.length > 0 ? items[items.length - 1].seq : opts.after,
+    nextAfter: items.length > 0 ? nextCursor : opts.after,
   }
 }
