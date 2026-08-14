@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "katex/dist/katex.min.css";
 @import "streamdown/styles.css";
 
 /* Streamdown + plugins: scan package class names for Tailwind (v4) */
