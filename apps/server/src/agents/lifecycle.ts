@@ -34,6 +34,12 @@ export type SessionLifecycleOptions = {
   onTurnSettled(id: string, error: string | null): void
   /** Called just before driving a fresh turn from send() (run: clear pending). */
   onBeforeNewTurn?(id: string): void
+  /** Fresh-turn gate: awaited in send()'s non-streaming branch, BEFORE
+   * onBeforeNewTurn, inside the caller's lock. Throw = the turn is abandoned
+   * and send() propagates the error to its caller. steer/followUp (streaming
+   * branch) and drive() callers (deliverToParent, system prime) do NOT pass
+   * through this hook — internal dispatch must never be capacity-rejected. */
+  onTurnGate?(id: string): Promise<void>
   /** Cold-resume a closed entity so send() can start a new turn (run:
    * ensureWarm). Omit to reject sends to entities without a live session
    * (orchestrator: sends require a running session). */
@@ -123,6 +129,7 @@ export function createSessionLifecycle(
         else await session.session.steer(text)
         return
       }
+      await options.onTurnGate?.(id)
       options.onBeforeNewTurn?.(id)
       drive(id, text)
     })

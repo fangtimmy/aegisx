@@ -76,6 +76,12 @@ export type RunHandleHost = {
  * in try/catch so a throwing callback never escapes (log + swallow). Callbacks
  * are expected to be cheap and side-effect-free except for `send()`; the
  * service emits from the generation-gated settle critical section.
+ *
+ * send() inside a callback can be rejected by the fresh-turn capacity gate
+ * (spec §8.2): the RunActionError propagates to THIS try/catch, is logged and
+ * swallowed, and the callback's remaining work is skipped — a dropped observer
+ * wake-up is an accepted degradation under capacity pressure (the observer can
+ * be re-woken by its own next turn or a manual message).
  */
 export class RunEmitter {
   private readonly runLevel = new Map<

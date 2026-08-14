@@ -248,7 +248,12 @@ export function createRunService(options: RunServiceOptions) {
   /** Global fence critical section (spec §8.2). Serializes the fence check +
    * slot reservation so concurrent launches can't overshoot the caps. Holds
    * only the quick DB op (row insert / status flip); container builds and
-   * setup run outside. */
+   * setup run outside.
+   *
+   * Lock order (agent → fence): every fence critical section runs either
+   * outside any agent lock (create / restoreRunContext) or inside one (the
+   * onTurnGate hook — send() holds the target agent's lock). No fence section
+   * ever acquires an agent lock, so the order is acyclic (no deadlock). */
   async function withFence<T>(op: () => T | Promise<T>): Promise<T> {
     return chainLock(fenceLocks, "global-fence", op)
   }
@@ -410,6 +415,33 @@ export function createRunService(options: RunServiceOptions) {
     },
     onBeforeNewTurn(agentId) {
       pendingFinish.delete(agentId)
+    },
+    /** Fresh-turn gate (spec §8.2, fourth fence enforcement point): waking a
+     * warm idle run starts a new compute round, so it must be admitted by the
+     * fence like a fresh launch. Runs a quick fence check + status flip under
+     * the GLOBAL fence while holding this agent's lock (agent → fence order,
+     * see withFence). A capacity reject propagates out of send() as
+     * RunActionError → HTTP 429 / tool result. steer/followUp (streaming
+     * branch) and drive() (child result delivery / prime) skip this hook. */
+    async onTurnGate(agentId) {
+      const runId = runIdOf(agentId)
+      if (!runId) return
+      const row = queries.getRow(runId)
+      if (!row || row.scopeType !== "challenge" || row.status !== "idle") {
+        return
+      }
+      await withFence(async () => {
+        const decision = checkLaunchFence(db, options.getSettings(), {
+          scopeType: "challenge",
+          eventId: row.eventId,
+          challengeId: row.challengeId,
+        })
+        if (!decision.ok) throw new RunActionError("capacity", decision.message)
+        // Atomic placeholder: same reservation semantics as create / restore.
+        // If the gate throws, the run stays idle (no slot consumed). The
+        // subsequent agentTurnStart's recompute maintains it as running.
+        updateRun(runId, { status: "running", updatedAt: now() })
+      })
     },
     async onResume(agentId) {
       const runId = runIdOf(agentId)
@@ -1840,6 +1872,27 @@ export function createRunService(options: RunServiceOptions) {
       )
     }
   }
+  /** Per-run cold-restore single-flight: concurrent prepareAgent calls for the
+   * same closed run share ONE restore promise, so a second restore never tears
+   * down the container the first just built (createToolboxContainer removes
+   * the same-named container first). The winner's promise is awaited by all
+   * callers; on failure every caller gets the error (restoreRunContext's catch
+   * reverts the run to closed). */
+  const restoring = new Map<string, Promise<void>>()
+
+  function restoreRunContextOnce(
+    runId: string,
+    row: typeof runs.$inferSelect
+  ): Promise<void> {
+    const existing = restoring.get(runId)
+    if (existing) return existing
+    const promise = restoreRunContext(runId, row).finally(() => {
+      if (restoring.get(runId) === promise) restoring.delete(runId)
+    })
+    restoring.set(runId, promise)
+    return promise
+  }
+
   /** Prepare one agent's environment: container online (via the run context,
    * built lazily on cold-restore) + this agent's session online. Unified for
    * fresh create (no sessionFile → new session) and cold-restore (sessionFile →
@@ -1856,9 +1909,10 @@ export function createRunService(options: RunServiceOptions) {
     if (!agentRow) throw new RunActionError("not_found", "Agent not found")
 
     // Ensure the run-level context (container + model runtime + setup) exists.
-    // Fresh create sets it before prepareAgent; cold-restore builds it here.
+    // Fresh create sets it before prepareAgent; cold-restore builds it here —
+    // single-flighted per run so concurrent wakes share one restore.
     if (!contexts.has(runId)) {
-      await restoreRunContext(runId, row)
+      await restoreRunContextOnce(runId, row)
     }
     const ctx = contexts.get(runId)!
 
