@@ -43,7 +43,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
 
 /**
- * Task-queue editor (overview Runs tab, spec §10/§11.2). Pending items can be
+ * Task-queue editor (overview Runs tab). Pending items can be
  * reordered (↑/↓), edited (prompt / timeout) and removed; running items are
  * read-only — the server rejects edits/removal, surfaced as an error toast.
  */

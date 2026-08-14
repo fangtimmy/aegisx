@@ -53,7 +53,7 @@ function buildTimeline(
     if (run.lastTimeoutAt) {
       // Outcome is not persisted — infer from the run's current state
       // (a timeout with a still-warm run settled to idle; a closed one
-      // was SIGKILLed, spec §8.3).
+      // was SIGKILLed).
       events.push({
         time: run.lastTimeoutAt,
         id: `run:${run.id}:timeout`,

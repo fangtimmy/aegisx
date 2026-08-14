@@ -104,7 +104,7 @@ export function RunWorkspace({
 
   // Conversation adapter — stable callbacks so the SSE connection effect
   // does not reconnect on re-render. Send/switch target the *selected* agent
-  // (per-agent endpoints, spec §10); model switch refreshes the run list so
+  // (per-agent endpoints); model switch refreshes the run list so
   // the header + switcher re-derive the current model.
   const loadMessages = useCallback(
     () => runsApi.listMessages(runId ?? "", 0).then((list) => list.items),

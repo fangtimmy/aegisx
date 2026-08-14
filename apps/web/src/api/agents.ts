@@ -1,7 +1,7 @@
 import { apiRequest, jsonRequest } from "./client"
 import type { AgentSessionSummary, RunPublic, SwitchModelInput } from "./types"
 
-/** Per-agent message (spec §10: POST /api/agents/:agentId/message). A closed
+/** Per-agent message (POST /api/agents/:agentId/message). A closed
  * run's agent cold-restores the run (fence → container → session). */
 export type AgentMessageInput = {
   text: string

@@ -97,7 +97,7 @@ export function EventSummary({
     queryFn: () => schedulerApi.listQueue(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
-  // Event-wide token usage + cost (spec §10).
+  // Event-wide token usage + cost.
   const usage = useQuery({
     queryKey: keys.events.usage(eventId),
     queryFn: () => eventsApi.getEventUsage(eventId),

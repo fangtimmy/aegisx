@@ -90,7 +90,7 @@ function isOrchestratorContext(plugin: string, key: string): boolean {
 }
 
 /**
- * Settings-page「编排」panel (spec §3.6 + v9 slot models): one card per
+ * Settings-page「编排」panel (v9 slot models): one card per
  * orchestration plugin. Each card lists the plugin's declared agent slots with
  * a per-slot model ref picker (the slot's model injected at createAgent time),
  * plus a prompt-templates section whose keys open an editor dialog. Prompt

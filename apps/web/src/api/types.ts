@@ -117,7 +117,7 @@ export type OrchestrationInfo = {
   templateKeys: string[]
 }
 
-/** GET/PATCH /api/prompt-templates — one row of the template store (spec §3.6). */
+/** GET/PATCH /api/prompt-templates — one row of the template store. */
 export type PromptTemplateRow = {
   plugin: string
   key: string

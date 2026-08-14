@@ -20,7 +20,7 @@ export function listEventRuns(eventId: string) {
   return apiRequest<{ items: RunPublic[] }>(`/events/${eventId}/runs`)
 }
 
-/** Enqueue a run (spec §10: POST /api/challenges/:id/runs returns a queue
+/** Enqueue a run (POST /api/challenges/:id/runs returns a queue
  * item, 202 — the drainer launches it when a fence slot is free). */
 export function createRun(challengeId: string, input: CreateRunInput) {
   return apiRequest<QueueItem>(
