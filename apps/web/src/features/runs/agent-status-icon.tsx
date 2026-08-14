@@ -1,4 +1,4 @@
-import { Check, CircleDashed, LoaderCircle, X } from "lucide-react"
+import { Check, CircleDashed, LoaderCircle, OctagonX, X } from "lucide-react"
 
 import type { AgentStatus } from "@/api"
 import { cn } from "@/lib/utils"
@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 function agentStatusLabel(status: AgentStatus): string {
   if (status === "running") return "运行中"
   if (status === "completed") return "已完成"
+  if (status === "aborted") return "已中断"
   if (status === "failed") return "已失败"
   return "空闲"
 }
@@ -27,15 +28,18 @@ export function AgentStatusIcon({
       ? LoaderCircle
       : status === "completed"
         ? Check
-        : status === "failed"
-          ? X
-          : CircleDashed // idle
+        : status === "aborted"
+          ? OctagonX
+          : status === "failed"
+            ? X
+            : CircleDashed // idle
   return (
     <span
       className={cn(
         "inline-flex shrink-0",
         status === "running" && "text-info",
         status === "completed" && "text-success",
+        status === "aborted" && "text-warning",
         status === "failed" && "text-destructive",
         status === "idle" && "text-muted-foreground",
         className

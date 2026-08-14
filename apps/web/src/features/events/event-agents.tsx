@@ -48,6 +48,7 @@ import {
 import { Link, useNavigate } from "react-router"
 
 import {
+  type AgentStatus,
   type AgentSummary,
   agentsApi,
   type Challenge,
@@ -97,6 +98,7 @@ import {
 } from "@/components/ui/number-field"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { CreateRunDialog } from "@/features/runs"
@@ -131,6 +133,27 @@ const ROLE_LABELS: Record<string, string> = {
 
 function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role
+}
+
+/** Terminal agent states — the run may still be active while its agents are
+ * done (completed / aborted / failed). */
+function isAgentFinished(agent: AgentSummary): boolean {
+  return (
+    agent.status === "completed" ||
+    agent.status === "aborted" ||
+    agent.status === "failed"
+  )
+}
+
+/** Terminal-state badge for a finished agent; null while running / idle. */
+function agentFinishBadge(status: AgentStatus): {
+  label: string
+  variant: "success" | "destructive" | "warning"
+} | null {
+  if (status === "completed") return { label: "已完成", variant: "success" }
+  if (status === "failed") return { label: "已失败", variant: "destructive" }
+  if (status === "aborted") return { label: "已中断", variant: "warning" }
+  return null
 }
 
 type OverviewTab = "plan" | "timeline" | "challenges" | "runs" | "agents"
@@ -692,6 +715,7 @@ function AgentsTab({
   scheduler?: SchedulerWithAgents
   onSelectAgent: (runId: string, agentId: string) => void
 }) {
+  const [hideFinished, setHideFinished] = useState(false)
   const allAgents: AgentRef[] = useMemo(() => {
     const refs: AgentRef[] = []
     for (const run of runs) {
@@ -710,15 +734,25 @@ function AgentsTab({
   const groups = useMemo(() => {
     const map = new Map<string, AgentRef[]>()
     for (const ref of allAgents) {
+      if (hideFinished && isAgentFinished(ref.agent)) continue
       const role = ref.agent.role || "agent"
       const list = map.get(role) ?? []
       list.push(ref)
       map.set(role, list)
     }
+    // Active agents first, finished ones after; newest first within each.
+    for (const list of map.values()) {
+      list.sort(
+        (left, right) =>
+          Number(isAgentFinished(left.agent)) -
+            Number(isAgentFinished(right.agent)) ||
+          right.agent.updatedAt.localeCompare(left.agent.updatedAt)
+      )
+    }
     return [...map.entries()].sort(([left], [right]) =>
       left.localeCompare(right)
     )
-  }, [allAgents])
+  }, [allAgents, hideFinished])
 
   if (allAgents.length === 0) {
     return (
@@ -735,50 +769,75 @@ function AgentsTab({
   return (
     <ScrollArea className="h-full pr-1" scrollFade>
       <div className="flex flex-col gap-3 p-1">
-        {groups.map(([role, refs]) => (
-          <section key={role}>
-            <div className="flex items-center gap-2 p-1">
-              <h3 className="text-sm font-medium">{roleLabel(role)}</h3>
-              <Badge size="sm" variant="secondary">
-                {refs.length}
-              </Badge>
-            </div>
-            <Card>
-              <CardPanel className="p-0">
-                <div className="flex flex-col">
-                  {refs.map(({ agent, run }) => (
-                    <button
-                      className="flex min-w-0 items-center gap-2.5 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-accent"
-                      key={agent.id}
-                      onClick={() => onSelectAgent(run.id, agent.id)}
-                      type="button"
-                    >
-                      <AgentStatusIcon
-                        className="[&_svg]:size-4"
-                        status={agent.status}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">
-                          {agent.name ?? roleLabel(agent.role)}
-                        </span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {run.scopeType === "event"
-                            ? "调度者"
-                            : run.challengeName}
-                        </span>
-                      </span>
-                      {agent.isEntry && (
-                        <Badge size="sm" variant="secondary">
-                          入口
-                        </Badge>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </CardPanel>
-            </Card>
-          </section>
-        ))}
+        <label className="flex cursor-pointer items-center justify-between gap-2 rounded-md p-1 text-sm text-muted-foreground">
+          <span>隐藏已结束</span>
+          <Switch
+            aria-label="隐藏已结束的 agents"
+            checked={hideFinished}
+            onCheckedChange={setHideFinished}
+          />
+        </label>
+        {groups.length === 0 ? (
+          <p className="px-2 py-4 text-sm text-muted-foreground">
+            没有活跃 agents。
+          </p>
+        ) : (
+          groups.map(([role, refs]) => (
+            <section key={role}>
+              <div className="flex items-center gap-2 p-1">
+                <h3 className="text-sm font-medium">{roleLabel(role)}</h3>
+                <Badge size="sm" variant="secondary">
+                  {refs.length}
+                </Badge>
+              </div>
+              <Card>
+                <CardPanel className="p-0">
+                  <div className="flex flex-col">
+                    {refs.map(({ agent, run }) => {
+                      const finish = agentFinishBadge(agent.status)
+                      return (
+                        <button
+                          className={cn(
+                            "flex min-w-0 items-center gap-2.5 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-accent",
+                            finish && "opacity-60"
+                          )}
+                          key={agent.id}
+                          onClick={() => onSelectAgent(run.id, agent.id)}
+                          type="button"
+                        >
+                          <AgentStatusIcon
+                            className="[&_svg]:size-4"
+                            status={agent.status}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {agent.name ?? roleLabel(agent.role)}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {run.scopeType === "event"
+                                ? "调度者"
+                                : run.challengeName}
+                            </span>
+                          </span>
+                          {agent.isEntry && (
+                            <Badge size="sm" variant="secondary">
+                              入口
+                            </Badge>
+                          )}
+                          {finish && (
+                            <Badge size="sm" variant={finish.variant}>
+                              {finish.label}
+                            </Badge>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </CardPanel>
+              </Card>
+            </section>
+          ))
+        )}
       </div>
     </ScrollArea>
   )
@@ -807,11 +866,15 @@ function AgentsGraph({
     )
   })
   const schedRun = scheduler?.run ?? null
+  // Start-open state: the launch dialog persists the pre-start policy (model /
+  // instruction / target cap) before creating the orchestrator run.
+  const [startOpen, setStartOpen] = useState(false)
 
-  // Scheduler lifecycle: start creates the event-scoped orchestrator run;
-  // stop cancels the current turn (container kept); close releases it. The
-  // scheduler agent itself is interacted with via the same AgentDialog as
-  // any run agent — these are the only run-level controls the graph needs.
+  // Scheduler lifecycle: start (via the dialog) creates the event-scoped
+  // orchestrator run; stop cancels the current turn (container kept); close
+  // releases it. The scheduler agent itself is interacted with via the same
+  // AgentDialog as any run agent — these are the only run-level controls the
+  // graph needs.
   const invalidateScheduler = () =>
     Promise.all([
       queryClient.invalidateQueries({
@@ -823,14 +886,6 @@ function AgentsGraph({
       queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) }),
       queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
     ])
-  const startScheduler = useMutation({
-    mutationFn: () => schedulerApi.startScheduler(eventId),
-    onSuccess: () => {
-      toast.success("调度者已启动")
-      void invalidateScheduler()
-    },
-    onError: (error) => toast.error("启动调度者失败", error.message),
-  })
   const stopScheduler = useMutation({
     mutationFn: () => schedulerApi.stopScheduler(eventId),
     onSuccess: () => {
@@ -936,8 +991,7 @@ function AgentsGraph({
           >
             {!schedRun || schedRun.status === "closed" ? (
               <Button
-                loading={startScheduler.isPending}
-                onClick={() => startScheduler.mutate()}
+                onClick={() => setStartOpen(true)}
                 size="sm"
                 type="button"
               >
@@ -972,6 +1026,14 @@ function AgentsGraph({
           </Panel>
         </ReactFlow>
       </CardPanel>
+      {startOpen && (
+        <StartSchedulerDialog
+          config={scheduler?.config}
+          eventId={eventId}
+          onClose={() => setStartOpen(false)}
+          onStarted={invalidateScheduler}
+        />
+      )}
     </Card>
   )
 }
@@ -1204,7 +1266,9 @@ function RunGraphNode({ data }: NodeProps) {
   const d = data as Extract<GraphNodeData, { kind: "run" }>
   const { run } = d
   return (
-    <GraphNodeShell className="w-56">
+    <GraphNodeShell
+      className={cn("w-56", run.status === "closed" && "opacity-60")}
+    >
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
         <Server className="size-3.5" />
       </span>
@@ -1234,13 +1298,18 @@ function RunGraphNode({ data }: NodeProps) {
 function AgentGraphNode({ data }: NodeProps) {
   const d = data as Extract<GraphNodeData, { kind: "agent" }>
   const { agent } = d
+  const finish = agentFinishBadge(agent.status)
   return (
-    <GraphNodeShell className="w-48">
+    <GraphNodeShell className={cn("w-48", finish && "opacity-60")}>
       <AgentStatusIcon className="[&_svg]:size-3.5" status={agent.status} />
       <span className="min-w-0 flex-1 truncate text-sm">
         {agent.name ?? roleLabel(agent.role)}
       </span>
-      {agent.isEntry ? (
+      {finish ? (
+        <Badge size="sm" variant={finish.variant}>
+          {finish.label}
+        </Badge>
+      ) : agent.isEntry ? (
         <Badge size="sm" variant="secondary">
           入口
         </Badge>
@@ -1575,47 +1644,14 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
           save.mutate()
         }}
       >
-        <Field>
-          <FieldLabel>默认模型</FieldLabel>
-          <FieldDescription>
-            调度者下次启动时使用的模型；留空则使用全局默认。
-          </FieldDescription>
-          <ModelRefPicker
-            allowEmpty
-            emptyLabel="全局默认"
-            onChange={setModelId}
-            value={modelId}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="sched-instruction">指令</FieldLabel>
-          <FieldDescription>
-            追加到调度者系统提示词末尾的常驻指令。
-          </FieldDescription>
-          <Textarea
-            id="sched-instruction"
-            onChange={(event) => setInstruction(event.target.value)}
-            rows={6}
-            value={instruction}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="sched-targets">并发靶机上限</FieldLabel>
-          <NumberField
-            id="sched-targets"
-            min={1}
-            onValueChange={(value) => {
-              if (typeof value === "number") setMaxTargets(value)
-            }}
-            value={maxTargets}
-          >
-            <NumberFieldGroup>
-              <NumberFieldDecrement />
-              <NumberFieldInput />
-              <NumberFieldIncrement />
-            </NumberFieldGroup>
-          </NumberField>
-        </Field>
+        <SchedulerConfigFields
+          instruction={instruction}
+          maxTargets={maxTargets}
+          modelId={modelId}
+          onInstructionChange={setInstruction}
+          onMaxTargetsChange={setMaxTargets}
+          onModelChange={setModelId}
+        />
         <div className="flex justify-end">
           <Button loading={save.isPending} type="submit">
             保存配置
@@ -1623,5 +1659,161 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
         </div>
       </form>
     </ScrollArea>
+  )
+}
+
+// --- 调度者配置字段（启动对话框 + AgentDialog 配置 tab 共享）-------------------
+
+function SchedulerConfigFields({
+  modelId,
+  instruction,
+  maxTargets,
+  onModelChange,
+  onInstructionChange,
+  onMaxTargetsChange,
+}: {
+  modelId: string | null
+  instruction: string
+  maxTargets: number
+  onModelChange: (value: string | null) => void
+  onInstructionChange: (value: string) => void
+  onMaxTargetsChange: (value: number) => void
+}) {
+  return (
+    <>
+      <Field>
+        <FieldLabel>默认模型</FieldLabel>
+        <FieldDescription>
+          调度者启动时使用的模型；留空则使用全局默认。
+        </FieldDescription>
+        <ModelRefPicker
+          allowEmpty
+          emptyLabel="全局默认"
+          onChange={onModelChange}
+          value={modelId}
+        />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="sched-instruction">指令</FieldLabel>
+        <FieldDescription>
+          追加到调度者系统提示词末尾的常驻指令。
+        </FieldDescription>
+        <Textarea
+          id="sched-instruction"
+          onChange={(event) => onInstructionChange(event.target.value)}
+          rows={6}
+          value={instruction}
+        />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="sched-targets">并发靶机上限</FieldLabel>
+        <NumberField
+          id="sched-targets"
+          min={1}
+          onValueChange={(value) => {
+            if (typeof value === "number") onMaxTargetsChange(value)
+          }}
+          value={maxTargets}
+        >
+          <NumberFieldGroup>
+            <NumberFieldDecrement />
+            <NumberFieldInput />
+            <NumberFieldIncrement />
+          </NumberFieldGroup>
+        </NumberField>
+      </Field>
+    </>
+  )
+}
+
+// --- 启动调度者对话框 ---------------------------------------------------------
+
+function StartSchedulerDialog({
+  eventId,
+  config,
+  onClose,
+  onStarted,
+}: {
+  eventId: string
+  config?: SchedulerInfo["config"]
+  onClose: () => void
+  onStarted: () => Promise<unknown> | void
+}) {
+  const [modelId, setModelId] = useState<string | null>(config?.modelId ?? null)
+  const [instruction, setInstruction] = useState(config?.instruction ?? "")
+  const [maxTargets, setMaxTargets] = useState(
+    config?.maxConcurrentTargets ?? 1
+  )
+
+  const saveConfig = useMutation({
+    mutationFn: () =>
+      schedulerApi.updateSchedulerConfig(eventId, {
+        modelId,
+        instruction,
+        maxConcurrentTargets: maxTargets,
+      }),
+  })
+  const start = useMutation({
+    mutationFn: () => schedulerApi.startScheduler(eventId),
+    onSuccess: () => {
+      toast.success("调度者已启动")
+      void onStarted()
+      onClose()
+    },
+    onError: (error) => toast.error("启动调度者失败", error.message),
+  })
+  const launching = saveConfig.isPending || start.isPending
+
+  const launch = () => {
+    // Persist the pre-start policy first — start resolves modelId/instruction
+    // into the run's params snapshot at creation, so config must land first.
+    saveConfig.mutate(undefined, {
+      onSuccess: () => start.mutate(),
+      onError: (error) => toast.error("保存配置失败", error.message),
+    })
+  }
+
+  return (
+    <Dialog onOpenChange={(open) => !open && !launching && onClose()} open>
+      <DialogPopup>
+        <DialogHeader>
+          <DialogTitle>启动调度者</DialogTitle>
+          <DialogDescription>
+            启动前确认调度策略；配置会持久化，本次启动即生效。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <form
+            className="flex flex-col gap-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              launch()
+            }}
+          >
+            <SchedulerConfigFields
+              instruction={instruction}
+              maxTargets={maxTargets}
+              modelId={modelId}
+              onInstructionChange={setInstruction}
+              onMaxTargetsChange={setMaxTargets}
+              onModelChange={setModelId}
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                disabled={launching}
+                onClick={onClose}
+                type="button"
+                variant="ghost"
+              >
+                取消
+              </Button>
+              <Button loading={launching} type="submit">
+                <Play /> 启动调度者
+              </Button>
+            </div>
+          </form>
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   )
 }
