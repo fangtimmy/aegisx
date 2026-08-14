@@ -156,9 +156,7 @@ export function SettingsScreen() {
             </CardFrameHeader>
             <Card>
               <CardPanel>
-                {settings.data && (
-                  <SchemaSettingsForm data={settings.data} providers={items} />
-                )}
+                {settings.data && <SchemaSettingsForm data={settings.data} />}
               </CardPanel>
             </Card>
           </CardFrame>

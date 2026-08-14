@@ -1,6 +1,3 @@
-import type { ThinkingLevel } from "./thinking"
-import { isThinkingLevel } from "./thinking"
-
 export type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
 
 export type SettingGroup = "智能体" | "运行时" | "容器" | "调度器"
@@ -58,7 +55,6 @@ export type SettingDef =
 // the deleted v2 in-process agent loop and had no effect here.
 export type FlatSettings = {
   "agent.defaultModelId": string | null
-  "agent.defaultThinkingLevel": ThinkingLevel
   "agent.compactionEnabled": boolean
   "agent.retryEnabled": boolean
   "agent.retryMaxRetries": number
@@ -78,16 +74,6 @@ export type FlatSettings = {
 
 export type SettingKey = keyof FlatSettings
 
-const THINKING_OPTIONS: { value: ThinkingLevel; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra high" },
-  { value: "max", label: "Maximum" },
-]
-
 const IMAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/
 
 export const SETTINGS_DEFS: SettingDef[] = [
@@ -100,16 +86,6 @@ export const SETTINGS_DEFS: SettingDef[] = [
     description: "创建新任务时使用。",
     widget: "model",
     order: 10,
-  },
-  {
-    key: "agent.defaultThinkingLevel",
-    type: "enum",
-    default: "off",
-    enum: THINKING_OPTIONS,
-    group: "智能体",
-    title: "默认推理等级",
-    widget: "select",
-    order: 20,
   },
   {
     key: "agent.compactionEnabled",
@@ -332,7 +308,6 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
   const flat: Record<string, unknown> = {}
   const map: Record<string, SettingKey> = {
     defaultModelId: "agent.defaultModelId",
-    defaultThinkingLevel: "agent.defaultThinkingLevel",
     maxAttachmentMb: "runtime.maxAttachmentMb",
     platformRequestTimeoutMs: "runtime.platformRequestTimeoutMs",
     providerDiscoverTimeoutMs: "runtime.providerDiscoverTimeoutMs",
@@ -404,9 +379,6 @@ function coerceValue(def: SettingDef, raw: unknown): unknown | undefined {
     case "enum": {
       if (typeof raw !== "string") return undefined
       if (!def.enum.some((item) => item.value === raw)) return undefined
-      if (def.key === "agent.defaultThinkingLevel" && !isThinkingLevel(raw)) {
-        return undefined
-      }
       return raw
     }
   }

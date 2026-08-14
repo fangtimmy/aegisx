@@ -118,7 +118,6 @@ function defaultProviders(): ProviderData[] {
 
 function defaultConfig(): ConfigData {
   const settings = defaultSettings()
-  settings["agent.defaultModelId"] = "default-model"
   return {
     version: CONFIG_DOCUMENT_VERSION,
     settings,

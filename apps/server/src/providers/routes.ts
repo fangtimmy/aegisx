@@ -1,3 +1,4 @@
+import { parseModelRef } from "@aegisx/shared"
 import type { Hono } from "hono"
 import { Type } from "typebox"
 
@@ -214,11 +215,17 @@ export function registerProviderRoutes(
     if (idx === -1) return notFound(c, "Provider not found")
     const provider = providers[idx]
     const settings = configStore.getSettings()
-    const defaultModelId = settings["agent.defaultModelId"]
+    const defaultModelRef = settings["agent.defaultModelId"]
+    const parsedDefault = parseModelRef(defaultModelRef)
     if (
-      defaultModelId &&
-      !defaultModelId.startsWith("alias:") &&
-      provider.models.some((m) => m.id === defaultModelId)
+      parsedDefault?.kind === "model" &&
+      provider.models.some((m) => {
+        const addr = piAddressOf(provider, m)
+        return (
+          addr.providerKey === parsedDefault.providerKey &&
+          addr.modelId === parsedDefault.modelId
+        )
+      })
     ) {
       configStore.updateSettings({ "agent.defaultModelId": null })
     }
@@ -386,8 +393,15 @@ export function registerProviderRoutes(
     )
     if (!provider || !model) return notFound(c, "Model not found")
     const settings = configStore.getSettings()
-    if (settings["agent.defaultModelId"] === model.id) {
-      configStore.updateSettings({ "agent.defaultModelId": null })
+    const parsedDefault = parseModelRef(settings["agent.defaultModelId"])
+    if (parsedDefault?.kind === "model") {
+      const addr = piAddressOf(provider, model)
+      if (
+        addr.providerKey === parsedDefault.providerKey &&
+        addr.modelId === parsedDefault.modelId
+      ) {
+        configStore.updateSettings({ "agent.defaultModelId": null })
+      }
     }
     pruneAliasModelIds(configStore, [model.id])
     provider.models = provider.models.filter((m) => m.id !== model.id)
@@ -437,6 +451,22 @@ export function registerProviderRoutes(
       )
     }
   })
+}
+
+/** Pi (providerKey, modelId) for a stored provider/model — mirrors
+ * resolvePiModelRef over the storage shape (piProviderId/piModelId columns).
+ * The default-model setting stores a canonical ref string; clearing it on
+ * provider/model deletion compares against this address. */
+function piAddressOf(
+  provider: ProviderData,
+  model: ProviderModelData
+): { providerKey: string; modelId: string } {
+  return model.piProviderId
+    ? {
+        providerKey: model.piProviderId,
+        modelId: model.piModelId ?? model.modelId,
+      }
+    : { providerKey: `aegisx-${provider.id}`, modelId: model.modelId }
 }
 
 function findProviderModel(

@@ -322,12 +322,16 @@ export function ModelRefPicker({
   onChange,
   disabled,
   compact,
+  emptyLabel = "默认（全局默认模型）",
 }: {
   value: ModelRef | null
   onChange: (ref: ModelRef | null) => void
   disabled?: boolean
   /** Tighter trigger sizing for inline table rows. */
   compact?: boolean
+  /** Label for the empty (null) option: "fall back to the global default" in
+   * slot config, "no default model" in the settings page. */
+  emptyLabel?: string
 }) {
   const models = useAvailableModels()
   const resolvedAliases = useResolvedAliases(models)
@@ -394,7 +398,7 @@ export function ModelRefPicker({
       <Select
         disabled={disabled}
         items={Object.fromEntries([
-          ["", "默认（全局默认模型）"],
+          ["", emptyLabel],
           ...resolvedAliases.map((r) => [aliasRef(r.alias.id), r.alias.label]),
           ...models.map((m) => [m.address, m.label]),
         ])}
@@ -405,10 +409,10 @@ export function ModelRefPicker({
           className={triggerClass}
           size={compact ? "sm" : "default"}
         >
-          <SelectValue placeholder="默认" />
+          <SelectValue placeholder={emptyLabel} />
         </SelectTrigger>
         <SelectPopup>
-          <SelectItem value="">默认（全局默认模型）</SelectItem>
+          <SelectItem value="">{emptyLabel}</SelectItem>
           {resolvedAliases.length > 0 && (
             <SelectGroup key="aliases">
               <SelectGroupLabel>别名</SelectGroupLabel>
