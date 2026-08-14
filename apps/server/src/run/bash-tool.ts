@@ -175,16 +175,19 @@ async function writeOverflow(
   return `${overflowDirAbs}/${name}`
 }
 
-export const BASH_DESCRIPTION = `Run a shell command inside the Kali container.
+export const BASH_DESCRIPTION = `Run a shell command inside the Kali container (stdout and stderr are merged into one output).
 
-Working directory & paths:
-- The shell already starts in the workspace (/workspace). read and bash run there. Do NOT prefix commands with \`cd /workspace\` — reference files as workspace-relative or /workspace/<path>.
+## Working directory & paths
+- The shell starts in the workspace (/workspace), where your file tools also operate — reference files as workspace-relative or /workspace/<path>. Do NOT prefix commands with \`cd /workspace\`.
 - The full CTF toolchain is on PATH: python3 (venv with pwntools/angr/impacket/pycryptodome/...), nmap, gdb/pwndbg, ghidra-analyze, fd, rg, ...
+- Search and file discovery happen here: \`rg\` for content search, \`fd\` for finding files, \`ls\` for listing.
 
-Execution:
-- Search and file discovery are done here: use \`rg\` for content search, \`fd\` for finding files, \`ls\` for listing. This tool tails output to the LAST ${MAX_LINES} lines / ${MAX_BYTES} bytes, so for search results pipe to \`head\`/\`sed -n\` to keep the FIRST matches (e.g. \`rg -n pattern | head -50\`, \`rg -l pattern | head\`).
-- Non-zero exit is returned as an error result (stdout+stderr still attached); the outcome is also reflected in the exit code shown to you. Keep output bounded: pipe through head/grep/awk and sample before dumping large results into context.
-- Output is tailed to the last ${MAX_LINES} lines / ${MAX_BYTES} bytes. When truncated, the full output is saved to ${OVERFLOW_DIR_REL}/<id>.log in the workspace and the path is returned — read or grep that file instead of re-running the command.
+## Output
+- Output is tailed to the last ${MAX_LINES} lines / ${MAX_BYTES} bytes (whichever trips first). For search results, pipe to \`head\`/\`sed -n\` to keep the FIRST matches (e.g. \`rg -n pattern | head -50\`, \`rg -l pattern | head\`).
+- When output is truncated, the full output is saved to ${OVERFLOW_DIR_REL}/<id>.log in the workspace and the path is returned — read or grep that file instead of re-running the command.
+- A non-zero exit code is reported in the result (the output is still attached). Keep output bounded: pipe through head/grep/awk and sample before dumping large results into context.
+
+## Timing
 - Foreground commands must finish promptly: pass \`timeout\` (seconds) for anything non-trivial (default ${DEFAULT_TIMEOUT_SEC}s, hard max ${MAX_TIMEOUT_SEC}s). For genuinely long jobs, start them backgrounded (\`nohup ... > out.log 2>&1 &\`) and poll the log with read/grep — never block a single call for many minutes.
 - Avoid interactive commands (REPLs, pagers, \`ssh\`/credential prompts without -o BatchMode=yes); they hang until the timeout.
 - Fire independent probes as parallel bash calls when they do not depend on each other.`

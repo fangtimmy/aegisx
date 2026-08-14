@@ -7,7 +7,7 @@ Usage:
 - Each line is prefixed as \`<line>: <content>\` (e.g. \`1: hello\`). When using edit, match the file text WITHOUT the line-number prefix.
 - Long lines are truncated to 2000 characters.
 - For later sections, call again with a larger offset.
-- Image files (jpeg/png/gif/webp) return path/mime/size only — bytes are not attached.
+- Image files (jpeg/png/gif/webp) are attached when the active model accepts image input and the file is under 5MB; otherwise only path/mime/size are returned — analyze with bash (file/xxd/strings/zbarimg/steghide).
 - Binary non-image files error; use bash (file/xxd/strings) instead.
 - Missing files include "Did you mean" suggestions when similar names exist in the parent directory.
 - Directories are not supported; use ls.`

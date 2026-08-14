@@ -158,7 +158,10 @@ export function createSchedulerTools(
         description:
           "Read full detail for one challenge: description, attachments, target connectivity (ports/services), solved state, and run history. Read this before starting a challenge you do not know.",
         parameters: Type.Object({
-          challenge_id: Type.String({ minLength: 1 }),
+          challenge_id: Type.String({
+            minLength: 1,
+            description: "The challenge id (from list_challenges).",
+          }),
         }),
         execute: async (_id, params) => {
           const c = ctx.getChallenge(params.challenge_id)
@@ -194,13 +197,18 @@ export function createSchedulerTools(
         description:
           "Enumerate challenge runs (recent first), optionally filtered by challenge or status. Each item has its summary and outcome. Use to review history before re-trying a failed strategy, or to find a run id for read_run / message_run.",
         parameters: Type.Object({
-          challenge_id: Type.Optional(Type.String()),
+          challenge_id: Type.Optional(
+            Type.String({ description: "Filter by challenge id." })
+          ),
           status: Type.Optional(
-            Type.Union([
-              Type.Literal("running"),
-              Type.Literal("idle"),
-              Type.Literal("closed"),
-            ])
+            Type.Union(
+              [
+                Type.Literal("running"),
+                Type.Literal("idle"),
+                Type.Literal("closed"),
+              ],
+              { description: "Filter by run status." }
+            )
           ),
         }),
         execute: async (_id, params) => {
@@ -266,13 +274,37 @@ export function createSchedulerTools(
         description:
           "Add (or re-arm) a task in the queue. Upserts by (challenge, orchestration): a hit — including done/cancelled/failed — resets to pending. The queue drains FIFO under the concurrency caps; if a slot is free the run launches right away. `prompt` overrides the run's default first prompt with your per-run strategy.",
         parameters: Type.Object({
-          challenge_id: Type.String({ minLength: 1 }),
+          challenge_id: Type.String({
+            minLength: 1,
+            description: "The challenge id (from list_challenges).",
+          }),
           orchestration: Type.Optional(
-            Type.String({ minLength: 1, maxLength: 80 })
+            Type.String({
+              minLength: 1,
+              maxLength: 80,
+              description:
+                "Orchestration id from the catalog in your system prompt; omit for classic with defaults.",
+            })
           ),
-          params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-          prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
-          timeout_ms: Type.Optional(Type.Integer({ minimum: 60_000 })),
+          params: Type.Optional(
+            Type.Record(Type.String(), Type.Unknown(), {
+              description:
+                "Orchestration params; only for orchestrations marked 'requires model params'.",
+            })
+          ),
+          prompt: Type.Optional(
+            Type.String({
+              maxLength: 20_000,
+              description:
+                "Per-run strategy that overrides the run's default first prompt.",
+            })
+          ),
+          timeout_ms: Type.Optional(
+            Type.Integer({
+              minimum: 60_000,
+              description: "Hard run deadline in milliseconds (minimum 60000).",
+            })
+          ),
         }),
         execute: async (_id, params) => {
           const item = ctx.enqueue({
@@ -319,7 +351,10 @@ export function createSchedulerTools(
         description:
           "Remove a queue item (pending/done/cancelled/failed). A running item cannot be removed — close its run first.",
         parameters: Type.Object({
-          item_id: Type.String({ minLength: 1 }),
+          item_id: Type.String({
+            minLength: 1,
+            description: "The queue item id (from list_queue).",
+          }),
         }),
         execute: async (_id, params) => {
           ctx.removeQueue(params.item_id)
@@ -353,7 +388,12 @@ export function createSchedulerTools(
         description:
           "Reorder pending queue items by listing their ids in the desired order (front first). Running/failed items keep their place. Pass every pending item id you care about.",
         parameters: Type.Object({
-          item_ids: Type.Array(Type.String({ minLength: 1 })),
+          item_ids: Type.Array(
+            Type.String({
+              minLength: 1,
+              description: "Pending queue item id (front first).",
+            })
+          ),
         }),
         execute: async (_id, params) => {
           ctx.reorderQueue(params.item_ids)
@@ -371,13 +411,37 @@ export function createSchedulerTools(
         description:
           "Start a fresh solver run directly (escape hatch — bypasses the queue). The initial prompt is your per-run strategy; be specific. A concurrency/target-slot rejection comes back as a reason — adjust your plan, do not retry blindly. Prefer enqueue_run for planned work; use this only when you need a run immediately.",
         parameters: Type.Object({
-          challenge_id: Type.String({ minLength: 1 }),
+          challenge_id: Type.String({
+            minLength: 1,
+            description: "The challenge id (from list_challenges).",
+          }),
           orchestration: Type.Optional(
-            Type.String({ minLength: 1, maxLength: 80 })
+            Type.String({
+              minLength: 1,
+              maxLength: 80,
+              description:
+                "Orchestration id from the catalog in your system prompt; omit for classic with defaults.",
+            })
           ),
-          params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-          prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
-          timeout_ms: Type.Optional(Type.Integer({ minimum: 60_000 })),
+          params: Type.Optional(
+            Type.Record(Type.String(), Type.Unknown(), {
+              description:
+                "Orchestration params; only for orchestrations marked 'requires model params'.",
+            })
+          ),
+          prompt: Type.Optional(
+            Type.String({
+              maxLength: 20_000,
+              description:
+                "Per-run strategy that overrides the run's default first prompt.",
+            })
+          ),
+          timeout_ms: Type.Optional(
+            Type.Integer({
+              minimum: 60_000,
+              description: "Hard run deadline in milliseconds (minimum 60000).",
+            })
+          ),
         }),
         execute: async (_id, params) => {
           const run = await ctx.startRun({
@@ -405,7 +469,10 @@ export function createSchedulerTools(
         description:
           "Abort a run's current turn (→ idle; container kept warm). Use to cut a stuck or off-track running turn before message_run with new direction.",
         parameters: Type.Object({
-          run_id: Type.String({ minLength: 1 }),
+          run_id: Type.String({
+            minLength: 1,
+            description: "The run id (from list_runs).",
+          }),
         }),
         execute: async (_id, params) => {
           const run = await ctx.stopRun(params.run_id)
@@ -423,10 +490,20 @@ export function createSchedulerTools(
         description:
           "Send guidance to a run (its entry agent). On an idle or closed run this starts/continues a turn (a closed run is cold-restored, keeping its context + workspace); on a running run, deliverAs steers (steer) or queues (followUp) into the current turn. Prefer this over stop+restart when the solver has useful context.",
         parameters: Type.Object({
-          run_id: Type.String({ minLength: 1 }),
-          text: Type.String({ minLength: 1, maxLength: 20_000 }),
+          run_id: Type.String({
+            minLength: 1,
+            description: "The run id (from list_runs).",
+          }),
+          text: Type.String({
+            minLength: 1,
+            maxLength: 20_000,
+            description: "The guidance or question to send.",
+          }),
           deliver_as: Type.Optional(
-            Type.Union([Type.Literal("steer"), Type.Literal("followUp")])
+            Type.Union([Type.Literal("steer"), Type.Literal("followUp")], {
+              description:
+                "On a running run: 'steer' into the current turn, or 'followUp' queued after it. Ignored on idle/closed runs.",
+            })
           ),
         }),
         execute: async (_id, params) => {
@@ -452,7 +529,10 @@ export function createSchedulerTools(
         description:
           "Release a run's container (→ closed; session + history kept, resumable later with message_run). Use to free resources on runs you are pausing or done actively working.",
         parameters: Type.Object({
-          run_id: Type.String({ minLength: 1 }),
+          run_id: Type.String({
+            minLength: 1,
+            description: "The run id (from list_runs).",
+          }),
         }),
         execute: async (_id, params) => {
           const run = await ctx.closeRun(params.run_id)
@@ -470,7 +550,10 @@ export function createSchedulerTools(
         description:
           "Read a run's status, agents, and the entry agent's latest output. Use to assess a run's progress before steering or closing it.",
         parameters: Type.Object({
-          run_id: Type.String({ minLength: 1 }),
+          run_id: Type.String({
+            minLength: 1,
+            description: "The run id (from list_runs).",
+          }),
         }),
         execute: async (_id, params) => {
           const r = ctx.readRun(params.run_id)
@@ -508,8 +591,15 @@ export function createSchedulerTools(
         description:
           "Set or extend a run's hard deadline (milliseconds from now). Usable on running/idle runs (re-arms the timer) and closed runs (applies on next resume).",
         parameters: Type.Object({
-          run_id: Type.String({ minLength: 1 }),
-          timeout_ms: Type.Integer({ minimum: 60_000 }),
+          run_id: Type.String({
+            minLength: 1,
+            description: "The run id (from list_runs).",
+          }),
+          timeout_ms: Type.Integer({
+            minimum: 60_000,
+            description:
+              "Hard deadline in milliseconds from now (minimum 60000).",
+          }),
         }),
         execute: async (_id, params) => {
           const run = ctx.setRunTimeout(params.run_id, params.timeout_ms)
@@ -530,7 +620,12 @@ export function createSchedulerTools(
         description:
           "Enumerate the agents in a run (id, name, role, status). Use to inspect a run's internal agent layout.",
         parameters: Type.Object({
-          run_id: Type.Optional(Type.String({ minLength: 1 })),
+          run_id: Type.Optional(
+            Type.String({
+              minLength: 1,
+              description: "The run id; defaults to your own run when omitted.",
+            })
+          ),
         }),
         execute: async (_id, params) => {
           const runId = params.run_id ?? ctx.runId

@@ -74,7 +74,7 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
         name: "finish_run",
         label: "Finish run",
         description:
-          "Declare the run complete and stop further work. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first. If no flag has been accepted yet, the tool warns once — submit the flag first when you solved the challenge.",
+          "Declare the run complete and stop further work. This terminates the ENTIRE run, including other agents. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first. If no flag has been accepted yet, the tool warns once — submit the flag first when you solved the challenge.",
         parameters: Type.Object({
           summary: Type.String({
             description:
@@ -228,7 +228,7 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
         name: "spawn_agent",
         label: "Spawn agent",
         description:
-          "Start a background child agent for a focused, self-contained sub-task. It shares your workspace but cannot submit flags, finish, manage targets, or spawn further agents. Reserve it for tasks heavy enough to deserve a dedicated turn. Completion is delivered automatically — do not poll repeatedly.",
+          "Start a background child agent for a focused, self-contained sub-task. It shares your workspace but cannot submit flags, finish, manage targets, or spawn further agents. Only one child runs at a time per run — wait for it to finish before spawning another. Reserve it for tasks heavy enough to deserve a dedicated turn. Completion is delivered automatically — do not poll repeatedly.",
         parameters: Type.Object({
           name: Type.String({
             description: "Short name for the child agent.",
