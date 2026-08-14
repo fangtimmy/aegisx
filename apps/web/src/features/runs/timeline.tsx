@@ -1,5 +1,7 @@
 import {
   ArrowDown,
+  ArrowLeftRight,
+  Boxes,
   Brain,
   ChevronRight,
   CircleAlert,
@@ -7,17 +9,18 @@ import {
   FileText,
   Flag,
   FolderOpen,
+  Gauge,
   GitFork,
   LoaderCircle,
   Pencil,
   Play,
-  RotateCw,
+  ScrollText,
   Search,
-  Settings,
   Shrink,
   Square,
   Terminal,
   Wrench,
+  type LucideIcon,
 } from "lucide-react"
 import {
   memo,
@@ -26,6 +29,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from "react"
 import { createPortal } from "react-dom"
 
@@ -47,6 +51,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   type ConversationItem,
   isRecord,
+  type SystemVariant,
   type ToolBlock,
   toolStatusLabel,
 } from "@/domain/conversation"
@@ -54,13 +59,6 @@ import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
 
 import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
-
-function formatConversationTime(value: string | number) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value))
-}
 
 function formatDuration(durationMs: number) {
   const seconds = durationMs / 1000
@@ -311,12 +309,69 @@ function ToolActivity({
   )
 }
 
+function systemVariantIcon(variant: SystemVariant): LucideIcon {
+  switch (variant) {
+    case "compaction":
+      return Shrink
+    case "branch":
+      return GitFork
+    case "model":
+      return ArrowLeftRight
+    case "thinking":
+      return Gauge
+  }
+}
+
+/** Unified collapsible/static row for meta events (system prompt, tool defs,
+ * compaction, model switch, ...). Renders a plain non-interactive row when
+ * there is no body; otherwise a collapsible matching ToolActivity's style. */
+function MetaActivity({
+  icon: Icon,
+  label,
+  meta,
+  body,
+}: {
+  icon: LucideIcon
+  label: string
+  meta?: string
+  body?: ReactNode
+}) {
+  if (!body) {
+    return (
+      <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
+        <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {meta && (
+          <span className="shrink-0 text-xs text-muted-foreground">{meta}</span>
+        )}
+      </div>
+    )
+  }
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className={activityTriggerClass}>
+        <Icon
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {meta && (
+          <span className="shrink-0 text-xs text-muted-foreground">{meta}</span>
+        )}
+        <ChevronRight className="size-3.5 shrink-0 transition-transform" />
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <div className="mt-1 ml-5 min-w-0 pb-2">{body}</div>
+      </CollapsiblePanel>
+    </Collapsible>
+  )
+}
+
 const ConversationRow = memo(function ConversationRow({
   item,
 }: {
   item: ConversationItem
 }) {
-  const time = item.timestamp ? formatConversationTime(item.timestamp) : null
   if (item.type === "user") {
     return (
       <article className="flex justify-end py-5">
@@ -327,19 +382,18 @@ const ConversationRow = memo(function ConversationRow({
     )
   }
   if (item.type === "system") {
-    const isCompaction =
-      item.kind === "compact_start" || item.kind === "compact_end"
-    const Icon = isCompaction ? Shrink : RotateCw
+    const body = item.body?.trim() ? (
+      <ScrollArea className="h-auto max-h-96" scrollFade scrollbarGutter>
+        <Markdown>{item.body}</Markdown>
+      </ScrollArea>
+    ) : undefined
     return (
-      <article className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
-        <span aria-hidden="true" className="h-px flex-1 bg-border" />
-        <Icon aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="font-medium">{item.title}</span>
-        {item.detail && (
-          <span className="max-w-[60%] min-w-0 truncate">{item.detail}</span>
-        )}
-        {time && <time className="shrink-0">{time}</time>}
-        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      <article>
+        <MetaActivity
+          body={body}
+          icon={systemVariantIcon(item.variant)}
+          label={item.title}
+        />
       </article>
     )
   }
@@ -410,35 +464,25 @@ const ConversationRow = memo(function ConversationRow({
   )
 })
 
-/** Collapsible system-config card at the head of the timeline: the agent's
- * snapshotted model, tool allowlist, and full system prompt (markdown). All
- * three are immutable per run (createAgent writes them once), so this reflects
- * the initial config the agent is operating under. Collapsed by default —
- * system prompts are long. */
-function SystemConfigCard({ agent }: { agent: AgentSummary }) {
+/** Head-of-timeline agent config: the snapshotted system prompt (plain text)
+ * and the tool allowlist, as two MetaActivity rows that sit before the first
+ * user message. Both are immutable per run (createAgent writes them once).
+ * Collapsed by default — system prompts are long. */
+function AgentConfig({ agent }: { agent: AgentSummary }) {
   return (
-    <Collapsible>
-      <CollapsibleTrigger className={activityTriggerClass}>
-        <Settings
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
-        <span className="min-w-0 flex-1 truncate font-medium">
-          系统配置
-          {agent.model ? (
-            <span className="ml-2 font-mono font-normal text-muted-foreground">
-              {agent.model}
-            </span>
-          ) : null}
-        </span>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {agent.tools.length} 工具
-        </span>
-        <ChevronRight className="size-3.5 shrink-0 transition-transform" />
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="mt-1 mb-3 ml-5 min-w-0 space-y-2 text-sm">
-          {agent.tools.length > 0 && (
+    <>
+      <MetaActivity
+        body={
+          <pre className="font-mono text-xs leading-5 wrap-break-word whitespace-pre-wrap">
+            {agent.systemPrompt || "（无系统提示词）"}
+          </pre>
+        }
+        icon={ScrollText}
+        label="系统提示词"
+      />
+      <MetaActivity
+        body={
+          agent.tools.length > 0 ? (
             <div className="flex flex-wrap gap-1">
               {agent.tools.map((name) => (
                 <span
@@ -449,13 +493,15 @@ function SystemConfigCard({ agent }: { agent: AgentSummary }) {
                 </span>
               ))}
             </div>
-          )}
-          <ScrollArea className="h-auto max-h-96" scrollFade scrollbarGutter>
-            <Markdown>{agent.systemPrompt || "（无系统提示词）"}</Markdown>
-          </ScrollArea>
-        </div>
-      </CollapsiblePanel>
-    </Collapsible>
+          ) : (
+            <p className="text-xs text-muted-foreground">无</p>
+          )
+        }
+        icon={Boxes}
+        label="工具定义"
+        meta={`${agent.tools.length} 工具`}
+      />
+    </>
   )
 }
 
@@ -580,7 +626,7 @@ export function Timeline({
       className="relative mx-auto min-h-full w-full max-w-3xl px-6 pb-6"
       ref={rootRef}
     >
-      {agent && <SystemConfigCard agent={agent} />}
+      {agent && <AgentConfig agent={agent} />}
       {scrollContainer &&
         createPortal(
           <div

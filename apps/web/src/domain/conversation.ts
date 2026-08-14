@@ -149,13 +149,18 @@ type AgentBlock =
   | { key: string; type: "error"; body: string }
   | ToolBlock
 
+export type SystemVariant = "compaction" | "branch" | "model" | "thinking"
+
 export type ConversationItem =
   | {
       key: string
       type: "system"
-      kind?: "compact_start" | "compact_end"
+      variant: SystemVariant
       title: string
       detail?: string
+      /** Expandable body (compaction / branch_summary text). Omitted for
+       * marker-only events (model_change, thinking_level_change). */
+      body?: string
       timestamp?: string | number
     }
   | {
@@ -227,8 +232,9 @@ function applyCompaction(
   items.push({
     key: stableKey,
     type: "system",
-    kind: "compact_end",
+    variant: "compaction",
     title,
+    body: entry.summary,
     timestamp: entry.timestamp,
   })
 }
@@ -394,8 +400,9 @@ export function buildConversation(
       items.push({
         key: stableKey,
         type: "system",
-        kind: "compact_end",
+        variant: "branch",
         title: "从更早的节点分叉",
+        body: entry.summary,
         timestamp: entry.timestamp,
       })
       agent = null
@@ -405,6 +412,7 @@ export function buildConversation(
       items.push({
         key: stableKey,
         type: "system",
+        variant: "model",
         title: `已切换模型 → ${entry.provider} / ${entry.modelId}`,
         timestamp: entry.timestamp,
       })
@@ -415,6 +423,7 @@ export function buildConversation(
       items.push({
         key: stableKey,
         type: "system",
+        variant: "thinking",
         title: `推理 → ${entry.thinkingLevel}`,
         timestamp: entry.timestamp,
       })
