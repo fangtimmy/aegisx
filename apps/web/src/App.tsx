@@ -12,7 +12,7 @@ const settingsSections = [
   "settings",
   "orchestration",
 ] as const
-const eventTabs = ["challenges", "settings"] as const
+const eventTabs = ["agents", "challenges", "settings"] as const
 
 const router = createBrowserRouter([
   { path: "/", Component: HomePage },

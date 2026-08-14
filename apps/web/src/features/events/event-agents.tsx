@@ -24,7 +24,6 @@ import {
   Files,
   Flag,
   GitFork,
-  LayoutPanelTop,
   ListChecks,
   ListOrdered,
   MessageSquare,
@@ -52,12 +51,10 @@ import {
   type AgentSummary,
   agentsApi,
   type Challenge,
-  eventsApi,
   keys,
   type ModelRef,
   type QueueItem,
   type RunPublic,
-  type RunUsage,
   runsApi,
   schedulerApi,
   type SchedulerInfo,
@@ -98,11 +95,6 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "@/components/ui/number-field"
-import {
-  Progress,
-  ProgressIndicator,
-  ProgressTrack,
-} from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
@@ -113,8 +105,6 @@ import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
 import { ModelRefPicker } from "@/features/runs/model-switcher"
 import {
-  formatCost,
-  formatTokens,
   RunOverview,
   runStatusLabel,
   statusVariant,
@@ -143,13 +133,7 @@ function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role
 }
 
-type OverviewTab =
-  | "summary"
-  | "plan"
-  | "timeline"
-  | "challenges"
-  | "runs"
-  | "agents"
+type OverviewTab = "plan" | "timeline" | "challenges" | "runs" | "agents"
 
 /** Scheduler endpoint payload + its run's agents (fetched in one query). */
 type SchedulerWithAgents = SchedulerInfo & { agents: AgentSummary[] }
@@ -157,14 +141,14 @@ type SchedulerWithAgents = SchedulerInfo & { agents: AgentSummary[] }
 /** An agent + the run it belongs to (for cross-run aggregation). */
 type AgentRef = { agent: AgentSummary; run: RunPublic }
 
-export function EventOverview({
+export function EventAgents({
   eventId,
   challenges,
 }: {
   eventId: string
   challenges: Challenge[]
 }) {
-  const [tab, setTab] = useState<OverviewTab>("summary")
+  const [tab, setTab] = useState<OverviewTab>("agents")
   const [selection, setSelection] = useState<{
     runId: string
     agentId: string
@@ -204,13 +188,6 @@ export function EventOverview({
     // current without manual refreshes.
     refetchInterval: POLL_INTERVAL_MS,
   })
-  // Event-wide token usage + cost (spec §10).
-  const usage = useQuery({
-    queryKey: keys.events.usage(eventId),
-    queryFn: () => eventsApi.getEventUsage(eventId),
-    refetchInterval: POLL_INTERVAL_MS,
-  })
-
   const detailsById = useMemo(() => {
     const map = new Map<string, { run: RunPublic; agents: AgentSummary[] }>()
     for (const detail of fleet.data?.details ?? [])
@@ -225,7 +202,7 @@ export function EventOverview({
         role="status"
       >
         <Spinner aria-hidden="true" />
-        正在加载概览…
+        正在加载 Agents…
       </div>
     )
   }
@@ -241,14 +218,11 @@ export function EventOverview({
       <div className="flex min-h-0 min-w-0 flex-col">
         <Tabs className="min-h-0 flex-1" onValueChange={setTab} value={tab}>
           <TabsList className="w-auto justify-start" variant="underline">
-            <TabsTab className="gap-1.5" value="summary">
-              <LayoutPanelTop /> 总览
-            </TabsTab>
             <TabsTab className="gap-1.5" value="plan">
               <ClipboardList /> 计划
             </TabsTab>
             <TabsTab className="gap-1.5" value="timeline">
-              <ListChecks /> Timeline
+              <ListChecks /> 时间线
             </TabsTab>
             <TabsTab className="gap-1.5" value="challenges">
               <Puzzle /> 题目
@@ -261,17 +235,6 @@ export function EventOverview({
             </TabsTab>
           </TabsList>
           <div className="mt-2 min-h-0 flex-1">
-            <TabsPanel className="h-full" value="summary">
-              <SummaryTab
-                challenges={challenges}
-                detailsById={detailsById}
-                onSelectAgent={onSelectAgent}
-                runs={runs}
-                scheduler={schedulerData}
-                queue={queue.data?.items ?? []}
-                usage={usage.data?.usage}
-              />
-            </TabsPanel>
             <TabsPanel className="h-full" value="plan">
               <PlanTab eventId={eventId} queue={queue.data?.items ?? []} />
             </TabsPanel>
@@ -314,206 +277,6 @@ export function EventOverview({
         />
       )}
     </div>
-  )
-}
-
-// --- 总览 -----------------------------------------------------------------
-
-function SummaryTab({
-  challenges,
-  runs,
-  detailsById,
-  scheduler,
-  queue,
-  usage,
-  onSelectAgent,
-}: {
-  challenges: Challenge[]
-  runs: RunPublic[]
-  detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
-  scheduler?: SchedulerWithAgents
-  queue: QueueItem[]
-  usage?: RunUsage
-  onSelectAgent: (runId: string, agentId: string) => void
-}) {
-  const solved = challenges.filter(isChallengeSolved).length
-  const total = challenges.length
-  const solvedPercent = total > 0 ? Math.round((solved / total) * 100) : 0
-  const activeRuns = runs.filter((run) => run.status !== "closed")
-  const pendingQueue = queue.filter((item) => item.status === "pending")
-
-  const activeAgents: AgentRef[] = []
-  for (const run of activeRuns) {
-    for (const agent of detailsById.get(run.id)?.agents ?? []) {
-      activeAgents.push({ agent, run })
-    }
-  }
-
-  return (
-    <ScrollArea className="h-full pr-1" scrollFade>
-      <div className="flex flex-col gap-4 p-1">
-        <Card>
-          <CardHeader>
-            <CardTitle>解题进度</CardTitle>
-            <CardDescription>
-              {solved} / {total} 已解决
-            </CardDescription>
-          </CardHeader>
-          <CardPanel className="pt-0">
-            <Progress value={solvedPercent}>
-              <ProgressTrack className="h-2 bg-secondary">
-                <ProgressIndicator className="bg-success" />
-              </ProgressTrack>
-            </Progress>
-          </CardPanel>
-        </Card>
-
-        <div className="grid grid-cols-2 gap-3">
-          <StatCard
-            icon={<Play className="size-4" />}
-            label="活跃任务"
-            value={String(activeRuns.length)}
-          />
-          <StatCard
-            icon={<ListOrdered className="size-4" />}
-            label="排队中"
-            value={String(pendingQueue.length)}
-          />
-          <StatCard
-            icon={<BrainCircuit className="size-4" />}
-            label="活跃 Agents"
-            value={String(activeAgents.length)}
-          />
-          <StatCard
-            icon={<Network className="size-4" />}
-            label="调度者"
-            value={
-              scheduler?.run ? runStatusLabel(scheduler.run.status) : "未启用"
-            }
-          />
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>用量汇总</CardTitle>
-            <CardDescription>
-              赛事内全部运行（含调度者）的 token 与费用
-            </CardDescription>
-          </CardHeader>
-          <CardPanel>
-            {usage ? (
-              <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
-                <div>
-                  <dt className="text-xs text-muted-foreground">总 token</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.totalTokens)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">费用</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatCost(usage.cost)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">轮次</dt>
-                  <dd className="mt-0.5 font-mono text-xs">{usage.turns}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">输入</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.input)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">输出</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.output)}
-                    {usage.reasoning > 0 && (
-                      <span className="text-muted-foreground">
-                        {" "}
-                        （{formatTokens(usage.reasoning)} 推理）
-                      </span>
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">缓存</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.cacheRead)} 读 /{" "}
-                    {formatTokens(usage.cacheWrite)} 写
-                  </dd>
-                </div>
-              </dl>
-            ) : (
-              <p className="text-sm text-muted-foreground">暂无用量数据。</p>
-            )}
-          </CardPanel>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>活跃 Agents</CardTitle>
-          </CardHeader>
-          <CardPanel className="p-0">
-            {activeAgents.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-                暂无活跃 agent。
-              </p>
-            ) : (
-              <div className="flex flex-col">
-                {activeAgents.map(({ agent, run }) => (
-                  <button
-                    className="flex min-w-0 items-center gap-2.5 border-b px-4 py-2.5 text-left last:border-b-0 hover:bg-accent"
-                    key={agent.id}
-                    onClick={() => onSelectAgent(run.id, agent.id)}
-                    type="button"
-                  >
-                    <AgentStatusIcon
-                      className="[&_svg]:size-4"
-                      status={agent.status}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">
-                        {agent.name ?? roleLabel(agent.role)}
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {run.challengeName}
-                      </span>
-                    </span>
-                    <Badge size="sm" variant="secondary">
-                      {roleLabel(agent.role)}
-                    </Badge>
-                  </button>
-                ))}
-              </div>
-            )}
-          </CardPanel>
-        </Card>
-      </div>
-    </ScrollArea>
-  )
-}
-
-function StatCard({
-  icon,
-  label,
-  value,
-}: {
-  icon: ReactNode
-  label: string
-  value: string
-}) {
-  return (
-    <Card>
-      <CardPanel className="gap-1">
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          {icon}
-          {label}
-        </span>
-        <span className="text-xl font-semibold">{value}</span>
-      </CardPanel>
-    </Card>
   )
 }
 
@@ -1148,16 +911,18 @@ function AgentsGraph({
         <ReactFlow
           edges={graph.edges}
           fitView
-          fitViewOptions={{ padding: 0.2 }}
+          fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
           key={graphKey}
-          maxZoom={1.75}
           minZoom={0.2}
           nodeTypes={GRAPH_NODE_TYPES}
           nodes={graph.nodes}
           nodesConnectable={false}
           nodesDraggable={false}
           onNodeClick={onNodeClick}
+          panOnScroll
+          panOnScrollSpeed={1}
           proOptions={{ hideAttribution: true }}
+          zoomOnScroll={false}
         >
           <Background color="var(--border)" gap={22} size={1} />
           <Controls position="bottom-right" showInteractive={false} />

@@ -10,6 +10,7 @@ import {
   Puzzle,
   Settings,
   TriangleAlert,
+  Users,
 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
@@ -44,7 +45,7 @@ import { RunWorkspace } from "@/features/runs/run-workspace"
 
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
-import { EventOverview } from "./event-overview"
+import { EventAgents } from "./event-agents"
 import { EventSettings } from "./event-settings"
 import {
   ErrorState,
@@ -53,6 +54,7 @@ import {
   type RemoteChallengeStatus,
   remoteChallengeStatus,
 } from "./event-shared"
+import { EventSummary } from "./event-summary"
 import {
   type ChallengeGroup,
   type ChallengeSort,
@@ -60,17 +62,19 @@ import {
 } from "./event-view-prefs"
 import { ImportChallengesDialog } from "./platform-binding"
 
-type EventTab = "overview" | "challenges" | "settings"
+type EventTab = "overview" | "agents" | "challenges" | "settings"
 
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
   if (pathname === `/events/${eventId}/challenges`) return "challenges"
+  if (pathname === `/events/${eventId}/agents`) return "agents"
   return "overview"
 }
 
 function pathForTab(eventId: string, tab: EventTab) {
   if (tab === "challenges") return `/events/${eventId}/challenges`
   if (tab === "settings") return `/events/${eventId}/settings`
+  if (tab === "agents") return `/events/${eventId}/agents`
   return `/events/${eventId}`
 }
 
@@ -262,6 +266,9 @@ export function EventPage() {
               <TabsTab className="justify-start gap-2" value="overview">
                 <LayoutPanelTop /> 概览
               </TabsTab>
+              <TabsTab className="justify-start gap-2" value="agents">
+                <Users /> Agents
+              </TabsTab>
               <TabsTab className="justify-start gap-2" value="challenges">
                 <Puzzle /> 题目
               </TabsTab>
@@ -294,7 +301,13 @@ export function EventPage() {
             ) : (
               <>
                 <TabsPanel className="h-[calc(100svh-5.5rem)]" value="overview">
-                  <EventOverview
+                  <EventSummary
+                    challenges={eventQuery.data.challenges}
+                    eventId={eventId}
+                  />
+                </TabsPanel>
+                <TabsPanel className="h-[calc(100svh-5.5rem)]" value="agents">
+                  <EventAgents
                     challenges={eventQuery.data.challenges}
                     eventId={eventId}
                   />
