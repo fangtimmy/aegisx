@@ -4,7 +4,7 @@ import {
   type AgentToolResult,
   defineTool,
 } from "@earendil-works/pi-coding-agent"
-import { type Detector, fileTypeFromBuffer } from "file-type"
+import { fileTypeFromBuffer } from "file-type"
 import { Type } from "typebox"
 
 import { type WorkspaceBackend } from "./backend"
@@ -64,30 +64,6 @@ function formatNumberedLines(
     truncated: truncated || formatted.length < lines.length,
     outputBytes: bytes,
   }
-}
-
-/**
- * Signature-only PNG detector, kept for equivalence with the legacy
- * magic-byte image check the read tool used before file-type: file-type's
- * core PNG detector requires a structurally valid IHDR/IDAT stream, which
- * would change the read tool's behavior for truncated / signature-only PNG
- * files (the read-image tests pin the legacy behavior down). Runs before the
- * core detectors.
- */
-const pngSignatureDetector: Detector = {
-  id: "png-signature",
-  async detect(tokenizer) {
-    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-    const buffer = new Uint8Array(signature.length)
-    await tokenizer.peekBuffer(buffer, {
-      length: signature.length,
-      mayBeLess: true,
-    })
-    if (signature.every((value, index) => value === buffer[index])) {
-      return { ext: "png", mime: "image/png" }
-    }
-    return undefined
-  },
 }
 
 function looksBinary(bytes: Uint8Array) {
@@ -234,9 +210,7 @@ export function createWorkspaceTools(
             : ""
         throw new Error(`File not found: ${params.filePath}. ${message}${hint}`)
       }
-      const detected = await fileTypeFromBuffer(bytes, {
-        customDetectors: [pngSignatureDetector],
-      })
+      const detected = await fileTypeFromBuffer(bytes)
       const mime = detected?.mime.startsWith("image/") ? detected.mime : null
       if (mime) {
         // Attach the image when the active model accepts image input AND it is
