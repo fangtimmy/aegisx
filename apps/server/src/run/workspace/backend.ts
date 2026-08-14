@@ -1,6 +1,6 @@
 import { isAbsolute, join, relative } from "node:path"
 
-import tarStream from "tar-stream"
+import { pack } from "tar-stream"
 
 import type { ContainerManager } from "../container/container-manager"
 
@@ -65,16 +65,18 @@ export function buildSingleFileTar(
   mode = 0o644
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const pack = tarStream.pack()
+    const packStream = pack()
     const chunks: Buffer[] = []
-    pack.on("data", (chunk: Uint8Array) => chunks.push(Buffer.from(chunk)))
-    pack.on("end", () => resolve(Buffer.concat(chunks)))
-    pack.on("error", reject)
-    pack.entry(
+    packStream.on("data", (chunk: Uint8Array) =>
+      chunks.push(Buffer.from(chunk))
+    )
+    packStream.on("end", () => resolve(Buffer.concat(chunks)))
+    packStream.on("error", reject)
+    packStream.entry(
       { name, mode, mtime: new Date(), type: "file" },
       Buffer.from(content)
     )
-    pack.finalize()
+    packStream.finalize()
   })
 }
 

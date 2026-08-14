@@ -17,12 +17,13 @@
     "drizzle-orm": "^0.45.2",
     "handlebars": "^4.7.9",
     "hono": "^4.12.30",
-    "tar-stream": "2.2.0",
+    "tar-stream": "^3.2.0",
     "typebox": "^1.3.6"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
     "@types/dockerode": "^4.0.1",
+    "@types/tar-stream": "^3.1.4",
     "drizzle-kit": "^0.31.10",
     "typescript": "^7.0.2"
   }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import tarStream from "tar-stream"
+import { extract } from "tar-stream"
 
 import {
   buildSingleFileTar,
@@ -67,8 +67,8 @@ function extractSingle(
   tar: Buffer
 ): Promise<{ name: string; content: string; bytes: Uint8Array }> {
   return new Promise((resolve, reject) => {
-    const extract = tarStream.extract()
-    extract.on("entry", (header, stream, next) => {
+    const extractStream = extract()
+    extractStream.on("entry", (header, stream, next) => {
       const chunks: Buffer[] = []
       stream.on("data", (c: Uint8Array) => chunks.push(Buffer.from(c)))
       stream.on("error", reject)
@@ -82,7 +82,7 @@ function extractSingle(
         next()
       })
     })
-    extract.on("error", reject)
-    extract.end(tar)
+    extractStream.on("error", reject)
+    extractStream.end(tar)
   })
 }
