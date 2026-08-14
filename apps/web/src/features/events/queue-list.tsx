@@ -51,12 +51,10 @@ export function QueueList({
   eventId,
   items,
   onOpenRun,
-  onChanged,
 }: {
   eventId: string
   items: QueueItem[]
   onOpenRun: (runId: string) => void
-  onChanged: () => void
 }) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<QueueItem | null>(null)
@@ -67,7 +65,6 @@ export function QueueList({
       queryKey: keys.scheduler.queue(eventId),
     })
     void queryClient.invalidateQueries({ queryKey: keys.runs.fleet(eventId) })
-    onChanged()
   }
 
   const removeMutation = useMutation({

@@ -7,9 +7,19 @@ import {
   Users,
 } from "lucide-react"
 import { useCallback, useMemo, useState } from "react"
+import { useNavigate } from "react-router"
 
-import type { AgentSummary, Challenge, RunPublic } from "@/api"
+import type { AgentSummary, Challenge, QueueItem, RunPublic } from "@/api"
 import { keys, runsApi, schedulerApi } from "@/api"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardPanel } from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 
@@ -22,11 +32,61 @@ import {
   type SchedulerWithAgents,
 } from "./event-agents-shared"
 import { ErrorState } from "./event-shared"
-import { PlanTab } from "./plan-tab"
+import { QueueList } from "./queue-list"
 import { RunsTab } from "./runs-tab"
 import { TimelineTab } from "./timeline-tab"
 
 type OverviewTab = "plan" | "timeline" | "challenges" | "runs" | "agents"
+
+function PlanPanel({
+  eventId,
+  queue,
+}: {
+  eventId: string
+  queue: QueueItem[]
+}) {
+  const navigate = useNavigate()
+  const visibleQueue = queue.filter((item) =>
+    ["pending", "running", "failed"].includes(item.status)
+  )
+  if (visibleQueue.length === 0) {
+    return (
+      <Empty className="py-16">
+        <EmptyHeader>
+          <EmptyTitle>计划队列为空</EmptyTitle>
+          <EmptyDescription>
+            调度者尚未规划任务。在「题目」中开启任务，或启动调度者让它自行排程。
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+  return (
+    <ScrollArea className="h-full pr-1" scrollFade>
+      <div className="flex flex-col gap-3 p-1">
+        <div className="flex items-center gap-2 p-1">
+          <h3 className="text-xs font-medium text-muted-foreground uppercase">
+            计划队列
+          </h3>
+          <Badge size="sm" variant="secondary">
+            {visibleQueue.length}
+          </Badge>
+        </div>
+        <Card>
+          <CardPanel className="p-0">
+            <QueueList
+              eventId={eventId}
+              items={visibleQueue}
+              onOpenRun={(runId) =>
+                navigate(`/events/${eventId}/runs/${runId}`)
+              }
+            />
+          </CardPanel>
+        </Card>
+      </div>
+    </ScrollArea>
+  )
+}
 
 export function EventAgents({
   eventId,
@@ -123,7 +183,7 @@ export function EventAgents({
           </TabsList>
           <div className="mt-2 min-h-0 flex-1">
             <TabsPanel className="h-full" value="plan">
-              <PlanTab eventId={eventId} queue={queue.data?.items ?? []} />
+              <PlanPanel eventId={eventId} queue={queue.data?.items ?? []} />
             </TabsPanel>
             <TabsPanel className="h-full" value="timeline">
               <TimelineTab
