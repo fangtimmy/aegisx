@@ -150,6 +150,23 @@ export class ConversationStore {
     return { toolName: latest.toolName, args: latest.args }
   }
 
+  /** Drop ALL committed + live state for one agent (session switch / flat
+   * backtrack). The caller re-fetches committed messages afterwards — the
+   * committed map is otherwise append-only (applySnapshot never removes keys),
+   * so a truncated session would keep its deleted tail without this. */
+  reset(agentId: string) {
+    this.messages.delete(agentId)
+    this.messageProgress.delete(agentId)
+    this.toolProgress.delete(agentId)
+    this.completedTools.delete(agentId)
+    this.activity.delete(agentId)
+    this.queues.delete(agentId)
+    this.context.delete(agentId)
+    this.views.delete(agentId)
+    this.snapshots.delete(agentId)
+    this.notify(agentId)
+  }
+
   /**
    * Drop ephemeral live state that may be stale after an SSE disconnect.
    * Keeps optimistic pending user messages; clears running tool/activity

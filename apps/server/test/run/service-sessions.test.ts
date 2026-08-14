@@ -1,0 +1,385 @@
+import { describe, expect, mock, test } from "bun:test"
+
+import { eq } from "drizzle-orm"
+
+import { agents, sessionEntries, sessions } from "../../src/db/schema"
+import type { CreateRunInput } from "../../src/run/service"
+import { createRunService } from "../../src/run/service"
+import {
+  flatSettingsWithDefaultModel,
+  makeProvider,
+  seedChallenge,
+  seedEvent,
+  setupDb,
+  stubConfigStore,
+  stubContainerManager,
+  stubHostAgentSession,
+} from "../helpers"
+
+const containerInput = {
+  image: "aegisx/solve:latest",
+  cpus: 2,
+  memoryMb: 1024,
+  pidsLimit: 128,
+  tmpfsSize: "128m",
+  workspace: "/workspace",
+}
+
+function baseCreateInput(challengeId: string): CreateRunInput {
+  return {
+    scopeType: "challenge" as const,
+    challengeId,
+    container: containerInput,
+  }
+}
+
+/** Stub service: every createHost call records the prepared agent and returns
+ * a stub session (no real pi / DbSessionManager). Session rows/entries are
+ * seeded directly via the DB in the tests below. */
+function makeService(
+  db: ReturnType<typeof setupDb>["db"],
+  sqlite: ReturnType<typeof setupDb>["sqlite"],
+  dir: string
+) {
+  const { manager } = stubContainerManager()
+  const prepared: string[] = []
+  const service = createRunService({
+    db,
+    sqlite,
+    dataDir: dir,
+    containerManager: manager,
+    platformService: {
+      submitFlag: async () => undefined,
+      targetAction: async () => ({
+        status: "running",
+        endpoints: [],
+        expiresAt: null,
+      }),
+    } as never,
+    configStore: stubConfigStore([
+      makeProvider({ models: [createModel("model-1")] }),
+    ]),
+    getSettings: flatSettingsWithDefaultModel,
+    createHost: mock(
+      async (input: {
+        agentId: string
+        resumeFrom?: { sessionId: string }
+      }) => {
+        prepared.push(input.agentId)
+        // Honor the resume pointer like DbSessionManager.open would: reopening a
+        // session keeps its id, so prepareAgent's write-back doesn't clobber the
+        // active session we seeded for the test.
+        const id =
+          input.resumeFrom?.sessionId ?? "sess-" + input.agentId.slice(0, 6)
+        return stubHostAgentSession(id)
+      }
+    ),
+  })
+  return { service, prepared }
+}
+
+function createModel(id: string) {
+  return {
+    id,
+    modelId: "gpt-4o-mini",
+    label: "Test Model",
+    enabled: true,
+    metadata: "{}",
+    piProviderId: "openai",
+    piModelId: "gpt-4o-mini",
+  }
+}
+
+/** A minimal message session_entries row (valid SessionEntry JSON). */
+function entryData(role: string, text: string, id: string): string {
+  return JSON.stringify({
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: new Date().toISOString(),
+    message: { role, content: text, timestamp: Date.now() },
+  })
+}
+
+/** Seed one session for the agent with `n` entries (seq 1..n), returning the
+ * session id. `agentId`/`runId` come from the caller's seeded graph. */
+function seedSession(
+  db: ReturnType<typeof setupDb>["db"],
+  sessionId: string,
+  agentId: string,
+  runId: string,
+  n: number,
+  createdAt = new Date().toISOString()
+) {
+  db.insert(sessions)
+    .values({ id: sessionId, agentId, cwd: "/ws", createdAt })
+    .run()
+  for (let seq = 1; seq <= n; seq += 1) {
+    db.insert(sessionEntries)
+      .values({
+        id: `${sessionId}-e${seq}`,
+        sessionId,
+        agentId,
+        runId,
+        parentId: null,
+        seq,
+        type: "message",
+        data: entryData(
+          seq % 2 === 1 ? "user" : "assistant",
+          `m${seq}`,
+          `${sessionId}-e${seq}`
+        ),
+        createdAt: new Date().toISOString(),
+      })
+      .run()
+  }
+}
+
+function remainingSeqs(
+  db: ReturnType<typeof setupDb>["db"],
+  sessionId: string
+): number[] {
+  return db
+    .select({ seq: sessionEntries.seq })
+    .from(sessionEntries)
+    .where(eq(sessionEntries.sessionId, sessionId))
+    .orderBy(sessionEntries.seq)
+    .all()
+    .map((row) => row.seq)
+}
+
+describe("multi-session + flat backtrack (v12)", () => {
+  test("listAgentSessions returns sessions with counts + active flag", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service } = makeService(db, sqlite, dir)
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+
+      seedSession(db, "sess-1", agent.id, run.id, 3, "2025-01-01T00:00:00.000Z")
+      seedSession(db, "sess-2", agent.id, run.id, 1, "2025-01-01T00:00:01.000Z")
+      db.update(agents)
+        .set({ sessionFile: "sess-2" })
+        .where(eq(agents.id, agent.id))
+        .run()
+
+      const list = service.listAgentSessions(agent.id)
+      expect(list.map((s) => s.id)).toEqual(["sess-1", "sess-2"])
+      expect(list[0]).toMatchObject({ messageCount: 3, isActive: false })
+      expect(list[1]).toMatchObject({ messageCount: 1, isActive: true })
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("listMessages filters each agent to its active session", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service } = makeService(db, sqlite, dir)
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+
+      seedSession(db, "sess-1", agent.id, run.id, 3)
+      seedSession(db, "sess-2", agent.id, run.id, 2)
+      db.update(agents)
+        .set({ sessionFile: "sess-1" })
+        .where(eq(agents.id, agent.id))
+        .run()
+
+      // Per-agent: only the active session's entries.
+      const perAgent = service.listMessages(run.id, { agentId: agent.id })
+      expect(perAgent.items).toHaveLength(3)
+      expect(perAgent.items.every((i) => i.entry.id.startsWith("sess-1"))).toBe(
+        true
+      )
+
+      // Run-level: the union of active sessions (sess-1 only here).
+      const runLevel = service.listMessages(run.id, {})
+      expect(runLevel.items).toHaveLength(3)
+
+      // Explicit session override can still reach the inactive session.
+      const override = service.listMessages(run.id, {
+        agentId: agent.id,
+        sessionId: "sess-2",
+      })
+      expect(override.items).toHaveLength(2)
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("createAgentSession (/new) resets the pointer and rebuilds the live session", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service, prepared } = makeService(db, sqlite, dir)
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+      expect(prepared).toHaveLength(1)
+
+      const stubSessionId = "sess-" + agent.id.slice(0, 6)
+      expect(
+        db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+          .sessionFile
+      ).toBe(stubSessionId)
+
+      const result = await service.createAgentSession(agent.id)
+      expect(result.id).toBe(run.id)
+      // The live session was disposed + re-prepared (pointer nulled first).
+      expect(prepared).toHaveLength(2)
+      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+      expect(row.sessionFile).toBe(stubSessionId) // fresh stub id written back
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("activateAgentSession switches the pointer and rebuilds; no-op when already active", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service, prepared } = makeService(db, sqlite, dir)
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+
+      seedSession(db, "sess-1", agent.id, run.id, 1)
+      seedSession(db, "sess-2", agent.id, run.id, 1)
+      db.update(agents)
+        .set({ sessionFile: "sess-1" })
+        .where(eq(agents.id, agent.id))
+        .run()
+
+      // Activating the already-active live session is a no-op (no rebuild).
+      await service.activateAgentSession(agent.id, "sess-1")
+      expect(prepared).toHaveLength(1)
+
+      await service.activateAgentSession(agent.id, "sess-2")
+      expect(prepared).toHaveLength(2)
+      expect(
+        db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+          .sessionFile
+      ).toBe("sess-2")
+
+      // Foreign session ids are rejected.
+      await expect(
+        service.activateAgentSession(agent.id, "sess-ghost")
+      ).rejects.toThrow("Session not found")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("backtrackAgent deletes entries after the target and rebuilds the live session", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service, prepared } = makeService(db, sqlite, dir)
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+
+      seedSession(db, "sess-1", agent.id, run.id, 4)
+      db.update(agents)
+        .set({ sessionFile: "sess-1" })
+        .where(eq(agents.id, agent.id))
+        .run()
+
+      await service.backtrackAgent(agent.id, 2)
+      expect(remainingSeqs(db, "sess-1")).toEqual([1, 2])
+      // Live session disposed + re-prepared from the truncated history.
+      expect(prepared).toHaveLength(2)
+      expect(
+        db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+          .sessionFile
+      ).toBe("sess-1")
+
+      // Unknown target seq is rejected and changes nothing.
+      await expect(service.backtrackAgent(agent.id, 99)).rejects.toThrow(
+        "目标消息不存在"
+      )
+      expect(remainingSeqs(db, "sess-1")).toEqual([1, 2])
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("backtrackAgent rejects legacy jsonl sessions", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service } = makeService(db, sqlite, dir)
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+
+      db.update(agents)
+        .set({ sessionFile: "legacy.jsonl" })
+        .where(eq(agents.id, agent.id))
+        .run()
+      await expect(service.backtrackAgent(agent.id, 1)).rejects.toThrow(
+        "旧版 jsonl 会话不支持回溯"
+      )
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("session ops reject spawn children and unknown agents", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service } = makeService(db, sqlite, dir)
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+
+      db.insert(agents)
+        .values({
+          id: "child-1",
+          runId: run.id,
+          slot: "child-abc",
+          role: "child",
+          parentAgentId: agent.id,
+          isEntry: false,
+          model: "openai/gpt-4o-mini:off",
+          systemPrompt: "x",
+          tools: "[]",
+          status: "idle",
+          sessionFile: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .run()
+
+      for (const op of [
+        () => service.createAgentSession("child-1"),
+        () => service.activateAgentSession("child-1", "sess-1"),
+        () => service.backtrackAgent("child-1", 1),
+      ]) {
+        await expect(op()).rejects.toThrow("子 agent 不支持会话操作")
+      }
+      // listAgentSessions is synchronous (read-only query).
+      expect(() => service.listAgentSessions("ghost")).toThrow(
+        "Agent not found"
+      )
+      await expect(service.createAgentSession("ghost")).rejects.toThrow(
+        "Agent not found"
+      )
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+})

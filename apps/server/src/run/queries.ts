@@ -8,7 +8,7 @@ import type {
   RunUsage,
 } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm"
 
 import {
   listRenderableEntries,
@@ -236,19 +236,59 @@ export function createRunQueries(options: {
   /** Durable committed entries for a run, paginated by `seq`. Only renderable
    * kinds (message / compaction / branch_summary / model_change /
    * thinking_level_change) are returned; others (custom, ...) are skipped
-   * but still count toward seq
-   * (positional cursor). `after` is the highest seq already seen. */
+   * but still count toward seq (positional cursor). `after` is the highest seq
+   * already seen.
+   *
+   * Multi-session (v12): each agent contributes only its ACTIVE session's
+   * entries (its `agents.sessionFile` pointer). A per-agent query takes the
+   * explicit `sessionId` override when given, else the active one; the
+   * run-level query is the union of every agent's active session. Legacy jsonl
+   * sessions have no session_entries rows and contribute nothing. */
   function listMessages(
     runId: string,
-    opts: { after?: number; agentId?: string }
+    opts: { after?: number; agentId?: string; sessionId?: string }
   ): MessageList {
+    const after = opts.after ?? 0
+    if (opts.agentId) {
+      const agent = db
+        .select({ sessionFile: agents.sessionFile })
+        .from(agents)
+        .where(eq(agents.id, opts.agentId))
+        .get()
+      const sessionId =
+        opts.sessionId ??
+        (agent?.sessionFile && !agent.sessionFile.endsWith(".jsonl")
+          ? agent.sessionFile
+          : undefined)
+      if (!sessionId) return { items: [], nextAfter: after }
+      return listRenderableEntries(
+        db,
+        and(
+          eq(sessionEntries.runId, runId),
+          eq(sessionEntries.agentId, opts.agentId),
+          eq(sessionEntries.sessionId, sessionId)
+        ),
+        { after }
+      )
+    }
+    const agentRows = db
+      .select({ id: agents.id, sessionFile: agents.sessionFile })
+      .from(agents)
+      .where(eq(agents.runId, runId))
+      .all()
+    const scopes = agentRows
+      .filter((a) => a.sessionFile && !a.sessionFile.endsWith(".jsonl"))
+      .map((a) =>
+        and(
+          eq(sessionEntries.agentId, a.id),
+          eq(sessionEntries.sessionId, a.sessionFile as string)
+        )
+      )
+    if (scopes.length === 0) return { items: [], nextAfter: after }
     return listRenderableEntries(
       db,
-      and(
-        eq(sessionEntries.runId, runId),
-        opts.agentId ? eq(sessionEntries.agentId, opts.agentId) : undefined
-      ),
-      { after: opts.after ?? 0 }
+      and(eq(sessionEntries.runId, runId), or(...scopes)),
+      { after }
     )
   }
 

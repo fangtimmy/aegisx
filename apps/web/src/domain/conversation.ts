@@ -162,18 +162,25 @@ export type ConversationItem =
        * marker-only events (model_change, thinking_level_change). */
       body?: string
       timestamp?: string | number
+      /** Committed session_entries.seq — set only on durable rows, the flat-
+       * backtrack target. Absent on live (streaming) items. */
+      seq?: number
     }
   | {
       key: string
       type: "user"
       body: string
       timestamp?: string | number
+      seq?: number
     }
   | {
       key: string
       type: "agent"
       blocks: AgentBlock[]
       timestamp?: string | number
+      /** seq of the entry that opened the agent block group (the assistant
+       * message). The backtrack target for the whole response. */
+      seq?: number
     }
 
 function contentText(content: unknown) {
@@ -202,7 +209,8 @@ type ConversationAgentItem = Extract<ConversationItem, { type: "agent" }>
 function applyUser(
   entry: SessionMessageEntry,
   items: ConversationItem[],
-  stableKey: string
+  stableKey: string,
+  seq?: number
 ) {
   const message = entry.message
   if (message.role !== "user") return
@@ -213,6 +221,7 @@ function applyUser(
     type: "user",
     body,
     timestamp: entry.timestamp,
+    ...(seq !== undefined ? { seq } : {}),
   })
 }
 
@@ -226,7 +235,8 @@ function formatTokens(count: number): string {
 function applyCompaction(
   entry: CompactionEntry,
   items: ConversationItem[],
-  stableKey: string
+  stableKey: string,
+  seq?: number
 ) {
   const title = `已压缩 ${formatTokens(entry.tokensBefore)} token`
   items.push({
@@ -236,6 +246,7 @@ function applyCompaction(
     title,
     body: entry.summary,
     timestamp: entry.timestamp,
+    ...(seq !== undefined ? { seq } : {}),
   })
 }
 
@@ -256,8 +267,12 @@ function terminalOfDetails(
 function applyToolResult(
   entry: SessionMessageEntry,
   tools: Map<string, ToolBlock>,
-  currentAgent: (timestamp?: string | number) => ConversationAgentItem,
-  meta?: TimingMeta
+  currentAgent: (
+    timestamp?: string | number,
+    seq?: number
+  ) => ConversationAgentItem,
+  meta?: TimingMeta,
+  seq?: number
 ) {
   const message = entry.message
   if (message.role !== "toolResult") return
@@ -285,7 +300,7 @@ function applyToolResult(
   if (terminal) block.terminal = terminal
   if (meta) block.execMs = meta.durationMs
   if (!existing) {
-    currentAgent(entry.timestamp).blocks.push(block)
+    currentAgent(entry.timestamp, seq).blocks.push(block)
     tools.set(id, block)
   }
 }
@@ -293,14 +308,18 @@ function applyToolResult(
 function applyAssistant(
   entry: SessionMessageEntry,
   tools: Map<string, ToolBlock>,
-  currentAgent: (timestamp?: string | number) => ConversationAgentItem,
+  currentAgent: (
+    timestamp?: string | number,
+    seq?: number
+  ) => ConversationAgentItem,
   stableKey: string,
-  meta?: TimingMeta
+  meta?: TimingMeta,
+  seq?: number
 ) {
   const message = entry.message
   if (message.role !== "assistant") return
   const timestamp = entry.timestamp
-  const blocks = currentAgent(timestamp).blocks
+  const blocks = currentAgent(timestamp, seq).blocks
   const blockPrefix = stableKey
   const blockTiming = new Map<number, TimingBlock>()
   if (meta?.blocks) for (const b of meta.blocks) blockTiming.set(b.index, b)
@@ -355,13 +374,17 @@ export function buildConversation(
   const tools = new Map<string, ToolBlock>()
   let agent: ConversationAgentItem | null = null
 
-  const currentAgent = (timestamp?: string | number): ConversationAgentItem => {
+  const currentAgent = (
+    timestamp?: string | number,
+    seq?: number
+  ): ConversationAgentItem => {
     if (agent) return agent
     agent = {
       key: `agent:${items.length}:${timestamp ?? "live"}`,
       type: "agent",
       blocks: [],
       timestamp,
+      ...(seq !== undefined ? { seq } : {}),
     }
     items.push(agent)
     return agent
@@ -370,21 +393,22 @@ export function buildConversation(
   const applyEntry = (
     entry: SessionEntry,
     stableKey: string,
-    meta?: TimingMeta
+    meta?: TimingMeta,
+    seq?: number
   ) => {
     if (entry.type === "message") {
       const message = entry.message
       if (message.role === "user") {
-        applyUser(entry, items, stableKey)
+        applyUser(entry, items, stableKey, seq)
         agent = null
         return
       }
       if (message.role === "assistant") {
-        applyAssistant(entry, tools, currentAgent, stableKey, meta)
+        applyAssistant(entry, tools, currentAgent, stableKey, meta, seq)
         return
       }
       if (message.role === "toolResult") {
-        applyToolResult(entry, tools, currentAgent, meta)
+        applyToolResult(entry, tools, currentAgent, meta, seq)
         return
       }
       // bashExecution / custom / branchSummary / compactionSummary roles are
@@ -392,7 +416,7 @@ export function buildConversation(
       return
     }
     if (entry.type === "compaction") {
-      applyCompaction(entry, items, stableKey)
+      applyCompaction(entry, items, stableKey, seq)
       agent = null
       return
     }
@@ -404,6 +428,7 @@ export function buildConversation(
         title: "从更早的节点分叉",
         body: entry.summary,
         timestamp: entry.timestamp,
+        ...(seq !== undefined ? { seq } : {}),
       })
       agent = null
       return
@@ -415,6 +440,7 @@ export function buildConversation(
         variant: "model",
         title: `已切换模型 → ${entry.provider} / ${entry.modelId}`,
         timestamp: entry.timestamp,
+        ...(seq !== undefined ? { seq } : {}),
       })
       agent = null
       return
@@ -426,6 +452,7 @@ export function buildConversation(
         variant: "thinking",
         title: `推理 → ${entry.thinkingLevel}`,
         timestamp: entry.timestamp,
+        ...(seq !== undefined ? { seq } : {}),
       })
       agent = null
       return
@@ -433,7 +460,7 @@ export function buildConversation(
   }
 
   for (const item of history) {
-    applyEntry(item.entry, item.key, item.meta)
+    applyEntry(item.entry, item.key, item.meta, item.seq)
   }
 
   for (const entry of live) {

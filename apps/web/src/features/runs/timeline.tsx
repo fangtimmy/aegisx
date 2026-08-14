@@ -19,6 +19,7 @@ import {
   Shrink,
   Square,
   Terminal,
+  Undo2,
   Wrench,
   type LucideIcon,
 } from "lucide-react"
@@ -367,14 +368,54 @@ function MetaActivity({
   )
 }
 
+/** Hover-visible "回溯到此" button on a committed row. Positioned on the side
+ * opposite the message bubble (user rows are right-aligned → left side;
+ * agent rows left-aligned → right side). Clicking asks the parent to confirm
+ * (the Conversation owns the AlertDialog). */
+function BacktrackButton({
+  onBacktrack,
+  seq,
+  side,
+}: {
+  onBacktrack: (seq: number) => void
+  seq: number
+  side: "left" | "right"
+}) {
+  return (
+    <button
+      aria-label="回溯到此"
+      className={cn(
+        "absolute top-1.5 z-10 rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground focus-visible:opacity-100",
+        side === "left" ? "left-0" : "right-0"
+      )}
+      onClick={() => onBacktrack(seq)}
+      title="删除该消息之后的所有消息（回溯）"
+      type="button"
+    >
+      <Undo2 className="size-3.5" />
+    </button>
+  )
+}
+
 const ConversationRow = memo(function ConversationRow({
   item,
+  onBacktrack,
 }: {
   item: ConversationItem
+  /** Flat-backtrack affordance (v12): shown on committed user/agent rows;
+   * the seq of the row's opening entry is the truncation target. */
+  onBacktrack?: (seq: number) => void
 }) {
   if (item.type === "user") {
     return (
-      <article className="flex justify-end py-5">
+      <article className="group relative flex justify-end py-5">
+        {onBacktrack && item.seq !== undefined && (
+          <BacktrackButton
+            onBacktrack={onBacktrack}
+            seq={item.seq}
+            side="left"
+          />
+        )}
         <div className="max-w-[90%] rounded-lg border bg-muted/45 px-4 py-3">
           <Markdown>{item.body}</Markdown>
         </div>
@@ -398,7 +439,14 @@ const ConversationRow = memo(function ConversationRow({
     )
   }
   return (
-    <article className="py-4 text-sm leading-6">
+    <article className="group relative py-4 text-sm leading-6">
+      {onBacktrack && item.seq !== undefined && (
+        <BacktrackButton
+          onBacktrack={onBacktrack}
+          seq={item.seq}
+          side="right"
+        />
+      )}
       <div className="flex min-w-0 flex-col gap-0">
         {item.blocks.map((block, index) => {
           const previous = item.blocks[index - 1]
@@ -572,10 +620,15 @@ export function Timeline({
   agentId,
   stream,
   agent,
+  canBacktrack = false,
+  onBacktrack,
 }: {
   agentId: string
   stream: ConversationStore
   agent?: AgentSummary
+  /** Show the flat-backtrack affordance on committed rows (v12). */
+  canBacktrack?: boolean
+  onBacktrack?: (seq: number) => void
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -708,7 +761,11 @@ export function Timeline({
           scrollContainer
         )}
       {items.map((item) => (
-        <ConversationRow item={item} key={item.key} />
+        <ConversationRow
+          item={item}
+          key={item.key}
+          onBacktrack={canBacktrack ? onBacktrack : undefined}
+        />
       ))}
       <div aria-live="polite" className="sr-only">
         {items.length > 0 ? "agent 活动已更新" : ""}

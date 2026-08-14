@@ -79,6 +79,13 @@ const queueInput = Type.Object(
 
 const emptyInput = EmptyInputSchema
 
+/** Flat-backtrack body: the session_entries.seq to KEEP (delete everything
+ * after it in the agent's active session). */
+const backtrackInput = Type.Object(
+  { seq: Type.Integer({ minimum: 1 }) },
+  { additionalProperties: false }
+)
+
 export function registerRunRoutes(
   app: Hono,
   options: {
@@ -170,7 +177,8 @@ export function registerRunRoutes(
     const afterRaw = Number.parseInt(c.req.query("after") ?? "0", 10)
     const after = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0
     const agentId = c.req.query("agentId") || undefined
-    return c.json(runService.listMessages(runId, { after, agentId }))
+    const sessionId = c.req.query("sessionId") || undefined
+    return c.json(runService.listMessages(runId, { after, agentId, sessionId }))
   })
 
   // Live event stream (EventSource). Ephemeral progress; reconnect re-reads
@@ -247,6 +255,64 @@ export function registerRunRoutes(
     async (c) => {
       try {
         return c.json(await runService.compactAgent(c.req.param("agentId")))
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  // Multi-session (v12): list / create / activate an agent's sessions, and
+  // flat backtrack (delete everything after a seq in the active session).
+  app.get("/api/agents/:agentId/sessions", (c) => {
+    try {
+      return c.json({
+        items: runService.listAgentSessions(c.req.param("agentId")),
+      })
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  app.post(
+    "/api/agents/:agentId/sessions",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        return c.json(
+          await runService.createAgentSession(c.req.param("agentId"))
+        )
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  app.post(
+    "/api/agents/:agentId/sessions/:sessionId/activate",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        return c.json(
+          await runService.activateAgentSession(
+            c.req.param("agentId"),
+            c.req.param("sessionId")
+          )
+        )
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  app.post(
+    "/api/agents/:agentId/backtrack",
+    validateJson(backtrackInput),
+    async (c) => {
+      try {
+        const body = c.req.valid("json")
+        return c.json(
+          await runService.backtrackAgent(c.req.param("agentId"), body.seq)
+        )
       } catch (error) {
         return runError(c, error)
       }

@@ -1384,6 +1384,21 @@ function AgentDialog({
       ]),
     [queryClient, runId, run?.eventId]
   )
+  // Multi-session + flat backtrack (v12): per-agent session ops (orchestrator
+  // included — it is a main agent served by the same run service).
+  const sessionOps = useMemo(
+    () => ({
+      listSessions: (id: string) =>
+        agentsApi.listSessions(id).then((r) => r.items),
+      createSession: (id: string) =>
+        agentsApi.createSession(id).then(() => invalidateAgent()),
+      activateSession: (id: string, sessionId: string) =>
+        agentsApi.activateSession(id, sessionId).then(() => invalidateAgent()),
+      backtrack: (id: string, seq: number) =>
+        agentsApi.backtrack(id, seq).then(() => invalidateAgent()),
+    }),
+    [invalidateAgent]
+  )
   const stop = useMutation({
     mutationFn: () => agentsApi.stopAgent(agentId),
     onSuccess: () => {
@@ -1545,6 +1560,7 @@ function AgentDialog({
                 key={`${runId}:${agentId}`}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
+                sessionOps={sessionOps}
                 status={run.status}
                 streamPath={`/api/runs/${runId}/stream`}
                 switchModel={switchModel}

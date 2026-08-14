@@ -1,4 +1,5 @@
 export type {
+  AgentSessionSummary,
   AgentStatus,
   AgentSummary,
   Attachment,

@@ -7,7 +7,7 @@ import {
   MessageSquare,
   Square,
 } from "lucide-react"
-import { useCallback } from "react"
+import { useCallback, useMemo } from "react"
 import { useSearchParams } from "react-router"
 
 import { type Challenge, type ModelRef, agentsApi, keys, runsApi } from "@/api"
@@ -132,6 +132,27 @@ export function RunWorkspace({
       agentsApi
         .compactAgent(agentId)
         .then(() => invalidate(queryClient, eventId)),
+    [eventId, queryClient]
+  )
+  // Multi-session + flat backtrack (v12): per-agent ops wired to the API with
+  // run-list invalidation so the header/agent list re-derive after a switch.
+  const sessionOps = useMemo(
+    () => ({
+      listSessions: (agentId: string) =>
+        agentsApi.listSessions(agentId).then((r) => r.items),
+      createSession: (agentId: string) =>
+        agentsApi
+          .createSession(agentId)
+          .then(() => invalidate(queryClient, eventId)),
+      activateSession: (agentId: string, sessionId: string) =>
+        agentsApi
+          .activateSession(agentId, sessionId)
+          .then(() => invalidate(queryClient, eventId)),
+      backtrack: (agentId: string, seq: number) =>
+        agentsApi
+          .backtrack(agentId, seq)
+          .then(() => invalidate(queryClient, eventId)),
+    }),
     [eventId, queryClient]
   )
 
@@ -298,6 +319,7 @@ export function RunWorkspace({
                 compactAgent={compactAgent}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
+                sessionOps={sessionOps}
                 status={run.status}
                 streamPath={`/api/runs/${runId}/stream`}
                 switchModel={switchModel}

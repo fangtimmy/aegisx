@@ -14,11 +14,11 @@ import {
   parseModelRef,
   resolveModelRef,
 } from "@aegisx/shared"
-import type { AgentSummary } from "@aegisx/shared/agent"
+import type { AgentSessionSummary, AgentSummary } from "@aegisx/shared/agent"
 import type { ProviderConnection } from "@aegisx/shared/provider"
 import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, count, eq, gt, inArray, sql } from "drizzle-orm"
 
 import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -36,6 +36,8 @@ import {
   events,
   runs,
   schedulerConfig,
+  sessionEntries,
+  sessions,
 } from "../db/schema"
 import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
@@ -1282,6 +1284,199 @@ export function createRunService(options: RunServiceOptions) {
     })
   }
 
+  // --- multi-session + flat backtrack (v12) --------------------------------
+  // Sessions are per-agent conversation threads: exactly one is active
+  // (agents.sessionFile), /new creates a fresh one, activate switches the
+  // pointer (old sessions stay in the DB), backtrack truncates the active one
+  // flat (no pi tree-branching — the abandoned tail is physically deleted).
+  // All ops require an idle agent (a running turn is rejected, matching
+  // /compact) and are rejected for spawn children (they run unattended).
+
+  /** The agent's run, throwing for unknown ids and spawn children. */
+  function mainAgentRunOf(agentId: string): string {
+    const row = db
+      .select({ runId: agents.runId, parentAgentId: agents.parentAgentId })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .get()
+    if (!row) throw new RunActionError("not_found", "Agent not found")
+    if (row.parentAgentId) {
+      throw new RunActionError("invalid_state", "子 agent 不支持会话操作")
+    }
+    return row.runId
+  }
+
+  /** Reject a session op while the agent's turn is in flight. */
+  function requireIdleAgent(agentId: string): void {
+    if (lifecycle.get(agentId)?.session.isStreaming) {
+      throw new RunActionError(
+        "invalid_state",
+        "Agent 正在运行，请先停止当前轮次"
+      )
+    }
+  }
+
+  /** Dispose the agent's live session (if any) and drop it from the lifecycle
+   * map. The caller re-prepares it when the run is warm. */
+  async function disposeLiveAgent(agentId: string): Promise<void> {
+    const session = lifecycle.get(agentId)
+    if (session) {
+      await session.dispose()
+      lifecycle.delete(agentId)
+    }
+  }
+
+  /** Rebuild the agent's live session after a session-pointer change
+   * (/new / activate / backtrack): dispose the old one, then re-prepare from
+   * the (possibly new) active session when the run context is warm. Closed /
+   * cold runs rebuild lazily on the next send (prepareAgent via onResume). */
+  async function rebuildAgentSession(
+    runId: string,
+    agentId: string
+  ): Promise<void> {
+    await disposeLiveAgent(agentId)
+    if (contexts.has(runId)) await prepareAgent(runId, agentId)
+  }
+
+  /** List an agent's sessions (oldest first) with per-session message counts
+   * and the active flag (the current sessionFile pointer). */
+  function listAgentSessions(agentId: string): AgentSessionSummary[] {
+    const runId = runIdOf(agentId)
+    if (!runId) throw new RunActionError("not_found", "Agent not found")
+    const rows = db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.agentId, agentId))
+      .orderBy(asc(sessions.createdAt))
+      .all()
+    const counts = new Map<string, number>()
+    if (rows.length > 0) {
+      for (const row of db
+        .select({ sessionId: sessionEntries.sessionId, count: count() })
+        .from(sessionEntries)
+        .where(
+          inArray(
+            sessionEntries.sessionId,
+            rows.map((r) => r.id)
+          )
+        )
+        .groupBy(sessionEntries.sessionId)
+        .all()) {
+        counts.set(row.sessionId, row.count)
+      }
+    }
+    const active = db
+      .select({ sessionFile: agents.sessionFile })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .get()?.sessionFile
+    return rows.map((row) => ({
+      id: row.id,
+      createdAt: row.createdAt,
+      messageCount: counts.get(row.id) ?? 0,
+      isActive: row.id === active,
+    }))
+  }
+
+  /** Create a brand-new session for the agent and make it active (/new). Old
+   * sessions stay in the DB (switchable). Requires an idle agent. */
+  async function createAgentSession(agentId: string): Promise<RunPublic> {
+    const runId = mainAgentRunOf(agentId)
+    return withLock(agentId, async () => {
+      requireIdleAgent(agentId)
+      // Nulling the pointer makes prepareAgent's createHost build a fresh
+      // DbSessionManager (new sessions row) and write the new id back.
+      updateAgent(agentId, { sessionFile: null, updatedAt: now() })
+      await rebuildAgentSession(runId, agentId)
+      emitAgents(runId)
+      return requireRun(runId)
+    })
+  }
+
+  /** Switch the agent's active session. The target must be one of the agent's
+   * own sessions. Requires an idle agent. */
+  async function activateAgentSession(
+    agentId: string,
+    sessionId: string
+  ): Promise<RunPublic> {
+    const runId = mainAgentRunOf(agentId)
+    return withLock(agentId, async () => {
+      const row = db
+        .select()
+        .from(sessions)
+        .where(and(eq(sessions.id, sessionId), eq(sessions.agentId, agentId)))
+        .get()
+      if (!row) throw new RunActionError("not_found", "Session not found")
+      const current = db
+        .select({ sessionFile: agents.sessionFile })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .get()?.sessionFile
+      if (current === sessionId && lifecycle.has(agentId)) {
+        return requireRun(runId) // already active + live — no-op
+      }
+      requireIdleAgent(agentId)
+      updateAgent(agentId, { sessionFile: sessionId, updatedAt: now() })
+      await rebuildAgentSession(runId, agentId)
+      emitAgents(runId)
+      return requireRun(runId)
+    })
+  }
+
+  /** Flat backtrack: delete every committed entry after `seq` in the agent's
+   * active session (the target entry itself is kept). pi's tree-branching
+   * semantics are intentionally NOT used — the abandoned tail is physically
+   * removed, so the next turn continues from the truncated history. The live
+   * session is rebuilt so pi re-derives its in-memory context (pi caches
+   * `agent.state.messages` at session creation; a bare DB delete would not
+   * take effect). Requires an idle agent; legacy jsonl sessions are rejected. */
+  async function backtrackAgent(
+    agentId: string,
+    seq: number
+  ): Promise<RunPublic> {
+    const runId = mainAgentRunOf(agentId)
+    return withLock(agentId, async () => {
+      requireIdleAgent(agentId)
+      const agentRow = db
+        .select({ sessionFile: agents.sessionFile })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .get()
+      if (!agentRow?.sessionFile) {
+        throw new RunActionError("invalid_state", "Agent has no session")
+      }
+      if (agentRow.sessionFile.endsWith(".jsonl")) {
+        throw new RunActionError("invalid_state", "旧版 jsonl 会话不支持回溯")
+      }
+      const sessionId = agentRow.sessionFile
+      const target = db
+        .select({ id: sessionEntries.id })
+        .from(sessionEntries)
+        .where(
+          and(
+            eq(sessionEntries.sessionId, sessionId),
+            eq(sessionEntries.seq, seq)
+          )
+        )
+        .get()
+      if (!target) {
+        throw new RunActionError("not_found", "目标消息不存在")
+      }
+      await disposeLiveAgent(agentId)
+      db.delete(sessionEntries)
+        .where(
+          and(
+            eq(sessionEntries.sessionId, sessionId),
+            gt(sessionEntries.seq, seq)
+          )
+        )
+        .run()
+      if (contexts.has(runId)) await prepareAgent(runId, agentId)
+      emitAgents(runId)
+      return requireRun(runId)
+    })
+  }
+
   /** Release a run's container + sessions (→ closed). The closed transition is
    * an atomic sanctioned UPDATE (spec §4.5d); a concurrently settling turn is
    * a no-op once closed (the aggregate SQL guards on status). */
@@ -2062,6 +2257,10 @@ export function createRunService(options: RunServiceOptions) {
     stopAgent,
     compactAgent,
     setQueue,
+    listAgentSessions,
+    createAgentSession,
+    activateAgentSession,
+    backtrackAgent,
     setRunTimeout,
     closeRun,
     delete: deleteRun,

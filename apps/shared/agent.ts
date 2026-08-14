@@ -2,6 +2,17 @@ import type { AgentStatus } from "./run-status"
 
 /** One active tool's definition snapshot (for the timeline 工具定义 panel).
  * `parameters` is the tool's TypeBox schema serialized to JSON Schema. */
+/** One session of an agent (multi-session v12): a `sessions` row + its message
+ * count + the active flag (whether it is the agent's current sessionFile
+ * pointer). Sessions are per-agent conversation threads; exactly one is active
+ * at a time. Display name is derived client-side by creation order. */
+export type AgentSessionSummary = {
+  id: string
+  createdAt: string
+  messageCount: number
+  isActive: boolean
+}
+
 export type ToolDefinitionSnapshot = {
   name: string
   description: string
