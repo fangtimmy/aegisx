@@ -3,21 +3,34 @@ import { DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE } from "@aegisx/shared/prompt
 import { defineOrchestration, type EventHandle, type RunHandle } from "./types"
 
 /** Scheduler wiring (spec §7.5): wake the orchestrator on child-run lifecycle
- * events. Each wake-up sends the orchestrator a fresh turn to read + decide. */
+ * events. Each wake-up sends the orchestrator a fresh turn to read + decide.
+ * `run.finished` covers finish_run/force-finish completions — without it a run
+ * that closes without ever settling idle (solver finishes in its first turn)
+ * would never wake the orchestrator. `run.resumed` covers cold-restores of
+ * closed runs (user reopens a solver) so the orchestrator never decides on
+ * stale state; `run.started` confirms external/manual launches. */
 function wire(run: RunHandle, event: EventHandle): void {
   const orch = run.agent("orchestrator")
-  event.on("run.idle", (e) => orch.send(`Run ${e.runId} 转入 idle。`))
+  event.on("run.started", (e) => orch.send(`Run ${e.runId} 已启动。`))
+  event.on("run.idle", (e) =>
+    orch.send(
+      `Run ${e.runId} 转入 idle${e.failed ? "（有 agent 失败）" : ""}。`
+    )
+  )
   event.on("run.flagAccepted", (e) => orch.send(`Run ${e.runId} 解出 flag。`))
+  event.on("run.finished", (e) => orch.send(`Run ${e.runId} 已完成。`))
   event.on("run.timedOut", (e) =>
     orch.send(`Run ${e.runId} 超时（${e.outcome}），决定延长/关闭/重排。`)
   )
+  event.on("run.resumed", (e) => orch.send(`Run ${e.runId} 已恢复。`))
 }
 
 /**
  * scheduler — the event-scoped orchestrator run (spec §7.5). One 'orchestrator'
  * agent holds the event's strategy; it manages the task queue + sibling
  * challenge runs via the scheduler tools, and is woken on child-run lifecycle
- * events (idle / flagAccepted / timedOut) to read + decide.
+ * events (started / idle / flagAccepted / finished / timedOut / resumed) to
+ * read + decide.
  *
  * The orchestrator's model defaults to the global orchestration setting
  * (`agentModels.scheduler.orchestrator`); a per-event `scheduler_config.model`

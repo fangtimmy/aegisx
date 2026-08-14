@@ -162,13 +162,15 @@ export type EventScopeEvent =
   | "run.flagAccepted"
   | "run.finished"
   | "run.timedOut"
+  | "run.resumed"
 
 export type EventScopePayload =
   | { type: "run.started"; runId: string; agentId?: string }
-  | { type: "run.idle"; runId: string; agentId?: string }
+  | { type: "run.idle"; runId: string; agentId?: string; failed?: boolean }
   | { type: "run.flagAccepted"; runId: string; agentId?: string }
   | { type: "run.finished"; runId: string; agentId?: string }
   | { type: "run.timedOut"; runId: string; outcome: "idle" | "closed" }
+  | { type: "run.resumed"; runId: string; agentId?: string }
 
 export interface AgentHandle {
   readonly id: string

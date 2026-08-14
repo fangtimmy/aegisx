@@ -189,6 +189,9 @@ export function createPlatformFlags(
       existing &&
       (existing.status === "accepted" || existing.status === "rejected")
     ) {
+      // A repeat submission of an accepted flag still counts for the
+      // submitting run — the scheduler's run.flagAccepted must fire for it.
+      if (existing.status === "accepted") options?.onRunFlagAccepted?.(runId)
       return {
         status: existing.status,
         ...(existing.message ? { message: existing.message } : {}),
@@ -223,6 +226,9 @@ export function createPlatformFlags(
       } else {
         db.insert(challengeFlags).values(row).run()
       }
+      // No remote judge here, but the acceptance is real — notify the run
+      // layer so the scheduler learns the flag (spec §3.5 run.flagAccepted).
+      options?.onRunFlagAccepted?.(runId)
       return { status: "accepted", verified: false }
     }
 

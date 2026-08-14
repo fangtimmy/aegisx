@@ -363,7 +363,19 @@ export function createRunService(options: RunServiceOptions) {
     recomputeRunStatus(runId)
     const run = queries.getRow(runId)
     if (run?.status === "idle") {
-      emitRunEvent(runId, { type: "run.idle", runId })
+      // A failed settle flips the run idle too — mark the event so the
+      // scheduler can tell a healthy pause from a dead solver (it reads the
+      // failed agent's error via read_run).
+      const failed = db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(and(eq(agents.runId, runId), eq(agents.status, "failed")))
+        .get()
+      emitRunEvent(runId, {
+        type: "run.idle",
+        runId,
+        failed: Boolean(failed),
+      })
     }
     emitRun(runId)
     emitAgents(runId)
@@ -1577,6 +1589,9 @@ export function createRunService(options: RunServiceOptions) {
       await runSetup(plugin, handle)
       // primeSpecs ignored on restore (spec §4.2).
       armRunTimers(runId, row.deadlineAt)
+      // The run is live again — notify the event's scheduler so it does not
+      // keep deciding on the stale closed state (spec §3.5).
+      emitRunEvent(runId, { type: "run.resumed", runId })
     } catch (error) {
       // Restore failed after reserving the slot: release it so the fence and
       // run state stay consistent, then surface the error.
