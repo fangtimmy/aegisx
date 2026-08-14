@@ -535,6 +535,13 @@ export function createRunService(options: RunServiceOptions) {
       }
     }
     contexts.delete(runId)
+    // Closed run: drop its replay snapshots (channel lastRun + every agent's
+    // context/queue/activity/running-tools) so long-lived memory stays flat.
+    // A cold-restored run rebuilds them from the first post-resume events.
+    bus.forget(
+      runId,
+      agents.map((agent) => agent.id)
+    )
     emitRun(runId)
     emitAgents(runId)
     if (opts.finished) emitRunEvent(runId, { type: "run.finished", runId })

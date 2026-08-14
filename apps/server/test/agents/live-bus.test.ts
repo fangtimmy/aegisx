@@ -110,4 +110,39 @@ describe("createLiveBus ephemeral snapshots", () => {
     expect(bus.getToolProgress("a1").length).toBe(0)
     expect(bus.getContext("a1")).toBeUndefined()
   })
+
+  test("forget drops a closed run's channel + agent snapshots only", () => {
+    const bus = createLiveBus()
+    bus.emit("run-1", {
+      type: "run.updated",
+      run: { id: "run-1" },
+    } as LiveEvent)
+    bus.emit("run-1", toolProgress("a1", "t1", "running", "p"))
+    bus.emit("run-1", {
+      type: "context.updated",
+      agentId: "a1",
+      tokens: 10,
+      contextWindow: 1000,
+      percent: 1,
+      cacheHitRate: null,
+      totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    })
+    bus.emit("run-1", {
+      type: "agent.activity",
+      agentId: "a1",
+      activity: "compacting",
+    })
+    // A second run's snapshots must survive (only the closed run is dropped).
+    bus.emit("run-2", toolProgress("a2", "t2", "running", "q"))
+
+    bus.forget("run-1", ["a1"])
+
+    expect(bus.getToolProgress("a1").length).toBe(0)
+    expect(bus.getContext("a1")).toBeUndefined()
+    expect(bus.getActivity("a1")).toBeUndefined()
+    expect(bus.getQueue("a1")).toBeUndefined()
+    // run-2's snapshots are untouched.
+    expect(bus.getToolProgress("a2").length).toBe(1)
+    // Subscribers are not touched (they manage themselves on close).
+  })
 })

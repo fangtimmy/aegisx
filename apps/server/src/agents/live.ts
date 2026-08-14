@@ -82,6 +82,21 @@ export function createLiveBus() {
     return lastContext.get(agentId)
   }
 
+  /** Drop the snapshots for a closed run/channel: the channel's `lastRun` and
+   * every per-agent snapshot (context / queue / activity / running tools).
+   * Called on run teardown — a closed run has no new subscribers to replay,
+   * and its per-agent snapshots only grow the in-memory state. A cold-restored
+   * run rebuilds its snapshots from the first post-resume events. */
+  function forget(channel: string, agentIds: string[]): void {
+    lastRun.delete(channel)
+    for (const agentId of agentIds) {
+      lastContext.delete(agentId)
+      lastQueue.delete(agentId)
+      lastActivity.delete(agentId)
+      runningTools.delete(agentId)
+    }
+  }
+
   /** Latest steer/followUp queue snapshot for an agent (for SSE initial replay). */
   function getQueue(agentId: string): LiveEvent | undefined {
     return lastQueue.get(agentId)
@@ -115,6 +130,7 @@ export function createLiveBus() {
     getQueue,
     getActivity,
     getToolProgress,
+    forget,
     close,
   }
 }
