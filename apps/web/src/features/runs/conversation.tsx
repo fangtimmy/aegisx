@@ -18,7 +18,12 @@ import {
   useSyncExternalStore,
 } from "react"
 
-import type { AgentSummary, MessageListItem, ThinkingLevel } from "@/api"
+import type {
+  AgentSummary,
+  MessageListItem,
+  ModelRef,
+  ThinkingLevel,
+} from "@/api"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -83,10 +88,7 @@ export type ConversationProps = {
     deliverAs?: "steer" | "followUp"
   ) => Promise<unknown>
   /** Switch an agent's live model (entry agent in the run workspace). */
-  switchModel: (
-    agentId: string,
-    input: { modelId: string; thinkingLevel: ThinkingLevel }
-  ) => Promise<unknown>
+  switchModel: (agentId: string, ref: ModelRef) => Promise<unknown>
   /** Replace an agent's steer/followUp queue (run main agent only). */
   setQueue?: (
     agentId: string,
@@ -219,8 +221,7 @@ export function Conversation(props: ConversationProps) {
   })
 
   const switchModel = useMutation({
-    mutationFn: (input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      switchModelFn(effectiveAgentId, input),
+    mutationFn: (ref: ModelRef) => switchModelFn(effectiveAgentId, ref),
     onError: (error) => toast.error("切换模型失败", error.message),
   })
 
@@ -344,7 +345,7 @@ export function Conversation(props: ConversationProps) {
                   findCurrentModelId={findCurrentModelId}
                   thinkingLevel={thinkingLevel}
                   disabled={locked}
-                  onSwitch={(input) => switchModel.mutate(input)}
+                  onSwitch={(ref) => switchModel.mutate(ref)}
                 />
               )}
               {running && (

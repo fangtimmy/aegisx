@@ -20,6 +20,7 @@ export type {
   MessageList,
   MessageListItem,
   ModelAlias,
+  ModelRef,
   ModelMetadata,
   PiModelProfile,
   PlatformType,
@@ -106,13 +107,20 @@ export type SchedulerInfo = {
   }
 }
 
-/** GET /api/orchestrations — plugin id/scope + TypeBox params schema + templates. */
+/** GET /api/orchestrations — plugin id/scope + declared slots + templates. */
 export type OrchestrationInfo = {
   id: string
   scope: "challenge" | "event"
-  /** TypeBox JSON schema for the plugin's input snapshot (spec §3.2). */
-  params: Record<string, unknown>
+  label: string
+  description: string
+  agents: Array<{
+    slot: string
+    role: string
+    name: string
+    entry: boolean
+  }>
   templates: Record<string, string>
+  templateKeys: string[]
 }
 
 /** GET/PATCH /api/prompt-templates — one row of the template store (spec §3.6). */

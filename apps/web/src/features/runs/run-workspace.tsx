@@ -10,13 +10,7 @@ import {
 import { useCallback } from "react"
 import { useSearchParams } from "react-router"
 
-import {
-  type Challenge,
-  type ThinkingLevel,
-  agentsApi,
-  keys,
-  runsApi,
-} from "@/api"
+import { type Challenge, type ModelRef, agentsApi, keys, runsApi } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -123,15 +117,9 @@ export function RunWorkspace({
     []
   )
   const switchModel = useCallback(
-    (
-      agentId: string,
-      input: {
-        modelId: string
-        thinkingLevel: ThinkingLevel
-      }
-    ) =>
+    (agentId: string, ref: ModelRef) =>
       agentsApi
-        .switchModel(agentId, input)
+        .switchModel(agentId, { model: ref })
         .then(() => invalidate(queryClient, eventId)),
     [eventId, queryClient]
   )

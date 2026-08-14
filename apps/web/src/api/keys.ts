@@ -38,4 +38,7 @@ export const keys = {
   orchestrations: {
     all: ["orchestrations"] as const,
   },
+  orchestrationConfig: {
+    all: ["orchestration-config"] as const,
+  },
 }

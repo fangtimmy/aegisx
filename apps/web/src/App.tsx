@@ -6,7 +6,12 @@ import { EventPage } from "@/features/events/event-page"
 import { HomePage } from "@/features/events/home-page"
 import { SettingsPage } from "@/features/settings/settings-page"
 
-const settingsSections = ["general", "models", "settings", "templates"] as const
+const settingsSections = [
+  "general",
+  "models",
+  "settings",
+  "orchestration",
+] as const
 const eventTabs = ["challenges", "settings"] as const
 
 const router = createBrowserRouter([
@@ -18,11 +23,11 @@ const router = createBrowserRouter([
   })),
   {
     path: "/settings/prompts",
-    element: <Navigate replace to="/settings/settings" />,
+    element: <Navigate replace to="/settings/orchestration" />,
   },
   {
-    path: "/settings/runtime",
-    element: <Navigate replace to="/settings/settings" />,
+    path: "/settings/templates",
+    element: <Navigate replace to="/settings/orchestration" />,
   },
   { path: "/events/:eventId", Component: EventPage },
   ...eventTabs.map((tab) => ({

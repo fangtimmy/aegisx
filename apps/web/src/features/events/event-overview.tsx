@@ -55,6 +55,7 @@ import {
   type Challenge,
   eventsApi,
   keys,
+  type ModelRef,
   type QueueItem,
   type RunPublic,
   type RunUsage,
@@ -1547,8 +1548,8 @@ function AgentDialog({
     []
   )
   const switchModel = useCallback(
-    (id: string, input: { modelId: string; thinkingLevel: ThinkingLevel }) =>
-      agentsApi.switchModel(id, input).then(() =>
+    (id: string, ref: ModelRef) =>
+      agentsApi.switchModel(id, { model: ref }).then(() =>
         queryClient.invalidateQueries({
           queryKey: keys.runs.fleet(run?.eventId ?? ""),
         })
@@ -1900,7 +1901,7 @@ function SchedulerConfigTab({ eventId }: { eventId: string }) {
                 <SelectGroup key={providerLabel}>
                   <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
                   {list.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
+                    <SelectItem key={model.id} value={model.address}>
                       {model.label}
                     </SelectItem>
                   ))}

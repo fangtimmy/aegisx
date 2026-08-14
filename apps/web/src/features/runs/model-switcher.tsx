@@ -1,13 +1,17 @@
 import {
   aliasRef,
   isAliasRef,
+  parseModelRef,
   resolveAliasToModel,
   type ModelAlias,
+  type ModelRef,
 } from "@aegisx/shared"
+import type { ProviderConnection } from "@aegisx/shared/provider"
+import type { ThinkingLevel } from "@aegisx/shared/thinking"
 import { useQuery } from "@tanstack/react-query"
 import { useEffect, useMemo, useState } from "react"
 
-import { aliasesApi, keys, providersApi, type ThinkingLevel } from "@/api"
+import { aliasesApi, keys, providersApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import {
   Select,
@@ -30,13 +34,19 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   max: "Maximum",
 }
 
+export const THINKING_LEVELS = Object.keys(
+  thinkingLevelLabels
+) as ThinkingLevel[]
+
 type AvailableModel = {
-  /** ProviderModel.id (UUID) — what the switch-model API takes. */
+  /** ProviderModel.id (UUID) — alias model ids reference this. */
   id: string
-  /** Underlying model id string (matches RunPublic.modelId). */
+  /** Underlying pi model id (matches the ref's modelId segment). */
   modelId: string
   label: string
   providerLabel: string
+  /** Canonical pi address (`<providerKey>/<modelId>`) — the ref's model segment. */
+  address: string
   thinkingLevels: ThinkingLevel[]
 }
 
@@ -70,8 +80,9 @@ export function useResolvedAliases(models: AvailableModel[]) {
   }, [aliases, models])
 }
 
-/** Enabled provider models flattened to {@link AvailableModel}, grouped-ready.
- * Shared by the composer model switcher and the scheduler config editor. */
+/** Enabled provider models flattened to {@link AvailableModel} (with the pi
+ * address needed to build canonical refs), grouped-ready. Shared by every
+ * model ref selector. */
 export function useAvailableModels() {
   const providers = useQuery({
     queryKey: keys.providers.all,
@@ -89,12 +100,38 @@ export function useAvailableModels() {
           modelId: model.modelId,
           label: model.label,
           providerLabel: provider.label,
+          address: modelAddress(provider, model),
           thinkingLevels: model.thinkingLevels,
         })
       }
     }
     return out
   }, [providers.data])
+}
+
+/** `providerKey/modelId` for a configured provider+model (mirrors the shared
+ * modelAddress helper without importing the generic form). */
+function modelAddress(
+  provider: ProviderConnection,
+  model: {
+    modelId: string
+    piBinding: { providerId: string; modelId: string } | null
+  }
+): string {
+  const providerKey = model.piBinding?.providerId ?? `aegisx-${provider.id}`
+  const piModelId = model.piBinding?.modelId ?? model.modelId
+  return `${providerKey}/${piModelId}`
+}
+
+/** Models grouped by provider label (for grouped selects). */
+export function groupByProvider(models: AvailableModel[]) {
+  const map = new Map<string, AvailableModel[]>()
+  for (const m of models) {
+    const bucket = map.get(m.providerLabel) ?? []
+    bucket.push(m)
+    map.set(m.providerLabel, bucket)
+  }
+  return [...map.entries()]
 }
 
 /**
@@ -105,8 +142,10 @@ export function useAvailableModels() {
  * because the run row stores the underlying modelId string while the
  * orchestrator row already stores the UUID — the parent supplies the matcher.
  *
- * Switching takes effect on the next turn (the in-flight turn, if any, finishes
- * on the old model).
+ * `onSwitch` receives a canonical model ref string
+ * (`<providerKey>/<modelId>:<effort>` or `alias:<id>`); the caller forwards it
+ * verbatim to the model-switch API. Switching takes effect on the next turn
+ * (the in-flight turn, if any, finishes on the old model).
  */
 export function ModelThinkingSwitcher({
   findCurrentModelId,
@@ -118,7 +157,7 @@ export function ModelThinkingSwitcher({
   findCurrentModelId: (models: AvailableModel[]) => string | null | undefined
   thinkingLevel: ThinkingLevel
   disabled?: boolean
-  onSwitch: (input: { modelId: string; thinkingLevel: ThinkingLevel }) => void
+  onSwitch: (ref: ModelRef) => void
   className?: string
 }) {
   const models = useAvailableModels()
@@ -152,15 +191,17 @@ export function ModelThinkingSwitcher({
     }
   }, [supportedThinking, thinking])
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, AvailableModel[]>()
-    for (const m of models) {
-      const bucket = map.get(m.providerLabel) ?? []
-      bucket.push(m)
-      map.set(m.providerLabel, bucket)
+  const grouped = useMemo(() => groupByProvider(models), [models])
+
+  const emit = (modelId: string | null, level: ThinkingLevel) => {
+    if (!modelId) return
+    if (isAliasRef(modelId)) {
+      onSwitch(modelId)
+      return
     }
-    return [...map.entries()]
-  }, [models])
+    const m = models.find((x) => x.id === modelId)
+    if (m) onSwitch(`${m.address}:${level}`)
+  }
 
   const handleModel = (id: string | null) => {
     if (!id) return
@@ -180,11 +221,11 @@ export function ModelThinkingSwitcher({
           ? thinking
           : (levels[0] ?? "off")
     setThinking(next)
-    onSwitch({ modelId: id, thinkingLevel: next })
+    emit(id, next)
   }
   const handleThinking = (level: ThinkingLevel) => {
     setThinking(level)
-    if (selected) onSwitch({ modelId: selected.id, thinkingLevel: level })
+    if (selectedId) emit(selectedId, level)
   }
 
   if (models.length === 0) return null
@@ -263,6 +304,168 @@ export function ModelThinkingSwitcher({
           ))}
         </SelectPopup>
       </Select>
+    </span>
+  )
+}
+
+/**
+ * Config-time model ref picker (orchestration settings): selects a concrete
+ * `<address>:<effort>` ref or an alias ref, with a leading "默认" entry that
+ * clears the slot (null → global default). Uncontrolled-ish: derives the
+ * select values from `value` and calls `onChange` with the resulting ref.
+ *
+ * Unlike {@link ModelThinkingSwitcher} this is not bound to a live session, so
+ * it shows the alias/concrete split purely from the parsed ref.
+ */
+export function ModelRefPicker({
+  value,
+  onChange,
+  disabled,
+  compact,
+}: {
+  value: ModelRef | null
+  onChange: (ref: ModelRef | null) => void
+  disabled?: boolean
+  /** Tighter trigger sizing for inline table rows. */
+  compact?: boolean
+}) {
+  const models = useAvailableModels()
+  const resolvedAliases = useResolvedAliases(models)
+  const grouped = useMemo(() => groupByProvider(models), [models])
+
+  // Parse the current ref into a select value (alias ref, concrete address, or
+  // empty = default) + an effort level.
+  const parsed = useMemo(() => parseModelRef(value), [value])
+  const selectedAddress =
+    parsed?.kind === "model" ? `${parsed.providerKey}/${parsed.modelId}` : null
+  const selectedAliasId = parsed?.kind === "alias" ? parsed.aliasId : null
+  const effort =
+    parsed?.kind === "model"
+      ? parsed.effort
+      : parsed?.kind === "alias"
+        ? (resolvedAliases.find((r) => r.alias.id === parsed.aliasId)?.alias
+            .thinkingLevel ?? "off")
+        : "off"
+
+  // The model select's value: an alias ref, a concrete address, or "" (default).
+  const modelValue = selectedAliasId
+    ? aliasRef(selectedAliasId)
+    : (selectedAddress ?? "")
+
+  // The selected concrete model (for its supported thinking levels). Aliases
+  // resolve to their first available model; the effort comes from the alias.
+  const selectedModel = useMemo(() => {
+    if (selectedAliasId) {
+      return (
+        resolvedAliases.find((r) => r.alias.id === selectedAliasId)?.target ??
+        null
+      )
+    }
+    return models.find((m) => m.address === selectedAddress) ?? null
+  }, [selectedAliasId, selectedAddress, models, resolvedAliases])
+  const supportedThinking = selectedModel?.thinkingLevels ?? THINKING_LEVELS
+
+  const applyModel = (key: string | null) => {
+    if (!key) {
+      onChange(null)
+      return
+    }
+    if (isAliasRef(key)) {
+      onChange(key)
+      return
+    }
+    // key is a concrete address → keep the current effort if supported.
+    const m = models.find((x) => x.address === key)
+    const levels = m?.thinkingLevels ?? ["off"]
+    const next = levels.includes(effort) ? effort : (levels[0] ?? "off")
+    onChange(`${key}:${next}`)
+  }
+  const applyEffort = (level: ThinkingLevel) => {
+    if (selectedAliasId) return // alias effort is fixed
+    if (selectedAddress) onChange(`${selectedAddress}:${level}`)
+  }
+
+  const triggerClass = compact
+    ? "h-8 min-w-[12rem] text-xs"
+    : "h-9 min-w-[14rem]"
+
+  return (
+    <span className="flex items-center gap-1.5">
+      <Select
+        disabled={disabled}
+        items={Object.fromEntries([
+          ["", "默认（全局默认模型）"],
+          ...resolvedAliases.map((r) => [aliasRef(r.alias.id), r.alias.label]),
+          ...models.map((m) => [m.address, m.label]),
+        ])}
+        onValueChange={applyModel}
+        value={modelValue}
+      >
+        <SelectTrigger
+          className={triggerClass}
+          size={compact ? "sm" : "default"}
+        >
+          <SelectValue placeholder="默认" />
+        </SelectTrigger>
+        <SelectPopup>
+          <SelectItem value="">默认（全局默认模型）</SelectItem>
+          {resolvedAliases.length > 0 && (
+            <SelectGroup key="aliases">
+              <SelectGroupLabel>别名</SelectGroupLabel>
+              {resolvedAliases.map(({ alias, target }) => (
+                <SelectItem key={aliasRef(alias.id)} value={aliasRef(alias.id)}>
+                  <span className="flex items-center gap-1.5">
+                    <span className="font-medium">{alias.label}</span>
+                    <span className="text-muted-foreground">
+                      → {target.label}
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          )}
+          {grouped.map(([providerLabel, list]) => (
+            <SelectGroup key={providerLabel}>
+              <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
+              {list.map((m) => (
+                <SelectItem key={m.address} value={m.address}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ))}
+        </SelectPopup>
+      </Select>
+      {!selectedAliasId && (
+        <Select
+          disabled={disabled || supportedThinking.length <= 1}
+          items={Object.fromEntries(
+            supportedThinking.map((level) => [
+              level,
+              thinkingLevelLabels[level],
+            ])
+          )}
+          onValueChange={(v) => v && applyEffort(v as ThinkingLevel)}
+          value={effort}
+        >
+          <SelectTrigger
+            className={cn(
+              compact ? "h-8 w-[7.5rem]" : "h-9 w-[8.5rem]",
+              "text-xs"
+            )}
+            size={compact ? "sm" : "default"}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            {supportedThinking.map((level) => (
+              <SelectItem key={level} value={level}>
+                {thinkingLevelLabels[level]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      )}
     </span>
   )
 }

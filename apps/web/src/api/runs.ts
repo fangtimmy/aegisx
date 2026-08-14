@@ -11,8 +11,6 @@ import type {
 export type CreateRunInput = {
   /** Orchestration plugin id (defaults to 'classic' server-side). */
   orchestration?: string
-  /** Plugin input snapshot (validated against the plugin's params schema). */
-  params?: Record<string, unknown>
   /** Overrides the rendered `initial` template as the run's first prompt. */
   prompt?: string
   /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
