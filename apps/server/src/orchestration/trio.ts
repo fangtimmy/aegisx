@@ -1,6 +1,5 @@
-import { DEFAULT_TRIO_SYSTEM_PROMPT_TEMPLATE } from "@aegisx/shared/prompt-defaults"
-
 import { trioTools } from "./common"
+import { DEFAULT_TRIO_SYSTEM_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration } from "./types"
 
 /**

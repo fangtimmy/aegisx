@@ -5,7 +5,7 @@ import {
   previewSystemPrompt,
   renderSystemPrompt,
   samplePromptContext,
-} from "./prompt-templates"
+} from "../../src/orchestration/prompt-templates"
 
 const highlightedText = (segments: { highlighted: boolean; text: string }[]) =>
   segments.filter((s) => s.highlighted).map((s) => s.text)

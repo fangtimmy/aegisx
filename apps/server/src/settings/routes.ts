@@ -22,16 +22,12 @@ import { badRequest, notFound } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
 import {
-  builtinModelProfile,
-  normalizeModelMetadata,
-  parseModelMetadata,
-} from "../providers/builtin-models"
-import { getProviderConnections } from "../providers/public"
-import {
   DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+} from "../orchestration/prompt-defaults"
+import {
   ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES,
   PROMPT_TEMPLATE_VARIABLES,
   previewInitialPrompt,
@@ -39,7 +35,13 @@ import {
   previewSystemPrompt,
   sampleOrchestratorPromptContext,
   samplePromptContext,
-} from "./prompt-templates"
+} from "../orchestration/prompt-templates"
+import {
+  builtinModelProfile,
+  normalizeModelMetadata,
+  parseModelMetadata,
+} from "../providers/builtin-models"
+import { getProviderConnections } from "../providers/public"
 
 const promptPreviewInput = Type.Object(
   {

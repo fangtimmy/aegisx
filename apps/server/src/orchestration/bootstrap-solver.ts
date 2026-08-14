@@ -1,6 +1,5 @@
-import { DEFAULT_BOOTSTRAP_SYSTEM_PROMPT_TEMPLATE } from "@aegisx/shared/prompt-defaults"
-
 import { bootstrapTools, solverTools } from "./common"
+import { DEFAULT_BOOTSTRAP_SYSTEM_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration, type RunHandle } from "./types"
 
 /**

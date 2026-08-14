@@ -11,7 +11,7 @@ import {
   renderTemplate,
   seedBuiltinTemplates,
   seedPluginTemplates,
-} from "../../src/orchestration/prompt-templates-store"
+} from "../../src/orchestration/prompt-templates"
 import { setupDb } from "../helpers"
 
 describe("prompt_templates store (spec §3.6)", () => {

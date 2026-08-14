@@ -1,5 +1,4 @@
-import { DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE } from "@aegisx/shared/prompt-defaults"
-
+import { DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration, type EventHandle, type RunHandle } from "./types"
 
 /** Scheduler wiring (spec §7.5): wake the orchestrator on child-run lifecycle

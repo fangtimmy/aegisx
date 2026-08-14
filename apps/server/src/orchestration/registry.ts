@@ -1,17 +1,16 @@
-import {
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-} from "@aegisx/shared/prompt-defaults"
-
 import type { Database } from "../db"
 import bootstrapSolver from "./bootstrap-solver"
 import classic from "./classic"
 import observerSolver from "./observer-solver"
 import {
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+} from "./prompt-defaults"
+import {
   seedBuiltinTemplates,
   seedPluginTemplates,
   upgradeBuiltinTemplate,
-} from "./prompt-templates-store"
+} from "./prompt-templates"
 import scheduler from "./scheduler"
 import trio from "./trio"
 import type {

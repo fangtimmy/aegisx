@@ -1,6 +1,5 @@
-import { DEFAULT_OBSERVER_SYSTEM_PROMPT_TEMPLATE } from "@aegisx/shared/prompt-defaults"
-
 import { solverTools } from "./common"
+import { DEFAULT_OBSERVER_SYSTEM_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration, type RunHandle } from "./types"
 
 /** Observer-solver wiring (spec §7.2): every solver turn ends (or a flag is

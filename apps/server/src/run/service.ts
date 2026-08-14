@@ -38,7 +38,7 @@ import {
   loadTemplateMap,
   migrateLegacyPromptSettings,
   renderTemplate,
-} from "../orchestration/prompt-templates-store"
+} from "../orchestration/prompt-templates"
 import {
   bootOrchestration,
   challengeOrchestrationCatalog,
