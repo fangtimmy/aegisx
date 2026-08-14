@@ -1,0 +1,105 @@
+import type { NodeTypes } from "@xyflow/react"
+import { Archive, Flag, Play, Puzzle, Timer } from "lucide-react"
+
+import type { AgentStatus, AgentSummary, SchedulerInfo } from "@/api"
+
+import {
+  AgentGraphNode,
+  RunGraphNode,
+  SchedulerGraphNode,
+} from "./agents-graph"
+
+export const UNCATEGORIZED = "未分类"
+
+/** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
+   so the fleet/queue/usage must refresh regardless of locally-known state. */
+export const POLL_INTERVAL_MS = 5000
+
+export const ROLE_LABELS: Record<string, string> = {
+  solver: "求解者",
+  observer: "观察者",
+  orchestrator: "调度者",
+  child: "子代理",
+}
+
+export function roleLabel(role: string): string {
+  return ROLE_LABELS[role] ?? role
+}
+
+/** Terminal agent states — the run may still be active while its agents are
+ * done (completed / aborted / failed). */
+export function isAgentFinished(agent: AgentSummary): boolean {
+  return (
+    agent.status === "completed" ||
+    agent.status === "aborted" ||
+    agent.status === "failed"
+  )
+}
+
+/** Terminal-state badge for a finished agent; null while running / idle. */
+export function agentFinishBadge(status: AgentStatus): {
+  label: string
+  variant: "success" | "destructive" | "warning"
+} | null {
+  if (status === "completed") return { label: "已完成", variant: "success" }
+  if (status === "failed") return { label: "已失败", variant: "destructive" }
+  if (status === "aborted") return { label: "已中断", variant: "warning" }
+  return null
+}
+
+/** Scheduler endpoint payload + its run's agents (fetched in one query). */
+export type SchedulerWithAgents = SchedulerInfo & { agents: AgentSummary[] }
+
+export type TimelineEvent = {
+  time: string
+  id: string
+  kind: "run" | "timeout" | "closed" | "flag" | "challenge"
+  title: string
+  detail: string
+  runId?: string
+}
+
+export const TIMELINE_ICONS: Record<TimelineEvent["kind"], typeof Play> = {
+  run: Play,
+  timeout: Timer,
+  closed: Archive,
+  flag: Flag,
+  challenge: Puzzle,
+}
+
+/** The AgentsGraph root node id (the event scheduler / orchestrator). */
+export const SCHED_NODE_ID = "sched"
+
+// Planned node sizes — used both for the dagre layout spacing and (roughly)
+// matched by the Tailwind widths on each node component.
+export const NODE_DIM = {
+  scheduler: { width: 176, height: 56 },
+  run: { width: 224, height: 60 },
+  agent: { width: 192, height: 48 },
+} as const
+
+export const EDGE_STYLE = {
+  // scheduler → run: the orchestrator oversees the whole fleet, kept faint.
+  oversee: {
+    stroke: "var(--muted-foreground)",
+    strokeOpacity: 0.3,
+    strokeWidth: 1.5,
+  },
+  // run → entry agent / scheduler → orchestrator: emphasized.
+  entry: { stroke: "var(--primary)", strokeWidth: 2 },
+  // run → non-entry agent.
+  agent: { stroke: "var(--border)", strokeWidth: 1.5 },
+  // agent → spawn child: dashed.
+  spawn: {
+    stroke: "var(--muted-foreground)",
+    strokeOpacity: 0.5,
+    strokeWidth: 1.5,
+    strokeDasharray: "5 3",
+  },
+} as const
+
+export const GRAPH_NODE_TYPES = {
+  scheduler: SchedulerGraphNode,
+  run: RunGraphNode,
+  agent: AgentGraphNode,
+} satisfies NodeTypes
