@@ -7,7 +7,7 @@ import {
   type ModelAlias,
   type ModelRef,
 } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/provider"
+import type { ProviderConnection } from "@aegisx/shared/domain"
 
 import type { AgentModels } from "../infrastructure/config-store"
 import type { SlotModel } from "../orchestration/types"

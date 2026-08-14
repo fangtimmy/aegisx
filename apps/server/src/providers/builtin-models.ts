@@ -1,4 +1,4 @@
-import type { ProviderType } from "@aegisx/shared/platform"
+import type { ProviderType } from "@aegisx/shared/domain"
 import {
   type Api,
   getSupportedThinkingLevels,

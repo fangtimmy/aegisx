@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "@aegisx/shared/thinking"
+import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import type {
   ModelRuntime,

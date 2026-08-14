@@ -1,7 +1,6 @@
 import type { AgentSummary } from "./agent"
-import type { ChallengeFlag } from "./challenge"
-import type { RunStatus } from "./run-status"
-import type { ThinkingLevel } from "./thinking"
+import type { ChallengeFlag } from "./domain"
+import type { ThinkingLevel } from "./live-event"
 
 /** Aggregated token usage + cost across a run's assistant messages. `turns` is
  * the number of assistant messages that reported usage. */
@@ -94,3 +93,111 @@ export type RunFile =
       size: number
       modifiedAt: string
     }
+
+/** v3 is container-only; every run is a Docker container running pi. */
+export type EnvironmentConfig = {
+  type: "container"
+  image: string
+  cpus: number
+  memoryMb: number
+  pidsLimit: number
+}
+
+export type ModelConfig = {
+  provider: string
+  providerLabel?: string
+  modelId: string
+  modelLabel?: string
+  baseUrl?: string
+  costKnown?: boolean
+  thinkingLevel: ThinkingLevel
+}
+
+export type PromptAttachment = {
+  name: string
+  path: string
+  size: number
+}
+
+/**
+ * Prompt template context (handlebars). v4 renders these host-side and feeds
+ * them to the pi SDK via a custom ResourceLoader (no APPEND_SYSTEM.md in the
+ * container). The main agent can spawn children; capabilities reflect the
+ * native tools registered for the run.
+ */
+export type PromptTemplateContext = {
+  agent: {
+    role: "main" | "child"
+    isMain: boolean
+    name: string
+    task: string | null
+  }
+  event: {
+    id: string
+    name: string
+    platform: string | null
+    promptHint: string
+  }
+  challenge: {
+    id: string
+    name: string
+    description: string
+    category: string | null
+    points: number | null
+    attachments: PromptAttachment[]
+    attachmentPaths: string[]
+  }
+  model: {
+    provider: string
+    name: string
+    id: string
+  }
+  run: {
+    id: string
+    /** v3 is container-only — every run runs in a Docker container. */
+    environment: "container"
+    isContainer: true
+    workspace: string
+    targetSupported: boolean
+    platformIntegrated: boolean
+    containerImage: string
+    cpus: number
+    memoryMb: number
+    pidsLimit: number
+  }
+  capabilities: {
+    canFinish: boolean
+    canSpawn: boolean
+    canSubmitFlag: boolean
+    canManageTarget: boolean
+  }
+}
+
+export type FrozenPromptConfig = {
+  mainSystemPromptTemplate: string
+  childSystemPromptTemplate: string
+  initialPromptTemplate: string
+  context?: PromptTemplateContext
+}
+
+/** v8 run lifecycle. A run's status is SQL-derived from its agents' statuses
+ * (running ↔ idle) plus sanctioned explicit `closed` transitions
+ * (finish / close / timeout-SIGKILL / recoverOnBoot). Not a dead terminal:
+ * the DB session + agent rows survive a `closed` run for cold-restore. */
+export type RunStatus = "running" | "idle" | "closed"
+
+/** A run holds live resources (container + in-process sessions). */
+export function isActiveRunStatus(status: string): boolean {
+  return status === "running" || status === "idle"
+}
+
+/** Per-agent lifecycle. Declared agents use running|idle (turn-by-turn); a
+ * spawn child runs to completion within one spawn_agent call
+ * (running|completed|aborted|failed). `aborted` is set when the run is torn
+ * down (finish/close/timeout) while the agent was mid-turn. */
+export type AgentStatus =
+  | "running"
+  | "idle"
+  | "completed"
+  | "aborted"
+  | "failed"

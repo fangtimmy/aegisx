@@ -1,7 +1,7 @@
 import { modelAddress, parseModelRef } from "@aegisx/shared"
 import type { ModelAlias, ModelRef } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/provider"
-import type { ThinkingLevel } from "@aegisx/shared/thinking"
+import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { ThinkingLevel } from "@aegisx/shared/live-event"
 
 import type { HostAgentSession } from "./host-session"
 import { resolveSwitchTarget } from "./model-switch"

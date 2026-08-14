@@ -1,6 +1,6 @@
 import type { PromptAttachment } from "@aegisx/shared"
-import type { ModelRef } from "@aegisx/shared/model-ref"
-import type { ThinkingLevel } from "@aegisx/shared/thinking"
+import type { ThinkingLevel } from "@aegisx/shared/live-event"
+import type { ModelRef } from "@aegisx/shared/model"
 
 /**
  * Orchestration plugin API (v8 + declarative slots). A Run = one scope

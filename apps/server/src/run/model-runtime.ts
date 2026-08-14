@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
-import type { ProviderConnection } from "@aegisx/shared/provider"
+import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
 

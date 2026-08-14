@@ -476,3 +476,9 @@ export function isConfigDocumentV1(raw: unknown): raw is {
     Array.isArray(doc.providers)
   )
 }
+
+export {
+  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_INITIAL_PROMPT_TEMPLATE,
+  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+} from "./prompt-defaults"

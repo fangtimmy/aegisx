@@ -9,7 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { defaultSettings } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/provider"
+import type { ProviderConnection } from "@aegisx/shared/domain"
 
 import type { HostAgentSession } from "../src/agents/host-session"
 import { createDatabase, type Database } from "../src/db"

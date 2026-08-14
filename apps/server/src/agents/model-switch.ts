@@ -1,7 +1,7 @@
 import { resolveModelRef } from "@aegisx/shared"
 import type { ModelRef } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/provider"
-import type { ThinkingLevel } from "@aegisx/shared/thinking"
+import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
 

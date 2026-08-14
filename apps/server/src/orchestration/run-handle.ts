@@ -1,4 +1,4 @@
-import type { ModelRef } from "@aegisx/shared/model-ref"
+import type { ModelRef } from "@aegisx/shared/model"
 
 import type { agents } from "../db/schema"
 import { renderTemplate } from "./prompt-templates-store"

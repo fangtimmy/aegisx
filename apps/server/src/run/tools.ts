@@ -3,7 +3,7 @@ import {
   isActiveTarget,
   type TargetEndpoint,
   type TargetState,
-} from "@aegisx/shared/target"
+} from "@aegisx/shared/domain"
 import { defineTool } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 

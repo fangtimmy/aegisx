@@ -2,7 +2,7 @@ import type {
   ModelMetadata,
   ProviderConnection,
   ProviderModel,
-} from "@aegisx/shared/provider"
+} from "@aegisx/shared/domain"
 
 import { providerApi, type ThinkingLevelMap } from "./builtin-models"
 

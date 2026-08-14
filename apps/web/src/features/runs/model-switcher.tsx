@@ -6,8 +6,8 @@ import {
   type ModelAlias,
   type ModelRef,
 } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/provider"
-import type { ThinkingLevel } from "@aegisx/shared/thinking"
+import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import { useQuery } from "@tanstack/react-query"
 import { useMemo } from "react"
 
