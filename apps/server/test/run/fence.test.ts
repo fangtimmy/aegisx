@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { challengeRemote, runs, schedulerConfig } from "../../src/db/schema"
+import {
+  challengeRemote,
+  challenges,
+  runs,
+  schedulerConfig,
+} from "../../src/db/schema"
 import { checkLaunchFence, maxConcurrentRunsSetting } from "../../src/run/fence"
 import {
   flatSettings,
@@ -28,6 +33,11 @@ function seedTarget(
   db.insert(challengeRemote)
     .values({
       challengeId,
+      eventId: db
+        .select({ eventId: challenges.eventId })
+        .from(challenges)
+        .where(eq(challenges.id, challengeId))
+        .get()!.eventId,
       sourceKey: "src",
       remoteId: `remote-${challengeId}`,
       available: true,

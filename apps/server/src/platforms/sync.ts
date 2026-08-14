@@ -99,25 +99,20 @@ export function createPlatformSync(
     adapter: CtfPlatformAdapter,
     onProgress?: (progress: ChallengeSyncProgress) => void | Promise<void>
   ) {
+    // Dedupe on (event, source, remote) — event-scoped since 0007: the same
+    // platform challenge can be imported independently by multiple events.
     const existing = db
-      .select({
-        challenge: challenges,
-        remote: challengeRemote,
-      })
-      .from(challenges)
-      .innerJoin(
-        challengeRemote,
-        eq(challenges.id, challengeRemote.challengeId)
-      )
+      .select()
+      .from(challengeRemote)
       .where(
         and(
-          eq(challenges.eventId, eventId),
+          eq(challengeRemote.eventId, eventId),
           eq(challengeRemote.sourceKey, sourceKey),
           eq(challengeRemote.remoteId, remote.id)
         )
       )
       .get()
-    const id = existing?.challenge.id ?? crypto.randomUUID()
+    const id = existing?.challengeId ?? crypto.randomUUID()
     const now = new Date().toISOString()
     const challengeValues = {
       eventId,
@@ -128,12 +123,13 @@ export function createPlatformSync(
       updatedAt: now,
     }
     const remoteValues = {
+      eventId,
       sourceKey,
       remoteId: remote.id,
       available: true,
-      solved: existing?.remote.solved === true || remote.solved,
+      solved: existing?.solved === true || remote.solved,
       targetSupported: remote.targetSupported,
-      targetIgnored: existing?.remote.targetIgnored ?? false,
+      targetIgnored: existing?.targetIgnored ?? false,
       targetCount: remote.targetCount,
       targetInfo: JSON.stringify(remote.targets),
       syncedAt: now,
@@ -158,12 +154,27 @@ export function createPlatformSync(
         .where(eq(challengeRemote.challengeId, id))
         .run()
     } else {
-      db.insert(challenges)
-        .values({ id, ...challengeValues, createdAt: now })
-        .run()
-      db.insert(challengeRemote)
-        .values({ challengeId: id, ...remoteValues })
-        .run()
+      // Atomic: a challenge row must never survive without its remote mapping
+      // (the pre-0007 bug left orphan challenge rows when the mapping insert
+      // hit the unique index).
+      try {
+        db.transaction((tx) => {
+          tx.insert(challenges)
+            .values({ id, ...challengeValues, createdAt: now })
+            .run()
+          tx.insert(challengeRemote)
+            .values({ challengeId: id, ...remoteValues })
+            .run()
+        })
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("UNIQUE")) {
+          throw new PlatformActionError(
+            "invalid_state",
+            `Challenge ${remote.name} (${remote.id}) is already imported by this event`
+          )
+        }
+        throw error
+      }
     }
 
     const syncedAttachments: ChallengeSyncAttachment[] = []
@@ -234,9 +245,16 @@ export function createPlatformSync(
     }
     const now = new Date().toISOString()
     db.transaction((tx) => {
+      // Event-scoped flip (0007): only this event's rows — a shared
+      // source_key must never touch another event's mappings.
       tx.update(challengeRemote)
         .set({ available: false })
-        .where(eq(challengeRemote.sourceKey, platform.sourceKey))
+        .where(
+          and(
+            eq(challengeRemote.eventId, eventId),
+            eq(challengeRemote.sourceKey, platform.sourceKey)
+          )
+        )
         .run()
       for (const item of remote) {
         tx.update(challengeRemote)
@@ -246,6 +264,7 @@ export function createPlatformSync(
           })
           .where(
             and(
+              eq(challengeRemote.eventId, eventId),
               eq(challengeRemote.sourceKey, platform.sourceKey),
               eq(challengeRemote.remoteId, item.id)
             )

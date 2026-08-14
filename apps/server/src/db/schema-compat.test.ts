@@ -124,6 +124,33 @@ describe("schema bootstrap", () => {
         ).map((c) => c.name)
       )
       expect(configCols.has("paused")).toBe(true)
+
+      // 0007: challenge_remote is event-scoped — event_id column + unique
+      // index (event_id, source_key, remote_id)
+      const remoteCols = new Set(
+        (
+          sqlite.query(`PRAGMA table_info(challenge_remote)`).all() as Array<{
+            name: string
+          }>
+        ).map((c) => c.name)
+      )
+      expect(remoteCols.has("event_id")).toBe(true)
+      const uniqueIdx = sqlite
+        .query(
+          `SELECT name FROM pragma_index_list('challenge_remote') WHERE "unique" = 1 AND origin = 'c'`
+        )
+        .all() as Array<{ name: string }>
+      expect(uniqueIdx.map((i) => i.name)).toEqual([
+        "challenge_remote_source_unique",
+      ])
+      const idxCols = (
+        sqlite
+          .query(
+            `SELECT name FROM pragma_index_info('challenge_remote_source_unique')`
+          )
+          .all() as Array<{ name: string }>
+      ).map((c) => c.name)
+      expect(idxCols).toEqual(["event_id", "source_key", "remote_id"])
       sqlite.close()
       releaseLock()
     } finally {

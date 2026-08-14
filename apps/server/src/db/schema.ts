@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -65,6 +65,12 @@ export const challengeRemote = sqliteTable(
     challengeId: text("challenge_id")
       .primaryKey()
       .references(() => challenges.id, { onDelete: "cascade" }),
+    /** Owning event — scopes the (source_key, remote_id) mapping so the same
+     * platform challenge can be imported by multiple events independently
+     * (0007; the old global unique index orphaned the second import). */
+    eventId: text("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
     sourceKey: text("source_key").notNull(),
     remoteId: text("remote_id").notNull(),
     available: integer("available", { mode: "boolean" })
@@ -83,6 +89,7 @@ export const challengeRemote = sqliteTable(
   },
   (table) => [
     uniqueIndex("challenge_remote_source_unique").on(
+      table.eventId,
       table.sourceKey,
       table.remoteId
     ),

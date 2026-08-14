@@ -50,6 +50,13 @@
       "when": 1789500000000,
       "tag": "0006_benchmark_fixes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": 13,
+      "when": 1789600000000,
+      "tag": "0007_challenge_remote_event_scope",
+      "breakpoints": true
     }
   ]
 }

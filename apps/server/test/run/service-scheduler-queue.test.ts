@@ -459,6 +459,7 @@ describe("scheduler queue integration (P3)", () => {
       db.insert(challengeRemote)
         .values({
           challengeId: "ch-a",
+          eventId: "evt-1",
           sourceKey: "src",
           remoteId: "r-a",
           available: true,

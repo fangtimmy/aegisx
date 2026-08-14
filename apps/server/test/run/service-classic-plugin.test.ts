@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, challengeRemote } from "../../src/db/schema"
+import { agents, challengeRemote, challenges } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
@@ -49,6 +49,11 @@ function seedRemote(
   db.insert(challengeRemote)
     .values({
       challengeId,
+      eventId: db
+        .select({ eventId: challenges.eventId })
+        .from(challenges)
+        .where(eq(challenges.id, challengeId))
+        .get()!.eventId,
       sourceKey: "src",
       remoteId: "remote-1",
       available: opts.available ?? true,
