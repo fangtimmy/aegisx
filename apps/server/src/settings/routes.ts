@@ -151,7 +151,7 @@ export function registerSettingsRoutes(
 
   app.get("/api/settings", (c) => c.json(settingsResponse(configStore)))
 
-  // Prompt template store (spec §10): GET lists all rows (plugin-grouped by
+  // Prompt template store: GET lists all rows (plugin-grouped by
   // the client), PATCH upserts one (plugin, key) row. Independent of
   // FlatSettings — the settings-page editor edits this store directly.
   app.get("/api/prompt-templates", (c) =>

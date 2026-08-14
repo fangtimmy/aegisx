@@ -121,7 +121,7 @@ function challengeSummaryText(c: Challenge): string {
 
 /**
  * Build the scheduler orchestrator's native tools from its persisted tool-list
- * snapshot (spec §6/§7.5). Each tool is gated by `has(name)` — like the solver
+ * snapshot. Each tool is gated by `has(name)` — like the solver
  * tools — so the granted set is exactly the snapshot. Names never overlap with
  * solver tools, so the two builders compose without conflict.
  */

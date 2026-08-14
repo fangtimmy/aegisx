@@ -3,7 +3,7 @@ import { DEFAULT_TRIO_SYSTEM_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration } from "./types"
 
 /**
- * trio — three peer solvers on one container/workspace (spec §7.4). All three
+ * trio — three peer solvers on one container/workspace. All three
  * prime the run's initial prompt and coordinate via
  * message_agent/read_agent/list_agents. solver-a is the entry agent (run-level
  * default conversation target). Finish is racy by design: the first

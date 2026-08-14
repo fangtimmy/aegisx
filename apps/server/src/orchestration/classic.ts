@@ -2,7 +2,7 @@ import { solverTools } from "./common"
 import { defineOrchestration } from "./types"
 
 /**
- * classic — the single-solver orchestration (spec §7.1).
+ * classic — the single-solver orchestration.
  *
  * One entry agent ("solver") with the full CTF tool set. The tool list is
  * assembled conditionally from the run's challenge context so it matches v7

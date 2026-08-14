@@ -45,7 +45,7 @@ export function createModelResolver(deps: ModelResolverDeps) {
 
   /** Resolve a model ref to a CONCRETE {@link SlotModel} snapshot (aliases
    * resolved to the first available model so per-agent rows do not follow later
-   * alias edits, spec §4.3). Throws when nothing resolves. */
+   * alias edits). Throws when nothing resolves. */
   function resolveSlotModelFromRef(
     ref: ModelRef | null | undefined
   ): SlotModel {

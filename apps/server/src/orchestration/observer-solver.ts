@@ -2,7 +2,7 @@ import { solverTools } from "./common"
 import { DEFAULT_OBSERVER_SYSTEM_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration, type RunHandle } from "./types"
 
-/** Observer-solver wiring (spec §7.2): every solver turn ends (or a flag is
+/** Observer-solver wiring: every solver turn ends (or a flag is
  * accepted), the observer is woken to review with read_agent and steer with
  * message_agent when the solver goes off track. */
 function wire(run: RunHandle): void {
@@ -18,7 +18,7 @@ function wire(run: RunHandle): void {
 }
 
 /**
- * observer-solver — supervised solving (spec §7.2). A full solver drives the
+ * observer-solver — supervised solving. A full solver drives the
  * challenge; a separate observer (no finish/flag/target/spawn capability)
  * reviews each turn and steers via message_agent. Each agent's model is
  * configured independently in the orchestration settings

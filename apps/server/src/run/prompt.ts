@@ -37,7 +37,7 @@ export type RunPromptInputs = {
 
 /**
  * Build the run-level {@link PromptContext} for a challenge-scoped run
- * (scope-aware, spec §3.7). `agent` and per-agent `capabilities` are intentionally
+ * (scope-aware). `agent` and per-agent `capabilities` are intentionally
  * LEFT BLANK here — `agent` is filled per-agent by `createAgent`, and
  * `capabilities` is the RUN-LEVEL view (challenge-derived) used to render
  * `initialPrompt`. createAgent OVERRIDES `capabilities` with the value derived
@@ -109,7 +109,7 @@ export function buildPromptContext(
 
 /**
  * Build the run-level {@link PromptContext} for an event-scoped (scheduler)
- * run (spec §3.7). No `challenge` block — the scheduler manages an event, not
+ * run. No `challenge` block — the scheduler manages an event, not
  * one challenge — and no `capabilities` (the scheduler's abilities come from
  * its own tool list via createAgent). `instruction` carries the user's
  * strategic direction for the event.
@@ -121,7 +121,7 @@ export function buildEventPromptContext(
     instruction: string
     environment: EnvironmentConfig
     model: ModelConfig
-    /** Challenge orchestrations the scheduler may launch (spec §3.7), so it
+    /** Challenge orchestrations the scheduler may launch, so it
      * never invents plugin names. Built by the service from the registry. */
     orchestrations: OrchestrationInfo[]
   },

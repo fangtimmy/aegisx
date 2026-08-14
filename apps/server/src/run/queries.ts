@@ -219,7 +219,7 @@ export function createRunQueries(options: {
 
   /** Event-wide token usage + cost across every run in the event (scheduler
    * run included — it burns tokens too). session_entries.runId is the
-   * redundant run-level key kept for exactly this (spec §九). */
+   * redundant run-level key kept for exactly this. */
   function usageForEvent(eventId: string): RunUsage | undefined {
     const runIds = db
       .select({ id: runs.id })

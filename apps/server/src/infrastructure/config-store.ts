@@ -300,7 +300,7 @@ export function createConfigStore(dataDir: string) {
     },
     /** Pre-v8 prompt-template edits captured from the raw config document
      * before parseSettings drops them (v8 keeps templates in the
-     * prompt_templates table, spec §3.6). Keyed by template key. */
+     * prompt_templates table). Keyed by template key. */
     getLegacyPromptTemplates(): Record<string, string> | undefined {
       return legacyPrompts
     },

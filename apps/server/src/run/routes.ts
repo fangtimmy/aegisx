@@ -22,7 +22,7 @@ import { RunActionError } from "./errors"
 import type { RunService } from "./service"
 import { streamRun } from "./sse"
 
-/** Manual enqueue body (spec §10: POST /api/challenges/:id/runs enqueues,
+/** Manual enqueue body (POST /api/challenges/:id/runs enqueues,
  * returns a queue item). Models come from the orchestration settings at
  * launch; the first-turn prompt may be overridden. */
 const runInput = Type.Object(
@@ -109,7 +109,7 @@ export function registerRunRoutes(
           .get()
         if (!challenge) return notFound(c, "Challenge not found")
 
-        // Enqueue (spec §10), then run one drain pass so a launchable task is
+        // Enqueue, then run one drain pass so a launchable task is
         // started synchronously; the item stays pending if the fence is full.
         const queue = runService.queue()
         const item = queue.enqueue({
@@ -208,7 +208,7 @@ export function registerRunRoutes(
     }
   )
 
-  // Per-agent actions (spec §10): message / model / stop address one agent
+  // Per-agent actions: message / model / stop address one agent
   // (messageing a closed run's agent cold-restores it, same as the run-level
   // path but targeting the named agent).
   app.post(

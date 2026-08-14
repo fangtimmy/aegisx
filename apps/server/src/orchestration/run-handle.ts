@@ -20,7 +20,7 @@ type AgentRow = typeof agents.$inferSelect
 
 /** Fields the handle asks the service to persist for a freshly declared agent.
  * The rendered system prompt, the tool list, and the model ref are all written
- * once here and reused verbatim on cold-restore (snapshot priority, spec §4.3). */
+ * once here and reused verbatim on cold-restore (snapshot priority). */
 export type FreshAgentInput = {
   slot: string
   role: string
@@ -37,8 +37,8 @@ export type FreshAgentInput = {
 /**
  * Service callbacks the handle delegates to. The handle is a thin plugin-
  * facing facade; the service owns the DB, the per-agent locks/lifecycle, the
- * container, and the emitter. All callbacks are keyed by agentId (per-agent,
- * spec §4.5a) — no run-level locking leaks through.
+ * container, and the emitter. All callbacks are keyed by agentId (per-agent)
+ * — no run-level locking leaks through.
  */
 export type RunHandleHost = {
   runId: string
@@ -72,13 +72,13 @@ export type RunHandleHost = {
 }
 
 /**
- * Per-run event emitter (spec §3.5). Plugin `on` callbacks fire here, wrapped
+ * Per-run event emitter. Plugin `on` callbacks fire here, wrapped
  * in try/catch so a throwing callback never escapes (log + swallow). Callbacks
  * are expected to be cheap and side-effect-free except for `send()`; the
  * service emits from the generation-gated settle critical section.
  *
- * send() inside a callback can be rejected by the fresh-turn capacity gate
- * (spec §8.2): the RunActionError propagates to THIS try/catch, is logged and
+ * send() inside a callback can be rejected by the fresh-turn capacity gate:
+ * the RunActionError propagates to THIS try/catch, is logged and
  * swallowed, and the callback's remaining work is skipped — a dropped observer
  * wake-up is an accepted degradation under capacity pressure (the observer can
  * be re-woken by its own next turn or a manual message).
@@ -152,7 +152,7 @@ export class RunEmitter {
 }
 
 /**
- * Per-event emitter for run lifecycle events (spec §3.5 EventHandle). One per
+ * Per-event emitter for run lifecycle events (EventHandle). One per
  * event, owned by the scheduler (event-scoped) run; child-run lifecycle events
  * (idle / flagAccepted / finished / timedOut) are dispatched here so the
  * scheduler's event.on() subscriptions fire. Same try/catch discipline as

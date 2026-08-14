@@ -226,7 +226,7 @@ export function createPlatformFlags(
         db.insert(challengeFlags).values(row).run()
       }
       // No remote judge here, but the acceptance is real — notify the run
-      // layer so the scheduler learns the flag (spec §3.5 run.flagAccepted).
+      // layer so the scheduler learns the flag (run.flagAccepted).
       options?.onRunFlagAccepted?.(runId)
       return { status: "accepted", verified: false }
     }

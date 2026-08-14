@@ -23,7 +23,7 @@ export function createApp(options: { dataDir: string }) {
   const { db, sqlite, releaseLock } = createDatabase(options.dataDir)
 
   // Register built-in orchestration plugins + seed prompt template defaults
-  // (idempotent) before any RunHandle is built (spec §3.6).
+  // (idempotent) before any RunHandle is built.
   bootOrchestration(db)
   const storage = createStorage(options.dataDir)
   const getSettings = () => configStore.getSettings()
@@ -47,7 +47,7 @@ export function createApp(options: { dataDir: string }) {
   })
 
   // Flag writes are a side path (platform → DB); refresh the run view after
-  // and notify the event's scheduler (run.flagAccepted, spec §3.5).
+  // and notify the event's scheduler (run.flagAccepted).
   platformService.setRunHooks({
     onRunFlagAccepted: (runId) => {
       runService.refresh(runId)

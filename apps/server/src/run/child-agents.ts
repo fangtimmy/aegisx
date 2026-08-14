@@ -37,7 +37,7 @@ export type ChildAgentDeps = {
   emitAgents(runId: string): void
   /** Hand a finished child's result text to its parent (steer or new turn). */
   deliverToParent(runId: string, parentAgentId: string, text: string): void
-  /** Child turn boundary hooks (status aggregation — spec §4.5e). */
+  /** Child turn boundary hooks (status aggregation). */
   onChildTurnStart(agentId: string, runId: string): void
   onChildTurnSettled(agentId: string, runId: string, error: string | null): void
 }
@@ -48,7 +48,7 @@ const now = () => new Date().toISOString()
 
 /**
  * Render a spawn child's system prompt: the plugin's spawn template with the
- * child context (role/name/task) and capabilities ZEROED (spec §3.7) — a child
+ * child context (role/name/task) and capabilities ZEROED — a child
  * can never finish, submit flags, manage targets, or spawn, so its prompt must
  * not advertise abilities its tool set lacks.
  */
@@ -171,7 +171,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     const childName = input.name.trim() || "Child agent"
     const ts = now()
     // Spawn children render the plugin's spawn template with capabilities
-    // ZEROED (spec §3.7): a child can never finish/submit/manage targets/spawn,
+    // ZEROED: a child can never finish/submit/manage targets/spawn,
     // and its prompt must not advertise abilities its tool set lacks.
     const childSystemPrompt = renderChildSystemPrompt(
       ctx.childTemplate,

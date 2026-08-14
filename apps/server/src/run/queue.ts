@@ -114,7 +114,8 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /**
-   * Upsert a queue item by `(challengeId, orchestration)` (spec §8.1). A hit —
+   * Upsert a queue item by `(challengeId, orchestration)` — one pending item
+   * per pair. A hit —
    * including done/cancelled/failed — is reset to pending, runId cleared, and
    * ord/params/prompt/timeoutMs updated; a miss inserts a new row at the end.
    */
@@ -192,7 +193,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       .map((row) => toPublic(db, row))
   }
 
-  /** Remove an item. Running items cannot be deleted (spec §8.1). */
+  /** Remove an item. Running items cannot be deleted. */
   function remove(itemId: string): void {
     const row = getRow(itemId)
     if (!row) throw new RunActionError("not_found", "Queue item not found")
@@ -214,7 +215,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       .run()
   }
 
-  /** Update a pending item's prompt / timeout / params (spec §10 PATCH). Only
+  /** Update a pending item's prompt / timeout / params. Only
    * pending items are editable; running/done/failed reject. */
   function update(
     itemId: string,
@@ -292,8 +293,8 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /**
-   * Transition a run's queue item to done, guarded by `(id, runId, running)`
-   * (spec §8.1). Called from run teardown; a no-op for runs not launched from
+   * Transition a run's queue item to done, guarded by `(id, runId, running)`.
+   * Called from run teardown; a no-op for runs not launched from
    * the queue (no queueItemId) or already-transitioned items.
    */
   function markDone(
@@ -327,7 +328,7 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /** Debounced drain: collapses a burst of triggers (enqueue / run release /
-   * boot) into one pass (spec §8.2). */
+   * boot) into one pass. */
   function scheduleDrain(): void {
     if (drainTimer) return
     drainTimer = setTimeout(() => {
@@ -337,7 +338,7 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /**
-   * One drain pass over pending items in FIFO order (spec §8.2). For each item:
+   * One drain pass over pending items in FIFO order. For each item:
    *  - fence ok → launch; on success mark running; on a (racy) capacity reject
    *    leave it pending; on other errors mark failed + notify the scheduler.
    *  - global_capacity → stop the pass (no later item can launch either).

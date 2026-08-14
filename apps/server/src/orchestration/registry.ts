@@ -23,7 +23,7 @@ import type {
  * Orchestration plugin registry. Plugins register an id + scope + declared
  * agent slots; the run service resolves a run's plugin by `runs.orchestration`
  * and materializes its agents (model injected from the orchestration settings)
- * for both create and cold-restore (spec §4.2).
+ * for both create and cold-restore.
  *
  * The registry is process-global (one set of plugins per server). Registration
  * is idempotent; app boot calls {@link registerOrchestrationPlugins} once.
@@ -49,7 +49,7 @@ export function listPlugins(): OrchestrationPlugin[] {
 }
 
 /** Compact catalog of challenge-scope orchestrations for the scheduler's prompt
- * (spec §3.7 `orchestrations`). Filters out the event-scope scheduler itself
+ * (`orchestrations`). Filters out the event-scope scheduler itself
  * and collapses to {id,label,description} so the scheduler never has to guess a
  * plugin name. */
 export function challengeOrchestrationCatalog(): OrchestrationInfo[] {

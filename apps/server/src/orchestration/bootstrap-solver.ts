@@ -3,7 +3,7 @@ import { DEFAULT_BOOTSTRAP_SYSTEM_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration, type RunHandle } from "./types"
 
 /**
- * bootstrap-solver — serial recon then solve (spec §7.3). The bootstrap agent
+ * bootstrap-solver — serial recon then solve. The bootstrap agent
  * (prime, no finish_run → canFinish derives false) runs one full recon turn,
  * staging everything in the workspace; on its turn end the solver is driven to
  * finish the job (entry, the run-level default conversation target).

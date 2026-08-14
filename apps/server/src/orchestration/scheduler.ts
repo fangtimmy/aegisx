@@ -1,7 +1,7 @@
 import { DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE } from "./prompt-defaults"
 import { defineOrchestration, type EventHandle, type RunHandle } from "./types"
 
-/** Scheduler wiring (spec §7.5): wake the orchestrator on child-run lifecycle
+/** Scheduler wiring: wake the orchestrator on child-run lifecycle
  * events. Each wake-up sends the orchestrator a fresh turn to read + decide.
  * `run.finished` covers finish_run/force-finish completions — without it a run
  * that closes without ever settling idle (solver finishes in its first turn)
@@ -25,7 +25,7 @@ function wire(run: RunHandle, event: EventHandle): void {
 }
 
 /**
- * scheduler — the event-scoped orchestrator run (spec §7.5). One 'orchestrator'
+ * scheduler — the event-scoped orchestrator run. One 'orchestrator'
  * agent holds the event's strategy; it manages the task queue + sibling
  * challenge runs via the scheduler tools, and is woken on child-run lifecycle
  * events (started / idle / flagAccepted / finished / timedOut / resumed) to

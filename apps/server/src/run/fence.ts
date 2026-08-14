@@ -54,7 +54,7 @@ export function fenceSnapshot(
   }
 }
 
-/** Count challenge-scope runs currently `running` (spec §8.2: only running
+/** Count challenge-scope runs currently `running` (only running
  * counts — idle keeps a warm container but consumes no compute slot; scheduler
  * runs never count). */
 function runningChallengeRunCount(db: Database): number {
@@ -67,7 +67,7 @@ function runningChallengeRunCount(db: Database): number {
 }
 
 /** Distinct target-capable AND unsolved challenges with a running run in this
- * event (spec §8.2: "different target-capable challenges under attack"). Solved
+ * event ("different target-capable challenges under attack"). Solved
  * challenges free their slot; the same challenge attacked by several runs
  * shares one slot (DISTINCT). */
 function activeTargetSlots(db: Database, eventId: string): Set<string> {
@@ -138,8 +138,8 @@ function occupiesTargetSlot(db: Database, challengeId: string): boolean {
 }
 
 /**
- * Decide whether a candidate run may launch under the concurrency fence
- * (spec §8.2). Two independent caps:
+ * Decide whether a candidate run may launch under the concurrency fence.
+ * Two independent caps:
  *
  *  1. Global: challenge-scope running runs ≤ `scheduler.maxConcurrentRuns`.
  *  2. Per-event: distinct target-capable unsolved challenges under attack ≤

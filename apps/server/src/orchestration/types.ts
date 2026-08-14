@@ -16,8 +16,8 @@ import type { ModelRef } from "@aegisx/shared/model"
 
 // --- per-agent capabilities (derived from the agent's tool list) -----------
 
-/** Per-agent capability flags. Derived from the agent's `tools` array
- * (spec §3.7), NOT from the run/challenge — so each agent's rendered system
+/** Per-agent capability flags. Derived from the agent's `tools` array,
+ * NOT from the run/challenge — so each agent's rendered system
  * prompt advertises exactly the abilities its tool set grants. */
 export type Capabilities = {
   canFinish: boolean
@@ -26,7 +26,7 @@ export type Capabilities = {
   canSpawn: boolean
 }
 
-/** Derive per-agent capabilities from a tool-name list (spec §3.7):
+/** Derive per-agent capabilities from a tool-name list:
  *  - canFinish       = has `finish_run`
  *  - canSubmitFlag   = has `submit_flag`
  *  - canManageTarget = has any `*_target`
@@ -42,7 +42,7 @@ export function deriveCapabilities(tools: string[]): Capabilities {
   }
 }
 
-// --- unified, scope-aware prompt render context (spec §3.7) ---------------
+// --- unified, scope-aware prompt render context --------------------------
 
 /**
  * Unified render context. Scope-aware: `challenge` is present only for
@@ -114,7 +114,7 @@ export type AgentSlotSpec = {
   /** Entry agent (run-level default conversation target); at most one per run. */
   entry?: boolean
   /** Prompt template KEY (e.g. "mainSystem"). Rendered with this agent's
-   * per-agent capabilities (spec §3.7). Resolution order at render:
+   * per-agent capabilities. Resolution order at render:
    * current-plugin templates → builtin → throw. */
   systemPrompt: string
   /** Real tool names granted to this agent (file tools always on, not listed).
@@ -140,7 +140,7 @@ export type SlotModel = {
   modelId: string
 }
 
-// --- agent handles (spec §3.2/§3.3) ----------------------------------------
+// --- agent handles ---------------------------------------------------------
 
 export type AgentEvent =
   | "turnEnded"
@@ -213,7 +213,7 @@ export interface RunHandle<P = any> {
 
 export interface EventHandle {
   /** Subscribe to a run lifecycle event; the callback's payload is narrowed to
-   * the event's own shape (spec §3.4). */
+   * the event's own shape. */
   on<E extends EventScopeEvent>(
     event: E,
     cb: (e: Extract<EventScopePayload, { type: E }>) => void | Promise<void>
