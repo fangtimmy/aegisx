@@ -21,9 +21,19 @@ import { platformActionHttpError } from "../platforms/errors"
 import type { createPlatformService } from "../platforms/service"
 import type { createCatalogReader } from "./catalog"
 
-const eventInput = Type.Object(
+const createEventInput = Type.Object(
   {
     name: Type.String({ minLength: 1, maxLength: 160 }),
+    promptHint: Type.Optional(Type.String({ maxLength: 10_000 })),
+  },
+  { additionalProperties: false }
+)
+
+/** PATCH is a partial update — name/promptHint are individually optional, so
+ * the frontend can save the prompt hint without resubmitting the name. */
+const updateEventInput = Type.Object(
+  {
+    name: Type.Optional(Type.String({ minLength: 1, maxLength: 160 })),
     promptHint: Type.Optional(Type.String({ maxLength: 10_000 })),
   },
   { additionalProperties: false }
@@ -90,7 +100,7 @@ export function registerEventRoutes(
 
   app.get("/api/events", (c) => c.json({ items: listEvents() }))
 
-  app.post("/api/events", validateJson(eventInput), (c) => {
+  app.post("/api/events", validateJson(createEventInput), (c) => {
     const input = c.req.valid("json")
     const now = new Date().toISOString()
     const event = {
@@ -141,19 +151,21 @@ export function registerEventRoutes(
     return c.json({ usage: runManager.usageForEvent(eventId) })
   })
 
-  app.patch("/api/events/:eventId", validateJson(eventInput), (c) => {
+  app.patch("/api/events/:eventId", validateJson(updateEventInput), (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
       return notFound(c, "Event not found")
     }
     const input = c.req.valid("json")
-    const name = input.name.trim()
-    if (!name) {
-      return badRequest(c, "invalid_name", "Event name is required")
-    }
-    const updates: { name: string; promptHint?: string; updatedAt: string } = {
-      name,
+    const updates: { name?: string; promptHint?: string; updatedAt: string } = {
       updatedAt: new Date().toISOString(),
+    }
+    if (input.name !== undefined) {
+      const name = input.name.trim()
+      if (!name) {
+        return badRequest(c, "invalid_name", "Event name is required")
+      }
+      updates.name = name
     }
     if (input.promptHint !== undefined) {
       updates.promptHint = input.promptHint.trim()
