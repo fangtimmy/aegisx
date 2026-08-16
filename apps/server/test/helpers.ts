@@ -152,7 +152,6 @@ export function toConnection(provider: ProviderData): ProviderConnection {
 export function stubConfigStore(providers: ProviderData[]): ConfigStore {
   return {
     getProviders: () => providers,
-    getAliases: () => [],
     getLegacyPromptTemplates: () => undefined,
   } as unknown as ConfigStore
 }

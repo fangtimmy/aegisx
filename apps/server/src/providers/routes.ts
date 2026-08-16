@@ -160,6 +160,13 @@ export function registerProviderRoutes(
   app.post("/api/providers", validateJson(providerInput), (c) => {
     const input = c.req.valid("json")
     try {
+      if (input.apiKey.startsWith("$")) {
+        return badRequest(
+          c,
+          "invalid_provider",
+          "apiKey must be a literal key (no $ENV references)"
+        )
+      }
       const provider: ProviderData = {
         id: crypto.randomUUID(),
         label: input.label.trim(),
@@ -195,7 +202,16 @@ export function registerProviderRoutes(
         if (input.type !== undefined) existing.type = input.type
         if (input.baseUrl !== undefined)
           existing.baseUrl = normalizeHttpBaseUrl(input.baseUrl)
-        if (input.apiKey !== undefined) existing.apiKey = input.apiKey
+        if (input.apiKey !== undefined) {
+          if (input.apiKey.startsWith("$")) {
+            return badRequest(
+              c,
+              "invalid_provider",
+              "apiKey must be a literal key (no $ENV references)"
+            )
+          }
+          existing.apiKey = input.apiKey
+        }
         if (input.enabled !== undefined) existing.enabled = input.enabled
         if (!existing.label) {
           return badRequest(c, "invalid_provider", "Provider name is required")
@@ -229,12 +245,6 @@ export function registerProviderRoutes(
     ) {
       configStore.updateSettings({ "agent.defaultModelId": null })
     }
-    // Drop any alias refs to this provider's models; dangling model ids are
-    // tolerated at resolve time, but writing keeps the store clean.
-    pruneAliasModelIds(
-      configStore,
-      provider.models.map((m) => m.id)
-    )
     providers.splice(idx, 1)
     configStore.updateProviders(providers)
     syncModels()
@@ -403,7 +413,6 @@ export function registerProviderRoutes(
         configStore.updateSettings({ "agent.defaultModelId": null })
       }
     }
-    pruneAliasModelIds(configStore, [model.id])
     provider.models = provider.models.filter((m) => m.id !== model.id)
     configStore.updateProviders(providers)
     syncModels()
@@ -481,25 +490,4 @@ function findProviderModel(
     if (model) return { provider, model }
   }
   return { provider: undefined, model: undefined }
-}
-
-/** Remove the given model ids from every alias's ordered model list, dropping
- * aliases that end up empty. Keeps the alias store clean when a model is
- * deleted (resolve-time tolerates dangling refs, but write-time prunes). */
-function pruneAliasModelIds(
-  configStore: ConfigStore,
-  modelIds: string[]
-): void {
-  const remove = new Set(modelIds)
-  const current = configStore.getAliases()
-  const next = current
-    .map((a) => ({
-      ...a,
-      modelIds: a.modelIds.filter((id) => !remove.has(id)),
-    }))
-    .filter((a) => a.modelIds.length > 0)
-  const changed =
-    next.length !== current.length ||
-    next.some((a, i) => a.modelIds.length !== current[i].modelIds.length)
-  if (changed) configStore.updateAliases(next)
 }

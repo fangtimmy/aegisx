@@ -1,7 +1,6 @@
 import { get } from "@aegisx/shared"
 import { Hono } from "hono"
 
-import { registerAliasRoutes } from ".//aliases/routes"
 import { createCatalogReader } from ".//events/catalog"
 import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
@@ -76,11 +75,13 @@ export function createApp(options: { dataDir: string }) {
     c.json({ name: "AegisX", status: "ok", version: SCHEMA_VERSION })
   )
 
-  // syncModels is a v2 artifact (pi-ai registry); kept as a no-op so the
-  // provider/settings routes persist config without a live model registry.
+  // syncModels is a v2 artifact (pi-ai registry). Kept as a no-op: model
+  // runtime sync is lazy — a live run's ModelRuntime is refreshed on demand
+  // when a model switch targets a provider/model added after the run started
+  // (service.refreshRunModelRuntime). Provider/settings writes only persist
+  // config here.
   const noopSync = () => {}
   registerProviderRoutes(app, { configStore, syncModels: noopSync })
-  registerAliasRoutes(app, { configStore })
   registerSettingsRoutes(app, {
     db,
     configStore,

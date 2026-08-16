@@ -192,7 +192,9 @@ function CreateRunDialogContent({
                   : {}),
               })),
             }
-          : { ...(model ? { model } : {}) }),
+          : model
+            ? { model }
+            : {}),
       }),
     onSuccess: (item) => {
       toast.success("任务已加入队列")

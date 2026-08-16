@@ -1,17 +1,10 @@
-import {
-  aliasRef,
-  isAliasRef,
-  parseModelRef,
-  resolveAliasToModel,
-  type ModelAlias,
-  type ModelRef,
-} from "@aegisx/shared"
+import { parseModelRef, type ModelRef } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import { useQuery } from "@tanstack/react-query"
 import { useMemo } from "react"
 
-import { aliasesApi, keys, providersApi } from "@/api"
+import { keys, providersApi } from "@/api"
 import {
   Select,
   SelectGroup,
@@ -36,7 +29,7 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
 const THINKING_LEVELS = Object.keys(thinkingLevelLabels) as ThinkingLevel[]
 
 type AvailableModel = {
-  /** ProviderModel.id (UUID) — alias model ids reference this. */
+  /** ProviderModel.id (UUID). */
   id: string
   /** Underlying pi model id (matches the ref's modelId segment). */
   modelId: string
@@ -48,34 +41,6 @@ type AvailableModel = {
 }
 
 export type { AvailableModel }
-
-/** Configured model aliases (GET /api/model-aliases). Shared by every model
- * selector that surfaces an "别名" group. */
-function useModelAliases(): ModelAlias[] {
-  const aliases = useQuery({
-    queryKey: keys.aliases.all,
-    queryFn: () => aliasesApi.listAliases(),
-  })
-  return aliases.data?.items ?? []
-}
-
-/** Aliases that currently resolve to an enabled available model, paired with
- * their resolved model. Aliases resolving to nothing are hidden. */
-function useResolvedAliases(models: AvailableModel[]) {
-  const aliases = useModelAliases()
-  return useMemo(() => {
-    const byId = new Map(models.map((m) => [m.id, m]))
-    return aliases
-      .map((alias) => {
-        const target = resolveAliasToModel(alias, (id) => byId.get(id))
-        return target ? { alias, target } : null
-      })
-      .filter(
-        (entry): entry is { alias: ModelAlias; target: AvailableModel } =>
-          entry !== null
-      )
-  }, [aliases, models])
-}
 
 /** Enabled provider models flattened to {@link AvailableModel} (with the pi
  * address needed to build canonical refs), grouped-ready. Shared by every
@@ -134,15 +99,18 @@ function groupByProvider(models: AvailableModel[]) {
 /**
  * The one model selector for every "pick a model + reasoning effort" surface.
  * Consumes and produces the canonical ref string
- * (`<providerKey>/<modelId>:<effort>` or `alias:<id>`).
+ * (`<providerKey>/<modelId>:<effort>`).
  *
- * Prefers a single model-list dropdown (aliases + providers, grouped). The
- * effort dropdown only appears when the selection is a concrete model that
- * supports more than one thinking level — a single-level model carries its
- * only level implicitly, and an alias carries its own. When `allowEmpty` the
- * leading option clears the ref (null → fall back to the global default in
- * slot config / no default in the settings page); runtime switching (live
- * agent) passes `allowEmpty={false}`.
+ * Lazy semantics: an agent keeps its model snapshot until explicitly switched.
+ * When the current ref points at a provider/model that was since disabled or
+ * deleted (so it is missing from the available list), the picker still shows it
+ * as a "当前使用" entry — the list is the current model + the up-to-date
+ * available models. The effort dropdown only appears when the selection is a
+ * concrete model that supports more than one thinking level — a single-level
+ * model carries its only level implicitly. When `allowEmpty` the leading option
+ * clears the ref (null → fall back to the global default in slot config / no
+ * default in the settings page); runtime switching (live agent) passes
+ * `allowEmpty={false}`.
  *
  * Controlled: derives its values from `value`, reports via `onChange`.
  */
@@ -168,53 +136,34 @@ export function ModelRefPicker({
   emptyLabel?: string
 }) {
   const models = useAvailableModels()
-  const resolvedAliases = useResolvedAliases(models)
   const grouped = useMemo(() => groupByProvider(models), [models])
 
-  // Parse the current ref into a select value (alias ref, concrete address, or
-  // empty = default) + an effort level.
+  // Parse the current ref into a select value (concrete address, or "" =
+  // default) + an effort level.
   const parsed = useMemo(() => parseModelRef(value), [value])
   const selectedAddress =
     parsed?.kind === "model" ? `${parsed.providerKey}/${parsed.modelId}` : null
-  const selectedAliasId = parsed?.kind === "alias" ? parsed.aliasId : null
-  const effort =
-    parsed?.kind === "model"
-      ? parsed.effort
-      : parsed?.kind === "alias"
-        ? (resolvedAliases.find((r) => r.alias.id === parsed.aliasId)?.alias
-            .thinkingLevel ?? "off")
-        : "off"
+  const effort = parsed?.kind === "model" ? parsed.effort : "off"
+  const modelValue = selectedAddress ?? ""
 
-  // The model select's value: an alias ref, a concrete address, or "" (default).
-  const modelValue = selectedAliasId
-    ? aliasRef(selectedAliasId)
-    : (selectedAddress ?? "")
-
-  // The selected concrete model (for its supported thinking levels). Aliases
-  // resolve to their first available model; the effort comes from the alias.
-  const selectedModel = useMemo(() => {
-    if (selectedAliasId) {
-      return (
-        resolvedAliases.find((r) => r.alias.id === selectedAliasId)?.target ??
-        null
-      )
-    }
-    return models.find((m) => m.address === selectedAddress) ?? null
-  }, [selectedAliasId, selectedAddress, models, resolvedAliases])
+  // The currently-selected model may be absent from the available list (its
+  // provider/model was disabled or deleted while the agent kept its snapshot).
+  // Keep it visible so the picker reflects what the agent actually runs.
+  const dangling =
+    !!selectedAddress && !models.some((m) => m.address === selectedAddress)
+  const selectedModel = useMemo(
+    () => models.find((m) => m.address === selectedAddress) ?? null,
+    [selectedAddress, models]
+  )
   const supportedThinking = selectedModel?.thinkingLevels ?? THINKING_LEVELS
 
   // The effort dropdown only shows when the selection is a concrete model with
   // more than one thinking level to choose from.
-  const showEffort =
-    !selectedAliasId && !!selectedAddress && supportedThinking.length > 1
+  const showEffort = !!selectedAddress && supportedThinking.length > 1
 
   const applyModel = (key: string | null) => {
     if (!key) {
       onChange(null)
-      return
-    }
-    if (isAliasRef(key)) {
-      onChange(key)
       return
     }
     // key is a concrete address → keep the current effort if supported.
@@ -230,15 +179,19 @@ export function ModelRefPicker({
   const sm = size === "sm"
   const triggerClass = sm ? "h-8 min-w-[12rem] text-xs" : "h-9 min-w-[14rem]"
 
+  const items: Record<string, string> = {}
+  if (allowEmpty) items[""] = emptyLabel
+  if (dangling && selectedAddress) {
+    items[selectedAddress] =
+      `${parsed?.kind === "model" ? parsed.modelId : selectedAddress}（当前）`
+  }
+  for (const m of models) items[m.address] = m.label
+
   return (
     <span className={cn("flex items-center gap-1.5", className)}>
       <Select
         disabled={disabled}
-        items={Object.fromEntries([
-          ...(allowEmpty ? [["", emptyLabel]] : []),
-          ...resolvedAliases.map((r) => [aliasRef(r.alias.id), r.alias.label]),
-          ...models.map((m) => [m.address, m.label]),
-        ])}
+        items={items}
         onValueChange={applyModel}
         value={modelValue}
       >
@@ -247,19 +200,13 @@ export function ModelRefPicker({
         </SelectTrigger>
         <SelectPopup>
           {allowEmpty && <SelectItem value="">{emptyLabel}</SelectItem>}
-          {resolvedAliases.length > 0 && (
-            <SelectGroup key="aliases">
-              <SelectGroupLabel>别名</SelectGroupLabel>
-              {resolvedAliases.map(({ alias, target }) => (
-                <SelectItem key={aliasRef(alias.id)} value={aliasRef(alias.id)}>
-                  <span className="flex items-center gap-1.5">
-                    <span className="font-medium">{alias.label}</span>
-                    <span className="text-muted-foreground">
-                      → {target.label}
-                    </span>
-                  </span>
-                </SelectItem>
-              ))}
+          {dangling && selectedAddress && (
+            <SelectGroup key="current">
+              <SelectGroupLabel>当前使用</SelectGroupLabel>
+              <SelectItem value={selectedAddress}>
+                {parsed?.kind === "model" ? parsed.modelId : selectedAddress}
+                （不可用）
+              </SelectItem>
             </SelectGroup>
           )}
           {grouped.map(([providerLabel, list]) => (

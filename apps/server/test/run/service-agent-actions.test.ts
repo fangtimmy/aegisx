@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents } from "../../src/db/schema"
+import { agents, runs } from "../../src/db/schema"
 import type { CreateRunInput } from "../../src/run/service"
 import { createRunService } from "../../src/run/service"
 import {
@@ -263,6 +263,124 @@ describe("per-agent actions (spec §10)", () => {
       })
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.model).toBe("aegisx-prov-2/new-model:off")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("switching the ENTRY agent syncs runs.model; non-entry switches leave it", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = twoModelProvider()
+      const { service } = makeService(db, sqlite, dir, [provider])
+
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [entry] = service.listAgents(run.id)
+      expect(
+        db.select().from(runs).where(eq(runs.id, run.id)).get()!.model
+      ).toBe(MODEL_1_REF)
+
+      // Entry switch syncs runs.model (RunPublic display + addAgent default).
+      await service.switchAgentModel(entry.id, { model: MODEL_2_REF })
+      const runRow = db.select().from(runs).where(eq(runs.id, run.id)).get()!
+      expect(runRow.model).toBe(MODEL_2_REF)
+      const pub = service.get(run.id)!
+      expect(pub.modelId).toBe("gpt-4o")
+
+      // A per-agent switch on a non-entry agent leaves runs.model untouched.
+      await service.addAgent(run.id, { model: MODEL_1_REF, prompt: "extra" })
+      const extra = service.listAgents(run.id).find((a) => !a.isEntry)!
+      await service.switchAgentModel(extra.id, { model: MODEL_1_REF })
+      expect(
+        db.select().from(runs).where(eq(runs.id, run.id)).get()!.model
+      ).toBe(MODEL_2_REF)
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("switchAgentModel persists the SDK-clamped thinking level", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = twoModelProvider()
+      const { manager } = stubContainerManager()
+      const service = createRunService({
+        db,
+        sqlite,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: {
+          submitFlag: async () => undefined,
+          targetAction: async () => ({
+            status: "running",
+            endpoints: [],
+            expiresAt: null,
+          }),
+        } as never,
+        configStore: stubConfigStore([provider]),
+        getSettings: flatSettingsWithDefaultModel,
+        createHost: mock(
+          async (input: { agentId: string; modelRuntime: unknown }) => {
+            const stub = stubHostAgentSession(
+              "sess-" + input.agentId.slice(0, 6),
+              { hang: true }
+            )
+            const sdk = stub.session as unknown as {
+              modelRuntime: unknown
+              thinkingLevel: string
+              setThinkingLevel: (level: string) => void
+              abort: () => Promise<void>
+            }
+            sdk.modelRuntime = input.modelRuntime
+            sdk.thinkingLevel = "off"
+            // Simulate the SDK clamping: the target model only supports
+            // thinking up to medium.
+            sdk.setThinkingLevel = (level: string) => {
+              sdk.thinkingLevel = level === "high" ? "medium" : level
+            }
+            sdk.abort = async () => {}
+            return stub
+          }
+        ),
+      })
+
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+      await service.switchAgentModel(agent.id, { model: MODEL_2_REF })
+      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+      expect(row.model).toBe("openai/gpt-4o:medium")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("switchAgentModel surfaces diagnosable resolution errors", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = twoModelProvider()
+      const { service } = makeService(db, sqlite, dir, [provider])
+
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+      await expect(
+        service.switchAgentModel(agent.id, { model: "garbage" })
+      ).rejects.toThrow("Invalid model ref")
+      await expect(
+        service.switchAgentModel(agent.id, { model: "openai/no-such:off" })
+      ).rejects.toThrow("is unavailable")
+      // alias refs no longer exist — they parse as an invalid ref.
+      await expect(
+        service.switchAgentModel(agent.id, { model: "alias:nope" })
+      ).rejects.toThrow("Invalid model ref")
       await service.close()
     } finally {
       close()

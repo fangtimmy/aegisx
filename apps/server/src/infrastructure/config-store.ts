@@ -13,9 +13,7 @@ import {
   extractLegacyPromptTemplates,
   type FlatSettings,
   migrateLegacySettings,
-  type ModelAlias,
   type ProviderType,
-  parseAliases,
   parseSettings,
   patchSettings,
 } from "@aegisx/shared"
@@ -25,9 +23,6 @@ import { Value } from "typebox/value"
 import { ProviderTypeSchema } from "../lib/schemas"
 
 export type { FlatSettings }
-
-/** Stored model alias shape (see @aegisx/shared/alias). */
-export type AliasData = ModelAlias
 
 export type ProviderModelData = {
   id: string
@@ -53,7 +48,6 @@ export type ConfigData = {
   version: typeof CONFIG_DOCUMENT_VERSION
   settings: FlatSettings
   providers: ProviderData[]
-  aliases: AliasData[]
   updatedAt: string
 }
 
@@ -115,7 +109,6 @@ function defaultConfig(): ConfigData {
     version: CONFIG_DOCUMENT_VERSION,
     settings,
     providers: defaultProviders(),
-    aliases: [],
     updatedAt: now(),
   }
 }
@@ -185,7 +178,6 @@ export function createConfigStore(dataDir: string) {
           version: data.version,
           settings: data.settings,
           providers: data.providers,
-          aliases: data.aliases,
           updatedAt: data.updatedAt,
         },
         null,
@@ -219,7 +211,6 @@ export function createConfigStore(dataDir: string) {
           version: CONFIG_DOCUMENT_VERSION,
           settings: parseSettings(doc.settings),
           providers: normalizeProviders(doc.providers),
-          aliases: parseAliases(doc.aliases),
           updatedAt:
             typeof doc.updatedAt === "string" && doc.updatedAt
               ? doc.updatedAt
@@ -233,7 +224,6 @@ export function createConfigStore(dataDir: string) {
           version: CONFIG_DOCUMENT_VERSION,
           settings: migrateLegacySettings(doc.settings),
           providers: normalizeProviders(doc.providers),
-          aliases: parseAliases(doc.aliases),
           updatedAt: now(),
         }
         save(migrated)
@@ -279,9 +269,6 @@ export function createConfigStore(dataDir: string) {
     getProviders(): ProviderData[] {
       return data.providers
     },
-    getAliases(): AliasData[] {
-      return data.aliases
-    },
     updateSettings(patch: Partial<FlatSettings> | unknown): FlatSettings {
       data = {
         ...data,
@@ -295,20 +282,11 @@ export function createConfigStore(dataDir: string) {
       data = { ...data, providers, updatedAt: now() }
       save(data)
     },
-    updateAliases(aliases: AliasData[]): void {
-      data = { ...data, aliases, updatedAt: now() }
-      save(data)
-    },
-    replaceAll(
-      settings: FlatSettings,
-      providers: ProviderData[],
-      aliases: AliasData[] = data.aliases
-    ): void {
+    replaceAll(settings: FlatSettings, providers: ProviderData[]): void {
       data = {
         version: CONFIG_DOCUMENT_VERSION,
         settings: parseSettings(settings),
         providers,
-        aliases,
         updatedAt: now(),
       }
       save(data)
@@ -318,7 +296,6 @@ export function createConfigStore(dataDir: string) {
         version: CONFIG_DOCUMENT_VERSION,
         settings: data.settings,
         providers: data.providers,
-        aliases: data.aliases,
       }
     },
     get path() {

@@ -1,5 +1,5 @@
 import { modelAddress, parseModelRef } from "@aegisx/shared"
-import type { ModelAlias, ModelRef } from "@aegisx/shared"
+import type { ModelRef } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { ThinkingLevel } from "@aegisx/shared/live-event"
 
@@ -33,19 +33,15 @@ function refAddress(ref: ModelRef | null | undefined): string {
 export async function applyModelSwitch(
   host: HostAgentSession,
   providers: ProviderConnection[],
-  aliases: ModelAlias[],
   ref: ModelRef,
   currentRef: ModelRef | null
 ): Promise<{ target: SwitchTarget; thinkingLevel: ThinkingLevel }> {
-  const target = resolveSwitchTarget(
-    host.session.modelRuntime,
-    providers,
-    aliases,
-    ref
-  )
+  const target = resolveSwitchTarget(host.session.modelRuntime, providers, ref)
   if (refAddress(currentRef) !== modelAddress(target.provider, target.model)) {
     await host.session.setModel(target.sdkModel)
   }
   host.session.setThinkingLevel(target.thinkingLevel)
-  return { target, thinkingLevel: target.thinkingLevel }
+  // The SDK clamps to the model's supported thinking levels; persist the
+  // ACTUAL level so the agent snapshot matches runtime reality.
+  return { target, thinkingLevel: host.session.thinkingLevel }
 }

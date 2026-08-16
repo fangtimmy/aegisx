@@ -4,7 +4,6 @@ import {
   parseModelRef,
   resolveModelRef,
   type FlatSettings,
-  type ModelAlias,
   type ModelRef,
 } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
@@ -27,11 +26,10 @@ export type SlotModel = {
 }
 
 /** Everything the model resolver reads from the service: the flat settings
- * (default model), the enabled provider connections and the alias table. */
+ * (default model) and the enabled provider connections. */
 export type ModelResolverDeps = {
   getSettings(): FlatSettings
   providers(): ProviderConnection[]
-  getAliases(): ModelAlias[]
 }
 
 export type ModelResolver = ReturnType<typeof createModelResolver>
@@ -50,7 +48,7 @@ export function createModelResolver(deps: ModelResolverDeps) {
   /** Resolve a model ref to a concrete enabled provider+model+effort, or null
    * when it is empty / malformed / every referenced model is unavailable. */
   function resolveModelTarget(ref: ModelRef | null | undefined) {
-    return resolveModelRef(ref, deps.providers(), deps.getAliases())
+    return resolveModelRef(ref, deps.providers())
   }
 
   /** Resolve a model ref to a CONCRETE {@link SlotModel} snapshot (aliases

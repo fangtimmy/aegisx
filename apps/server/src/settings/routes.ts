@@ -1,8 +1,6 @@
 import {
   get,
-  isAliasRef,
   isConfigDocumentV1,
-  parseAliases,
   parseSettings,
   patchSettings,
   resolveModelRef,
@@ -196,7 +194,6 @@ export function registerSettingsRoutes(
         version: 1,
         settings: configStore.getSettings(),
         providers: transferProviders(),
-        aliases: configStore.getAliases(),
       },
       null,
       2
@@ -234,12 +231,11 @@ export function registerSettingsRoutes(
             "Default model id is invalid"
           )
         }
-        // The default model is a canonical ref string (`<key>/<id>:<effort>`
-        // or `alias:<id>`); it must resolve to an enabled provider+model.
+        // The default model is a canonical ref string (`<key>/<id>:<effort>`);
+        // it must resolve to an enabled provider+model.
         const target = resolveModelRef(
           modelId,
-          getProviderConnections(configStore),
-          configStore.getAliases()
+          getProviderConnections(configStore)
         )
         if (!target) {
           return notFound(c, "Default model not found")
@@ -388,42 +384,15 @@ export function registerSettingsRoutes(
           models,
         })
       }
-      const defaultModelId = get(settings, "agent.defaultModelId")
-      // Aliases travel with the document; validate their model refs against the
-      // imported model ids before persisting.
-      const importedAliases = parseAliases(
-        (body as Record<string, unknown>).aliases
-      )
-      const aliasIds = new Set(importedAliases.map((a) => a.id))
-      for (const alias of importedAliases) {
-        if (!alias.label.trim()) {
-          throw new Error("Alias name is required")
-        }
-        for (const id of alias.modelIds) {
-          if (!modelIds.has(id)) {
-            throw new Error("Alias references an unknown model")
-          }
-        }
-      }
-      if (defaultModelId !== null) {
-        if (isAliasRef(defaultModelId)) {
-          if (!aliasIds.has(defaultModelId.slice("alias:".length))) {
-            throw new Error(
-              "Default model alias not found in imported configuration"
-            )
-          }
-        }
-        // Concrete default-model refs (`<key>/<id>:<effort>`) are validated at
-        // use time against the imported providers; importing cannot cheaply
-        // rebuild the pi provider keys, so only alias refs are checked here.
-      }
-      configStore.replaceAll(settings, newProviders, importedAliases)
+      // Concrete default-model refs (`<key>/<id>:<effort>`) are validated at
+      // use time against the imported providers; importing cannot cheaply
+      // rebuild the pi provider keys.
+      configStore.replaceAll(settings, newProviders)
       syncModels()
       return c.json({
         version: 1,
         settings: configStore.getSettings(),
         providers: transferProviders(),
-        aliases: configStore.getAliases(),
       })
     } catch (error) {
       return badRequest(

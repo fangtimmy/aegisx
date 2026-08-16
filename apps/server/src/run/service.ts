@@ -7,7 +7,7 @@ import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 
-import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
+import { applyModelSwitch } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
 import type { AgentLoopSettings } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
@@ -102,7 +102,6 @@ export function createRunService(options: RunServiceOptions) {
   const modelResolver = createModelResolver({
     getSettings,
     providers,
-    getAliases: () => configStore.getAliases(),
   })
   const queries = createRunQueries({
     db,
@@ -419,17 +418,14 @@ export function createRunService(options: RunServiceOptions) {
         .from(agents)
         .where(eq(agents.id, agentId))
         .get()
-      let target: SwitchTarget
+      let result: Awaited<ReturnType<typeof applyModelSwitch>>
       try {
-        target = (
-          await applyModelSwitch(
-            session,
-            providers(),
-            configStore.getAliases(),
-            input.model,
-            agentRow?.model ?? null
-          )
-        ).target
+        result = await applyModelSwitch(
+          session,
+          providers(),
+          input.model,
+          agentRow?.model ?? null
+        )
       } catch {
         // The target may be a provider/model added while the run was live —
         // missing from this run's ModelRuntime snapshot. Lazy-refresh the
@@ -437,15 +433,12 @@ export function createRunService(options: RunServiceOptions) {
         // disabled/unconfigured model) fails the retry with the same error.
         await refreshRunModelRuntime(runId).catch(() => undefined)
         try {
-          target = (
-            await applyModelSwitch(
-              session,
-              providers(),
-              configStore.getAliases(),
-              input.model,
-              agentRow?.model ?? null
-            )
-          ).target
+          result = await applyModelSwitch(
+            session,
+            providers(),
+            input.model,
+            agentRow?.model ?? null
+          )
         } catch (retryError) {
           throw new RunActionError(
             "invalid_state",
@@ -455,14 +448,22 @@ export function createRunService(options: RunServiceOptions) {
           )
         }
       }
-      updateAgent(agentId, {
-        model: formatModelRef(
-          target.provider,
-          target.model,
-          target.thinkingLevel
-        ),
-        updatedAt: now(),
-      })
+      const { target } = result
+      // Persist the ACTUAL (SDK-clamped) thinking level so the agent snapshot
+      // matches runtime reality.
+      const nextModelRef = formatModelRef(
+        target.provider,
+        target.model,
+        result.thinkingLevel
+      )
+      updateAgent(agentId, { model: nextModelRef, updatedAt: now() })
+      // runs.model is the run's entry-model snapshot: display source for
+      // RunPublic.model* and the addAgent default. Sync it when the ENTRY
+      // agent's model changes; per-agent switches of non-entry agents leave
+      // the run-level default untouched.
+      if (agentId === entryAgent(runId)?.id) {
+        updateRun(runId, { model: nextModelRef, updatedAt: now() })
+      }
       status.emitAgents(runId)
       return requireRun(runId)
     })
