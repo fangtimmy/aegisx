@@ -21,6 +21,18 @@ export type RunScope = "challenge" | "event"
 
 export type RunSource = "manual" | "scheduler"
 
+/** One solver's creation spec (v9). Array length = the run's solver count. */
+export type SolverSpec = {
+  /** Canonical model ref; omit = the global default model. */
+  model?: string
+  /** This solver's own prompt. */
+  prompt?: string
+  /** 'strategy' (default) renders the `initial` template with the prompt
+   * appended to the run-level Strategy section; 'override' replaces the
+   * initial prompt entirely (first turn = the raw prompt). */
+  promptMode?: "strategy" | "override"
+}
+
 export type RunPublic = {
   id: string
   scopeType: RunScope

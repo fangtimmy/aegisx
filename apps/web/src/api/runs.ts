@@ -1,3 +1,5 @@
+import type { SolverSpec } from "@aegisx/shared"
+
 import { apiRequest, jsonRequest } from "./client"
 import type {
   FleetInfo,
@@ -15,6 +17,15 @@ export type CreateRunInput = {
   prompt?: string
   /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
   timeoutMs?: number
+  /** v9 run-level strategy — rendered into every solver's initial Strategy
+   *  section (replaces `prompt` once v9 UI lands). */
+  strategy?: string
+  /** v9 solver count (1..4, default 1). */
+  solver_count?: number
+  /** v9 model ref applied to every solver. */
+  model?: string
+  /** v9 per-solver specs (advanced); takes precedence over model/solver_count. */
+  solvers?: SolverSpec[]
 }
 
 export function listEventRuns(eventId: string) {

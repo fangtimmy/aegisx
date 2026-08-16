@@ -6,6 +6,7 @@ import type {
   FlatSettings,
   ModelRef,
   RunPublic,
+  SolverSpec,
 } from "@aegisx/shared"
 import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
@@ -121,6 +122,9 @@ export type CreateRunInput = {
    * rendered `initial` template — it is injected as a `strategy` variable that
    * renders a `## Strategy` section (the standard blocks stay). */
   strategy?: string
+  /** Per-solver creation specs (v9): array length = solver count (1..MAX);
+   *  empty = one solver with all defaults. */
+  solvers?: SolverSpec[]
 } & (
   | { scopeType: "challenge"; challengeId: string }
   | { scopeType: "event"; eventId: string; instruction: string }
