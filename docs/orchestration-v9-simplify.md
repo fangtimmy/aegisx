@@ -192,6 +192,8 @@ get_target / start_target / extend_target / stop_target（targetSupported 时）
 
 ### 7.2 调度者
 
+> **SUPERSEDED（SDK 收敛）**：本节描述的 18 个原生管理工具已下马——调度者改为通过容器内 `aegisx` Python SDK + bash 管理（见 [scheduler-python-sdk.md](scheduler-python-sdk.md)）。队列/生命周期/寻址语义不变，仅工具面收敛为 read/edit/write/bash。
+
 队列 CRUD、`start_run`/`stop_run`/`close_run`/`set_run_timeout`、`list_challenges`/`get_challenge`/`list_runs`/`get_status` 不变；变化与新增：
 
 | 工具 | 变化 |

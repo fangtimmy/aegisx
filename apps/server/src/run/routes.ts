@@ -55,6 +55,35 @@ const runInput = Type.Object(
   { additionalProperties: false }
 )
 
+/** Direct-start body (POST /api/runs/start): runInput + a challengeId. The
+ * scheduler SDK's `runs.start` escape hatch — bypasses the queue exactly like
+ * the scheduler tool's start_run (source=scheduler). */
+const startRunInput = Type.Object(
+  {
+    challengeId: Type.String({ minLength: 1 }),
+    strategy: Type.Optional(Type.String({ maxLength: 20_000 })),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
+    model: Type.Optional(Type.String({ maxLength: 300 })),
+    solver_count: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+    solvers: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            model: Type.Optional(Type.String({ maxLength: 300 })),
+            prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
+            promptMode: Type.Optional(
+              Type.Union([Type.Literal("strategy"), Type.Literal("override")])
+            ),
+          },
+          { additionalProperties: false }
+        ),
+        { maxItems: 4 }
+      )
+    ),
+  },
+  { additionalProperties: false }
+)
+
 const timeoutInput = Type.Object(
   { timeoutMs: Type.Integer({ minimum: 60_000 }) },
   { additionalProperties: false }
@@ -168,6 +197,32 @@ export function registerRunRoutes(
       }
     }
   )
+
+  app.post("/api/runs/start", validateJson(startRunInput), async (c) => {
+    try {
+      const input = c.req.valid("json")
+      const challenge = db
+        .select()
+        .from(challenges)
+        .where(eq(challenges.id, input.challengeId))
+        .get()
+      if (!challenge) return notFound(c, "Challenge not found")
+      // Fail fast on an unresolvable model ref (same as the enqueue path).
+      runService.assertModelsResolvable(input.model, input.solvers)
+      const run = await runService.resolveAndCreate({
+        challengeId: input.challengeId,
+        strategy: input.strategy,
+        model: input.model,
+        solverCount: input.solver_count,
+        solvers: input.solvers,
+        timeoutMs: input.timeoutMs,
+        source: "scheduler",
+      })
+      return c.json(run, 201)
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
 
   app.get("/api/runs/:runId", (c) => {
     const detail = runService.detail(c.req.param("runId"))

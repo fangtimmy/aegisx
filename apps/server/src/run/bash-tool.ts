@@ -190,7 +190,18 @@ const BASH_DESCRIPTION = `Run a shell command inside the Kali container (stdout 
 ## Timing
 - Foreground commands must finish promptly: pass \`timeout\` (seconds) for anything non-trivial (default ${DEFAULT_TIMEOUT_SEC}s, hard max ${MAX_TIMEOUT_SEC}s). For genuinely long jobs, start them backgrounded (\`nohup ... > out.log 2>&1 &\`) and poll the log with read/grep — never block a single call for many minutes.
 - Avoid interactive commands (REPLs, pagers, \`ssh\`/credential prompts without -o BatchMode=yes); they hang until the timeout.
-- Fire independent probes as parallel bash calls when they do not depend on each other.`
+- Fire independent probes as parallel bash calls when they do not depend on each other.
+
+## Python scripts
+For multi-step logic (especially the scheduler's \`aegisx\` management SDK), write ONE script with a heredoc instead of chaining \`python3 -c\` one-liners (quote hell):
+
+    python3 - <<'PY'
+    import aegisx
+    snap = aegisx.snapshot()
+    ...
+    PY
+
+Single quotes around PY stop shell interpolation of $/backticks. The scheduler container has PYTHONPATH preset so \`import aegisx\` just works. A script failure prints a traceback — read it, fix the script, re-run (do not switch to a different mechanism).`
 
 export function createBashTool(
   containerWorkspace: string,

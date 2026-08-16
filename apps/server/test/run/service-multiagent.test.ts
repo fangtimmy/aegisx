@@ -95,9 +95,9 @@ describe("multi-agent orchestration (service level)", () => {
       expect(rows[0]!.slot).toBe("orchestrator")
       expect(rows[0]!.role).toBe("orchestrator")
       expect(rows[0]!.isEntry).toBe(true)
-      expect(JSON.parse(rows[0]!.tools)).toContain("enqueue_run")
-      expect(JSON.parse(rows[0]!.tools)).toContain("start_run")
-      expect(JSON.parse(rows[0]!.tools)).toContain("get_status")
+      // SDK convergence: the orchestrator snapshot grants no management tools
+      // (scheduler-python-sdk.md) — management goes through `aegisx` + bash.
+      expect(JSON.parse(rows[0]!.tools)).toEqual([])
       await runService.close()
     } finally {
       close()

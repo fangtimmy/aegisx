@@ -29,6 +29,11 @@ export type CreateOptions = {
   workingDir: string
   /** host binds, e.g. ["<abs>:/workspace"]. */
   binds: string[]
+  /** Extra read-only-ish binds beyond the workspace (e.g. the scheduler SDK
+   * mount). Appended to `binds`. */
+  extraBinds?: string[]
+  /** Container env as "KEY=value" entries (dockerode Env). */
+  env?: string[]
   limits: ContainerLimits
   tmpfsSize: string
   /** Docker network mode (HostConfig.NetworkMode). Empty/undefined = default
@@ -92,9 +97,10 @@ export function createContainerManager(options?: { socketPath?: string }) {
       Cmd: ["sleep", "infinity"],
       WorkingDir: opts.workingDir,
       Tty: false,
+      Env: opts.env,
       HostConfig: {
         AutoRemove: true,
-        Binds: opts.binds,
+        Binds: [...opts.binds, ...(opts.extraBinds ?? [])],
         NanoCpus: Math.round(opts.limits.cpus * 1e9),
         Memory: opts.limits.memoryMb * 1024 * 1024,
         PidsLimit: opts.limits.pidsLimit,
@@ -328,6 +334,8 @@ export async function createToolboxContainer(
     pidsLimit: number
     tmpfsSize: string
     networkMode?: string
+    extraBinds?: string[]
+    env?: string[]
   }
 ): Promise<{ id: string }> {
   return manager.create({
@@ -335,6 +343,8 @@ export async function createToolboxContainer(
     image: opts.image,
     workingDir: opts.workspace,
     binds: [`${opts.hostWorkspace}:${opts.workspace}`],
+    extraBinds: opts.extraBinds,
+    env: opts.env,
     limits: {
       cpus: opts.cpus,
       memoryMb: opts.memoryMb,

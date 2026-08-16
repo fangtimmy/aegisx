@@ -20,8 +20,11 @@ import { EventScopeEmitter } from "../orchestration/event-scope"
 import {
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
   LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
+  LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "../orchestration/prompt-defaults"
 import {
   migrateLegacyPromptSettings,
@@ -133,6 +136,21 @@ export function createRunService(options: RunServiceOptions) {
     "orchestratorSystem",
     LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
     DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
+  // SDK convergence (docs/scheduler-python-sdk.md): the orchestrator's
+  // 18 management tools are unmounted — the system prompt now teaches the
+  // `aegisx` Python SDK + bash heredoc mode. Exact-match refresh only.
+  upgradeBuiltinTemplate(
+    db,
+    "orchestratorSystem",
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
+    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
+  upgradeBuiltinTemplate(
+    db,
+    "schedulerInitial",
+    LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
+    DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE
   )
   // Idempotent guard for the WP2→WP3a window: re-delete any plugin-owned
   // template rows that might have been re-seeded in between.

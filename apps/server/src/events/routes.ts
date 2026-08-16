@@ -278,6 +278,14 @@ export function registerEventRoutes(
     }
   )
 
+  // Single-challenge detail (SDK `challenges.get`; the scheduler's in-process
+  // get_challenge already had this — the HTTP layer lacked it).
+  app.get("/api/challenges/:challengeId", (c) => {
+    const challenge = getChallenge(c.req.param("challengeId"))
+    if (!challenge) return notFound(c, "Challenge not found")
+    return c.json(challenge)
+  })
+
   app.patch(
     "/api/challenges/:challengeId/solved",
     validateJson(solveStateInput),

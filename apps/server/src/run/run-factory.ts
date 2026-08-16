@@ -1,5 +1,5 @@
-import { mkdirSync } from "node:fs"
-import { relative } from "node:path"
+import { existsSync, mkdirSync } from "node:fs"
+import { relative, resolve } from "node:path"
 
 import type {
   EnvironmentConfig,
@@ -65,6 +65,39 @@ import { createSchedulerTools } from "./scheduler-tools"
 import { createMainTools, type RunToolContext } from "./tools"
 
 type PlatformService = ReturnType<typeof createPlatformService>
+
+/** Host path to the scheduler Python SDK package (mount source). Overridable
+ * via AEGISX_SDK_PATH; default = repo apps/sdk/python relative to this file.
+ * Absent when the path does not exist (the mount is then skipped). */
+function sdkHostPath(): string | undefined {
+  const candidate =
+    process.env.AEGISX_SDK_PATH ??
+    resolve(import.meta.dir, "../../../../apps/sdk/python")
+  return existsSync(candidate) ? candidate : undefined
+}
+
+/** Event-scope container extras: the read-only SDK mount (→ /opt/aegisx-sdk)
+ * + the three env vars (PYTHONPATH / AEGISX_EVENT_ID / AEGISX_API_URL).
+ * Undefined for challenge scope / when the SDK path is absent — solver
+ * containers never see the SDK. AEGISX_API_URL passes the host's override
+ * through (Linux deployments where host.docker.internal does not resolve). */
+function schedulerSdkContainerOpts(
+  eventId: string
+): { extraBinds: string[]; env: string[] } | undefined {
+  const path = sdkHostPath()
+  if (!path) {
+    console.warn("aegisx SDK not found on host — skipping scheduler SDK mount")
+    return undefined
+  }
+  return {
+    extraBinds: [`${path}:/opt/aegisx-sdk:ro`],
+    env: [
+      `AEGISX_EVENT_ID=${eventId}`,
+      `AEGISX_API_URL=${process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"}`,
+      "PYTHONPATH=/opt/aegisx-sdk",
+    ],
+  }
+}
 
 /** Reusable per-run handles (model runtime, container, the prompt context).
  * Agents carry their own creation snapshot. */
@@ -223,30 +256,14 @@ export function createRunFactory(deps: RunFactoryDeps) {
   /** The event-scope scheduler's tool snapshot (agent-level addressing
    * included; the add_agent/message_agent implementations land in WP4 — the
    * snapshot is granted up front). */
-  const ORCHESTRATOR_TOOLS: string[] = [
-    // Queue CRUD (the plan = queue content).
-    "enqueue_run",
-    "list_queue",
-    "remove_queue",
-    "clear_queue",
-    "reorder_queue",
-    // Direct run management (escape hatch + read).
-    "start_run",
-    "stop_run",
-    "message_run",
-    "close_run",
-    "read_run",
-    "set_run_timeout",
-    // Read-only inventory.
-    "list_challenges",
-    "get_challenge",
-    "list_runs",
-    "get_status",
-    "list_agents",
-    // Agent-level addressing (v9).
-    "add_agent",
-    "message_agent",
-  ]
+  /** Scheduler management tools (the 18 native tools). EMPTY after the SDK
+   * convergence (docs/scheduler-python-sdk.md): the orchestrator manages via
+   * the container-side `aegisx` Python SDK + bash, not native tools. The tool
+   * definitions in scheduler-tools.ts stay (HTTP endpoints untouched) but are
+   * never granted — new scheduler agents snapshot this empty list, and cold
+   * restores intersect the persisted snapshot with it (legacy rows carrying
+   * the old 18 names do not resurrect the tools). */
+  const ORCHESTRATOR_TOOLS: string[] = []
 
   /** The per-event run-lifecycle emitter (created lazily). */
   function eventScopeFor(eventId: string): EventScopeEmitter {
@@ -731,6 +748,9 @@ export function createRunFactory(deps: RunFactoryDeps) {
         pidsLimit: env.pidsLimit,
         tmpfsSize: input.container.tmpfsSize,
         networkMode: get(getSettings(), "container.networkMode"),
+        ...(input.scopeType === "event"
+          ? schedulerSdkContainerOpts(event!.id)
+          : {}),
       })
     } catch (error) {
       db.delete(runs).where(eq(runs.id, runId)).run()
@@ -928,6 +948,9 @@ export function createRunFactory(deps: RunFactoryDeps) {
         pidsLimit: row.pidsLimit,
         tmpfsSize: settings["container.tmpfsSize"],
         networkMode: get(settings, "container.networkMode"),
+        ...(row.scopeType === "event"
+          ? schedulerSdkContainerOpts(row.eventId)
+          : {}),
       })
 
       const modelDisplay = modelResolver.resolveModelDisplay(row.model)
@@ -1187,6 +1210,12 @@ export function createRunFactory(deps: RunFactoryDeps) {
 
     const snapshotTools = safeParseTools(agentRow.tools)
     const toolCtx = buildAgentToolContext(runId, ctx.challengeId, agentId)
+    // Scheduler tools are gated by the CURRENT ORCHESTRATOR_TOOLS (empty post-
+    // SDK-convergence): a legacy agent row whose snapshot still lists the old
+    // 18 management names gets the intersection — i.e. no management tools.
+    const schedulerTools = snapshotTools.filter((name) =>
+      ORCHESTRATOR_TOOLS.includes(name)
+    )
     const nativeTools = [
       ...createMainTools(toolCtx, snapshotTools),
       // Scheduler tools are granted only to the event-scope orchestrator;
@@ -1195,7 +1224,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
       ...(row.scopeType === "event"
         ? createSchedulerTools(
             deps.buildSchedulerToolContext(runId, agentId),
-            snapshotTools
+            schedulerTools
           )
         : []),
     ]
