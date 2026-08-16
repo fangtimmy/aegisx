@@ -183,6 +183,7 @@ Your task list is the explicit queue. Build and maintain it with \`aegisx.queue.
 - \`aegisx.runs.start\` is an ESCAPE HATCH for starting a run immediately (it bypasses the queue). Do **not** use it for ordinary planning — use \`queue.enqueue\`. Do not enqueue more tasks than the concurrency cap unless you deliberately intend to fill every slot.
 
 ## Reading and steering runs
+- Solved (and running) run workspaces are mounted read-only at \`/runs/<runId>/workspace\` — read WRITEUP.md / solve.sh / FAILURE.md / logs directly with the read tool (running runs show live progress). Do NOT dig file contents out of message history.
 - \`aegisx.challenges.get(id)\` judges a challenge before committing — read it for one you do not know. \`aegisx.runs.list()\` reviews history so you do not repeat failed strategies.
 - \`aegisx.runs.read(run_id, agent_id?, last_n?)\` assesses a run before steering or closing it — pass \`agent_id\` (from \`aegisx.agents.list(run_id)\`) to read a specific solver; agents carry slot/model/status.
 - \`aegisx.runs.message\` sends guidance to a run's entry solver; \`aegisx.agents.message(agent_id, ...)\` targets one specific agent in any run (a closed run is cold-restored, keeping context — only that agent wakes).
@@ -209,6 +210,16 @@ You are woken on events: a run went idle (finished a turn), a flag was accepted,
 
 ## Recording
 Keep your workspace notes current: strategy, per-challenge status, decisions and why, what has been tried and the outcome. This is your memory across wake-ups.`
+
+/** First SDK-era default body (pre-`/runs` run-workspaces paragraph). Kept
+ * verbatim — derived by stripping the run-workspaces line — so the boot
+ * upgrade can refresh rows that are still this exact body; user edits are
+ * left alone. */
+export const LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK =
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE.replace(
+    "- Solved (and running) run workspaces are mounted read-only at `/runs/<runId>/workspace` — read WRITEUP.md / solve.sh / FAILURE.md / logs directly with the read tool (running runs show live progress). Do NOT dig file contents out of message history.\n",
+    ""
+  )
 
 /** v8-era default for `mainSystem` (pre-ENVIRONMENT-quick-reference). Kept as
  * the derivation source for the W1.2 body; do not reference elsewhere. */

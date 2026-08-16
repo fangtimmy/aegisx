@@ -76,13 +76,17 @@ function sdkHostPath(): string | undefined {
   return existsSync(candidate) ? candidate : undefined
 }
 
-/** Event-scope container extras: the read-only SDK mount (→ /opt/aegisx-sdk)
+/** Event-scope container extras: the read-only SDK mount (→ /opt/aegisx-sdk),
+ * the read-only run-workspaces mount (→ /runs/<runId>/workspace — the
+ * scheduler reads solver WRITEUP.md / solve.sh directly, live progress too),
  * + the three env vars (PYTHONPATH / AEGISX_EVENT_ID / AEGISX_API_URL).
  * Undefined for challenge scope / when the SDK path is absent — solver
- * containers never see the SDK. AEGISX_API_URL passes the host's override
- * through (Linux deployments where host.docker.internal does not resolve). */
+ * containers never see the SDK or other runs' workspaces. AEGISX_API_URL
+ * passes the host's override through (Linux deployments where
+ * host.docker.internal does not resolve). */
 function schedulerSdkContainerOpts(
-  eventId: string
+  eventId: string,
+  dataDir: string
 ): { extraBinds: string[]; env: string[] } | undefined {
   const path = sdkHostPath()
   if (!path) {
@@ -90,7 +94,10 @@ function schedulerSdkContainerOpts(
     return undefined
   }
   return {
-    extraBinds: [`${path}:/opt/aegisx-sdk:ro`],
+    extraBinds: [
+      `${path}:/opt/aegisx-sdk:ro`,
+      `${resolve(dataDir, "runs")}:/runs:ro`,
+    ],
     env: [
       `AEGISX_EVENT_ID=${eventId}`,
       `AEGISX_API_URL=${process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"}`,
@@ -749,7 +756,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
         tmpfsSize: input.container.tmpfsSize,
         networkMode: get(getSettings(), "container.networkMode"),
         ...(input.scopeType === "event"
-          ? schedulerSdkContainerOpts(event!.id)
+          ? schedulerSdkContainerOpts(event!.id, dataDir)
           : {}),
       })
     } catch (error) {
@@ -949,7 +956,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
         tmpfsSize: settings["container.tmpfsSize"],
         networkMode: get(settings, "container.networkMode"),
         ...(row.scopeType === "event"
-          ? schedulerSdkContainerOpts(row.eventId)
+          ? schedulerSdkContainerOpts(row.eventId, dataDir)
           : {}),
       })
 

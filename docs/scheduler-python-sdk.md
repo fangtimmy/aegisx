@@ -109,11 +109,12 @@ aegisx.agents.add(run_id, prompt, model=None, prompt_mode=None) -> RunSummary
 
 - **工具面**：`SOLVER_TOOLS` / `ORCHESTRATOR_TOOLS` 本就是两套快照，solver 从来没有任何管理工具。
 - **SDK 文件**：创建容器时按 `scopeType == "event"` 才挂载 SDK 只读目录（→ `/opt/aegisx-sdk`）+ 注入 `PYTHONPATH` / `AEGISX_EVENT_ID` / `AEGISX_API_URL`；solver 容器 `import aegisx` 直接失败。
+- **solver 产出物**：event 容器同时只读挂载宿主机 `dataDir/runs` → `/runs`（`/runs/<runId>/workspace/`），调度者用 read/bash 直接读 WRITEUP.md / solve.sh / FAILURE.md（运行中 run 实时可见）；solver 容器不挂，且调度者挂载是 `:ro`，不会污染 solver 工作区。
 - **边界（已确认接受）**：solver 有 bash + 网络，理论上仍可 `curl host.docker.internal:3000/api/...` 直接打管理 API。本地单用户 + 管理 API 的 run id 隔离 + 已有 Boundaries 提示词防注入，可接受，**不做 API token**。
 
 ## 五、服务端改动清单
 
-1. `run-factory` / `container-manager`：`container-manager` 的 `CreateOptions` 增 `env?` + `extraBinds?`（dockerode create 目前既不传 Env 也只绑 workspace 一个 bind）；event 容器挂 SDK 只读目录（`:ro`，宿主路径 = repo `apps/sdk/python`，`AEGISX_SDK_PATH` env 可覆盖）+ 注入 `PYTHONPATH=/opt/aegisx-sdk` / `AEGISX_EVENT_ID` / `AEGISX_API_URL`（默认 `http://host.docker.internal:3000`，宿主机 `AEGISX_API_URL` env 透传覆盖）；challenge 容器不动。注意全局 `container.networkMode`（`container:aegisx-vpn`）下 `host.docker.internal` 取决于 VPN 容器 resolv.conf——P2 验证必须覆盖非默认网络模式
+1. `run-factory` / `container-manager`：`container-manager` 的 `CreateOptions` 增 `env?` + `extraBinds?`（dockerode create 目前既不传 Env 也只绑 workspace 一个 bind）；event 容器挂 SDK 只读目录（`:ro`，宿主路径 = repo `apps/sdk/python`，`AEGISX_SDK_PATH` env 可覆盖）+ 只读挂载宿主机 `dataDir/runs` → `/runs`（调度者读 solver 产出）+ 注入 `PYTHONPATH=/opt/aegisx-sdk` / `AEGISX_EVENT_ID` / `AEGISX_API_URL`（默认 `http://host.docker.internal:3000`，宿主机 `AEGISX_API_URL` env 透传覆盖）；challenge 容器不动。注意全局 `container.networkMode`（`container:aegisx-vpn`）下 `host.docker.internal` 取决于 VPN 容器 resolv.conf——P2 验证必须覆盖非默认网络模式
 2. `scheduler-tools.ts`：`ORCHESTRATOR_TOOLS` 收敛为空；实现代码保留（HTTP 端点后端不动）；**restore 路径对存量 agent 行的工具快照按当前 `ORCHESTRATOR_TOOLS` 取交集**——旧调度者会话冷恢复不会复活 18 个旧工具
 3. prompt 模板（`orchestratorSystem` / `schedulerInitial`）：18 工具决策指南 → `import aegisx` 用法 + `help()` 自查 + heredoc 脚本模式 + `scheduler_lib.py` 沉淀；`upgradeBuiltinTemplate` 一次性刷新（旧正文精确匹配才刷，用户编辑保留）
 4. 新增 `apps/sdk/python/`：client + dataclasses + `pyproject.toml`
@@ -134,7 +135,7 @@ aegisx.agents.add(run_id, prompt, model=None, prompt_mode=None) -> RunSummary
 | Phase | 内容 | 验证 |
 |---|---|---|
 | **P1 SDK 包 + 端点** | `aegisx` 包（client/dataclasses/4 命名空间/错误模型）；新增 `GET /api/challenges/:id` + `POST /api/runs/start`；`queue.enqueue` 映射全参入队路由 | ✅ 宿主 smoke 全绿（status/snapshot/challenges/queue enqueue-close-remove/runs/错误契约）；错误信封 `{error:{code,message}}` 解析兼容 |
-| **P2 容器挂载 + env** | container-manager 支持 env/extraBinds；event 容器挂载 SDK（`:ro`）+ 三 env | ✅ 调度者容器内 `import aegisx` + `status()`/`challenges.list()` 经 VPN netns 的 `host.docker.internal` 返回真实数据；solver 容器无挂载、`import aegisx` → ModuleNotFoundError |
+| **P2 容器挂载 + env** | container-manager 支持 env/extraBinds；event 容器挂载 SDK（`:ro`）+ 只读挂载 `dataDir/runs` → `/runs`（调度者直接 read solver 产出）+ 三 env | ✅ 调度者容器内 `import aegisx` + `status()`/`challenges.list()` 经 VPN netns 的 `host.docker.internal` 返回真实数据；solver 容器无挂载、`import aegisx` → ModuleNotFoundError；✅ `/runs/<runId>/workspace/WRITEUP.md` 真实可读（真实测试确认） |
 | **P3 工具面收敛 + prompt** | `ORCHESTRATOR_TOOLS` 清空；restore 存量快照取交集（旧 18 工具不复活，单测覆盖）；`orchestratorSystem`/`schedulerInitial` 模板重写 + `upgradeBuiltinTemplate` 精确刷新存量库；bash-tool 描述补 heredoc 提示 | ✅ 新调度者快照 `tools=[]`（DB 验证）；存量库模板已升级为 SDK 版；✅ 真实赛事端到端（2026-08-16，Test 赛事 3 题 × deepseek-v4-flash）：3 个 solver 全部解出正确 flag（submit_flag accepted）+ 调度者全程纯 SDK/bash（snapshot/read/交叉核对/复现 solve.sh）完成观察与收尾，无管理工具调用 |
 | **P4 文档转正** | 本文标记已实施；superseded 标注 | ✅ `bun run check` / `bun run test` / `bun run build` 全绿 |
 

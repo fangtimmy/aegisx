@@ -24,6 +24,7 @@ import {
   LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
   LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "../orchestration/prompt-defaults"
 import {
@@ -144,6 +145,15 @@ export function createRunService(options: RunServiceOptions) {
     db,
     "orchestratorSystem",
     LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
+    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
+  // /runs mount: the first SDK-era default gained the run-workspaces
+  // paragraph (scheduler reads solver WRITEUP.md directly). Exact-match
+  // refresh for rows still on the pre-/runs body.
+  upgradeBuiltinTemplate(
+    db,
+    "orchestratorSystem",
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
     DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
   )
   upgradeBuiltinTemplate(

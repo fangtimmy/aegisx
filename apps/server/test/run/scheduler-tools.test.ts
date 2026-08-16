@@ -40,7 +40,7 @@ function makeService(
 ) {
   const hang = opts.hang ?? true
   const provider = makeProvider()
-  const { manager } = stubContainerManager()
+  const { manager, created } = stubContainerManager()
   const grantedTools = opts.grantedTools
   const service = createRunService({
     db,
@@ -78,7 +78,7 @@ function makeService(
       }
     ),
   })
-  return { service }
+  return { service, created }
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 10))
@@ -212,6 +212,88 @@ describe("scheduler service behaviors (SDK backend)", () => {
       // empty) ORCHESTRATOR_TOOLS — no management tool is resurrected. The
       // four file tools are host-side always-on, not part of this grant.
       expect(granted).toEqual([])
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("event container gets SDK + /runs mounts; solver container gets neither", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      seedRun(db, {
+        id: "sched-1",
+        scopeType: "event",
+        eventId: "evt-1",
+        challengeId: null,
+        status: "closed",
+      })
+      db.insert(agents)
+        .values({
+          id: "orch-1",
+          runId: "sched-1",
+          slot: "orchestrator",
+          role: "orchestrator",
+          isEntry: true,
+          model: `${TEST_MODEL_REF}:off`,
+          systemPrompt: "sp",
+          tools: "[]",
+          status: "idle",
+          sessionFile: "sess-orch-1",
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .run()
+      seedRun(db, {
+        id: "solver-1",
+        scopeType: "challenge",
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        status: "closed",
+      })
+      db.insert(agents)
+        .values({
+          id: "sol-a1",
+          runId: "solver-1",
+          slot: "solver-1",
+          role: "solver",
+          isEntry: true,
+          model: `${TEST_MODEL_REF}:off`,
+          systemPrompt: "sp",
+          tools: "[]",
+          status: "idle",
+          sessionFile: "sess-sol-1",
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .run()
+
+      const { service, created } = makeService(db, sqlite, dir, {
+        hang: false,
+      })
+      await service.sendMessage("sched-1", { text: "wake" })
+      await settle()
+      await service.sendMessage("solver-1", { text: "wake" })
+      await settle()
+
+      expect(created.length).toBe(2)
+      const [schedOpts, solverOpts] = created as Array<{
+        extraBinds?: string[]
+        env?: string[]
+      }>
+      // The scheduler container: read-only SDK mount + read-only run
+      // workspaces (so it reads WRITEUP.md / solve.sh directly) + event env.
+      expect(schedOpts.extraBinds).toContain(`${dir}/runs:/runs:ro`)
+      expect(
+        schedOpts.extraBinds?.some((b) => b.includes("/opt/aegisx-sdk:ro"))
+      ).toBe(true)
+      expect(schedOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
+      expect(schedOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
+      // The solver container: no SDK, no run workspaces, no event env.
+      expect(solverOpts.extraBinds).toBeUndefined()
+      expect(solverOpts.env).toBeUndefined()
       await service.close()
     } finally {
       close()
