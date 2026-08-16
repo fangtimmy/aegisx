@@ -19,15 +19,38 @@ import { toAgentSummary } from "./public"
 import type { RunService } from "./service"
 import { streamRun } from "./sse"
 
-/** Manual enqueue body (POST /api/challenges/:id/runs enqueues,
- * returns a queue item). Models resolve at launch; the first-turn prompt may
- * be overridden. */
+/** Manual enqueue body (POST /api/challenges/:id/runs enqueues, returns a
+ * queue item). Models resolve at launch; the run-level strategy shapes every
+ * solver's first turn (design §3.4). */
 const runInput = Type.Object(
   {
-    /** Per-run strategy — appended to the run's default initial prompt as a
-     * Strategy section (the standard blocks are always included). */
+    /** Legacy alias of `strategy` (pre-v9 clients). */
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
+    /** v9 run-level strategy — appended to every solver's initial prompt as a
+     * Strategy section (the standard blocks are always included). */
+    strategy: Type.Optional(Type.String({ maxLength: 20_000 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
+    /** v9 model ref applied to every solver. */
+    model: Type.Optional(Type.String({ maxLength: 300 })),
+    /** v9 solver count (1..4, default 1). */
+    solver_count: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+    /** v9 per-solver specs (advanced); takes precedence over
+     * model/solver_count. */
+    solvers: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            model: Type.Optional(Type.String({ maxLength: 300 })),
+            prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
+            promptMode: Type.Optional(
+              Type.Union([Type.Literal("strategy"), Type.Literal("override")])
+            ),
+          },
+          { additionalProperties: false }
+        ),
+        { maxItems: 4 }
+      )
+    ),
   },
   { additionalProperties: false }
 )
@@ -121,11 +144,17 @@ export function registerRunRoutes(
 
         // Enqueue, then run one drain pass so a launchable task is
         // started synchronously; the item stays pending if the fence is full.
+        // Fail fast on an unresolvable model ref (design §3.4) — otherwise it
+        // would surface only at (auto-)launch, as a failed queue item.
+        runService.assertModelsResolvable(input.model, input.solvers)
         const queue = runService.queue()
         const item = queue.enqueue({
           eventId: challenge.eventId,
           challengeId,
-          prompt: input.prompt,
+          strategy: input.strategy ?? input.prompt,
+          model: input.model,
+          solverCount: input.solver_count,
+          solvers: input.solvers,
           timeoutMs: input.timeoutMs,
           source: "manual",
         })

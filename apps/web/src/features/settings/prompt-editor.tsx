@@ -19,7 +19,6 @@ import { Textarea } from "@/components/ui/textarea"
 /** Preview context kinds the server supports (settings/prompt-templates.ts). */
 export type PromptPreviewKind =
   | "mainSystemPrompt"
-  | "childSystemPrompt"
   | "initialPrompt"
   | "orchestratorSystemPrompt"
 

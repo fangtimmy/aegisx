@@ -616,6 +616,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   return {
     buildSchedulerToolContext,
     resolveAndCreate,
+    assertModelsResolvable,
     setRunTimeout,
     readRun,
     getStatusSnapshot,

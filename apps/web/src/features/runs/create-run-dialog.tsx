@@ -1,17 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Box, CircleAlert, ListOrdered, Plus } from "lucide-react"
-import { type ReactNode, useEffect, useMemo, useState } from "react"
-import { Link } from "react-router"
+import { Box, ChevronDown, CircleAlert, ListOrdered, Plus } from "lucide-react"
+import { type ReactNode, useEffect, useState } from "react"
 
 import {
   type Challenge,
   keys,
-  orchestrationsApi,
+  type ModelRef,
   runsApi,
   settingsApi,
 } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button, type ButtonProps } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   Dialog,
   DialogClose,
@@ -40,15 +44,28 @@ import {
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { ModelRefPicker } from "@/features/runs/model-switcher"
 import { toast } from "@/lib/toast"
 
-/** Orchestration display names for the picker. */
-const ORCHESTRATION_LABELS: Record<string, string> = {
-  classic: "Classic（单求解者）",
-  "observer-solver": "Observer-Solver（求解者 + 观察者）",
-  "bootstrap-solver": "Bootstrap-Solver",
-  trio: "Trio（三个并行求解者）",
+const MAX_SOLVERS = 4
+
+const PROMPT_MODE_LABELS = {
+  strategy: "追加到 Strategy（默认）",
+  override: "完全替换 initial",
+} as const
+
+/** One advanced per-solver row (model + prompt + mode). */
+type SolverRow = {
+  model: ModelRef | null
+  prompt: string
+  mode: "strategy" | "override"
 }
+
+const emptyRow = (): SolverRow => ({
+  model: null,
+  prompt: "",
+  mode: "strategy",
+})
 
 type CreateRunDialogProps = {
   challenges?: Challenge[]
@@ -134,23 +151,15 @@ function CreateRunDialogContent({
     queryKey: keys.settings.all,
     queryFn: () => settingsApi.getSettings(),
   })
-  const orchestrations = useQuery({
-    queryKey: ["orchestrations"],
-    queryFn: () => orchestrationsApi.listOrchestrations(),
-  })
 
-  const [orchestration, setOrchestration] = useState("classic")
-  const [timeoutMinutes, setTimeoutMinutes] = useState(60)
-  const [prompt, setPrompt] = useState("")
-  const [challengeId, setChallengeId] = useState(available[0]?.id ?? "")
-
-  const challengePlugins = useMemo(
-    () =>
-      (orchestrations.data?.items ?? []).filter(
-        (plugin) => plugin.scope === "challenge"
-      ),
-    [orchestrations.data]
+  const [solverCount, setSolverCount] = useState(1)
+  const [model, setModel] = useState<ModelRef | null>(null)
+  const [strategy, setStrategy] = useState("")
+  const [rows, setRows] = useState<SolverRow[]>(() =>
+    Array.from({ length: MAX_SOLVERS }, emptyRow)
   )
+  const [timeoutMinutes, setTimeoutMinutes] = useState(60)
+  const [challengeId, setChallengeId] = useState(available[0]?.id ?? "")
 
   // Seed the timeout from the global default once settings arrive.
   useEffect(() => {
@@ -160,11 +169,30 @@ function CreateRunDialogContent({
     }
   }, [settings.data])
 
+  // The rows visible under the current solver count.
+  const visibleRows = rows.slice(0, solverCount)
+  // Advanced = any per-solver customization; then the solvers array wins over
+  // the run-level model (server-side precedence, design §3.5).
+  const advanced = visibleRows.some((row) => row.model || row.prompt.trim())
+
   const mutation = useMutation({
     mutationFn: () =>
       runsApi.createRun(challenge?.id ?? challengeId, {
         timeoutMs: Math.max(1, Math.round(timeoutMinutes)) * 60_000,
-        ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
+        solver_count: solverCount,
+        ...(strategy.trim() ? { strategy: strategy.trim() } : {}),
+        ...(advanced
+          ? {
+              solvers: visibleRows.map((row) => ({
+                // Fall back to the run-level model for untouched rows.
+                ...((row.model ?? model) ? { model: row.model ?? model! } : {}),
+                ...(row.prompt.trim() ? { prompt: row.prompt.trim() } : {}),
+                ...(row.prompt.trim() && row.mode === "override"
+                  ? { promptMode: "override" as const }
+                  : {}),
+              })),
+            }
+          : { ...(model ? { model } : {}) }),
       }),
     onSuccess: (item) => {
       toast.success("任务已加入队列")
@@ -184,8 +212,11 @@ function CreateRunDialogContent({
     onError: (error) => toast.error("入队失败", error.message),
   })
 
-  const isLoading = settings.isPending || orchestrations.isPending
-  const loadError = settings.error ?? orchestrations.error
+  const patchRow = (index: number, patch: Partial<SolverRow>) => {
+    setRows((current) =>
+      current.map((row, i) => (i === index ? { ...row, ...patch } : row))
+    )
+  }
 
   return (
     <DialogPopup>
@@ -193,11 +224,11 @@ function CreateRunDialogContent({
         <DialogTitle>启动任务</DialogTitle>
         <DialogDescription>
           {challenge
-            ? `为 ${challenge.name} 选择编排，任务将进入队列。每个 agent 的模型在「设置 · 编排」中配置。`
-            : "选择题目与编排，任务将进入队列。每个 agent 的模型在「设置 · 编排」中配置。"}
+            ? `为 ${challenge.name} 启动求解任务，任务将进入队列。`
+            : "选择题目并启动求解任务，任务将进入队列。"}
         </DialogDescription>
       </DialogHeader>
-      {isLoading && (
+      {settings.isPending && (
         <DialogPanel>
           <div
             className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -208,17 +239,14 @@ function CreateRunDialogContent({
           </div>
         </DialogPanel>
       )}
-      {loadError && (
+      {settings.error && (
         <DialogPanel>
           <Alert variant="error">
             <CircleAlert />
             <AlertTitle>无法加载任务配置</AlertTitle>
-            <AlertDescription>{loadError.message}</AlertDescription>
+            <AlertDescription>{settings.error.message}</AlertDescription>
             <Button
-              onClick={() => {
-                void settings.refetch()
-                void orchestrations.refetch()
-              }}
+              onClick={() => void settings.refetch()}
               type="button"
               variant="outline"
             >
@@ -227,7 +255,7 @@ function CreateRunDialogContent({
           </Alert>
         </DialogPanel>
       )}
-      {!isLoading && !loadError && (
+      {!settings.isPending && !settings.error && (
         <form
           className="contents"
           onSubmit={(event) => {
@@ -260,44 +288,48 @@ function CreateRunDialogContent({
                 </Select>
               </Field>
             )}
-            <Field>
-              <FieldLabel>编排</FieldLabel>
-              <Select
-                items={Object.fromEntries(
-                  challengePlugins.map((plugin) => [
-                    plugin.id,
-                    ORCHESTRATION_LABELS[plugin.id] ??
-                      plugin.label ??
-                      plugin.id,
-                  ])
-                )}
-                onValueChange={(value) => setOrchestration(value ?? "")}
-                value={orchestration}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectPopup>
-                  {challengePlugins.map((plugin) => (
-                    <SelectItem key={plugin.id} value={plugin.id}>
-                      {ORCHESTRATION_LABELS[plugin.id] ??
-                        plugin.label ??
-                        plugin.id}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                各 agent 的模型与提示词在{" "}
-                <Link
-                  className="font-medium underline"
-                  to="/settings/orchestration"
+            <div className="grid grid-cols-2 items-start gap-4">
+              <Field>
+                <FieldLabel htmlFor="run-solvers">Solver 数</FieldLabel>
+                <NumberField
+                  id="run-solvers"
+                  max={MAX_SOLVERS}
+                  min={1}
+                  onValueChange={(value) => {
+                    if (
+                      typeof value === "number" &&
+                      Number.isInteger(value) &&
+                      value >= 1 &&
+                      value <= MAX_SOLVERS
+                    ) {
+                      setSolverCount(value)
+                    }
+                  }}
+                  value={solverCount}
                 >
-                  设置 · 编排
-                </Link>{" "}
-                中按编排配置。
-              </p>
-            </Field>
+                  <NumberFieldGroup>
+                    <NumberFieldDecrement />
+                    <NumberFieldInput />
+                    <NumberFieldIncrement />
+                  </NumberFieldGroup>
+                </NumberField>
+                <p className="text-xs text-muted-foreground">
+                  并行求解者共享同一工作区（上限 {MAX_SOLVERS}）。
+                </p>
+              </Field>
+              <Field>
+                <FieldLabel>模型</FieldLabel>
+                <ModelRefPicker
+                  allowEmpty
+                  emptyLabel="全局默认"
+                  onChange={setModel}
+                  value={model}
+                />
+                <p className="text-xs text-muted-foreground">
+                  应用于全部 solver；高级中可逐个覆盖。
+                </p>
+              </Field>
+            </div>
             <Field>
               <FieldLabel htmlFor="run-timeout">超时（分钟）</FieldLabel>
               <NumberField
@@ -316,14 +348,74 @@ function CreateRunDialogContent({
               </NumberField>
             </Field>
             <Field>
-              <FieldLabel htmlFor="run-prompt">首轮提示词（可选）</FieldLabel>
+              <FieldLabel htmlFor="run-strategy">Strategy（可选）</FieldLabel>
               <Textarea
-                id="run-prompt"
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="覆盖编排默认的 initial 提示词…"
-                value={prompt}
+                id="run-strategy"
+                onChange={(event) => setStrategy(event.target.value)}
+                placeholder="run 级策略，追加到每个 solver 首轮提示词的 Strategy 段…"
+                value={strategy}
               />
             </Field>
+            <Collapsible>
+              <CollapsibleTrigger
+                className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+                type="button"
+              >
+                <ChevronDown className="size-4 transition-transform data-panel-open:rotate-180" />
+                高级：逐 solver 规格
+              </CollapsibleTrigger>
+              <CollapsibleContent className="grid gap-4 pt-2">
+                {visibleRows.map((row, index) => (
+                  <div className="grid gap-2 rounded-lg border p-3" key={index}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium">
+                        Solver {index + 1}
+                      </span>
+                      <ModelRefPicker
+                        allowEmpty
+                        emptyLabel="跟随上方模型"
+                        onChange={(ref) => patchRow(index, { model: ref })}
+                        size="sm"
+                        value={row.model}
+                      />
+                    </div>
+                    <Textarea
+                      aria-label={`Solver ${index + 1} 专属提示词`}
+                      onChange={(event) =>
+                        patchRow(index, { prompt: event.target.value })
+                      }
+                      placeholder="该 solver 的专属提示词（可选）…"
+                      value={row.prompt}
+                    />
+                    <Select
+                      disabled={!row.prompt.trim()}
+                      items={PROMPT_MODE_LABELS}
+                      onValueChange={(value) =>
+                        patchRow(index, {
+                          mode: (value ?? "strategy") as SolverRow["mode"],
+                        })
+                      }
+                      value={row.mode}
+                    >
+                      <SelectTrigger className="h-8 text-xs" size="sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {(
+                          Object.keys(PROMPT_MODE_LABELS) as Array<
+                            keyof typeof PROMPT_MODE_LABELS
+                          >
+                        ).map((mode) => (
+                          <SelectItem key={mode} value={mode}>
+                            {PROMPT_MODE_LABELS[mode]}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
             <Alert>
               <Box />
               <AlertTitle>容器工具箱</AlertTitle>

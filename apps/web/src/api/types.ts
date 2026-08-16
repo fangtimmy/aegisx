@@ -122,22 +122,6 @@ export type FleetInfo = {
   status: SchedulerInfo["status"]
 }
 
-/** GET /api/orchestrations — plugin id/scope + declared slots + templates. */
-export type OrchestrationInfo = {
-  id: string
-  scope: "challenge" | "event"
-  label: string
-  description: string
-  agents: Array<{
-    slot: string
-    role: string
-    name: string
-    entry: boolean
-  }>
-  templates: Record<string, string>
-  templateKeys: string[]
-}
-
 /** GET/PATCH /api/prompt-templates — one row of the template store. */
 export type PromptTemplateRow = {
   plugin: string
@@ -153,9 +137,9 @@ export type SettingsResponse = {
     /** Builtin template defaults, keyed by template key (reset source). */
     promptTemplateDefaults: {
       mainSystem: string
-      childSystem: string
       initial: string
       orchestratorSystem: string
+      schedulerInitial: string
     }
     promptVariables: string[]
     orchestratorPromptVariables: string[]

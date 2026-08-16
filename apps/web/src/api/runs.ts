@@ -11,13 +11,11 @@ import type {
 } from "./types"
 
 export type CreateRunInput = {
-  /** Overrides the rendered `initial` template as the run's first prompt. */
-  prompt?: string
+  /** v9 run-level strategy — rendered into every solver's initial Strategy
+   *  section. */
+  strategy?: string
   /** Per-run hard deadline (ms). Defaults to scheduler.defaultRunTimeoutMs. */
   timeoutMs?: number
-  /** v9 run-level strategy — rendered into every solver's initial Strategy
-   *  section (replaces `prompt` once v9 UI lands). */
-  strategy?: string
   /** v9 solver count (1..4, default 1). */
   solver_count?: number
   /** v9 model ref applied to every solver. */
@@ -48,6 +46,23 @@ export function createRun(challengeId: string, input: CreateRunInput) {
 
 export function getRun(runId: string) {
   return apiRequest<RunDetail>(`/runs/${runId}`)
+}
+
+/** Add one more solver to a run (POST /api/runs/:runId/agents, design §3.3).
+ * `prompt` is required — expansion always comes with a job. A closed run is
+ * cold-restored first (the old solvers stay dormant until messaged). */
+export function addRunAgent(
+  runId: string,
+  input: {
+    prompt: string
+    model?: string
+    promptMode?: "strategy" | "override"
+  }
+) {
+  return apiRequest<RunPublic>(
+    `/runs/${runId}/agents`,
+    jsonRequest("POST", input)
+  )
 }
 
 export function stopRun(runId: string) {

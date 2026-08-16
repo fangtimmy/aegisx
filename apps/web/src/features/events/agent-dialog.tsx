@@ -238,7 +238,7 @@ export function AgentDialog({
               value="overview"
             >
               <ScrollArea className="h-full" scrollFade>
-                <RunOverview run={run} />
+                <RunOverview agents={agents} run={run} />
               </ScrollArea>
             </TabsPanel>
             {run.scopeType === "event" && (

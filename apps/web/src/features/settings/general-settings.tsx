@@ -16,6 +16,8 @@ import {
 import { Label } from "@/components/ui/label"
 import { Radio, RadioGroup } from "@/components/ui/radio-group"
 
+import { PromptTemplatesSettings } from "./prompt-templates-settings"
+
 const themes = [
   { label: "跟随系统", value: "system" },
   { label: "浅色", value: "light" },
@@ -284,6 +286,7 @@ export function GeneralSettings() {
           </CardPanel>
         </Card>
       </CardFrame>
+      <PromptTemplatesSettings />
     </div>
   )
 }

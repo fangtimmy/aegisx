@@ -737,6 +737,7 @@ export function createRunService(options: RunServiceOptions) {
     create: runFactory.create,
     addAgent: runFactory.addAgent,
     resolveAndCreate: schedulerAdmin.resolveAndCreate,
+    assertModelsResolvable: schedulerAdmin.assertModelsResolvable,
     stop,
     switchModel,
     finish,

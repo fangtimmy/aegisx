@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Box, CircleAlert, Clock3, Play, RefreshCw, Square } from "lucide-react"
 
-import type { RunPublic, RunStatus } from "@/api"
+import type { AgentSummary, RunPublic, RunStatus } from "@/api"
 import { challengesApi, keys } from "@/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { AddSolverDialog } from "@/features/runs/add-solver-dialog"
+import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import { formatTime } from "@/lib/format"
 import { toast } from "@/lib/toast"
 
@@ -34,7 +36,15 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`
 }
 
-export function RunOverview({ run }: { run: RunPublic }) {
+export function RunOverview({
+  run,
+  agents,
+}: {
+  run: RunPublic
+  /** The run's agents (AgentDialog passes detail.agents) — drives the
+   * solver roster + the add-solver entry for challenge runs. */
+  agents?: AgentSummary[]
+}) {
   return (
     <div className="flex flex-col gap-4 px-6 py-4">
       <Alert>
@@ -87,6 +97,9 @@ export function RunOverview({ run }: { run: RunPublic }) {
           <dd className="mt-1">{formatTime(run.completedAt)}</dd>
         </div>
       </dl>
+      {agents && agents.length > 0 && run.scopeType === "challenge" && (
+        <SolverRoster agents={agents} run={run} />
+      )}
       {run.usage && (
         <section className="border-t pt-4">
           <h3 className="mb-2 text-sm font-medium">Token 用量与费用</h3>
@@ -158,6 +171,63 @@ export function RunOverview({ run }: { run: RunPublic }) {
         </Alert>
       )}
     </div>
+  )
+}
+
+/** The challenge run's solver roster (design §2.1): slot + model per
+ * solver, entry marker, and the「添加 solver」 entry (POST
+ * /api/runs/:runId/agents). */
+function SolverRoster({
+  run,
+  agents,
+}: {
+  run: RunPublic
+  agents: AgentSummary[]
+}) {
+  // The next slot's 1-based index: max solver-N + 1 (add_agent's server-side
+  // slot rule), for the dialog label only.
+  const nextIndex =
+    Math.max(
+      0,
+      ...agents.map((agent) => {
+        const slot = /^(?:solver-)(\d+)$/.exec(agent.slot)
+        return slot ? Number(slot[1]) : 0
+      })
+    ) + 1
+  return (
+    <section className="border-t pt-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="mr-auto text-sm font-medium">Solvers</h3>
+        <AddSolverDialog
+          eventId={run.eventId}
+          nextIndex={nextIndex}
+          runId={run.id}
+        />
+      </div>
+      <div className="mt-3 divide-y overflow-hidden rounded-lg border">
+        {agents.map((agent) => (
+          <div className="flex items-center gap-3 px-3 py-2" key={agent.id}>
+            <AgentStatusIcon status={agent.status} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                {agent.name ?? agent.slot}
+                {agent.isEntry && (
+                  <Badge size="sm" variant="outline">
+                    入口
+                  </Badge>
+                )}
+              </div>
+              <code className="text-[11px] text-muted-foreground">
+                {agent.slot}
+              </code>
+            </div>
+            <code className="truncate font-mono text-[11px] text-muted-foreground">
+              {agent.model ?? "默认模型"}
+            </code>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 

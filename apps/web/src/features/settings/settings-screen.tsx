@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Boxes,
   CircleAlert,
-  Layers,
   Settings2,
   SlidersHorizontal,
   Tags,
@@ -36,18 +35,16 @@ import { cn } from "@/lib/utils"
 
 import { GeneralSettings } from "./general-settings"
 import { ModelAliases } from "./model-aliases"
-import { OrchestrationSettings } from "./orchestration-settings"
 import { ProviderDetail } from "./provider-detail"
 import { ProviderDialog } from "./provider-dialog"
 import { SchemaSettingsForm } from "./schema-form"
 
-type SettingsSection = "general" | "models" | "settings" | "orchestration"
+type SettingsSection = "general" | "models" | "settings"
 
 const sectionPaths: Record<SettingsSection, string> = {
   general: "/settings/general",
   models: "/settings/models",
   settings: "/settings/settings",
-  orchestration: "/settings/orchestration",
 }
 
 export function SettingsScreen() {
@@ -137,9 +134,6 @@ export function SettingsScreen() {
           <TabsTab value="settings">
             <Settings2 aria-hidden="true" /> 设置
           </TabsTab>
-          <TabsTab value="orchestration">
-            <Layers aria-hidden="true" /> 编排
-          </TabsTab>
         </TabsList>
       </div>
       <div className="min-w-0 flex-1">
@@ -160,9 +154,6 @@ export function SettingsScreen() {
               </CardPanel>
             </Card>
           </CardFrame>
-        </TabsPanel>
-        <TabsPanel value="orchestration">
-          <OrchestrationSettings />
         </TabsPanel>
         <TabsPanel value="models">
           <div className="grid min-w-0 grid-cols-[18rem_minmax(0,1fr)] gap-4">

@@ -35,10 +35,4 @@ export const keys = {
   promptTemplates: {
     all: ["prompt-templates"] as const,
   },
-  orchestrations: {
-    all: ["orchestrations"] as const,
-  },
-  orchestrationConfig: {
-    all: ["orchestration-config"] as const,
-  },
 }
