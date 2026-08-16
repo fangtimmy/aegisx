@@ -1,7 +1,8 @@
 # 真实赛事复盘：编排层暴露的九个问题与改进方向
 
 状态：**记录，未实施**（2025-08，几场真实赛事后的复盘结论）
-关系：这些改进将在编排简化重构（[orchestration-v9-simplify.md](orchestration-v9-simplify.md)）之后按 §11 的优先级落地；其中问题 1 的「启动时选模型」会被 v9 结构性解决（入队输入原生携带模型）。
+关系：这些改进将在编排简化重构（[orchestration-v9-simplify.md](orchestration-v9-simplify.md)）之后按 §11 的优先级落地。
+已解决：§0 的 params 静默丢弃 bug 随 v9 删除 `orchestration/params` 概念而消灭；§1「启动时选模型」已由 v9 结构性解决（入队输入原生携带模型）；§4（通知风暴）与 §7a（时间可见性）已有设计稿 [scheduler-inbox.md](scheduler-inbox.md)（待实施）。
 
 ---
 

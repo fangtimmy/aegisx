@@ -3,7 +3,7 @@
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, an event task queue (scheduler), and token usage.
 
 > **Schema v14（v9 编排简化）** — 插件编排与 spawn child 已删除：challenge run = 1..N 个平等 solver，event run = 1 个调度者（内建唤醒）；迁移 `0008_v14_orchestration_drop`（wipe 执行态）。v13 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。
-> Design notes: [docs/orchestration-v9-simplify.md](docs/orchestration-v9-simplify.md) (current, v9)；[docs/orchestration-redesign.md](docs/orchestration-redesign.md)（v8，已 SUPERSEDED）。
+> Design notes: [docs/orchestration-v9-simplify.md](docs/orchestration-v9-simplify.md) (current, v9)。
 
 ## Requirements
 
@@ -29,7 +29,7 @@ The API stores its SQLite database, attachments, and run workspaces under `data/
 
 The agent loop runs **host-side in-process** via the pi SDK. `bash` and the CTF toolchain execute inside a dedicated Kali container (a long-lived `sleep infinity` tool box, workspace bind-mounted at `/workspace`) over `docker exec`; the file tools (`read`/`edit`/`write`/`grep`/`find`/`ls`) operate on the host workspace, which is shared with the container. Container resources (CPU, memory, PIDs) are configurable.
 
-Each run has one main agent and may spawn background child agents (`spawn_agent`).
+A challenge run hosts 1..N parallel solvers sharing one container and workspace (each solver has its own model and optional per-solver prompt); an event run hosts a single scheduler that manages the event's task queue.
 
 ## Solve container image
 

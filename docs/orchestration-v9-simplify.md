@@ -2,7 +2,7 @@
 
 状态：**已实施**（WP1–WP6 全部完成；`bun run check` / `bun run test` / `bun run build` 全绿）
 前置：[field-findings.md](field-findings.md)（复盘问题记录；问题 1「启动选模型」由本重构结构性解决）
-取代：[orchestration-redesign.md](orchestration-redesign.md)（v8；已标 SUPERSEDED）
+取代：v8 编排插件设计（历史版本，已删除）
 
 ---
 
@@ -256,7 +256,7 @@ per-agent 锁+代次；run 状态 SQL 派生 + sanctioned closed；finishing 原
 |---|---|---|
 | **P1 schema + 创建核心** | v14 迁移（wipe + DDL + 模板收敛至 4 键）；run-factory 去插件化（直接建 N solver 行 + per-solver initial + prime）；restore 简化；child-agents 全链删除；model-resolver/routes 输入变化 | N=1 与 v8 classic 全 parity（创建/prime/finish/超时/冷恢复/模型切换）；N=3 并行 + finish 竞态；per-solver 提示词两模式渲染；入队模型校验拒绝路径 |
 | **P2 调度者内建化 + agent 级寻址** | 内建唤醒模块；scheduler-admin 模型直解；调度者工具更新（strategy/solvers/add_agent/message_agent/read_run agent 级）；orchestratorSystem/schedulerInitial 模板刷新；队列 upsert key=challengeId | 6 事件唤醒 parity；paused 静默；调度者冷恢复重挂；add_agent 三态（running/idle/closed 不唤醒旧 agent）；message_agent 跨 run 冷恢复 |
-| **P3 前端 + 清理** | create-run 弹窗；run 详情加 agent；设置页收敛；orchestration 标签清理；shared 字段删除；删插件/child 测试；文档转正（本文件 + orchestration-redesign 标记 superseded） | `bun run check` + 全量测试；web build |
+| **P3 前端 + 清理** | create-run 弹窗；run 详情加 agent；设置页收敛；orchestration 标签清理；shared 字段删除；删插件/child 测试；文档转正 | `bun run check` + 全量测试；web build |
 
 ## 十二、已定决策记录
 
