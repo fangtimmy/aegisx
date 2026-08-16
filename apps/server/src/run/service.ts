@@ -1,5 +1,5 @@
 import type { Database as Sqlite } from "bun:sqlite"
-import { rmSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 import type { RunPublic, SwitchModelInput } from "@aegisx/shared"
@@ -33,6 +33,7 @@ import {
   isTargetCapable,
 } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
+import { generateModelsJson } from "../providers/models-json"
 import { getProviderConnections } from "../providers/public"
 import { createAgentSessionOps } from "./agent-session-ops"
 import type { ContainerManager } from "./container/container-manager"
@@ -366,6 +367,36 @@ export function createRunService(options: RunServiceOptions) {
     return requireRun(runId)
   }
 
+  /** Lazy model-runtime sync: regenerate the run's models.json from the
+   * current providers and hot-reload its ModelRuntime (pi SDK refresh re-reads
+   * models.json + rebuilds providers), making providers/models added while the
+   * run is live visible to model switches. Single-flighted per run so
+   * concurrent triggers (parallel agent switches) coalesce; agents keep their
+   * own model snapshot until explicitly switched, so this only affects the
+   * switch that requested it. */
+  const runtimeRefreshes = new Map<string, Promise<void>>()
+  function refreshRunModelRuntime(runId: string): Promise<void> {
+    const existing = runtimeRefreshes.get(runId)
+    if (existing) return existing
+    const pending = (async () => {
+      const ctx = contexts.get(runId)
+      if (!ctx) return
+      mkdirSync(runtimeAbs(runId), { recursive: true })
+      writeFileSync(
+        join(runtimeAbs(runId), "models.json"),
+        `${JSON.stringify(generateModelsJson(providers()), null, 2)}\n`
+      )
+      // allowNetwork: false — the run's models.json is the only model source
+      // (offline semantics like createRunModelRuntime); a network catalog
+      // refresh would hit pi.dev and can hang/block the switch.
+      await ctx.modelRuntime.refresh({ allowNetwork: false })
+    })().finally(() => {
+      runtimeRefreshes.delete(runId)
+    })
+    runtimeRefreshes.set(runId, pending)
+    return pending
+  }
+
   /** Per-agent model switch (POST /api/agents/:agentId/model + the run-level
    * entry switch). Takes effect next turn; persists the snapshot on the agent
    * row. Serialized on the agent's lock against its turns. */
@@ -399,11 +430,30 @@ export function createRunService(options: RunServiceOptions) {
             agentRow?.model ?? null
           )
         ).target
-      } catch (error) {
-        throw new RunActionError(
-          "invalid_state",
-          error instanceof Error ? error.message : String(error)
-        )
+      } catch {
+        // The target may be a provider/model added while the run was live —
+        // missing from this run's ModelRuntime snapshot. Lazy-refresh the
+        // runtime once and retry; a genuine resolution failure (bad ref,
+        // disabled/unconfigured model) fails the retry with the same error.
+        await refreshRunModelRuntime(runId).catch(() => undefined)
+        try {
+          target = (
+            await applyModelSwitch(
+              session,
+              providers(),
+              configStore.getAliases(),
+              input.model,
+              agentRow?.model ?? null
+            )
+          ).target
+        } catch (retryError) {
+          throw new RunActionError(
+            "invalid_state",
+            retryError instanceof Error
+              ? retryError.message
+              : String(retryError)
+          )
+        }
       }
       updateAgent(agentId, {
         model: formatModelRef(

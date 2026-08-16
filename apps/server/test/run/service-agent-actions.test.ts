@@ -72,7 +72,7 @@ function makeService(
   db: ReturnType<typeof setupDb>["db"],
   sqlite: ReturnType<typeof setupDb>["sqlite"],
   dir: string,
-  provider: ReturnType<typeof makeProvider>
+  providers: ReturnType<typeof makeProvider>[]
 ) {
   const { manager } = stubContainerManager()
   const prepared: string[] = []
@@ -90,7 +90,7 @@ function makeService(
         expiresAt: null,
       }),
     } as never,
-    configStore: stubConfigStore([provider]),
+    configStore: stubConfigStore(providers),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(
       async (input: { agentId: string; modelRuntime: unknown }) => {
@@ -126,7 +126,7 @@ describe("per-agent actions (spec §10)", () => {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service, prepared } = makeService(db, sqlite, dir, provider)
+      const { service, prepared } = makeService(db, sqlite, dir, [provider])
 
       const run = await service.create(baseCreateInput("ch-1"))
       const [agent] = service.listAgents(run.id)
@@ -159,7 +159,7 @@ describe("per-agent actions (spec §10)", () => {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service } = makeService(db, sqlite, dir, provider)
+      const { service } = makeService(db, sqlite, dir, [provider])
 
       const run = await service.create(baseCreateInput("ch-1"))
       const [agent] = service.listAgents(run.id)
@@ -185,7 +185,7 @@ describe("per-agent actions (spec §10)", () => {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service, aborted } = makeService(db, sqlite, dir, provider)
+      const { service, aborted } = makeService(db, sqlite, dir, [provider])
 
       const run = await service.create(baseCreateInput("ch-1"))
       const [agent] = service.listAgents(run.id)
@@ -206,7 +206,7 @@ describe("per-agent actions (spec §10)", () => {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service } = makeService(db, sqlite, dir, provider)
+      const { service } = makeService(db, sqlite, dir, [provider])
 
       await expect(
         service.sendAgentMessage("ghost", { text: "hi" })
@@ -217,6 +217,52 @@ describe("per-agent actions (spec §10)", () => {
       await expect(service.stopAgent("ghost")).rejects.toThrow(
         "Agent not found"
       )
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("switchAgentModel lazy-refreshes the run runtime for providers added while live", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const providers = [twoModelProvider()]
+      const { service, prepared } = makeService(db, sqlite, dir, providers)
+
+      const run = await service.create(baseCreateInput("ch-1"))
+      const [agent] = service.listAgents(run.id)
+      expect(prepared).toHaveLength(1)
+
+      // Simulate adding a brand-new custom provider while the run is live: its
+      // model is absent from the run's ModelRuntime snapshot, so the switch
+      // must lazy-refresh the runtime and retry.
+      providers.push({
+        id: "prov-2",
+        label: "New Provider",
+        type: "openai-compatible",
+        baseUrl: "https://new.example.com/v1",
+        apiKey: "new-key",
+        enabled: true,
+        models: [
+          {
+            id: "model-3",
+            modelId: "new-model",
+            label: "New Model",
+            enabled: true,
+            metadata: "{}",
+            piProviderId: null,
+            piModelId: null,
+          },
+        ],
+      })
+
+      await service.switchAgentModel(agent.id, {
+        model: "aegisx-prov-2/new-model:off",
+      })
+      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+      expect(row.model).toBe("aegisx-prov-2/new-model:off")
       await service.close()
     } finally {
       close()
