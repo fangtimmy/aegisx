@@ -48,7 +48,7 @@ export function getRun(runId: string) {
   return apiRequest<RunDetail>(`/runs/${runId}`)
 }
 
-/** Add one more solver to a run (POST /api/runs/:runId/agents, design §3.3).
+/** Add one more solver to a run (POST /api/runs/:runId/agents).
  * `prompt` is required — expansion always comes with a job. A closed run is
  * cold-restored first (the old solvers stay dormant until messaged). */
 export function addRunAgent(

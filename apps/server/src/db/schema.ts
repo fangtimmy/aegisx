@@ -124,7 +124,7 @@ export const attachments = sqliteTable(
  * (scopeType='event') IS the scheduler — the former standalone `orchestrators`
  * table is merged in here.
  *
- * Run status is SQL-derived from agent statuses (running↔idle, §4.5b) plus
+ * Run status is SQL-derived from agent statuses (running↔idle) plus
  * sanctioned explicit `closed` transitions (finish / close / timeout-SIGKILL /
  * recoverOnBoot). The `finishing` column is set atomically by finish_run
  * (rows-affected decides who teardowns); once set the aggregate SQL won't flip

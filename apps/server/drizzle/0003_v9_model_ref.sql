@@ -8,7 +8,8 @@
 -- string used everywhere else (orchestration slot config, model-switch API,
 -- aliases), so the whole system speaks one representation.
 --
--- Migration strategy (same as v8 §14.1): the execution-state tables are
+-- Migration strategy (same as the v8 run migration): the execution-state
+-- tables are
 -- transient and the column change is structural, so DROP+recreate runs/agents
 -- (cascade-wiping sessions/session_entries) rather than an in-place ALTER.
 -- Catalog/history tables (events, challenges, challenge_flags, ...) are

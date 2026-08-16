@@ -172,7 +172,7 @@ function CreateRunDialogContent({
   // The rows visible under the current solver count.
   const visibleRows = rows.slice(0, solverCount)
   // Advanced = any per-solver customization; then the solvers array wins over
-  // the run-level model (server-side precedence, design §3.5).
+  // the run-level model (server-side precedence).
   const advanced = visibleRows.some((row) => row.model || row.prompt.trim())
 
   const mutation = useMutation({

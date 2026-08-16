@@ -24,7 +24,7 @@ function createTestApp() {
   return instance.app
 }
 
-describe("prompt template store API (spec §10)", () => {
+describe("prompt template store API", () => {
   test("GET lists the seeded builtin templates", async () => {
     const app = createTestApp()
     const response = await app.request("/api/prompt-templates")

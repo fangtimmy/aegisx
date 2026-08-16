@@ -87,7 +87,7 @@ function solverRows(db: Db, runId: string) {
 
 const settle = () => new Promise((r) => setTimeout(r, 10))
 
-describe("add_agent (design §3.3)", () => {
+describe("add_agent", () => {
   test("on a running run: new solver primes in parallel, the old solver gets no new turn", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {

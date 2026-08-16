@@ -67,7 +67,7 @@ function enqueue(
   })
 }
 
-describe("queue CRUD (spec §8.1)", () => {
+describe("queue CRUD", () => {
   test("enqueue assigns increasing ord; list returns pending+running+failed FIFO", async () => {
     const { db, close } = setupDb()
     try {
@@ -383,7 +383,7 @@ describe("queue per-event state (W2.1)", () => {
   })
 })
 
-describe("queue drainer (spec §8.2)", () => {
+describe("queue drainer", () => {
   test("drainOnce launches pending items FIFO and marks them running", async () => {
     const { db, close } = setupDb()
     try {

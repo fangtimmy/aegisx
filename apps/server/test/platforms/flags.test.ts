@@ -4,7 +4,7 @@ import { createStorage } from "../../src/infrastructure/storage"
 import { createPlatformService } from "../../src/platforms/service"
 import { seedChallenge, seedEvent, setupDb, stubConfigStore } from "../helpers"
 
-describe("platform flags → run hook (spec §3.5)", () => {
+describe("platform flags → run hook", () => {
   function makePlatform(db: ReturnType<typeof setupDb>["db"], dir: string) {
     const accepted: string[] = []
     const platform = createPlatformService(

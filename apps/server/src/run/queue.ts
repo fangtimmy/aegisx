@@ -51,8 +51,8 @@ export type EnqueueInput = {
   source: "manual" | "scheduler"
 }
 
-/** The v9 launch specs a queue row carries (the parsed `params` JSON column,
- * design §3.5): everything the drainer forwards to resolveAndCreate. */
+/** The v9 launch specs a queue row carries (the parsed `params` JSON column):
+ * everything the drainer forwards to resolveAndCreate. */
 export type QueueLaunchSpecs = {
   strategy?: string
   model?: string
@@ -198,7 +198,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     const ts = now()
     // The `prompt` column keeps the run-level strategy (display); the v9
     // launch specs (strategy included) live in the `params` JSON for the
-    // drainer to forward (design §3.5).
+    // drainer to forward.
     const strategy = input.strategy ?? input.prompt ?? ""
     const params = JSON.stringify(launchParamsOf(input, strategy))
     const prompt = strategy

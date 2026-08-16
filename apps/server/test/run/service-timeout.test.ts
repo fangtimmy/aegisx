@@ -29,8 +29,8 @@ type Db = ReturnType<typeof setupDb>
 
 /**
  * A session that stays streaming (its prompt never settles) so the timeout
- * path sees a live agent. `abortResolves` selects the grace outcome (spec
- * §8.3): true → abort clears streaming so the run settles within the grace and
+ * path sees a live agent. `abortResolves` selects the grace outcome:
+ * true → abort clears streaming so the run settles within the grace and
  * stays warm (`outcome: 'idle'`); false → abort is a no-op, the run is still
  * streaming past the grace, gets SIGKILLed (`outcome: 'closed'`).
  */
@@ -98,7 +98,7 @@ async function createHangingRun(
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-describe("run timeout (spec §8.3)", () => {
+describe("run timeout", () => {
   test("deadline → abort → all settle within grace → run stays idle (warm), container kept", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {

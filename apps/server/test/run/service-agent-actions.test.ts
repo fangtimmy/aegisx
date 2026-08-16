@@ -119,7 +119,7 @@ function makeService(
   return { service, prepared, aborted }
 }
 
-describe("per-agent actions (spec §10)", () => {
+describe("per-agent actions", () => {
   test("sendAgentMessage cold-restores a closed run's agent and drives a fresh turn", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {

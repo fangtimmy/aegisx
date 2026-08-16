@@ -424,7 +424,7 @@ export function patchSettings(
 /**
  * Pre-v8 prompt templates lived in FlatSettings (`prompts.*`) and, before
  * flattening, as `*PromptTemplate` keys. v8 keeps them in the prompt_templates
- * table (spec §3.6); boot reads a raw config document with this helper so user
+ * table; boot reads a raw config document with this helper so user
  * edits carry across. Values are keyed by template key (mainSystem / …).
  */
 const LEGACY_PROMPT_TEMPLATE_KEYS: Record<string, string> = {

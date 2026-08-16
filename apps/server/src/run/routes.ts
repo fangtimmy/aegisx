@@ -21,7 +21,7 @@ import { streamRun } from "./sse"
 
 /** Manual enqueue body (POST /api/challenges/:id/runs enqueues, returns a
  * queue item). Models resolve at launch; the run-level strategy shapes every
- * solver's first turn (design §3.4). */
+ * solver's first turn. */
 const runInput = Type.Object(
   {
     /** Legacy alias of `strategy` (pre-v9 clients). */
@@ -124,7 +124,7 @@ const queueInput = Type.Object(
   { additionalProperties: false }
 )
 
-/** Add-agent body (POST /api/runs/:runId/agents, design §3.3): dynamically
+/** Add-agent body (POST /api/runs/:runId/agents): dynamically
  * expand a run with one more solver. `prompt` is required — expansion always
  * comes with a job. */
 const addAgentInput = Type.Object(
@@ -173,7 +173,7 @@ export function registerRunRoutes(
 
         // Enqueue, then run one drain pass so a launchable task is
         // started synchronously; the item stays pending if the fence is full.
-        // Fail fast on an unresolvable model ref (design §3.4) — otherwise it
+        // Fail fast on an unresolvable model ref — otherwise it
         // would surface only at (auto-)launch, as a failed queue item.
         runService.assertModelsResolvable(input.model, input.solvers)
         const queue = runService.queue()
@@ -337,7 +337,7 @@ export function registerRunRoutes(
     }
   )
 
-  // Dynamically add one more solver to a run (design §3.3): running/idle runs
+  // Dynamically add one more solver to a run: running/idle runs
   // gain it in place; a closed run is cold-restored first (the old solvers
   // stay dormant until messaged).
   app.post(

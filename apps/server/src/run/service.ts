@@ -162,8 +162,8 @@ export function createRunService(options: RunServiceOptions) {
     LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
     DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE
   )
-  // Idempotent guard for the WP2→WP3a window: re-delete any plugin-owned
-  // template rows that might have been re-seeded in between.
+  // Idempotent guard: plugin-owned template rows (a pre-v9 concept) must
+  // never come back — re-delete any that got re-seeded.
   db.run(sql`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
 
   /** Per-agent promise-chaining locks (the only concurrency mechanism). */
@@ -788,8 +788,8 @@ export function createRunService(options: RunServiceOptions) {
   // Construct the queue service now that resolveAndCreate + the failure
   // notifier exist. The drainer's launch callback builds the run from the
   // queue item's snapshot — the v9 launch specs stored in the item's `params`
-  // JSON (design §3.5), with the `prompt` column as the strategy fallback for
-  // rows written before the params serialization landed.
+  // JSON, with the `prompt` column as the strategy fallback for rows written
+  // before the params serialization landed.
   queue = createQueueService({
     db,
     getSettings,

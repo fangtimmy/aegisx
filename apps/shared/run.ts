@@ -60,7 +60,7 @@ export type RunPublic = {
   updatedAt: string
   completedAt: string | null
   /** When the hard deadline last fired (abort branch); null until the first
-   * timeout. Timeline source (spec §十一: run.timedOut{outcome}). */
+   * timeout. Timeline source: the run.timedOut{outcome} lifecycle event. */
   lastTimeoutAt: string | null
   error: string | null
   summary: string | null

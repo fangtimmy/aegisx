@@ -113,7 +113,7 @@ export function registerSettingsRoutes(
       return previewSystemPrompt(template, samplePromptContext)
     }
     if (kind === "childSystemPrompt") {
-      // v9: childSystem is gone; kept as an accepted kind so pre-WP5 clients
+      // v9: childSystem is gone; kept as an accepted kind so older clients
       // get a sane preview instead of a validation error.
       return previewSystemPrompt(template, childSampleContext)
     }

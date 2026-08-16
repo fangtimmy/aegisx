@@ -163,8 +163,8 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   }
 
   /** All model refs addressable right now (enabled providers × enabled
-   * models) — the unresolvable-ref error text. Derived from providers()
-   * (design §7.2); refs are shown without the optional :effort suffix. */
+   * models) — the unresolvable-ref error text. Derived from providers(); refs
+   * are shown without the optional :effort suffix. */
   function availableModelRefs(): string[] {
     const refs: string[] = []
     for (const provider of providers()) {
@@ -215,7 +215,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   }
 
   /** Resolve container settings and launch a challenge run (direct start:
-   * scheduler start_run + queue drainer). v9 launch specs (design §3.5):
+   * scheduler start_run + queue drainer). v9 launch specs:
    * `solvers` wins; else `solverCount` × `model`; else the create defaults. */
   async function resolveAndCreate(input: {
     challengeId: string
@@ -262,13 +262,13 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return deps.requireRun(runId)
   }
 
-  /** Character budget for read_run's recent-messages body (design §7.2). */
+  /** Character budget for read_run's recent-messages body. */
   const READ_RUN_CHAR_BUDGET = 20_000
-  /** read_run's default message count (design §7.2). */
+  /** read_run's default message count. */
   const READ_RUN_DEFAULT_LAST_N = 10
 
-  /** Read a run for the scheduler, parameterized to agent level (design
-   * §7.2): status header (agent/run status numbers, deadline remaining, last
+  /** Read a run for the scheduler, parameterized to agent level:
+   * status header (agent/run status numbers, deadline remaining, last
    * message time) + the target agent's last-n renderable message lines.
    * Defaults to the entry agent; `lastAssistant` is the fallback when the
    * agent has no renderable messages yet. */

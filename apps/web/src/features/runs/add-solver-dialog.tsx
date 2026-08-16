@@ -32,8 +32,8 @@ const PROMPT_MODE_LABELS = {
   override: "完全替换 initial",
 } as const
 
-/** Run-detail「添加 solver」entry (POST /api/runs/:runId/agents, design
- * §3.3): one more solver with its own model + required prompt. A closed run
+/** Run-detail「添加 solver」entry (POST /api/runs/:runId/agents):
+ * one more solver with its own model + required prompt. A closed run
  * is cold-restored server-side (the old solvers stay dormant). */
 export function AddSolverDialog({
   runId,

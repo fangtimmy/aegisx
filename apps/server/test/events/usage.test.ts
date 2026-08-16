@@ -98,7 +98,7 @@ function seedEntry(
     .run()
 }
 
-describe("event usage API (spec §10, session_entries.runId aggregation)", () => {
+describe("event usage API (session_entries.runId aggregation)", () => {
   test("GET aggregates usage across every run of the event (scheduler included)", async () => {
     const { app, dataDir } = createTestApp()
     const event = (await (

@@ -57,7 +57,7 @@ const challenge = (eventId: string, id: string) => ({
   challengeId: id,
 })
 
-describe("launch fence (spec §8.2)", () => {
+describe("launch fence", () => {
   test("admits when under the global cap; rejects at the cap", () => {
     const { db, close } = setupDb()
     try {

@@ -26,7 +26,7 @@ const containerInput = {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 
-describe("scheduler event wiring (spec §3.5)", () => {
+describe("scheduler event wiring", () => {
   test("challenge run going idle wakes the scheduler's orchestrator", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {

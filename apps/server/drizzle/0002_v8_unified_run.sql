@@ -1,6 +1,6 @@
 -- v8: unify run + orchestration ("统一 Run + 编排插件").
 --
--- Migration strategy (spec §14.1): preserve catalog/history tables (events,
+-- Migration strategy: preserve catalog/history tables (events,
 -- event_platforms, challenges, challenge_remote, attachments, challenge_flags,
 -- platform_request_log) untouched; WIPE execution-state tables (their rows are
 -- transient and the v8 structure differs substantially — a data-preserving

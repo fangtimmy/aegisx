@@ -42,7 +42,7 @@ export type SchedulerStatusSnapshot = {
   }>
 }
 
-/** Agent-level read_run result (design §7.2): the run + agents overview, the
+/** Agent-level read_run result: the run + agents overview, the
  * target agent's status-header numbers, and its recent message lines. */
 export type RunReadResult = {
   run: RunPublic

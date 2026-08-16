@@ -47,7 +47,7 @@ function textResult(text: string, details?: unknown) {
  * snapshot is the single source of truth — the tools created here are exactly
  * the granted names (finish_run only when the snapshot has it, so a bootstrap
  * agent truly has no finish capability), and capabilities derived for prompt
- * rendering come from the same list (§3.7).
+ * rendering come from the same list.
  */
 export function createMainTools(ctx: RunToolContext, tools: string[]) {
   const has = (name: string) => tools.includes(name)

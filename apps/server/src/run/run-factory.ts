@@ -260,9 +260,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
       : []),
   ]
 
-  /** The event-scope scheduler's tool snapshot (agent-level addressing
-   * included; the add_agent/message_agent implementations land in WP4 — the
-   * snapshot is granted up front). */
   /** Scheduler management tools (the 18 native tools). EMPTY after the SDK
    * convergence (docs/scheduler-python-sdk.md): the orchestrator manages via
    * the container-side `aegisx` Python SDK + bash, not native tools. The tool
@@ -1081,7 +1078,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
     return promise
   }
 
-  /** Add one more solver to an existing challenge run (design §3.3): slot =
+  /** Add one more solver to an existing challenge run: slot =
    * max solver index + 1, first turn rendered with the same SolverSpec
    * semantics as create (override = the raw prompt). A closed run is
    * cold-restored first (fence inside restoreRunContextOnce) WITHOUT waking
@@ -1128,7 +1125,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
       throw new RunActionError("invalid_state", "Run context is not live")
     }
     // The expansion baseline model is the run's stored ref (solver-1's)
-    // unless the spec overrides it (design §2.1).
+    // unless the spec overrides it.
     const slotModel = modelResolver.resolveSlotModelFromRef(
       spec.model ?? row.model
     )

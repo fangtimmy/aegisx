@@ -156,10 +156,10 @@ describe("classic-parity: N=1 solver run (v9 path)", () => {
       expect(tools).toContain("submit_flag")
       expect(tools).not.toContain("spawn_agent")
       expect(tools).not.toContain("read_agent")
-      // Target tools stay conditional on target capability (spec §6).
+      // Target tools stay conditional on target capability.
       expect(tools.filter((t) => t.endsWith("_target"))).toEqual([])
       // mainSystem rendered WITH the submit_flag section — the tool records
-      // non-platform flags as locally accepted (spec §7.1 / flags.ts).
+      // non-platform flags as locally accepted (see flags.ts).
       expect(agent.systemPrompt).toContain("CTF-solving agent")
       expect(agent.systemPrompt).toContain("submit_flag")
     } finally {

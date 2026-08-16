@@ -174,7 +174,7 @@ export function RunOverview({
   )
 }
 
-/** The challenge run's solver roster (design §2.1): slot + model per
+/** The challenge run's solver roster: slot + model per
  * solver, entry marker, and the「添加 solver」 entry (POST
  * /api/runs/:runId/agents). */
 function SolverRoster({
