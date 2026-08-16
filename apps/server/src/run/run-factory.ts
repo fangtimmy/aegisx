@@ -1051,6 +1051,102 @@ export function createRunFactory(deps: RunFactoryDeps) {
     return promise
   }
 
+  /** Add one more solver to an existing challenge run (design §3.3): slot =
+   * max solver index + 1, first turn rendered with the same SolverSpec
+   * semantics as create (override = the raw prompt). A closed run is
+   * cold-restored first (fence inside restoreRunContextOnce) WITHOUT waking
+   * the old solvers — only the new agent is prepared + primed (the same
+   * "restore touches only the triggered agent" semantics as messaging a
+   * closed run). run.model / the entry agent never change. */
+  async function addAgent(
+    runId: string,
+    spec: {
+      model?: string
+      prompt: string
+      promptMode?: "strategy" | "override"
+    }
+  ): Promise<RunPublic> {
+    const row = queries.getRow(runId)
+    if (!row) throw new RunActionError("not_found", "Run not found")
+    if (row.scopeType !== "challenge") {
+      throw new RunActionError(
+        "invalid_state",
+        "Only challenge runs can gain solvers"
+      )
+    }
+    // Slot numbering + the cap over the persisted solver rows.
+    const solverIndexes = db
+      .select({ slot: agents.slot })
+      .from(agents)
+      .where(and(eq(agents.runId, runId), eq(agents.role, "solver")))
+      .all()
+      .map(({ slot }) => Number(/^solver-(\d+)$/.exec(slot)?.[1] ?? 0))
+    const maxIndex = solverIndexes.reduce((max, n) => Math.max(max, n), 0)
+    if (solverIndexes.length >= MAX_SOLVERS_PER_RUN) {
+      throw new RunActionError(
+        "invalid_state",
+        `A run supports at most ${MAX_SOLVERS_PER_RUN} solvers`
+      )
+    }
+    // Closed → cold-restore the run context (fence + container rebuild);
+    // running/idle continue on the live context. No old agent is prepared.
+    if (row.status === "closed") {
+      await restoreRunContextOnce(runId, row)
+    }
+    const context = contexts.get(runId)
+    if (!context) {
+      throw new RunActionError("invalid_state", "Run context is not live")
+    }
+    // The expansion baseline model is the run's stored ref (solver-1's)
+    // unless the spec overrides it (design §2.1).
+    const slotModel = modelResolver.resolveSlotModelFromRef(
+      spec.model ?? row.model
+    )
+    const templateMap = loadTemplateMap(db)
+    const tools = SOLVER_TOOLS(
+      context.promptContext.run?.targetSupported ?? false
+    )
+    const index = maxIndex + 1
+    const systemPrompt = renderTemplate(templateMap, "mainSystem", {
+      ...context.promptContext,
+      // The new solver always has teammates → render the co-solver section
+      // regardless of what the (possibly stale) run context captured.
+      run: { ...context.promptContext.run!, multiSolver: true },
+      agent: {
+        role: "solver",
+        isMain: false,
+        name: `Solver ${index}`,
+        task: null,
+        isEntry: false,
+      },
+      capabilities: deriveCapabilities(tools),
+      model: {
+        provider: slotModel.providerLabel,
+        name: slotModel.modelLabel,
+        id: slotModel.modelId,
+      },
+    })
+    const agentId = insertAgentRow({
+      runId,
+      slot: `solver-${index}`,
+      role: "solver",
+      name: `Solver ${index}`,
+      isEntry: false,
+      model: slotModel.ref,
+      systemPrompt,
+      tools,
+    })
+    emitAgents(runId)
+    await prepareAgent(runId, agentId)
+    // No run-level strategy is persisted — the spec's prompt is the whole
+    // Strategy input for the newcomer.
+    await lifecycle.send(
+      agentId,
+      solverInitial(templateMap, context.promptContext, undefined, spec)
+    )
+    return requireRun(runId)
+  }
+
   /** Prepare one agent's environment: container online (via the run context,
    * built lazily on cold-restore) + this agent's session online. Unified for
    * fresh create (no sessionFile → new session) and cold-restore (sessionFile →
@@ -1205,6 +1301,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
 
   return {
     create,
+    addAgent,
     buildRunContext,
     restoreRunContext,
     restoreRunContextOnce,

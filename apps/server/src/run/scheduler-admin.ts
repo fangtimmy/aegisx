@@ -1,6 +1,7 @@
-import type { RunPublic } from "@aegisx/shared"
-import { get, type FlatSettings } from "@aegisx/shared"
-import type { AgentSummary } from "@aegisx/shared/agent"
+import type { RunPublic, SolverSpec } from "@aegisx/shared"
+import { get, modelAddress, type FlatSettings } from "@aegisx/shared"
+import type { MessageListItem } from "@aegisx/shared/agent"
+import type { ProviderConnection } from "@aegisx/shared/domain"
 import { and, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -8,11 +9,13 @@ import { challenges, runs, schedulerConfig } from "../db/schema"
 import type { createCatalogReader } from "../events/catalog"
 import { RunActionError } from "./errors"
 import { fenceSnapshot } from "./fence"
+import type { ModelResolver } from "./model-resolver"
 import type { RunQueries } from "./queries"
 import type { QueueService } from "./queue"
 import type { CreateRunInput, RunContext } from "./run-factory"
 import type {
   RunSchedulerToolContext,
+  RunReadResult,
   RunSummary,
   SchedulerStatusSnapshot,
 } from "./scheduler-tools"
@@ -23,6 +26,10 @@ export type SchedulerAdminDeps = {
   catalog: ReturnType<typeof createCatalogReader>
   getSettings(): FlatSettings
   now(): string
+  /** Enabled provider connections (the unresolvable-ref error's list). */
+  providers(): ProviderConnection[]
+  /** Model-ref resolution (the unresolvable-ref check). */
+  modelResolver: ModelResolver
   /** Reusable per-run handles (to re-arm timers for live runs). */
   contexts: Map<string, RunContext>
   updateRun(runId: string, patch: Partial<typeof runs.$inferInsert>): void
@@ -31,9 +38,23 @@ export type SchedulerAdminDeps = {
   armRunTimers(runId: string, deadlineAt: string | null): void
   /** Fresh-run launch (run-factory's create). */
   create(input: CreateRunInput): Promise<RunPublic>
+  /** Dynamic solver expansion (run-factory's addAgent). */
+  addAgent(
+    runId: string,
+    spec: {
+      model?: string
+      prompt: string
+      promptMode?: "strategy" | "override"
+    }
+  ): Promise<RunPublic>
   stop(runId: string): Promise<RunPublic>
   sendMessage(
     runId: string,
+    input: { text: string; deliverAs?: "steer" | "followUp" }
+  ): Promise<RunPublic>
+  /** Per-agent send (POST /api/agents/:agentId/message path). */
+  sendAgentMessage(
+    agentId: string,
     input: { text: string; deliverAs?: "steer" | "followUp" }
   ): Promise<RunPublic>
   closeRun(runId: string): Promise<RunPublic>
@@ -80,6 +101,8 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     catalog,
     getSettings,
     now,
+    providers,
+    modelResolver,
     contexts,
     updateRun,
     emitRun,
@@ -97,17 +120,22 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       runId,
       eventId,
       agentId,
-      enqueue: (input) =>
-        deps.queue()!.enqueue({
+      enqueue: (input) => {
+        // Fail fast at enqueue time: an unresolvable model ref would
+        // otherwise surface only at (auto-)launch, as a failed queue item.
+        assertModelsResolvable(input.model, input.solvers)
+        return deps.queue()!.enqueue({
           ...input,
           eventId,
           source: "scheduler",
-        }),
+        })
+      },
       listQueue: () => deps.queue()!.list(eventId),
       removeQueue: (itemId) => deps.queue()!.remove(itemId),
       clearQueue: () => deps.queue()!.clear(eventId),
       reorderQueue: (itemIds) => deps.queue()!.reorder(eventId, itemIds),
       startRun: async (input) => {
+        assertModelsResolvable(input.model, input.solvers)
         const run = await resolveAndCreate({
           ...input,
           source: "scheduler",
@@ -118,7 +146,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       messageRun: async (id, text, deliverAs) =>
         runSummary(await deps.sendMessage(id, { text, deliverAs })),
       closeRun: async (id) => runSummary(await deps.closeRun(id)),
-      readRun: (id) => readRun(id),
+      readRun: (id, opts) => readRun(id, opts),
       listRuns: (filter) =>
         queries.listRuns({ eventId, ...filter }).map(runSummary),
       setRunTimeout: (id, timeoutMs) =>
@@ -128,20 +156,79 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       getChallenge: (id) => catalog.getChallenge(id),
       listAgents: (id) => queries.listAgents(id),
       lastAssistantText: (id, targetId) => deps.lastAssistantText(id, targetId),
+      addAgent: async (id, input) => runSummary(await deps.addAgent(id, input)),
+      messageAgent: async (agentId, text, deliverAs) =>
+        runSummary(await deps.sendAgentMessage(agentId, { text, deliverAs })),
     }
   }
 
+  /** All model refs addressable right now (enabled providers × enabled
+   * models) — the unresolvable-ref error text. Derived from providers()
+   * (design §7.2); refs are shown without the optional :effort suffix. */
+  function availableModelRefs(): string[] {
+    const refs: string[] = []
+    for (const provider of providers()) {
+      if (!provider.enabled || !provider.apiKey) continue
+      for (const model of provider.models) {
+        if (model.enabled) refs.push(modelAddress(provider, model))
+      }
+    }
+    return refs
+  }
+
+  /** Reject an unresolvable model ref (enqueue/start) with an error listing
+   * every currently-available ref so the model can correct itself. */
+  function assertModelsResolvable(
+    model: string | undefined,
+    solvers: SolverSpec[] | undefined
+  ): void {
+    const refs = [
+      ...(model ? [model] : []),
+      ...(solvers ?? []).flatMap((spec) => (spec.model ? [spec.model] : [])),
+    ]
+    for (const ref of refs) {
+      if (modelResolver.resolveModelTarget(ref)) continue
+      throw new RunActionError(
+        "invalid_state",
+        `Model "${ref}" is not available. Available models: ${
+          availableModelRefs().join(", ") || "(none)"
+        }`
+      )
+    }
+  }
+
+  /** Map the v9 launch specs onto `CreateRunInput.solvers`: explicit
+   * per-solver specs win; else N copies of the shared `model`; undefined when
+   * everything is defaulted (create treats empty as one default solver). */
+  function solverSpecsOf(input: {
+    model?: string
+    solverCount?: number
+    solvers?: SolverSpec[]
+  }): SolverSpec[] | undefined {
+    if (input.solvers?.length) return input.solvers
+    const count =
+      input.solverCount && input.solverCount > 0 ? input.solverCount : 1
+    if (count === 1 && !input.model) return undefined
+    return Array.from({ length: count }, () =>
+      input.model ? { model: input.model } : {}
+    )
+  }
+
   /** Resolve container settings and launch a challenge run (direct start:
-   * scheduler start_run + queue drainer). Per-agent models come from the
-   * orchestration settings (computed inside create()). */
+   * scheduler start_run + queue drainer). v9 launch specs (design §3.5):
+   * `solvers` wins; else `solverCount` × `model`; else the create defaults. */
   async function resolveAndCreate(input: {
     challengeId: string
-    prompt?: string
+    strategy?: string
+    model?: string
+    solverCount?: number
+    solvers?: SolverSpec[]
     timeoutMs?: number | null
     source: "manual" | "scheduler"
     queueItemId?: string
   }): Promise<RunPublic> {
     const settings = getSettings()
+    const solvers = solverSpecsOf(input)
     return deps.create({
       scopeType: "challenge",
       challengeId: input.challengeId,
@@ -156,7 +243,8 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       source: input.source,
       timeoutMs: input.timeoutMs ?? undefined,
       queueItemId: input.queueItemId,
-      strategy: input.prompt,
+      strategy: input.strategy,
+      ...(solvers ? { solvers } : {}),
     })
   }
 
@@ -174,24 +262,104 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return deps.requireRun(runId)
   }
 
-  /** Read a run for the scheduler: run + agents + the entry agent's latest
-   * assistant text (reasoning/progress at a glance). */
-  function readRun(runId: string): {
-    run: RunPublic
-    agents: AgentSummary[]
-    entryAgentId: string | null
-    lastAssistant: string | null
-  } {
+  /** Character budget for read_run's recent-messages body (design §7.2). */
+  const READ_RUN_CHAR_BUDGET = 20_000
+  /** read_run's default message count (design §7.2). */
+  const READ_RUN_DEFAULT_LAST_N = 10
+
+  /** Read a run for the scheduler, parameterized to agent level (design
+   * §7.2): status header (agent/run status numbers, deadline remaining, last
+   * message time) + the target agent's last-n renderable message lines.
+   * Defaults to the entry agent; `lastAssistant` is the fallback when the
+   * agent has no renderable messages yet. */
+  function readRun(
+    runId: string,
+    opts: { agentId?: string; lastN?: number } = {}
+  ): RunReadResult {
     const run = queries.get(runId)
     if (!run) throw new RunActionError("not_found", "Run not found")
+    const row = queries.getRow(runId)
     const agentRows = queries.listAgents(runId)
-    const entry = agentRows.find((a) => a.isEntry)
+    const target = opts.agentId
+      ? agentRows.find((a) => a.id === opts.agentId)
+      : agentRows.find((a) => a.isEntry)
+    if (!target) throw new RunActionError("not_found", "Agent not found")
+    const lastN =
+      opts.lastN && opts.lastN > 0 ? opts.lastN : READ_RUN_DEFAULT_LAST_N
+    // Newest → oldest, capped by lastN lines + the total char budget; the
+    // lines are returned oldest-first.
+    const list = queries.listMessages(runId, { agentId: target.id })
+    const messages: string[] = []
+    let budget = READ_RUN_CHAR_BUDGET
+    let lastMessageAt: string | null = null
+    for (let index = list.items.length - 1; index >= 0; index -= 1) {
+      const item = list.items[index]!
+      if (item.entry.type === "message" && !lastMessageAt) {
+        lastMessageAt = item.entry.timestamp
+      }
+      if (messages.length >= lastN || budget <= 0) continue
+      const line = messageLine(item)
+      if (!line) continue
+      const capped = line.slice(0, budget)
+      messages.unshift(capped)
+      budget -= capped.length
+    }
     return {
       run,
       agents: agentRows,
-      entryAgentId: entry?.id ?? null,
-      lastAssistant: entry ? deps.lastAssistantText(runId, entry.id) : null,
+      agent: target,
+      elapsedMs: Date.now() - Date.parse(run.createdAt),
+      deadlineRemainingMs: row?.deadlineAt
+        ? Date.parse(row.deadlineAt) - Date.now()
+        : null,
+      lastMessageAt,
+      messages,
+      lastAssistant: deps.lastAssistantText(runId, target.id),
     }
+  }
+
+  /** One read_run line for a session entry: assistant → text body (or its
+   * tool calls), user → text body, toolResult → a one-line tool summary.
+   * Non-message entries (compaction / branch summaries) and empty bodies
+   * render null (they do not count toward lastN). */
+  function messageLine(item: MessageListItem): string | null {
+    const entry = item.entry
+    if (entry.type !== "message") return null
+    const message = entry.message
+    if (message.role === "assistant") {
+      const body = message.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n")
+        .trim()
+      if (body) return `[assistant] ${body}`
+      const tools = message.content.flatMap((part) =>
+        part.type === "toolCall" ? [part.name] : []
+      )
+      return tools.length
+        ? `[assistant] (tool calls: ${tools.join(", ")})`
+        : null
+    }
+    if (message.role === "user") {
+      const body =
+        typeof message.content === "string"
+          ? message.content.trim()
+          : message.content
+              .flatMap((part) => (part.type === "text" ? [part.text] : []))
+              .join("\n")
+              .trim()
+      return body ? `[user] ${body}` : null
+    }
+    if (message.role === "toolResult") {
+      const body = message.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n")
+        .trim()
+      const head = body.split("\n").find((line) => line.trim()) ?? ""
+      return `[tool ${message.toolName}] ${
+        head ? head.slice(0, 200) : "(no output)"
+      }${message.isError ? " (error)" : ""}`
+    }
+    return null
   }
 
   /** Fence snapshot augmented with active run details (challenge names). */

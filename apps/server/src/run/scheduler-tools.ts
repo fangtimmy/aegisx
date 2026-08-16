@@ -1,4 +1,9 @@
-import type { AgentSummary, Challenge, RunPublic } from "@aegisx/shared"
+import type {
+  AgentSummary,
+  Challenge,
+  RunPublic,
+  SolverSpec,
+} from "@aegisx/shared"
 import { defineTool } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 
@@ -37,6 +42,25 @@ export type SchedulerStatusSnapshot = {
   }>
 }
 
+/** Agent-level read_run result (design §7.2): the run + agents overview, the
+ * target agent's status-header numbers, and its recent message lines. */
+export type RunReadResult = {
+  run: RunPublic
+  agents: AgentSummary[]
+  /** The agent being read (explicit id, else the run's entry agent). */
+  agent: AgentSummary
+  /** Run age since createdAt (ms). */
+  elapsedMs: number
+  /** Deadline remaining (ms; negative = overdue). Null = no deadline. */
+  deadlineRemainingMs: number | null
+  /** Timestamp of the target's most recent message entry. */
+  lastMessageAt: string | null
+  /** Rendered message lines (assistant body / tool one-liner / user body),
+   * oldest first, within the char budget. */
+  messages: string[]
+  lastAssistant: string | null
+}
+
 /**
  * Callback bundle the scheduler (event-scope orchestrator) tools delegate to.
  * The orchestrator manages its event's task queue + sibling challenge runs; it
@@ -49,8 +73,10 @@ export type RunSchedulerToolContext = {
   agentId: string
   enqueue(input: {
     challengeId: string
-    params?: Record<string, unknown>
-    prompt?: string
+    strategy?: string
+    model?: string
+    solverCount?: number
+    solvers?: SolverSpec[]
     timeoutMs?: number | null
   }): QueueItemPublic
   listQueue(): QueueItemPublic[]
@@ -59,8 +85,10 @@ export type RunSchedulerToolContext = {
   reorderQueue(itemIds: string[]): void
   startRun(input: {
     challengeId: string
-    params?: Record<string, unknown>
-    prompt?: string
+    strategy?: string
+    model?: string
+    solverCount?: number
+    solvers?: SolverSpec[]
     timeoutMs?: number | null
   }): Promise<RunSummary>
   stopRun(runId: string): Promise<RunSummary>
@@ -70,12 +98,10 @@ export type RunSchedulerToolContext = {
     deliverAs?: "steer" | "followUp"
   ): Promise<RunSummary>
   closeRun(runId: string): Promise<RunSummary>
-  readRun(runId: string): {
-    run: RunPublic
-    agents: AgentSummary[]
-    entryAgentId: string | null
-    lastAssistant: string | null
-  }
+  readRun(
+    runId: string,
+    opts?: { agentId?: string; lastN?: number }
+  ): RunReadResult
   listRuns(filter?: {
     challengeId?: string
     status?: RunPublic["status"]
@@ -86,6 +112,19 @@ export type RunSchedulerToolContext = {
   getChallenge(challengeId: string): Challenge | undefined
   listAgents(runId: string): AgentSummary[]
   lastAssistantText(runId: string, agentId: string): string | null
+  addAgent(
+    runId: string,
+    input: {
+      model?: string
+      prompt: string
+      promptMode?: "strategy" | "override"
+    }
+  ): Promise<RunSummary>
+  messageAgent(
+    agentId: string,
+    text: string,
+    deliverAs?: "steer" | "followUp"
+  ): Promise<RunSummary>
 }
 
 function textResult(text: string, details?: unknown) {
@@ -113,6 +152,48 @@ function challengeSummaryText(c: Challenge): string {
     remoteTarget: c.remoteTarget && !c.remoteTargetIgnored,
     runs: c.runStatusCounts,
   })
+}
+
+/** Compact human duration for read_run's status header (ms → "1h 23m"). */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(Math.abs(ms) / 1000)
+  const h = Math.floor(totalSeconds / 3600)
+  const m = Math.floor((totalSeconds % 3600) / 60)
+  const s = totalSeconds % 60
+  const text = h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`
+  return ms < 0 ? `-${text}` : text
+}
+
+/** The per-solver TypeBox spec shared by enqueue_run / start_run. */
+const solverSpecSchema = Type.Object({
+  model: Type.Optional(
+    Type.String({ description: "This solver's model ref; omit = run default." })
+  ),
+  prompt: Type.Optional(
+    Type.String({
+      maxLength: 20_000,
+      description: "This solver's own prompt (see prompt_mode).",
+    })
+  ),
+  prompt_mode: Type.Optional(
+    Type.Union([Type.Literal("strategy"), Type.Literal("override")], {
+      description:
+        "'strategy' (default): the prompt joins the run-level Strategy section; 'override': the prompt IS the solver's entire first prompt.",
+    })
+  ),
+})
+
+/** Map a tool-level solvers array (snake_case) onto SolverSpec[] (camelCase). */
+function mapSolverSpecs(
+  solvers: Array<{ model?: string; prompt?: string; prompt_mode?: string }>
+): SolverSpec[] {
+  return solvers.map((s) => ({
+    ...(s.model !== undefined ? { model: s.model } : {}),
+    ...(s.prompt !== undefined ? { prompt: s.prompt } : {}),
+    ...(s.prompt_mode !== undefined
+      ? { promptMode: s.prompt_mode as "strategy" | "override" }
+      : {}),
+  }))
 }
 
 /**
@@ -267,23 +348,36 @@ export function createSchedulerTools(
         name: "enqueue_run",
         label: "Enqueue run",
         description:
-          "Add (or re-arm) a task in the queue. Upserts by challenge: a hit — including done/cancelled/failed — resets to pending. The queue drains FIFO under the concurrency caps; if a slot is free the run launches right away. `prompt` is appended to the run's default initial prompt as a Strategy section — the standard blocks (challenge, environment, submission) are always included.",
+          "Add (or re-arm) a task in the queue. Upserts by challenge: a hit — including done/cancelled/failed — resets to pending. The queue drains FIFO under the concurrency caps; if a slot is free the run launches right away. `strategy` is the run-level guidance every solver receives (appended as a Strategy section to the standard challenge brief).",
         parameters: Type.Object({
           challenge_id: Type.String({
             minLength: 1,
             description: "The challenge id (from list_challenges).",
           }),
-          params: Type.Optional(
-            Type.Record(Type.String(), Type.Unknown(), {
-              description:
-                "Orchestration params; only for orchestrations marked 'requires model params'.",
-            })
-          ),
-          prompt: Type.Optional(
+          strategy: Type.Optional(
             Type.String({
               maxLength: 20_000,
               description:
-                "Per-run strategy; appended to the run's default initial prompt as a Strategy section (the standard blocks stay).",
+                "Run-level strategy appended to every solver's initial prompt as a Strategy section (the standard blocks stay).",
+            })
+          ),
+          model: Type.Optional(
+            Type.String({
+              description:
+                'Model ref applied to every solver (e.g. "openai/gpt-4o", optional :effort suffix); defaults to the global default model.',
+            })
+          ),
+          solver_count: Type.Optional(
+            Type.Integer({
+              minimum: 1,
+              maximum: 4,
+              description: "Parallel solvers for this run (1-4, default 1).",
+            })
+          ),
+          solvers: Type.Optional(
+            Type.Array(solverSpecSchema, {
+              description:
+                "Per-solver specs (takes precedence over model/solver_count): each solver gets its own model and prompt.",
             })
           ),
           timeout_ms: Type.Optional(
@@ -296,8 +390,14 @@ export function createSchedulerTools(
         execute: async (_id, params) => {
           const item = ctx.enqueue({
             challengeId: params.challenge_id,
-            ...(params.params ? { params: params.params } : {}),
-            ...(params.prompt ? { prompt: params.prompt } : {}),
+            ...(params.strategy ? { strategy: params.strategy } : {}),
+            ...(params.model ? { model: params.model } : {}),
+            ...(params.solver_count
+              ? { solverCount: params.solver_count }
+              : {}),
+            ...(params.solvers
+              ? { solvers: mapSolverSpecs(params.solvers) }
+              : {}),
             ...(params.timeout_ms ? { timeoutMs: params.timeout_ms } : {}),
           })
           return textResult(`Enqueued. ${queueItemText(item)}`, item)
@@ -393,23 +493,36 @@ export function createSchedulerTools(
         name: "start_run",
         label: "Start run",
         description:
-          "Start a fresh solver run directly (escape hatch — bypasses the queue). The initial prompt is your per-run strategy; be specific. A concurrency/target-slot rejection comes back as a reason — adjust your plan, do not retry blindly. Prefer enqueue_run for planned work; use this only when you need a run immediately.",
+          "Start a fresh solver run directly (escape hatch — bypasses the queue). The `strategy` is your per-run guidance — be specific. Shape the solver set with model/solver_count/solvers exactly like enqueue_run. A concurrency/target-slot rejection comes back as a reason — adjust your plan, do not retry blindly. Prefer enqueue_run for planned work; use this only when you need a run immediately.",
         parameters: Type.Object({
           challenge_id: Type.String({
             minLength: 1,
             description: "The challenge id (from list_challenges).",
           }),
-          params: Type.Optional(
-            Type.Record(Type.String(), Type.Unknown(), {
-              description:
-                "Orchestration params; only for orchestrations marked 'requires model params'.",
-            })
-          ),
-          prompt: Type.Optional(
+          strategy: Type.Optional(
             Type.String({
               maxLength: 20_000,
               description:
-                "Per-run strategy; appended to the run's default initial prompt as a Strategy section (the standard blocks stay).",
+                "Run-level strategy appended to every solver's initial prompt as a Strategy section (the standard blocks stay).",
+            })
+          ),
+          model: Type.Optional(
+            Type.String({
+              description:
+                'Model ref applied to every solver (e.g. "openai/gpt-4o", optional :effort suffix); defaults to the global default model.',
+            })
+          ),
+          solver_count: Type.Optional(
+            Type.Integer({
+              minimum: 1,
+              maximum: 4,
+              description: "Parallel solvers for this run (1-4, default 1).",
+            })
+          ),
+          solvers: Type.Optional(
+            Type.Array(solverSpecSchema, {
+              description:
+                "Per-solver specs (takes precedence over model/solver_count): each solver gets its own model and prompt.",
             })
           ),
           timeout_ms: Type.Optional(
@@ -422,8 +535,14 @@ export function createSchedulerTools(
         execute: async (_id, params) => {
           const run = await ctx.startRun({
             challengeId: params.challenge_id,
-            ...(params.params ? { params: params.params } : {}),
-            ...(params.prompt ? { prompt: params.prompt } : {}),
+            ...(params.strategy ? { strategy: params.strategy } : {}),
+            ...(params.model ? { model: params.model } : {}),
+            ...(params.solver_count
+              ? { solverCount: params.solver_count }
+              : {}),
+            ...(params.solvers
+              ? { solvers: mapSolverSpecs(params.solvers) }
+              : {}),
             ...(params.timeout_ms ? { timeoutMs: params.timeout_ms } : {}),
           })
           return textResult(
@@ -522,15 +641,32 @@ export function createSchedulerTools(
         name: "read_run",
         label: "Read run",
         description:
-          "Read a run's status, agents, and the entry agent's latest output. Use to assess a run's progress before steering or closing it.",
+          "Read a run's status and one agent's recent output. Defaults to the entry agent; pass agent_id (from list_agents) to read a specific solver. Returns a status header (agent/run status, elapsed, deadline remaining, last message time) plus that agent's most recent messages (assistant text, one-line tool summaries, user text).",
         parameters: Type.Object({
           run_id: Type.String({
             minLength: 1,
             description: "The run id (from list_runs).",
           }),
+          agent_id: Type.Optional(
+            Type.String({
+              minLength: 1,
+              description:
+                "The agent to read (from list_agents); defaults to the entry agent.",
+            })
+          ),
+          last_n: Type.Optional(
+            Type.Integer({
+              minimum: 1,
+              maximum: 100,
+              description: "How many recent messages to include (default 10).",
+            })
+          ),
         }),
         execute: async (_id, params) => {
-          const r = ctx.readRun(params.run_id)
+          const r = ctx.readRun(params.run_id, {
+            ...(params.agent_id ? { agentId: params.agent_id } : {}),
+            ...(params.last_n ? { lastN: params.last_n } : {}),
+          })
           return textResult(
             JSON.stringify({
               run: {
@@ -541,12 +677,27 @@ export function createSchedulerTools(
                 error: r.run.error,
                 solved: r.run.hasAcceptedFlag,
               },
-              entryAgentId: r.entryAgentId,
+              agent: {
+                id: r.agent.id,
+                slot: r.agent.slot,
+                name: r.agent.name,
+                status: r.agent.status,
+                model: r.agent.model,
+              },
+              elapsed: formatDuration(r.elapsedMs),
+              deadlineRemaining:
+                r.deadlineRemainingMs === null
+                  ? null
+                  : formatDuration(r.deadlineRemainingMs),
+              lastMessageAt: r.lastMessageAt,
               agents: r.agents.map((a) => ({
                 id: a.id,
+                slot: a.slot,
                 role: a.role,
                 status: a.status,
+                model: a.model,
               })),
+              messages: r.messages,
               lastAssistant: r.lastAssistant ?? "(no output yet)",
             }),
             { found: true }
@@ -591,7 +742,7 @@ export function createSchedulerTools(
         name: "list_agents",
         label: "List agents",
         description:
-          "Enumerate the agents in a run (id, name, role, status). Use to inspect a run's internal agent layout.",
+          "Enumerate the agents in a run (id, slot, name, role, model, status). Use to pick an agent id for read_run / message_agent.",
         parameters: Type.Object({
           run_id: Type.Optional(
             Type.String({
@@ -604,11 +755,97 @@ export function createSchedulerTools(
           const runId = params.run_id ?? ctx.runId
           const agents = ctx.listAgents(runId).map((a) => ({
             id: a.id,
+            slot: a.slot,
             name: a.name,
             role: a.role,
+            model: a.model,
             status: a.status,
           }))
           return textResult(JSON.stringify(agents), { count: agents.length })
+        },
+      })
+    )
+  }
+
+  if (has("add_agent")) {
+    created.push(
+      defineTool({
+        name: "add_agent",
+        label: "Add agent",
+        description:
+          "Add one more solver to a run — its prompt is required (you add hands with a job). The new solver runs in parallel in the same container/workspace; a closed run is cold-restored first (existing solvers stay dormant until messaged). Use instead of a whole new run when a run needs another angle.",
+        parameters: Type.Object({
+          run_id: Type.String({
+            minLength: 1,
+            description: "The run id (from list_runs).",
+          }),
+          prompt: Type.String({
+            minLength: 1,
+            maxLength: 20_000,
+            description: "The new solver's task/angle (required).",
+          }),
+          model: Type.Optional(
+            Type.String({
+              description:
+                "Model ref for the new solver; defaults to the run's baseline (solver-1's) model.",
+            })
+          ),
+          prompt_mode: Type.Optional(
+            Type.Union([Type.Literal("strategy"), Type.Literal("override")], {
+              description:
+                "'strategy' (default): the prompt renders into the Strategy section of the standard brief; 'override': the prompt IS the solver's entire first prompt.",
+            })
+          ),
+        }),
+        execute: async (_id, params) => {
+          const run = await ctx.addAgent(params.run_id, {
+            prompt: params.prompt,
+            ...(params.model ? { model: params.model } : {}),
+            ...(params.prompt_mode ? { promptMode: params.prompt_mode } : {}),
+          })
+          return textResult(
+            `Added a solver to run ${run.id} (now ${run.status}).`,
+            run
+          )
+        },
+      })
+    )
+  }
+
+  if (has("message_agent")) {
+    created.push(
+      defineTool({
+        name: "message_agent",
+        label: "Message agent",
+        description:
+          "Send guidance to one specific agent by id, in any run. On an idle or closed agent this starts/continues its turn (a closed run is cold-restored, keeping context + workspace — only that agent wakes); on a running agent, deliver_as steers into or queues after the current turn.",
+        parameters: Type.Object({
+          agent_id: Type.String({
+            minLength: 1,
+            description: "The agent id (from list_agents / read_run).",
+          }),
+          text: Type.String({
+            minLength: 1,
+            maxLength: 20_000,
+            description: "The guidance or question to send.",
+          }),
+          deliver_as: Type.Optional(
+            Type.Union([Type.Literal("steer"), Type.Literal("followUp")], {
+              description:
+                "On a running agent: 'steer' into the current turn, or 'followUp' queued after it. Ignored otherwise.",
+            })
+          ),
+        }),
+        execute: async (_id, params) => {
+          const run = await ctx.messageAgent(
+            params.agent_id,
+            params.text,
+            params.deliver_as
+          )
+          return textResult(
+            `Delivered to agent ${params.agent_id} (run ${run.id} now ${run.status}).`,
+            run
+          )
         },
       })
     )

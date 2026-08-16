@@ -72,6 +72,20 @@ const queueInput = Type.Object(
   { additionalProperties: false }
 )
 
+/** Add-agent body (POST /api/runs/:runId/agents, design §3.3): dynamically
+ * expand a run with one more solver. `prompt` is required — expansion always
+ * comes with a job. */
+const addAgentInput = Type.Object(
+  {
+    model: Type.Optional(Type.String({ maxLength: 300 })),
+    prompt: Type.String({ minLength: 1, maxLength: 20_000 }),
+    promptMode: Type.Optional(
+      Type.Union([Type.Literal("strategy"), Type.Literal("override")])
+    ),
+  },
+  { additionalProperties: false }
+)
+
 const emptyInput = EmptyInputSchema
 
 /** Flat-backtrack body: the session_entries.seq to KEEP (delete everything
@@ -231,6 +245,29 @@ export function registerRunRoutes(
         const run = await runService.sendMessage(c.req.param("runId"), {
           text: body.text,
           deliverAs: body.deliverAs,
+        })
+        return c.json(run)
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  // Dynamically add one more solver to a run (design §3.3): running/idle runs
+  // gain it in place; a closed run is cold-restored first (the old solvers
+  // stay dormant until messaged).
+  app.post(
+    "/api/runs/:runId/agents",
+    validateJson(addAgentInput),
+    async (c) => {
+      try {
+        const body = c.req.valid("json")
+        const run = await runService.addAgent(c.req.param("runId"), {
+          prompt: body.prompt,
+          ...(body.model !== undefined ? { model: body.model } : {}),
+          ...(body.promptMode !== undefined
+            ? { promptMode: body.promptMode }
+            : {}),
         })
         return c.json(run)
       } catch (error) {

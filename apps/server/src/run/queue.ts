@@ -1,3 +1,4 @@
+import type { SolverSpec } from "@aegisx/shared"
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -34,14 +35,89 @@ const DRAIN_DEBOUNCE_MS = 200
 export type EnqueueInput = {
   eventId: string
   challengeId: string
-  params?: Record<string, unknown>
-  /** Per-run strategy. Appended to the launched run's default `initial`
-   * template as a `## Strategy` section — the standard blocks (challenge,
-   * environment, submission) are always included. Empty/undefined → the
-   * default `initial` renders as-is. */
+  /** v9 run-level strategy — rendered into every solver's initial prompt as
+   * a `## Strategy` section (the standard blocks stay). Stored in BOTH the
+   * `prompt` column (display) and the `params` JSON (launch). */
+  strategy?: string
+  /** v9 model ref applied to every solver at launch. */
+  model?: string
+  /** v9 solver count (1..MAX_SOLVERS_PER_RUN). */
+  solverCount?: number
+  /** v9 per-solver specs — takes precedence over model/solverCount. */
+  solvers?: SolverSpec[]
+  /** Legacy alias of `strategy` (the HTTP enqueue routes' field name). */
   prompt?: string
   timeoutMs?: number | null
   source: "manual" | "scheduler"
+}
+
+/** The v9 launch specs a queue row carries (the parsed `params` JSON column,
+ * design §3.5): everything the drainer forwards to resolveAndCreate. */
+export type QueueLaunchSpecs = {
+  strategy?: string
+  model?: string
+  solverCount?: number
+  solvers?: SolverSpec[]
+}
+
+/** Serialize the v9 launch specs into the `params` JSON value. */
+function launchParamsOf(
+  input: EnqueueInput,
+  strategy: string
+): Record<string, unknown> {
+  const params: Record<string, unknown> = {}
+  if (strategy) params.strategy = strategy
+  if (input.model) params.model = input.model
+  if (input.solverCount !== undefined) params.solverCount = input.solverCount
+  if (input.solvers) params.solvers = input.solvers
+  return params
+}
+
+/** Parse a queue row's `params` JSON into the typed launch specs. Defensive:
+ * malformed JSON / wrong shapes drop the affected key (the drainer must not
+ * blow up on a hand-edited column). */
+export function parseQueueLaunchSpecs(raw: string): QueueLaunchSpecs {
+  const parsed = safeParseObject(raw)
+  const specs: QueueLaunchSpecs = {}
+  if (typeof parsed.strategy === "string" && parsed.strategy) {
+    specs.strategy = parsed.strategy
+  }
+  if (typeof parsed.model === "string" && parsed.model) {
+    specs.model = parsed.model
+  }
+  if (
+    typeof parsed.solverCount === "number" &&
+    Number.isInteger(parsed.solverCount) &&
+    parsed.solverCount > 0
+  ) {
+    specs.solverCount = parsed.solverCount
+  }
+  if (Array.isArray(parsed.solvers)) {
+    const solvers = parsed.solvers.filter(isSolverSpec)
+    if (solvers.length) specs.solvers = solvers
+  }
+  return specs
+}
+
+function isSolverSpec(value: unknown): value is SolverSpec {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const spec = value as Record<string, unknown>
+  // At least one known key — an all-unknown object (a typo like `{modle: "x"}`)
+  // must not silently become a default solver.
+  if (
+    spec.model === undefined &&
+    spec.prompt === undefined &&
+    spec.promptMode === undefined
+  ) {
+    return false
+  }
+  return (
+    (spec.model === undefined || typeof spec.model === "string") &&
+    (spec.prompt === undefined || typeof spec.prompt === "string") &&
+    (spec.promptMode === undefined ||
+      spec.promptMode === "strategy" ||
+      spec.promptMode === "override")
+  )
 }
 
 export type QueueServiceDeps = {
@@ -120,8 +196,12 @@ export function createQueueService(deps: QueueServiceDeps) {
    */
   function enqueue(input: EnqueueInput): QueueItemPublic {
     const ts = now()
-    const params = JSON.stringify(input.params ?? {})
-    const prompt = input.prompt ?? ""
+    // The `prompt` column keeps the run-level strategy (display); the v9
+    // launch specs (strategy included) live in the `params` JSON for the
+    // drainer to forward (design §3.5).
+    const strategy = input.strategy ?? input.prompt ?? ""
+    const params = JSON.stringify(launchParamsOf(input, strategy))
+    const prompt = strategy
     const timeoutMs = input.timeoutMs ?? null
     const existing = db
       .select()

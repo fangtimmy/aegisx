@@ -14,7 +14,6 @@ import { streamRun } from "../run/sse"
 
 const enqueueInput = Type.Object(
   {
-    params: Type.Optional(Type.Unknown()),
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
   },
@@ -137,7 +136,6 @@ export function registerSchedulerRoutes(
       const item = runService.queue().enqueue({
         eventId,
         challengeId,
-        params: body.params as Record<string, unknown> | undefined,
         prompt: body.prompt,
         timeoutMs: body.timeoutMs,
         source: "manual",

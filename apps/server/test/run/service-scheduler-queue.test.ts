@@ -78,6 +78,162 @@ function makeService(
 
 const settle = () => new Promise((r) => setTimeout(r, 10))
 
+describe("v9 launch spec passthrough (params → drainer → create)", () => {
+  /** Service variant capturing every agent's prompt texts. */
+  function makeCapturingService(
+    db: Db,
+    sqlite: ReturnType<typeof setupDb>["sqlite"],
+    dir: string
+  ) {
+    const provider = makeProvider()
+    const { manager } = stubContainerManager()
+    const promptLog = new Map<string, string[]>()
+    const service = createRunService({
+      db,
+      sqlite,
+      dataDir: dir,
+      containerManager: manager,
+      platformService: {
+        submitFlag: async () => undefined,
+        targetAction: async () => ({
+          status: "running",
+          endpoints: [],
+          expiresAt: null,
+        }),
+      } as never,
+      configStore: stubConfigStore([provider]),
+      getSettings: settingsWithModel,
+      createHost: mock(async (input: { agentId: string }) => {
+        const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
+          hang: true,
+        })
+        const list: string[] = []
+        promptLog.set(input.agentId, list)
+        const sdk = stub.session as unknown as {
+          prompt: (text: string) => Promise<void>
+        }
+        sdk.prompt = async (text: string) => {
+          list.push(text)
+        }
+        return stub
+      }),
+    })
+    return { service, promptLog }
+  }
+
+  test("enqueue with solvers launches a run shaped by them (solvers win over model)", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      const { service, promptLog } = makeCapturingService(db, sqlite, dir)
+      const queue = service.queue()
+
+      const item = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-a",
+        source: "scheduler",
+        strategy: "shared run strategy",
+        model: "openai/gpt-4o-mini:high",
+        solvers: [
+          { model: "openai/gpt-4o-mini:off" },
+          { prompt: "solver-level angle" },
+        ],
+      })
+      await queue.drainOnce()
+
+      const launched = queue.list("evt-1").find((i) => i.id === item.id)!
+      expect(launched.status).toBe("running")
+      const run = db
+        .select()
+        .from(runs)
+        .where(eq(runs.id, launched.runId!))
+        .get()!
+      expect(run.queueItemId).toBe(item.id)
+      const solverAgents = db
+        .select()
+        .from(agents)
+        .where(eq(agents.runId, run.id))
+        .orderBy(agents.slot)
+        .all()
+      // Per-solver models won over the shared `model`; solver-2 fell back to
+      // the run default (no model in its spec).
+      expect(solverAgents.map((a) => a.model)).toEqual([
+        "openai/gpt-4o-mini:off",
+        "openai/gpt-4o-mini:off",
+      ])
+      // Strategy rendering: solver-2's Strategy section carries the run-level
+      // strategy + its own prompt; solver-1 got the run-level strategy only.
+      const primes = solverAgents.map((a) => promptLog.get(a.id)?.[0] ?? "")
+      expect(primes[0]).toContain("shared run strategy")
+      expect(primes[1]).toContain("shared run strategy")
+      expect(primes[1]).toContain("solver-level angle")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("enqueue with model + solver_count shapes the run; prompt-only rows still pass the strategy", async () => {
+    const { db, sqlite, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      const { service, promptLog } = makeCapturingService(db, sqlite, dir)
+      const queue = service.queue()
+
+      const shaped = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-a",
+        source: "scheduler",
+        model: "openai/gpt-4o-mini:low",
+        solverCount: 2,
+      })
+      // Legacy field name (the HTTP routes): still lands as the strategy.
+      const legacy = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-b",
+        source: "manual",
+        prompt: "legacy prompt strategy",
+      })
+      await queue.drainOnce()
+
+      const shapedRun = db
+        .select()
+        .from(runs)
+        .where(eq(runs.queueItemId, shaped.id))
+        .get()!
+      const shapedAgents = db
+        .select()
+        .from(agents)
+        .where(eq(agents.runId, shapedRun.id))
+        .all()
+      expect(shapedAgents).toHaveLength(2)
+      expect(
+        shapedAgents.every((a) => a.model === "openai/gpt-4o-mini:low")
+      ).toBe(true)
+
+      const legacyRun = db
+        .select()
+        .from(runs)
+        .where(eq(runs.queueItemId, legacy.id))
+        .get()!
+      const legacyAgent = db
+        .select()
+        .from(agents)
+        .where(eq(agents.runId, legacyRun.id))
+        .get()!
+      expect(promptLog.get(legacyAgent.id)?.[0]).toContain(
+        "legacy prompt strategy"
+      )
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+})
+
 describe("scheduler queue integration (P3)", () => {
   test("enqueue → drainOnce launches a run; item running + run.queueItemId linked", async () => {
     const { db, sqlite, dir, close } = setupDb()

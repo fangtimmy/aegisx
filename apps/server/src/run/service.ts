@@ -40,7 +40,11 @@ import { createRunDeadlines, type RunDeadlines } from "./deadlines"
 import { RunActionError } from "./errors"
 import { createModelResolver } from "./model-resolver"
 import { createRunQueries } from "./queries"
-import { createQueueService, type QueueService } from "./queue"
+import {
+  createQueueService,
+  parseQueueLaunchSpecs,
+  type QueueService,
+} from "./queue"
 import { createRunFactory, type RunFactory } from "./run-factory"
 import type { RunContext } from "./run-factory"
 import { createRunStatus, type RunStatus } from "./run-status"
@@ -683,6 +687,8 @@ export function createRunService(options: RunServiceOptions) {
     catalog,
     getSettings,
     now,
+    providers,
+    modelResolver,
     contexts,
     updateRun,
     emitRun: status.emitRun,
@@ -690,8 +696,10 @@ export function createRunService(options: RunServiceOptions) {
     armRunTimers: (runId, deadlineAt) =>
       deadlines.armRunTimers(runId, deadlineAt),
     create: (input) => runFactory.create(input),
+    addAgent: (runId, spec) => runFactory.addAgent(runId, spec),
     stop,
     sendMessage,
+    sendAgentMessage,
     closeRun,
     lastAssistantText: (runId, agentId) =>
       runFactory.lastAssistantText(runId, agentId),
@@ -700,15 +708,21 @@ export function createRunService(options: RunServiceOptions) {
 
   // Construct the queue service now that resolveAndCreate + the failure
   // notifier exist. The drainer's launch callback builds the run from the
-  // queue item's snapshot.
+  // queue item's snapshot — the v9 launch specs stored in the item's `params`
+  // JSON (design §3.5), with the `prompt` column as the strategy fallback for
+  // rows written before the params serialization landed.
   queue = createQueueService({
     db,
     getSettings,
     isDisposed: () => closed,
     launch: async (item) => {
+      const specs = parseQueueLaunchSpecs(item.params)
       const run = await schedulerAdmin.resolveAndCreate({
         challengeId: item.challengeId,
-        prompt: item.prompt,
+        strategy: specs.strategy || item.prompt || undefined,
+        model: specs.model,
+        solverCount: specs.solverCount,
+        solvers: specs.solvers,
         timeoutMs: item.timeoutMs,
         source: item.source as "manual" | "scheduler",
         queueItemId: item.id,
@@ -721,6 +735,7 @@ export function createRunService(options: RunServiceOptions) {
 
   return {
     create: runFactory.create,
+    addAgent: runFactory.addAgent,
     resolveAndCreate: schedulerAdmin.resolveAndCreate,
     stop,
     switchModel,

@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm"
 
 import { queueState, runQueue } from "../../src/db/schema"
 import { RunActionError } from "../../src/run/errors"
-import { createQueueService } from "../../src/run/queue"
+import { createQueueService, parseQueueLaunchSpecs } from "../../src/run/queue"
 import {
   flatSettings,
   seedChallenge,
@@ -211,6 +211,70 @@ describe("queue CRUD (spec §8.1)", () => {
     } finally {
       close()
     }
+  })
+
+  test("enqueue serializes the v9 launch specs into params; prompt keeps the strategy", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      const { svc } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      const specs = {
+        strategy: "run-level strategy",
+        model: "openai/gpt-4o-mini",
+        solverCount: 3,
+        solvers: [
+          { model: "a/b:off" },
+          { prompt: "angle b", promptMode: "override" as const },
+        ],
+      }
+      const item = svc.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-a",
+        source: "scheduler",
+        ...specs,
+      })
+      expect(item.prompt).toBe("run-level strategy")
+      expect(item.params).toEqual(specs)
+      // A prompt-only (legacy HTTP field) enqueue lands in both places too.
+      const legacy = enqueue(svc, "evt-1", "ch-b", 1)
+      expect(legacy.prompt).toBe("prompt-1")
+      expect(legacy.params).toEqual({ strategy: "prompt-1" })
+    } finally {
+      close()
+    }
+  })
+
+  test("parseQueueLaunchSpecs reads the specs back defensively", () => {
+    expect(parseQueueLaunchSpecs("{}")).toEqual({})
+    expect(parseQueueLaunchSpecs("not json")).toEqual({})
+    expect(
+      parseQueueLaunchSpecs(
+        JSON.stringify({
+          strategy: "s",
+          model: "m",
+          solverCount: 2,
+          solvers: [{ model: "a" }],
+        })
+      )
+    ).toEqual({
+      strategy: "s",
+      model: "m",
+      solverCount: 2,
+      solvers: [{ model: "a" }],
+    })
+    // Wrong shapes drop the affected key; bad solver entries are filtered.
+    expect(
+      parseQueueLaunchSpecs(
+        JSON.stringify({
+          strategy: 42,
+          solverCount: -1,
+          solvers: [{ bogus: 1 }, { prompt: "ok" }],
+        })
+      )
+    ).toEqual({ solvers: [{ prompt: "ok" }] })
   })
 })
 
