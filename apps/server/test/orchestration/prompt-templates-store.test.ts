@@ -5,7 +5,9 @@ import { eq } from "drizzle-orm"
 import { promptTemplates } from "../../src/db/schema"
 import {
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
   LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
 } from "../../src/orchestration/prompt-defaults"
 import {
   BUILTIN_DEFAULTS,
@@ -145,6 +147,45 @@ describe("prompt_templates store (v9: builtin-only)", () => {
         .where(eq(promptTemplates.key, "initial"))
         .get()
       expect(initial?.body).toBe(BUILTIN_DEFAULTS.initial)
+    } finally {
+      close()
+    }
+  })
+
+  test("orchestratorSystem inbox rework refreshes exact legacy rows (P3)", () => {
+    const { db, close } = setupDb()
+    try {
+      seedBuiltinTemplates(db)
+      // Simulate a pre-inbox DB: the row still carries the v10 SDK-era body.
+      db.update(promptTemplates)
+        .set({
+          body: LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
+          updatedAt: "x",
+        })
+        .where(eq(promptTemplates.key, "orchestratorSystem"))
+        .run()
+      expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).not.toBe(
+        LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK
+      )
+      upgradeBuiltinTemplate(
+        db,
+        "orchestratorSystem",
+        LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
+        DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+      )
+      const orch = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "orchestratorSystem"))
+        .get()
+      expect(orch?.body).toBe(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE)
+      // The new default carries the passive-inbox model + no-poll warning.
+      expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
+        "passive inbox"
+      )
+      expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
+        "NEVER run long polling"
+      )
     } finally {
       close()
     }

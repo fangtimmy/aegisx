@@ -54,6 +54,7 @@ import { createRunFactory, type RunFactory } from "./run-factory"
 import type { RunContext } from "./run-factory"
 import { createRunStatus, type RunStatus } from "./run-status"
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
+import { createSchedulerInbox, type SchedulerInbox } from "./scheduler-inbox"
 import { createRunTeardown, type RunTeardown } from "./teardown"
 
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -75,6 +76,8 @@ export type RunServiceOptions = {
   createHost?: typeof createAgentHost
   /** Test seam: grace between deadline-abort and a forced SIGKILL. */
   timeoutGraceMs?: number
+  /** Test seam: scheduler inbox silent-flush interval (default 5min). */
+  inboxSilenceMs?: number
 }
 
 export type SendMessageInput = {
@@ -180,6 +183,10 @@ export function createRunService(options: RunServiceOptions) {
   const contexts = new Map<string, RunContext>()
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   const eventScopes = new Map<string, EventScopeEmitter>()
+  /** Per-event scheduler inboxes (docs/scheduler-inbox.md), same lifetime as
+   * their emitter: created lazily on scheduler wake-up wiring, closed when the
+   * scheduler run tears down or the service closes. */
+  const inboxes = new Map<string, SchedulerInbox>()
   /** Scheduler task queue + drainer. Assigned after construction (it calls back
    * into the launch callback); read via closures (teardownRun, routes). */
   let queue: QueueService | undefined
@@ -349,6 +356,7 @@ export function createRunService(options: RunServiceOptions) {
     contexts,
     queue: () => queue,
     eventScopes,
+    inboxes,
     finishFlagWarned,
     now,
     updateRun,
@@ -360,6 +368,36 @@ export function createRunService(options: RunServiceOptions) {
     emitRunEvent: status.emitRunEvent,
     stopTargetIfOrphaned,
   })
+
+  /** Lazy per-event scheduler inbox. Created on wake-up wiring (run-factory's
+   * attachSchedulerWakeup) with the orchestrator agent as the digest target;
+   * torn down with the scheduler run (teardown clears the map). Queue
+   * emergencies (starved / launch failure) push in via onQueueEmergency —
+   * absent inbox (no live scheduler) → silently dropped. */
+  function inboxFor(
+    eventId: string,
+    orchestratorAgentId: string
+  ): SchedulerInbox {
+    let inbox = inboxes.get(eventId)
+    if (!inbox) {
+      inbox = createSchedulerInbox({
+        eventId,
+        orchestratorAgentId,
+        db,
+        getSettings,
+        send: (text) => {
+          void lifecycle
+            .send(orchestratorAgentId, text, "steer")
+            .catch(() => undefined)
+        },
+        now,
+        isPaused: () => schedulerAdmin.isSchedulerPaused(eventId),
+        silenceMs: options.inboxSilenceMs,
+      })
+      inboxes.set(eventId, inbox)
+    }
+    return inbox
+  }
 
   // --- multi-session + flat backtrack (v12) --------------------------------
   // Sessions are per-agent conversation threads: exactly one is active
@@ -705,6 +743,8 @@ export function createRunService(options: RunServiceOptions) {
     finishFlagWarned.clear()
     for (const emitter of eventScopes.values()) emitter.close()
     eventScopes.clear()
+    for (const inbox of inboxes.values()) inbox.close()
+    inboxes.clear()
     bus.close()
   }
 
@@ -730,6 +770,7 @@ export function createRunService(options: RunServiceOptions) {
     bus,
     contexts,
     eventScopes,
+    inboxFor,
     pendingFinish,
     finishFlagWarned,
     lifecycle,
@@ -808,8 +849,8 @@ export function createRunService(options: RunServiceOptions) {
       })
       return run.id
     },
-    onLaunchFailed: (eventId, item, error) =>
-      schedulerAdmin.notifySchedulerOfFailure(eventId, item, error),
+    onQueueEmergency: (eventId, line) =>
+      inboxes.get(eventId)?.pushEmergency(line),
   })
 
   return {

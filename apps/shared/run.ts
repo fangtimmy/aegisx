@@ -59,6 +59,9 @@ export type RunPublic = {
   startedAt: string | null
   updatedAt: string
   completedAt: string | null
+  /** Hard deadline (set_run_timeout / queue timeoutMs); null until set.
+   * SDK-side time properties derive from it (docs/scheduler-inbox.md §3). */
+  deadlineAt: string | null
   /** When the hard deadline last fired (abort branch); null until the first
    * timeout. Timeline source: the run.timedOut{outcome} lifecycle event. */
   lastTimeoutAt: string | null

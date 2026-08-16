@@ -60,6 +60,7 @@ import {
   copyAttachments,
 } from "./prompt"
 import type { RunQueries } from "./queries"
+import type { SchedulerInbox } from "./scheduler-inbox"
 import type { RunSchedulerToolContext } from "./scheduler-tools"
 import { createSchedulerTools } from "./scheduler-tools"
 import { createMainTools, type RunToolContext } from "./tools"
@@ -164,6 +165,10 @@ export type RunFactoryDeps = {
   contexts: Map<string, RunContext>
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   eventScopes: Map<string, EventScopeEmitter>
+  /** Lazy per-event scheduler inbox (docs/scheduler-inbox.md): the wake-up
+   * wiring pushes lifecycle events into it; it flushes digests to the
+   * orchestrator. Created here, torn down with the scheduler run. */
+  inboxFor(eventId: string, orchestratorAgentId: string): SchedulerInbox
   /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
   pendingFinish: Map<string, { summary: string; runId: string }>
   /** Runs finish_run already warned about a missing flag (once per run). */
@@ -227,6 +232,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
     bus,
     contexts,
     eventScopes,
+    inboxFor,
     pendingFinish,
     finishFlagWarned,
     lifecycle,
@@ -279,49 +285,24 @@ export function createRunFactory(deps: RunFactoryDeps) {
     return emitter
   }
 
-  /** Built-in scheduler wake-up (v9: replaces the scheduler plugin's wire).
-   * Wakes the orchestrator on child-run lifecycle events; texts are identical
-   * to the v8 plugin wiring. The emitter's callbacks are already wrapped in
-   * try/catch (EventScopeEmitter). */
+  /** Built-in scheduler wake-up (v9: replaces the scheduler plugin's wire;
+   * inbox era, docs/scheduler-inbox.md): child-run lifecycle events are pushed
+   * into the event's passive inbox instead of waking the orchestrator per
+   * event — the inbox accumulates and flushes a digest (urgent immediately,
+   * otherwise after the silent window). The emitter's callbacks are already
+   * wrapped in try/catch (EventScopeEmitter). */
   function attachSchedulerWakeup(
     eventId: string,
     orchestratorAgentId: string
   ): void {
     const emitter = eventScopeFor(eventId)
-    const sendToOrch = (text: string) =>
-      lifecycle.send(orchestratorAgentId, text)
-    // Manual runs are flagged so the scheduler observes but never operates on
-    // them (unless its instruction explicitly authorizes it).
-    emitter.on(
-      "run.started",
-      (e) =>
-        void sendToOrch(
-          `Run ${e.runId} 已启动${e.source === "manual" ? "（手动启动，由用户管理）" : ""}。`
-        )
-    )
-    emitter.on(
-      "run.idle",
-      (e) =>
-        void sendToOrch(
-          `Run ${e.runId} 转入 idle${e.failed ? "（有 agent 失败）" : ""}。`
-        )
-    )
-    emitter.on(
-      "run.flagAccepted",
-      (e) => void sendToOrch(`Run ${e.runId} 解出 flag。`)
-    )
-    emitter.on(
-      "run.finished",
-      (e) => void sendToOrch(`Run ${e.runId} 已完成。`)
-    )
-    emitter.on(
-      "run.timedOut",
-      (e) =>
-        void sendToOrch(
-          `Run ${e.runId} 超时（${e.outcome}），决定延长/关闭/重排。`
-        )
-    )
-    emitter.on("run.resumed", (e) => void sendToOrch(`Run ${e.runId} 已恢复。`))
+    const inbox = inboxFor(eventId, orchestratorAgentId)
+    emitter.on("run.started", (e) => inbox.push(e))
+    emitter.on("run.idle", (e) => inbox.push(e))
+    emitter.on("run.flagAccepted", (e) => inbox.push(e))
+    emitter.on("run.finished", (e) => inbox.push(e))
+    emitter.on("run.timedOut", (e) => inbox.push(e))
+    emitter.on("run.resumed", (e) => inbox.push(e))
   }
 
   /** Latest assistant text for an agent (read_run fallback). */

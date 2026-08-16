@@ -597,22 +597,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     })
   }
 
-  /** Notify the event's scheduler orchestrator that a queued launch failed
-   * (avoid a pending death-loop). No-op if no live scheduler run. */
-  function notifySchedulerOfFailure(
-    eventId: string,
-    item: { id: string; challengeId: string },
-    error: string
-  ): void {
-    const sched = getSchedulerRun(eventId)
-    if (!sched || sched.status === "closed") return
-    const text =
-      `Queue item ${item.id} (challenge ${item.challengeId}) failed to ` +
-      `launch: ${error}. ` +
-      `Marked failed — remove_queue to clear or enqueue_run to retry.`
-    void deps.sendMessage(sched.id, { text }).catch(() => undefined)
-  }
-
   return {
     buildSchedulerToolContext,
     resolveAndCreate,
@@ -627,6 +611,5 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     pauseScheduler,
     resumeScheduler,
     isSchedulerPaused,
-    notifySchedulerOfFailure,
   }
 }

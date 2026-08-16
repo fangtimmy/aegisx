@@ -25,6 +25,7 @@ const containerInput = {
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe("scheduler event wiring", () => {
   test("challenge run going idle wakes the scheduler's orchestrator", async () => {
@@ -51,6 +52,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -85,17 +87,18 @@ describe("scheduler event wiring", () => {
         challengeId: "ch-1",
         container: containerInput,
       })
+      await wait(80)
       await settle()
 
       const texts = promptLog.get(orch.id) ?? []
-      // Scheduler prime, then the run.started + run.idle wake-ups.
-      expect(texts.length).toBeGreaterThanOrEqual(3)
-      expect(
-        texts.some((t) => t.includes(challenge.id) && t.includes("已启动"))
-      ).toBe(true)
-      expect(
-        texts.some((t) => t.includes(challenge.id) && t.includes("idle"))
-      ).toBe(true)
+      // Scheduler prime + one inbox digest carrying started→idle for the run.
+      const digest = texts.find((t) => t.includes("[调度事件摘要"))
+      expect(digest).toBeDefined()
+      // Order within the merged sequence is arrival order (prime-settle idle
+      // can land before the create's run.started); assert both are present.
+      expect(digest).toContain(challenge.id.slice(0, 8))
+      expect(digest).toContain("started(手动)")
+      expect(digest).toContain("idle")
       // The orchestrator's wake-up turn settled → scheduler run is idle again.
       expect(runService.get(sched.id)!.status).toBe("idle")
       await runService.close()
@@ -127,6 +130,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -164,11 +168,14 @@ describe("scheduler event wiring", () => {
       await settle()
 
       runService.notifyFlagAccepted(challenge.id)
+      await wait(80)
       await settle()
 
       const texts = promptLog.get(orch.id) ?? []
       expect(
-        texts.some((t) => t.includes(challenge.id) && t.includes("flag"))
+        texts.some(
+          (t) => t.includes("[调度事件摘要") && t.includes("flagAccepted")
+        )
       ).toBe(true)
       await runService.close()
     } finally {
@@ -199,6 +206,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -237,11 +245,12 @@ describe("scheduler event wiring", () => {
       // must wake the scheduler's orchestrator (a finish_run run never settles
       // idle, so run.idle alone would leave the scheduler blind).
       await runService.finish(challenge.id, "solved it")
+      await wait(80)
       await settle()
 
       const texts = promptLog.get(orch.id) ?? []
       expect(
-        texts.some((t) => t.includes(challenge.id) && t.includes("已完成"))
+        texts.some((t) => t.includes("[调度事件摘要") && t.includes("finished"))
       ).toBe(true)
       await runService.close()
     } finally {
@@ -272,6 +281,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -315,14 +325,17 @@ describe("scheduler event wiring", () => {
         challengeId: "ch-1",
         container: containerInput,
       })
+      await wait(80)
       await settle()
 
-      // The solver's failed prime settle flips the run idle — the wake-up
+      // The solver's failed prime settle flips the run idle — the digest
       // must carry the failure marker so the orchestrator does not treat the
       // run as a healthy pause.
       const texts = promptLog.get(orch.id) ?? []
       expect(
-        texts.some((t) => t.includes(challenge.id) && t.includes("失败"))
+        texts.some(
+          (t) => t.includes("[调度事件摘要") && t.includes("idle(failed)")
+        )
       ).toBe(true)
       await runService.close()
     } finally {
@@ -353,6 +366,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -392,11 +406,12 @@ describe("scheduler event wiring", () => {
       await runService.finish(challenge.id, "done")
       await settle()
       await runService.sendMessage(challenge.id, { text: "继续" })
+      await wait(80)
       await settle()
 
       const texts = promptLog.get(orch.id) ?? []
       expect(
-        texts.some((t) => t.includes(challenge.id) && t.includes("已恢复"))
+        texts.some((t) => t.includes("[调度事件摘要") && t.includes("resumed"))
       ).toBe(true)
       await runService.close()
     } finally {
@@ -427,6 +442,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -474,10 +490,16 @@ describe("scheduler event wiring", () => {
         challengeId: "ch-1",
         container: containerInput,
       })
+      await wait(80)
       await settle()
       const after = promptLog.get(orch.id) ?? []
       expect(
-        after.some((t) => t.includes(challenge.id) && t.includes("idle"))
+        after.some(
+          (t) =>
+            t.includes("[调度事件摘要") &&
+            t.includes("started(手动)") &&
+            t.includes("idle")
+        )
       ).toBe(true)
       await runService.close()
     } finally {
@@ -508,6 +530,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -580,6 +603,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -653,6 +677,7 @@ describe("scheduler event wiring", () => {
         } as never,
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
+        inboxSilenceMs: 30,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
@@ -688,11 +713,12 @@ describe("scheduler event wiring", () => {
         container: containerInput,
         source: "manual",
       })
+      await wait(80)
       await settle()
 
       const texts = promptLog.get(orch.id) ?? []
       expect(
-        texts.some((t) => t.includes(challenge.id) && t.includes("手动启动"))
+        texts.some((t) => t.includes("[调度事件摘要") && t.includes("手动"))
       ).toBe(true)
 
       // A scheduler-launched run (source=scheduler) carries NO manual marker —
@@ -703,16 +729,15 @@ describe("scheduler event wiring", () => {
         container: containerInput,
         source: "scheduler",
       })
+      await wait(80)
       await settle()
       const textsAfter = promptLog.get(orch.id) ?? []
-      expect(
-        textsAfter.some(
-          (t) =>
-            t.includes(schedRun.id) &&
-            t.includes("已启动") &&
-            !t.includes("手动启动")
-        )
-      ).toBe(true)
+      const lastDigest = [...textsAfter]
+        .reverse()
+        .find((t) => t.includes("[调度事件摘要"))
+      expect(lastDigest).toBeDefined()
+      expect(lastDigest).toContain(schedRun.id.slice(0, 8))
+      expect(lastDigest).not.toContain("手动")
       await runService.close()
     } finally {
       close()

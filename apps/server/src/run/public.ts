@@ -70,6 +70,7 @@ export function toRunPublic(
     startedAt: row.startedAt,
     updatedAt: row.updatedAt,
     completedAt: row.completedAt,
+    deadlineAt: row.deadlineAt,
     lastTimeoutAt: row.lastTimeoutAt,
     error: row.error,
     summary: row.summary,

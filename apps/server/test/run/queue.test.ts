@@ -21,13 +21,9 @@ function item(db: Db, id: string) {
 }
 
 /** QueueService with a stubbed launch (records calls, controls outcome). */
-function makeQueue(
-  db: Db,
-  launch: (id: string) => Promise<string>,
-  onFail?: (eventId: string, error: string) => void
-) {
+function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
   const launches: string[] = []
-  const failures: Array<{ eventId: string; error: string }> = []
+  const emergencies: string[] = []
   const svc = createQueueService({
     db,
     getSettings: flatSettings,
@@ -43,12 +39,10 @@ function makeQueue(
       })
       return runId
     },
-    onLaunchFailed: (eventId, _row, error) => {
-      failures.push({ eventId, error })
-      onFail?.(eventId, error)
-    },
+    onQueueEmergency: (eventId, line) =>
+      emergencies.push(`${eventId}: ${line}`),
   })
-  return { svc, launches, failures }
+  return { svc, launches, emergencies }
 }
 
 function enqueue(
@@ -405,24 +399,22 @@ describe("queue drainer", () => {
     }
   })
 
-  test("a launch failure marks the item failed and notifies the scheduler", async () => {
+  test("a launch failure marks the item failed and raises a queue emergency", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
-      const { svc, failures } = makeQueue(
-        db,
-        async () => {
-          throw new Error("container exploded")
-        },
-        (eventId) => expect(eventId).toBe("evt-1")
-      )
+      const { svc, emergencies } = makeQueue(db, async () => {
+        throw new Error("container exploded")
+      })
       svc.cancelDrain()
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       await svc.drainOnce()
       expect(item(db, a.id).status).toBe("failed")
       expect(item(db, a.id).error).toContain("container exploded")
-      expect(failures).toHaveLength(1)
+      expect(emergencies).toHaveLength(1)
+      expect(emergencies[0]).toContain("evt-1: 启动失败：Test Challenge")
+      expect(emergencies[0]).toContain("container exploded")
     } finally {
       close()
     }
@@ -433,14 +425,57 @@ describe("queue drainer", () => {
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
-      const { svc, failures } = makeQueue(db, async () => {
+      const { svc, emergencies } = makeQueue(db, async () => {
         throw new RunActionError("capacity", "full")
       })
       svc.cancelDrain()
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       await svc.drainOnce()
       expect(item(db, a.id).status).toBe("pending")
-      expect(failures).toHaveLength(0)
+      expect(emergencies).toHaveLength(0)
+    } finally {
+      close()
+    }
+  })
+
+  test("queue-starved edge: pending 2→1 fires once; refill re-arms", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-c", eventId: "evt-1" })
+      const { svc, emergencies } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      const a = enqueue(svc, "evt-1", "ch-a", 1)
+      const b = enqueue(svc, "evt-1", "ch-b", 2)
+      expect(emergencies).toHaveLength(0) // 2 pending — no edge yet
+      svc.remove(a.id) // 2 → 1: edge fires
+      expect(emergencies).toHaveLength(1)
+      expect(emergencies[0]).toContain("队列不足")
+      svc.remove(b.id) // 1 → 0: already ≤1, no repeat
+      expect(emergencies).toHaveLength(1)
+
+      // Refill to ≥2 re-arms; another 2→1 crossing fires again.
+      enqueue(svc, "evt-1", "ch-c", 3)
+      const d = enqueue(svc, "evt-1", "ch-b", 4)
+      expect(emergencies).toHaveLength(1)
+      svc.remove(d.id)
+      expect(emergencies).toHaveLength(2)
+    } finally {
+      close()
+    }
+  })
+
+  test("initial single-item queue never fires the starved edge", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      const { svc, emergencies } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      enqueue(svc, "evt-1", "ch-a", 1)
+      expect(emergencies).toHaveLength(0)
     } finally {
       close()
     }

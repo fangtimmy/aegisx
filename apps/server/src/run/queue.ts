@@ -129,9 +129,10 @@ export type QueueServiceDeps = {
    * success; rejects with {@link RunActionError} (capacity / launch_failed) or
    * other errors. */
   launch(item: QueueRow): Promise<string>
-  /** A launch failed permanently (not capacity). Notify the event's scheduler
-   * so it can re-plan; never throws. */
-  onLaunchFailed(eventId: string, item: QueueRow, error: string): void
+  /** Emergency line for the event's scheduler inbox (docs/scheduler-inbox.md):
+   * a permanent launch failure, or the queue-starved edge (pending 2→1).
+   * Never throws. */
+  onQueueEmergency(eventId: string, line: string): void
 }
 
 function toPublic(db: Database, row: QueueRow): QueueItemPublic {
@@ -173,6 +174,50 @@ const now = () => new Date().toISOString()
 
 export function createQueueService(deps: QueueServiceDeps) {
   const { db } = deps
+
+  /** Per-event starved-edge memory: true once pending crossed 2→1 (fired);
+   * reset when the count climbs back ≥ 2 (refill re-arms). Edge-triggered so
+   * a queue sitting at ≤ 1 never keeps nagging. */
+  const starvedFired = new Map<string, boolean>()
+
+  /** Pending items count for an event (queue-starved判定口径). */
+  function pendingCount(eventId: string): number {
+    return db
+      .select({ id: runQueue.id })
+      .from(runQueue)
+      .where(and(eq(runQueue.eventId, eventId), eq(runQueue.status, "pending")))
+      .all().length
+  }
+
+  /** Check the 2→1 edge on a pending-count DECREASE (launch 拉走 / remove /
+   * fail): exactly one pending item left → fire once (the last queued item is
+   * the buffer — the scheduler still has one pending + the just-launched run
+   * to react within). Never fires for a count that never crossed the edge
+   * (initial single-item enqueue, or 2→0 bulk clears). */
+  function checkStarved(eventId: string): void {
+    const count = pendingCount(eventId)
+    if (count >= 2) {
+      starvedFired.set(eventId, false)
+      return
+    }
+    if (count === 1 && !starvedFired.get(eventId)) {
+      starvedFired.set(eventId, true)
+      deps.onQueueEmergency(eventId, "队列不足：仅剩最后 1 项排队")
+    }
+  }
+
+  /** A launch permanently failed → emergency line for the inbox (replaces the
+   * old bare scheduler notification; docs/scheduler-inbox.md §2.2). */
+  function launchFailureLine(item: QueueRow, error: string): string {
+    const name =
+      db
+        .select({ name: challenges.name })
+        .from(challenges)
+        .where(eq(challenges.id, item.challengeId))
+        .get()?.name ?? item.challengeId
+    const brief = error.length > 200 ? `${error.slice(0, 200)}…` : error
+    return `启动失败：${name} — ${brief}`
+  }
 
   /** Next ord value for an event (max + 1). */
   function nextOrd(eventId: string): number {
@@ -225,6 +270,10 @@ export function createQueueService(deps: QueueServiceDeps) {
         })
         .where(eq(runQueue.id, existing.id))
         .run()
+      // Enqueue only grows the count; ≥ 2 clears the starved edge so a later
+      // 2→1 crossing re-fires (initial single-item enqueue never fires).
+      if (pendingCount(input.eventId) >= 2)
+        starvedFired.set(input.eventId, false)
       scheduleDrain()
       return toPublic(db, getRow(existing.id)!)
     }
@@ -246,6 +295,7 @@ export function createQueueService(deps: QueueServiceDeps) {
         updatedAt: ts,
       })
       .run()
+    if (pendingCount(input.eventId) >= 2) starvedFired.set(input.eventId, false)
     scheduleDrain()
     return toPublic(db, getRow(id)!)
   }
@@ -277,6 +327,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       )
     }
     db.delete(runQueue).where(eq(runQueue.id, itemId)).run()
+    checkStarved(row.eventId)
   }
 
   /** Remove every non-running item for an event. */
@@ -362,18 +413,22 @@ export function createQueueService(deps: QueueServiceDeps) {
 
   /** Mark an item running once its run launched (back-fills runId). */
   function markRunning(itemId: string, runId: string): void {
+    const row = getRow(itemId)
     db.update(runQueue)
       .set({ status: "running", runId, error: null, updatedAt: now() })
       .where(and(eq(runQueue.id, itemId), eq(runQueue.status, "pending")))
       .run()
+    if (row) checkStarved(row.eventId)
   }
 
   /** Mark an item failed (launch error recorded). */
   function markFailed(itemId: string, error: string): void {
+    const row = getRow(itemId)
     db.update(runQueue)
       .set({ status: "failed", error, updatedAt: now() })
       .where(eq(runQueue.id, itemId))
       .run()
+    if (row) checkStarved(row.eventId)
   }
 
   /**
@@ -453,7 +508,7 @@ export function createQueueService(deps: QueueServiceDeps) {
           if (isCapacity(error)) continue // race with another launch; stay pending
           const message = error instanceof Error ? error.message : String(error)
           markFailed(item.id, message)
-          deps.onLaunchFailed(item.eventId, item, message)
+          deps.onQueueEmergency(item.eventId, launchFailureLine(item, message))
         }
       }
     } finally {

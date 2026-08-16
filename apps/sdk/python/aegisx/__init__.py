@@ -40,6 +40,7 @@ from .models import (
     RunRead,
     SchedulerStatus,
     Snapshot,
+    fmt_ms,
     from_dict,
 )
 
@@ -55,6 +56,7 @@ __all__ = [
     "agents",
     "challenges",
     "configure",
+    "fmt_ms",
     "queue",
     "runs",
     "snapshot",

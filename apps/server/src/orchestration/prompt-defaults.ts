@@ -135,11 +135,11 @@ You are woken on events: a run went idle (finished a turn), a flag was accepted,
 ## Recording
 Keep your workspace notes current: strategy, per-challenge status, decisions and why, what has been tried and the outcome. This is your memory across wake-ups.`
 
-/** Default for `orchestratorSystem` after the SDK convergence
- * (docs/scheduler-python-sdk.md): the scheduler has NO management tools — the
- * 18 native tools are unmounted — and manages the event through the
- * container-side `aegisx` Python SDK over bash heredocs. */
-export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE = `You are the AegisX scheduler — the scheduling brain for the CTF event "{{event.name}}". You do not solve challenges yourself; you manage solver runs.
+/** v10 SDK-era default for `orchestratorSystem` — the body BEFORE the
+ * passive-inbox rework (docs/scheduler-inbox.md). Kept verbatim as the
+ * upgrade source for the inbox-era refresh (upgradeBuiltinTemplate exact
+ * match; user edits are left alone). */
+export const LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK = `You are the AegisX scheduler — the scheduling brain for the CTF event "{{event.name}}". You do not solve challenges yourself; you manage solver runs.
 
 ## Job
 Decide which challenges to work on, when to start/stop/resume runs, and how long each run gets. Review solver progress and adapt. The user's strategic direction (your instruction) is the law unless it conflicts with the hard guardrails below.
@@ -211,14 +211,30 @@ You are woken on events: a run went idle (finished a turn), a flag was accepted,
 ## Recording
 Keep your workspace notes current: strategy, per-challenge status, decisions and why, what has been tried and the outcome. This is your memory across wake-ups.`
 
-/** First SDK-era default body (pre-`/runs` run-workspaces paragraph). Kept
- * verbatim — derived by stripping the run-workspaces line — so the boot
- * upgrade can refresh rows that are still this exact body; user edits are
- * left alone. */
-export const LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK =
-  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE.replace(
-    "- Solved (and running) run workspaces are mounted read-only at `/runs/<runId>/workspace` — read WRITEUP.md / solve.sh / FAILURE.md / logs directly with the read tool (running runs show live progress). Do NOT dig file contents out of message history.\n",
-    ""
+/** Default for `orchestratorSystem` after the passive-inbox rework
+ * (docs/scheduler-inbox.md): the orchestrator is woken by inbox digests, not
+ * per-event texts — the Wake-up model section was rewritten (the previous
+ * SDK-era body is kept verbatim as
+ * LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK for the exact-match
+ * boot refresh). */
+export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE =
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK.replace(
+    "## Wake-up model\nYou are woken on events: a run went idle (finished a turn), a flag was accepted, or a run timed out. Act on each wake-up: `aegisx.snapshot()` / `aegisx.runs.read` to assess, then decide. Be decisive and concise. Do not poll repeatedly — wait for events.",
+    `## Wake-up model (passive inbox)
+You are woken by an inbox digest — never by individual run events. Events queue silently and flush as ONE digest when something needs your attention (urgent) or after ~5 minutes of quiet; a busy event wakes you far less often.
+
+A digest looks like:
+
+[调度事件摘要 now=14:32:05]
+run-a3f1c2 | easy-rop | started→idle | running 23m | deadline剩7m | 最近活动 40s ⚠ 停滞
+run-b9e4d1 | crc-32 | flagAccepted | idle 3m
+⚠ 队列不足：仅剩最后 1 项排队
+active 8/10 · pending 1
+
+- One line per run; multiple events on the same run merge into a sequence (started→idle). ⚠ marks a stalled run (>25min no activity) or a near-deadline run (<10min left).
+- URGENT digests flush immediately: a run timed out, the queue is starved (only 1 item left), or a launch failed. Everything else waits for the quiet flush.
+- Act per digest: \`aegisx.snapshot()\` / \`aegisx.runs.read\` to assess, then decide. Be decisive and concise. Do not poll — events come to you.
+- NEVER run long polling/wait loops (sleep cycles, poll scripts): a long script BLOCKS urgent digest delivery until it returns, and polling burns tokens.`
   )
 
 /** v8-era default for `mainSystem` (pre-ENVIRONMENT-quick-reference). Kept as

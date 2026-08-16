@@ -10,11 +10,46 @@ where the scheduler reasons about the data.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 _WORD_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 T = TypeVar("T")
+
+
+def _now_ms() -> int:
+    """Current epoch time in milliseconds (container clock shares the host
+    kernel clock, so epoch deltas against server ISO strings are reliable)."""
+    return int(time.time() * 1000)
+
+
+def _parse_iso_ms(iso: str) -> int:
+    """Parse a server ISO-8601 UTC timestamp (e.g. `2025-01-01T00:00:00.000Z`)
+    to epoch milliseconds. Handles the `Z` suffix (Python < 3.11 rejects it)
+    and treats naive strings as UTC."""
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def fmt_ms(ms: int) -> str:
+    """Milliseconds → human duration, shared format with the server digest:
+    `3500` → `"4s"`, `210000` → `"3m30s"`, `60000` → `"1m"`, `-45000` →
+    `"-45s(超时)"`. Use integer ms properties for comparisons; this is for
+    display only."""
+    if ms < 0:
+        return f"-{fmt_ms(-ms)}(超时)"
+    total_sec = round(ms / 1000)
+    if total_sec < 60:
+        return f"{total_sec}s"
+    m, s = divmod(total_sec, 60)
+    if m >= 60:
+        h, rem = divmod(m, 60)
+        return f"{h}h" if rem == 0 else f"{h}h{rem}m"
+    return f"{m}m" if s == 0 else f"{m}m{s}s"
 
 
 def _snake(name: str) -> str:
@@ -117,6 +152,7 @@ class Run:
     started_at: str | None
     updated_at: str
     completed_at: str | None
+    deadline_at: str | None
     last_timeout_at: str | None
     error: str | None
     summary: str | None
@@ -127,6 +163,36 @@ class Run:
     @property
     def active(self) -> bool:
         return self.status in ("running", "idle")
+
+    # --- time visibility (docs/scheduler-inbox.md §3.2) ---------------------
+    # Computed on every access (fresh); always integer ms. Judge with these
+    # values — do NOT parse the ISO strings yourself (timezone/naive traps).
+
+    @property
+    def elapsed_ms(self) -> int | None:
+        """started_at → now; None until the run starts."""
+        if not self.started_at:
+            return None
+        return _now_ms() - _parse_iso_ms(self.started_at)
+
+    @property
+    def deadline_remain_ms(self) -> int | None:
+        """deadline_at − now; None when there is no deadline or the run is
+        over (closed). Negative = already over the deadline."""
+        if not self.deadline_at or self.status == "closed":
+            return None
+        return _parse_iso_ms(self.deadline_at) - _now_ms()
+
+    @property
+    def overdue(self) -> bool:
+        """Deadline passed but the run is still active (running/idle)."""
+        remain = self.deadline_remain_ms
+        return remain is not None and remain < 0
+
+    @property
+    def last_activity_age_ms(self) -> int:
+        """updated_at → now."""
+        return _now_ms() - _parse_iso_ms(self.updated_at)
 
 
 @dataclass
@@ -149,6 +215,11 @@ class AgentSummary:
     updated_at: str
     completed_at: str | None
     error: str | None
+
+    @property
+    def idle_age_ms(self) -> int:
+        """updated_at → now (docs/scheduler-inbox.md §3.2)."""
+        return _now_ms() - _parse_iso_ms(self.updated_at)
 
 
 @dataclass
