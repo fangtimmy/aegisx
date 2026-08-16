@@ -25,11 +25,10 @@ import type { RunService } from "./service"
 import { streamRun } from "./sse"
 
 /** Manual enqueue body (POST /api/challenges/:id/runs enqueues,
- * returns a queue item). Models come from the orchestration settings at
- * launch; the first-turn prompt may be overridden. */
+ * returns a queue item). Models resolve at launch; the first-turn prompt may
+ * be overridden. */
 const runInput = Type.Object(
   {
-    orchestration: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
     /** Per-run strategy — appended to the run's default initial prompt as a
      * Strategy section (the standard blocks are always included). */
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
@@ -118,7 +117,6 @@ export function registerRunRoutes(
         const item = queue.enqueue({
           eventId: challenge.eventId,
           challengeId,
-          orchestration: input.orchestration ?? "classic",
           prompt: input.prompt,
           timeoutMs: input.timeoutMs,
           source: "manual",

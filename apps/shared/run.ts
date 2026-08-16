@@ -40,8 +40,6 @@ export type RunPublic = {
   /** Nullable: event-scope (scheduler) runs have no challenge. */
   challengeId: string | null
   challengeName: string
-  /** Orchestration plugin id (e.g. 'classic', 'scheduler'). */
-  orchestration: string
   status: RunStatus
   /** Set atomically by finish_run; the winning agent tears the run down. */
   finishing: boolean

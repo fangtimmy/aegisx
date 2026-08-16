@@ -14,7 +14,6 @@ export type QueueItemPublic = {
   ord: number
   challengeId: string
   challengeName: string
-  orchestration: string
   params: Record<string, unknown>
   timeoutMs: number | null
   prompt: string
@@ -35,7 +34,6 @@ const DRAIN_DEBOUNCE_MS = 200
 export type EnqueueInput = {
   eventId: string
   challengeId: string
-  orchestration: string
   params?: Record<string, unknown>
   /** Per-run strategy. Appended to the launched run's default `initial`
    * template as a `## Strategy` section — the standard blocks (challenge,
@@ -72,7 +70,6 @@ function toPublic(db: Database, row: QueueRow): QueueItemPublic {
     ord: row.ord,
     challengeId: row.challengeId,
     challengeName: challenge?.name ?? "",
-    orchestration: row.orchestration,
     params: safeParseObject(row.params),
     timeoutMs: row.timeoutMs,
     prompt: row.prompt,
@@ -116,8 +113,8 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /**
-   * Upsert a queue item by `(challengeId, orchestration)` — one pending item
-   * per pair. A hit —
+   * Upsert a queue item by `challengeId` (globally unique PK — one pending
+   * item per challenge; re-enqueue = re-arm). A hit —
    * including done/cancelled/failed — is reset to pending, runId cleared, and
    * ord/params/prompt/timeoutMs updated; a miss inserts a new row at the end.
    */
@@ -129,12 +126,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     const existing = db
       .select()
       .from(runQueue)
-      .where(
-        and(
-          eq(runQueue.challengeId, input.challengeId),
-          eq(runQueue.orchestration, input.orchestration)
-        )
-      )
+      .where(eq(runQueue.challengeId, input.challengeId))
       .get()
     if (existing) {
       // Re-enqueue goes to the back of the queue (FIFO).
@@ -163,7 +155,6 @@ export function createQueueService(deps: QueueServiceDeps) {
         eventId: input.eventId,
         ord: nextOrd(input.eventId),
         challengeId: input.challengeId,
-        orchestration: input.orchestration,
         params,
         timeoutMs,
         prompt,

@@ -169,7 +169,7 @@ describe("classic plugin end-to-end (service-level parity)", () => {
     }
   })
 
-  test("exactly one entry agent declared; orchestration = classic", async () => {
+  test("exactly one entry agent declared", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
@@ -180,7 +180,7 @@ describe("classic plugin end-to-end (service-level parity)", () => {
       const run = await runService.create(input)
       await runService.close()
 
-      expect(run.orchestration).toBe("classic")
+      expect(run.scopeType).toBe("challenge")
       const all = db.select().from(agents).where(eq(agents.runId, run.id)).all()
       expect(all).toHaveLength(1)
       expect(all.filter((a) => a.isEntry)).toHaveLength(1)

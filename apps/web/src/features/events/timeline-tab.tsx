@@ -44,7 +44,7 @@ function buildTimeline(
       id: `run:${run.id}:created`,
       kind: "run",
       title: "任务启动",
-      detail: `${run.challengeName} · ${run.orchestration} · ${
+      detail: `${run.challengeName} · ${
         run.source === "scheduler" ? "调度者" : "手动"
       }`,
       runId: run.id,

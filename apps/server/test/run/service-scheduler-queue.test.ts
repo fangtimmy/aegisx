@@ -90,7 +90,6 @@ describe("scheduler queue integration (P3)", () => {
       const item = queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "manual",
         prompt: "go",
       })
@@ -123,7 +122,6 @@ describe("scheduler queue integration (P3)", () => {
       const item = queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "scheduler",
         prompt: "go",
       })
@@ -155,7 +153,6 @@ describe("scheduler queue integration (P3)", () => {
       queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "manual",
         prompt: "go",
       })
@@ -229,7 +226,6 @@ describe("scheduler queue integration (P3)", () => {
 
       const sched = await service.startScheduler("evt-1")
       expect(sched.scopeType).toBe("event")
-      expect(sched.orchestration).toBe("scheduler")
       const config = service.getSchedulerConfig("evt-1")
       expect(config.instruction).toBe("Hit crypto first.")
       expect(config.maxConcurrentTargets).toBe(2)
@@ -288,7 +284,6 @@ describe("scheduler queue integration (P3)", () => {
         scopeType: "event",
         eventId: "evt-1",
         challengeId: null,
-        orchestration: "scheduler",
         status: "idle",
       })
       db.insert(agents)
@@ -312,7 +307,6 @@ describe("scheduler queue integration (P3)", () => {
       const item = queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "scheduler",
         prompt: "go",
       })
@@ -373,7 +367,6 @@ describe("scheduler queue integration (P3)", () => {
       queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "scheduler",
         prompt: "Hit crypto first; try z3.",
       })
@@ -406,7 +399,6 @@ describe("scheduler queue integration (P3)", () => {
       const item = queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "scheduler",
         prompt: "go",
       })
@@ -497,7 +489,6 @@ describe("scheduler queue integration (P3)", () => {
       const run1 = await service.create({
         scopeType: "challenge",
         challengeId: "ch-a",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -510,13 +501,11 @@ describe("scheduler queue integration (P3)", () => {
       const run2 = await service.create({
         scopeType: "challenge",
         challengeId: "ch-a",
-        orchestration: "classic",
         container: containerInput,
       })
       const run3 = await service.create({
         scopeType: "challenge",
         challengeId: "ch-a",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()

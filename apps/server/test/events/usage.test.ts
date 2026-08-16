@@ -59,7 +59,6 @@ function seedRun(
       id,
       scopeType,
       eventId,
-      orchestration: scopeType === "event" ? "scheduler" : "classic",
       status: "closed",
       model: "openai/gpt-4o-mini:off",
       image: "img",

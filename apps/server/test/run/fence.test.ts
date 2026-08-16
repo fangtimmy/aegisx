@@ -131,7 +131,6 @@ describe("launch fence (spec §8.2)", () => {
           scopeType: "event",
           eventId: "evt-1",
           challengeId: null,
-          orchestration: "scheduler",
           status: "running",
           model: "openai/gpt-4o-mini:off",
           image: "i",

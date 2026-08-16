@@ -782,7 +782,6 @@ export function createRunService(options: RunServiceOptions) {
     launch: async (item) => {
       const run = await schedulerAdmin.resolveAndCreate({
         challengeId: item.challengeId,
-        orchestration: item.orchestration,
         prompt: item.prompt,
         timeoutMs: item.timeoutMs,
         source: item.source as "manual" | "scheduler",

@@ -500,7 +500,9 @@ export function createRunFactory(deps: RunFactoryDeps) {
   }
 
   async function create(input: CreateRunInput): Promise<RunPublic> {
-    const plugin = requirePlugin(input.orchestration ?? "classic")
+    const plugin = requirePlugin(
+      input.scopeType === "event" ? "scheduler" : "classic"
+    )
     if (plugin.scope !== input.scopeType) {
       throw new RunActionError(
         "invalid_state",
@@ -677,7 +679,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
           eventId:
             input.scopeType === "challenge" ? challenge!.eventId : event!.id,
           challengeId: challenge?.id ?? null,
-          orchestration: plugin.id,
           params: "{}",
           status: "running",
           model: entryModelRef,
@@ -931,7 +932,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
         scope: row.scopeType === "event" ? "event" : "challenge",
         eventId: row.eventId,
         challengeId: row.challengeId,
-        orchestration: row.orchestration,
+        orchestration: row.scopeType === "event" ? "scheduler" : "classic",
         containerName: row.containerName,
         containerWorkspace: settings["container.workspace"],
         wsAbs,

@@ -56,12 +56,11 @@ function enqueue(
   eventId: string,
   challengeId: string,
   ord = 0,
-  extra: { orchestration?: string; status?: string } = {}
+  extra: { status?: string } = {}
 ) {
   return svc.enqueue({
     eventId,
     challengeId,
-    orchestration: extra.orchestration ?? "classic",
     source: "manual",
     prompt: `prompt-${ord}`,
     ...extra,
@@ -88,7 +87,7 @@ describe("queue CRUD (spec §8.1)", () => {
     }
   })
 
-  test("enqueue upserts by (challenge, orchestration): resets done/failed to pending", async () => {
+  test("enqueue upserts by challenge: resets done/failed to pending", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
@@ -107,7 +106,6 @@ describe("queue CRUD (spec §8.1)", () => {
       const re = svc.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "manual",
         prompt: "new-strategy",
       })
@@ -158,9 +156,7 @@ describe("queue CRUD (spec §8.1)", () => {
       expect(updated.prompt).toBe("edited")
       expect(updated.timeoutMs).toBe(99)
 
-      const running = enqueue(svc, "evt-1", "ch-a", 2, {
-        orchestration: "trio",
-      })
+      const running = enqueue(svc, "evt-1", "ch-a", 2)
       db.update(runQueue)
         .set({ status: "running", updatedAt: now() })
         .where(eq(runQueue.id, running.id))
@@ -254,14 +250,12 @@ describe("queue per-event state (W2.1)", () => {
       const a = svc.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "manual",
         prompt: "p",
       })
       const b = svc.enqueue({
         eventId: "evt-2",
         challengeId: "ch-b",
-        orchestration: "classic",
         source: "manual",
         prompt: "p",
       })
@@ -292,7 +286,6 @@ describe("queue per-event state (W2.1)", () => {
       const a = svc.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
-        orchestration: "classic",
         source: "manual",
         prompt: "p",
       })

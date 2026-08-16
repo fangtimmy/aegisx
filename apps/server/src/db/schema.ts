@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -120,9 +120,9 @@ export const attachments = sqliteTable(
 
 /**
  * v8 runs: the single deployment unit. A run = one scope (challenge or event)
- * + one orchestration plugin + a shared container/workspace + N agents. The
- * event-scoped run (scopeType='event', orchestration='scheduler') IS the
- * scheduler — the former standalone `orchestrators` table is merged in here.
+ * + a shared container/workspace + N agents. The event-scoped run
+ * (scopeType='event') IS the scheduler — the former standalone `orchestrators`
+ * table is merged in here.
  *
  * Run status is SQL-derived from agent statuses (running↔idle, §4.5b) plus
  * sanctioned explicit `closed` transitions (finish / close / timeout-SIGKILL /
@@ -143,8 +143,6 @@ export const runs = sqliteTable(
     challengeId: text("challenge_id").references(() => challenges.id, {
       onDelete: "cascade",
     }),
-    /** Orchestration plugin id (e.g. 'classic', 'observer-solver', 'scheduler'). */
-    orchestration: text("orchestration").notNull(),
     status: text("status").notNull(),
     /** Atomic finish_run flag: the agent whose conditional UPDATE sets this is
      * responsible for teardown; others no-op. */
@@ -193,7 +191,6 @@ export const runs = sqliteTable(
   (table) => [
     index("runs_challenge_id_idx").on(table.challengeId),
     index("runs_scope_event_idx").on(table.scopeType, table.eventId),
-    index("runs_orchestration_idx").on(table.orchestration),
     // At most one scheduler (event-scoped) run per event.
     uniqueIndex("runs_event_scheduler_unique")
       .on(table.eventId)
@@ -368,7 +365,6 @@ export const runQueue = sqliteTable(
     challengeId: text("challenge_id")
       .notNull()
       .references(() => challenges.id, { onDelete: "cascade" }),
-    orchestration: text("orchestration").notNull(),
     /** Plugin input snapshot (JSON). */
     params: text("params").notNull(),
     timeoutMs: integer("timeout_ms"),

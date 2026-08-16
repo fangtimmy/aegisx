@@ -96,7 +96,6 @@ export function seedRun(
       scopeType: "challenge",
       eventId,
       challengeId,
-      orchestration: "classic",
       status: "closed",
       model: `${TEST_MODEL_REF}:off`,
       image: "img",

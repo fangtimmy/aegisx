@@ -163,7 +163,6 @@ function CreateRunDialogContent({
   const mutation = useMutation({
     mutationFn: () =>
       runsApi.createRun(challenge?.id ?? challengeId, {
-        orchestration,
         timeoutMs: Math.max(1, Math.round(timeoutMinutes)) * 60_000,
         ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
       }),

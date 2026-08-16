@@ -62,7 +62,7 @@ describe("schema bootstrap", () => {
         ).map((c) => c.name)
       )
       expect(runCols.has("scope_type")).toBe(true)
-      expect(runCols.has("orchestration")).toBe(true)
+      expect(runCols.has("orchestration")).toBe(false)
       expect(runCols.has("finishing")).toBe(true)
       expect(runCols.has("queue_item_id")).toBe(true)
       expect(runCols.has("params")).toBe(true)

@@ -11,7 +11,6 @@ export type RunSummary = {
   eventId: string
   challengeId: string | null
   challengeName: string
-  orchestration: string
   status: RunPublic["status"]
   source: RunPublic["source"]
   modelId: string
@@ -35,7 +34,6 @@ export type SchedulerStatusSnapshot = {
     challengeId: string | null
     challengeName: string
     status: string
-    orchestration: string
   }>
 }
 
@@ -51,7 +49,6 @@ export type RunSchedulerToolContext = {
   agentId: string
   enqueue(input: {
     challengeId: string
-    orchestration?: string
     params?: Record<string, unknown>
     prompt?: string
     timeoutMs?: number | null
@@ -62,7 +59,6 @@ export type RunSchedulerToolContext = {
   reorderQueue(itemIds: string[]): void
   startRun(input: {
     challengeId: string
-    orchestration?: string
     params?: Record<string, unknown>
     prompt?: string
     timeoutMs?: number | null
@@ -100,7 +96,7 @@ function textResult(text: string, details?: unknown) {
 }
 
 function queueItemText(item: QueueItemPublic): string {
-  return `Queue item ${item.id}: ${item.orchestration} on "${item.challengeName}" (${item.challengeId}) — ${item.status}${item.runId ? `, run ${item.runId}` : ""}${item.error ? `, error: ${item.error}` : ""}.`
+  return `Queue item ${item.id}: "${item.challengeName}" (${item.challengeId}) — ${item.status}${item.runId ? `, run ${item.runId}` : ""}${item.error ? `, error: ${item.error}` : ""}.`
 }
 
 function challengeSummaryText(c: Challenge): string {
@@ -226,7 +222,6 @@ export function createSchedulerTools(
                     JSON.stringify({
                       id: r.id,
                       challenge: r.challengeName || r.challengeId,
-                      orchestration: r.orchestration,
                       status: r.status,
                       summary: r.summary,
                       error: r.error,
@@ -272,20 +267,12 @@ export function createSchedulerTools(
         name: "enqueue_run",
         label: "Enqueue run",
         description:
-          "Add (or re-arm) a task in the queue. Upserts by (challenge, orchestration): a hit — including done/cancelled/failed — resets to pending. The queue drains FIFO under the concurrency caps; if a slot is free the run launches right away. `prompt` is appended to the run's default initial prompt as a Strategy section — the standard blocks (challenge, environment, submission) are always included.",
+          "Add (or re-arm) a task in the queue. Upserts by challenge: a hit — including done/cancelled/failed — resets to pending. The queue drains FIFO under the concurrency caps; if a slot is free the run launches right away. `prompt` is appended to the run's default initial prompt as a Strategy section — the standard blocks (challenge, environment, submission) are always included.",
         parameters: Type.Object({
           challenge_id: Type.String({
             minLength: 1,
             description: "The challenge id (from list_challenges).",
           }),
-          orchestration: Type.Optional(
-            Type.String({
-              minLength: 1,
-              maxLength: 80,
-              description:
-                "Orchestration id from the catalog in your system prompt; omit for classic with defaults.",
-            })
-          ),
           params: Type.Optional(
             Type.Record(Type.String(), Type.Unknown(), {
               description:
@@ -309,9 +296,6 @@ export function createSchedulerTools(
         execute: async (_id, params) => {
           const item = ctx.enqueue({
             challengeId: params.challenge_id,
-            ...(params.orchestration
-              ? { orchestration: params.orchestration }
-              : {}),
             ...(params.params ? { params: params.params } : {}),
             ...(params.prompt ? { prompt: params.prompt } : {}),
             ...(params.timeout_ms ? { timeoutMs: params.timeout_ms } : {}),
@@ -415,14 +399,6 @@ export function createSchedulerTools(
             minLength: 1,
             description: "The challenge id (from list_challenges).",
           }),
-          orchestration: Type.Optional(
-            Type.String({
-              minLength: 1,
-              maxLength: 80,
-              description:
-                "Orchestration id from the catalog in your system prompt; omit for classic with defaults.",
-            })
-          ),
           params: Type.Optional(
             Type.Record(Type.String(), Type.Unknown(), {
               description:
@@ -446,14 +422,12 @@ export function createSchedulerTools(
         execute: async (_id, params) => {
           const run = await ctx.startRun({
             challengeId: params.challenge_id,
-            ...(params.orchestration
-              ? { orchestration: params.orchestration }
-              : {}),
+            ...(params.params ? { params: params.params } : {}),
             ...(params.prompt ? { prompt: params.prompt } : {}),
             ...(params.timeout_ms ? { timeoutMs: params.timeout_ms } : {}),
           })
           return textResult(
-            `Started run ${run.id} (${run.orchestration}) on challenge ${params.challenge_id}.`,
+            `Started run ${run.id} on challenge ${params.challenge_id}.`,
             run
           )
         },
@@ -562,7 +536,6 @@ export function createSchedulerTools(
               run: {
                 id: r.run.id,
                 challenge: r.run.challengeName,
-                orchestration: r.run.orchestration,
                 status: r.run.status,
                 summary: r.run.summary,
                 error: r.run.error,

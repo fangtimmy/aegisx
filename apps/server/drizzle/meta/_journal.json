@@ -57,6 +57,13 @@
       "when": 1789600000000,
       "tag": "0007_challenge_remote_event_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": 14,
+      "when": 1789900000000,
+      "tag": "0008_v14_orchestration_drop",
+      "breakpoints": true
     }
   ]
 }

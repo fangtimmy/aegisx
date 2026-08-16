@@ -118,8 +118,7 @@ export function QueueList({
                   {item.challengeName}
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
-                  {item.orchestration}
-                  {item.source === "scheduler" ? " · 调度者" : ""}
+                  {item.source === "scheduler" ? "调度者" : ""}
                   {item.error ? (
                     <span className="text-destructive"> · {item.error}</span>
                   ) : null}
@@ -330,7 +329,7 @@ function EditQueueItemDialog({
         <DialogHeader>
           <DialogTitle>编辑队列项</DialogTitle>
           <DialogDescription>
-            {item.challengeName} · {item.orchestration}（仅排队中可编辑）
+            {item.challengeName}（仅排队中可编辑）
           </DialogDescription>
         </DialogHeader>
         <form

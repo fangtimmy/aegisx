@@ -316,8 +316,7 @@ function RunGraphNode({ data }: NodeProps) {
           {run.challengeName}
         </span>
         <span className="block truncate font-mono text-[11px] leading-tight text-muted-foreground">
-          {run.orchestration}
-          {run.source === "scheduler" ? " · 调度" : ""}
+          {run.source === "scheduler" ? "调度" : ""}
         </span>
       </span>
       <Badge size="sm" variant={statusVariant(run.status)}>

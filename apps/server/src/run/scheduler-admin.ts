@@ -54,7 +54,6 @@ function runSummary(run: RunPublic): RunSummary {
     eventId: run.eventId,
     challengeId: run.challengeId,
     challengeName: run.challengeName,
-    orchestration: run.orchestration,
     status: run.status,
     source: run.source,
     modelId: run.modelId,
@@ -101,7 +100,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       enqueue: (input) =>
         deps.queue()!.enqueue({
           ...input,
-          orchestration: input.orchestration ?? "classic",
           eventId,
           source: "scheduler",
         }),
@@ -112,7 +110,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       startRun: async (input) => {
         const run = await resolveAndCreate({
           ...input,
-          orchestration: input.orchestration ?? "classic",
           source: "scheduler",
         })
         return runSummary(run)
@@ -139,7 +136,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
    * orchestration settings (computed inside create()). */
   async function resolveAndCreate(input: {
     challengeId: string
-    orchestration: string
     prompt?: string
     timeoutMs?: number | null
     source: "manual" | "scheduler"
@@ -149,7 +145,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return deps.create({
       scopeType: "challenge",
       challengeId: input.challengeId,
-      orchestration: input.orchestration,
       container: {
         image: get(settings, "container.image"),
         cpus: get(settings, "container.cpus"),
@@ -207,7 +202,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         id: runs.id,
         challengeId: runs.challengeId,
         status: runs.status,
-        orchestration: runs.orchestration,
       })
       .from(runs)
       .where(
@@ -227,7 +221,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
           .where(eq(challenges.id, row.challengeId ?? ""))
           .get()?.name ?? "",
       status: row.status,
-      orchestration: row.orchestration,
     }))
     return { ...snap, activeRuns }
   }
@@ -444,14 +437,14 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
    * (avoid a pending death-loop). No-op if no live scheduler run. */
   function notifySchedulerOfFailure(
     eventId: string,
-    item: { id: string; challengeId: string; orchestration: string },
+    item: { id: string; challengeId: string },
     error: string
   ): void {
     const sched = getSchedulerRun(eventId)
     if (!sched || sched.status === "closed") return
     const text =
-      `Queue item ${item.id} (challenge ${item.challengeId}, ` +
-      `${item.orchestration}) failed to launch: ${error}. ` +
+      `Queue item ${item.id} (challenge ${item.challengeId}) failed to ` +
+      `launch: ${error}. ` +
       `Marked failed — remove_queue to clear or enqueue_run to retry.`
     void deps.sendMessage(sched.id, { text }).catch(() => undefined)
   }

@@ -51,7 +51,6 @@ export function toRunPublic(
     eventId: row.eventId,
     challengeId: row.challengeId,
     challengeName: challenge?.name ?? "",
-    orchestration: row.orchestration,
     status: row.status as RunPublic["status"],
     finishing: row.finishing,
     source: row.source as RunPublic["source"],

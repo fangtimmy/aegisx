@@ -66,7 +66,6 @@ export type QueueItem = {
   ord: number
   challengeId: string
   challengeName: string
-  orchestration: string
   params: Record<string, unknown>
   timeoutMs: number | null
   prompt: string
@@ -108,7 +107,6 @@ export type SchedulerInfo = {
       challengeId: string | null
       challengeName: string
       status: string
-      orchestration: string
     }>
   }
 }
