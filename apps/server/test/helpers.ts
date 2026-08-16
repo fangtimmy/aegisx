@@ -153,7 +153,6 @@ export function stubConfigStore(providers: ProviderData[]): ConfigStore {
   return {
     getProviders: () => providers,
     getAliases: () => [],
-    getAgentModels: () => ({}),
     getLegacyPromptTemplates: () => undefined,
   } as unknown as ConfigStore
 }

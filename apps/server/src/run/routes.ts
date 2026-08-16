@@ -553,8 +553,6 @@ export function registerRunRoutes(
       return runError(c, error)
     }
   })
-
-  // --- orchestration settings (per-plugin, per-slot model refs) -------------
 }
 
 function runError(c: Context, error: unknown) {

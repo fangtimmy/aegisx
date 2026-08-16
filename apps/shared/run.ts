@@ -16,7 +16,7 @@ export type RunUsage = {
 }
 
 /** 'challenge' = a solver run on one challenge; 'event' = the scheduler run
- * (orchestration='scheduler') that manages a task queue for an event. */
+ * (scopeType='event') that manages a task queue for an event. */
 export type RunScope = "challenge" | "event"
 
 export type RunSource = "manual" | "scheduler"
@@ -184,14 +184,7 @@ export type PromptTemplateContext = {
   }
 }
 
-export type FrozenPromptConfig = {
-  mainSystemPromptTemplate: string
-  childSystemPromptTemplate: string
-  initialPromptTemplate: string
-  context?: PromptTemplateContext
-}
-
-/** v8 run lifecycle. A run's status is SQL-derived from its agents' statuses
+/** Run lifecycle. A run's status is SQL-derived from its agents' statuses
  * (running ↔ idle) plus sanctioned explicit `closed` transitions
  * (finish / close / timeout-SIGKILL / recoverOnBoot). Not a dead terminal:
  * the DB session + agent rows survive a `closed` run for cold-restore. */
@@ -202,10 +195,9 @@ export function isActiveRunStatus(status: string): boolean {
   return status === "running" || status === "idle"
 }
 
-/** Per-agent lifecycle. Declared agents use running|idle (turn-by-turn); a
- * spawn child runs to completion within one spawn_agent call
- * (running|completed|aborted|failed). `aborted` is set when the run is torn
- * down (finish/close/timeout) while the agent was mid-turn. */
+/** Per-agent lifecycle. Solver + orchestrator agents use running|idle
+ * (turn-by-turn); `aborted` is set when the run is torn down
+ * (finish/close/timeout) while the agent was mid-turn. */
 export type AgentStatus =
   | "running"
   | "idle"

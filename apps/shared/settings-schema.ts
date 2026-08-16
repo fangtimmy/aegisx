@@ -429,11 +429,9 @@ export function patchSettings(
  */
 const LEGACY_PROMPT_TEMPLATE_KEYS: Record<string, string> = {
   "prompts.mainSystem": "mainSystem",
-  "prompts.childSystem": "childSystem",
   "prompts.initial": "initial",
   "prompts.orchestratorSystem": "orchestratorSystem",
   mainSystemPromptTemplate: "mainSystem",
-  childSystemPromptTemplate: "childSystem",
   initialPromptTemplate: "initial",
 }
 

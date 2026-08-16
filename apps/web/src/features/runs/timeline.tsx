@@ -157,7 +157,6 @@ function toolIcon(name: string) {
   if (name === "stop_target") return Square
   if (name === "extend_target") return Clock
   if (name === "finish_run" || name === "submit_flag") return Flag
-  if (name === "spawn_agent" || name === "inspect_agent") return GitFork
   return Wrench
 }
 

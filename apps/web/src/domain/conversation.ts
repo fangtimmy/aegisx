@@ -54,10 +54,6 @@ export function toolStatusLabel(
       }
       case "ls":
         return truncateLabel(text(a?.path)) || ""
-      case "spawn_agent":
-        return truncateLabel(text(a?.name)) || truncateLabel(text(a?.task), 60)
-      case "inspect_agent":
-        return truncateLabel(text(a?.agent_id)) || ""
       default:
         return ""
     }
@@ -82,10 +78,6 @@ export function toolStatusLabel(
         return running ? "正在提交 flag" : "已提交 flag"
       case "finish_run":
         return running ? "正在结束任务" : "已结束任务"
-      case "spawn_agent":
-        return running ? "正在派生 agent" : "已派生 agent"
-      case "inspect_agent":
-        return running ? "正在检查 agent" : "已检查 agent"
       case "get_target":
         return running ? "正在检查目标" : "已检查目标"
       case "start_target":

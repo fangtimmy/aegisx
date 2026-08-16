@@ -95,7 +95,7 @@ function makeService(
   })
 }
 
-describe("classic plugin end-to-end (service-level parity)", () => {
+describe("classic-parity: N=1 solver run (v9 path)", () => {
   test("platform + target challenge → solver tools snapshot includes flag + target tools; systemPrompt rendered from builtin mainSystem", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {

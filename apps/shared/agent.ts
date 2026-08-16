@@ -20,22 +20,22 @@ export type ToolDefinitionSnapshot = {
   promptGuidelines?: string[]
 }
 
-/** v8 agent: a pi session + role + model + prompt + tools, snapshotted on the
- * row at createAgent time. A run declares N agents (classic = 1 solver);
- * spawn adds child agents (parentAgentId set). */
+/** v9 agent: a pi session + role + model + prompt + tools, snapshotted on the
+ * row at createAgent time. A run declares 1..N solvers (`solver-1` = entry) or
+ * one event scheduler (`orchestrator`); there are no child agents. */
 export type AgentSummary = {
   id: string
   runId: string
-  /** Run-unique createAgent idempotency key; spawn child = `child-<8char>`. */
+  /** Run-unique agent slot: `solver-N` / `orchestrator`. */
   slot: string
-  /** Free-form role ('solver' / 'observer' / 'orchestrator' / 'child' ...). */
+  /** Free-form role ('solver' / 'orchestrator'). */
   role: string
-  /** Non-null = spawn child; references the delegating parent agent. */
+  /** Kept for schema stability; always null in v9 (spawn child removed). */
   parentAgentId: string | null
   /** Entry agent (run-level default conversation target); at most one per run. */
   isEntry: boolean
   name: string | null
-  /** Delegated task text (spawn children). */
+  /** Delegated task text (spawn children); always null in v9. */
   task: string | null
   /** Canonical model ref snapshot (`<providerKey>/<modelId>:<effort>` | alias),
    * persisted on the agent row at createAgent/switch time. */

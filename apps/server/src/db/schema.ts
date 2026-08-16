@@ -177,7 +177,8 @@ export const runs = sqliteTable(
      * runs) is declared on run_queue instead. */
     queueItemId: text("queue_item_id"),
     // Structured snapshots (independent columns)
-    /** Plugin input snapshot (JSON). */
+    /** Reserved; v9 always writes `{}` (solver specs live on the create input
+     * / run_queue.params). */
     params: text("params").notNull().default("{}"),
     /** Timestamp of the last timeout fire (Timeline source; outcome event). */
     lastTimeoutAt: text("last_timeout_at"),
@@ -212,8 +213,8 @@ export const runs = sqliteTable(
  * a model + a system prompt + tools, all snapshotted on the row at createAgent
  * time. Cold-restore reuses the snapshot verbatim (per-agent model switches /
  * prompt edits survive). `entry` is the DB-enforced "default conversation
- * agent" (at most one per run via a partial unique index); spawn children carry
- * parentAgentId + a synthesized `child-<id>` slot.
+ * agent" (at most one per run via a partial unique index); v9 runs have no
+ * spawn children (parentAgentId stays null).
  */
 export const agents = sqliteTable(
   "agents",
@@ -222,12 +223,12 @@ export const agents = sqliteTable(
     runId: text("run_id")
       .notNull()
       .references(() => runs.id, { onDelete: "cascade" }),
-    /** Run-unique createAgent idempotency key (plugin-internal). Spawn child =
-     * `child-<8charid>`. */
+    /** Run-unique agent slot: `solver-N` (solvers) / `orchestrator` (event
+     * scheduler). */
     slot: text("slot").notNull(),
-    /** Free-form role ('orchestrator'/'child' reserved by convention). */
+    /** Free-form role ('solver' / 'orchestrator'). */
     role: text("role").notNull(),
-    /** Non-null = spawn child; references the delegating parent agent. */
+    /** Kept for schema stability; always null in v9 (spawn child removed). */
     parentAgentId: text("parent_agent_id"),
     /** Entry agent flag (run-level default conversation target). At most one
      * per run (partial unique index). */
@@ -365,7 +366,8 @@ export const runQueue = sqliteTable(
     challengeId: text("challenge_id")
       .notNull()
       .references(() => challenges.id, { onDelete: "cascade" }),
-    /** Plugin input snapshot (JSON). */
+    /** Solver creation options JSON (`strategy` / `model` / `solverCount` /
+     * `solvers`); the drainer passes them through to create. */
     params: text("params").notNull(),
     timeoutMs: integer("timeout_ms"),
     /** Overrides the rendered `initial` template as the run's first prompt. */
@@ -405,8 +407,7 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
     .primaryKey()
     .references(() => events.id, { onDelete: "cascade" }),
   /** Per-event scheduler model override (canonical model ref string
-   * `<providerKey>/<modelId>:<effort>` | alias); null = fall back to the global
-   * orchestration setting (`agentModels.scheduler.orchestrator`) then the
+   * `<providerKey>/<modelId>:<effort>` | alias); null = fall back to the
    * global default model. */
   modelId: text("model_id"),
   /** Natural-language steering ("hit crypto first, leave pwn for last"). */
@@ -423,10 +424,8 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
 
 /**
  * Prompt template store (v8). Independent of FlatSettings (which is a closed
- * enum). `(plugin, key)` unique; `plugin='builtin'` for the built-in templates
- * (mainSystem/childSystem/initial/orchestratorSystem). Plugin `templates?`
- * defaults are upserted at registration only when no user edit exists;
- * `run.render(key)` resolves current-plugin → builtin → throw. Built-in rows
+ * enum). `(plugin, key)` unique; v9 only uses `plugin='builtin'` with the four
+ * built-in keys (mainSystem/initial/orchestratorSystem/schedulerInitial). Rows
  * are seeded at runtime (app boot), not by migration SQL.
  */
 export const promptTemplates = sqliteTable(

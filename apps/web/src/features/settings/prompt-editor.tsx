@@ -22,9 +22,9 @@ export type PromptPreviewKind =
   | "initialPrompt"
   | "orchestratorSystemPrompt"
 
-/** Prompt template editor: {{variable}} insertion, live preview (builtin
- * kinds only — plugin templates have no preview context server-side) and a
- * monospace textarea. Controlled; saving/debouncing is the caller's. */
+/** Prompt template editor: {{variable}} insertion, live preview (only kinds
+ * with a server-side sample context) and a monospace textarea. Controlled;
+ * saving/debouncing is the caller's. */
 export function PromptEditor({
   title,
   kind,

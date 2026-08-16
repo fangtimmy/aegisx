@@ -1,8 +1,8 @@
 # 编排模型 v9：彻底简化（一个调度者 + 每 Run N 个平等解题者）
 
-状态：**设计定稿，待实施**
+状态：**已实施**（WP1–WP6 全部完成；`bun run check` / `bun run test` / `bun run build` 全绿）
 前置：[field-findings.md](field-findings.md)（复盘问题记录；问题 1「启动选模型」由本重构结构性解决）
-取代：[orchestration-redesign.md](orchestration-redesign.md)（v8；保留为历史文档）
+取代：[orchestration-redesign.md](orchestration-redesign.md)（v8；已标 SUPERSEDED）
 
 ---
 

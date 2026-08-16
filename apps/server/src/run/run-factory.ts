@@ -66,8 +66,8 @@ import { createMainTools, type RunToolContext } from "./tools"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
-/** Reusable per-run handles for spawn children (model runtime, container, the
- * prompt context). Declared agents carry their own snapshot. */
+/** Reusable per-run handles (model runtime, container, the prompt context).
+ * Agents carry their own creation snapshot. */
 export type RunContext = {
   containerName: string
   workspaceHostPath: string
@@ -303,7 +303,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
     emitter.on("run.resumed", (e) => void sendToOrch(`Run ${e.runId} 已恢复。`))
   }
 
-  /** Latest assistant text for an agent (inspect_agent). */
+  /** Latest assistant text for an agent (read_run fallback). */
   function lastAssistantText(runId: string, agentId: string): string | null {
     const list = queries.listMessages(runId, { agentId })
     for (let index = list.items.length - 1; index >= 0; index -= 1) {

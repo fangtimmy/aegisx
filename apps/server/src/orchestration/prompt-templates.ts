@@ -11,7 +11,7 @@ import {
   DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "./prompt-defaults"
 
-/** plugin id for the built-in templates. */
+/** Namespace id for the built-in template rows. */
 export const BUILTIN_PLUGIN = "builtin"
 
 /** The four built-in template keys + their default bodies. Seeded into
@@ -27,7 +27,7 @@ export const BUILTIN_DEFAULTS: Record<string, string> = {
  * Seed the four built-in prompt template rows. Idempotent: inserts defaults
  * only where no row exists (ON CONFLICT DO NOTHING via unique(plugin,key)), so
  * a user's edit (an UPDATE) always survives reboots. Called once at app boot,
- * before any RunHandle is built.
+ * before any agent is created.
  */
 export function seedBuiltinTemplates(db: Database): void {
   const now = new Date().toISOString()
@@ -131,8 +131,7 @@ export function loadTemplateMap(db: Database): Map<string, string> {
 
 /**
  * Render a template key from an in-memory map. Resolution is just a Map lookup
- * (the map already encodes plugin → builtin precedence). Throws if the key is
- * absent. An empty body renders to an empty string (no fallback) — user edits
+ * (the map holds only builtin rows). Throws if the key is absent. An empty body renders to an empty string (no fallback) — user edits
  * to "" are honored (empty-string semantics).
  */
 export function renderTemplate(

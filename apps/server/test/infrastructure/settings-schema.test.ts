@@ -60,7 +60,6 @@ describe("settings schema", () => {
       // v2-era prompt templates left FlatSettings in v8 (prompt_templates
       // table); the legacy extractor carries them into the DB at boot instead.
       mainSystemPromptTemplate: "custom main",
-      childSystemPromptTemplate: "",
     })
     expect(migrated["agent.defaultModelId"]).toBe("m1")
     expect(migrated["runtime.maxAttachmentMb"]).toBe(256)

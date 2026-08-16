@@ -3,7 +3,7 @@ import { isThinkingLevel, type ThinkingLevel } from "./live-event"
 
 /**
  * Model reference — the single canonical way to point at "one model + one
- * reasoning effort" across the whole system (config, plugin slots, DB
+ * reasoning effort" across the whole system (config, run-creation inputs, DB
  * snapshots, model-switch API, UI pickers). Replaces the former
  * `{ provider, modelId, thinking }` object and the mixed UUID/label refs.
  *

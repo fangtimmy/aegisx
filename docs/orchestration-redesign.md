@@ -1,5 +1,8 @@
 # 编排插件架构（v8 重构）规格
 
+> **SUPERSEDED by v9** — 编排插件与 spawn child 已整体删除，本设计仅作历史记录。
+> 现行设计见 [orchestration-v9-simplify.md](orchestration-v9-simplify.md)：challenge run = 1..N 个平等 solver，event run = 1 个调度者（内建唤醒），无插件、无子 agent。
+
 状态：**已实施（P0–P5 全部完成；schema v8 上线，191 测试全绿）**
 Schema：**v8（已上线）**（**保留目录/历史表，仅 wipe 执行态 runs/agents/sessions，不写执行态迁移**；见 §十四迁移策略与 `apps/server/drizzle/0002_v8_unified_run.sql`）
 
