@@ -22,10 +22,10 @@ import { badRequest, notFound } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
 import {
-  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "../orchestration/prompt-defaults"
 import {
   ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES,
@@ -73,9 +73,9 @@ function settingsResponse(configStore: ConfigStore) {
     meta: {
       promptTemplateDefaults: {
         mainSystem: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-        childSystem: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
         initial: DEFAULT_INITIAL_PROMPT_TEMPLATE,
         orchestratorSystem: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+        schedulerInitial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
       },
       promptVariables: [...PROMPT_TEMPLATE_VARIABLES],
       orchestratorPromptVariables: [...ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES],
@@ -115,6 +115,8 @@ export function registerSettingsRoutes(
       return previewSystemPrompt(template, samplePromptContext)
     }
     if (kind === "childSystemPrompt") {
+      // v9: childSystem is gone; kept as an accepted kind so pre-WP5 clients
+      // get a sane preview instead of a validation error.
       return previewSystemPrompt(template, childSampleContext)
     }
     if (kind === "orchestratorSystemPrompt") {

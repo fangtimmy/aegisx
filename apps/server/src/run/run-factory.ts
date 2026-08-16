@@ -8,7 +8,7 @@ import type {
   RunPublic,
   SolverSpec,
 } from "@aegisx/shared"
-import { formatModelRef, get } from "@aegisx/shared"
+import { get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import type { Api, Model } from "@earendil-works/pi-ai"
@@ -31,36 +31,24 @@ import {
   runQueue,
   runs,
 } from "../db/schema"
-import type { ConfigStore } from "../infrastructure/config-store"
+import { EventScopeEmitter } from "../orchestration/event-scope"
 import {
   loadTemplateMap,
   renderTemplate,
 } from "../orchestration/prompt-templates"
 import {
-  challengeOrchestrationCatalog,
-  requirePlugin,
-} from "../orchestration/registry"
-import {
-  createRunHandle,
-  EventScopeEmitter,
-  type FreshAgentInput,
-  RunEmitter,
-  type RunHandleHost,
-} from "../orchestration/run-handle"
-import type {
-  EventHandle,
-  EventScopePayload,
-  OrchestrationPlugin,
-  PromptContext,
+  deriveCapabilities,
+  type EventScopePayload,
+  type PromptContext,
 } from "../orchestration/types"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
-import type { ChildAgentRuntime } from "./child-agents"
 import type { ContainerManager } from "./container/container-manager"
 import { createToolboxContainer } from "./container/container-manager"
 import { RunActionError, RunStartError } from "./errors"
 import { checkLaunchFence } from "./fence"
 import type { ModelResolver } from "./model-resolver"
+import type { SlotModel } from "./model-resolver"
 import {
   createRunModelRuntime,
   type RunModelRuntime,
@@ -79,7 +67,7 @@ import { createMainTools, type RunToolContext } from "./tools"
 type PlatformService = ReturnType<typeof createPlatformService>
 
 /** Reusable per-run handles for spawn children (model runtime, container, the
- * child prompt template). Declared agents carry their own snapshot. */
+ * prompt context). Declared agents carry their own snapshot. */
 export type RunContext = {
   containerName: string
   workspaceHostPath: string
@@ -91,18 +79,11 @@ export type RunContext = {
    * resolve + snapshot it at spawn time. */
   defaultModelRef: ModelRef
   thinkingLevel: ThinkingLevel
-  childTemplate: string
   promptContext: PromptContext
   challengeId: string
 }
 
 export type CreateRunInput = {
-  /** Orchestration plugin id (challenge runs default to 'classic'). */
-  orchestration?: string
-  /** Per-slot model overrides (highest precedence), keyed by slot id. Used by
-   * the scheduler to apply a per-event model override on top of the global
-   * orchestration setting. */
-  slotModelOverrides?: Record<string, ModelRef>
   container: {
     image: string
     cpus: number
@@ -135,25 +116,19 @@ export type RunFactoryDeps = {
   dataDir: string
   containerManager: ContainerManager
   platformService: PlatformService
-  configStore: ConfigStore
   providers(): ProviderConnection[]
   modelResolver: ModelResolver
   queries: RunQueries
   bus: LiveBus
   /** Reusable per-run handles (entry snapshot lives on the agent row). */
   contexts: Map<string, RunContext>
-  /** Per-run plugin event emitters; close clears, setup rebuilds. */
-  emitters: Map<string, RunEmitter>
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   eventScopes: Map<string, EventScopeEmitter>
-  /** Live spawn-child sessions, keyed by child agent id. */
-  childSessions: Map<string, HostAgentSession>
   /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
   pendingFinish: Map<string, { summary: string; runId: string }>
   /** Runs finish_run already warned about a missing flag (once per run). */
   finishFlagWarned: Set<string>
   lifecycle: SessionLifecycle
-  childRuntime: ChildAgentRuntime
   withFence<T>(op: () => T | Promise<T>): Promise<T>
   getSettings(): FlatSettings
   now(): string
@@ -195,29 +170,26 @@ export type RunFactoryDeps = {
 
 export type RunFactory = ReturnType<typeof createRunFactory>
 
-/** Fresh-create + cold-restore orchestration: the run's model/container/prompt
- * context, the plugin-facing handle + wiring, per-agent session preparation,
- * and boot recovery. The shared create/restore tail guarantees a restored run
- * runs the same setup code as a fresh one. */
+/** Fresh-create + cold-restore orchestration (v9: no plugins): the run's
+ * model/container/prompt context, direct N-solver creation, the built-in
+ * scheduler wake-up wiring, per-agent session preparation, and boot recovery.
+ * The shared create/restore tail guarantees a restored run runs the same setup
+ * code as a fresh one. */
 export function createRunFactory(deps: RunFactoryDeps) {
   const {
     db,
     dataDir,
     containerManager,
     platformService,
-    configStore,
     providers,
     modelResolver,
     queries,
     bus,
     contexts,
-    emitters,
     eventScopes,
-    childSessions,
     pendingFinish,
     finishFlagWarned,
     lifecycle,
-    childRuntime,
     withFence,
     getSettings,
     now,
@@ -235,17 +207,100 @@ export function createRunFactory(deps: RunFactoryDeps) {
     emitAgents,
   } = deps
 
-  /** The EventHandle for an event's scheduler run: subscribes to the per-event
-   * run-lifecycle emitter (created lazily). */
-  function eventHandleFor(eventId: string): EventHandle {
+  /** v9: at most this many parallel solvers per challenge run. */
+  const MAX_SOLVERS_PER_RUN = 4
+
+  /** The fixed solver tool set (no inter-agent communication tools — solvers
+   * coordinate via workspace files only). */
+  const SOLVER_TOOLS = (targetSupported: boolean): string[] => [
+    "submit_flag",
+    "finish_run",
+    ...(targetSupported
+      ? ["get_target", "start_target", "extend_target", "stop_target"]
+      : []),
+  ]
+
+  /** The event-scope scheduler's tool snapshot (agent-level addressing
+   * included; the add_agent/message_agent implementations land in WP4 — the
+   * snapshot is granted up front). */
+  const ORCHESTRATOR_TOOLS: string[] = [
+    // Queue CRUD (the plan = queue content).
+    "enqueue_run",
+    "list_queue",
+    "remove_queue",
+    "clear_queue",
+    "reorder_queue",
+    // Direct run management (escape hatch + read).
+    "start_run",
+    "stop_run",
+    "message_run",
+    "close_run",
+    "read_run",
+    "set_run_timeout",
+    // Read-only inventory.
+    "list_challenges",
+    "get_challenge",
+    "list_runs",
+    "get_status",
+    "list_agents",
+    // Agent-level addressing (v9).
+    "add_agent",
+    "message_agent",
+  ]
+
+  /** The per-event run-lifecycle emitter (created lazily). */
+  function eventScopeFor(eventId: string): EventScopeEmitter {
     let emitter = eventScopes.get(eventId)
     if (!emitter) {
       emitter = new EventScopeEmitter()
       eventScopes.set(eventId, emitter)
     }
-    return {
-      on: (event, cb) => emitter!.on(event, cb),
-    }
+    return emitter
+  }
+
+  /** Built-in scheduler wake-up (v9: replaces the scheduler plugin's wire).
+   * Wakes the orchestrator on child-run lifecycle events; texts are identical
+   * to the v8 plugin wiring. The emitter's callbacks are already wrapped in
+   * try/catch (EventScopeEmitter). */
+  function attachSchedulerWakeup(
+    eventId: string,
+    orchestratorAgentId: string
+  ): void {
+    const emitter = eventScopeFor(eventId)
+    const sendToOrch = (text: string) =>
+      lifecycle.send(orchestratorAgentId, text)
+    // Manual runs are flagged so the scheduler observes but never operates on
+    // them (unless its instruction explicitly authorizes it).
+    emitter.on(
+      "run.started",
+      (e) =>
+        void sendToOrch(
+          `Run ${e.runId} 已启动${e.source === "manual" ? "（手动启动，由用户管理）" : ""}。`
+        )
+    )
+    emitter.on(
+      "run.idle",
+      (e) =>
+        void sendToOrch(
+          `Run ${e.runId} 转入 idle${e.failed ? "（有 agent 失败）" : ""}。`
+        )
+    )
+    emitter.on(
+      "run.flagAccepted",
+      (e) => void sendToOrch(`Run ${e.runId} 解出 flag。`)
+    )
+    emitter.on(
+      "run.finished",
+      (e) => void sendToOrch(`Run ${e.runId} 已完成。`)
+    )
+    emitter.on(
+      "run.timedOut",
+      (e) =>
+        void sendToOrch(
+          `Run ${e.runId} 超时（${e.outcome}），决定延长/关闭/重排。`
+        )
+    )
+    emitter.on("run.resumed", (e) => void sendToOrch(`Run ${e.runId} 已恢复。`))
   }
 
   /** Latest assistant text for an agent (inspect_agent). */
@@ -271,9 +326,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
     return null
   }
 
-  /** Build the per-agent native tool context. Peer tools resolve within this
-   * run only; message_agent refuses spawn children (they run unattended to
-   * completion). */
+  /** Build the per-agent native tool context. */
   function buildAgentToolContext(
     runId: string,
     challengeId: string,
@@ -313,130 +366,127 @@ export function createRunFactory(deps: RunFactoryDeps) {
       markFinishFlagWarned: () => {
         finishFlagWarned.add(runId)
       },
-      spawnChild: (childInput) =>
-        childRuntime.spawn(runId, agentId, childInput),
-      messageAgent: async (targetId, text) => {
-        const target = queries.listAgents(runId).find((a) => a.id === targetId)
-        if (!target) return { ok: false, error: "Agent not found in this run" }
-        if (target.parentAgentId) {
-          return {
-            ok: false,
-            error: "Child agents run unattended and cannot receive messages",
-          }
-        }
-        await lifecycle.send(targetId, text)
-        return { ok: true }
-      },
-      getAgent: (id) => queries.listAgents(runId).find((a) => a.id === id),
-      listAgents: () => queries.listAgents(runId),
       lastAssistantText: (id) => lastAssistantText(runId, id),
     }
   }
 
-  /** Run a plugin's event wiring with scope narrowing (discriminated union on
-   * scope): challenge → wire(run); event → wire(run, event) with an EventHandle
-   * wired to the event's run-lifecycle emitter. Agent creation is automatic
-   * (from the plugin's declared `agents`); this only fires the plugin's
-   * optional triggers. */
-  async function runSetup(
-    plugin: OrchestrationPlugin,
-    handle: ReturnType<typeof createRunHandle>,
-    eventHandle?: EventHandle
-  ): Promise<void> {
-    if (plugin.scope === "challenge") {
-      await plugin.wire?.(handle)
-      return
-    }
-    if (!eventHandle) {
-      throw new Error(
-        `Event-scope plugin '${plugin.id}' requires an EventHandle`
-      )
-    }
-    await plugin.wire?.(handle, eventHandle)
+  /** Insert one agent row with its creation snapshot (system prompt, tools,
+   * model ref). Shared by the direct N-solver creation and the event-scope
+   * orchestrator creation. Returns the new agent id. */
+  function insertAgentRow(input: {
+    runId: string
+    slot: string
+    role: string
+    name: string
+    isEntry: boolean
+    model: ModelRef
+    systemPrompt: string
+    tools: string[]
+  }): string {
+    const id = crypto.randomUUID()
+    const ts = now()
+    db.insert(agents)
+      .values({
+        id,
+        runId: input.runId,
+        slot: input.slot,
+        role: input.role,
+        parentAgentId: null,
+        isEntry: input.isEntry,
+        model: input.model,
+        systemPrompt: input.systemPrompt,
+        tools: JSON.stringify(input.tools),
+        status: "idle",
+        sessionFile: null,
+        name: input.name,
+        task: null,
+        createdAt: ts,
+        updatedAt: ts,
+      })
+      .run()
+    return id
   }
 
-  /** Build the {@link RunHandleHost} callback bundle the plugin-facing handle
-   * delegates through. All callbacks are per-agentId: no run-level lock leaks.
-   * Shared by create() (fresh) and restoreRunContext() (cold). */
-  function buildHandleHost(opts: {
-    runId: string
-    scope: "challenge" | "event"
-    plugin: OrchestrationPlugin
-    ctx: PromptContext
-    initialPrompt: string
-    templateMap: Map<string, string>
-    emitter: RunEmitter
-    slotOverrides?: Record<string, ModelRef>
-  }): RunHandleHost {
-    const plugin = opts.plugin
-    return {
-      runId: opts.runId,
-      scope: opts.scope,
-      ctx: opts.ctx,
-      initialPrompt: opts.initialPrompt,
-      templateMap: opts.templateMap,
-      emitter: opts.emitter,
-      agents: plugin.agents,
-      findAgentBySlot(slot) {
-        return db
-          .select()
-          .from(agents)
-          .where(and(eq(agents.runId, opts.runId), eq(agents.slot, slot)))
-          .get()
-      },
-      createFreshAgent(input: FreshAgentInput) {
-        const id = crypto.randomUUID()
-        const ts = now()
-        db.insert(agents)
-          .values({
-            id,
-            runId: opts.runId,
-            slot: input.slot,
-            role: input.role,
-            parentAgentId: input.parentAgentId ?? null,
-            isEntry: input.isEntry,
-            model: input.model,
-            systemPrompt: input.systemPrompt,
-            tools: JSON.stringify(input.tools),
-            status: "idle",
-            sessionFile: null,
-            name: input.name,
-            task: input.task ?? null,
-            createdAt: ts,
-            updatedAt: ts,
-          })
-          .run()
-        return id
-      },
-      resolveSlotModel(slot) {
-        const override = opts.slotOverrides?.[slot]
-        return override
-          ? modelResolver.resolveSlotModelFromRef(override)
-          : modelResolver.resolveSlotModel(plugin.id, slot)
-      },
-      isAgentStreaming(agentId) {
-        if (lifecycle.get(agentId)?.session.isStreaming) return true
-        const child = childSessions.get(agentId)
-        return !!child?.session.isStreaming
-      },
-      prepareAgent: (agentId) => prepareAgent(opts.runId, agentId),
-      sendToAgent: (agentId, text, deliverAs) =>
-        lifecycle.send(agentId, text, deliverAs),
-      abortAgent: (agentId) => lifecycle.abort(agentId),
+  /** Render the i-th solver's first-turn prompt. `override` mode returns the
+   * raw prompt verbatim; otherwise the `initial` template renders with the
+   * run-level + solver-level strategy joined into one Strategy section. */
+  function solverInitial(
+    templateMap: Map<string, string>,
+    ctx: PromptContext,
+    runStrategy: string | undefined,
+    spec: SolverSpec
+  ): string {
+    if (spec.promptMode === "override" && spec.prompt) return spec.prompt
+    const strategy = [runStrategy, spec.prompt]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n")
+    return renderTemplate(templateMap, "initial", {
+      ...ctx,
+      ...(strategy ? { strategy } : {}),
+    })
+  }
+
+  /** challenge scope: directly create N solver agent rows and prime each with
+   * its own rendered initial prompt (all solvers prime — no lazy agents). */
+  async function createSolvers(
+    runId: string,
+    ctx: PromptContext,
+    templateMap: Map<string, string>,
+    slotModels: SlotModel[],
+    specs: SolverSpec[],
+    runStrategy: string | undefined,
+    targetSupported: boolean
+  ): Promise<void> {
+    const tools = SOLVER_TOOLS(targetSupported)
+    const capabilities = deriveCapabilities(tools)
+    for (let i = 0; i < specs.length; i += 1) {
+      const spec = specs[i]!
+      const slotModel = slotModels[i]!
+      const slot = `solver-${i + 1}`
+      const isEntry = i === 0
+      const systemPrompt = renderTemplate(templateMap, "mainSystem", {
+        ...ctx,
+        agent: {
+          role: "solver",
+          isMain: isEntry,
+          name: `Solver ${i + 1}`,
+          task: null,
+          isEntry,
+        },
+        capabilities,
+        model: {
+          provider: slotModel.providerLabel,
+          name: slotModel.modelLabel,
+          id: slotModel.modelId,
+        },
+      })
+      const agentId = insertAgentRow({
+        runId,
+        slot,
+        role: "solver",
+        name: `Solver ${i + 1}`,
+        isEntry,
+        model: slotModel.ref,
+        systemPrompt,
+        tools,
+      })
+      await prepareAgent(runId, agentId)
+      await lifecycle.send(
+        agentId,
+        solverInitial(templateMap, ctx, runStrategy, spec)
+      )
     }
   }
 
   /** Shared create/restore tail: persist the run-level context (container
-   * refs, model, prompt template + child template), build the plugin-facing
-   * handle and run its wiring. Returns the handle so fresh creates can reach
-   * primeSpecs. The differences (fence/slot reservation, the container build,
-   * priming, the initialPrompt override) stay in the callers. */
+   * refs, model, prompt context) and, for the event scope, attach the built-in
+   * scheduler wake-up. The differences (fence/slot reservation, the container
+   * build, agent creation/priming) stay in the callers. */
   async function buildRunContext(opts: {
     runId: string
     scope: "challenge" | "event"
     eventId: string
     challengeId: string | null
-    orchestration: string
     containerName: string
     containerWorkspace: string
     wsAbs: string
@@ -445,23 +495,9 @@ export function createRunFactory(deps: RunFactoryDeps) {
     defaultModelRef: ModelRef
     thinkingLevel: ThinkingLevel
     promptContext: PromptContext
-    slotOverrides?: Record<string, ModelRef>
-    strategy?: string
-  }): Promise<ReturnType<typeof createRunHandle>> {
-    const plugin = requirePlugin(opts.orchestration)
-    const templateMap = loadTemplateMap(db, plugin.id)
-    // The initial template is ALWAYS rendered — a strategy (queue/scheduler
-    // `prompt`) is injected as a variable (appended as a `## Strategy`
-    // section), never a whole-prompt replacement, so the standard blocks
-    // (challenge, environment, submission) can't be lost.
-    const initialPrompt = renderTemplate(templateMap, "initial", {
-      ...opts.promptContext,
-      ...(opts.strategy ? { strategy: opts.strategy } : {}),
-    })
-
-    // Run-level live context: prepareAgent (prime) + spawn children reuse it.
-    // The child prompt comes from the plugin's spawn template (plugin → builtin
-    // resolution; default childSystem).
+    /** event scope only: the orchestrator agent the wake-up events send to. */
+    orchestratorAgentId?: string
+  }): Promise<void> {
     contexts.set(opts.runId, {
       containerName: opts.containerName,
       workspaceHostPath: opts.wsAbs,
@@ -471,45 +507,21 @@ export function createRunFactory(deps: RunFactoryDeps) {
       sdkModel: opts.sdkModel,
       defaultModelRef: opts.defaultModelRef,
       thinkingLevel: opts.thinkingLevel,
-      childTemplate:
-        templateMap.get(plugin.spawn?.systemPrompt ?? "childSystem") ?? "",
       promptContext: opts.promptContext,
       challengeId: opts.challengeId ?? "",
     })
-
-    const emitter = new RunEmitter()
-    emitters.set(opts.runId, emitter)
-
-    const host = buildHandleHost({
-      runId: opts.runId,
-      scope: opts.scope,
-      plugin,
-      ctx: opts.promptContext,
-      initialPrompt,
-      templateMap,
-      emitter,
-      slotOverrides: opts.slotOverrides,
-    })
-    const handle = createRunHandle(host)
-    await runSetup(
-      plugin,
-      handle,
-      opts.scope === "event" ? eventHandleFor(opts.eventId) : undefined
-    )
-    return handle
+    if (opts.scope === "event") {
+      if (!opts.orchestratorAgentId) {
+        throw new RunActionError(
+          "invalid_state",
+          "Event-scope run context requires the orchestrator agent id"
+        )
+      }
+      attachSchedulerWakeup(opts.eventId, opts.orchestratorAgentId)
+    }
   }
 
   async function create(input: CreateRunInput): Promise<RunPublic> {
-    const plugin = requirePlugin(
-      input.scopeType === "event" ? "scheduler" : "classic"
-    )
-    if (plugin.scope !== input.scopeType) {
-      throw new RunActionError(
-        "invalid_state",
-        `Plugin '${plugin.id}' is ${plugin.scope}-scoped, not ${input.scopeType}`
-      )
-    }
-
     const challenge =
       input.scopeType === "challenge"
         ? db
@@ -552,39 +564,45 @@ export function createRunFactory(deps: RunFactoryDeps) {
       }
     }
 
-    // The run default model = the entry agent's configured model (the
-    // conversation target the UI shows / switches; spawn children fall back to
-    // it). Resolved from the orchestration settings, falling back to the global
-    // default; snapshotted as a CONCRETE ref (aliases resolved away).
-    const entrySlot =
-      plugin.agents.find((agent) => agent.entry) ?? plugin.agents[0]
-    if (!entrySlot) {
-      throw new RunActionError(
-        "invalid_state",
-        `Plugin '${plugin.id}' declares no agents`
+    // v9 direct creation: challenge scope resolves one model per solver spec
+    // (spec.model → global default), event scope resolves the scheduler's
+    // model (scheduler_config.modelId → global default). Unresolvable refs
+    // fail the launch with the ref in the message. The run default model =
+    // solver-1's (challenge) / the orchestrator's (event) CONCRETE ref
+    // (aliases resolved away).
+    let specs: SolverSpec[] = []
+    let slotModels: SlotModel[] = []
+    let entryModel: SlotModel
+    if (input.scopeType === "challenge") {
+      specs = input.solvers?.length ? input.solvers : [{}]
+      if (specs.length > MAX_SOLVERS_PER_RUN) {
+        throw new RunActionError(
+          "invalid_state",
+          `A run supports at most ${MAX_SOLVERS_PER_RUN} solvers (got ${specs.length})`
+        )
+      }
+      slotModels = specs.map((spec) =>
+        modelResolver.resolveSlotModelFromRef(
+          spec.model ?? modelResolver.defaultModelRef()
+        )
+      )
+      entryModel = slotModels[0]!
+    } else {
+      const config = deps.getSchedulerConfig(input.eventId)
+      entryModel = modelResolver.resolveSlotModelFromRef(
+        config.modelId ?? modelResolver.defaultModelRef()
       )
     }
-    const entryConfigured =
-      input.slotModelOverrides?.[entrySlot.slot] ??
-      configStore.getAgentModels()[plugin.id]?.[entrySlot.slot] ??
-      modelResolver.defaultModelRef()
-    const entryTarget = modelResolver.resolveModelTarget(entryConfigured)
+    const entryTarget = modelResolver.resolveModelTarget(entryModel.ref)
     if (!entryTarget) {
       throw new RunActionError(
         "invalid_state",
-        entryConfigured
-          ? `Configured model "${entryConfigured}" is unavailable`
-          : "No enabled default model is configured"
+        `Configured model "${entryModel.ref}" is unavailable`
       )
     }
     if (!entryTarget.provider.apiKey) {
       throw new RunActionError("invalid_state", "Provider API key is required")
     }
-    const entryModelRef = formatModelRef(
-      entryTarget.provider,
-      entryTarget.model,
-      entryTarget.thinkingLevel
-    )
 
     const runId = crypto.randomUUID()
     const runSource = input.source ?? "manual"
@@ -628,6 +646,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
               ),
               environment: env,
               model: modelConfig,
+              multiSolver: specs.length > 1,
             },
             db,
             input.container.workspace
@@ -639,7 +658,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
               instruction: input.instruction,
               environment: env,
               model: modelConfig,
-              orchestrations: challengeOrchestrationCatalog(),
             },
             db,
             input.container.workspace
@@ -681,7 +699,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
           challengeId: challenge?.id ?? null,
           params: "{}",
           status: "running",
-          model: entryModelRef,
+          model: entryModel.ref,
           image: env.image,
           cpus: env.cpus,
           memoryMb: env.memoryMb,
@@ -722,47 +740,92 @@ export function createRunFactory(deps: RunFactoryDeps) {
       )
     }
 
-    // Run-level live context + plugin wiring: contexts.set + emitter + handle
-    // + setup are the same code create and cold-restore run — see
-    // buildRunContext. The run row + container exist before setup runs; agents
-    // are declared by the plugin's setup.
-    const handle = await buildRunContext({
-      runId,
-      scope: input.scopeType,
-      eventId: input.scopeType === "challenge" ? challenge!.eventId : event!.id,
-      challengeId: challenge?.id ?? null,
-      orchestration: plugin.id,
-      containerName: name,
-      containerWorkspace: input.container.workspace,
-      wsAbs,
-      modelRuntime,
-      sdkModel,
-      defaultModelRef: entryModelRef,
-      thinkingLevel: entryTarget.thinkingLevel,
-      promptContext,
-      slotOverrides: input.slotModelOverrides,
-      strategy: input.strategy,
-    }).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error)
-      deps.teardownRun(runId)
-      updateRun(runId, {
-        error: `Plugin setup failed: ${message}`,
-        updatedAt: now(),
-      })
-      throw new RunActionError("launch_failed", message)
-    })
-
-    // System auto-prime: for a fresh run, prepare()+send(prime) each prime
-    // agent. classic primes the solver with run.initialPrompt.
+    // Run-level live context (+ the built-in scheduler wake-up on the event
+    // scope) — the same shared tail create and cold-restore run. The run row +
+    // container exist before it; agents are created directly below.
+    const templateMap = loadTemplateMap(db)
     try {
-      for (const spec of handle.primeSpecs) {
-        await prepareAgent(runId, spec.agentId)
-        await lifecycle.send(spec.agentId, spec.prime)
+      if (input.scopeType === "challenge") {
+        await buildRunContext({
+          runId,
+          scope: "challenge",
+          eventId: challenge!.eventId,
+          challengeId: challenge!.id,
+          containerName: name,
+          containerWorkspace: input.container.workspace,
+          wsAbs,
+          modelRuntime,
+          sdkModel,
+          defaultModelRef: entryModel.ref,
+          thinkingLevel: entryTarget.thinkingLevel,
+          promptContext,
+        })
+        // Directly create + prime the N solver agents (v9: every solver
+        // primes with its own rendered initial prompt).
+        await createSolvers(
+          runId,
+          promptContext,
+          templateMap,
+          slotModels,
+          specs,
+          input.strategy,
+          promptContext.run?.targetSupported ?? false
+        )
+      } else {
+        // Directly create the orchestrator agent row with its snapshot, then
+        // attach the built-in wake-up + prime with schedulerInitial.
+        const capabilities = deriveCapabilities(ORCHESTRATOR_TOOLS)
+        const systemPrompt = renderTemplate(templateMap, "orchestratorSystem", {
+          ...promptContext,
+          agent: {
+            role: "orchestrator",
+            isMain: true,
+            name: "Scheduler",
+            task: null,
+            isEntry: true,
+          },
+          capabilities,
+          model: {
+            provider: entryModel.providerLabel,
+            name: entryModel.modelLabel,
+            id: entryModel.modelId,
+          },
+        })
+        const agentId = insertAgentRow({
+          runId,
+          slot: "orchestrator",
+          role: "orchestrator",
+          name: "Scheduler",
+          isEntry: true,
+          model: entryModel.ref,
+          systemPrompt,
+          tools: ORCHESTRATOR_TOOLS,
+        })
+        await buildRunContext({
+          runId,
+          scope: "event",
+          eventId: event!.id,
+          challengeId: null,
+          containerName: name,
+          containerWorkspace: input.container.workspace,
+          wsAbs,
+          modelRuntime,
+          sdkModel,
+          defaultModelRef: entryModel.ref,
+          thinkingLevel: entryTarget.thinkingLevel,
+          promptContext,
+          orchestratorAgentId: agentId,
+        })
+        await prepareAgent(runId, agentId)
+        await lifecycle.send(
+          agentId,
+          renderTemplate(templateMap, "schedulerInitial", promptContext)
+        )
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      for (const spec of handle.primeSpecs) {
-        updateAgent(spec.agentId, {
+      for (const agent of queries.listAgents(runId)) {
+        updateAgent(agent.id, {
           status: "failed",
           error: message,
           completedAt: now(),
@@ -785,17 +848,17 @@ export function createRunFactory(deps: RunFactoryDeps) {
   }
 
   /** Cold-restore a closed run's run-level context: rebuild the container +
-   * model runtime + prompt context, then re-run the plugin's setup (create and
-   * resume run the same code). createAgent reuses existing agent rows (slot
-   * idempotent, snapshot priority) and on() re-wires triggers; prime is ignored
-   * on restore. Does NOT create sessions — prepareAgent does, lazily per agent. */
+   * model runtime + prompt context, re-attach the built-in scheduler wake-up
+   * (event scope), re-arm timers, and notify. v9: NO agent rows are created —
+   * the persisted agent rows are the whole truth; sessions open lazily per
+   * agent in prepareAgent (snapshot priority). */
   async function restoreRunContext(
     runId: string,
     row: typeof runs.$inferSelect
   ): Promise<void> {
     // Scheduler (event-scoped) runs cold-restore like challenge runs: a
     // message to a closed run's agent rebuilds the container + session and
-    // re-runs the plugin wiring. `start` on a closed scheduler is now a
+    // re-attaches the wake-up wiring. `start` on a closed scheduler is now a
     // cold-restore too (W3.2 — memory kept); only `start reset:true` goes
     // fresh — create() deletes the closed row first.
     const settings = getSettings()
@@ -898,6 +961,10 @@ export function createRunFactory(deps: RunFactoryDeps) {
             "Challenge not found for restore"
           )
         }
+        // multiSolver derives from the persisted solver rows.
+        const solverCount = queries
+          .listAgents(runId)
+          .filter((agent) => agent.role === "solver").length
         promptContext = buildPromptContext(
           {
             runId,
@@ -906,6 +973,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
             challengeAttachments: [],
             environment,
             model,
+            multiSolver: solverCount > 1,
           },
           db,
           settings["container.workspace"]
@@ -918,21 +986,23 @@ export function createRunFactory(deps: RunFactoryDeps) {
             instruction: deps.getSchedulerConfig(row.eventId).instruction,
             environment,
             model,
-            orchestrations: challengeOrchestrationCatalog(),
           },
           db,
           settings["container.workspace"]
         )
       }
 
-      // Run-level live context + plugin wiring — the same shared tail as
-      // create(); primeSpecs are ignored on restore.
+      // Run-level live context + (event scope) the built-in wake-up — the
+      // same shared tail as create(). Agent rows are NOT touched.
+      const orchestrator =
+        row.scopeType === "event"
+          ? queries.listAgents(runId).find((agent) => agent.isEntry)
+          : undefined
       await buildRunContext({
         runId,
         scope: row.scopeType === "event" ? "event" : "challenge",
         eventId: row.eventId,
         challengeId: row.challengeId,
-        orchestration: row.scopeType === "event" ? "scheduler" : "classic",
         containerName: row.containerName,
         containerWorkspace: settings["container.workspace"],
         wsAbs,
@@ -941,6 +1011,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
         defaultModelRef: row.model,
         thinkingLevel: modelDisplay.thinkingLevel,
         promptContext,
+        orchestratorAgentId: orchestrator?.id,
       })
       deps.armRunTimers(runId, row.deadlineAt)
       // The run is live again — notify the event's scheduler so it does not
@@ -950,8 +1021,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
       // Restore failed after reserving the slot: release it so the fence and
       // run state stay consistent, then surface the error.
       contexts.delete(runId)
-      emitters.get(runId)?.close()
-      emitters.delete(runId)
       updateRun(runId, { status: "closed", updatedAt: now() })
       if (error instanceof RunActionError) throw error
       throw new RunActionError(
@@ -1136,16 +1205,14 @@ export function createRunFactory(deps: RunFactoryDeps) {
 
   return {
     create,
-    runSetup,
     buildRunContext,
-    buildHandleHost,
     restoreRunContext,
     restoreRunContextOnce,
     prepareAgent,
     recoverOnBoot,
     buildAgentToolContext,
     lastAssistantText,
-    eventHandleFor,
+    eventScopeFor,
   }
 }
 

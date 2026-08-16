@@ -84,7 +84,7 @@ describe("runService.create", () => {
         .where(eq(agents.runId, run.id))
         .get()
       expect(agent?.role).toBe("solver")
-      expect(agent?.slot).toBe("solver")
+      expect(agent?.slot).toBe("solver-1")
       expect(agent?.isEntry).toBe(true)
       expect(agent?.systemPrompt).toBeTruthy()
       expect(agent?.status).toBe("running")

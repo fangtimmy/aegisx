@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
 import {
-  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
 } from "../../src/orchestration/prompt-defaults"
@@ -42,24 +41,30 @@ describe("W1 prompt fixes", () => {
     expect(rendered).not.toContain("## Strategy")
   })
 
-  test("mainSystem + childSystem carry the ENVIRONMENT.md quick-reference (W1.2)", () => {
+  test("mainSystem carries the ENVIRONMENT.md quick-reference (W1.2)", () => {
     expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain(
-      "/opt/solver/ENVIRONMENT.md"
-    )
-    expect(DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE).toContain(
       "/opt/solver/ENVIRONMENT.md"
     )
     const main = renderSystemPrompt(
       DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       samplePromptContext
     )
-    const child = renderSystemPrompt(
-      DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
-      samplePromptContext
-    )
     expect(main).toContain("/opt/solver/ENVIRONMENT.md")
     expect(main).toContain("/opt/solver/knowledges")
-    expect(child).toContain("/opt/solver/ENVIRONMENT.md")
+  })
+
+  test("mainSystem renders the co-solver section only for multi-solver runs (v9)", () => {
+    const single = renderSystemPrompt(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      run: { ...samplePromptContext.run, multiSolver: false },
+    })
+    const multi = renderSystemPrompt(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      run: { ...samplePromptContext.run, multiSolver: true },
+    })
+    expect(single).not.toContain("Co-solvers")
+    expect(multi).toContain("Co-solvers")
+    expect(multi).toContain("SOLVER-")
   })
 })
 

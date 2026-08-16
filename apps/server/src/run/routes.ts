@@ -1,4 +1,3 @@
-import { resolveModelRef } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
 import { eq, inArray } from "drizzle-orm"
 import type { Context, Hono } from "hono"
@@ -6,7 +5,6 @@ import { Type } from "typebox"
 
 import type { Database } from "../db"
 import { agents, challenges, events } from "../db/schema"
-import type { ConfigStore } from "../infrastructure/config-store"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import {
@@ -15,10 +13,7 @@ import {
   workspaceDownload,
 } from "../infrastructure/workspace-files"
 import { EmptyInputSchema } from "../lib/schemas"
-import { listPlugins, requirePlugin } from "../orchestration/registry"
-import { toOrchestrationPublic } from "../orchestration/types"
 import { platformActionHttpError } from "../platforms/errors"
-import { getProviderConnections } from "../providers/public"
 import { RunActionError } from "./errors"
 import { toAgentSummary } from "./public"
 import type { RunService } from "./service"
@@ -92,10 +87,9 @@ export function registerRunRoutes(
     db: Database
     dataDir: string
     runService: RunService
-    configStore: ConfigStore
   }
 ) {
-  const { db, runService, configStore } = options
+  const { db, runService } = options
 
   app.post(
     "/api/challenges/:challengeId/runs",
@@ -130,12 +124,6 @@ export function registerRunRoutes(
         return runError(c, error)
       }
     }
-  )
-
-  /** Orchestration plugin registry (id, scope, agents, templates) — the
-   * orchestration-settings page + create-run picker render against it. */
-  app.get("/api/orchestrations", (c) =>
-    c.json({ items: listPlugins().map(toOrchestrationPublic) })
   )
 
   app.get("/api/runs/:runId", (c) => {
@@ -501,88 +489,6 @@ export function registerRunRoutes(
   })
 
   // --- orchestration settings (per-plugin, per-slot model refs) -------------
-
-  /** Validate that a model ref resolves to an enabled provider+model (or a
-   * configured alias). Throws with a user-facing message otherwise. */
-  function requireResolvableRef(ref: string): void {
-    const target = resolveModelRef(
-      ref,
-      getProviderConnections(configStore),
-      configStore.getAliases()
-    )
-    if (!target) {
-      throw new RunActionError("invalid_state", `Unknown model "${ref}"`)
-    }
-  }
-
-  /** GET /api/orchestration-config — every plugin with its declared slots and
-   * the currently-configured model ref per slot (null = global default). */
-  app.get("/api/orchestration-config", (c) => {
-    const configured = configStore.getAgentModels()
-    return c.json({
-      items: listPlugins().map((plugin) => ({
-        ...toOrchestrationPublic(plugin),
-        agents: plugin.agents.map((agent) => ({
-          slot: agent.slot,
-          role: agent.role ?? agent.slot,
-          name: agent.name,
-          entry: !!agent.entry,
-          model: configured[plugin.id]?.[agent.slot] ?? null,
-        })),
-      })),
-    })
-  })
-
-  const slotModelPatchInput = Type.Object(
-    {
-      /** slot → model ref. A null value clears the slot (fall back to the
-       * global default). */
-      slots: Type.Record(
-        Type.String(),
-        Type.Union([Type.String(), Type.Null()])
-      ),
-    },
-    { additionalProperties: false }
-  )
-
-  /** PATCH /api/orchestration-config/:pluginId — set one or more slot model
-   * refs for a plugin. Validates each non-null ref resolves. */
-  app.patch(
-    "/api/orchestration-config/:pluginId",
-    validateJson(slotModelPatchInput),
-    (c) => {
-      const plugin = requirePlugin(c.req.param("pluginId"))
-      const body = c.req.valid("json")
-      const knownSlots = new Set(plugin.agents.map((agent) => agent.slot))
-      const agentModels = { ...configStore.getAgentModels() }
-      const current = { ...agentModels[plugin.id] }
-      try {
-        for (const [slot, ref] of Object.entries(body.slots)) {
-          if (!knownSlots.has(slot)) {
-            throw new RunActionError(
-              "invalid_state",
-              `Plugin '${plugin.id}' has no slot '${slot}'`
-            )
-          }
-          if (ref === null || ref === "") {
-            delete current[slot]
-          } else {
-            requireResolvableRef(ref)
-            current[slot] = ref
-          }
-        }
-      } catch (error) {
-        return runError(c, error)
-      }
-      if (Object.keys(current).length > 0) {
-        agentModels[plugin.id] = current
-      } else {
-        delete agentModels[plugin.id]
-      }
-      configStore.updateAgentModels(agentModels)
-      return c.json({ [plugin.id]: current })
-    }
-  )
 }
 
 function runError(c: Context, error: unknown) {

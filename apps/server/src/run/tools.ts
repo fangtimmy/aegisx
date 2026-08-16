@@ -1,4 +1,3 @@
-import type { AgentSummary } from "@aegisx/shared/agent"
 import {
   isActiveTarget,
   type TargetEndpoint,
@@ -11,7 +10,7 @@ import { Type } from "typebox"
 export type RunToolContext = {
   runId: string
   challengeId: string
-  /** This agent's id (peer tools resolve targets within the run). */
+  /** This agent's id. */
   agentId: string
   submitFlag(
     flag: string,
@@ -32,21 +31,7 @@ export type RunToolContext = {
   /** Whether finish_run already warned this run about a missing flag. */
   finishFlagWarned(): boolean
   markFinishFlagWarned(): void
-  /** Start a background child agent; resolves immediately with the new agent. */
-  spawnChild(input: {
-    name: string
-    task: string
-  }): Promise<{ agentId: string; name: string; status: string }>
-  /** Send a message to another agent in this run (auto-prepares it). */
-  messageAgent(
-    agentId: string,
-    text: string
-  ): Promise<{ ok: boolean; error?: string }>
-  /** Look up an agent in this run (peer read + spawn children). */
-  getAgent(agentId: string): AgentSummary | undefined
-  /** Enumerate this run's agents. */
-  listAgents(): AgentSummary[]
-  /** Latest assistant text for an agent. */
+  /** Latest assistant text for an agent (kept for the scheduler's read_run). */
   lastAssistantText(agentId: string): string | null
 }
 
@@ -220,126 +205,6 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
         )
       )
     }
-  }
-
-  if (has("spawn_agent")) {
-    created.push(
-      defineTool({
-        name: "spawn_agent",
-        label: "Spawn agent",
-        description:
-          "Start a background child agent for a focused, self-contained sub-task. It shares your workspace but cannot submit flags, finish, manage targets, or spawn further agents. Only one child runs at a time per run — wait for it to finish before spawning another. Reserve it for tasks heavy enough to deserve a dedicated turn. Completion is delivered automatically — do not poll repeatedly.",
-        parameters: Type.Object({
-          name: Type.String({
-            description: "Short name for the child agent.",
-            minLength: 1,
-            maxLength: 80,
-          }),
-          task: Type.String({
-            description:
-              "One concrete, self-contained task with clear acceptance criteria.",
-            minLength: 1,
-            maxLength: 100_000,
-          }),
-        }),
-        executionMode: "parallel",
-        execute: async (_id, params) => {
-          const child = await ctx.spawnChild({
-            name: params.name.trim(),
-            task: params.task.trim(),
-          })
-          return textResult(
-            `Started ${child.name} in the background (agent ${child.agentId}). It shares the workspace. Completion will be delivered automatically — do not poll repeatedly.`,
-            { agentId: child.agentId, status: child.status }
-          )
-        },
-      })
-    )
-  }
-
-  if (has("message_agent")) {
-    created.push(
-      defineTool({
-        name: "message_agent",
-        label: "Message agent",
-        description:
-          "Send a message to another agent in this run (by id). While that agent is streaming this steers into its current turn; otherwise it starts a fresh turn for it. Use for coordination (observer → solver, peer → peer); do not poll — events drive the loop.",
-        parameters: Type.Object({
-          agent_id: Type.String({
-            description: "The target agent id (from list_agents / read_agent).",
-            minLength: 1,
-          }),
-          text: Type.String({
-            description: "The guidance or question to send.",
-            minLength: 1,
-          }),
-        }),
-        execute: async (_id, params) => {
-          const result = await ctx.messageAgent(
-            params.agent_id,
-            params.text.trim()
-          )
-          if (!result.ok) throw new Error(result.error ?? "Agent not found")
-          return textResult(`Message delivered to agent ${params.agent_id}.`, {
-            delivered: true,
-          })
-        },
-      })
-    )
-  }
-
-  if (has("read_agent")) {
-    created.push(
-      defineTool({
-        name: "read_agent",
-        label: "Read agent",
-        description:
-          "Read another agent in this run (by id): its status and latest output. Use to review a peer's or child's progress. Completion is normally delivered automatically — use this when you must check in.",
-        parameters: Type.Object({
-          agent_id: Type.String({
-            description: "The agent id (from list_agents / spawn_agent).",
-            minLength: 1,
-          }),
-        }),
-        execute: async (_id, params) => {
-          const agent = ctx.getAgent(params.agent_id)
-          if (!agent) throw new Error("Agent was not found in this run")
-          const summary = ctx.lastAssistantText(agent.id) ?? "(no output yet)"
-          return textResult(
-            JSON.stringify({
-              id: agent.id,
-              name: agent.name,
-              role: agent.role,
-              status: agent.status,
-              summary,
-              error: agent.error,
-            }),
-            { found: true }
-          )
-        },
-      })
-    )
-  }
-
-  if (has("list_agents")) {
-    created.push(
-      defineTool({
-        name: "list_agents",
-        label: "List agents",
-        description:
-          "Enumerate the agents in this run (id, name, role, status). Use to discover agent ids before read_agent / message_agent.",
-        parameters: Type.Object({}, { additionalProperties: false }),
-        execute: async () => {
-          const agents = ctx.listAgents().map((a) => ({
-            id: a.id,
-            name: a.name,
-            role: a.role,
-            status: a.status,
-          }))
-          return textResult(JSON.stringify(agents), { count: agents.length })
-        },
-      })
-    )
   }
 
   return created

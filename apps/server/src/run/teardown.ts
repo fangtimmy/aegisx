@@ -1,12 +1,8 @@
-import type { HostAgentSession } from "../agents/host-session"
 import type { SessionLifecycle } from "../agents/lifecycle"
 import type { LiveBus } from "../agents/live"
-import type { Database } from "../db"
 import { agents, runs } from "../db/schema"
-import type { EventScopeEmitter } from "../orchestration/run-handle"
-import type { RunEmitter } from "../orchestration/run-handle"
+import type { EventScopeEmitter } from "../orchestration/event-scope"
 import type { EventScopePayload } from "../orchestration/types"
-import type { ChildAgentRuntime } from "./child-agents"
 import type { ContainerManager } from "./container/container-manager"
 import type { RunQueries } from "./queries"
 import type { QueueService } from "./queue"
@@ -20,15 +16,10 @@ export type RunTeardownDeps = {
   queries: RunQueries
   bus: LiveBus
   lifecycle: SessionLifecycle
-  /** Live spawn-child sessions, keyed by child agent id. */
-  childSessions: Map<string, HostAgentSession>
   /** Reusable per-run handles (entry snapshot lives on the agent row). */
   contexts: Map<string, RunContext>
-  childRuntime: ChildAgentRuntime
   /** Scheduler task queue (assigned after construction; read via getter). */
   queue: () => QueueService | undefined
-  /** Per-run plugin event emitters; close clears, setup rebuilds. */
-  emitters: Map<string, RunEmitter>
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   eventScopes: Map<string, EventScopeEmitter>
   /** Runs finish_run already warned about a missing flag (once per run). */
@@ -52,7 +43,7 @@ export type RunTeardown = ReturnType<typeof createRunTeardown>
 
 /** Container force-kill + sanctioned `closed` teardown. Owns the SIGKILL grace
  * timers (one per run); teardownRun stamps the row closed and releases every
- * live resource (container, agent sessions, emitters, bus snapshots) while
+ * live resource (container, agent sessions, bus snapshots) while
  * keeping the DB sessions + agent rows so the run is cold-restorable. */
 export function createRunTeardown(deps: RunTeardownDeps) {
   const {
@@ -60,11 +51,8 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     queries,
     bus,
     lifecycle,
-    childSessions,
     contexts,
-    childRuntime,
     queue,
-    emitters,
     eventScopes,
     finishFlagWarned,
     now,
@@ -123,10 +111,6 @@ export function createRunTeardown(deps: RunTeardownDeps) {
         .get(agent.id)
         ?.session.abort()
         .catch(() => undefined)
-      void childSessions
-        .get(agent.id)
-        ?.session.abort()
-        .catch(() => undefined)
     }
     const patch: Partial<typeof runs.$inferInsert> = {
       status: "closed",
@@ -144,9 +128,6 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     }
     clearRunTimers(runId)
     terminateContainer(runId, containerName(runId))
-    childRuntime.abortAll(runId)
-    emitters.get(runId)?.close()
-    emitters.delete(runId)
     // A closed scheduler run stops receiving child-run events; the emitter is
     // dropped and rebuilt fresh by the next scheduler start.
     const row = queries.getRow(runId)

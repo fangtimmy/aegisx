@@ -174,10 +174,11 @@ export type PromptTemplateContext = {
     cpus: number
     memoryMb: number
     pidsLimit: number
+    /** v9: true when the run has more than one solver. */
+    multiSolver: boolean
   }
   capabilities: {
     canFinish: boolean
-    canSpawn: boolean
     canSubmitFlag: boolean
     canManageTarget: boolean
   }

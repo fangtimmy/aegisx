@@ -372,8 +372,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
 
   /** Start (or restart) the event's scheduler run from its config. The
    * orchestrator's model is the per-event `scheduler_config.modelId` override
-   * when set, else the global orchestration setting, else the global default —
-   * resolved inside create() via the slot override.
+   * when set, else the global default — resolved inside create().
    *
    * W3.2 (start = restore):
    *  - live run (running/idle): paused → resume (un-pause + wake); else error.
@@ -410,17 +409,14 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       return deps.requireRun(existing.id)
     }
     // Fresh create (reset=true on a closed run, or no run at all) also clears
-    // any paused flag so the new run starts live.
+    // any paused flag so the new run starts live. The orchestrator's model
+    // resolves inside create(): scheduler_config.modelId → global default.
     setSchedulerPaused(eventId, false)
     const settings = getSettings()
     return deps.create({
       scopeType: "event",
       eventId,
       instruction: config.instruction,
-      orchestration: "scheduler",
-      slotModelOverrides: config.modelId
-        ? { orchestrator: config.modelId }
-        : undefined,
       container: {
         image: get(settings, "container.image"),
         cpus: get(settings, "container.cpus"),

@@ -90,7 +90,6 @@ async function createHangingRun(
   const run = await runService.create({
     scopeType: "challenge" as const,
     challengeId: "ch-1",
-    orchestration: "classic",
     container: containerInput,
     timeoutMs: 30,
   })
@@ -194,7 +193,6 @@ describe("run timeout (spec §8.3)", () => {
       const sched = await runService.create({
         scopeType: "event" as const,
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "",
         container: containerInput,
       })
@@ -207,7 +205,6 @@ describe("run timeout (spec §8.3)", () => {
       const challenge = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
         timeoutMs: 30,
       })

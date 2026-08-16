@@ -5,36 +5,29 @@ import { join } from "node:path"
 import type { RunPublic, SwitchModelInput } from "@aegisx/shared"
 import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
-import { and, eq, inArray, ne } from "drizzle-orm"
+import { and, eq, inArray, ne, sql } from "drizzle-orm"
 
 import { applyModelSwitch, type SwitchTarget } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
-import type {
-  AgentLoopSettings,
-  HostAgentSession,
-} from "../agents/host-session"
+import type { AgentLoopSettings } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, runs } from "../db/schema"
 import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
+import { EventScopeEmitter } from "../orchestration/event-scope"
 import {
-  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-  LEGACY_CHILD_SYSTEM_PROMPT_TEMPLATE,
-  LEGACY_INITIAL_PROMPT_TEMPLATE,
-  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE,
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V2,
+  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
 } from "../orchestration/prompt-defaults"
 import {
   migrateLegacyPromptSettings,
+  seedBuiltinTemplates,
   upgradeBuiltinTemplate,
 } from "../orchestration/prompt-templates"
-import { bootOrchestration } from "../orchestration/registry"
-import { EventScopeEmitter, RunEmitter } from "../orchestration/run-handle"
 import {
   getChallengeRemote,
   isTargetCapable,
@@ -42,7 +35,6 @@ import {
 import type { createPlatformService } from "../platforms/service"
 import { getProviderConnections } from "../providers/public"
 import { createAgentSessionOps } from "./agent-session-ops"
-import { createChildAgentRuntime } from "./child-agents"
 import type { ContainerManager } from "./container/container-manager"
 import { createRunDeadlines, type RunDeadlines } from "./deadlines"
 import { RunActionError } from "./errors"
@@ -60,8 +52,6 @@ type PlatformService = ReturnType<typeof createPlatformService>
 export type { CreateRunInput } from "./run-factory"
 
 const RUNS_SUBDIR = "runs"
-/** Cap concurrent spawn children per run. */
-const MAX_CHILDREN_PER_RUN = 1
 
 export type RunServiceOptions = {
   db: Database
@@ -102,13 +92,12 @@ export function createRunService(options: RunServiceOptions) {
     return getProviderConnections(configStore)
   }
 
-  /** Model-ref resolution (default ref, slot models, run display fields),
-   * factored out of the service (model-resolver.ts). */
+  /** Model-ref resolution (default ref, run display fields), factored out of
+   * the service (model-resolver.ts). */
   const modelResolver = createModelResolver({
     getSettings,
     providers,
     getAliases: () => configStore.getAliases(),
-    getAgentModels: () => configStore.getAgentModels(),
   })
   const queries = createRunQueries({
     db,
@@ -118,41 +107,32 @@ export function createRunService(options: RunServiceOptions) {
   const catalog = createCatalogReader(db, platformService)
   const bus: LiveBus = createLiveBus()
 
-  // Register built-in plugins + seed default prompt templates (idempotent) so
-  // the service is self-sufficient — any RunHandle built here can render. Then
-  // carry pre-v8 FlatSettings prompt edits into the table: the prompt_templates
-  // table is the single render source.
-  bootOrchestration(db)
+  // Seed the four built-in prompt templates (idempotent) so the service is
+  // self-sufficient — any agent created here renders. Then carry pre-v8
+  // FlatSettings prompt edits into the table: the prompt_templates table is
+  // the single render source.
+  seedBuiltinTemplates(db)
   migrateLegacyPromptSettings(db, configStore.getLegacyPromptTemplates())
-  // One-time refresh of built-in rows still carrying the previous default
-  // bodies (W1.3/W5): mainSystem/childSystem gained the ENVIRONMENT.md
-  // quick-reference, initial gained the Strategy section, orchestratorSystem
-  // gained the Manual-runs section. upgradeBuiltinTemplate only touches rows
-  // that exactly equal the legacy body — user edits survive untouched.
+  // One-time refresh of built-in rows still carrying the pre-v9 default
+  // bodies: mainSystem lost the spawn section and gained the co-solver
+  // section; orchestratorSystem lost the orchestration catalog and gained the
+  // v9 tool surface. upgradeBuiltinTemplate only touches rows that exactly
+  // equal the legacy body — user edits survive untouched.
   upgradeBuiltinTemplate(
     db,
     "mainSystem",
-    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE,
+    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
     DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
   )
   upgradeBuiltinTemplate(
     db,
-    "childSystem",
-    LEGACY_CHILD_SYSTEM_PROMPT_TEMPLATE,
-    DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE
-  )
-  upgradeBuiltinTemplate(
-    db,
-    "initial",
-    LEGACY_INITIAL_PROMPT_TEMPLATE,
-    DEFAULT_INITIAL_PROMPT_TEMPLATE
-  )
-  upgradeBuiltinTemplate(
-    db,
     "orchestratorSystem",
-    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V2,
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
     DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
   )
+  // Idempotent guard for the WP2→WP3a window: re-delete any plugin-owned
+  // template rows that might have been re-seeded in between.
+  db.run(sql`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
 
   /** Per-agent promise-chaining locks (the only concurrency mechanism). */
   const locks = new Map<string, Promise<unknown>>()
@@ -166,15 +146,11 @@ export function createRunService(options: RunServiceOptions) {
   const finishFlagWarned = new Set<string>()
   /** Reusable per-run handles (entry snapshot lives on the agent row). */
   const contexts = new Map<string, RunContext>()
-  /** Per-run plugin event emitters; close clears, setup rebuilds. */
-  const emitters = new Map<string, RunEmitter>()
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   const eventScopes = new Map<string, EventScopeEmitter>()
   /** Scheduler task queue + drainer. Assigned after construction (it calls back
    * into the launch callback); read via closures (teardownRun, routes). */
   let queue: QueueService | undefined
-  /** Live spawn-child sessions, keyed by child agent id. */
-  const childSessions = new Map<string, HostAgentSession>()
   let closed = false
   /** Monotonic timestamp: never returns the same value twice, so agents/runs
    * declared within one millisecond still get a strictly-ordered `createdAt`
@@ -255,7 +231,6 @@ export function createRunService(options: RunServiceOptions) {
     sqlite,
     queries,
     bus,
-    emitters,
     eventScopes,
     // W3: a paused scheduler's run-lifecycle events are dropped before they
     // reach the orchestrator (late-bound schedulerAdmin, read at call time).
@@ -321,47 +296,11 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
-  /** Hand a finished child's result text to its parent: steer into the current
-   * turn if streaming, otherwise drive a fresh turn. */
-  const deliverToParent = (
-    runId: string,
-    parentAgentId: string,
-    text: string
-  ): void => {
-    const session = lifecycle.get(parentAgentId)
-    if (!session) return
-    if (session.session.isStreaming) {
-      void session.session.steer(text).catch(() => undefined)
-    } else {
-      lifecycle.drive(parentAgentId, text)
-    }
-  }
-
-  const childRuntime = createChildAgentRuntime({
-    db,
-    bus,
-    containerManager,
-    contexts,
-    childSessions,
-    maxChildrenPerRun: MAX_CHILDREN_PER_RUN,
-    agentSettings,
-    createHost: options.createHost,
-    listAgents: queries.listAgents,
-    updateAgent,
-    emitRun: status.emitRun,
-    emitAgents: status.emitAgents,
-    deliverToParent,
-    onChildTurnStart: (agentId, runId) => status.agentTurnStart(agentId, runId),
-    onChildTurnSettled: (agentId, runId, error) =>
-      status.agentTurnSettled(agentId, runId, error),
-  })
-
   // Per-run hard-deadline timers (deadlines.ts). Created before teardown (its
   // clearRunTimers is injected there); teardown is injected back via the let.
   const deadlines: RunDeadlines = createRunDeadlines({
     queries,
     lifecycle,
-    childSessions,
     updateRun,
     now,
     teardownRun: (runId) => teardown.teardownRun(runId),
@@ -375,11 +314,8 @@ export function createRunService(options: RunServiceOptions) {
     queries,
     bus,
     lifecycle,
-    childSessions,
     contexts,
-    childRuntime,
     queue: () => queue,
-    emitters,
     eventScopes,
     finishFlagWarned,
     now,
@@ -627,7 +563,6 @@ export function createRunService(options: RunServiceOptions) {
       teardown.clearForceKill(runId)
       deadlines.clearRunTimers(runId)
       await containerManager.remove(row.containerName).catch(() => undefined)
-      childRuntime.abortAll(runId)
       for (const agent of agents) {
         const session = lifecycle.get(agent.id)
         if (session) {
@@ -683,13 +618,8 @@ export function createRunService(options: RunServiceOptions) {
     deadlines.timeoutTimers.clear()
     queue?.cancelDrain()
     await lifecycle.closeAll()
-    for (const childSession of childSessions.values())
-      await childSession.dispose()
-    childSessions.clear()
     pendingFinish.clear()
     finishFlagWarned.clear()
-    for (const emitter of emitters.values()) emitter.close()
-    emitters.clear()
     for (const emitter of eventScopes.values()) emitter.close()
     eventScopes.clear()
     bus.close()
@@ -711,19 +641,15 @@ export function createRunService(options: RunServiceOptions) {
     dataDir,
     containerManager,
     platformService,
-    configStore,
     providers,
     modelResolver,
     queries,
     bus,
     contexts,
-    emitters,
     eventScopes,
-    childSessions,
     pendingFinish,
     finishFlagWarned,
     lifecycle,
-    childRuntime,
     withFence,
     getSettings,
     now,

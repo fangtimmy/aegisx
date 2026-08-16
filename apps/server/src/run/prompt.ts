@@ -16,7 +16,6 @@ import {
   events,
 } from "../db/schema"
 import type { PromptContext } from "../orchestration/types"
-import type { OrchestrationInfo } from "../orchestration/types"
 import {
   type ChallengeRemote,
   isPlatformIntegrated,
@@ -33,6 +32,9 @@ export type RunPromptInputs = {
   challengeAttachments: PromptAttachment[]
   environment: EnvironmentConfig
   model: ModelConfig
+  /** v9: true when the run has more than one solver — feeds
+   * `run.multiSolver` (renders the co-solver section in mainSystem). */
+  multiSolver: boolean
 }
 
 /**
@@ -50,8 +52,15 @@ export function buildPromptContext(
   db: Database,
   containerWorkspace: string
 ): PromptContext {
-  const { runId, challenge, remote, challengeAttachments, environment, model } =
-    inputs
+  const {
+    runId,
+    challenge,
+    remote,
+    challengeAttachments,
+    environment,
+    model,
+    multiSolver,
+  } = inputs
   const event = db
     .select()
     .from(events)
@@ -97,10 +106,10 @@ export function buildPromptContext(
       cpus: environment.cpus,
       memoryMb: environment.memoryMb,
       pidsLimit: environment.pidsLimit,
+      multiSolver,
     },
     capabilities: {
       canFinish: true,
-      canSpawn: true,
       canSubmitFlag: platformIntegrated,
       canManageTarget: targetSupported,
     },
@@ -121,9 +130,6 @@ export function buildEventPromptContext(
     instruction: string
     environment: EnvironmentConfig
     model: ModelConfig
-    /** Challenge orchestrations the scheduler may launch, so it
-     * never invents plugin names. Built by the service from the registry. */
-    orchestrations: OrchestrationInfo[]
   },
   db: Database,
   containerWorkspace: string
@@ -160,9 +166,9 @@ export function buildEventPromptContext(
       cpus: environment.cpus,
       memoryMb: environment.memoryMb,
       pidsLimit: environment.pidsLimit,
+      multiSolver: false,
     },
     instruction,
-    orchestrations: inputs.orchestrations,
   }
 }
 

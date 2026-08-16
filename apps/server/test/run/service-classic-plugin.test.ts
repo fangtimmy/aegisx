@@ -113,7 +113,7 @@ describe("classic plugin end-to-end (service-level parity)", () => {
         .get()!
       await runService.close()
 
-      expect(agent.slot).toBe("solver")
+      expect(agent.slot).toBe("solver-1")
       expect(agent.isEntry).toBe(true)
       const tools = JSON.parse(agent.tools) as string[]
       expect(tools).toEqual(
@@ -124,8 +124,6 @@ describe("classic plugin end-to-end (service-level parity)", () => {
           "start_target",
           "extend_target",
           "stop_target",
-          "spawn_agent",
-          "read_agent",
         ])
       )
       // mainSystem builtin rendered (capabilities injected: canSubmitFlag true).
@@ -156,8 +154,8 @@ describe("classic plugin end-to-end (service-level parity)", () => {
       const tools = JSON.parse(agent.tools) as string[]
       expect(tools).toContain("finish_run")
       expect(tools).toContain("submit_flag")
-      expect(tools).toContain("spawn_agent")
-      expect(tools).toContain("read_agent")
+      expect(tools).not.toContain("spawn_agent")
+      expect(tools).not.toContain("read_agent")
       // Target tools stay conditional on target capability (spec §6).
       expect(tools.filter((t) => t.endsWith("_target"))).toEqual([])
       // mainSystem rendered WITH the submit_flag section — the tool records

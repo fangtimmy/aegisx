@@ -5,8 +5,7 @@ import { and, eq, inArray, sql } from "drizzle-orm"
 import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, runs } from "../db/schema"
-import type { EventScopeEmitter } from "../orchestration/run-handle"
-import type { RunEmitter } from "../orchestration/run-handle"
+import type { EventScopeEmitter } from "../orchestration/event-scope"
 import type { EventScopePayload } from "../orchestration/types"
 import type { RunQueries } from "./queries"
 
@@ -16,8 +15,6 @@ export type RunStatusDeps = {
   sqlite: Sqlite
   queries: RunQueries
   bus: LiveBus
-  /** Per-run plugin event emitters; the settle hook notifies the plugin. */
-  emitters: Map<string, RunEmitter>
   /** Per-event run-lifecycle emitters (scheduler observation). */
   eventScopes: Map<string, EventScopeEmitter>
   /** Whether the event's scheduler is paused (W3): paused → the run-lifecycle
@@ -36,8 +33,7 @@ export type RunStatus = ReturnType<typeof createRunStatus>
  * run lifecycle events to the event's scheduler.
  */
 export function createRunStatus(deps: RunStatusDeps) {
-  const { db, sqlite, queries, bus, emitters, eventScopes, now, updateAgent } =
-    deps
+  const { db, sqlite, queries, bus, eventScopes, now, updateAgent } = deps
 
   function emitRun(runId: string) {
     const run = queries.get(runId)
@@ -137,9 +133,6 @@ export function createRunStatus(deps: RunStatusDeps) {
     }
     emitRun(runId)
     emitAgents(runId)
-    emitters
-      .get(runId)
-      ?.emit(agentId, { type: "turnEnded", ...(error ? { error } : {}) })
   }
 
   return {

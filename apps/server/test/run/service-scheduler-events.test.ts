@@ -68,7 +68,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const sched = await runService.create({
         scopeType: "event" as const,
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "",
         container: containerInput,
       })
@@ -84,7 +83,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -146,7 +144,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const sched = await runService.create({
         scopeType: "event" as const,
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "",
         container: containerInput,
       })
@@ -162,7 +159,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -220,7 +216,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const sched = await runService.create({
         scopeType: "event" as const,
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "",
         container: containerInput,
       })
@@ -234,7 +229,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -306,7 +300,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const sched = await runService.create({
         scopeType: "event" as const,
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "",
         container: containerInput,
       })
@@ -320,7 +313,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -378,7 +370,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const sched = await runService.create({
         scopeType: "event" as const,
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "",
         container: containerInput,
       })
@@ -392,7 +383,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -454,7 +444,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const sched = await runService.create({
         scopeType: "event" as const,
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "focus crypto",
         container: containerInput,
       })
@@ -483,7 +472,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -549,7 +537,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge",
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
       })
       await settle()
@@ -683,7 +670,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const sched = await runService.create({
         scopeType: "event",
         eventId: "evt-1",
-        orchestration: "scheduler",
         instruction: "",
         container: containerInput,
       })
@@ -699,7 +685,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const challenge = await runService.create({
         scopeType: "challenge",
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
         source: "manual",
       })
@@ -715,7 +700,6 @@ describe("scheduler event wiring (spec §3.5)", () => {
       const schedRun = await runService.create({
         scopeType: "challenge",
         challengeId: "ch-1",
-        orchestration: "classic",
         container: containerInput,
         source: "scheduler",
       })

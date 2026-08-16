@@ -8,20 +8,30 @@ import {
   type ModelRef,
 } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { ThinkingLevel } from "@aegisx/shared/live-event"
 
-import type { AgentModels } from "../infrastructure/config-store"
-import type { SlotModel } from "../orchestration/types"
 import { RunActionError } from "./errors"
 import type { RunModelDisplay } from "./public"
 
+/** A resolved per-agent model snapshot: what the run factory persists on the
+ * agent row (the concrete ref) plus the display fields that feed the
+ * per-agent prompt context's `model` variable. */
+export type SlotModel = {
+  /** Canonical model ref string (`<providerKey>/<modelId>:<effort>` | alias). */
+  ref: ModelRef
+  thinkingLevel: ThinkingLevel
+  /** Display: provider label, model label, pi model id (prompt `model` var). */
+  providerLabel: string
+  modelLabel: string
+  modelId: string
+}
+
 /** Everything the model resolver reads from the service: the flat settings
- * (default model), the enabled provider connections, alias table and per-slot
- * orchestration model overrides. */
+ * (default model), the enabled provider connections and the alias table. */
 export type ModelResolverDeps = {
   getSettings(): FlatSettings
   providers(): ProviderConnection[]
   getAliases(): ModelAlias[]
-  getAgentModels(): AgentModels
 }
 
 export type ModelResolver = ReturnType<typeof createModelResolver>
@@ -67,14 +77,6 @@ export function createModelResolver(deps: ModelResolverDeps) {
     }
   }
 
-  /** Resolve a plugin slot's model from the orchestration settings, falling
-   * back to the global default. */
-  function resolveSlotModel(pluginId: string, slot: string): SlotModel {
-    return resolveSlotModelFromRef(
-      deps.getAgentModels()[pluginId]?.[slot] ?? defaultModelRef()
-    )
-  }
-
   /** Derive the run-level model display fields (provider/modelId/modelName/
    * thinkingLevel) for {@link toRunPublic} from a stored ref string. Falls back
    * to parsing the ref when no provider matches (e.g. provider since disabled). */
@@ -104,7 +106,6 @@ export function createModelResolver(deps: ModelResolverDeps) {
     defaultModelRef,
     resolveModelTarget,
     resolveSlotModelFromRef,
-    resolveSlotModel,
     resolveModelDisplay,
   }
 }

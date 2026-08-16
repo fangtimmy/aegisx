@@ -8,7 +8,6 @@ import { SCHEMA_VERSION } from "./db/schema"
 import { registerEventRoutes } from "./events/routes"
 import { createConfigStore } from "./infrastructure/config-store"
 import { createStorage } from "./infrastructure/storage"
-import { bootOrchestration } from "./orchestration/registry"
 import { registerPlatformRoutes } from "./platforms/routes"
 import { createPlatformService } from "./platforms/service"
 import { registerProviderRoutes } from "./providers/routes"
@@ -22,9 +21,6 @@ export function createApp(options: { dataDir: string }) {
   const configStore = createConfigStore(options.dataDir)
   const { db, sqlite, releaseLock } = createDatabase(options.dataDir)
 
-  // Register built-in orchestration plugins + seed prompt template defaults
-  // (idempotent) before any RunHandle is built.
-  bootOrchestration(db)
   const storage = createStorage(options.dataDir)
   const getSettings = () => configStore.getSettings()
 
@@ -106,7 +102,6 @@ export function createApp(options: { dataDir: string }) {
     db,
     dataDir: options.dataDir,
     runService,
-    configStore,
   })
   registerSchedulerRoutes(app, { db, runService })
 

@@ -1,26 +1,26 @@
 import type { PromptTemplateContext } from "@aegisx/shared"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import Handlebars from "handlebars"
 
 import type { Database } from "../db"
 import { promptTemplates } from "../db/schema"
 import {
-  DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "./prompt-defaults"
 
-/** plugin id for the four built-in templates. */
+/** plugin id for the built-in templates. */
 export const BUILTIN_PLUGIN = "builtin"
 
 /** The four built-in template keys + their default bodies. Seeded into
  * prompt_templates (plugin='builtin') at app boot. */
 export const BUILTIN_DEFAULTS: Record<string, string> = {
   mainSystem: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-  childSystem: DEFAULT_CHILD_SYSTEM_PROMPT_TEMPLATE,
   initial: DEFAULT_INITIAL_PROMPT_TEMPLATE,
   orchestratorSystem: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  schedulerInitial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 }
 
 /**
@@ -74,26 +74,6 @@ export function upgradeBuiltinTemplate(
 }
 
 /**
- * Seed a plugin's declared default templates (upsert at registration only when
- * no user edit exists for (plugin,key)). Idempotent via ON CONFLICT DO
- * NOTHING. Plugins without `templates` (e.g. classic, which uses only the
- * built-ins) are a no-op.
- */
-export function seedPluginTemplates(
-  db: Database,
-  plugin: { id: string; templates?: Record<string, string> }
-): void {
-  if (!plugin.templates) return
-  const now = new Date().toISOString()
-  for (const [key, body] of Object.entries(plugin.templates)) {
-    db.insert(promptTemplates)
-      .values({ plugin: plugin.id, key, body, updatedAt: now })
-      .onConflictDoNothing()
-      .run()
-  }
-}
-
-/**
  * Carry pre-v8 FlatSettings prompt edits into the prompt_templates store. A
  * legacy value is written only when it differs from the builtin default AND
  * the current row is still the seed default — edits made directly in the table
@@ -132,29 +112,20 @@ export function migrateLegacyPromptSettings(
 }
 
 /**
- * Load this run's in-memory template map: the plugin's own templates overlaid
- * on the built-in defaults (same key → plugin wins, the resolution order).
- * Returned as a Map so render never hits the DB — a RunHandle loads it once at
- * construction and renders only against that snapshot (no cross-run cache →
- * edits take effect on the next run, no stale reads).
+ * Load the in-memory builtin template map (plugin='builtin' only — v9 has no
+ * plugin templates). Returned as a Map so render never hits the DB — the run
+ * factory loads it once at agent-creation time and renders only against that
+ * snapshot (no cross-run cache → edits take effect on the next run, no stale
+ * reads).
  */
-export function loadTemplateMap(
-  db: Database,
-  pluginId: string
-): Map<string, string> {
+export function loadTemplateMap(db: Database): Map<string, string> {
   const rows = db
     .select()
     .from(promptTemplates)
-    .where(inArray(promptTemplates.plugin, [BUILTIN_PLUGIN, pluginId]))
+    .where(eq(promptTemplates.plugin, BUILTIN_PLUGIN))
     .all()
   const map = new Map<string, string>()
-  // Built-ins first, then the plugin's own keys override (same key → plugin).
-  for (const row of rows) {
-    if (row.plugin === BUILTIN_PLUGIN) map.set(row.key, row.body)
-  }
-  for (const row of rows) {
-    if (row.plugin === pluginId) map.set(row.key, row.body)
-  }
+  for (const row of rows) map.set(row.key, row.body)
   return map
 }
 
@@ -204,8 +175,8 @@ export const PROMPT_TEMPLATE_VARIABLES = [
   "run.cpus",
   "run.memoryMb",
   "run.pidsLimit",
+  "run.multiSolver",
   "capabilities.canFinish",
-  "capabilities.canSpawn",
   "capabilities.canSubmitFlag",
   "capabilities.canManageTarget",
   "strategy",
@@ -262,10 +233,10 @@ export const samplePromptContext: PromptTemplateContext = {
     cpus: 2,
     memoryMb: 2048,
     pidsLimit: 256,
+    multiSolver: false,
   },
   capabilities: {
     canFinish: true,
-    canSpawn: true,
     canSubmitFlag: true,
     canManageTarget: true,
   },
