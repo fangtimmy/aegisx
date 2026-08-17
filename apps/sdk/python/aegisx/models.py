@@ -248,12 +248,12 @@ class Channel:
     scope_type: str
     run_id: str | None
     event_id: str
-    challenge_id: str | None = None
     kind: str
     target_agent_id: str | None
     label: str
     unread: int
     last_message_at: str | None
+    challenge_id: str | None = None
     shared_run_count: int | None = None
 
 
