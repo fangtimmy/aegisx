@@ -190,12 +190,21 @@ export function ChannelComposer({ channelId }: { channelId: string }) {
 }
 
 /**
- * The per-run IM view (docs/im-channels.md §5.2): channel rail (#announce /
- * #team / DM per solver) + message timeline + composer with attachments.
+ * The IM view (docs/im-channels.md §5.2): channel rail + message timeline +
+ * composer with attachments. Two data sources:
+ *  - runId: a run's tree (#announce / #team / DM per solver)
+ *  - challengeId: the challenge's group channels (#team / #announce — v17
+ *    knowledge base, shared across the challenge's runs)
  * UI unread is client-side session state (messages newer than the last id
  * seen at mount / on channel switch) — never persisted.
  */
-export function ChannelsView({ runId }: { runId: string }) {
+export function ChannelsView({
+  runId,
+  challengeId,
+}: {
+  runId?: string
+  challengeId?: string
+}) {
   const [activeId, setActiveId] = useState<string | null>(null)
   /** Session-local unread baseline (design §5.2: UI unread is client session
    * state, never persisted): channel id → the last message timestamp this
@@ -205,8 +214,14 @@ export function ChannelsView({ runId }: { runId: string }) {
   const timelineRef = useRef<HTMLDivElement>(null)
 
   const channels = useQuery({
-    queryKey: keys.runs.channels(runId),
-    queryFn: () => channelsApi.getRunChannels(runId),
+    queryKey: challengeId
+      ? keys.challenges.channels(challengeId)
+      : keys.runs.channels(runId ?? ""),
+    enabled: Boolean(challengeId ?? runId),
+    queryFn: () =>
+      challengeId
+        ? channelsApi.getChallengeChannels(challengeId)
+        : channelsApi.getRunChannels(runId!),
     refetchInterval: POLL_INTERVAL_MS,
   })
 

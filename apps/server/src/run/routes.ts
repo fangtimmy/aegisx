@@ -244,6 +244,20 @@ export function registerRunRoutes(
     return c.json({ items: runService.channels.runChannelTree(runId) })
   })
 
+  /** The challenge's group channels (#team/#announce, get-or-create) — the
+   * challenge-level IM view (v17 knowledge base; works with no run). */
+  app.get("/api/challenges/:challengeId/channels", (c) => {
+    try {
+      return c.json({
+        items: runService.channels.challengeChannelTree(
+          c.req.param("challengeId")
+        ),
+      })
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
   /** SDK channels.list: the agent's visible channels + unread counts. */
   app.get("/api/agents/:agentId/channels", (c) => {
     try {

@@ -8,6 +8,15 @@ export function getRunChannels(runId: string) {
   return apiRequest<{ items: ChannelInfo[] }>(`/runs/${runId}/channels`)
 }
 
+/** A challenge's group channels (#team / #announce) — the challenge-level
+ * IM view (v17 knowledge base; get-or-create server-side, works with no
+ * run on the challenge). */
+export function getChallengeChannels(challengeId: string) {
+  return apiRequest<{ items: ChannelInfo[] }>(
+    `/challenges/${challengeId}/channels`
+  )
+}
+
 /** Channel timeline, paginated by the global message-id cursor. */
 export function listChannelMessages(channelId: string, after = 0, limit = 100) {
   const params = new URLSearchParams()

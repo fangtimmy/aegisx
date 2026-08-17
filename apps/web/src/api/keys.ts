@@ -23,6 +23,8 @@ export const keys = {
     inbox: (eventId: string) => ["events", eventId, "inbox"] as const,
   },
   challenges: {
+    channels: (challengeId: string) =>
+      ["challenges", challengeId, "channels"] as const,
     target: (challengeId: string) =>
       ["challenges", challengeId, "target"] as const,
   },

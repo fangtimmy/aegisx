@@ -62,22 +62,29 @@ export const TIMELINE_ICONS: Record<TimelineEvent["kind"], typeof Play> = {
 
 /** The AgentsGraph root node id (the event scheduler / orchestrator). */
 export const SCHED_NODE_ID = "sched"
-/** W7.2 group roots: manual runs + the archived aggregate. */
-export const MANUAL_NODE_ID = "manual"
+/** W7.2 group roots: the archived aggregate (manual runs now hang off their
+ * challenge node — the graph is event → challenge → run → agent). */
 export const ARCHIVE_NODE_ID = "archive"
 
 // Planned node sizes — used both for the dagre layout spacing and (roughly)
 // matched by the Tailwind widths on each node component.
 export const NODE_DIM = {
   scheduler: { width: 176, height: 56 },
-  manual: { width: 176, height: 56 },
+  challenge: { width: 208, height: 60 },
   archive: { width: 176, height: 56 },
   run: { width: 224, height: 60 },
   agent: { width: 192, height: 48 },
 } as const
 
 export const EDGE_STYLE = {
-  // scheduler → run: the orchestrator oversees the whole fleet, kept faint.
+  // scheduler → challenge: the event's challenge backbone (v17 knowledge
+  // bases), emphasized over the run edges below.
+  challenge: {
+    stroke: "var(--primary)",
+    strokeOpacity: 0.45,
+    strokeWidth: 1.5,
+  },
+  // challenge → run / archive → run: runs are execution units, kept faint.
   oversee: {
     stroke: "var(--muted-foreground)",
     strokeOpacity: 0.3,

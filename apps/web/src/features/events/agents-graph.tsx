@@ -25,12 +25,12 @@ import {
   Network,
   Pause,
   Play,
+  Puzzle,
   Server,
-  Users,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import type { AgentSummary, RunPublic } from "@/api"
+import type { AgentSummary, Challenge, RunPublic } from "@/api"
 import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -50,7 +50,6 @@ import {
   agentFinishBadge,
   ARCHIVE_NODE_ID,
   EDGE_STYLE,
-  MANUAL_NODE_ID,
   NODE_DIM,
   roleLabel,
   SCHED_NODE_ID,
@@ -60,6 +59,9 @@ import { StartSchedulerDialog } from "./scheduler-config-tab"
 
 const runNodeId = (id: string) => `run:${id}`
 const agentNodeId = (id: string) => `agent:${id}`
+const challengeNodeId = (id: string) => `challenge:${id}`
+/** Run short id — the v17 signing convention (`run-a3f1`). */
+const runShortId = (id: string) => `run-${id.slice(0, 4)}`
 
 type SelectedAgent = { runId: string; agentId: string } | null
 
@@ -72,7 +74,14 @@ type GraphNodeData =
       agentId: string | null
       status: string
     }
-  | { kind: "manual" }
+  | {
+      kind: "challenge"
+      challengeId: string
+      name: string
+      category: string | null
+      points: number | null
+      activeRunCount: number
+    }
   | { kind: "archive"; count: number; open: boolean }
   | { kind: "run"; run: RunPublic; active: boolean }
   | { kind: "agent"; agent: AgentSummary; runId: string; selected: boolean }
@@ -109,11 +118,12 @@ function layoutWithDagre(
   })
 }
 
-/** W7.2: three top-level groups — 调度者 (scheduler root + its active
- * scheduler-source runs), 手动 (group root + active manual runs), 已归档
- * (aggregate node, collapsed by default; expanded shows closed runs). Active
- * run count is bounded by the container cap (W4), the archive stays collapsed
- * unless opened, so the steady-state node count is bounded. */
+/** W7.2: the four-layer graph (v17) — 调度者 (scheduler root) → challenge
+ * (each challenge with active runs; the v17 knowledge base + IM entry) → run
+ * (hangs off its challenge; source badge 调度/手动) → agent. Archived runs
+ * collapse into the aggregate node (default closed; expanded shows runs).
+ * Active run count is bounded by the container cap (W4), the archive stays
+ * collapsed unless opened, so the steady-state node count is bounded. */
 function buildAgentsGraph({
   scheduler,
   schedRun,
@@ -122,6 +132,7 @@ function buildAgentsGraph({
   openRuns,
   archiveOpen,
   selected,
+  challenges,
 }: {
   scheduler?: SchedulerWithAgents
   schedRun: RunPublic | null
@@ -130,13 +141,14 @@ function buildAgentsGraph({
   openRuns: Set<string>
   archiveOpen: boolean
   selected: SelectedAgent
+  challenges: Challenge[]
 }): { nodes: Node[]; edges: Edge[] } {
   const rawNodes: Node[] = []
   const rawEdges: Edge[] = []
   const dims: Record<string, { width: number; height: number }> = {}
   const addNode = (
     id: string,
-    type: "scheduler" | "manual" | "archive" | "run" | "agent",
+    type: "scheduler" | "challenge" | "archive" | "run" | "agent",
     data: GraphNodeData
   ) => {
     rawNodes.push({ id, type, data, position: { x: 0, y: 0 } })
@@ -156,14 +168,8 @@ function buildAgentsGraph({
   })
 
   const active = runs.filter((run) => run.status !== "closed")
-  const schedulerActive = active.filter((run) => run.source === "scheduler")
-  const manualActive = active.filter((run) => run.source !== "scheduler")
   const closed = runs.filter((run) => run.status === "closed")
 
-  // Group 2 + 3 roots only when they have content.
-  if (manualActive.length > 0) {
-    addNode(MANUAL_NODE_ID, "manual", { kind: "manual" })
-  }
   if (closed.length > 0) {
     addNode(ARCHIVE_NODE_ID, "archive", {
       kind: "archive",
@@ -216,8 +222,47 @@ function buildAgentsGraph({
     }
   }
 
-  for (const run of schedulerActive) addRun(run, SCHED_NODE_ID)
-  for (const run of manualActive) addRun(run, MANUAL_NODE_ID)
+  // Four layers: active runs group by challenge; the challenge node is the
+  // v17 knowledge base + IM entry (manual runs hang off their challenge too,
+  // told apart by the run node's 调度/手动 badge).
+  const activeByChallenge = new Map<string, RunPublic[]>()
+  for (const run of active) {
+    if (!run.challengeId) continue
+    const list = activeByChallenge.get(run.challengeId) ?? []
+    list.push(run)
+    activeByChallenge.set(run.challengeId, list)
+  }
+  const challengeById = new Map(challenges.map((ch) => [ch.id, ch]))
+  const challengeOrder = challenges.map((ch) => ch.id)
+  const challengeIds = [...activeByChallenge.keys()].sort((a, b) => {
+    const ia = challengeOrder.indexOf(a)
+    const ib = challengeOrder.indexOf(b)
+    if (ia === -1 && ib === -1) return a.localeCompare(b)
+    if (ia === -1) return 1
+    if (ib === -1) return -1
+    return ia - ib
+  })
+  for (const challengeId of challengeIds) {
+    const runs_ = activeByChallenge.get(challengeId)!
+    const meta = challengeById.get(challengeId)
+    addNode(challengeNodeId(challengeId), "challenge", {
+      kind: "challenge",
+      challengeId,
+      name: meta?.name ?? runs_[0].challengeName,
+      category: meta?.category ?? null,
+      points: meta?.points ?? null,
+      activeRunCount: runs_.length,
+    })
+    rawEdges.push({
+      id: `e:sched:challenge:${challengeId}`,
+      source: SCHED_NODE_ID,
+      target: challengeNodeId(challengeId),
+      type: "smoothstep",
+      style: EDGE_STYLE.challenge,
+    })
+    for (const run of runs_) addRun(run, challengeNodeId(challengeId))
+  }
+
   if (archiveOpen) for (const run of closed) addRun(run, ARCHIVE_NODE_ID)
 
   return { nodes: layoutWithDagre(rawNodes, rawEdges, dims), edges: rawEdges }
@@ -271,13 +316,23 @@ function SchedulerGraphNode({ data }: NodeProps) {
   )
 }
 
-function ManualGroupNode() {
+function ChallengeGraphNode({ data }: NodeProps) {
+  const d = data as Extract<GraphNodeData, { kind: "challenge" }>
   return (
-    <GraphNodeShell className="w-44">
-      <Users className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-        手动任务
+    <GraphNodeShell className="w-52">
+      <Puzzle className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm leading-tight font-medium">
+          {d.name}
+        </span>
+        <span className="block truncate text-[11px] leading-tight text-muted-foreground">
+          {d.category ?? "未分类"}
+          {d.points != null ? ` · ${d.points} 分` : ""}
+        </span>
       </span>
+      <Badge size="sm" variant="secondary">
+        {d.activeRunCount} run
+      </Badge>
     </GraphNodeShell>
   )
 }
@@ -312,11 +367,11 @@ function RunGraphNode({ data }: NodeProps) {
         <Server className="size-3.5" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm leading-tight font-medium">
-          {run.challengeName}
+        <span className="block truncate font-mono text-xs leading-tight">
+          {runShortId(run.id)}
         </span>
-        <span className="block truncate font-mono text-[11px] leading-tight text-muted-foreground">
-          {run.source === "scheduler" ? "调度" : ""}
+        <span className="block truncate text-[11px] leading-tight text-muted-foreground">
+          {run.source === "scheduler" ? "调度" : "手动"}
         </span>
       </span>
       <Badge size="sm" variant={statusVariant(run.status)}>
@@ -369,7 +424,7 @@ function AgentGraphNode({ data }: NodeProps) {
 // node components back from this module (an ESM cycle).
 const GRAPH_NODE_TYPES = {
   scheduler: SchedulerGraphNode,
-  manual: ManualGroupNode,
+  challenge: ChallengeGraphNode,
   archive: ArchiveGraphNode,
   run: RunGraphNode,
   agent: AgentGraphNode,
@@ -388,6 +443,7 @@ function GraphCanvas({
   closePending,
   selected,
   onOpenAgent,
+  onOpenChallenge,
   onToggleRun,
   onToggleArchive,
   onPauseScheduler,
@@ -404,6 +460,7 @@ function GraphCanvas({
   closePending: boolean
   selected: SelectedAgent
   onOpenAgent: (runId: string, agentId: string) => void
+  onOpenChallenge: (challengeId: string) => void
   onToggleRun: (runId: string) => void
   onToggleArchive: () => void
   onPauseScheduler: () => void
@@ -435,6 +492,9 @@ function GraphCanvas({
       if (data.kind === "scheduler") {
         // The scheduler node IS the orchestrator agent — open its conversation.
         if (data.runId && data.agentId) onOpenAgent(data.runId, data.agentId)
+      } else if (data.kind === "challenge") {
+        // The challenge node IS the v17 knowledge base — open its IM.
+        onOpenChallenge(data.challengeId)
       } else if (data.kind === "run") {
         onToggleRun(data.run.id)
       } else if (data.kind === "agent") {
@@ -442,9 +502,8 @@ function GraphCanvas({
       } else if (data.kind === "archive") {
         onToggleArchive()
       }
-      // manual → group label, no-op.
     },
-    [onOpenAgent, onToggleRun, onToggleArchive]
+    [onOpenAgent, onOpenChallenge, onToggleRun, onToggleArchive]
   )
 
   return (
@@ -520,15 +579,21 @@ export function AgentsGraph({
   runs,
   detailsById,
   scheduler,
+  challenges,
   onOpenAgent,
+  onOpenChallenge,
   selected,
 }: {
   eventId: string
   runs: RunPublic[]
   detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
   scheduler?: SchedulerWithAgents
+  /** The event's challenges (for the challenge node labels + grouping). */
+  challenges: Challenge[]
   /** W7.1: graph node click → open the agent dialog (the ONLY dialog entry). */
   onOpenAgent: (runId: string, agentId: string) => void
+  /** Challenge node click → open the challenge-level IM (v17 knowledge base). */
+  onOpenChallenge: (challengeId: string) => void
   /** W7.2: highlighted agent (from the left panel / timeline / queue); the
    * graph auto-expands its run + focuses it, but does NOT open a dialog. */
   selected: SelectedAgent
@@ -605,6 +670,7 @@ export function AgentsGraph({
         openRuns,
         archiveOpen,
         selected,
+        challenges,
       }),
     [
       scheduler,
@@ -614,6 +680,7 @@ export function AgentsGraph({
       openRuns,
       archiveOpen,
       selected,
+      challenges,
     ]
   )
   // Remount React Flow (→ re-fit-view) only when the node SET changes
@@ -668,6 +735,7 @@ export function AgentsGraph({
             graphKey={graphKey}
             onCloseScheduler={() => closeScheduler.mutate()}
             onOpenAgent={onOpenAgent}
+            onOpenChallenge={onOpenChallenge}
             onPauseScheduler={() => pauseScheduler.mutate()}
             onResumeScheduler={() => resumeScheduler.mutate()}
             onStartOpen={() => setStartOpen(true)}

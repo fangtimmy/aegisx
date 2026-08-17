@@ -18,6 +18,7 @@ import {
   channelMessages,
   channelReads,
   channels,
+  challenges,
   runs,
 } from "../db/schema"
 import { RunActionError } from "./errors"
@@ -1145,6 +1146,49 @@ export function createChannelService(deps: ChannelServiceDeps) {
     return runChannels(runId).map((channel) => toChannelPublic(channel, ""))
   }
 
+  /** The challenge's group channels (#team + #announce, get-or-create) — the
+   * challenge-level IM view (v17 knowledge base). Mirrors runChannelTree but
+   * keyed by challenge: works even when the challenge currently has no run. */
+  function challengeChannelTree(challengeId: string): ChannelPublic[] {
+    const challenge = db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+    if (!challenge) throw new RunActionError("not_found", "Challenge not found")
+    for (const kind of ["team", "announce"] as const) {
+      const existing = db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(eq(channels.challengeId, challengeId), eq(channels.kind, kind))
+        )
+        .get()
+      if (!existing) {
+        insertChannel({
+          scopeType: "challenge",
+          runId: null,
+          eventId: challenge.eventId,
+          challengeId,
+          kind,
+          targetAgentId: null,
+        })
+      }
+    }
+    return db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.challengeId, challengeId),
+          inArray(channels.kind, ["team", "announce"])
+        )
+      )
+      .orderBy(asc(channels.kind))
+      .all()
+      .map((channel) => toChannelPublic(channel, ""))
+  }
+
   // --- files ----------------------------------------------------------------------
 
   function fileById(fileId: string): { row: ChannelFileRow; path: string } {
@@ -1202,6 +1246,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     runChannels,
     challengeChannel,
     runChannelTree,
+    challengeChannelTree,
     agentChannels,
     channelById,
     post,

@@ -64,6 +64,7 @@ import { AgentsGraph } from "./agents-graph"
 import { AgentsTab } from "./agents-tab"
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
+import { ChallengeImDialog } from "./challenge-im-dialog"
 import { ChallengesTreeTab } from "./challenges-tree-tab"
 import {
   POLL_INTERVAL_MS,
@@ -333,6 +334,8 @@ function EventAgentsPanel({
     runId: string
     agentId: string
   } | null>(null)
+  /** Challenge node click → the challenge-level IM (v17 knowledge base). */
+  const [challengeIm, setChallengeIm] = useState<string | null>(null)
 
   // Fleet: the overview's single source of truth (runs + per-run agents +
   // scheduler run/agents + config/status) — W7.3 merged the old fleet +
@@ -404,6 +407,9 @@ function EventAgentsPanel({
   }
 
   const runs = fleet.data?.runs ?? []
+  const imChallenge = challengeIm
+    ? (challenges.find((ch) => ch.id === challengeIm) ?? null)
+    : null
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[24rem_minmax(0,1fr)] gap-4">
@@ -454,9 +460,11 @@ function EventAgentsPanel({
         </Tabs>
       </div>
       <AgentsGraph
+        challenges={challenges}
         detailsById={detailsById}
         eventId={eventId}
         onOpenAgent={onOpenAgent}
+        onOpenChallenge={setChallengeIm}
         runs={runs}
         scheduler={schedulerData}
         selected={selected}
@@ -466,6 +474,12 @@ function EventAgentsPanel({
           agentId={dialog.agentId}
           onClose={() => setDialog(null)}
           runId={dialog.runId}
+        />
+      )}
+      {imChallenge && (
+        <ChallengeImDialog
+          challenge={imChallenge}
+          onClose={() => setChallengeIm(null)}
         />
       )}
     </div>

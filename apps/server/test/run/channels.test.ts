@@ -127,6 +127,38 @@ describe("channel tree", () => {
       close()
     }
   })
+
+  test("challenge channels: #team/#announce get-or-create with NO run on the challenge; idempotent; shared with the run tree", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      const { channels } = makeService(db, dir)
+      // No run exists yet — the challenge-level IM still works (the graph
+      // challenge node entry point must not depend on a live run).
+      const tree = channels.challengeChannelTree("ch-1")
+      expect(tree.map((c) => c.kind)).toEqual(["announce", "team"])
+      expect(tree.every((c) => c.scopeType === "challenge")).toBe(true)
+      const ids = tree.map((c) => c.id)
+      // Idempotent: no duplicate channels.
+      expect(channels.challengeChannelTree("ch-1").map((c) => c.id)).toEqual(
+        ids
+      )
+      // A later run reuses the SAME channels (v17 §11.2 knowledge base).
+      seedRun(db, { id: "r1", status: "running" })
+      seedSolver(db, "r1", "a1", { slot: "solver-1", isEntry: true })
+      channels.ensureChallengeChannels("r1")
+      const runGroup = channels
+        .runChannelTree("r1")
+        .filter((c) => c.kind !== "dm")
+        .map((c) => c.id)
+      expect(runGroup).toEqual(ids)
+      // Unknown challenge.
+      expect(() => channels.challengeChannelTree("nope")).toThrow()
+    } finally {
+      close()
+    }
+  })
 })
 
 describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
