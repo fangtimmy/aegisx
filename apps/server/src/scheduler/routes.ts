@@ -5,20 +5,11 @@ import { Type } from "typebox"
 
 import type { Database } from "../db"
 import { events } from "../db/schema"
-import { badRequest, notFound } from "../infrastructure/http-errors"
+import { notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { EmptyInputSchema } from "../lib/schemas"
 import { runActionError as runError } from "../run/errors"
 import type { RunService } from "../run/service"
-import { streamRun } from "../run/sse"
-
-const enqueueInput = Type.Object(
-  {
-    prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
-    timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
-  },
-  { additionalProperties: false }
-)
 
 const reorderInput = Type.Object(
   { itemIds: Type.Array(Type.String({ minLength: 1 })) },
@@ -110,19 +101,6 @@ export function registerSchedulerRoutes(
     return c.json(runService.inboxSnapshot(eventId))
   })
 
-  /** Delivered-digest history (newest first; ?limit default 30, ?offset) —
-   * served from the recap messages stored back into the scheduler DM channel
-   * (schema v16 dropped scheduler_inbox_digests; the ledger is
-   * self-contained). */
-  app.get("/api/events/:eventId/inbox/digests", (c) => {
-    const eventId = c.req.param("eventId")
-    const miss = requireEvent(c, eventId)
-    if (miss) return miss
-    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 30, 1), 200)
-    const offset = Math.max(Number(c.req.query("offset")) || 0, 0)
-    return c.json(runService.inboxHistory(eventId, limit, offset))
-  })
-
   /** Hold delivery: the inbox keeps collecting silently but flushes nothing —
    * the orchestrator stays idle. Resume flushes the backlog in one digest.
    * In-memory only (a scheduler-run rebuild resets it); no live inbox → no-op. */
@@ -173,36 +151,6 @@ export function registerSchedulerRoutes(
       runService.queue().resume(eventId, c.req.valid("json").source ?? "manual")
       runService.queue().scheduleDrain()
       return c.json({ state: "running" })
-    }
-  )
-
-  app.post(
-    "/api/events/:eventId/queue",
-    validateJson(enqueueInput),
-    async (c) => {
-      const eventId = c.req.param("eventId")
-      const miss = requireEvent(c, eventId)
-      if (miss) return miss
-      const body = c.req.valid("json")
-      // Enqueue needs a challengeId; require it via query for the HTTP path
-      // (the scheduler tool passes it inline). The body carries the rest.
-      const challengeId = c.req.query("challengeId") ?? ""
-      if (!challengeId) {
-        return badRequest(
-          c,
-          "invalid_request",
-          "challengeId query parameter is required"
-        )
-      }
-      const item = runService.queue().enqueue({
-        eventId,
-        challengeId,
-        prompt: body.prompt,
-        timeoutMs: body.timeoutMs,
-        source: "manual",
-      })
-      await runService.queue().drainOnce()
-      return c.json(item, 201)
     }
   )
 
@@ -401,24 +349,4 @@ export function registerSchedulerRoutes(
       }
     }
   )
-
-  app.get("/api/events/:eventId/scheduler/messages", (c) => {
-    const eventId = c.req.param("eventId")
-    const miss = requireEvent(c, eventId)
-    if (miss) return miss
-    const sched = runService.getSchedulerRun(eventId)
-    if (!sched) return notFound(c, "No scheduler run for this event")
-    const afterRaw = Number.parseInt(c.req.query("after") ?? "0", 10)
-    const after = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0
-    return c.json(runService.listMessages(sched.id, { after }))
-  })
-
-  app.get("/api/events/:eventId/scheduler/stream", (c) => {
-    const eventId = c.req.param("eventId")
-    const miss = requireEvent(c, eventId)
-    if (miss) return miss
-    const sched = runService.getSchedulerRun(eventId)
-    if (!sched) return notFound(c, "No scheduler run for this event")
-    return streamRun(c, runService, sched.id)
-  })
 }

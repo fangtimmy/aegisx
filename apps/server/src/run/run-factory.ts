@@ -62,8 +62,6 @@ import {
 } from "./prompt"
 import type { RunQueries } from "./queries"
 import type { SchedulerDigest } from "./scheduler-digest"
-import type { RunSchedulerToolContext } from "./scheduler-tools"
-import { createSchedulerTools } from "./scheduler-tools"
 import { createMainTools, type RunToolContext } from "./tools"
 
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -227,11 +225,6 @@ export type RunFactoryDeps = {
   agentSettings(): AgentLoopSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost: typeof createAgentHost
-  /** Scheduler-tool context for the event-scope orchestrator (scheduler-admin). */
-  buildSchedulerToolContext(
-    runId: string,
-    agentId: string
-  ): RunSchedulerToolContext
   /** Read the event's scheduler policy (scheduler-admin). */
   getSchedulerConfig(eventId: string): {
     eventId: string
@@ -295,13 +288,11 @@ export function createRunFactory(deps: RunFactoryDeps) {
       : []),
   ]
 
-  /** Scheduler management tools (the 18 native tools). EMPTY after the SDK
-   * convergence (docs/scheduler-python-sdk.md): the orchestrator manages via
-   * the container-side `aegisx` Python SDK + bash, not native tools. The tool
-   * definitions in scheduler-tools.ts stay (HTTP endpoints untouched) but are
-   * never granted — new scheduler agents snapshot this empty list, and cold
-   * restores intersect the persisted snapshot with it (legacy rows carrying
-   * the old 18 names do not resurrect the tools). */
+  /** Scheduler management tools. EMPTY after the SDK convergence
+   * (docs/scheduler-python-sdk.md): the orchestrator manages via the
+   * container-side `aegisx` Python SDK + bash, not native tools. New scheduler
+   * agents snapshot this empty list, so no management tool is ever granted;
+   * a legacy snapshot's old 18 names are simply ignored by createMainTools. */
   const ORCHESTRATOR_TOOLS: string[] = []
 
   /** The per-event run-lifecycle emitter (created lazily). */
@@ -333,29 +324,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
     emitter.on("run.finished", (e) => digest.push(e))
     emitter.on("run.timedOut", (e) => digest.push(e))
     emitter.on("run.resumed", (e) => digest.push(e))
-  }
-
-  /** Latest assistant text for an agent (read_run fallback). */
-  function lastAssistantText(runId: string, agentId: string): string | null {
-    const list = queries.listMessages(runId, { agentId })
-    for (let index = list.items.length - 1; index >= 0; index -= 1) {
-      const item = list.items[index]
-      if (item.entry.type !== "message") continue
-      const message = item.entry.message
-      if (message.role !== "assistant") continue
-      const body = message.content
-        .flatMap((part) =>
-          typeof part === "string"
-            ? [part]
-            : part && part.type === "text"
-              ? [part.text]
-              : []
-        )
-        .join("\n")
-        .trim()
-      if (body) return body.slice(0, 50_000)
-    }
-    return null
   }
 
   /** Build the per-agent native tool context. */
@@ -398,7 +366,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
       markFinishFlagWarned: () => {
         finishFlagWarned.add(runId)
       },
-      lastAssistantText: (id) => lastAssistantText(runId, id),
     }
   }
 
@@ -1256,24 +1223,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
 
     const snapshotTools = safeParseTools(agentRow.tools)
     const toolCtx = buildAgentToolContext(runId, ctx.challengeId, agentId)
-    // Scheduler tools are gated by the CURRENT ORCHESTRATOR_TOOLS (empty post-
-    // SDK-convergence): a legacy agent row whose snapshot still lists the old
-    // 18 management names gets the intersection — i.e. no management tools.
-    const schedulerTools = snapshotTools.filter((name) =>
-      ORCHESTRATOR_TOOLS.includes(name)
-    )
-    const nativeTools = [
-      ...createMainTools(toolCtx, snapshotTools),
-      // Scheduler tools are granted only to the event-scope orchestrator;
-      // challenge agents never carry their names. Gating here skips the
-      // scheduler-tool context (a DB lookup + closures) for every solver.
-      ...(row.scopeType === "event"
-        ? createSchedulerTools(
-            deps.buildSchedulerToolContext(runId, agentId),
-            schedulerTools
-          )
-        : []),
-    ]
+    const nativeTools = createMainTools(toolCtx, snapshotTools)
 
     let agentSession: HostAgentSession
     try {
@@ -1389,7 +1339,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
     prepareAgent,
     recoverOnBoot,
     buildAgentToolContext,
-    lastAssistantText,
     eventScopeFor,
   }
 }

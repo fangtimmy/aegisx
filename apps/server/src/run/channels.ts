@@ -7,6 +7,11 @@ import {
 } from "node:fs"
 import { basename, join, relative, resolve, sep } from "node:path"
 
+import type {
+  ChannelMessageList,
+  ChannelMessagePublic,
+  ChannelPublic,
+} from "@aegisx/shared/channels"
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm"
 
 import type { SessionLifecycle } from "../agents/lifecycle"
@@ -65,6 +70,14 @@ export type ChannelRow = typeof channels.$inferSelect
 export type ChannelMessageRow = typeof channelMessages.$inferSelect
 export type ChannelFileRow = typeof channelFiles.$inferSelect
 
+/** Public channel shapes (timeline + SDK read). Canonical definitions live in
+ * @aegisx/shared/channels; re-exported here for server-side importers. */
+export type {
+  ChannelMessageList,
+  ChannelMessagePublic,
+  ChannelPublic,
+} from "@aegisx/shared/channels"
+
 export type MessageAuthor =
   | { type: "system"; name?: string }
   | { type: "user"; name?: string }
@@ -95,38 +108,6 @@ export type AttachmentInput = {
   /** File bytes (user multipart upload path). */
   stream: () => Promise<Uint8Array>
   size: number
-}
-
-/** Public message shape (timeline + SDK read). */
-export type ChannelMessagePublic = {
-  id: number
-  channelId: string
-  kind: "text" | "recap"
-  authorType: "system" | "user" | "agent"
-  authorAgentId: string | null
-  authorName: string
-  body: string
-  meta: Record<string, unknown>
-  createdAt: string
-  files: Array<{ id: string; filename: string; size: number }>
-}
-
-export type ChannelPublic = {
-  id: string
-  scopeType: "run" | "event" | "challenge"
-  runId: string | null
-  eventId: string
-  /** Challenge scope (#team/#announce, v17): the owning challenge. */
-  challengeId: string | null
-  kind: "team" | "announce" | "dm"
-  targetAgentId: string | null
-  /** Display label: "#team" / "#announce" / "DM <agentName>". */
-  label: string
-  unread: number
-  lastMessageAt: string | null
-  /** Challenge-scope channels only (v17 §11.5): how many live runs currently
-   * share this channel — the UI's 共享 badge. Null for DM/scheduler DM. */
-  sharedRunCount: number | null
 }
 
 export type ChannelServiceDeps = {
@@ -964,7 +945,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
   function listMessages(
     channelId: string,
     opts: { after?: number; limit?: number } = {}
-  ): { items: ChannelMessagePublic[]; nextAfter: number; hasMore: boolean } {
+  ): ChannelMessageList {
     const channel = requireChannel(channelId)
     const after = opts.after ?? 0
     const limit = Math.min(Math.max(opts.limit ?? DEFAULT_PAGE, 1), 200)

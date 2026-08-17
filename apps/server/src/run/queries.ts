@@ -221,22 +221,12 @@ export function createRunQueries(options: {
     )
   }
 
-  function entryAgent(runId: string): AgentSummary | undefined {
-    return listAgents(runId).find((agent) => agent.isEntry)
-  }
-
   function detail(
     runId: string
   ): { run: RunPublic; agents: AgentSummary[] } | undefined {
     const run = get(runId)
     if (!run) return undefined
     return { run, agents: listAgents(runId) }
-  }
-
-  function workspacePath(runId: string): string | undefined {
-    const row = getRow(runId)
-    if (!row) return undefined
-    return join(dataDir, row.workspacePath)
   }
 
   /** Absolute path to the run directory (data/runs/<id>), the files root. */
@@ -340,11 +330,8 @@ export function createRunQueries(options: {
     get,
     getRow,
     listForEvent,
-    listRuns,
     listAgents,
-    entryAgent,
     detail,
-    workspacePath,
     runDirPath,
     usageTotals,
     usageForEvent,

@@ -1,29 +1,20 @@
 import type { RunPublic, SolverSpec } from "@aegisx/shared"
 import { get, modelAddress, type FlatSettings } from "@aegisx/shared"
-import type { MessageListItem } from "@aegisx/shared/agent"
 import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { SchedulerStatusSnapshot } from "@aegisx/shared/scheduler"
 import { and, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, runs, schedulerConfig } from "../db/schema"
-import type { createCatalogReader } from "../events/catalog"
 import { RunActionError } from "./errors"
 import { fenceSnapshot } from "./fence"
 import type { ModelResolver } from "./model-resolver"
 import type { RunQueries } from "./queries"
-import type { QueueService } from "./queue"
 import type { CreateRunInput, RunContext } from "./run-factory"
-import type {
-  RunSchedulerToolContext,
-  RunReadResult,
-  RunSummary,
-  SchedulerStatusSnapshot,
-} from "./scheduler-tools"
 
 export type SchedulerAdminDeps = {
   db: Database
   queries: RunQueries
-  catalog: ReturnType<typeof createCatalogReader>
   getSettings(): FlatSettings
   now(): string
   /** Enabled provider connections (the unresolvable-ref error's list). */
@@ -38,55 +29,16 @@ export type SchedulerAdminDeps = {
   armRunTimers(runId: string, deadlineAt: string | null): void
   /** Fresh-run launch (run-factory's create). */
   create(input: CreateRunInput): Promise<RunPublic>
-  /** Dynamic solver expansion (run-factory's addAgent). */
-  addAgent(
-    runId: string,
-    spec: {
-      model?: string
-      prompt: string
-      promptMode?: "strategy" | "override"
-    }
-  ): Promise<RunPublic>
+  /** Run-level stop (abort every streaming agent, container stays warm). */
   stop(runId: string): Promise<RunPublic>
+  /** Run-level message (posts into the entry agent's DM + awaited delivery). */
   sendMessage(
     runId: string,
     input: { text: string; deliverAs?: "steer" | "followUp" }
   ): Promise<RunPublic>
-  /** Per-agent send (POST /api/agents/:agentId/message path). */
-  sendAgentMessage(
-    agentId: string,
-    input: { text: string; deliverAs?: "steer" | "followUp" }
-  ): Promise<RunPublic>
-  closeRun(runId: string): Promise<RunPublic>
-  lastAssistantText(runId: string, agentId: string): string | null
-  /** Scheduler task queue (assigned after construction; read via getter). */
-  queue: () => QueueService | undefined
 }
 
 export type SchedulerAdmin = ReturnType<typeof createSchedulerAdmin>
-
-/** Compact run summary for the scheduler's read-only tools (list_runs /
- * start_run / ...): enough to identify a run + its outcome without the full
- * flag/usage payload. */
-function runSummary(run: RunPublic): RunSummary {
-  return {
-    id: run.id,
-    scopeType: run.scopeType,
-    eventId: run.eventId,
-    challengeId: run.challengeId,
-    challengeName: run.challengeName,
-    status: run.status,
-    source: run.source,
-    modelId: run.modelId,
-    modelName: run.modelName,
-    summary: run.summary,
-    error: run.error,
-    hasAcceptedFlag: run.hasAcceptedFlag,
-    createdAt: run.createdAt,
-    updatedAt: run.updatedAt,
-    completedAt: run.completedAt,
-  }
-}
 
 /**
  * Scheduler policy + run-management API surface (what the event-scope
@@ -98,7 +50,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   const {
     db,
     queries,
-    catalog,
     getSettings,
     now,
     providers,
@@ -107,60 +58,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     updateRun,
     emitRun,
   } = deps
-
-  /** Build the scheduler-tool context for the event-scope orchestrator agent.
-   * The orchestrator manages the queue + sibling challenge runs in its event. */
-  function buildSchedulerToolContext(
-    runId: string,
-    agentId: string
-  ): RunSchedulerToolContext {
-    const row = queries.getRow(runId)
-    const eventId = row?.eventId ?? ""
-    return {
-      runId,
-      eventId,
-      agentId,
-      enqueue: (input) => {
-        // Fail fast at enqueue time: an unresolvable model ref would
-        // otherwise surface only at (auto-)launch, as a failed queue item.
-        assertModelsResolvable(input.model, input.solvers)
-        return deps.queue()!.enqueue({
-          ...input,
-          eventId,
-          source: "scheduler",
-        })
-      },
-      listQueue: () => deps.queue()!.list(eventId),
-      removeQueue: (itemId) => deps.queue()!.remove(itemId),
-      clearQueue: () => deps.queue()!.clear(eventId),
-      reorderQueue: (itemIds) => deps.queue()!.reorder(eventId, itemIds),
-      startRun: async (input) => {
-        assertModelsResolvable(input.model, input.solvers)
-        const run = await resolveAndCreate({
-          ...input,
-          source: "scheduler",
-        })
-        return runSummary(run)
-      },
-      stopRun: async (id) => runSummary(await deps.stop(id)),
-      messageRun: async (id, text, deliverAs) =>
-        runSummary(await deps.sendMessage(id, { text, deliverAs })),
-      closeRun: async (id) => runSummary(await deps.closeRun(id)),
-      readRun: (id, opts) => readRun(id, opts),
-      listRuns: (filter) =>
-        queries.listRuns({ eventId, ...filter }).map(runSummary),
-      setRunTimeout: (id, timeoutMs) =>
-        runSummary(setRunTimeout(id, timeoutMs)),
-      getStatus: () => getStatusSnapshot(eventId),
-      listChallenges: () => catalog.listChallengesForEvent(eventId),
-      getChallenge: (id) => catalog.getChallenge(id),
-      listAgents: (id) => queries.listAgents(id),
-      lastAssistantText: (id, targetId) => deps.lastAssistantText(id, targetId),
-      addAgent: async (id, input) => runSummary(await deps.addAgent(id, input)),
-      messageAgent: async (agentId, text, deliverAs) =>
-        runSummary(await deps.sendAgentMessage(agentId, { text, deliverAs })),
-    }
-  }
 
   /** All model refs addressable right now (enabled providers × enabled
    * models) — the unresolvable-ref error text. Derived from providers(); refs
@@ -260,106 +157,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     if (contexts.has(runId)) deps.armRunTimers(runId, deadlineAt)
     emitRun(runId)
     return deps.requireRun(runId)
-  }
-
-  /** Character budget for read_run's recent-messages body. */
-  const READ_RUN_CHAR_BUDGET = 20_000
-  /** read_run's default message count. */
-  const READ_RUN_DEFAULT_LAST_N = 10
-
-  /** Read a run for the scheduler, parameterized to agent level:
-   * status header (agent/run status numbers, deadline remaining, last
-   * message time) + the target agent's last-n renderable message lines.
-   * Defaults to the entry agent; `lastAssistant` is the fallback when the
-   * agent has no renderable messages yet. */
-  function readRun(
-    runId: string,
-    opts: { agentId?: string; lastN?: number } = {}
-  ): RunReadResult {
-    const run = queries.get(runId)
-    if (!run) throw new RunActionError("not_found", "Run not found")
-    const row = queries.getRow(runId)
-    const agentRows = queries.listAgents(runId)
-    const target = opts.agentId
-      ? agentRows.find((a) => a.id === opts.agentId)
-      : agentRows.find((a) => a.isEntry)
-    if (!target) throw new RunActionError("not_found", "Agent not found")
-    const lastN =
-      opts.lastN && opts.lastN > 0 ? opts.lastN : READ_RUN_DEFAULT_LAST_N
-    // Newest → oldest, capped by lastN lines + the total char budget; the
-    // lines are returned oldest-first.
-    const list = queries.listMessages(runId, { agentId: target.id })
-    const messages: string[] = []
-    let budget = READ_RUN_CHAR_BUDGET
-    let lastMessageAt: string | null = null
-    for (let index = list.items.length - 1; index >= 0; index -= 1) {
-      const item = list.items[index]!
-      if (item.entry.type === "message" && !lastMessageAt) {
-        lastMessageAt = item.entry.timestamp
-      }
-      if (messages.length >= lastN || budget <= 0) continue
-      const line = messageLine(item)
-      if (!line) continue
-      const capped = line.slice(0, budget)
-      messages.unshift(capped)
-      budget -= capped.length
-    }
-    return {
-      run,
-      agents: agentRows,
-      agent: target,
-      elapsedMs: Date.now() - Date.parse(run.createdAt),
-      deadlineRemainingMs: row?.deadlineAt
-        ? Date.parse(row.deadlineAt) - Date.now()
-        : null,
-      lastMessageAt,
-      messages,
-      lastAssistant: deps.lastAssistantText(runId, target.id),
-    }
-  }
-
-  /** One read_run line for a session entry: assistant → text body (or its
-   * tool calls), user → text body, toolResult → a one-line tool summary.
-   * Non-message entries (compaction / branch summaries) and empty bodies
-   * render null (they do not count toward lastN). */
-  function messageLine(item: MessageListItem): string | null {
-    const entry = item.entry
-    if (entry.type !== "message") return null
-    const message = entry.message
-    if (message.role === "assistant") {
-      const body = message.content
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("\n")
-        .trim()
-      if (body) return `[assistant] ${body}`
-      const tools = message.content.flatMap((part) =>
-        part.type === "toolCall" ? [part.name] : []
-      )
-      return tools.length
-        ? `[assistant] (tool calls: ${tools.join(", ")})`
-        : null
-    }
-    if (message.role === "user") {
-      const body =
-        typeof message.content === "string"
-          ? message.content.trim()
-          : message.content
-              .flatMap((part) => (part.type === "text" ? [part.text] : []))
-              .join("\n")
-              .trim()
-      return body ? `[user] ${body}` : null
-    }
-    if (message.role === "toolResult") {
-      const body = message.content
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("\n")
-        .trim()
-      const head = body.split("\n").find((line) => line.trim()) ?? ""
-      return `[tool ${message.toolName}] ${
-        head ? head.slice(0, 200) : "(no output)"
-      }${message.isError ? " (error)" : ""}`
-    }
-    return null
   }
 
   /** Fence snapshot augmented with active run details (challenge names). */
@@ -610,11 +407,9 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   }
 
   return {
-    buildSchedulerToolContext,
     resolveAndCreate,
     assertModelsResolvable,
     setRunTimeout,
-    readRun,
     getStatusSnapshot,
     getSchedulerRun,
     getSchedulerConfig,

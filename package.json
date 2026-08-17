@@ -8,13 +8,14 @@
     "dev": "bun run dev:server & bun run dev:web & wait",
     "dev:server": "bun run --filter @aegisx/server dev",
     "dev:web": "bun run --filter @aegisx/web dev",
-    "check": "oxfmt --check package.json .oxfmtrc.json && bun run --filter '@aegisx/*' check",
+    "check": "oxfmt --check package.json .oxfmtrc.json && (knip || true) && bun run --filter '@aegisx/*' check",
     "fmt": "oxfmt package.json .oxfmtrc.json && bun run --filter '@aegisx/*' fmt",
     "test": "bun run --filter '@aegisx/*' test",
     "build": "bun run --filter @aegisx/web build",
     "db:generate": "bun run --filter @aegisx/server db:generate"
   },
   "devDependencies": {
+    "knip": "^6.32.2",
     "oxfmt": "0.62.0",
     "oxlint": "1.76.0",
     "oxlint-tailwindcss": "^1.7.1",

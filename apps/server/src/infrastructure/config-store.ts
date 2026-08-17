@@ -10,7 +10,6 @@ import { join } from "node:path"
 import {
   CONFIG_DOCUMENT_VERSION,
   defaultSettings,
-  extractLegacyPromptTemplates,
   type FlatSettings,
   migrateLegacySettings,
   type ProviderType,
@@ -187,10 +186,6 @@ export function createConfigStore(dataDir: string) {
     renameSync(tmp, path)
   }
 
-  // Pre-v8 prompt templates (FlatSettings `prompts.*` / unversioned `*PromptTemplate`)
-  // captured at load, before parseSettings drops them; see getLegacyPromptTemplates.
-  let legacyPrompts: Record<string, string> | undefined = undefined
-
   function load(): ConfigData {
     if (!existsSync(path)) {
       const defaults = defaultConfig()
@@ -203,7 +198,6 @@ export function createConfigStore(dataDir: string) {
         throw new Error("invalid config root")
       }
       const doc = raw as Record<string, unknown>
-      legacyPrompts = extractLegacyPromptTemplates(doc.settings)
 
       // Current flat document
       if (isCurrentDocument(raw)) {
@@ -256,12 +250,6 @@ export function createConfigStore(dataDir: string) {
     },
     getSettings(): FlatSettings {
       return data.settings
-    },
-    /** Pre-v8 prompt-template edits captured from the raw config document
-     * before parseSettings drops them (v8 keeps templates in the
-     * prompt_templates table). Keyed by template key. */
-    getLegacyPromptTemplates(): Record<string, string> | undefined {
-      return legacyPrompts
     },
     getUpdatedAt(): string {
       return data.updatedAt

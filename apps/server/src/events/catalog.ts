@@ -21,6 +21,7 @@ import {
 import { RemoteTargetInfoSchema } from "../lib/schemas"
 import type { ChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
+import { toFlagPublic } from "../run/public"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
@@ -84,21 +85,6 @@ export function createCatalogReader(
         downloadUrl: `/api/attachments/${attachment.id}`,
       }))
   }
-
-  const toFlagPublic = (
-    row: typeof challengeFlags.$inferSelect
-  ): ChallengeFlag => ({
-    id: row.id,
-    challengeId: row.challengeId,
-    flag: row.flag,
-    status: row.status as ChallengeFlag["status"],
-    source: row.source as ChallengeFlag["source"],
-    runId: row.runId,
-    remoteId: row.remoteId,
-    message: row.message,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  })
 
   const listFlagsFor = (challengeIds: string[]): ChallengeFlag[] => {
     if (challengeIds.length === 0) return []

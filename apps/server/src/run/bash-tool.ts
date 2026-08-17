@@ -260,19 +260,25 @@ export function createBashTool(
         schedule()
       }
 
-      let exitCode: number | null
+      let exitCode: number | null = null
       let timedOut = false
-      try {
-        const res = await manager.exec(containerName, params.command, {
-          onData: handleData,
-          signal,
-          timeout,
-          env: execEnv,
-        })
-        exitCode = res.exitCode
-        timedOut = res.timedOut
-      } finally {
-        if (updateTimer) clearTimeout(updateTimer)
+      let aborted = false
+      if (signal?.aborted) {
+        aborted = true
+      } else {
+        try {
+          const res = await manager.exec(containerName, params.command, {
+            onData: handleData,
+            signal,
+            timeout,
+            env: execEnv,
+          })
+          exitCode = res.exitCode
+          timedOut = res.timedOut
+          aborted = res.aborted
+        } finally {
+          if (updateTimer) clearTimeout(updateTimer)
+        }
       }
 
       const tail = await finalizeTail(
@@ -298,7 +304,7 @@ export function createBashTool(
       // still surfaced to the model via the content text, and the pipeline
       // reads `details.terminal` to mark the tool result as an error.
       let terminal: "timed_out" | "cancelled" | "failed" | undefined
-      if (signal?.aborted) {
+      if (aborted) {
         text += "\n\nCommand aborted"
         terminal = "cancelled"
       } else if (timedOut || exitCode === null) {

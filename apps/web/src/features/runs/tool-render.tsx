@@ -199,7 +199,6 @@ function DiffPreview({ diff }: { diff: string }) {
               row.kind === "del" &&
                 "bg-red-500/10 text-red-900 dark:text-red-200"
             )}
-            // biome-ignore lint/suspicious/noArrayIndexKey: static diff dump
             key={index}
           >
             <span
@@ -279,7 +278,6 @@ function BashCommand({ command }: { command: string }) {
           "[&_code]:block [&_code]:font-mono",
           "[&_.line]:wrap-anywhere [&_.line]:whitespace-pre-wrap"
         )}
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: Shiki HTML / escaped fallback
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </div>

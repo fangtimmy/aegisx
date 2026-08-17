@@ -1,4 +1,5 @@
 import type { SolverSpec } from "@aegisx/shared"
+import type { QueueItemPublic } from "@aegisx/shared/queue"
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -6,25 +7,11 @@ import { challenges, queueState, runQueue } from "../db/schema"
 import { RunActionError } from "./errors"
 import { checkLaunchFence, type FenceCandidate } from "./fence"
 
-type QueueRow = typeof runQueue.$inferSelect
+/** Public queue item shape (REST + tools). Canonical definition lives in
+ * @aegisx/shared/queue; re-exported here for server-side importers. */
+export type { QueueItemPublic } from "@aegisx/shared/queue"
 
-/** Public queue item shape (REST + tools). */
-export type QueueItemPublic = {
-  id: string
-  eventId: string
-  ord: number
-  challengeId: string
-  challengeName: string
-  params: Record<string, unknown>
-  timeoutMs: number | null
-  prompt: string
-  source: "manual" | "scheduler"
-  status: "pending" | "running" | "done" | "cancelled" | "failed"
-  runId: string | null
-  error: string | null
-  createdAt: string
-  updatedAt: string
-}
+type QueueRow = typeof runQueue.$inferSelect
 
 /** Statuses visible in the queue view (actionable items; done/cancelled are
  * historical). */
@@ -249,7 +236,7 @@ export function createQueueService(deps: QueueServiceDeps) {
    * item per challenge; re-enqueue = re-arm). A hit —
    * including done/cancelled/failed — is reset to pending, runId cleared, and
    * ord/params/prompt/timeoutMs updated; a miss inserts a new row at the end.
-   */
+   * A running item is rejected (close the run first). */
   function enqueue(input: EnqueueInput): QueueItemPublic {
     const ts = now()
     // The `prompt` column keeps the run-level strategy (display); the v9
@@ -265,6 +252,12 @@ export function createQueueService(deps: QueueServiceDeps) {
       .where(eq(runQueue.challengeId, input.challengeId))
       .get()
     if (existing) {
+      if (existing.status === "running") {
+        throw new RunActionError(
+          "invalid_state",
+          "Challenge run already in progress — close it or wait for it to finish first"
+        )
+      }
       // Re-enqueue goes to the back of the queue (FIFO).
       const ord = nextOrd(input.eventId)
       db.update(runQueue)

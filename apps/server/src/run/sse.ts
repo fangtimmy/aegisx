@@ -17,9 +17,6 @@ export function streamRun(
   runService: RunService,
   runId: string
 ): Response {
-  const detail = runService.detail(runId)
-  if (!detail) return notFound(c, "Run not found")
-  const entryAgent = detail.agents.find((a) => a.isEntry)
   const bus = runService.bus
 
   return streamSSE(c, async (stream) => {
@@ -39,10 +36,21 @@ export function streamRun(
       aborted = true
       drain()
     })
+    // Subscribe BEFORE the initial snapshot so no event between snapshot
+    // read and subscribe is missed. Duplicates (event X in both snapshot and
+    // queue) are harmless — the UI handles them idempotently.
     const unsubscribe = bus.subscribe(runId, (event) => {
       queue.push(event)
       drain()
     })
+
+    // Fresh snapshot (re-read after subscribe, not before).
+    const detail = runService.detail(runId)
+    if (!detail) {
+      unsubscribe()
+      return
+    }
+    const entryAgent = detail.agents.find((a) => a.isEntry)
 
     queue.push({ type: "ready", runId, agentId: entryAgent?.id ?? "" })
     queue.push({ type: "run.updated", run: detail.run })

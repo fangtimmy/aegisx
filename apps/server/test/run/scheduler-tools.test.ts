@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, runQueue, sessionEntries, sessions } from "../../src/db/schema"
+import { agents, runQueue } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
@@ -82,38 +82,6 @@ function makeService(
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 10))
-
-let entryCounter = 0
-
-/** Insert one session_entries row with an arbitrary message JSON. */
-function insertEntry(
-  db: Db,
-  runId: string,
-  agentId: string,
-  sessionId: string,
-  seq: number,
-  message: Record<string, unknown>
-) {
-  entryCounter += 1
-  db.insert(sessionEntries)
-    .values({
-      id: `entry-${entryCounter}`,
-      sessionId,
-      agentId,
-      runId,
-      seq,
-      type: "message",
-      data: JSON.stringify({
-        type: "message",
-        id: `m-${entryCounter}`,
-        parentId: null,
-        timestamp: new Date(Date.parse(now()) + seq * 1000).toISOString(),
-        message,
-      }),
-      createdAt: now(),
-    })
-    .run()
-}
 
 /**
  * Scheduler service behaviors the `aegisx` SDK maps to (scheduler-python-sdk.md).
@@ -327,114 +295,6 @@ describe("scheduler service behaviors (SDK backend)", () => {
         service.assertModelsResolvable(undefined, [{ model: bad }])
       ).toThrow(/Available models:/)
       expect(db.select().from(runQueue).all()).toHaveLength(0)
-      await service.close()
-    } finally {
-      close()
-    }
-  })
-
-  test("read_run agent level: status header + the target agent's recent messages", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedRun(db, { id: "run-1", status: "idle", challengeId: "ch-1" })
-      db.insert(agents)
-        .values([
-          {
-            id: "a-1",
-            runId: "run-1",
-            slot: "solver-1",
-            role: "solver",
-            isEntry: true,
-            model: `${TEST_MODEL_REF}:off`,
-            systemPrompt: "sp",
-            tools: "[]",
-            status: "idle",
-            sessionFile: "sess-a",
-            name: "Solver 1",
-            createdAt: now(),
-            updatedAt: now(),
-          },
-          {
-            id: "a-2",
-            runId: "run-1",
-            slot: "solver-2",
-            role: "solver",
-            isEntry: false,
-            model: `${TEST_MODEL_REF}:low`,
-            systemPrompt: "sp",
-            tools: "[]",
-            status: "idle",
-            sessionFile: "sess-b",
-            name: "Solver 2",
-            createdAt: now(),
-            updatedAt: now(),
-          },
-        ])
-        .run()
-      db.insert(sessions)
-        .values([
-          { id: "sess-a", agentId: "a-1", cwd: "/workspace", createdAt: now() },
-          { id: "sess-b", agentId: "a-2", cwd: "/workspace", createdAt: now() },
-        ])
-        .run()
-      insertEntry(db, "run-1", "a-1", "sess-a", 1, {
-        role: "user",
-        content: [{ type: "text", text: "entry agent message" }],
-      })
-      insertEntry(db, "run-1", "a-2", "sess-b", 1, {
-        role: "user",
-        content: "u1",
-      })
-      insertEntry(db, "run-1", "a-2", "sess-b", 2, {
-        role: "assistant",
-        content: [{ type: "text", text: "working on it" }],
-      })
-      insertEntry(db, "run-1", "a-2", "sess-b", 3, {
-        role: "toolResult",
-        toolCallId: "tc-1",
-        toolName: "bash",
-        content: [{ type: "text", text: "first output line\nsecond line" }],
-        isError: true,
-      })
-      insertEntry(db, "run-1", "a-2", "sess-b", 4, {
-        role: "assistant",
-        content: [{ type: "text", text: "final answer body" }],
-      })
-
-      const { service } = makeService(db, sqlite, dir, { hang: false })
-
-      const out = service.readRun("run-1", {
-        agentId: "a-2",
-        lastN: 2,
-      })
-      // Status header: the target agent (not the entry default).
-      expect(out.agent).toMatchObject({
-        id: "a-2",
-        slot: "solver-2",
-        name: "Solver 2",
-        status: "idle",
-        model: `${TEST_MODEL_REF}:low`,
-      })
-      expect(out.run.status).toBe("idle")
-      expect(typeof out.elapsedMs).toBe("number")
-      expect(out.deadlineRemainingMs).toBeNull()
-      // The last 2 renderable messages of a-2 only (tool one-liner + text).
-      expect(out.messages).toEqual([
-        "[tool bash] first output line (error)",
-        "[assistant] final answer body",
-      ])
-      expect(out.lastMessageAt).toBe(
-        new Date(Date.parse(now()) + 4_000).toISOString()
-      )
-      expect(out.agents.map((a) => a.id).sort()).toEqual(["a-1", "a-2"])
-
-      // Default (no agent_id) reads the entry agent.
-      const entryOut = service.readRun("run-1")
-      expect(entryOut.agent.id).toBe("a-1")
-      expect(entryOut.messages).toEqual(["[user] entry agent message"])
-      await settle()
       await service.close()
     } finally {
       close()

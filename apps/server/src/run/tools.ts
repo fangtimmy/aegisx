@@ -31,8 +31,6 @@ export type RunToolContext = {
   /** Whether finish_run already warned this run about a missing flag. */
   finishFlagWarned(): boolean
   markFinishFlagWarned(): void
-  /** Latest assistant text for an agent (kept for the scheduler's read_run). */
-  lastAssistantText(agentId: string): string | null
 }
 
 function textResult(text: string, details?: unknown) {

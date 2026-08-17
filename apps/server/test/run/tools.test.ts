@@ -20,7 +20,6 @@ function mockCtx(overrides: Partial<RunToolContext> = {}): RunToolContext {
     hasAcceptedFlag: () => true,
     finishFlagWarned: () => false,
     markFinishFlagWarned: () => {},
-    lastAssistantText: () => null,
     ...overrides,
   }
 }

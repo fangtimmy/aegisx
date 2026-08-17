@@ -117,7 +117,6 @@ export function CodePreview({
           "[&_.line]:before:w-7 [&_.line]:before:shrink-0 [&_.line]:before:text-right [&_.line]:before:text-muted-foreground/70 [&_.line]:before:content-[attr(data-line)] [&_.line]:before:select-none",
           "[&_.line-content]:min-w-0 [&_.line-content]:flex-1 [&_.line-content]:wrap-anywhere [&_.line-content]:whitespace-pre-wrap"
         )}
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: Shiki HTML / escaped plain fallback
         dangerouslySetInnerHTML={{ __html: html }}
       />
       {normalized.footer ? (

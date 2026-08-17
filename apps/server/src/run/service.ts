@@ -5,7 +5,7 @@ import { join } from "node:path"
 import type { RunPublic, SwitchModelInput } from "@aegisx/shared"
 import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm"
+import { and, eq, inArray, ne, sql } from "drizzle-orm"
 
 import { applyModelSwitch } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -13,36 +13,10 @@ import type { AgentLoopSettings } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { Database } from "../db"
-import {
-  agents,
-  challengeFlags,
-  challenges,
-  channelMessages,
-  runs,
-} from "../db/schema"
-import { createCatalogReader } from "../events/catalog"
+import { agents, challengeFlags, challenges, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { EventScopeEmitter } from "../orchestration/event-scope"
-import {
-  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
-  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
-  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
-  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_CHANNELS,
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX,
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES,
-  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
-  LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
-} from "../orchestration/prompt-defaults"
-import {
-  migrateLegacyPromptSettings,
-  seedBuiltinTemplates,
-  upgradeBuiltinTemplate,
-} from "../orchestration/prompt-templates"
+import { seedBuiltinTemplates } from "../orchestration/prompt-templates"
 import {
   getChallengeRemote,
   isTargetCapable,
@@ -127,100 +101,11 @@ export function createRunService(options: RunServiceOptions) {
     dataDir,
     resolveModelDisplay: modelResolver.resolveModelDisplay,
   })
-  const catalog = createCatalogReader(db, platformService)
   const bus: LiveBus = createLiveBus()
 
   // Seed the four built-in prompt templates (idempotent) so the service is
-  // self-sufficient — any agent created here renders. Then carry pre-v8
-  // FlatSettings prompt edits into the table: the prompt_templates table is
-  // the single render source.
+  // self-sufficient — any agent created here renders.
   seedBuiltinTemplates(db)
-  migrateLegacyPromptSettings(db, configStore.getLegacyPromptTemplates())
-  // One-time refresh of built-in rows still carrying the pre-v9 default
-  // bodies: mainSystem lost the spawn section and gained the co-solver
-  // section; orchestratorSystem lost the orchestration catalog and gained the
-  // v9 tool surface. upgradeBuiltinTemplate only touches rows that exactly
-  // equal the legacy body — user edits survive untouched.
-  upgradeBuiltinTemplate(
-    db,
-    "mainSystem",
-    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
-    DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
-  )
-  upgradeBuiltinTemplate(
-    db,
-    "orchestratorSystem",
-    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
-    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
-  )
-  // SDK convergence (docs/scheduler-python-sdk.md): the orchestrator's
-  // 18 management tools are unmounted — the system prompt now teaches the
-  // `aegisx` Python SDK + bash heredoc mode. Exact-match refresh only.
-  upgradeBuiltinTemplate(
-    db,
-    "orchestratorSystem",
-    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
-    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
-  )
-  // /runs mount: the first SDK-era default gained the run-workspaces
-  // paragraph (scheduler reads solver WRITEUP.md directly). Exact-match
-  // refresh for rows still on the pre-/runs body.
-  upgradeBuiltinTemplate(
-    db,
-    "orchestratorSystem",
-    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
-    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
-  )
-  // Stall watchdog + queue notices: the urgent list now includes agent
-  // stalls (idle >2min) and queue pause/resume notice lines. Exact-match
-  // refresh for rows still on the pre-stall inbox body.
-  upgradeBuiltinTemplate(
-    db,
-    "orchestratorSystem",
-    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX,
-    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
-  )
-  // Solved-challenge cleanup: full solve auto-stops sibling runs / cancels
-  // stale queue items; a partial multi-flag solve steers the solvers. The
-  // digest's cleanup notice lines are now explained in the wake-up section.
-  upgradeBuiltinTemplate(
-    db,
-    "orchestratorSystem",
-    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES,
-    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
-  )
-  // Channels era (docs/im-channels.md): mainSystem's co-solver file
-  // convention is replaced by the Channels section (post/ask/read/fetch,
-  // attachment etiquette); orchestratorSystem gains the Channels split
-  // (announce=FYI / DM=指令) + the channels namespace. Exact-match refresh.
-  upgradeBuiltinTemplate(
-    db,
-    "mainSystem",
-    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
-    DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
-  )
-  // v17 challenge-level channels (docs/im-channels.md §11): #team is shared
-  // across the challenge's runs — the mainSystem channel section gains the
-  // herding-discipline line (stick to your assigned angle/strategy unless
-  // #team evidence directly contradicts it). Exact-match refresh.
-  upgradeBuiltinTemplate(
-    db,
-    "mainSystem",
-    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_CHANNELS,
-    DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
-  )
-  upgradeBuiltinTemplate(
-    db,
-    "orchestratorSystem",
-    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
-    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
-  )
-  upgradeBuiltinTemplate(
-    db,
-    "schedulerInitial",
-    LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
-    DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE
-  )
   // Idempotent guard: plugin-owned template rows (a pre-v9 concept) must
   // never come back — re-delete any that got re-seeded.
   db.run(sql`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
@@ -1020,15 +905,12 @@ export function createRunService(options: RunServiceOptions) {
     emitRunEvent: status.emitRunEvent,
     agentSettings,
     createHost,
-    buildSchedulerToolContext: (runId, agentId) =>
-      schedulerAdmin.buildSchedulerToolContext(runId, agentId),
     getSchedulerConfig: (eventId) => schedulerAdmin.getSchedulerConfig(eventId),
   })
 
   schedulerAdmin = createSchedulerAdmin({
     db,
     queries,
-    catalog,
     getSettings,
     now,
     providers,
@@ -1040,14 +922,8 @@ export function createRunService(options: RunServiceOptions) {
     armRunTimers: (runId, deadlineAt) =>
       deadlines.armRunTimers(runId, deadlineAt),
     create: (input) => runFactory.create(input),
-    addAgent: (runId, spec) => runFactory.addAgent(runId, spec),
     stop,
     sendMessage,
-    sendAgentMessage,
-    closeRun,
-    lastAssistantText: (runId, agentId) =>
-      runFactory.lastAssistantText(runId, agentId),
-    queue: () => queue,
   })
 
   // Construct the queue service now that resolveAndCreate + the failure
@@ -1099,36 +975,16 @@ export function createRunService(options: RunServiceOptions) {
       : { live: false, deliveryPaused: false, ...base }
   }
 
-  /** Delivered-digest history = recap messages in the scheduler DM channel
-   * (newest first, offset pagination) — replaces the dropped
-   * scheduler_inbox_digests table; the ledger is self-contained. */
-  function inboxHistory(eventId: string, limit: number, offset: number) {
-    const channel = channels.schedulerDm(eventId)
-    if (!channel) return { items: [], total: 0, hasMore: false }
-    const recaps = db
-      .select()
-      .from(channelMessages)
-      .where(
-        and(
-          eq(channelMessages.channelId, channel.id),
-          eq(channelMessages.kind, "recap")
-        )
-      )
-      .orderBy(desc(channelMessages.id))
-      .all()
-    const total = recaps.length
-    const items = recaps.slice(offset, offset + limit).map((row) => ({
-      id: String(row.id),
-      eventId,
-      text: row.body,
-      createdAt: row.createdAt,
-    }))
-    return { items, total, hasMore: offset + items.length < total }
-  }
-
   return {
     create: runFactory.create,
-    addAgent: runFactory.addAgent,
+    addAgent: (
+      runId: string,
+      spec: {
+        model?: string
+        prompt: string
+        promptMode?: "strategy" | "override"
+      }
+    ) => withLock(runId, () => runFactory.addAgent(runId, spec)),
     resolveAndCreate: schedulerAdmin.resolveAndCreate,
     assertModelsResolvable: schedulerAdmin.assertModelsResolvable,
     stop,
@@ -1147,11 +1003,9 @@ export function createRunService(options: RunServiceOptions) {
     setRunTimeout: schedulerAdmin.setRunTimeout,
     closeRun,
     delete: deleteRun,
-    readRun: schedulerAdmin.readRun,
     getStatus: schedulerAdmin.getStatusSnapshot,
     getSchedulerRun: schedulerAdmin.getSchedulerRun,
     inboxSnapshot,
-    inboxHistory,
     setInboxDeliveryPaused: (eventId: string, paused: boolean) =>
       digests.get(eventId)?.setDeliveryPaused(paused),
     getSchedulerConfig: schedulerAdmin.getSchedulerConfig,
@@ -1164,13 +1018,11 @@ export function createRunService(options: RunServiceOptions) {
     recoverOnBoot: runFactory.recoverOnBoot,
     close,
     listMessages: queries.listMessages,
-    listRuns: queries.listRuns,
     get: queries.get,
     detail: queries.detail,
     listForEvent: queries.listForEvent,
     usageForEvent: queries.usageForEvent,
     listAgents: queries.listAgents,
-    workspacePath: queries.workspacePath,
     runDirPath: queries.runDirPath,
     bus,
     channels,

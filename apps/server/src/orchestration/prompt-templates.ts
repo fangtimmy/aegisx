@@ -1,5 +1,5 @@
 import type { PromptTemplateContext } from "@aegisx/shared"
-import { and, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import Handlebars from "handlebars"
 
 import type { Database } from "../db"
@@ -44,73 +44,6 @@ export function seedBuiltinTemplates(db: Database): void {
  * `fromBody` (i.e. the user has not customized it), so user edits always
  * survive. Used to ship prompt improvements (e.g. the scheduler catalog) to
  * existing databases without a schema bump. */
-export function upgradeBuiltinTemplate(
-  db: Database,
-  key: string,
-  fromBody: string,
-  toBody: string
-): void {
-  if (fromBody === toBody) return
-  const row = db
-    .select({ body: promptTemplates.body })
-    .from(promptTemplates)
-    .where(
-      and(
-        eq(promptTemplates.plugin, BUILTIN_PLUGIN),
-        eq(promptTemplates.key, key)
-      )
-    )
-    .get()
-  if (!row || row.body !== fromBody) return // absent (seeded fresh) or customized
-  db.update(promptTemplates)
-    .set({ body: toBody, updatedAt: new Date().toISOString() })
-    .where(
-      and(
-        eq(promptTemplates.plugin, BUILTIN_PLUGIN),
-        eq(promptTemplates.key, key)
-      )
-    )
-    .run()
-}
-
-/**
- * Carry pre-v8 FlatSettings prompt edits into the prompt_templates store. A
- * legacy value is written only when it differs from the builtin default AND
- * the current row is still the seed default — edits made directly in the table
- * during v8 win over legacy config. Idempotent.
- */
-export function migrateLegacyPromptSettings(
-  db: Database,
-  legacy: Readonly<Record<string, string>> | undefined
-): void {
-  if (!legacy) return
-  const now = new Date().toISOString()
-  for (const [key, body] of Object.entries(legacy)) {
-    if (!(key in BUILTIN_DEFAULTS)) continue
-    if (body === BUILTIN_DEFAULTS[key]) continue // untouched → nothing to migrate
-    const row = db
-      .select({ body: promptTemplates.body })
-      .from(promptTemplates)
-      .where(
-        and(
-          eq(promptTemplates.plugin, BUILTIN_PLUGIN),
-          eq(promptTemplates.key, key)
-        )
-      )
-      .get()
-    if (!row || row.body !== BUILTIN_DEFAULTS[key]) continue // already customized
-    db.update(promptTemplates)
-      .set({ body, updatedAt: now })
-      .where(
-        and(
-          eq(promptTemplates.plugin, BUILTIN_PLUGIN),
-          eq(promptTemplates.key, key)
-        )
-      )
-      .run()
-  }
-}
-
 /**
  * Load the in-memory builtin template map (plugin='builtin' only — v9 has no
  * plugin templates). Returned as a Map so render never hits the DB — the run

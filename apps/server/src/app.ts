@@ -1,9 +1,9 @@
 import { get } from "@aegisx/shared"
 import { Hono } from "hono"
 
-import { createCatalogReader } from ".//events/catalog"
 import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
+import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
 import { createConfigStore } from "./infrastructure/config-store"
 import { createStorage } from "./infrastructure/storage"

@@ -59,6 +59,7 @@ export class DbSessionManager {
   private readonly runId: string
   private readonly cwd: string
   private readonly createdAt: string
+  private nextSeq = 0
   private readonly fileEntries: SessionEntry[] = []
   private readonly byId = new Map<string, SessionEntry>()
   private leafId: string | null = null
@@ -160,11 +161,15 @@ export class DbSessionManager {
       try {
         entry = JSON.parse(row.data) as SessionEntry
       } catch {
+        // Corrupt row: skip but still count its seq so the next commit
+        // does not collide.
+        if (row.seq > this.nextSeq) this.nextSeq = row.seq
         continue
       }
       this.fileEntries.push(entry)
       this.byId.set(entry.id, entry)
       this.leafId = entry.id
+      if (row.seq > this.nextSeq) this.nextSeq = row.seq
     }
   }
 
@@ -180,7 +185,7 @@ export class DbSessionManager {
     this.fileEntries.push(entry)
     this.byId.set(entry.id, entry)
     this.leafId = entry.id
-    const seq = this.fileEntries.length
+    const seq = ++this.nextSeq
     // meta is injected pre-commit (NOT onAppend, which is post-insert) so it
     // lands in the row itself and survives a refresh.
     const meta = this.metaProvider?.(entry) ?? null

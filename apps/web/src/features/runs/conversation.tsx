@@ -235,7 +235,6 @@ export function Conversation(props: ConversationProps) {
 
   // Re-fetch when the agent list grows (e.g. a child spawned) so its history
   // is loaded even if committed SSE events raced ahead.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional refetch on agent growth
   useEffect(() => {
     void loadMessages()
   }, [agents.length, loadMessages])

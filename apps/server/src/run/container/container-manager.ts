@@ -220,7 +220,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       stdoutSink: NodeJS.WritableStream
       stderrSink: NodeJS.WritableStream
     }
-  ): Promise<{ exitCode: number | null; timedOut: boolean }> {
+  ): Promise<{ exitCode: number | null; timedOut: boolean; aborted: boolean }> {
     // Inherit the container's WorkingDir (set at create time from the
     // container.workspace setting) when no override is given.
     const workdir = opts.workdir
@@ -234,6 +234,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
     })
 
     let timedOut = false
+    let aborted = opts.signal?.aborted ?? false
     let stream: Readable | undefined
     const destroyStream = () => {
       try {
@@ -242,7 +243,16 @@ export function createContainerManager(options?: { socketPath?: string }) {
         // ignore
       }
     }
-    opts.signal?.addEventListener("abort", destroyStream, { once: true })
+    if (opts.signal && !aborted) {
+      opts.signal.addEventListener(
+        "abort",
+        () => {
+          aborted = true
+          destroyStream()
+        },
+        { once: true }
+      )
+    }
     let timer: ReturnType<typeof setTimeout> | undefined
     const ms = execTimeoutMs(opts.timeout)
     if (ms !== undefined) {
@@ -262,10 +272,10 @@ export function createContainerManager(options?: { socketPath?: string }) {
         stream.on("error", reject)
       })
       const exitCode = await pollExitCode(execInst)
-      return { exitCode: timedOut ? null : exitCode, timedOut }
+      return { exitCode: timedOut ? null : exitCode, timedOut, aborted }
     } finally {
       if (timer) clearTimeout(timer)
-      opts.signal?.removeEventListener("abort", destroyStream)
+      if (opts.signal) opts.signal.removeEventListener("abort", destroyStream)
     }
   }
 
@@ -278,9 +288,9 @@ export function createContainerManager(options?: { socketPath?: string }) {
     name: string,
     command: string,
     opts: ExecOptions
-  ): Promise<{ exitCode: number | null; timedOut: boolean }> {
+  ): Promise<{ exitCode: number | null; timedOut: boolean; aborted: boolean }> {
     const sink = onDataSink(opts.onData)
-    const { exitCode, timedOut } = await runHijacked(name, command, {
+    const { exitCode, timedOut, aborted } = await runHijacked(name, command, {
       workdir: opts.workdir,
       signal: opts.signal,
       timeout: opts.timeout,
@@ -288,7 +298,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       stdoutSink: sink,
       stderrSink: sink,
     })
-    return { exitCode, timedOut }
+    return { exitCode, timedOut, aborted }
   }
 
   /**

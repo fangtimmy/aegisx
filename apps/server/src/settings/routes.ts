@@ -1,8 +1,6 @@
 import {
-  get,
   isConfigDocumentV1,
   parseSettings,
-  patchSettings,
   resolveModelRef,
 } from "@aegisx/shared"
 import { asc } from "drizzle-orm"
@@ -242,7 +240,6 @@ export function registerSettingsRoutes(
         }
       }
     }
-    const next = patchSettings(configStore.getSettings(), patch)
     configStore.updateSettings(patch)
     return c.json(settingsResponse(configStore))
   })

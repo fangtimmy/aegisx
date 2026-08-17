@@ -17,6 +17,7 @@ function mockManager(opts: {
     return {
       exitCode: opts.exitCode ?? 0,
       timedOut: opts.timedOut ?? false,
+      aborted: false,
     }
   }
   return { exec } as unknown as ContainerManager
