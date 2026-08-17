@@ -235,6 +235,51 @@ class RunRead:
 
 
 @dataclass
+class Channel:
+    """One channel in the caller's visible face (docs/im-channels.md). `kind`:
+    team | announce | dm. `label` is the display name ("#team" / "#announce" /
+    "DM Solver 1" / the event scheduler DM). `unread` counts messages past the
+    caller's read cursor (recaps + own posts excluded)."""
+
+    id: str
+    scope_type: str
+    run_id: str | None
+    event_id: str
+    kind: str
+    target_agent_id: str | None
+    label: str
+    unread: int
+    last_message_at: str | None
+
+
+@dataclass
+class ChannelFile:
+    """Attachment metadata (📎 filename · size — content is fetched
+    separately via `aegisx.channels.fetch`)."""
+
+    id: str
+    filename: str
+    size: int
+
+
+@dataclass
+class ChannelMessage:
+    """One channel message. `kind`: text | recap (a stored digest snapshot).
+    `author_type`: system | user | agent."""
+
+    id: int
+    channel_id: str
+    kind: str
+    author_type: str
+    author_agent_id: str | None
+    author_name: str
+    body: str
+    meta: dict[str, Any]
+    created_at: str
+    files: list[ChannelFile]
+
+
+@dataclass
 class SchedulerStatus:
     """Concurrency / target-slot usage snapshot for the event."""
 

@@ -17,8 +17,8 @@ import {
   agents,
   challengeFlags,
   challenges,
+  channelMessages,
   runs,
-  schedulerInboxDigests,
 } from "../db/schema"
 import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
@@ -28,11 +28,13 @@ import {
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
   LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
+  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
   LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "../orchestration/prompt-defaults"
 import {
@@ -48,6 +50,7 @@ import type { createPlatformService } from "../platforms/service"
 import { generateModelsJson } from "../providers/models-json"
 import { getProviderConnections } from "../providers/public"
 import { createAgentSessionOps } from "./agent-session-ops"
+import { createChannelService, type ChannelService } from "./channels"
 import type { ContainerManager } from "./container/container-manager"
 import { createRunDeadlines, type RunDeadlines } from "./deadlines"
 import { RunActionError } from "./errors"
@@ -62,7 +65,7 @@ import { createRunFactory, type RunFactory } from "./run-factory"
 import type { RunContext } from "./run-factory"
 import { createRunStatus, type RunStatus } from "./run-status"
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
-import { createSchedulerInbox, type SchedulerInbox } from "./scheduler-inbox"
+import { createSchedulerDigest, type SchedulerDigest } from "./scheduler-digest"
 import { createRunTeardown, type RunTeardown } from "./teardown"
 
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -185,6 +188,22 @@ export function createRunService(options: RunServiceOptions) {
     LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES,
     DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
   )
+  // Channels era (docs/im-channels.md): mainSystem's co-solver file
+  // convention is replaced by the Channels section (post/ask/read/fetch,
+  // attachment etiquette); orchestratorSystem gains the Channels split
+  // (announce=FYI / DM=指令) + the channels namespace. Exact-match refresh.
+  upgradeBuiltinTemplate(
+    db,
+    "mainSystem",
+    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+    DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
+  )
+  upgradeBuiltinTemplate(
+    db,
+    "orchestratorSystem",
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
   upgradeBuiltinTemplate(
     db,
     "schedulerInitial",
@@ -209,10 +228,11 @@ export function createRunService(options: RunServiceOptions) {
   const contexts = new Map<string, RunContext>()
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   const eventScopes = new Map<string, EventScopeEmitter>()
-  /** Per-event scheduler inboxes (docs/scheduler-inbox.md), same lifetime as
-   * their emitter: created lazily on scheduler wake-up wiring, closed when the
-   * scheduler run tears down or the service closes. */
-  const inboxes = new Map<string, SchedulerInbox>()
+  /** Per-event scheduler digests (docs/im-channels.md §三 — the DM: scheduler
+   * delivery policy), same lifetime as their emitter: created lazily on
+   * scheduler wake-up wiring, closed when the scheduler run tears down or the
+   * service closes. */
+  const digests = new Map<string, SchedulerDigest>()
   /** Scheduler task queue + drainer. Assigned after construction (it calls back
    * into the launch callback); read via closures (teardownRun, routes). */
   let queue: QueueService | undefined
@@ -301,11 +321,11 @@ export function createRunService(options: RunServiceOptions) {
     // reach the orchestrator (late-bound schedulerAdmin, read at call time).
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
     // Stall watchdog wiring: a settled (idle/failed) challenge-scope solver
-    // arms the event inbox's 2-minute stall check (late-bound inboxes).
+    // arms the event digest's 2-minute stall check (late-bound digests).
     onAgentSettled: (_agentId, runId) => {
       const row = queries.getRow(runId)
       if (row?.scopeType !== "challenge") return
-      inboxes.get(row.eventId)?.noteAgentIdle(runId)
+      digests.get(row.eventId)?.noteAgentIdle(runId)
     },
     now,
     updateAgent,
@@ -355,6 +375,56 @@ export function createRunService(options: RunServiceOptions) {
     },
   })
 
+  // --- unified message layer (docs/im-channels.md) --------------------------
+
+  /** Channel core: the single write/store/render point + the delivery
+   * engine. Solver DM posts steer their target; group posts steer all live
+   * members; scheduler-DM posts flow into the digest policy. */
+  const channels: ChannelService = createChannelService({
+    db,
+    dataDir,
+    bus,
+    queries,
+    lifecycle,
+    now,
+    workspaceAbs,
+    onSchedulerDmMessage: (eventId, message) => {
+      digests.get(eventId)?.onMessage(message)
+    },
+  })
+
+  /** Lazy per-event scheduler digest. Created on wake-up wiring (run-factory's
+   * attachSchedulerWakeup) with the orchestrator agent as the steer target;
+   * torn down with the scheduler run (teardown clears the map). Queue
+   * emergencies (starved / launch failure) push in via onQueueEmergency —
+   * absent digest (no live scheduler) → the message is simply not flushed
+   * (it stays stored in the scheduler DM and settles on the next attach). */
+  function digestFor(
+    eventId: string,
+    orchestratorAgentId: string
+  ): SchedulerDigest {
+    let digest = digests.get(eventId)
+    if (!digest) {
+      digest = createSchedulerDigest({
+        eventId,
+        orchestratorAgentId,
+        db,
+        getSettings,
+        channels,
+        send: (text) => {
+          void lifecycle
+            .send(orchestratorAgentId, text, "steer")
+            .catch(() => undefined)
+        },
+        now,
+        isPaused: () => schedulerAdmin.isSchedulerPaused(eventId),
+        silenceMs: options.inboxSilenceMs,
+      })
+      digests.set(eventId, digest)
+    }
+    return digest
+  }
+
   // --- providers / settings / tools ---------------------------------------
 
   function agentSettings(): AgentLoopSettings {
@@ -389,7 +459,7 @@ export function createRunService(options: RunServiceOptions) {
     contexts,
     queue: () => queue,
     eventScopes,
-    inboxes,
+    digests,
     finishFlagWarned,
     now,
     updateRun,
@@ -401,36 +471,6 @@ export function createRunService(options: RunServiceOptions) {
     emitRunEvent: status.emitRunEvent,
     stopTargetIfOrphaned,
   })
-
-  /** Lazy per-event scheduler inbox. Created on wake-up wiring (run-factory's
-   * attachSchedulerWakeup) with the orchestrator agent as the digest target;
-   * torn down with the scheduler run (teardown clears the map). Queue
-   * emergencies (starved / launch failure) push in via onQueueEmergency —
-   * absent inbox (no live scheduler) → silently dropped. */
-  function inboxFor(
-    eventId: string,
-    orchestratorAgentId: string
-  ): SchedulerInbox {
-    let inbox = inboxes.get(eventId)
-    if (!inbox) {
-      inbox = createSchedulerInbox({
-        eventId,
-        orchestratorAgentId,
-        db,
-        getSettings,
-        send: (text) => {
-          void lifecycle
-            .send(orchestratorAgentId, text, "steer")
-            .catch(() => undefined)
-        },
-        now,
-        isPaused: () => schedulerAdmin.isSchedulerPaused(eventId),
-        silenceMs: options.inboxSilenceMs,
-      })
-      inboxes.set(eventId, inbox)
-    }
-    return inbox
-  }
 
   // --- multi-session + flat backtrack (v12) --------------------------------
   // Sessions are per-agent conversation threads: exactly one is active
@@ -592,27 +632,48 @@ export function createRunService(options: RunServiceOptions) {
     return requireRun(runId)
   }
 
+  /** Run-level message (POST /api/runs/:id/message) — a DM thin wrapper over
+   * the channel layer (design §5.1: kept for UI/SDK compatibility). Posts a
+   * user message into the entry agent's DM; the DM delivery policy steers the
+   * target (cold-restoring a closed run — the same three-state lifecycle.send
+   * semantics as before, now routed through the deliver engine). */
   async function sendMessage(
     runId: string,
     input: SendMessageInput
   ): Promise<RunPublic> {
     const entry = entryAgent(runId)
     if (!entry) throw new RunActionError("not_found", "Run has no entry agent")
-    await lifecycle.send(entry.id, input.text, input.deliverAs)
+    const channel = channels.ensureAgentDm(runId, entry.id)
+    channels.post({
+      channelId: channel.id,
+      author: { type: "user" },
+      body: input.text,
+      deferDelivery: true,
+    })
+    // Awaited delivery (old contract): the push — and any cold-restore it
+    // triggers — completes before the caller sees the run.
+    await channels.deliverAwaited(entry.id, input.deliverAs)
     return requireRun(runId)
   }
 
-  /** Per-agent send (POST /api/agents/:agentId/message). The target agent's run
-   * is resolved from the agent row; a closed (cold) run goes through
-   * lifecycle.send → onResume → prepareAgent (fence → restore → session), so
-   * this single path covers warm + cold targets. */
+  /** Per-agent send (POST /api/agents/:agentId/message) — a DM thin wrapper
+   * over the channel layer. Posts a user message into the target's DM; the
+   * DM policy steers it (a closed run cold-restores via lifecycle.send →
+   * onResume → prepareAgent — only the triggered agent wakes). */
   async function sendAgentMessage(
     agentId: string,
     input: SendMessageInput
   ): Promise<RunPublic> {
     const runId = runIdOf(agentId)
     if (!runId) throw new RunActionError("not_found", "Agent not found")
-    await lifecycle.send(agentId, input.text, input.deliverAs)
+    const channel = channels.ensureAgentDm(runId, agentId)
+    channels.post({
+      channelId: channel.id,
+      author: { type: "user" },
+      body: input.text,
+      deferDelivery: true,
+    })
+    await channels.deliverAwaited(agentId, input.deliverAs)
     return requireRun(runId)
   }
 
@@ -716,6 +777,9 @@ export function createRunService(options: RunServiceOptions) {
       }
       teardown.clearForceKill(runId)
       deadlines.clearRunTimers(runId)
+      // Channel rows cascade with the run row; the snapshot files on disk
+      // need an explicit sweep (data/channel-files/<channelId>/).
+      channels.cleanupRunFiles(runId)
       await containerManager.remove(row.containerName).catch(() => undefined)
       for (const agent of agents) {
         const session = lifecycle.get(agent.id)
@@ -776,8 +840,8 @@ export function createRunService(options: RunServiceOptions) {
     finishFlagWarned.clear()
     for (const emitter of eventScopes.values()) emitter.close()
     eventScopes.clear()
-    for (const inbox of inboxes.values()) inbox.close()
-    inboxes.clear()
+    for (const digest of digests.values()) digest.close()
+    digests.clear()
     bus.close()
   }
 
@@ -794,10 +858,11 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
-   * (TSecBench partial — the challenge is NOT fully solved). Steers every
-   * agent on the challenge's live runs with the confirmed flags so the
-   * solvers converge on the remaining ones; queues a non-urgent inbox
-   * notice (the scheduler learns the progress with the next digest). */
+   * (TSecBench partial — the challenge is NOT fully solved). Posts a system
+   * message into every live run's #team (team delivery steers all live
+   * members — behavior parity with the former direct steer loop, minus the
+   * submitter) + a non-urgent scheduler-DM notice (learned with the next
+   * digest). */
   function notifyFlagPartial(
     runId: string,
     message: string | null,
@@ -826,15 +891,23 @@ export function createRunService(options: RunServiceOptions) {
       `[多 flag 进度]「${name}」部分解出${message ? `（${message}）` : ""}。` +
       `已确认的 flag：${confirmed.join("、") || "（无）"}。` +
       `请专注解出剩余 flag；已确认的无需重复提交。`
-    // Every agent on the challenge's live runs except the submitter:
-    // streaming ones get the steer queued into their turn, idle ones start a
-    // fresh turn (lifecycle.send handles both).
+    // System message → each live run's #team; the team policy steers every
+    // live member (skipAgentIds keeps the exact old submitter exception).
     for (const target of liveRunsOnChallenge(row.challengeId)) {
-      for (const agent of queries.listAgents(target.id)) {
-        if (agent.id !== submitterAgentId) steerAgent(agent.id, text)
+      const team = channels
+        .runChannels(target.id)
+        .find((channel) => channel.kind === "team")
+      if (team) {
+        channels.post({
+          channelId: team.id,
+          author: { type: "system" },
+          body: text,
+          meta: { runId, eventType: "flagPartial" },
+          ...(submitterAgentId ? { skipAgentIds: [submitterAgentId] } : {}),
+        })
       }
     }
-    inboxes
+    digests
       .get(row.eventId)
       ?.pushNotice(
         `部分解出：「${name}」${message ?? "多 flag 未集齐"}（run-${runId.slice(0, 8)}）`
@@ -856,13 +929,8 @@ export function createRunService(options: RunServiceOptions) {
       .all()
   }
 
-  /** Fire-and-forget steer (queued if the agent is mid-turn). */
-  function steerAgent(agentId: string, text: string): void {
-    void lifecycle.send(agentId, text, "steer").catch(() => undefined)
-  }
-
   /** Full-solve cleanup (see notifyFlagAccepted). Returns a summary line of
-   * what was stopped for the inbox notice. */
+   * what was stopped for the scheduler-DM notice. */
   function stopSiblingsOnSolved(
     runId: string,
     submitterAgentId?: string
@@ -909,7 +977,7 @@ export function createRunService(options: RunServiceOptions) {
     if (aborted > 0) parts.push(`终止 ${aborted} 个同 run solver`)
     if (cancelled > 0) parts.push(`取消 ${cancelled} 个排队项`)
     if (parts.length > 0) {
-      inboxes
+      digests
         .get(row.eventId)
         ?.pushNotice(
           `「${name}」已完全解出（run-${runId.slice(0, 8)}）：${parts.join("、")}`
@@ -932,7 +1000,8 @@ export function createRunService(options: RunServiceOptions) {
     bus,
     contexts,
     eventScopes,
-    inboxFor,
+    digestFor,
+    channels,
     pendingFinish,
     finishFlagWarned,
     lifecycle,
@@ -1012,46 +1081,55 @@ export function createRunService(options: RunServiceOptions) {
       return run.id
     },
     onQueueEmergency: (eventId, line) =>
-      inboxes.get(eventId)?.pushEmergency(line),
-    onQueueNotice: (eventId, line) => inboxes.get(eventId)?.pushNotice(line),
+      digests.get(eventId)?.pushEmergency(line),
+    onQueueNotice: (eventId, line) => digests.get(eventId)?.pushNotice(line),
   })
 
-  /** Live inbox snapshot for an event (agent dialog's inbox tab). No live
-   * inbox (no scheduler run) → live:false; history is served separately
-   * (scheduler_inbox_digests persists across scheduler runs). */
+  /** Live scheduler-DM digest snapshot for an event (the scheduler DM view's
+   * status header). No live digest (no scheduler run) → live:false; the
+   * channel timeline itself (incl. recap history) is served by the generic
+   * channel-messages endpoint via `channelId`. */
   function inboxSnapshot(eventId: string) {
-    const inbox = inboxes.get(eventId)
-    return inbox
-      ? { live: true, ...inbox.snapshot() }
-      : {
-          live: false,
-          pending: [],
-          notices: [],
-          emergency: [],
-          silence: { armed: false, flushAt: null },
-          stallWatch: [],
-        }
+    const channel = channels.schedulerDm(eventId)
+    const digest = digests.get(eventId)
+    const base = {
+      channelId: channel?.id ?? null,
+      pending: [] as Array<{ runId: string; events: string[] }>,
+      notices: [] as string[],
+      emergency: [] as string[],
+      unreadCount: 0,
+      silence: { armed: false, flushAt: null as number | null },
+      stallWatch: [] as Array<{ runId: string; dueAt: number }>,
+    }
+    return digest
+      ? { live: true, ...base, ...digest.snapshot() }
+      : { live: false, deliveryPaused: false, ...base }
   }
 
-  /** Delivered-digest history (newest first, offset pagination). */
+  /** Delivered-digest history = recap messages in the scheduler DM channel
+   * (newest first, offset pagination) — replaces the dropped
+   * scheduler_inbox_digests table; the ledger is self-contained. */
   function inboxHistory(eventId: string, limit: number, offset: number) {
-    const total =
-      db
-        .select({ n: sql<number>`count(*)` })
-        .from(schedulerInboxDigests)
-        .where(eq(schedulerInboxDigests.eventId, eventId))
-        .get()?.n ?? 0
-    const items = db
+    const channel = channels.schedulerDm(eventId)
+    if (!channel) return { items: [], total: 0, hasMore: false }
+    const recaps = db
       .select()
-      .from(schedulerInboxDigests)
-      .where(eq(schedulerInboxDigests.eventId, eventId))
-      .orderBy(
-        desc(schedulerInboxDigests.createdAt),
-        desc(schedulerInboxDigests.id)
+      .from(channelMessages)
+      .where(
+        and(
+          eq(channelMessages.channelId, channel.id),
+          eq(channelMessages.kind, "recap")
+        )
       )
-      .limit(limit)
-      .offset(offset)
+      .orderBy(desc(channelMessages.id))
       .all()
+    const total = recaps.length
+    const items = recaps.slice(offset, offset + limit).map((row) => ({
+      id: String(row.id),
+      eventId,
+      text: row.body,
+      createdAt: row.createdAt,
+    }))
     return { items, total, hasMore: offset + items.length < total }
   }
 
@@ -1082,7 +1160,7 @@ export function createRunService(options: RunServiceOptions) {
     inboxSnapshot,
     inboxHistory,
     setInboxDeliveryPaused: (eventId: string, paused: boolean) =>
-      inboxes.get(eventId)?.setDeliveryPaused(paused),
+      digests.get(eventId)?.setDeliveryPaused(paused),
     getSchedulerConfig: schedulerAdmin.getSchedulerConfig,
     upsertSchedulerConfig: schedulerAdmin.upsertSchedulerConfig,
     startScheduler: schedulerAdmin.startScheduler,
@@ -1102,6 +1180,7 @@ export function createRunService(options: RunServiceOptions) {
     workspacePath: queries.workspacePath,
     runDirPath: queries.runDirPath,
     bus,
+    channels,
     notifyFlagAccepted,
     notifyFlagPartial,
     submitFlag: platformService.submitFlag,

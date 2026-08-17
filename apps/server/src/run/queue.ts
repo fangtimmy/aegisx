@@ -129,13 +129,13 @@ export type QueueServiceDeps = {
    * success; rejects with {@link RunActionError} (capacity / launch_failed) or
    * other errors. */
   launch(item: QueueRow): Promise<string>
-  /** Emergency line for the event's scheduler inbox (docs/scheduler-inbox.md):
-   * a permanent launch failure, or the queue-starved edge (pending 2→1).
-   * Never throws. */
+  /** Emergency line for the event's scheduler DM (docs/im-channels.md §三,
+   * digest policy — absorbs the former scheduler-inbox): a permanent launch
+   * failure, or the queue-starved edge (pending 2→1). Posted as an urgent
+   * system message (immediate flush). Never throws. */
   onQueueEmergency(eventId: string, line: string): void
-  /** Ordinary notice line for the inbox (queue pause/resume): queued into
-   * the inbox's notice bucket, flushed with the next digest — not urgent.
-   * Never throws. */
+  /** Ordinary notice line for the scheduler DM (queue pause/resume): a
+   * non-urgent system message riding the next digest. Never throws. */
   onQueueNotice(eventId: string, line: string): void
 }
 
@@ -213,8 +213,8 @@ export function createQueueService(deps: QueueServiceDeps) {
     }
   }
 
-  /** A launch permanently failed → emergency line for the inbox (replaces the
-   * old bare scheduler notification; docs/scheduler-inbox.md §2.2). */
+  /** A launch permanently failed → urgent message for the scheduler DM
+   * (digest policy flushes immediately; docs/im-channels.md §三). */
   function launchFailureLine(item: QueueRow, error: string): string {
     const name =
       db

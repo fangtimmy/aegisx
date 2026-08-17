@@ -38,10 +38,11 @@ function buildHostFileTools(
   cwd: string,
   containerName: string,
   containerManager: ContainerManager,
-  multimodal = false
+  multimodal = false,
+  execEnv?: string[]
 ): ToolDefinition[] {
   return [
-    createBashTool(cwd, containerName, containerManager),
+    createBashTool(cwd, containerName, containerManager, execEnv),
     ...createWorkspaceTools(
       createDockerExecBackend(containerName, containerManager, cwd),
       { multimodal }
@@ -77,6 +78,11 @@ export type AgentHostInput = {
   extraToolNames?: string[]
   /** Resume an existing session; omit for a new session. */
   resumeFrom?: SessionResume
+  /** Per-call exec env for the bash tool ("KEY=value" entries) — per-agent
+   * identity (AEGISX_AGENT_ID / AEGISX_RUN_ID) injected into every bash exec
+   * so the container-side aegisx SDK knows who is calling (shared solver
+   * containers; docs/im-channels.md §四). */
+  execEnv?: string[]
   /** Fired after a commit that may change usage (compaction / branch_summary). */
   onUsageMaybeChanged?: () => void
   db: Database
@@ -107,7 +113,8 @@ export async function createAgentHost(
     input.cwd,
     input.containerName,
     input.containerManager,
-    input.model.input.includes("image")
+    input.model.input.includes("image"),
+    input.execEnv
   )
   const customTools: ToolDefinition[] = [
     ...fileTools,

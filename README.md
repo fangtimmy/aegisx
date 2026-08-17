@@ -2,8 +2,8 @@
 
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, an event task queue (scheduler), and token usage.
 
-> **Schema v14（v9 编排简化）** — 插件编排与 spawn child 已删除：challenge run = 1..N 个平等 solver，event run = 1 个调度者（内建唤醒）；迁移 `0008_v14_orchestration_drop`（wipe 执行态）。v13 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。
-> Design notes: [docs/orchestration-v9-simplify.md](docs/orchestration-v9-simplify.md) (current, v9)。
+> **Schema v16（频道化 IM）** — 统一消息层：channels / channel_messages / channel_reads / channel_files 四表（每 run 频道树 #team/#announce/DM + 事件作用域调度者 DM；调度 digest 以 recap 消息存回，scheduler_inbox_digests 表删除），迁移 `0010_im_channels`；v15 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。此前 v14（v9 编排简化）删除插件编排与 spawn child。
+> Design notes: [docs/im-channels.md](docs/im-channels.md)（统一消息层，现行）、[docs/orchestration-v9-simplify.md](docs/orchestration-v9-simplify.md)（v9 编排模型）。
 
 ## Requirements
 

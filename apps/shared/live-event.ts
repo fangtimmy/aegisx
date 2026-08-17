@@ -6,6 +6,22 @@ import {
 } from "./agent"
 import type { RunPublic } from "./run"
 
+/** One channel message (the ledger row — shared wire shape for timelines,
+ * SDK reads, and the SSE `channel.message` push). Attachments render as
+ * metadata only (📎 filename · size); content is fetched separately. */
+export type ChannelMessage = {
+  id: number
+  channelId: string
+  kind: "text" | "recap"
+  authorType: "system" | "user" | "agent"
+  authorAgentId: string | null
+  authorName: string
+  body: string
+  meta: Record<string, unknown>
+  createdAt: string
+  files: Array<{ id: string; filename: string; size: number }>
+}
+
 export type TransientActivity = "retrying" | "compacting"
 
 export type ToolProgressStatus = "running" | "done" | "error"
@@ -107,6 +123,13 @@ export type LiveEvent =
       type: "message.committed"
       agentId: string
       item: EntryItem
+    }
+  | {
+      /** Unified message layer push (docs/im-channels.md §5.1): a new channel
+       * message landed. Emitted on the run's channel (run-scope channels) or
+       * the event's channel (the scheduler DM). */
+      type: "channel.message"
+      message: ChannelMessage
     }
 
 /**

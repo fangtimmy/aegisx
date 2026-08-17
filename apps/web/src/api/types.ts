@@ -85,10 +85,14 @@ export type QueueSnapshot = {
   state: QueueState
 }
 
-/** GET /api/events/:id/inbox — live scheduler-inbox snapshot. */
+/** GET /api/events/:id/inbox — live scheduler-DM digest snapshot (channels
+ * era: the DM view's status header + backlog; the timeline incl. recap
+ * history comes from the channel messages endpoint via channelId). */
 export type InboxSnapshot = {
   live: boolean
+  channelId: string | null
   deliveryPaused: boolean
+  unreadCount: number
   pending: Array<{ runId: string; events: string[] }>
   notices: string[]
   emergency: string[]
@@ -96,18 +100,36 @@ export type InboxSnapshot = {
   stallWatch: Array<{ runId: string; dueAt: number }>
 }
 
-/** One delivered digest row (GET /api/events/:id/inbox/digests). */
-export type InboxDigest = {
+/** One channel in a run's tree (GET /api/runs/:id/channels). */
+export type ChannelInfo = {
   id: string
+  scopeType: "run" | "event"
+  runId: string | null
   eventId: string
-  text: string
-  createdAt: string
+  kind: "team" | "announce" | "dm"
+  targetAgentId: string | null
+  label: string
+  unread: number
+  lastMessageAt: string | null
 }
 
-/** GET /api/events/:id/inbox/digests — newest first, offset pagination. */
-export type InboxHistory = {
-  items: InboxDigest[]
-  total: number
+/** One channel message (timeline + SDK read). */
+export type ChannelMessageInfo = {
+  id: number
+  channelId: string
+  kind: "text" | "recap"
+  authorType: "system" | "user" | "agent"
+  authorAgentId: string | null
+  authorName: string
+  body: string
+  meta: Record<string, unknown>
+  createdAt: string
+  files: Array<{ id: string; filename: string; size: number }>
+}
+
+export type ChannelMessageList = {
+  items: ChannelMessageInfo[]
+  nextAfter: number
   hasMore: boolean
 }
 

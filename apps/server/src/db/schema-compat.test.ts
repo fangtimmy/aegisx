@@ -33,13 +33,19 @@ describe("schema bootstrap", () => {
         "session_entries",
         "run_queue",
         "scheduler_config",
-        "scheduler_inbox_digests",
+        "channels",
+        "channel_messages",
+        "channel_reads",
+        "channel_files",
         "prompt_templates",
         "challenge_flags",
         "queue_state",
       ]) {
         expect(names.has(t)).toBe(true)
       }
+      // v16: the scheduler inbox digest history table is dropped (recap
+      // messages in the scheduler DM channel replace it).
+      expect(names.has("scheduler_inbox_digests")).toBe(false)
       // orchestrators merged into runs; drizzle tracking present
       expect(names.has("orchestrators")).toBe(false)
       expect(names.has("__drizzle_migrations")).toBe(true)

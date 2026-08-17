@@ -1,6 +1,7 @@
 # 调度者消极收件箱 + 时间可见性
 
-状态：**已实施**（P1–P3 已落地；后续补充：队列 pause/resume 通知行、agent 停滞紧急触发）
+状态：**已被取代（superseded）**——存储层与投递策略已由统一消息层吸收：事件流落事件作用域调度者 DM（channels 表），digest 以 kind=recap 消息存回频道（scheduler_inbox_digests 表已删除）。策略语义（静默计时、紧急 flush、停滞 watchdog、hold）全部保留，见 [im-channels.md](im-channels.md) §三。以下为历史设计文本（供追溯）。
+
 前置：[scheduler-python-sdk.md](scheduler-python-sdk.md)（SDK 收敛后的工具面）；解决 [field-findings.md](field-findings.md) §4（通知风暴）与 §7a（时间可见性）
 
 ---

@@ -51,6 +51,10 @@ export type ExecOptions = {
   signal?: AbortSignal
   /** Timeout in seconds (matches the bash tool schema; converted to ms in exec). */
   timeout?: number
+  /** Per-call env additions as "KEY=value" entries (dockerode exec Env).
+   * Per-agent identity injection for shared containers — e.g. the solver SDK's
+   * AEGISX_AGENT_ID (docs/im-channels.md §四). */
+  env?: string[]
 }
 
 export type ContainerManager = ReturnType<typeof createContainerManager>
@@ -192,6 +196,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       workdir?: string
       signal?: AbortSignal
       timeout?: number
+      env?: string[]
       stdoutSink: NodeJS.WritableStream
       stderrSink: NodeJS.WritableStream
     }
@@ -205,6 +210,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       AttachStdout: true,
       AttachStderr: true,
       Tty: false,
+      Env: opts.env,
     })
 
     let timedOut = false
@@ -258,6 +264,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       workdir: opts.workdir,
       signal: opts.signal,
       timeout: opts.timeout,
+      env: opts.env,
       stdoutSink: sink,
       stderrSink: sink,
     })
@@ -278,6 +285,8 @@ export function createContainerManager(options?: { socketPath?: string }) {
       signal?: AbortSignal
       /** Timeout in seconds (converted to ms in runHijacked). */
       timeout?: number
+      /** Per-call env additions ("KEY=value" entries). */
+      env?: string[]
     }
   ): Promise<{ stdout: Buffer; stderr: string; exitCode: number | null }> {
     const outChunks: Buffer[] = []
@@ -286,6 +295,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       workdir: opts?.workdir,
       signal: opts?.signal,
       timeout: opts?.timeout,
+      env: opts?.env,
       stdoutSink: collectSink(outChunks),
       stderrSink: collectSink(errChunks),
     })

@@ -30,11 +30,14 @@ Rules:
 """
 from __future__ import annotations
 
-from . import agents, challenges, queue, runs
+from . import agents, challenges, channels, queue, runs
 from .client import AegisxError, configure, get_client
 from .models import (
     AgentSummary,
     Challenge,
+    Channel,
+    ChannelFile,
+    ChannelMessage,
     QueueItem,
     Run,
     RunRead,
@@ -48,13 +51,18 @@ __all__ = [
     "AegisxError",
     "AgentSummary",
     "Challenge",
+    "Channel",
+    "ChannelFile",
+    "ChannelMessage",
     "QueueItem",
     "Run",
     "RunRead",
     "SchedulerStatus",
     "Snapshot",
     "agents",
+    "ask",
     "challenges",
+    "channels",
     "configure",
     "fmt_ms",
     "queue",
@@ -62,6 +70,14 @@ __all__ = [
     "snapshot",
     "status",
 ]
+
+
+def ask(text: str, urgent: bool = False, files: list[str] | None = None):
+    """Ask the event scheduler (solver face; docs/im-channels.md §四): posts
+    into the scheduler DM. urgent=True flushes the digest immediately (e.g.
+    "target expires in 3min — extend or drop?"); otherwise the question rides
+    the next digest. Returns the posted ChannelMessage."""
+    return channels.ask(text, urgent=urgent, files=files)
 
 
 def snapshot() -> Snapshot:

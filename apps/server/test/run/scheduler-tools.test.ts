@@ -218,7 +218,7 @@ describe("scheduler service behaviors (SDK backend)", () => {
     }
   })
 
-  test("event container gets SDK + /runs mounts; solver container gets neither", async () => {
+  test("event container gets SDK + /runs mounts; solver gets SDK-only (no /runs)", async () => {
     const { db, sqlite, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
@@ -291,9 +291,18 @@ describe("scheduler service behaviors (SDK backend)", () => {
       ).toBe(true)
       expect(schedOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
       expect(schedOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
-      // The solver container: no SDK, no run workspaces, no event env.
-      expect(solverOpts.extraBinds).toBeUndefined()
-      expect(solverOpts.env).toBeUndefined()
+      // The solver container (channels era, docs/im-channels.md §4): the
+      // same read-only SDK mount + event/API env with AEGISX_ROLE=solver, but
+      // NO /runs mount (a solver never sees other runs' workspaces).
+      expect(solverOpts.extraBinds).toEqual(
+        schedOpts.extraBinds?.filter((b) => b.includes("/opt/aegisx-sdk:ro"))
+      )
+      expect(solverOpts.extraBinds?.some((b) => b.includes("/runs:ro"))).toBe(
+        false
+      )
+      expect(solverOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
+      expect(solverOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
+      expect(solverOpts.env).toContain("AEGISX_ROLE=solver")
       await service.close()
     } finally {
       close()

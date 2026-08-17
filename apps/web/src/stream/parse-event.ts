@@ -47,6 +47,11 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
       ? { type: "ready", runId: value.runId, agentId: value.agentId }
       : undefined
   }
+  if (value.type === "channel.message") {
+    // Channel pushes (docs/im-channels.md): the message payload shape is the
+    // ledger row; timeline views currently poll, so this is a pass-through.
+    return { type: "channel.message", message: value.message as never }
+  }
   if (value.type === "run.updated") {
     if (!isRecord(value.run)) return undefined
     return { type: "run.updated", run: value.run as RunPublic }

@@ -1,6 +1,5 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
-  InboxHistory,
   InboxSnapshot,
   QueueItem,
   QueueSnapshot,
@@ -33,27 +32,13 @@ export function listQueue(eventId: string) {
   return apiRequest<QueueSnapshot>(`/events/${eventId}/queue`)
 }
 
-/** Live scheduler-inbox snapshot (agent dialog's inbox tab). */
+/** Live scheduler-DM digest snapshot (the scheduler DM view's status
+ * header). */
 export function getInbox(eventId: string) {
   return apiRequest<InboxSnapshot>(`/events/${eventId}/inbox`)
 }
 
-/** Delivered-digest history, newest first (complete, DB-backed). */
-export function getInboxDigests(
-  eventId: string,
-  limit: number,
-  offset: number
-) {
-  const query = new URLSearchParams({
-    limit: String(limit),
-    offset: String(offset),
-  })
-  return apiRequest<InboxHistory>(
-    `/events/${eventId}/inbox/digests?${query.toString()}`
-  )
-}
-
-/** Hold inbox delivery (collect silently — the orchestrator stays idle). */
+/** Hold digest delivery (collect silently — the orchestrator stays idle). */
 export function pauseInbox(eventId: string) {
   return apiRequest<{ deliveryPaused: boolean }>(
     `/events/${eventId}/inbox/pause`,

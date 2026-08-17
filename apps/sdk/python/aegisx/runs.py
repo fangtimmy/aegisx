@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from builtins import list as builtin_list
 
-from .client import AegisxError, get_client, wire_solvers
+from .client import AegisxError, get_client, require_manager, wire_solvers
 from .models import AgentSummary, Run, RunRead, from_dict
 
 # Mirrors the server's read_run defaults (scheduler-admin.ts).
@@ -36,6 +36,7 @@ def start(
     solvers: list[dict] | None = None,
     timeout_ms: int | None = None,
 ) -> Run:
+    require_manager()
     """Start a fresh solver run directly (escape hatch — bypasses the queue).
     The `strategy` is per-run guidance — be specific. A concurrency/target-slot
     rejection comes back as AegisxError("capacity") — adjust the plan, do not
@@ -57,6 +58,7 @@ def start(
 
 
 def stop(run_id: str) -> Run:
+    require_manager()
     """Abort a run's current turn (→ idle; container kept warm). Use to cut a
     stuck or off-track running turn before messaging new direction."""
     data = get_client().request("POST", f"/api/runs/{run_id}/stop")
@@ -64,6 +66,7 @@ def stop(run_id: str) -> Run:
 
 
 def message(run_id: str, text: str, deliver_as: str | None = None) -> Run:
+    require_manager()
     """Send guidance to a run (its entry agent). On an idle or closed run this
     starts/continues a turn (a closed run is cold-restored, keeping context +
     workspace); on a running run `deliver_as` steers ("steer") or queues
@@ -78,6 +81,7 @@ def message(run_id: str, text: str, deliver_as: str | None = None) -> Run:
 
 
 def close(run_id: str) -> Run:
+    require_manager()
     """Release a run's container (→ closed; session + history kept, resumable
     later with message). Use to free resources on runs you are pausing."""
     data = get_client().request("POST", f"/api/runs/{run_id}/close")
@@ -85,6 +89,7 @@ def close(run_id: str) -> Run:
 
 
 def set_timeout(run_id: str, timeout_ms: int) -> Run:
+    require_manager()
     """Set or extend a run's hard deadline (milliseconds from now)."""
     data = get_client().request(
         "POST", f"/api/runs/{run_id}/timeout", body={"timeoutMs": timeout_ms}

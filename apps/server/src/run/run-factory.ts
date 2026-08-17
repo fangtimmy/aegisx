@@ -43,6 +43,7 @@ import {
 } from "../orchestration/types"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
+import type { ChannelService } from "./channels"
 import type { ContainerManager } from "./container/container-manager"
 import { createToolboxContainer } from "./container/container-manager"
 import { RunActionError, RunStartError } from "./errors"
@@ -60,7 +61,7 @@ import {
   copyAttachments,
 } from "./prompt"
 import type { RunQueries } from "./queries"
-import type { SchedulerInbox } from "./scheduler-inbox"
+import type { SchedulerDigest } from "./scheduler-digest"
 import type { RunSchedulerToolContext } from "./scheduler-tools"
 import { createSchedulerTools } from "./scheduler-tools"
 import { createMainTools, type RunToolContext } from "./tools"
@@ -80,11 +81,8 @@ function sdkHostPath(): string | undefined {
 /** Event-scope container extras: the read-only SDK mount (→ /opt/aegisx-sdk),
  * the read-only run-workspaces mount (→ /runs/<runId>/workspace — the
  * scheduler reads solver WRITEUP.md / solve.sh directly, live progress too),
- * + the three env vars (PYTHONPATH / AEGISX_EVENT_ID / AEGISX_API_URL).
- * Undefined for challenge scope / when the SDK path is absent — solver
- * containers never see the SDK or other runs' workspaces. AEGISX_API_URL
- * passes the host's override through (Linux deployments where
- * host.docker.internal does not resolve). */
+ * + the env vars (PYTHONPATH / AEGISX_EVENT_ID / AEGISX_API_URL /
+ * AEGISX_ROLE=scheduler). Undefined when the SDK path is absent. */
 function schedulerSdkContainerOpts(
   eventId: string,
   dataDir: string
@@ -103,6 +101,33 @@ function schedulerSdkContainerOpts(
       `AEGISX_EVENT_ID=${eventId}`,
       `AEGISX_API_URL=${process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"}`,
       "PYTHONPATH=/opt/aegisx-sdk",
+      "AEGISX_ROLE=scheduler",
+    ],
+  }
+}
+
+/** Challenge-scope container extras (docs/im-channels.md §四): the SAME
+ * read-only SDK mount as the scheduler (solvers post/read/ask/fetch via
+ * `aegisx.channels`), the same event/API env — but AEGISX_ROLE=solver (the
+ * SDK's client-side management gate) and **NO /runs mount** (a solver never
+ * sees other runs' workspaces — injection surface stays minimal). Per-agent
+ * identity (AEGISX_AGENT_ID / AEGISX_RUN_ID) is injected per-exec by the bash
+ * tool, not container-wide: one run's N solvers share this container. */
+function solverSdkContainerOpts(
+  eventId: string
+): { extraBinds: string[]; env: string[] } | undefined {
+  const path = sdkHostPath()
+  if (!path) {
+    console.warn("aegisx SDK not found on host — skipping solver SDK mount")
+    return undefined
+  }
+  return {
+    extraBinds: [`${path}:/opt/aegisx-sdk:ro`],
+    env: [
+      `AEGISX_EVENT_ID=${eventId}`,
+      `AEGISX_API_URL=${process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"}`,
+      "PYTHONPATH=/opt/aegisx-sdk",
+      "AEGISX_ROLE=solver",
     ],
   }
 }
@@ -165,10 +190,13 @@ export type RunFactoryDeps = {
   contexts: Map<string, RunContext>
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   eventScopes: Map<string, EventScopeEmitter>
-  /** Lazy per-event scheduler inbox (docs/scheduler-inbox.md): the wake-up
-   * wiring pushes lifecycle events into it; it flushes digests to the
-   * orchestrator. Created here, torn down with the scheduler run. */
-  inboxFor(eventId: string, orchestratorAgentId: string): SchedulerInbox
+  /** Lazy per-event scheduler digest (docs/im-channels.md §三 — the DM:
+   * scheduler delivery policy): lifecycle events are posted as system
+   * messages into the scheduler DM; the digest policy flushes steers. Created
+   * here, torn down with the scheduler run. */
+  digestFor(eventId: string, orchestratorAgentId: string): SchedulerDigest
+  /** Unified message layer core (channels). */
+  channels: ChannelService
   /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
   pendingFinish: Map<string, { summary: string; runId: string }>
   /** Runs finish_run already warned about a missing flag (once per run). */
@@ -232,7 +260,8 @@ export function createRunFactory(deps: RunFactoryDeps) {
     bus,
     contexts,
     eventScopes,
-    inboxFor,
+    digestFor,
+    channels,
     pendingFinish,
     finishFlagWarned,
     lifecycle,
@@ -286,23 +315,24 @@ export function createRunFactory(deps: RunFactoryDeps) {
   }
 
   /** Built-in scheduler wake-up (v9: replaces the scheduler plugin's wire;
-   * inbox era, docs/scheduler-inbox.md): child-run lifecycle events are pushed
-   * into the event's passive inbox instead of waking the orchestrator per
-   * event — the inbox accumulates and flushes a digest (urgent immediately,
-   * otherwise after the silent window). The emitter's callbacks are already
-   * wrapped in try/catch (EventScopeEmitter). */
+   * channels era, docs/im-channels.md §三): the event's scheduler DM channel
+   * is ensured, then child-run lifecycle events are posted into it as system
+   * messages — the digest policy (run/scheduler-digest.ts) decides when to
+   * flush a steer. The emitter's callbacks are already wrapped in try/catch
+   * (EventScopeEmitter). */
   function attachSchedulerWakeup(
     eventId: string,
     orchestratorAgentId: string
   ): void {
     const emitter = eventScopeFor(eventId)
-    const inbox = inboxFor(eventId, orchestratorAgentId)
-    emitter.on("run.started", (e) => inbox.push(e))
-    emitter.on("run.idle", (e) => inbox.push(e))
-    emitter.on("run.flagAccepted", (e) => inbox.push(e))
-    emitter.on("run.finished", (e) => inbox.push(e))
-    emitter.on("run.timedOut", (e) => inbox.push(e))
-    emitter.on("run.resumed", (e) => inbox.push(e))
+    channels.ensureSchedulerDm(eventId, orchestratorAgentId)
+    const digest = digestFor(eventId, orchestratorAgentId)
+    emitter.on("run.started", (e) => digest.push(e))
+    emitter.on("run.idle", (e) => digest.push(e))
+    emitter.on("run.flagAccepted", (e) => digest.push(e))
+    emitter.on("run.finished", (e) => digest.push(e))
+    emitter.on("run.timedOut", (e) => digest.push(e))
+    emitter.on("run.resumed", (e) => digest.push(e))
   }
 
   /** Latest assistant text for an agent (read_run fallback). */
@@ -472,6 +502,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
         systemPrompt,
         tools,
       })
+      channels.ensureAgentDm(runId, agentId)
       await prepareAgent(runId, agentId)
       await lifecycle.send(
         agentId,
@@ -735,7 +766,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
         networkMode: get(getSettings(), "container.networkMode"),
         ...(input.scopeType === "event"
           ? schedulerSdkContainerOpts(event!.id, dataDir)
-          : {}),
+          : solverSdkContainerOpts(challenge!.eventId)),
       })
     } catch (error) {
       db.delete(runs).where(eq(runs.id, runId)).run()
@@ -765,6 +796,9 @@ export function createRunFactory(deps: RunFactoryDeps) {
           thinkingLevel: entryTarget.thinkingLevel,
           promptContext,
         })
+        // Channel tree first (§2.1): #team + #announce exist before any
+        // solver can post; each solver's DM is created with its agent row.
+        channels.ensureRunChannels(runId)
         // Directly create + prime the N solver agents (v9: every solver
         // primes with its own rendered initial prompt).
         await createSolvers(
@@ -935,7 +969,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
         networkMode: get(settings, "container.networkMode"),
         ...(row.scopeType === "event"
           ? schedulerSdkContainerOpts(row.eventId, dataDir)
-          : {}),
+          : solverSdkContainerOpts(row.eventId)),
       })
 
       const modelDisplay = modelResolver.resolveModelDisplay(row.model)
@@ -998,6 +1032,17 @@ export function createRunFactory(deps: RunFactoryDeps) {
           db,
           settings["container.workspace"]
         )
+      }
+
+      // Channel backfill for pre-channels (v≤15) runs: the tree is ensured
+      // idempotently — a legacy challenge run cold-restored gets
+      // #team/#announce + a DM per persisted agent so the first post does
+      // not 404. Event runs keep their scheduler DM (attached below).
+      if (row.scopeType === "challenge") {
+        channels.ensureRunChannels(runId)
+        for (const agent of queries.listAgents(runId)) {
+          channels.ensureAgentDm(runId, agent.id)
+        }
       }
 
       // Run-level live context + (event scope) the built-in wake-up — the
@@ -1144,6 +1189,8 @@ export function createRunFactory(deps: RunFactoryDeps) {
       systemPrompt,
       tools,
     })
+    // New solver → new DM channel (§2.1, add_agent 增建)。
+    channels.ensureAgentDm(runId, agentId)
     emitAgents(runId)
     await prepareAgent(runId, agentId)
     // No run-level strategy is persisted — the spec's prompt is the whole
@@ -1230,6 +1277,12 @@ export function createRunFactory(deps: RunFactoryDeps) {
         systemPrompt: agentRow.systemPrompt,
         extraTools: nativeTools,
         extraToolNames: snapshotTools,
+        // Per-agent identity for the container-side `aegisx` SDK: one run's N
+        // solvers share a container, so identity cannot be container-wide env
+        // — it rides the per-exec env of the bash tool (docs/im-channels.md
+        // §四; accepted boundary: same-run solvers share the workspace and
+        // /proc/*/environ anyway).
+        execEnv: [`AEGISX_AGENT_ID=${agentId}`, `AEGISX_RUN_ID=${runId}`],
         ...(agentRow.sessionFile
           ? {
               resumeFrom: {

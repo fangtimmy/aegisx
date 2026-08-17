@@ -3,6 +3,7 @@ import {
   Files,
   Inbox,
   MessageSquare,
+  MessagesSquare,
   Settings2,
   SlidersHorizontal,
 } from "lucide-react"
@@ -22,13 +23,14 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
+import { ChannelsView } from "@/features/runs/channels-view"
 import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
 import { RunOverview } from "@/features/runs/run-overview"
 
 import { POLL_INTERVAL_MS, roleLabel } from "./event-agents-shared"
 import { SchedulerConfigTab } from "./scheduler-config-tab"
-import { SchedulerInboxTab } from "./scheduler-inbox-tab"
+import { SchedulerDmTab } from "./scheduler-dm-tab"
 
 export function AgentDialog({
   runId,
@@ -51,7 +53,7 @@ export function AgentDialog({
         : false,
   })
   const [view, setView] = useState<
-    "conversation" | "files" | "overview" | "config" | "inbox"
+    "conversation" | "files" | "channels" | "overview" | "config" | "inbox"
   >("conversation")
 
   const run = detail.data?.run
@@ -183,6 +185,7 @@ export function AgentDialog({
                 value as
                   | "conversation"
                   | "files"
+                  | "channels"
                   | "overview"
                   | "config"
                   | "inbox"
@@ -197,6 +200,11 @@ export function AgentDialog({
               <TabsTab className="gap-2" value="conversation">
                 <MessageSquare /> 对话
               </TabsTab>
+              {run.scopeType === "challenge" && (
+                <TabsTab className="gap-2" value="channels">
+                  <MessagesSquare /> 频道
+                </TabsTab>
+              )}
               <TabsTab className="gap-2" value="files">
                 <Files /> 文件
               </TabsTab>
@@ -210,7 +218,7 @@ export function AgentDialog({
               )}
               {run.scopeType === "event" && (
                 <TabsTab className="gap-2" value="inbox">
-                  <Inbox /> 收件箱
+                  <Inbox /> 调度 DM
                 </TabsTab>
               )}
             </TabsList>
@@ -235,6 +243,14 @@ export function AgentDialog({
                 switchModel={switchModel}
               />
             </TabsPanel>
+            {run.scopeType === "challenge" && (
+              <TabsPanel
+                className="min-h-0 flex-1 overflow-hidden"
+                value="channels"
+              >
+                <ChannelsView runId={runId} />
+              </TabsPanel>
+            )}
             <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="files">
               <FilesWorkspace
                 enabled={view === "files"}
@@ -268,7 +284,7 @@ export function AgentDialog({
                 className="min-h-0 flex-1 overflow-hidden"
                 value="inbox"
               >
-                <SchedulerInboxTab
+                <SchedulerDmTab
                   active={view === "inbox"}
                   eventId={run.eventId}
                 />

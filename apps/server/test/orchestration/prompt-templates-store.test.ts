@@ -6,8 +6,10 @@ import { promptTemplates } from "../../src/db/schema"
 import {
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
   LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
 } from "../../src/orchestration/prompt-defaults"
 import {
   BUILTIN_DEFAULTS,
@@ -147,6 +149,73 @@ describe("prompt_templates store (v9: builtin-only)", () => {
         .where(eq(promptTemplates.key, "initial"))
         .get()
       expect(initial?.body).toBe(BUILTIN_DEFAULTS.initial)
+    } finally {
+      close()
+    }
+  })
+
+  test("channels-era upgrade chain: V16 exact-match refreshes; user edits survive (P1)", () => {
+    const { db, close } = setupDb()
+    try {
+      seedBuiltinTemplates(db)
+      // mainSystem: a pre-channels DB (row carries the v16-pre-channels body,
+      // i.e. the v9-era default). orchestratorSystem: user-edited.
+      db.update(promptTemplates)
+        .set({
+          body: LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+          updatedAt: "x",
+        })
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .run()
+      db.update(promptTemplates)
+        .set({
+          body: LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+          updatedAt: "x",
+        })
+        .where(eq(promptTemplates.key, "orchestratorSystem"))
+        .run()
+
+      upgradeBuiltinTemplate(
+        db,
+        "mainSystem",
+        LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+        DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
+      )
+      const main = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "mainSystem"))
+        .get()
+      expect(main?.body).toBe(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE)
+      expect(main?.body).toContain("## Channels（团队频道）")
+      expect(main?.body).not.toContain("## Co-solvers")
+
+      // The channels-era orchestrator default carries the Channels split
+      // (announce=FYI / DM=指令) + the channels namespace.
+      expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
+        "## Channels：广播与定向的分工"
+      )
+      expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
+        "aegisx.channels.list()"
+      )
+
+      // User-edited rows never match the legacy body → untouched.
+      db.update(promptTemplates)
+        .set({ body: "USER-EDITED-CH", updatedAt: "x" })
+        .where(eq(promptTemplates.key, "orchestratorSystem"))
+        .run()
+      upgradeBuiltinTemplate(
+        db,
+        "orchestratorSystem",
+        LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+        DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+      )
+      const orch = db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.key, "orchestratorSystem"))
+        .get()
+      expect(orch?.body).toBe("USER-EDITED-CH")
     } finally {
       close()
     }

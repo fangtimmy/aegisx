@@ -1,7 +1,7 @@
 """`aegisx.agents` — agent-level addressing (v9)."""
 from __future__ import annotations
 
-from .client import AegisxError, get_client
+from .client import AegisxError, get_client, require_manager
 from .models import AgentSummary, Run, from_dict
 
 
@@ -22,6 +22,7 @@ def list(run_id: str | None = None) -> list[AgentSummary]:
 
 
 def message(agent_id: str, text: str, deliver_as: str | None = None) -> Run:
+    require_manager()
     """Send guidance to one specific agent by id, in any run. On an idle or
     closed agent this starts/continues its turn (a closed run is
     cold-restored, keeping context + workspace — only that agent wakes); on a
@@ -42,6 +43,7 @@ def add(
     model: str | None = None,
     prompt_mode: str | None = None,
 ) -> Run:
+    require_manager()
     """Add one more solver to a run — its prompt is required (you add hands
     with a job). The new solver runs in parallel in the same
     container/workspace; a closed run is cold-restored first (existing solvers

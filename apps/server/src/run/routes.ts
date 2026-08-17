@@ -19,6 +19,12 @@ import { toAgentSummary } from "./public"
 import type { RunService } from "./service"
 import { streamRun } from "./sse"
 
+/** Agent identity header for SDK channel calls (docs/im-channels.md §四):
+ * the per-exec env AEGISX_AGENT_ID rides this header; the server resolves the
+ * posting/reading agent from it. No token — the accepted curl boundary from
+ * scheduler-python-sdk.md §四 applies. */
+const AGENT_ID_HEADER = "x-aegisx-agent-id"
+
 /** Manual enqueue body (POST /api/challenges/:id/runs enqueues, returns a
  * queue item). Models resolve at launch; the run-level strategy shapes every
  * solver's first turn. */
@@ -224,6 +230,157 @@ export function registerRunRoutes(
         source: "scheduler",
       })
       return c.json(run, 201)
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  // --- unified message layer (docs/im-channels.md §5.1) ---------------------
+
+  /** A run's channel tree (#announce / #team / DM per solver). */
+  app.get("/api/runs/:runId/channels", (c) => {
+    const runId = c.req.param("runId")
+    if (!runService.get(runId)) return notFound(c, "Run not found")
+    return c.json({ items: runService.channels.runChannelTree(runId) })
+  })
+
+  /** SDK channels.list: the agent's visible channels + unread counts. */
+  app.get("/api/agents/:agentId/channels", (c) => {
+    try {
+      return c.json({
+        items: runService.channels.agentChannels(c.req.param("agentId")),
+      })
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  /** Channel timeline (paginated by the global message-id cursor). With the
+   * agent identity header this is the SDK read path: visibility-enforced and
+   * pull-is-read (the cursor advances unless markRead=0). */
+  app.get("/api/channels/:channelId/messages", (c) => {
+    const channelId = c.req.param("channelId")
+    const afterRaw = Number.parseInt(c.req.query("after") ?? "0", 10)
+    const after = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0
+    const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10)
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 50
+    const markRead = c.req.query("markRead") !== "0"
+    const agentId = c.req.header(AGENT_ID_HEADER) ?? ""
+    try {
+      if (agentId) {
+        return c.json(
+          runService.channels.readForAgent(agentId, channelId, {
+            after,
+            limit,
+            markRead,
+          })
+        )
+      }
+      const channel = runService.channels.channelById(channelId)
+      if (!channel) return notFound(c, "Channel not found")
+      return c.json(
+        runService.channels.listMessages(channelId, { after, limit })
+      )
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  /** Post a channel message. Two faces on one route (design §5.1):
+   *  - JSON + agent identity header → the SDK path (files = workspace paths,
+   *    server-side resolve check + snapshot copy).
+   *  - multipart/form-data (text + files[]) → the UI user post (file blobs).
+   * Both run the same ledger write + delivery policy. */
+  app.post("/api/channels/:channelId/messages", async (c) => {
+    const channelId = c.req.param("channelId")
+    const contentType = c.req.header("content-type")?.split(";", 1)[0]
+    try {
+      if (contentType === "multipart/form-data") {
+        const form = await c.req.formData()
+        const text = String(form.get("text") ?? "").trim()
+        if (!text) return badRequest(c, "invalid", "text is required")
+        const uploads = [...form.getAll("files")].filter(
+          (entry): entry is File => entry instanceof File
+        )
+        const message = await runService.channels.postWithUpload({
+          channelId,
+          author: { type: "user" },
+          body: text,
+          uploads: uploads.map((file) => ({
+            filename: file.name,
+            size: file.size,
+            stream: () => file.arrayBuffer().then((b) => new Uint8Array(b)),
+          })),
+        })
+        return c.json(message, 201)
+      }
+      // JSON path — requires the agent identity header.
+      const agentId = c.req.header(AGENT_ID_HEADER) ?? ""
+      if (!agentId) {
+        return badRequest(
+          c,
+          "invalid",
+          "JSON posts require the agent identity header (or use multipart)"
+        )
+      }
+      const input = (await c.req.json()) as {
+        text?: unknown
+        tags?: unknown
+        urgent?: unknown
+        files?: unknown
+      }
+      if (typeof input.text !== "string" || !input.text.trim()) {
+        return badRequest(c, "invalid", "text is required")
+      }
+      if (input.text.length > 16_000) {
+        return badRequest(c, "invalid", "text exceeds the 16K character cap")
+      }
+      const tags = Array.isArray(input.tags)
+        ? input.tags
+            .filter((t): t is string => typeof t === "string")
+            .slice(0, 8)
+        : []
+      const files = Array.isArray(input.files)
+        ? input.files
+            .filter((f): f is string => typeof f === "string")
+            .slice(0, 8)
+        : []
+      const message = runService.channels.post({
+        channelId,
+        author: { type: "agent", agentId },
+        body: input.text,
+        meta: {
+          ...(tags.length ? { tags } : {}),
+          ...(input.urgent === true ? { urgent: true } : {}),
+        },
+        ...(files.length ? { files } : {}),
+      })
+      return c.json(message, 201)
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  /** Attachment download / preview (users + SDK fetch materialization).
+   * `?meta=1` returns the JSON metadata instead of the bytes (fetch uses the
+   * original filename for its default dest). */
+  app.get("/api/channel-files/:fileId", (c) => {
+    try {
+      const { row, path } = runService.channels.fileById(c.req.param("fileId"))
+      if (c.req.query("meta") === "1") {
+        return c.json({
+          id: row.id,
+          filename: row.filename,
+          size: row.size,
+          createdAt: row.createdAt,
+        })
+      }
+      return new Response(Bun.file(path), {
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+        },
+      })
     } catch (error) {
       return runError(c, error)
     }
@@ -626,7 +783,9 @@ function runError(c: Context, error: unknown) {
         ? 500
         : error.code === "capacity"
           ? 429
-          : 409
+          : error.code === "invalid"
+            ? 400
+            : 409
   )
 }
 

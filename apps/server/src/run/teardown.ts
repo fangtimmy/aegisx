@@ -7,7 +7,7 @@ import type { ContainerManager } from "./container/container-manager"
 import type { RunQueries } from "./queries"
 import type { QueueService } from "./queue"
 import type { RunContext } from "./run-factory"
-import type { SchedulerInbox } from "./scheduler-inbox"
+import type { SchedulerDigest } from "./scheduler-digest"
 
 /** Grace between SIGTERM and a forced SIGKILL on container teardown. */
 const FORCE_KILL_GRACE_MS = 10_000
@@ -23,9 +23,9 @@ export type RunTeardownDeps = {
   queue: () => QueueService | undefined
   /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
   eventScopes: Map<string, EventScopeEmitter>
-  /** Per-event scheduler inboxes, same lifetime as their emitter (closed +
-   * dropped together). */
-  inboxes: Map<string, SchedulerInbox>
+  /** Per-event scheduler digests, same lifetime as their emitter (closed +
+   * dropped together). The channel messages themselves persist. */
+  digests: Map<string, SchedulerDigest>
   /** Runs finish_run already warned about a missing flag (once per run). */
   finishFlagWarned: Set<string>
   now(): string
@@ -58,7 +58,7 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     contexts,
     queue,
     eventScopes,
-    inboxes,
+    digests,
     finishFlagWarned,
     now,
     updateRun,
@@ -134,13 +134,14 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     clearRunTimers(runId)
     terminateContainer(runId, containerName(runId))
     // A closed scheduler run stops receiving child-run events; the emitter
-    // and its inbox are dropped and rebuilt fresh by the next scheduler start.
+    // and its digest are dropped and rebuilt fresh by the next scheduler
+    // start (unread channel messages survive — catch-up on re-attach).
     const row = queries.getRow(runId)
     if (row?.scopeType === "event") {
       eventScopes.get(row.eventId)?.close()
       eventScopes.delete(row.eventId)
-      inboxes.get(row.eventId)?.close()
-      inboxes.delete(row.eventId)
+      digests.get(row.eventId)?.close()
+      digests.delete(row.eventId)
     }
     // Dispose every live agent session, then drop the run-level context.
     for (const agent of agents) {

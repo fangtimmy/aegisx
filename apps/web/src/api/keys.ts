@@ -13,13 +13,14 @@ export const keys = {
       ["runs", runId, "files", path] as const,
     messages: (runId: string, agentId?: string) =>
       ["runs", runId, "messages", agentId ?? "all"] as const,
+    channels: (runId: string) => ["runs", runId, "channels"] as const,
+    channelMessages: (channelId: string) =>
+      ["channels", channelId, "messages"] as const,
   },
   scheduler: {
     detail: (eventId: string) => ["events", eventId, "scheduler"] as const,
     queue: (eventId: string) => ["events", eventId, "queue"] as const,
     inbox: (eventId: string) => ["events", eventId, "inbox"] as const,
-    inboxDigests: (eventId: string) =>
-      ["events", eventId, "inbox", "digests"] as const,
   },
   challenges: {
     target: (challengeId: string) =>

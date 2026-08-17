@@ -1,5 +1,6 @@
 export * as challengesApi from "./challenges"
 export { jsonRequest } from "./client"
+export * as channelsApi from "./channels"
 export * as agentsApi from "./agents"
 export * as eventsApi from "./events"
 export { keys } from "./keys"

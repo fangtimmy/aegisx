@@ -206,7 +206,11 @@ Single quotes around PY stop shell interpolation of $/backticks. The scheduler c
 export function createBashTool(
   containerWorkspace: string,
   containerName: string,
-  manager: ContainerManager
+  manager: ContainerManager,
+  /** Per-call exec env ("KEY=value" entries) — per-agent identity for the
+   * container-side aegisx SDK (AEGISX_AGENT_ID / AEGISX_RUN_ID) on shared
+   * solver containers (docs/im-channels.md §四). */
+  execEnv?: string[]
 ): ToolDefinition {
   const overflowDirAbs = `${containerWorkspace}/${OVERFLOW_DIR_REL}`.replace(
     /\/+/g,
@@ -263,6 +267,7 @@ export function createBashTool(
           onData: handleData,
           signal,
           timeout,
+          env: execEnv,
         })
         exitCode = res.exitCode
         timedOut = res.timedOut

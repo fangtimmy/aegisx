@@ -71,6 +71,13 @@
       "when": 1790000000000,
       "tag": "0009_scheduler_inbox_digests",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": 12,
+      "when": 1790100000000,
+      "tag": "0010_im_channels",
+      "breakpoints": true
     }
   ]
 }

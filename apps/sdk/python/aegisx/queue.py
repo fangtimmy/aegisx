@@ -1,11 +1,12 @@
 """`aegisx.queue` — the event's task queue (the plan)."""
 from __future__ import annotations
 
-from .client import get_client, wire_solvers
+from .client import get_client, require_manager, wire_solvers
 from .models import QueueItem, from_dict
 
 
 def list() -> list[QueueItem]:
+    require_manager()
     """The event's actionable queue items (pending + running + failed), FIFO.
     The queue content IS the plan."""
     client = get_client()
@@ -22,6 +23,7 @@ def enqueue(
     timeout_ms: int | None = None,
     source: str = "scheduler",
 ) -> QueueItem:
+    require_manager()
     """Add (or re-arm) a task in the queue — upserts by challenge; a hit
     including done/cancelled/failed resets to pending. The queue drains FIFO
     under the concurrency caps; with a free slot the run launches right away.
@@ -53,6 +55,7 @@ def enqueue(
 
 
 def remove(item_id: str) -> None:
+    require_manager()
     """Remove a queue item (pending/done/cancelled/failed). A running item
     cannot be removed — close its run first."""
     client = get_client()
@@ -60,12 +63,14 @@ def remove(item_id: str) -> None:
 
 
 def clear() -> None:
+    require_manager()
     """Remove every non-running queue item (pending + failed)."""
     client = get_client()
     client.request("POST", client.event_path("/queue/clear"))
 
 
 def reorder(item_ids: list[str]) -> None:
+    require_manager()
     """Reorder pending queue items by listing their ids front-first.
     Running/failed items keep their place."""
     client = get_client()

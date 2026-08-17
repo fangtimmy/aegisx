@@ -3,6 +3,7 @@ import {
   check,
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   unique,
@@ -10,7 +11,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -396,27 +397,138 @@ export const runQueue = sqliteTable(
 )
 
 /**
- * Per-event scheduler inbox delivery history: one row per flushed digest
- * (the exact text steered into the orchestrator). Append-only; cascade on
- * event delete. The live backlog itself stays in memory (scheduler-inbox.ts)
- * — this table only records what WAS delivered.
+ * Unified message layer (docs/im-channels.md, schema v16): one channel tree
+ * per run (#team / #announce / DM per solver) + one event-scope channel
+ * (DM: scheduler). Channels are persistent rows created with the run and
+ * cascaded on run/event delete; the scheduler DM is event-scoped (FK on
+ * events, NOT on the scheduler run — it survives scheduler restarts so the
+ * recap history persists) with a plain-text `targetAgentId` pointer that is
+ * re-stamped on each scheduler start.
  */
-export const schedulerInboxDigests = sqliteTable(
-  "scheduler_inbox_digests",
+export const channels = sqliteTable(
+  "channels",
   {
     id: text("id").primaryKey(),
+    /** "run" | "event". */
+    scopeType: text("scope_type").notNull(),
+    /** Run scope: the owning run (cascade). Event scope: null. */
+    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
+    /** Always set (run channels derive it from the run; scheduler DM is
+     * event-scoped). Powers the scheduler's whole-event visibility. */
     eventId: text("event_id")
       .notNull()
       .references(() => events.id, { onDelete: "cascade" }),
-    text: text("text").notNull(),
+    /** "team" | "announce" | "dm". */
+    kind: text("kind").notNull(),
+    /** DM target agent id (kind=dm). No FK: the scheduler agent churns across
+     * scheduler restarts while the channel (and its history) persists. */
+    targetAgentId: text("target_agent_id"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("scheduler_inbox_digests_event_idx").on(
-      table.eventId,
-      table.createdAt
+    index("channels_run_id_idx").on(table.runId),
+    index("channels_event_id_idx").on(table.eventId),
+    check(
+      "channels_scope_type_check",
+      sql`${table.scopeType} in ('run', 'event')`
+    ),
+    check(
+      "channels_kind_check",
+      sql`${table.kind} in ('team', 'announce', 'dm')`
+    ),
+    check(
+      "channels_dm_target_check",
+      sql`(${table.kind} != 'dm') or (${table.targetAgentId} is not null)`
+    ),
+    check(
+      "channels_scope_run_check",
+      sql`(${table.scopeType} != 'run') or (${table.runId} is not null)`
     ),
   ]
+)
+
+/**
+ * Channel message ledger (the single write/store/render point for ALL
+ * inter-agent communication). `id` is a global autoincrement — the monotonic
+ * comparison basis for read cursors. `kind="recap"` rows are rendered digest
+ * snapshots stored back into the scheduler DM (delivery history, Slack
+ * bot-summary style); they never steer on their own.
+ */
+export const channelMessages = sqliteTable(
+  "channel_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    channelId: text("channel_id")
+      .notNull()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    /** "text" | "recap". */
+    kind: text("kind").notNull(),
+    /** "system" | "user" | "agent". */
+    authorType: text("author_type").notNull(),
+    authorAgentId: text("author_agent_id"),
+    /** Display-name snapshot ("Solver 2" / "Scheduler" / "system" / "用户"). */
+    authorName: text("author_name").notNull(),
+    /** Server-side cap: 16K characters. */
+    body: text("body").notNull(),
+    /** JSON: { runId?, eventType?, urgent?, noticeType? }. */
+    meta: text("meta").notNull().default("{}"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("channel_messages_channel_id_idx").on(table.channelId, table.id),
+    check(
+      "channel_messages_kind_check",
+      sql`${table.kind} in ('text', 'recap')`
+    ),
+    check(
+      "channel_messages_author_type_check",
+      sql`${table.authorType} in ('system', 'user', 'agent')`
+    ),
+  ]
+)
+
+/**
+ * Read cursors: (channelId, agentId) → lastReadMsgId. The dedup anchor for
+ * delivery — a message is steered at most once. `agentId` is a plain key:
+ * solver DMs use the agent uuid; the event-scope scheduler DM uses the stable
+ * literal "scheduler" so the cursor survives scheduler-agent churn.
+ */
+export const channelReads = sqliteTable(
+  "channel_reads",
+  {
+    channelId: text("channel_id")
+      .notNull()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    agentId: text("agent_id").notNull(),
+    lastReadMsgId: integer("last_read_msg_id").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.channelId, table.agentId] })]
+)
+
+/**
+ * Message attachments (docs/im-channels.md §2.5). Snapshot semantics: the
+ * bytes are copied out of the poster's workspace at post time into
+ * data/channel-files/<channelId>/<messageId>/<filename> — later workspace
+ * edits never mutate a sent attachment. Storage dir is host-only (never bind
+ * mounted into any container); agents materialize via SDK fetch, users via
+ * HTTP download.
+ */
+export const channelFiles = sqliteTable(
+  "channel_files",
+  {
+    id: text("id").primaryKey(),
+    messageId: integer("message_id")
+      .notNull()
+      .references(() => channelMessages.id, { onDelete: "cascade" }),
+    channelId: text("channel_id")
+      .notNull()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    size: integer("size").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("channel_files_message_id_idx").on(table.messageId)]
 )
 
 /**

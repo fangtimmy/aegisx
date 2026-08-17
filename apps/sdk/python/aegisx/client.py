@@ -18,6 +18,31 @@ DEFAULT_API_URL = os.environ.get(
 )
 
 
+def agent_id() -> str:
+    """The calling agent's id (per-exec env AEGISX_AGENT_ID — see
+    docs/im-channels.md §四) or an empty string."""
+    return os.environ.get("AEGISX_AGENT_ID", "")
+
+
+def role() -> str:
+    """The container's AEGISX_ROLE ("solver" on challenge containers,
+    "scheduler" on the event container, "" on old setups)."""
+    return os.environ.get("AEGISX_ROLE", "")
+
+
+def require_manager() -> None:
+    """Client-side role gate for the management namespaces: AEGISX_ROLE=solver
+    containers raise AegisxError("forbidden") instead of issuing the call.
+    Guards accidental misuse — deliberate bypass (bash + curl straight at the
+    API) remains the accepted boundary (scheduler-python-sdk.md §四/§六)."""
+    if role() == "solver":
+        raise AegisxError(
+            "forbidden",
+            "management namespaces are scheduler-only (AEGISX_ROLE=solver); "
+            "use aegisx.channels / aegisx.ask instead",
+        )
+
+
 class AegisxError(Exception):
     """API error. `code` mirrors the server's error code (capacity,
     not_found, invalid_state, launch_failed, ...) so scripts can branch on it
@@ -47,6 +72,7 @@ class Client:
         path: str,
         body: dict[str, Any] | None = None,
         query: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         url = self.api_url + path
         if query:
@@ -55,6 +81,11 @@ class Client:
         req = urllib.request.Request(url, data=data, method=method)
         if data is not None:
             req.add_header("Content-Type", "application/json")
+        caller = agent_id()
+        if caller:
+            req.add_header("X-Aegisx-Agent-Id", caller)
+        for key, value in (headers or {}).items():
+            req.add_header(key, value)
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 raw = resp.read()
@@ -71,6 +102,29 @@ class Client:
             raise AegisxError(
                 "bad_response", f"Invalid JSON from {url}: {error}"
             ) from None
+
+    def download(self, path: str, dest: str) -> str:
+        """GET binary content and write it to `dest` (returns the absolute-ish
+        dest path as given). Used by `aegisx.channels.fetch` to materialize
+        attachments into the caller's workspace."""
+        url = self.api_url + path
+        req = urllib.request.Request(url)
+        caller = agent_id()
+        if caller:
+            req.add_header("X-Aegisx-Agent-Id", caller)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                payload = resp.read()
+        except urllib.error.HTTPError as error:
+            raise _http_error(error) from None
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise AegisxError(
+                "network_error", f"Download from {url} failed: {error}"
+            ) from None
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        with open(dest, "wb") as fh:
+            fh.write(payload)
+        return dest
 
     def event_path(self, suffix: str = "") -> str:
         """`/api/events/<event_id><suffix>` — event-scoped API base."""

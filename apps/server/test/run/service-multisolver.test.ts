@@ -157,9 +157,14 @@ describe("v9 direct N-solver creation", () => {
         .from(agents)
         .where(eq(agents.runId, triple.id))
         .get()!.systemPrompt
-      expect(singlePrompt).not.toContain("Co-solvers")
-      expect(triplePrompt).toContain("Co-solvers")
-      expect(triplePrompt).toContain("SOLVER-")
+      // Channels era (docs/im-channels.md §6): the multiSolver-gated
+      // Co-solvers file convention is replaced by the channel section,
+      // rendered for every solver run (single keeps ask/#team/attachments).
+      expect(singlePrompt).toContain("## Channels（团队频道）")
+      expect(triplePrompt).toContain("## Channels（团队频道）")
+      expect(singlePrompt).not.toContain("## Co-solvers")
+      expect(triplePrompt).not.toContain("## Co-solvers")
+      expect(triplePrompt).toContain('aegisx.channels.post("#team"')
     } finally {
       close()
     }

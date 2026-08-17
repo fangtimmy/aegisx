@@ -53,7 +53,7 @@ describe("W1 prompt fixes", () => {
     expect(main).toContain("/opt/solver/knowledges")
   })
 
-  test("mainSystem renders the co-solver section only for multi-solver runs (v9)", () => {
+  test("mainSystem renders the Channels section for every solver run (channels era)", () => {
     const single = renderSystemPrompt(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE, {
       ...samplePromptContext,
       run: { ...samplePromptContext.run, multiSolver: false },
@@ -62,9 +62,14 @@ describe("W1 prompt fixes", () => {
       ...samplePromptContext,
       run: { ...samplePromptContext.run, multiSolver: true },
     })
-    expect(single).not.toContain("Co-solvers")
-    expect(multi).toContain("Co-solvers")
-    expect(multi).toContain("SOLVER-")
+    // The legacy multiSolver-gated Co-solvers file convention is REPLACED by
+    // the channel layer (docs/im-channels.md §6) — rendered for EVERY run
+    // (single-solver keeps ask/attachments/#team).
+    expect(single).toContain("## Channels（团队频道）")
+    expect(multi).toContain("## Channels（团队频道）")
+    expect(single).not.toContain("## Co-solvers")
+    expect(multi).not.toContain("## Co-solvers")
+    expect(multi).toContain('aegisx.channels.post("#team"')
   })
 })
 

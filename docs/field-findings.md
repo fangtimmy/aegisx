@@ -39,6 +39,8 @@
 
 ## 3. 知识共享：共享什么、怎么共享
 
+> **已由统一消息层覆盖**（[im-channels.md](im-channels.md)）：共享 FS/post_note 方案未实施即被频道化 IM 取代——findings/死路广播走 #team，跨 run 工件流转走「调度者读 /runs:ro + 摘要附件转发 DM」模式，`/shared` 层取消（设计 §八）。
+
 **共享什么**（按价值排序）：
 
 1. 环境/方法论知识（§2 的产物）——一次踩坑全员受益，event 级共享。
@@ -101,6 +103,8 @@ read_run(run_id, agent_id?=entry, after_seq?|last_n?=10,
 - 补充（可选，后做）：轮数上限（cap-1 注入同样收尾指令，到 cap 强制 settle，防快速空转型 runaway）；`autoCloseIdleMs`（idle 无 flag 超 N 分钟自动 close 释放槽，默认关）。
 
 ## 9. 调度者/解题者之间、解题者之间的文件传递与通信
+
+> **已由统一消息层覆盖**（[im-channels.md](im-channels.md)）：`ask_scheduler` 落地为 SDK `aegisx.ask(text, urgent)`（落调度者 DM，digest 分级投递）；文件传递落地为频道附件（📎 元数据 + `aegisx.channels.fetch` 物化）；跨 run messaging 部分由「调度者中转」模式覆盖，agent-to-agent 总线仍不做。
 
 **方向**：第一版用 §3 的共享 FS + `post_note` + `read_run_file`，**不做跨 run 消息总线**。补一个高性价比小件：solver → scheduler 异步问询 `ask_scheduler(question)`（写一条 `@scheduler` 标记的 note 并唤醒调度者，digest 带上）——解决「靶机快到期了，延长还是放弃」这类决策上移场景。真正的跨 run agent-to-agent messaging 等 §11 的 P0–P2 落地后再评估。
 

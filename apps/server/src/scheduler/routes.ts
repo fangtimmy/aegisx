@@ -100,9 +100,9 @@ export function registerSchedulerRoutes(
     })
   })
 
-  /** Live scheduler-inbox snapshot (agent dialog's inbox tab): pending
-   * backlog, notices, emergency lines, silence/stall timers. No live inbox
-   * (no scheduler run) → live:false. */
+  /** Live scheduler-DM digest snapshot (the scheduler DM view's status
+   * header): unread backlog, silence/stall timers, hold state + the channel
+   * id for the timeline. No live digest (no scheduler run) → live:false. */
   app.get("/api/events/:eventId/inbox", (c) => {
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
@@ -110,7 +110,10 @@ export function registerSchedulerRoutes(
     return c.json(runService.inboxSnapshot(eventId))
   })
 
-  /** Delivered-digest history (newest first; ?limit default 30, ?offset). */
+  /** Delivered-digest history (newest first; ?limit default 30, ?offset) —
+   * served from the recap messages stored back into the scheduler DM channel
+   * (schema v16 dropped scheduler_inbox_digests; the ledger is
+   * self-contained). */
   app.get("/api/events/:eventId/inbox/digests", (c) => {
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
@@ -431,6 +434,8 @@ function runError(c: Context, error: unknown) {
         ? 500
         : error.code === "capacity"
           ? 429
-          : 409
+          : error.code === "invalid"
+            ? 400
+            : 409
   )
 }
