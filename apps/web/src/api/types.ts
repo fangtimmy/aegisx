@@ -9,12 +9,16 @@ export type {
   ChallengeSyncItem,
   ChallengeSyncProgress,
   ChallengeSyncResult,
+  ChannelMessageList,
+  ChannelMessagePublic,
+  ChannelPublic,
   CompactionEntry,
   EntryItem,
   EventInput,
   EventPlatform,
   EventSummary,
   FlatSettings,
+  InboxSnapshot,
   LiveEvent,
   MessageList,
   MessageListItem,
@@ -83,58 +87,6 @@ export type QueueState = "running" | "paused"
 export type QueueSnapshot = {
   items: QueueItem[]
   state: QueueState
-}
-
-/** GET /api/events/:id/inbox — live scheduler-DM digest snapshot (channels
- * era: the DM view's status header + backlog; the timeline incl. recap
- * history comes from the channel messages endpoint via channelId). */
-export type InboxSnapshot = {
-  live: boolean
-  channelId: string | null
-  deliveryPaused: boolean
-  unreadCount: number
-  pending: Array<{ runId: string; events: string[] }>
-  notices: string[]
-  emergency: string[]
-  silence: { armed: boolean; flushAt: number | null }
-  stallWatch: Array<{ runId: string; dueAt: number }>
-}
-
-/** One channel in a run's tree (GET /api/runs/:id/channels). v17:
- * #team/#announce are challenge-scoped (shared across the challenge's runs —
- * `sharedRunCount` = live runs on the challenge, the UI 共享 badge). */
-export type ChannelInfo = {
-  id: string
-  scopeType: "run" | "event" | "challenge"
-  runId: string | null
-  eventId: string
-  challengeId: string | null
-  kind: "team" | "announce" | "dm"
-  targetAgentId: string | null
-  label: string
-  unread: number
-  lastMessageAt: string | null
-  sharedRunCount: number | null
-}
-
-/** One channel message (timeline + SDK read). */
-export type ChannelMessageInfo = {
-  id: number
-  channelId: string
-  kind: "text" | "recap"
-  authorType: "system" | "user" | "agent"
-  authorAgentId: string | null
-  authorName: string
-  body: string
-  meta: Record<string, unknown>
-  createdAt: string
-  files: Array<{ id: string; filename: string; size: number }>
-}
-
-export type ChannelMessageList = {
-  items: ChannelMessageInfo[]
-  nextAfter: number
-  hasMore: boolean
 }
 
 /** GET /api/events/:id/scheduler — config + run + fence status snapshot. */

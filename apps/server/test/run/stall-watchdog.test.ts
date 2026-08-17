@@ -28,7 +28,11 @@ function setupLite() {
   return { db, dir, close: () => releaseLock() }
 }
 
-function makeWatchdog(db: Db, dir: string, opts: { stallMs?: number; paused?: boolean } = {}) {
+function makeWatchdog(
+  db: Db,
+  dir: string,
+  opts: { stallMs?: number; paused?: boolean } = {}
+) {
   const channels: ChannelService = createChannelService({
     db,
     dataDir: dir,
@@ -175,7 +179,8 @@ describe("stall watchdog (docs/im-simplify-v18.md §五)", () => {
         paused: true,
       })
 
-      for (const runId of ["r1", "r2", "r3", "rS"]) watchdog.noteAgentIdle(runId)
+      for (const runId of ["r1", "r2", "r3", "rS"])
+        watchdog.noteAgentIdle(runId)
       await wait(60)
       expect(orchRows(db)).toHaveLength(0)
       watchdog.close()
@@ -196,9 +201,7 @@ describe("stall watchdog (docs/im-simplify-v18.md §五)", () => {
       const { channels, watchdog } = makeWatchdog(db, dir, { stallMs: 20 })
       watchdog.noteAgentIdle("r1")
       await wait(50)
-      expect(
-        channels.unreadCount(orchKey("evt-1"), SCHEDULER_READ_KEY)
-      ).toBe(1)
+      expect(channels.unreadCount(orchKey("evt-1"), SCHEDULER_READ_KEY)).toBe(1)
       watchdog.close()
       channels.close()
     } finally {

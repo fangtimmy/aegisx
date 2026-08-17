@@ -32,13 +32,14 @@ export function listQueue(eventId: string) {
   return apiRequest<QueueSnapshot>(`/events/${eventId}/queue`)
 }
 
-/** Live scheduler-DM digest snapshot (the scheduler DM view's status
- * header). */
+/** The scheduler orch inbox status (the scheduler DM view's status header):
+ * unread backlog / next flush tick / delivery hold. */
 export function getInbox(eventId: string) {
   return apiRequest<InboxSnapshot>(`/events/${eventId}/inbox`)
 }
 
-/** Hold digest delivery (collect silently — the orchestrator stays idle). */
+/** Hold delivery for the event (posts store only — the flush tick and
+ * urgent deliveries skip the event entirely). */
 export function pauseInbox(eventId: string) {
   return apiRequest<{ deliveryPaused: boolean }>(
     `/events/${eventId}/inbox/pause`,
@@ -46,7 +47,7 @@ export function pauseInbox(eventId: string) {
   )
 }
 
-/** Resume delivery — flushes any backlog as one digest. */
+/** Resume delivery — the next tick/urgent post catches up the backlog. */
 export function resumeInbox(eventId: string) {
   return apiRequest<{ deliveryPaused: boolean }>(
     `/events/${eventId}/inbox/resume`,

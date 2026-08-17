@@ -81,7 +81,10 @@ export function createRunStatus(deps: RunStatusDeps) {
     channels.post({
       channelKey: orchKey(run.eventId),
       author: { type: "system" },
-      body: eventName({ ...payload, source: run.source as "manual" | "scheduler" }),
+      body: eventName({
+        ...payload,
+        source: run.source as "manual" | "scheduler",
+      }),
       meta: {
         runId,
         eventType: payload.type,

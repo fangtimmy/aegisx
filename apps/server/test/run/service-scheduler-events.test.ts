@@ -267,8 +267,7 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       // scheduler can tell a dead solver from a healthy pause.
       expect(
         orchRows(db).some(
-          (r) =>
-            r.body === "idle(failed)" && metaOf(r).eventType === "run.idle"
+          (r) => r.body === "idle(failed)" && metaOf(r).eventType === "run.idle"
         )
       ).toBe(true)
       await service.close()
@@ -558,9 +557,9 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       await settle()
       const stored = orchRows(db)
       expect(stored.length).toBeGreaterThanOrEqual(2)
-      expect(
-        service.channels.unreadCount(orchKey("evt-1"), "scheduler")
-      ).toBe(stored.length)
+      expect(service.channels.unreadCount(orchKey("evt-1"), "scheduler")).toBe(
+        stored.length
+      )
 
       // Restore: SAME run id + agent row (memory kept)…
       const restored = await service.startScheduler("evt-1")

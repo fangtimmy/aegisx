@@ -1,10 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-} from "node:fs"
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs"
 import { join } from "node:path"
 
 import type { Database } from "./index"

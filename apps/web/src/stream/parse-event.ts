@@ -48,8 +48,9 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
       : undefined
   }
   if (value.type === "channel.message") {
-    // Channel pushes (docs/im-channels.md): the message payload shape is the
-    // ledger row; timeline views currently poll, so this is a pass-through.
+    // Channel pushes: the message payload is the ledger row keyed by its
+    // derived channelKey; timeline views currently poll, so this is a
+    // pass-through.
     return { type: "channel.message", message: value.message as never }
   }
   if (value.type === "run.updated") {

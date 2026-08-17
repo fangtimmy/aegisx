@@ -14,8 +14,8 @@ export const keys = {
     messages: (runId: string, agentId?: string) =>
       ["runs", runId, "messages", agentId ?? "all"] as const,
     channels: (runId: string) => ["runs", runId, "channels"] as const,
-    channelMessages: (channelId: string) =>
-      ["channels", channelId, "messages"] as const,
+    channelMessages: (channelKey: string) =>
+      ["channels", channelKey, "messages"] as const,
   },
   scheduler: {
     detail: (eventId: string) => ["events", eventId, "scheduler"] as const,

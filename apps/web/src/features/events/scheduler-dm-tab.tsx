@@ -18,11 +18,11 @@ function countdown(ms: number): string {
 }
 
 /**
- * The scheduler agent dialog's DM tab (docs/im-channels.md §5.2 — replaces
- * the former inbox tab): a status header (digest timers / hold toggle /
- * backlog) + the scheduler DM timeline (event messages AND recap digests
- * side-by-side — the delivery history is self-contained in the channel) +
- * the composer (a user post flushes the digest immediately).
+ * The scheduler agent dialog's DM tab (v18 派生键频道): a status header
+ * (orch unread backlog / global flush-tick countdown / per-event delivery
+ * hold toggle) + the orch timeline itself (solver asks + system run/queue
+ * events + user posts — the event stream; no recap rendering) + the
+ * composer (a user post defaults urgent → immediate delivery).
  */
 export function SchedulerDmTab({
   eventId,
@@ -31,7 +31,7 @@ export function SchedulerDmTab({
   eventId: string
   active: boolean
 }) {
-  // Ticking clock for the countdowns; only runs while the tab is visible.
+  // Ticking clock for the flush countdown; only runs while the tab is visible.
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
     if (!active) return
@@ -44,12 +44,12 @@ export function SchedulerDmTab({
     queryFn: () => schedulerApi.getInbox(eventId),
     refetchInterval: active ? POLL_INTERVAL_MS : false,
   })
-  const channelId = snapshot.data?.channelId ?? null
+  const channelKey = snapshot.data?.channelKey ?? null
 
   const messages = useQuery({
-    queryKey: keys.runs.channelMessages(channelId ?? ""),
-    enabled: Boolean(channelId),
-    queryFn: () => channelsApi.listChannelMessages(channelId!, 0, 100),
+    queryKey: keys.runs.channelMessages(channelKey ?? ""),
+    enabled: Boolean(channelKey),
+    queryFn: () => channelsApi.listChannelMessages(channelKey!, 0, 100),
     refetchInterval: active ? POLL_INTERVAL_MS : false,
   })
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -72,53 +72,35 @@ export function SchedulerDmTab({
   })
 
   const snap = snapshot.data
-  const backlog =
-    snap &&
-    (snap.emergency.length > 0 ||
-      snap.notices.length > 0 ||
-      snap.pending.length > 0)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Status header (digest timers / hold / backlog) */}
-      <div className="flex shrink-0 flex-col gap-2 border-b px-4 py-2.5">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          {snap ? (
-            snap.live ? (
-              <Badge size="sm" variant="success">
-                运行中
+      {/* Status header (orch unread / flush tick / hold) */}
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5 text-sm">
+        {!snap ? (
+          <Badge size="sm" variant="secondary">
+            加载中…
+          </Badge>
+        ) : (
+          <>
+            {snap.deliveryPaused ? (
+              <Badge size="sm" variant="warning">
+                已暂停（只存不投）
+              </Badge>
+            ) : snap.nextFlushAt !== null ? (
+              <Badge size="sm" variant="info">
+                合并投递 {countdown(snap.nextFlushAt - nowMs)}
               </Badge>
             ) : (
               <Badge size="sm" variant="secondary">
-                未运行
+                投递循环未运行
               </Badge>
-            )
-          ) : (
-            <Badge size="sm" variant="secondary">
-              加载中…
-            </Badge>
-          )}
-          {snap?.deliveryPaused && (
-            <Badge size="sm" variant="warning">
-              已暂停（静默收集）
-            </Badge>
-          )}
-          {snap?.silence.armed && snap.silence.flushAt !== null && (
-            <Badge size="sm" variant="info">
-              静默 {countdown(snap.silence.flushAt - nowMs)} 后结算
-            </Badge>
-          )}
-          {snap?.stallWatch.map(({ runId, dueAt }) => (
-            <Badge key={runId} size="sm" variant="warning">
-              run-{runId.slice(0, 8)} 停滞检查 {countdown(dueAt - nowMs)}
-            </Badge>
-          ))}
-          {snap?.unreadCount ? (
-            <Badge size="sm" variant="outline">
-              未读 {snap.unreadCount}
-            </Badge>
-          ) : null}
-          {snap?.live && (
+            )}
+            {snap.unreadCount > 0 && (
+              <Badge size="sm" variant="outline">
+                未读 {snap.unreadCount}
+              </Badge>
+            )}
             <Button
               disabled={holdToggle.isPending}
               onClick={() => holdToggle.mutate(!snap.deliveryPaused)}
@@ -131,55 +113,12 @@ export function SchedulerDmTab({
                   ? "恢复投递"
                   : "暂停投递"}
             </Button>
-          )}
-        </div>
-        {snap && backlog && (
-          <div className="flex flex-col gap-1">
-            {snap.emergency.map((line, index) => (
-              <div
-                className="flex items-start gap-2 text-sm"
-                key={`emergency-${index}`}
-              >
-                <Badge className="mt-0.5 shrink-0" size="sm" variant="error">
-                  紧急
-                </Badge>
-                <span className="text-destructive-foreground">⚠ {line}</span>
-              </div>
-            ))}
-            {snap.notices.map((line, index) => (
-              <div
-                className="flex items-start gap-2 text-sm"
-                key={`notice-${index}`}
-              >
-                <Badge className="mt-0.5 shrink-0" size="sm" variant="info">
-                  通知
-                </Badge>
-                <span>{line}</span>
-              </div>
-            ))}
-            {snap.pending.map(({ runId, events }) => (
-              <div
-                className="flex items-start gap-2 text-sm"
-                key={`pending-${runId}`}
-              >
-                <Badge
-                  className="mt-0.5 shrink-0 font-mono"
-                  size="sm"
-                  variant="outline"
-                >
-                  run-{runId.slice(0, 8)}
-                </Badge>
-                <span className="font-mono text-xs leading-5">
-                  {events.join(" → ")}
-                </span>
-              </div>
-            ))}
-          </div>
+          </>
         )}
       </div>
-      {/* Timeline (event stream + recap digests side by side) */}
+      {/* Timeline (the orch event stream — no recap) */}
       <div className="flex min-h-0 flex-1 flex-col">
-        {!channelId ? (
+        {!channelKey ? (
           <p className="px-4 py-6 text-sm text-muted-foreground">
             尚无调度者频道（启动调度者后自动创建）。
           </p>
@@ -199,7 +138,7 @@ export function SchedulerDmTab({
             ))}
           </div>
         )}
-        {channelId && <ChannelComposer channelId={channelId} />}
+        {channelKey && <ChannelComposer channelKey={channelKey} />}
       </div>
     </div>
   )

@@ -647,9 +647,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       const sameChallenge =
         agentRun?.scopeType === "challenge" &&
         agentRun.challengeId === parsed.id
-      const scheduler = schedulerAgentOf(
-        challengeRow(parsed.id)?.eventId ?? ""
-      )
+      const scheduler = schedulerAgentOf(challengeRow(parsed.id)?.eventId ?? "")
       if (!sameChallenge && scheduler?.id !== agent.id) {
         throw new RunActionError(
           "invalid",
@@ -1088,9 +1086,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       const target = agentRow(parsed.id)
       runId = target?.runId ?? null
       agentId = parsed.id
-      eventId = target
-        ? (queries.getRow(target.runId)?.eventId ?? "")
-        : ""
+      eventId = target ? (queries.getRow(target.runId)?.eventId ?? "") : ""
     } else {
       eventId = parsed.id
     }
@@ -1109,7 +1105,9 @@ export function createChannelService(deps: ChannelServiceDeps) {
       challengeId,
       agentId,
       runId,
-      unread: readerKey ? unreadCount(`${parsed.kind}:${parsed.id}`, readerKey) : 0,
+      unread: readerKey
+        ? unreadCount(`${parsed.kind}:${parsed.id}`, readerKey)
+        : 0,
       lastMessageAt: last?.createdAt ?? null,
       sharedRunCount: shared,
     }
@@ -1133,31 +1131,39 @@ export function createChannelService(deps: ChannelServiceDeps) {
         .orderBy(asc(challenges.name))
         .all()
       for (const challenge of eventChallenges) {
-        out.push(channelInfo(parseChannelKey(teamKey(challenge.id))!, readerKey))
+        out.push(
+          channelInfo(parseChannelKey(teamKey(challenge.id))!, readerKey)
+        )
       }
-      out.push(channelInfo(parseChannelKey(orchKey(runRow.eventId))!, readerKey))
+      out.push(
+        channelInfo(parseChannelKey(orchKey(runRow.eventId))!, readerKey)
+      )
       const eventRuns = db
         .select({ id: runs.id })
         .from(runs)
         .where(
-          and(
-            eq(runs.eventId, runRow.eventId),
-            eq(runs.scopeType, "challenge")
-          )
+          and(eq(runs.eventId, runRow.eventId), eq(runs.scopeType, "challenge"))
         )
         .orderBy(asc(runs.createdAt))
         .all()
       for (const run of eventRuns) {
         for (const candidate of queries.listAgents(run.id)) {
           if (candidate.role !== "solver") continue
-          out.push(channelInfo(parseChannelKey(dmKey(candidate.id))!, readerKey))
+          out.push(
+            channelInfo(parseChannelKey(dmKey(candidate.id))!, readerKey)
+          )
         }
       }
       return out
     }
     return [
       ...(runRow.challengeId
-        ? [channelInfo(parseChannelKey(teamKey(runRow.challengeId))!, readerKey)]
+        ? [
+            channelInfo(
+              parseChannelKey(teamKey(runRow.challengeId))!,
+              readerKey
+            ),
+          ]
         : []),
       channelInfo(parseChannelKey(dmKey(agent.id))!, readerKey),
       channelInfo(parseChannelKey(orchKey(runRow.eventId))!, readerKey),
@@ -1231,9 +1237,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     db.delete(channelMessages)
       .where(inArray(channelMessages.channelKey, keys))
       .run()
-    db.delete(channelReads)
-      .where(inArray(channelReads.channelKey, keys))
-      .run()
+    db.delete(channelReads).where(inArray(channelReads.channelKey, keys)).run()
     for (const { id } of messageIds) {
       rmSync(filesDir(id), { recursive: true, force: true })
     }
@@ -1242,9 +1246,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
   /** Run deletion: each agent's dm:<aid> data goes (its #team posts stay —
    * the knowledge base survives single runs). */
   function cleanupRunChannels(runId: string): void {
-    const keys = queries
-      .listAgents(runId)
-      .map((agent) => dmKey(agent.id))
+    const keys = queries.listAgents(runId).map((agent) => dmKey(agent.id))
     deleteChannelData(keys)
   }
 

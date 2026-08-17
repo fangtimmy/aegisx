@@ -150,7 +150,11 @@ describe("channel trees (§2.2 / §9.1)", () => {
       const { channels } = makeService(db, dir)
       // No ensure*, no rows — the tree derives from entities alone.
       const tree = channels.runChannelTree("r1")
-      expect(tree.map((c) => c.key)).toEqual([teamKey("ch-1"), dmKey("a1"), dmKey("a2")])
+      expect(tree.map((c) => c.key)).toEqual([
+        teamKey("ch-1"),
+        dmKey("a1"),
+        dmKey("a2"),
+      ])
       expect(tree.map((c) => c.kind)).toEqual(["team", "dm", "dm"])
       expect(tree[0]!.label).toBe("#team")
       expect(tree[0]!.sharedRunCount).toBe(1)
@@ -728,9 +732,7 @@ describe("read cursors — three progression points (§3.5)", () => {
         dmKey("a1")
       )
       // Visibility: a solver cannot read a foreign team, another agent's dm.
-      expect(() => channels.readForAgent("a1", teamKey("ch-2"))).toThrow(
-        /无权/
-      )
+      expect(() => channels.readForAgent("a1", teamKey("ch-2"))).toThrow(/无权/)
       expect(() => channels.readForAgent("a1", dmKey("x1"))).toThrow(/无权/)
       // The scheduler addresses teams by key ("#team" is a solver shortcut).
       expect(channels.readForAgent("s1", teamKey("ch-1")).channel.key).toBe(
@@ -957,7 +959,11 @@ describe("attachments (§六)", () => {
       ).rejects.toThrow(/disk full/)
       expect(db.select().from(channelMessages).all().length).toBe(before)
       expect(
-        db.select().from(channelFiles).all().filter((f) => f.filename === "ok.txt")
+        db
+          .select()
+          .from(channelFiles)
+          .all()
+          .filter((f) => f.filename === "ok.txt")
       ).toHaveLength(0)
       made.channels.close()
     } finally {
@@ -987,7 +993,13 @@ describe("timeline pagination (§9.1)", () => {
       expect(page1.nextAfter).toBe(5)
       // Widening the limit exposes the older tail (ascending order kept).
       const full = channels.listMessages(teamKey("ch-1"), { limit: 10 })
-      expect(full.items.map((m) => m.body)).toEqual(["m1", "m2", "m3", "m4", "m5"])
+      expect(full.items.map((m) => m.body)).toEqual([
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+      ])
       expect(full.hasMore).toBe(false)
       // Incremental pull above the cursor: nothing new.
       const tail = channels.listMessages(teamKey("ch-1"), { after: 5 })
@@ -1025,14 +1037,26 @@ describe("explicit cleanup (§八)", () => {
 
       channels.cleanupRunChannels("r1")
       expect(
-        db.select().from(channelMessages).where(eq(channelMessages.channelKey, dmKey("a1"))).all()
+        db
+          .select()
+          .from(channelMessages)
+          .where(eq(channelMessages.channelKey, dmKey("a1")))
+          .all()
       ).toHaveLength(0)
       expect(
-        db.select().from(channelReads).where(eq(channelReads.channelKey, dmKey("a1"))).all()
+        db
+          .select()
+          .from(channelReads)
+          .where(eq(channelReads.channelKey, dmKey("a1")))
+          .all()
       ).toHaveLength(0)
       // The #team knowledge base survives single-run deletion.
       expect(
-        db.select().from(channelMessages).where(eq(channelMessages.channelKey, teamKey("ch-1"))).all()
+        db
+          .select()
+          .from(channelMessages)
+          .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+          .all()
       ).toHaveLength(1)
       channels.close()
     } finally {

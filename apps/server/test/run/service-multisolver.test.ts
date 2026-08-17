@@ -8,8 +8,8 @@ import {
   channelReads,
   runs,
 } from "../../src/db/schema"
-import { createRunService } from "../../src/run/service"
 import { teamKey } from "../../src/run/channels"
+import { createRunService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
@@ -286,7 +286,6 @@ describe("v9 direct N-solver creation", () => {
   })
 })
 
-
 describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3)", () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -527,9 +526,8 @@ describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3
         db.select().from(runs).where(eq(runs.id, "r-1")).get()!.status
       ).toBe("idle")
       expect(
-        runService.channels
-          .agentChannels("a-1")
-          .find((c) => c.kind === "team")!.unread
+        runService.channels.agentChannels("a-1").find((c) => c.kind === "team")!
+          .unread
       ).toBe(1)
 
       await runService.close()

@@ -1,6 +1,6 @@
 # IM 简化 v18：派生键频道 + urgent 统一投递
 
-状态：**设计定稿，待实施**（用户拍板 2025-12；实施信号后按 §十二 阶段执行）
+状态：**已实施**（P1–P4 服务端 + SDK：提交 `b488532`；P5 Web 适配 + P6 收尾随其后续变更落地）
 前置：[im-channels.md](im-channels.md)（v16/v17 频道化 IM）、[orchestration-v9-simplify.md](orchestration-v9-simplify.md)（v9 编排模型）
 取代：[im-channels.md](im-channels.md) 全文（本文与其冲突处以本文为准；实施完成后前者标注 superseded）
 
@@ -20,7 +20,7 @@ v18 断言：**频道 = 派生键，事件 = 消息，投递 = urgent 二值分�
 ## 二、频道宇宙（派生键，无目录表）
 
 | 频道 | 键 | 生命周期 | 用途 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `#team` | `team:<challengeId>` | 跟随 challenge | 同题跨 run 的 solver 协作 + 调度者公告 + 系统通知（partial-flag 等） |
 | `DM:run-x/solver-y` | `dm:<agentId>` | 跟随 agent | 调度者/系统 → 指定 solver 的定向消息 |
 | `DM:orchestrator` | `orch:<eventId>` | 跟随 event | solver ask + 系统 run 生命周期/队列事件 → 调度者 |
@@ -33,7 +33,7 @@ v18 断言：**频道 = 派生键，事件 = 消息，投递 = urgent 二值分�
 ### 2.1 写入权限（3 条规则）
 
 | 频道 | 可写 |
-|---|---|
+| --- | --- |
 | `team:<cid>` | 该题任意 run 的 solver、本 event 调度者、用户、系统 |
 | `dm:<agentId>` | 本 event 调度者、用户、系统（目标 agent 本身不写） |
 | `orch:<eid>` | 本 event 的 solver（ask）、用户、系统（调度者 agent 不写） |
@@ -65,7 +65,7 @@ post(msg):
 **urgent 默认值**（SDK/UI 参数可显式改）：
 
 | 写入方 | 默认 | 理由 |
-|---|---|---|
+| --- | --- | --- |
 | solver `post("#team", ...)` | false | findings 多数不紧急，合并投递 |
 | solver `ask(text, urgent=False)` | 参数 | 决策上移场景自判 |
 | 调度者 `channels.announce(run_id, ...)`（→ #team） | false | FYI 公告 |
@@ -89,7 +89,7 @@ deliverAgent(agentId):                     # 一个 reader 一次 steer，吃掉
 **冷唤醒红线**（唯一例外规则）：
 
 | 频道 | urgent 立即投递到 closed run | tick 投递 |
-|---|---|---|
+| --- | --- | --- |
 | `team` | 否（只存——恢复只碰被触发的 agent） | 仅 live run |
 | `dm` | **是**（lifecycle.send → onResume 冷恢复该 agent，保留现 message_agent 语义） | 仅 live session |
 | `orch` | 否（调度者 run 关闭时只存；下次启动 catch-up） | 仅 live session |
@@ -124,7 +124,7 @@ deliverAgent(agentId):                     # 一个 reader 一次 steer，吃掉
 `emitRunEvent` **直接 post 到 `orch:<eventId>`**，EventScopeEmitter / attachSchedulerWakeup / digest 对象整体删除。W3 paused 门控保留为 post 前一行判断（paused → run 事件与队列紧急静默丢弃）。
 
 | 事件 | urgent |
-|---|---|
+| --- | --- |
 | `run.timedOut` | **true** |
 | `run.started` / `run.idle` / `run.flagAccepted` / `run.finished` / `run.resumed` | false |
 | 队列紧急（starved 边沿 / 启动失败） | **true** |
@@ -176,7 +176,7 @@ channel_files(
 ## 八、生命周期与显式清理
 
 | 删除 | 清理动作 |
-|---|---|
+| --- | --- |
 | run 删除（deleteRun） | 各 agent 的 `dm:<aid>` 消息/游标行 + 附件目录；`lifecycle` 会话（现状已有） |
 | challenge 删除 | `team:<cid>` 消息/游标 + 附件目录（app.ts 现有 cleanupChallengeFiles 处扩展） |
 | event 删除 | `orch:<eid>` + 该 event 全部 team/dm 键的消息/游标/附件（event 级联删除路径补一次按键前缀清理） |
@@ -188,7 +188,7 @@ channel_files(
 ### 9.1 HTTP
 
 | 端点 | 变化 |
-|---|---|
+| --- | --- |
 | `GET /api/runs/:runId/channels` | 返回派生键树（#team + 各 dm），无 announce |
 | `GET /api/challenges/:challengeId/channels` | 只剩 #team 一个 |
 | `GET/POST /api/channels/:channelKey/messages` | 路径参数 = 派生键（`:` 为合法 path 字符；POST body 增 `urgent`） |
@@ -242,7 +242,7 @@ aegisx.runs.message(run_id, text)                       # → entry agent 的 dm
 ## 十一、规模预估
 
 | 组件 | 现状 | 目标 |
-|---|---|---|
+| --- | --- | --- |
 | `run/channels.ts` | 1342 | ~550 |
 | `run/scheduler-digest.ts` | ~370 | 0（flush ~80 并入 channels；watchdog ~60 独立文件） |
 | `orchestration/event-scope.ts` | 50 | 0 |
@@ -256,7 +256,7 @@ aegisx.runs.message(run_id, text)                       # → entry agent 的 dm
 ## 十二、实施阶段
 
 | Phase | 内容 | 验证 |
-|---|---|---|
+| --- | --- | --- |
 | **P1 schema + 核心** | v18 迁移 0012（announce 并入、键派生、recap 删除、目录拍平、drop channels）；`run/channels.ts` 重写：键派生 / post（含 urgent 参数与默认值矩阵）/ 权限 3 规则 / markRead 三推进点 / 附件（拍平目录）/ 列表查询 / `deleteChannelData` | `migration-0012.test.ts`（合并保序、目录搬移、reads 重键、recap 清除）；post/权限/附件/上限单测 |
 | **P2 投递引擎** | `deliverAgent`（跨频道收拢 + renderMerged 复用 + ⚠ 前缀）；urgent 立即投递（dm 冷唤醒 / team 只存 / orch 只存）；flush tick（N 常量 + seam + nextFlushAt + hold）；onboarding deliver 沿用 deliverAgent | urgent 三频道即时投递矩阵；tick 合并（一 reader 一 steer）；closed store-only；dm urgent 冷恢复；hold 暂停/补投；自发帖过滤 |
 | **P3 事件接线 + 清理** | `emitRunEvent` → 直 post（urgent 查表 + W3 门控）；队列紧急/通知 → post；`scheduler-digest.ts` / `event-scope.ts` 删除；`stall-watchdog.ts` 独立；service/run-factory/teardown 全链清理（digests/eventScopes/attachSchedulerWakeup/回调）；sendMessage/sendAgentMessage 直连化；routes（键路径 + inbox 简化 + message 端点直连）；deleteRun/challenge/event 显式清理 | scheduler-events 测试改写（事件→orch 消息断言 + urgent 表）；watchdog 测试；teardown/boot 无残留引用；`bun run check` 绿 |

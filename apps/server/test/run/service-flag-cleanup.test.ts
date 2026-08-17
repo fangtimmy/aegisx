@@ -186,9 +186,7 @@ describe("solved-challenge cleanup (flag hooks)", () => {
       // The scheduler learns via orch messages (v18 §五: events are
       // messages): the flagAccepted run event + the cleanup summary notice.
       const orch = orchRows(db)
-      expect(
-        orch.some((r) => r.body === "flagAccepted")
-      ).toBe(true)
+      expect(orch.some((r) => r.body === "flagAccepted")).toBe(true)
       const cleanup = orch.find((r) => r.body.includes("已完全解出"))
       expect(cleanup).toBeDefined()
       expect(cleanup!.body).toContain("停止 1 个同题 run")

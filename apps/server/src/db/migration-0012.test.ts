@@ -128,14 +128,54 @@ describe("migration 0012 — v18 derived channel keys (docs/im-simplify-v18.md �
            VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?)`,
           [id, channelId, kind, authorType, authorAgentId, authorName, body, ts]
         )
-      insertMessage(1, "tA1", "text", "agent", "a1", "Solver a1 · run-runA", "finding A1")
+      insertMessage(
+        1,
+        "tA1",
+        "text",
+        "agent",
+        "a1",
+        "Solver a1 · run-runA",
+        "finding A1"
+      )
       insertMessage(2, "aA1", "text", "system", null, "system", "announce A")
       insertMessage(3, "tA1", "text", "user", null, "用户", "note")
-      insertMessage(4, "aA1", "text", "agent", "a1", "Solver a1 · run-runA", "announce B")
+      insertMessage(
+        4,
+        "aA1",
+        "text",
+        "agent",
+        "a1",
+        "Solver a1 · run-runA",
+        "announce B"
+      )
       insertMessage(5, "dm1", "text", "user", null, "用户", "dm msg")
-      insertMessage(6, "sdm", "text", "agent", "a1", "Solver a1 · run-runA", "solver ask")
-      insertMessage(7, "tA1", "recap", "system", null, "system", "recap snapshot")
-      insertMessage(8, "tC1", "text", "system", null, "system", "other challenge")
+      insertMessage(
+        6,
+        "sdm",
+        "text",
+        "agent",
+        "a1",
+        "Solver a1 · run-runA",
+        "solver ask"
+      )
+      insertMessage(
+        7,
+        "tA1",
+        "recap",
+        "system",
+        null,
+        "system",
+        "recap snapshot"
+      )
+      insertMessage(
+        8,
+        "tC1",
+        "text",
+        "system",
+        null,
+        "system",
+        "other challenge"
+      )
 
       // Read cursors: a1 holds cursors on BOTH ch-1 group channels (max
       // wins) + the dm; the scheduler's orch cursor sits under agent_id
@@ -210,9 +250,7 @@ describe("migration 0012 — v18 derived channel keys (docs/im-simplify-v18.md �
           [6, "orch:evt-1"],
           [8, "team:ch-2"],
         ])
-        expect(
-          msgs.filter((m) => m.body === "recap snapshot")
-        ).toHaveLength(0)
+        expect(msgs.filter((m) => m.body === "recap snapshot")).toHaveLength(0)
         // Author snapshots + meta carried verbatim (no kind column left).
         expect("kind" in msgs[0]!).toBe(false)
         expect(msgs[0]!.author_name).toBe("Solver a1 · run-runA")

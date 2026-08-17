@@ -1,6 +1,6 @@
 # 统一消息层：频道化 IM（Discord/Slack 模型）
 
-状态：**已实施**（P1–P5：schema v16 四表 + 迁移 0010；channels/scheduler-digest 服务层；SDK `aegisx.channels`/`ask`；Web 频道视图与调度者 DM 视图）。**v17 修订（题目级频道聚合，§十一）已实施**（schema v17 + 迁移 0011；旧 run 级 team/announce 合并为每题一个 canonical 频道，历史/游标/附件保留；onboarding、跨 run 扇出、署名 run 溯源、UI 共享徽章落地）。
+状态：**已取代（superseded）**—— 本文档描述的 v16/v17 频道化 IM 已被 [im-simplify-v18.md](im-simplify-v18.md)（派生键频道 + urgent 统一投递，schema v18）实施取代；冲突处以 v18 文档为准。历史保留供追溯。
 前置：[orchestration-v9-simplify.md](orchestration-v9-simplify.md)（v9 编排模型）、[scheduler-inbox.md](scheduler-inbox.md)（消极收件箱，本设计吸收并取代其存储层）、[scheduler-python-sdk.md](scheduler-python-sdk.md)（SDK 收敛先例，本设计将 SDK 推广到 solver 容器）
 取代：scheduler-inbox 的消息积累/存储实现（digest 策略语义保留，见 §三）；`SOLVER-<n>.md` 文件协作约定（mainSystem 协作段重写）
 关系：[field-findings.md](field-findings.md) §3/§9 的知识/文件共享方向由本设计整体覆盖（频道消息 + 附件）；原设想的 `/shared` 工件层**取消**（见 §2.5、§八）。
@@ -59,7 +59,7 @@ channel_messages:
 ### 2.3 投递策略（每频道一张表 = 全部设计）
 
 | 频道 | 写入方 | 投递策略 |
-|---|---|---|
+| --- | --- | --- |
 | `#team`（题目级，v17） | solver（SDK post）、调度者、用户、系统 | **steer 该题全部 live run 的 solver**（closed run 只存不投——与「恢复只碰被触发的 agent」一致） |
 | `#announce`（题目级，v17） | 调度者（SDK）、用户、系统 | 同 `#team` |
 | `DM: solver-N` | 调度者、用户、系统 | **steer 单目标，允许冷恢复唤醒**（= 现有 `agents.message` 语义） |
@@ -120,7 +120,7 @@ deliver(agentId):
 `scheduler-inbox.ts` 的**策略语义全部保留**，存储与账本被频道层取代：
 
 | scheduler-inbox 现实现 | 统一后 |
-|---|---|
+| --- | --- |
 | 内存行积累（lines/notices/emergency Map） | system 消息即时落 `DM: scheduler`（meta.urgent / meta.eventType 标注）；**事件先持久化再聚合**（比现状更强：crash 不丢积压） |
 | 静默 5min 计时器 / 紧急立即 flush | 保留（`run/scheduler-digest.ts`，吸收原文件）：计时器作用于「调度者 DM 的未读消息」 |
 | digest 渲染（现查状态列 + ⚠ 标注 + 20 行上限 + 统计行） | 保留原文格式：flush = 渲染未读消息 + 现查状态快照 → steer → **渲染结果作为 kind=recap 消息存回频道** → 游标推进 |
@@ -160,7 +160,7 @@ aegisx.channels.fetch(file_id, dest=None)    # 附件物化到本 agent workspac
 ### 5.1 端点
 
 | 端点 | 用途 |
-|---|---|
+| --- | --- |
 | `GET /api/runs/:runId/channels` | 该 run 的频道树 + 各频道元信息（UI 渲染用） |
 | `GET /api/channels/:channelId/messages?after=&limit=` | 时间线（分页，`after` = 全局消息 id 游标） |
 | `POST /api/channels/:channelId/messages` | 用户发帖（multipart：`text` + `files[]`）——走同一投递策略（发 #team = 广播 steer；发 DM: scheduler = 立即 flush） |
@@ -228,7 +228,7 @@ SCHEMA_VERSION 15→16；**不 wipe**（纯 additive + drop 一张投递历史�
 ## 七、全量映射清单（「把现在所有的都统一」）
 
 | 现有机制 | 统一后 |
-|---|---|
+| --- | --- |
 | `agents.message` / `runs.message`（HTTP/SDK） | DM 发帖（端点保留薄封装） |
 | scheduler-inbox 全部（§三表） | 调度者 DM + digest 策略 |
 | 部分解出 steer / 完全解出通知 / 队列通知 | system 消息（#team / DM: scheduler，分级不变） |
@@ -242,7 +242,7 @@ SCHEMA_VERSION 15→16；**不 wipe**（纯 additive + drop 一张投递历史�
 ## 八、明确不做 / 推迟
 
 | 项 | 理由 |
-|---|---|
+| --- | --- |
 | ride-along 注入层（fresh turn 捎带未读） | 用户拍板直接 steer——消息不多、findings 有时效性；该层是逃生舱（若实赛证明 #team 吵，降级为注入式，机械在投递引擎内，非新通道） |
 | solver 间 DM / 跨 run solver 直连 | 星型拓扑维持：跨 run 经调度者中转（ask → 决策 → DM） |
 | `/shared` 工件层 | **取消**（用户：消息可携带附件后不再需要）——跨 run 工件经调度者中转（`/runs:ro` 读 → 摘要+附件转发新 run DM）；超大产物（libc dump/wordlist）留 workspace 引用路径 |
@@ -253,7 +253,7 @@ SCHEMA_VERSION 15→16；**不 wipe**（纯 additive + drop 一张投递历史�
 ## 九、实施阶段
 
 | Phase | 内容 | 验证 |
-|---|---|---|
+| --- | --- | --- |
 | **P1 schema + 频道核心** | v16 迁移；`run/channels.ts`（建频道/发帖/附件拷贝/游标/deliver 引擎：批量合并、8K 上限、已读跳过、自发帖过滤）；run 创建/add_agent 建频道 | deliver 三态（streaming steer / idle 新轮 / closed 跳过）；已读三点推进；合并文本渲染（含 📎 行）；DM 冷恢复唤醒；附件快照拷贝 + 路径校验 + fetch 物化 |
 | **P2 调度者统一** | 事件/队列/停滞/清场 → system 消息；`scheduler-digest.ts`（吸收 inbox：静默/紧急/hold/paused/catch-up）；recap 存回；drop `scheduler_inbox_digests`；移植现有收件箱全部测试语义 | 紧急立即 flush 捎带积压；静默 5min；2→1 边沿一次；paused 静默；hold 补投；crash 后未读不丢（消息已持久化） |
 | **P3 solver SDK + prompt** | challenge 容器挂 SDK（ROLE/无 /runs）；exec per-call env（AGENT_ID/RUN_ID）；`channels.{list,read,post,fetch}` + `ask`（含 files 参数）+ 角色门禁；mainSystem 协作段→Channels 段（教附件惯例：发 finding/flag 附 exp/poc）+ Boundaries 扩展（LEGACY 链刷新）；orchestratorSystem 教 announce/DM 分工（FYI→#announce，行动→DM） | solver 容器 `import aegisx` + post/ask（含附件）全链路；管理命名空间 forbidden；partial-flag 走 #team 的行为 parity |
@@ -289,7 +289,7 @@ v16 的 `#team`/`#announce` 是 run 级——同题知识共享仍靠调度者�
 ### 11.2 三层 scope 模型
 
 | 频道 | scope | 生命周期 |
-|---|---|---|
+| --- | --- | --- |
 | `#team` / `#announce` | **challenge**（challengeId FK，cascade 到 challenge 删除） | 跨 run 持久，历史即同题知识库 |
 | `DM: solver-N` | agent（runId cascade 不变） | 随 run |
 | `DM: scheduler` | event（不变） | 跨调度者轮换 |

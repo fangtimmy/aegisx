@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { ChannelsView } from "@/features/runs/channels-view"
 
-/** Challenge-level IM (v17 knowledge base): the challenge's #team/#announce,
+/** Challenge-level IM (v17 knowledge base): the challenge's #team,
  * shared across every run of the challenge. Opened from the challenge node in
  * AgentsGraph. */
 export function ChallengeImDialog({
@@ -34,7 +34,7 @@ export function ChallengeImDialog({
             {challenge.category ?? "未分类"}
             {challenge.points != null ? ` · ${challenge.points} 分` : ""}
             {" · "}
-            题目频道（#team / #announce，同题跨 run 共享）
+            题目频道 #team（同题跨 run 共享）
           </DialogDescription>
         </DialogHeader>
         {/* Plain flex, NOT DialogPanel (which would scroll the composer along

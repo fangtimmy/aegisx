@@ -364,8 +364,7 @@ export function registerRunRoutes(
             .filter((f): f is string => typeof f === "string")
             .slice(0, 8)
         : []
-      const deliverAs =
-        input.deliverAs === "followUp" ? "followUp" : "steer"
+      const deliverAs = input.deliverAs === "followUp" ? "followUp" : "steer"
       const message = runService.channels.post({
         channelKey,
         author: { type: "agent", agentId },

@@ -19,19 +19,15 @@ export type SchedulerStatusSnapshot = {
   }>
 }
 
-/** GET /api/events/:id/inbox — live scheduler-DM digest snapshot (the DM
- * view's status header + backlog; the timeline incl. recap history comes from
- * the channel messages endpoint via channelId). */
+/** GET /api/events/:id/inbox — the scheduler DM view's status header
+ * (v18): the orch channel key + its unread backlog + the global flush tick
+ * + the per-event delivery hold. The timeline itself comes from the channel
+ * messages endpoint via `channelKey`. */
 export type InboxSnapshot = {
-  live: boolean
-  channelId: string | null
-  deliveryPaused: boolean
+  channelKey: string
   unreadCount: number
-  pending: Array<{ runId: string; events: string[] }>
-  notices: string[]
-  emergency: string[]
-  silence: { armed: boolean; flushAt: number | null }
-  stallWatch: Array<{ runId: string; dueAt: number }>
+  nextFlushAt: number | null
+  deliveryPaused: boolean
 }
 
 /** W7.3: GET /api/events/:id/fleet — the overview's single poll (runs +

@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Hash, Paperclip, Send, Users, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
-import { channelsApi, keys, type ChannelMessageInfo } from "@/api"
+import { channelsApi, keys, type ChannelMessagePublic } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
@@ -28,7 +29,7 @@ function formatSize(bytes: number): string {
 }
 
 function authorBadgeVariant(
-  authorType: ChannelMessageInfo["authorType"]
+  authorType: ChannelMessagePublic["authorType"]
 ): "secondary" | "info" | "outline" {
   if (authorType === "system") return "secondary"
   if (authorType === "user") return "info"
@@ -39,7 +40,7 @@ function authorBadgeVariant(
 function AttachmentChip({
   file,
 }: {
-  file: ChannelMessageInfo["files"][number]
+  file: ChannelMessagePublic["files"][number]
 }) {
   return (
     <a
@@ -56,21 +57,7 @@ function AttachmentChip({
   )
 }
 
-export function MessageBubble({ message }: { message: ChannelMessageInfo }) {
-  if (message.kind === "recap") {
-    return (
-      <div className="flex flex-col gap-1 border-y bg-muted/30 px-3 py-2">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-medium">── 摘要</span>
-          <span>{timeOf(message.createdAt)}</span>
-          <span>（投递历史）</span>
-        </div>
-        <pre className="overflow-x-auto font-mono text-xs whitespace-pre-wrap">
-          {message.body}
-        </pre>
-      </div>
-    )
-  }
+export function MessageBubble({ message }: { message: ChannelMessagePublic }) {
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -78,6 +65,11 @@ export function MessageBubble({ message }: { message: ChannelMessageInfo }) {
           {message.authorName}
         </Badge>
         <span>{timeOf(message.createdAt)}</span>
+        {message.meta.urgent === true && (
+          <Badge size="sm" variant="warning">
+            ⚠ 紧急
+          </Badge>
+        )}
       </div>
       <div className="text-sm whitespace-pre-wrap">{message.body}</div>
       {message.files.length > 0 && (
@@ -91,20 +83,24 @@ export function MessageBubble({ message }: { message: ChannelMessageInfo }) {
   )
 }
 
-/** The channel composer: textarea + attachment picker + send. Posts as the
- * user (multipart) — same ledger + delivery policy as SDK/system posts. */
-export function ChannelComposer({ channelId }: { channelId: string }) {
+/** The channel composer: textarea + attachment picker + urgent switch +
+ * send. Posts as the user (multipart) — urgent defaults on (a user IM post
+ * is rare and intended → immediate delivery); off defers to the next flush
+ * tick. */
+export function ChannelComposer({ channelKey }: { channelKey: string }) {
   const [text, setText] = useState("")
   const [files, setFiles] = useState<File[]>([])
+  const [urgent, setUrgent] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
 
   const send = useMutation({
     mutationFn: () =>
-      channelsApi.postChannelMessage(channelId, {
+      channelsApi.postChannelMessage(channelKey, {
         text: text.trim(),
         files: files.length ? files : undefined,
+        urgent,
       }),
     onSuccess: () => {
       setText("")
@@ -112,7 +108,7 @@ export function ChannelComposer({ channelId }: { channelId: string }) {
       if (fileInput.current) fileInput.current.value = ""
       setError(null)
       void queryClient.invalidateQueries({
-        queryKey: keys.runs.channelMessages(channelId),
+        queryKey: keys.runs.channelMessages(channelKey),
       })
     },
     onError: (err: Error) => setError(err.message),
@@ -166,6 +162,17 @@ export function ChannelComposer({ channelId }: { channelId: string }) {
           ref={fileInput}
           type="file"
         />
+        <label
+          className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 text-[10px] leading-3 text-muted-foreground"
+          title="紧急消息立即投递；关闭后等待下一次合并投递"
+        >
+          <Switch
+            aria-label="紧急投递"
+            checked={urgent}
+            onCheckedChange={setUrgent}
+          />
+          紧急
+        </label>
         <Button
           aria-label="添加附件"
           disabled={files.length >= 8}
@@ -190,11 +197,12 @@ export function ChannelComposer({ channelId }: { channelId: string }) {
 }
 
 /**
- * The IM view (docs/im-channels.md §5.2): channel rail + message timeline +
- * composer with attachments. Two data sources:
- *  - runId: a run's tree (#announce / #team / DM per solver)
- *  - challengeId: the challenge's group channels (#team / #announce — v17
- *    knowledge base, shared across the challenge's runs)
+ * The IM view (v18 派生键频道): channel rail + message timeline + composer
+ * with attachments + urgent switch. Two data sources:
+ *  - runId: a run's tree (#team + one DM per solver, derived keys)
+ *  - challengeId: the challenge's single #team (v17 knowledge base, shared
+ *    across the challenge's runs — the 共享 badge)
+ * Channels are addressed by their derived `key` (team:<cid> / dm:<aid>).
  * UI unread is client-side session state (messages newer than the last id
  * seen at mount / on channel switch) — never persisted.
  */
@@ -205,11 +213,11 @@ export function ChannelsView({
   runId?: string
   challengeId?: string
 }) {
-  const [activeId, setActiveId] = useState<string | null>(null)
-  /** Session-local unread baseline (design §5.2: UI unread is client session
-   * state, never persisted): channel id → the last message timestamp this
-   * view has accounted for. A channel whose live `lastMessageAt` is newer
-   * shows an unread dot. */
+  const [activeKey, setActiveKey] = useState<string | null>(null)
+  /** Session-local unread baseline (UI unread is client session state,
+   * never persisted): channel key → the last message timestamp this view has
+   * accounted for. A channel whose live `lastMessageAt` is newer shows an
+   * unread dot. */
   const [seenAt, setSeenAt] = useState<Record<string, string | null>>({})
   const timelineRef = useRef<HTMLDivElement>(null)
 
@@ -226,7 +234,7 @@ export function ChannelsView({
   })
 
   const list = channels.data?.items ?? []
-  const active = list.find((channel) => channel.id === activeId) ?? list[0]
+  const active = list.find((channel) => channel.key === activeKey) ?? list[0]
 
   // Baseline unseen channels on first load (0 unread at mount).
   useEffect(() => {
@@ -234,8 +242,8 @@ export function ChannelsView({
       let changed = false
       const next = { ...prev }
       for (const channel of list) {
-        if (!(channel.id in next)) {
-          next[channel.id] = channel.lastMessageAt
+        if (!(channel.key in next)) {
+          next[channel.key] = channel.lastMessageAt
           changed = true
         }
       }
@@ -244,9 +252,9 @@ export function ChannelsView({
   }, [list])
 
   const messages = useQuery({
-    queryKey: keys.runs.channelMessages(active?.id ?? ""),
+    queryKey: keys.runs.channelMessages(active?.key ?? ""),
     enabled: Boolean(active),
-    queryFn: () => channelsApi.listChannelMessages(active!.id, 0, PAGE_SIZE),
+    queryFn: () => channelsApi.listChannelMessages(active!.key, 0, PAGE_SIZE),
     refetchInterval: POLL_INTERVAL_MS,
   })
 
@@ -256,7 +264,7 @@ export function ChannelsView({
     if (!messages.data || !active) return
     const newest = messages.data.items.at(-1)?.createdAt ?? null
     setSeenAt((prev) =>
-      prev[active.id] === newest ? prev : { ...prev, [active.id]: newest }
+      prev[active.key] === newest ? prev : { ...prev, [active.key]: newest }
     )
   }, [messages.data, active])
 
@@ -277,17 +285,17 @@ export function ChannelsView({
         )}
         {list.map((channel) => {
           const unseen =
-            channel.id !== active?.id &&
+            channel.key !== active?.key &&
             channel.lastMessageAt !== null &&
-            channel.lastMessageAt !== seenAt[channel.id]
+            channel.lastMessageAt !== seenAt[channel.key]
           return (
             <button
               className={cn(
                 "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
-                channel.id === active?.id && "bg-muted font-medium"
+                channel.key === active?.key && "bg-muted font-medium"
               )}
-              key={channel.id}
-              onClick={() => setActiveId(channel.id)}
+              key={channel.key}
+              onClick={() => setActiveKey(channel.key)}
               type="button"
             >
               {channel.kind === "dm" ? (
@@ -298,7 +306,7 @@ export function ChannelsView({
                 <Hash className="size-3.5 shrink-0 text-muted-foreground" />
               )}
               <span className="truncate">{channel.label}</span>
-              {/* v17：题目级共享频道（同题全部 live run 同一频道 + 历史） */}
+              {/* v17/v18：题目级共享频道（同题全部 live run 同一频道 + 历史） */}
               {channel.sharedRunCount !== null && (
                 <span
                   className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground"
@@ -343,7 +351,7 @@ export function ChannelsView({
             ))}
           </div>
         )}
-        {active && <ChannelComposer channelId={active.id} />}
+        {active && <ChannelComposer channelKey={active.key} />}
       </div>
     </div>
   )

@@ -15,8 +15,8 @@ import { createLiveBus, type LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, challengeFlags, challenges, runs } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
-import { seedBuiltinTemplates } from "../orchestration/prompt-templates"
 import { refreshBuiltinTemplateSections } from "../orchestration/prompt-refresh-v18"
+import { seedBuiltinTemplates } from "../orchestration/prompt-templates"
 import {
   getChallengeRemote,
   isTargetCapable,
