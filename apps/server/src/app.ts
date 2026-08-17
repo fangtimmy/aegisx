@@ -104,6 +104,8 @@ export function createApp(options: { dataDir: string }) {
     },
     getSettings,
     catalog,
+    cleanupChallengeChannelFiles: (challengeId: string) =>
+      runService.channels.cleanupChallengeFiles(challengeId),
   })
   registerRunRoutes(app, {
     db,

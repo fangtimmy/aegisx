@@ -100,17 +100,21 @@ export type InboxSnapshot = {
   stallWatch: Array<{ runId: string; dueAt: number }>
 }
 
-/** One channel in a run's tree (GET /api/runs/:id/channels). */
+/** One channel in a run's tree (GET /api/runs/:id/channels). v17:
+ * #team/#announce are challenge-scoped (shared across the challenge's runs —
+ * `sharedRunCount` = live runs on the challenge, the UI 共享 badge). */
 export type ChannelInfo = {
   id: string
-  scopeType: "run" | "event"
+  scopeType: "run" | "event" | "challenge"
   runId: string | null
   eventId: string
+  challengeId: string | null
   kind: "team" | "announce" | "dm"
   targetAgentId: string | null
   label: string
   unread: number
   lastMessageAt: string | null
+  sharedRunCount: number | null
 }
 
 /** One channel message (timeline + SDK read). */

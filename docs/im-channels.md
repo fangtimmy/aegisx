@@ -1,6 +1,6 @@
 # 统一消息层：频道化 IM（Discord/Slack 模型）
 
-状态：**已实施**（P1–P5：schema v16 四表 + 迁移 0010；channels/scheduler-digest 服务层；SDK `aegisx.channels`/`ask`；Web 频道视图与调度者 DM 视图）
+状态：**已实施**（P1–P5：schema v16 四表 + 迁移 0010；channels/scheduler-digest 服务层；SDK `aegisx.channels`/`ask`；Web 频道视图与调度者 DM 视图）。**v17 修订（题目级频道聚合，§十一）已实施**（schema v17 + 迁移 0011；旧 run 级 team/announce 合并为每题一个 canonical 频道，历史/游标/附件保留；onboarding、跨 run 扇出、署名 run 溯源、UI 共享徽章落地）。
 前置：[orchestration-v9-simplify.md](orchestration-v9-simplify.md)（v9 编排模型）、[scheduler-inbox.md](scheduler-inbox.md)（消极收件箱，本设计吸收并取代其存储层）、[scheduler-python-sdk.md](scheduler-python-sdk.md)（SDK 收敛先例，本设计将 SDK 推广到 solver 容器）
 取代：scheduler-inbox 的消息积累/存储实现（digest 策略语义保留，见 §三）；`SOLVER-<n>.md` 文件协作约定（mainSystem 协作段重写）
 关系：[field-findings.md](field-findings.md) §3/§9 的知识/文件共享方向由本设计整体覆盖（频道消息 + 附件）；原设想的 `/shared` 工件层**取消**（见 §2.5、§八）。
@@ -37,6 +37,7 @@ Event（event 域，唯一额外频道）
 ```
 
 - 频道是**持久数据**（DB 行），随 run 创建而建、随 run 删除而级联；`add_agent` 时增建该 solver 的 DM。
+  > **v17 修订**：`#team`/`#announce` 提升为**题目级**（跨 run 持久，生命周期跟随 challenge）；DM 不变——见 §十一。
 - solver 的写入面只有两个：`post → #team`、`ask → DM: scheduler`。**solver 之间没有 DM**（用户判断：无指派/聊天必要；DM 是调度者/用户定向下发的通道）。
 - 消息体装叙事与引用；**小而关键的工件（exp/poc、payload、结论文件）随消息作为附件**（§2.5），大产物留 workspace 引用路径（「libc dump 在 libc.so.6.dump」）。`/runs:ro` 不变。
 
@@ -59,8 +60,8 @@ channel_messages:
 
 | 频道 | 写入方 | 投递策略 |
 |---|---|---|
-| `#team`（run 级） | solver（SDK post）、调度者、用户、系统 | **steer 全部 live 成员**（closed run 只存不投——与「恢复只碰被触发的 agent」一致） |
-| `#announce`（run 级） | 调度者（SDK）、用户、系统 | 同 `#team` |
+| `#team`（题目级，v17） | solver（SDK post）、调度者、用户、系统 | **steer 该题全部 live run 的 solver**（closed run 只存不投——与「恢复只碰被触发的 agent」一致） |
+| `#announce`（题目级，v17） | 调度者（SDK）、用户、系统 | 同 `#team` |
 | `DM: solver-N` | 调度者、用户、系统 | **steer 单目标，允许冷恢复唤醒**（= 现有 `agents.message` 语义） |
 | `DM: scheduler`（event 级） | system（6 生命周期事件/队列紧急/通知/停滞）、solver（ask）、用户 | **digest 策略**：静默 5min flush；urgent 立即（timedOut / 队列 2→1 边沿 / 启动失败 / agent 停滞 / `ask(urgent=true)` / **用户发帖**——用户直接发话罕见且有意图，立即 flush） |
 
@@ -272,3 +273,60 @@ SCHEMA_VERSION 15→16；**不 wipe**（纯 additive + drop 一张投递历史�
 9. per-exec env 注入身份（`AEGISX_AGENT_ID`）解共享容器问题；env 可见性边界接受并记录。
 10. UI 未读为客户端会话态，不落库；agent 游标才是功能态。
 11. **消息可携带附件**（用户：发 finding/拿 flag 时附 exp/poc）：快照拷贝语义（发帖即定格）；agent 发送 = workspace 路径经服务端校验拷贝，agent 读取 = fetch 物化回 workspace（容器边界不破）；上限 = 单文件 64MB / 单消息 8 个 128MB（代码常量）；steer 文本只渲染 📎 元数据行，内容靠 fetch。
+
+## 十一、修订 v17：题目级频道聚合（同题跨 run 知识共享）
+
+状态：**已实施**（2025-12 拍板；实施 = schema v17 + 迁移 0011 + channels/run-factory/service/prompt/Web/SDK 全链路；本节与前文冲突处，以本节为准）
+
+### 11.1 动机
+
+v16 的 `#team`/`#announce` 是 run 级——同题知识共享仍靠调度者中转（读旧 WRITEUP → 转发摘要）与 prompt 纪律。聚合到题目级后：
+
+1. **同题重试的新 run 天然看到全部历史** findings/死路/公告（field-findings §3 价值最高场景从「调度者手动中转」变机械保证）。
+2. **系统消息扇出免费获得跨 run 语义**：partial-flag / 清场通知单发一帖，收件人查询天然覆盖该题全部 live run 的 solver。
+3. **announce 升值**：调度者一次广播（「远程 libc 2.35，以靶机为准」），后续重试 run 自动受益。
+
+### 11.2 三层 scope 模型
+
+| 频道 | scope | 生命周期 |
+|---|---|---|
+| `#team` / `#announce` | **challenge**（challengeId FK，cascade 到 challenge 删除） | 跨 run 持久，历史即同题知识库 |
+| `DM: solver-N` | agent（runId cascade 不变） | 随 run |
+| `DM: scheduler` | event（不变） | 跨调度者轮换 |
+
+- `channels.scopeType` 增 `'challenge'`；题目级频道 runId=null、challengeId 必填；check 约束同步（scope=challenge ↔ challengeId 非空、runId 为空）。
+- **建 run 不再建群**：createSolvers / add_agent 路径 get-or-create 该题的 `#team`/`#announce`（同题首个 run 创建，后续复用）；DM 建法不变。
+- `deliverableChannels(agent)` 解析：agent 所在 run 的 challengeId → 题目级两频道 + 自己 DM + 调度者 DM。
+- **收件人查询**（triggerDelivery group 分支）：该 challenge 全部 **live** run 的 solver（替换现在的单 run `listAgents`）；closed run 成员仍只存不投。
+
+### 11.3 新成员 onboarding（本次修订的核心行为）
+
+- createSolvers / add_agent：**prime（initial send）完成后立即 `deliver(agent.id)` 一次**——新成员 cursor=0，全部历史都是未读；8K 上限 + 溢出折叠自限，一条 steer 把 prior findings + announce 历史注入第一轮末尾（prime 后 agent 正在 streaming，steer 注入语义正好）。
+- 历史入场从 prompt 纪律变**机械保证**——优于原 `/shared` handoff 设想。
+- 冷恢复 agent 不触发（游标在其上次位置，只收真正的新消息）。
+
+### 11.4 署名与 herding
+
+- **跨 run 署名歧义**：agent 发帖的 authorName 快照带 run 溯源——`Solver 2 · run-a3f1`（发帖路径统一追加；UI 与 steer 渲染同源）。系统/用户消息不受影响。
+- **herding 取舍明确接受**：跨 run 共享使「独立角度尝试」相互耦合（早期成功信号可能让各 run 集体转向）。CTF 里死路知识 > 角度独立性，接受。缓解：mainSystem 纪律（「坚持你的指派角度，除非证据直接矛盾」）+ 调度者 per-solver strategy 仍是角度分配主通道 + 需要真正独立时 strategy 明说「忽略 #team 旧思路」。
+
+### 11.5 简化（随迁移落地）
+
+- `notifyFlagPartial` / `stopSiblingsOnSolved` 的通知路径：循环 steer → **单发一帖**到题目级 `#team`/调度者 DM。
+- 调度者「读旧 WRITEUP → 转发摘要+附件」模式从必需降级为可选（`/runs:ro` 保留，深读时仍用）。
+- UI：run 详情频道树中 `#team`/`#announce` 标**共享徽章**（同题 live run 计数）；同题两个 run 的详情页看到同一频道，天然一致。
+
+### 11.6 迁移（schema v17）
+
+- 旧 run 级 team/announce 频道 → **每题合并为一个 canonical 题目级频道**（按 challengeId 分组；消息 id 全局单调，直接 `UPDATE channel_messages SET channel_id=canonical` 多频道合并不乱序；`channel_reads` 重指 canonical 频道，历史 agent 游标保留；旧频道行删除）。事件域 scheduler DM 不动。
+- 旧消息 authorName 回填 `· run-xxxx` 短 id 后缀（从旧频道 runId 反查）。
+- `channel_files` 存储路径含 channelId：迁移时目录同步重命名到 canonical id。
+- SCHEMA_VERSION 16→17，**不 wipe**（历史就是本次修订的全部价值）。
+
+### 11.7 已定决策（v17）
+
+1. 三层 scope（challenge / event / agent）；题目级频道 cascade 到 challenge 删除。
+2. onboarding = prime 后自动 deliver 一次（cursor 0，含 announce 历史）。
+3. 旧数据**合并**到 per-challenge 频道，不 wipe。
+4. agent 署名带 run 短 id（`Solver 2 · run-a3f1`）。
+5. herding 取舍接受（纪律 + strategy 主通道缓解）。

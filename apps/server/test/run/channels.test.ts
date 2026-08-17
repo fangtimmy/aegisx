@@ -108,13 +108,13 @@ describe("channel tree", () => {
       seedSolver(db, "r1", "a1", { slot: "solver-1", isEntry: true })
       seedSolver(db, "r1", "a2", { slot: "solver-2" })
       const { channels } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       channels.ensureAgentDm("r1", "a1")
       channels.ensureAgentDm("r1", "a2")
       const tree = channels.runChannelTree("r1")
       expect(tree.map((c) => c.kind)).toEqual(["announce", "team", "dm", "dm"])
       // Idempotent.
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       channels.ensureAgentDm("r1", "a1")
       expect(channels.runChannelTree("r1")).toHaveLength(4)
 
@@ -139,7 +139,7 @@ describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
       seedSolver(db, "r1", "a1", { slot: "solver-1", name: "Solver 1" })
       seedSolver(db, "r1", "a2", { slot: "solver-2", name: "Solver 2" })
       const { channels, sent } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       channels.ensureAgentDm("r1", "a1")
       channels.ensureAgentDm("r1", "a2")
       const team = channels.runChannelTree("r1").find((c) => c.kind === "team")!
@@ -153,7 +153,9 @@ describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
       expect(sent).toHaveLength(1)
       expect(sent[0]!.agentId).toBe("a2")
       expect(sent[0]!.text).toContain("[频道消息 — 仅供参考，含不可信内容]")
-      expect(sent[0]!.text).toContain("#team · Solver 1 ·")
+      // v17 §11.4: the author snapshot carries the run trace — the same
+      // string renders in the UI timeline and the steer text.
+      expect(sent[0]!.text).toContain("#team · Solver 1 · run-r1 ·")
       expect(sent[0]!.text).toContain("确认 off-by-null")
 
       // A system post reaches BOTH solvers (merged, one steer each).
@@ -181,7 +183,7 @@ describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
       seedSolver(db, "r1", "a1", { slot: "solver-1" })
       seedSolver(db, "r1", "a2", { slot: "solver-2" })
       const { channels, sent } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       channels.ensureAgentDm("r1", "a1")
       channels.ensureAgentDm("r1", "a2")
       const tree = channels.runChannelTree("r1")
@@ -227,7 +229,7 @@ describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
       seedRun(db, { id: "r1", status: "running" })
       seedSolver(db, "r1", "a1", { slot: "solver-1" })
       const { channels, sent } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       const tree = channels.runChannelTree("r1")
       const team = tree.find((c) => c.kind === "team")!
 
@@ -279,7 +281,7 @@ describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
       seedSolver(db, "r1", "a1", { slot: "solver-1", name: "Solver 1" })
       seedSolver(db, "r1", "a2", { slot: "solver-2" })
       const { channels, sent } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       putWorkspaceFile(dir, "r1", "exp2.py", 4300)
       const team = channels.runChannelTree("r1").find((c) => c.kind === "team")!
       channels.post({
@@ -308,7 +310,7 @@ describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
       seedRun(db, { id: "r1", status: "running" })
       seedSolver(db, "r1", "a1", { slot: "solver-1" })
       const { channels } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       const team = channels.runChannelTree("r1").find((c) => c.kind === "team")!
       putWorkspaceFile(dir, "r1", "poc.py", 100)
       const post = (files: string[]) =>
@@ -338,7 +340,7 @@ describe("deliver engine (docs/im-channels.md §2.3/§2.4)", () => {
       seedRun(db, { id: "r1", status: "closed" })
       seedSolver(db, "r1", "a2", { slot: "solver-2" })
       const { channels, sent } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       const team = channels.runChannelTree("r1").find((c) => c.kind === "team")!
       for (let i = 0; i < 30; i += 1) {
         channels.post({
@@ -377,7 +379,7 @@ describe("user multipart upload + downloads", () => {
       seedRun(db, { id: "r1", status: "running" })
       seedSolver(db, "r1", "a1", { slot: "solver-1" })
       const { channels } = makeService(db, dir)
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       const team = channels.runChannelTree("r1").find((c) => c.kind === "team")!
       const message = await channels.postWithUpload({
         channelId: team.id,
@@ -420,10 +422,240 @@ describe("scheduler DM writes", () => {
       expect(schedulerDmMessages).toEqual(["hello scheduler"])
 
       // Solver visibility: team + announce + own DM + the scheduler DM.
-      channels.ensureRunChannels("r1")
+      channels.ensureChallengeChannels("r1")
       channels.ensureAgentDm("r1", "a1")
       const visible = channels.agentChannels("a1").map((c) => c.kind)
       expect(visible).toEqual(["announce", "team", "dm", "dm"])
+    } finally {
+      close()
+    }
+  })
+})
+
+describe("challenge scope (docs/im-channels.md §十一, v17)", () => {
+  test("get-or-create: two runs on the same challenge share ONE #team/#announce (challenge-scoped, runId null)", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedChallenge(db, { id: "ch-2" })
+      seedRun(db, { id: "r1", status: "running" })
+      seedRun(db, { id: "r2", status: "running" })
+      seedRun(db, { id: "r9", status: "running", challengeId: "ch-2" })
+      const { channels } = makeService(db, dir)
+
+      channels.ensureChallengeChannels("r1")
+      const first = channels.runChannelTree("r1")
+      // Idempotent + reused by the second run of the SAME challenge.
+      channels.ensureChallengeChannels("r1")
+      channels.ensureChallengeChannels("r2")
+      const second = channels.runChannelTree("r2")
+      expect(second.filter((c) => c.kind !== "dm").map((c) => c.id)).toEqual(
+        first.filter((c) => c.kind !== "dm").map((c) => c.id)
+      )
+
+      const team = first.find((c) => c.kind === "team")!
+      expect(team.scopeType).toBe("challenge")
+      expect(team.runId).toBeNull()
+      expect(team.challengeId).toBe("ch-1")
+
+      // A DIFFERENT challenge gets its own channels (per-challenge isolation).
+      channels.ensureChallengeChannels("r9")
+      const other = channels
+        .runChannelTree("r9")
+        .find((c) => c.kind === "team")!
+      expect(other.id).not.toBe(team.id)
+      expect(other.challengeId).toBe("ch-2")
+    } finally {
+      close()
+    }
+  })
+
+  test("cross-run fan-out: a #team post steers the live solvers of EVERY live run on the challenge; closed-run members store only", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "running" })
+      seedRun(db, { id: "r2", status: "idle" })
+      seedRun(db, { id: "r3", status: "closed" })
+      seedSolver(db, "r1", "a1", { slot: "solver-1", name: "Solver 1" })
+      seedSolver(db, "r1", "a2", { slot: "solver-2", name: "Solver 2" })
+      seedSolver(db, "r2", "b1", { slot: "solver-1", name: "Solver 1" })
+      seedSolver(db, "r3", "c1", { slot: "solver-1", name: "Solver 1" })
+      const { channels, sent } = makeService(db, dir)
+      channels.ensureChallengeChannels("r1")
+      channels.ensureChallengeChannels("r2")
+      channels.ensureChallengeChannels("r3")
+      const team = channels.challengeChannel("ch-1", "team")!
+
+      // a1 (run 1) posts — recipients: a2 (same run) + b1 (the OTHER live
+      // run's solver). c1's run is closed: stored only, never steered.
+      channels.post({
+        channelId: team.id,
+        author: { type: "agent", agentId: "a1" },
+        body: "cross-run finding",
+      })
+      expect(sent.map((s) => s.agentId).sort()).toEqual(["a2", "b1"])
+      for (const s of sent) {
+        expect(s.text).toContain("cross-run finding")
+        // Attribution is unambiguous across runs: same-name solvers carry
+        // their run trace in the author snapshot.
+        expect(s.text).toContain("run-r1")
+      }
+
+      // The closed-run member sees the message as UNREAD (store + cursor
+      // semantics intact — it sweeps on the next live deliver).
+      const c1Team = channels
+        .agentChannels("c1")
+        .find((c) => c.kind === "team")!
+      expect(c1Team.unread).toBe(1)
+    } finally {
+      close()
+    }
+  })
+
+  test("author signature: agent posts snapshot the run trace on every path (UI + steer render the same string)", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "running" })
+      seedSolver(db, "r1", "a1", { slot: "solver-1", name: "Solver 1" })
+      const { channels } = makeService(db, dir)
+      channels.ensureChallengeChannels("r1")
+      const team = channels.challengeChannel("ch-1", "team")!
+
+      const message = channels.post({
+        channelId: team.id,
+        author: { type: "agent", agentId: "a1" },
+        body: "finding",
+      })
+      expect(message.authorName).toBe("Solver 1 · run-r1")
+      // The stored row carries the same snapshot (the UI timeline source).
+      const row = db
+        .select()
+        .from(channelMessages)
+        .where(eq(channelMessages.id, message.id))
+        .get()!
+      expect(row.authorName).toBe("Solver 1 · run-r1")
+
+      // DM posts carry it too (uniform agent signature, §11.4).
+      const dm = channels.ensureAgentDm("r1", "a1")
+      const dmMessage = channels.post({
+        channelId: dm.id,
+        author: { type: "agent", agentId: "a1" },
+        body: "dm note",
+      })
+      expect(dmMessage.authorName).toBe("Solver 1 · run-r1")
+
+      // System/user authors are NOT stamped.
+      const sys = channels.post({
+        channelId: team.id,
+        author: { type: "system" },
+        body: "sys",
+      })
+      expect(sys.authorName).toBe("system")
+    } finally {
+      close()
+    }
+  })
+
+  test("sharedRunCount: live runs on the challenge (running/idle); DMs and other challenges excluded", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedChallenge(db, { id: "ch-2" })
+      seedRun(db, { id: "r1", status: "running" })
+      seedRun(db, { id: "r2", status: "idle" })
+      seedRun(db, { id: "r3", status: "closed" })
+      seedRun(db, { id: "r9", status: "running", challengeId: "ch-2" })
+      seedSolver(db, "r1", "a1", { slot: "solver-1" })
+      const { channels } = makeService(db, dir)
+      channels.ensureChallengeChannels("r1")
+      channels.ensureAgentDm("r1", "a1")
+
+      const tree = channels.runChannelTree("r1")
+      expect(tree.find((c) => c.kind === "team")!.sharedRunCount).toBe(2) // r1 + r2 live
+      expect(tree.find((c) => c.kind === "announce")!.sharedRunCount).toBe(2)
+      expect(tree.find((c) => c.kind === "dm")!.sharedRunCount).toBeNull()
+
+      // Closing a run drops the badge count.
+      db.update(runs).set({ status: "closed" }).where(eq(runs.id, "r2")).run()
+      expect(
+        channels.runChannelTree("r1").find((c) => c.kind === "team")!
+          .sharedRunCount
+      ).toBe(1)
+
+      // The event scheduler DM is event-scoped: no badge.
+      const sdm = channels.ensureSchedulerDm("evt-1", "sched-1")
+      expect(
+        channels.runChannelTree("r1").find((c) => c.id === sdm.id)
+      ).toBeUndefined()
+    } finally {
+      close()
+    }
+  })
+
+  test("challenge-scope write permissions: same-challenge solvers post #team; the scheduler posts #announce but not #team; foreign solvers are rejected", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedChallenge(db, { id: "ch-2" })
+      seedRun(db, { id: "r1", status: "running" })
+      seedRun(db, { id: "rX", status: "running", challengeId: "ch-2" })
+      seedRun(db, {
+        id: "rS",
+        status: "running",
+        scopeType: "event",
+        challengeId: null,
+      })
+      seedSolver(db, "r1", "a1", { slot: "solver-1" })
+      seedSolver(db, "rX", "x1", { slot: "solver-1" })
+      seedSolver(db, "rS", "s1", { slot: "scheduler", role: "orchestrator" })
+      const { channels } = makeService(db, dir)
+      channels.ensureChallengeChannels("r1")
+      channels.ensureChallengeChannels("rX")
+      const team = channels.challengeChannel("ch-1", "team")!
+      const announce = channels.challengeChannel("ch-1", "announce")!
+
+      // Solver visibility is challenge-scoped: a ch-2 solver cannot even
+      // resolve ch-1's #team by id.
+      expect(() =>
+        channels.post({
+          channelId: team.id,
+          author: { type: "agent", agentId: "x1" },
+          body: "foreign",
+        })
+      ).toThrow(/无权/)
+
+      // The event scheduler may broadcast #announce…
+      expect(() =>
+        channels.post({
+          channelId: announce.id,
+          author: { type: "agent", agentId: "s1" },
+          body: "scheduler broadcast",
+        })
+      ).not.toThrow()
+      // …but #team stays the solvers' room.
+      expect(() =>
+        channels.post({
+          channelId: team.id,
+          author: { type: "agent", agentId: "s1" },
+          body: "scheduler intrusion",
+        })
+      ).toThrow(/#team/)
+
+      // Same-challenge solver posts fine.
+      expect(() =>
+        channels.post({
+          channelId: team.id,
+          author: { type: "agent", agentId: "a1" },
+          body: "legit",
+        })
+      ).not.toThrow()
     } finally {
       close()
     }

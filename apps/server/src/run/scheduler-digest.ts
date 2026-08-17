@@ -273,9 +273,10 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
         continue
       }
       if (item.authorType === "agent") {
-        lines.push(
-          `问询 ${item.authorName}（run-${runId?.slice(0, 8) ?? "?"}）：${item.body}`
-        )
+        // v17 §11.4: authorName snapshots carry the run trace
+        // (`Solver 2 · run-a3f1`) on every agent post path — the digest
+        // renders it as-is (single attribution source).
+        lines.push(`问询 ${item.authorName}：${item.body}`)
         continue
       }
       if (item.authorType === "user") {

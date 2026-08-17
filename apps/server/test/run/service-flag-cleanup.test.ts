@@ -2,7 +2,13 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, challengeFlags, runQueue, runs } from "../../src/db/schema"
+import {
+  agents,
+  challengeFlags,
+  channelMessages,
+  runQueue,
+  runs,
+} from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
@@ -258,6 +264,17 @@ describe("solved-challenge cleanup (flag hooks)", () => {
       )
       await wait(80)
       await settle()
+
+      // v17 §11.5: ONE system post in the challenge-level #team (not one per
+      // run) — the channel fan-out covers every live run on the challenge.
+      const teamChannel = service.channels.challengeChannel("ch-1", "team")!
+      const partialPosts = db
+        .select()
+        .from(channelMessages)
+        .where(eq(channelMessages.channelId, teamChannel.id))
+        .all()
+        .filter((row) => row.body.includes("[多 flag 进度]"))
+      expect(partialPosts).toHaveLength(1)
 
       // The co-solver and the sibling run's agent got the progress steer;
       // the submitter did not.

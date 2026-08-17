@@ -2,7 +2,7 @@
 
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, an event task queue (scheduler), and token usage.
 
-> **Schema v16（频道化 IM）** — 统一消息层：channels / channel_messages / channel_reads / channel_files 四表（每 run 频道树 #team/#announce/DM + 事件作用域调度者 DM；调度 digest 以 recap 消息存回，scheduler_inbox_digests 表删除），迁移 `0010_im_channels`；v15 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。此前 v14（v9 编排简化）删除插件编排与 spawn child。
+> **Schema v17（题目级频道聚合）** — `#team`/`#announce` 从 run 级提升为**题目级**（`channels.challenge_id` FK，同题跨 run 共享同一频道与历史；agent 署名带 run 短 id 溯源；新 run/新成员 onboarding 自动注入频道历史；系统通知单帖扇出到同题全部 live run；UI 共享徽章），迁移 `0011_challenge_scope_channels` 将旧 run 级群频道按题合并（消息全局单调序/游标/附件目录保留）。此前 v16（频道化 IM）建立 channels / channel_messages / channel_reads / channel_files 四表与事件作用域调度者 DM；v15 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。
 > Design notes: [docs/im-channels.md](docs/im-channels.md)（统一消息层，现行）、[docs/orchestration-v9-simplify.md](docs/orchestration-v9-simplify.md)（v9 编排模型）。
 
 ## Requirements

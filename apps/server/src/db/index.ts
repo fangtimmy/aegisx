@@ -11,6 +11,7 @@ import { basename, join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
+import { reconcileChannelFileDirs } from "./channel-files"
 import * as schema from "./schema"
 import { SCHEMA_VERSION } from "./schema"
 
@@ -217,6 +218,11 @@ export function createDatabase(dataDir: string) {
       )
     }
     sqlite.run(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+    // v17 (0011) moved attachment dirs' owning channels in SQL; the
+    // filesystem side is healed here (idempotent, self-limiting — see
+    // db/channel-files.ts). Runs on every open so a crash between the SQL
+    // commit and the relocate still heals on the next boot.
+    reconcileChannelFileDirs(db, dataDir)
     return { db, sqlite, releaseLock }
   } catch (error) {
     releaseLock()

@@ -11,7 +11,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 16
+export const SCHEMA_VERSION = 17
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -397,27 +397,34 @@ export const runQueue = sqliteTable(
 )
 
 /**
- * Unified message layer (docs/im-channels.md, schema v16): one channel tree
- * per run (#team / #announce / DM per solver) + one event-scope channel
- * (DM: scheduler). Channels are persistent rows created with the run and
- * cascaded on run/event delete; the scheduler DM is event-scoped (FK on
- * events, NOT on the scheduler run — it survives scheduler restarts so the
- * recap history persists) with a plain-text `targetAgentId` pointer that is
- * re-stamped on each scheduler start.
+ * Unified message layer (docs/im-channels.md, schema v16→v17): one channel
+ * tree per run (#team / #announce / DM per solver) + one event-scope channel
+ * (DM: scheduler). v17 promotes #team/#announce to CHALLENGE scope — they
+ * persist across runs of the same challenge (the same-challenge knowledge
+ * base) and cascade on challenge delete. DMs stay run-scoped (agent
+ * lifecycle) and the scheduler DM stays event-scoped (survives scheduler
+ * restarts) with a plain-text `targetAgentId` pointer that is re-stamped on
+ * each scheduler start.
  */
 export const channels = sqliteTable(
   "channels",
   {
     id: text("id").primaryKey(),
-    /** "run" | "event". */
+    /** "run" (DM) | "event" (scheduler DM) | "challenge" (#team/#announce). */
     scopeType: text("scope_type").notNull(),
-    /** Run scope: the owning run (cascade). Event scope: null. */
+    /** Run scope (DM): the owning run (cascade). Otherwise null. */
     runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
-    /** Always set (run channels derive it from the run; scheduler DM is
-     * event-scoped). Powers the scheduler's whole-event visibility. */
+    /** Always set (run channels derive it from the run; challenge channels
+     * from the challenge's event; scheduler DM is event-scoped). Powers the
+     * scheduler's whole-event visibility. */
     eventId: text("event_id")
       .notNull()
       .references(() => events.id, { onDelete: "cascade" }),
+    /** Challenge scope (#team/#announce): the challenge (cascade) — the
+     * channel persists across runs of the same challenge (v17 §11.2). */
+    challengeId: text("challenge_id").references(() => challenges.id, {
+      onDelete: "cascade",
+    }),
     /** "team" | "announce" | "dm". */
     kind: text("kind").notNull(),
     /** DM target agent id (kind=dm). No FK: the scheduler agent churns across
@@ -428,9 +435,10 @@ export const channels = sqliteTable(
   (table) => [
     index("channels_run_id_idx").on(table.runId),
     index("channels_event_id_idx").on(table.eventId),
+    index("channels_challenge_id_idx").on(table.challengeId),
     check(
       "channels_scope_type_check",
-      sql`${table.scopeType} in ('run', 'event')`
+      sql`${table.scopeType} in ('run', 'event', 'challenge')`
     ),
     check(
       "channels_kind_check",
@@ -443,6 +451,16 @@ export const channels = sqliteTable(
     check(
       "channels_scope_run_check",
       sql`(${table.scopeType} != 'run') or (${table.runId} is not null)`
+    ),
+    // v17 §11.2: scope=challenge ↔ challengeId set AND runId null.
+    check(
+      "channels_scope_challenge_check",
+      sql`((${table.scopeType} = 'challenge') and (${table.challengeId} is not null) and (${table.runId} is null)) or ((${table.scopeType} != 'challenge') and (${table.challengeId} is null))`
+    ),
+    // Group channels are exactly the challenge-scoped ones; DMs never are.
+    check(
+      "channels_kind_scope_check",
+      sql`(((${table.kind} = 'team') or (${table.kind} = 'announce')) and (${table.scopeType} = 'challenge')) or ((${table.kind} = 'dm') and (${table.scopeType} != 'challenge'))`
     ),
   ]
 )

@@ -508,6 +508,14 @@ export function createRunFactory(deps: RunFactoryDeps) {
         agentId,
         solverInitial(templateMap, ctx, runStrategy, spec)
       )
+      // Onboarding (v17 §11.3): a fresh solver's cursor is 0 — the challenge's
+      // ENTIRE group-channel history (prior runs' findings/dead-ends +
+      // announce) is unread. One deliver right after the prime sweeps it
+      // into the first turn's tail as a single steer (8K cap + overflow
+      // folding bound the size); mechanical history intake replaces the old
+      // prompt-discipline handoff. Cold restores do NOT pass here (their
+      // cursors sit where they left off — only genuinely new messages steer).
+      channels.deliver(agentId)
     }
   }
 
@@ -796,9 +804,11 @@ export function createRunFactory(deps: RunFactoryDeps) {
           thinkingLevel: entryTarget.thinkingLevel,
           promptContext,
         })
-        // Channel tree first (§2.1): #team + #announce exist before any
-        // solver can post; each solver's DM is created with its agent row.
-        channels.ensureRunChannels(runId)
+        // Channel tree first (§2.1 + v17 §11.2): the challenge's #team +
+        // #announce exist (get-or-create — shared with every other run on
+        // this challenge) before any solver can post; each solver's DM is
+        // created with its agent row.
+        channels.ensureChallengeChannels(runId)
         // Directly create + prime the N solver agents (v9: every solver
         // primes with its own rendered initial prompt).
         await createSolvers(
@@ -1035,11 +1045,12 @@ export function createRunFactory(deps: RunFactoryDeps) {
       }
 
       // Channel backfill for pre-channels (v≤15) runs: the tree is ensured
-      // idempotently — a legacy challenge run cold-restored gets
-      // #team/#announce + a DM per persisted agent so the first post does
-      // not 404. Event runs keep their scheduler DM (attached below).
+      // idempotently — a legacy challenge run cold-restored gets the
+      // challenge's #team/#announce (v17: created if absent) + a DM per
+      // persisted agent so the first post does not 404. Event runs keep
+      // their scheduler DM (attached below).
       if (row.scopeType === "challenge") {
-        channels.ensureRunChannels(runId)
+        channels.ensureChallengeChannels(runId)
         for (const agent of queries.listAgents(runId)) {
           channels.ensureAgentDm(runId, agent.id)
         }
@@ -1199,6 +1210,9 @@ export function createRunFactory(deps: RunFactoryDeps) {
       agentId,
       solverInitial(templateMap, context.promptContext, undefined, spec)
     )
+    // Onboarding deliver (v17 §11.3, same as createSolvers): sweep the
+    // challenge's group-channel history into the newcomer's first turn.
+    channels.deliver(agentId)
     return requireRun(runId)
   }
 

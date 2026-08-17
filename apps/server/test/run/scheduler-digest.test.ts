@@ -456,7 +456,7 @@ describe("scheduler digest (docs/im-channels.md §三)", () => {
         body: "继续",
       })
       expect(sent).toHaveLength(1)
-      expect(sent[0]).toContain("问询 Solver 1（run-r1）：flag 格式确认一下？")
+      expect(sent[0]).toContain("问询 Solver 1 · run-r1：flag 格式确认一下？")
       expect(sent[0]).toContain("用户：继续")
     } finally {
       close()

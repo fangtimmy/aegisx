@@ -85,6 +85,9 @@ export function registerEventRoutes(
       ReturnType<typeof createCatalogReader>,
       "getEvent" | "getChallenge" | "listEvents" | "listChallengesForEvent"
     >
+    /** v17: sweep the challenge's channel attachment directories when the
+     * challenge (and its challenge-scope channels) is deleted. */
+    cleanupChallengeChannelFiles(challengeId: string): void
   }
 ) {
   const { db, storage, platformService, runManager, catalog } = options
@@ -377,6 +380,10 @@ export function registerEventRoutes(
     const path = storage.challengePath(challenge.eventId, challenge.id)
     const trashedPath = storage.moveToTrash(path)
     try {
+      // v17: the challenge-scope channels (#team/#announce + their message
+      // history) cascade with the challenge row; their attachment dirs on
+      // disk need the explicit sweep (mirrors deleteRun's cleanupRunFiles).
+      options.cleanupChallengeChannelFiles(challenge.id)
       db.delete(challenges).where(eq(challenges.id, challenge.id)).run()
     } catch (error) {
       if (trashedPath) storage.restore(trashedPath, path)

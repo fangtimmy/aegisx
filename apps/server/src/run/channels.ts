@@ -24,17 +24,20 @@ import { RunActionError } from "./errors"
 import type { RunQueries } from "./queries"
 
 /**
- * Unified message layer core (docs/im-channels.md). One channel tree per run
- * (#team / #announce / DM per solver) + one event-scope channel (DM:
- * scheduler). Messages are written once, stored once, rendered once —
- * delivery (whether/when to wake whom) is a per-channel POLICY implemented
- * here, not a per-call-site decision.
+ * Unified message layer core (docs/im-channels.md). One channel tree per
+ * run (challenge-scope #team/#announce + DM per solver) + one event-scope
+ * channel (DM: scheduler). v17 (§11): #team/#announce are CHALLENGE-scoped —
+ * they persist across runs of the same challenge, so a retry run's fresh
+ * solvers mechanically see every prior finding/dead-end/announcement (the
+ * onboarding deliver sweeps it into their first turn). Messages are written
+ * once, stored once, rendered once — delivery (whether/when to wake whom) is
+ * a per-channel POLICY implemented here, not a per-call-site decision.
  *
  * Delivery = steer via `lifecycle.send(agentId, text, "steer")` (three-state
  * semantics owned by the lifecycle: streaming → inject at turn end, idle →
  * fresh turn, closed → onResume cold-restore). Red lines honored:
- *  - #team / #announce only store on a closed run (restore touches only the
- *    triggered agent); DMs may cold-wake their target.
+ *  - #team / #announce only store for agents on a closed run (restore touches
+ *    only the triggered agent); DMs may cold-wake their target.
  *  - Steer text carries 📎 filename/size metadata lines only — attachment
  *    CONTENT is never injected (agents materialize via SDK fetch).
  *  - Attachment sources are resolve-checked inside the posting agent's run
@@ -75,7 +78,7 @@ export type PostInput = {
    * workspace (snapshot semantics, §2.5). */
   files?: string[]
   /** Delivery-time skip (partial-flag steer parity: the submitter is not
-   * re-steered). Only applies to run-scope group channels. */
+   * re-steered). Only applies to challenge-scope group channels. */
   skipAgentIds?: string[]
   /** Push mode for deliveries triggered by this post (default "steer").
    * The scheduler tools' message_run/message_agent use "followUp". */
@@ -109,15 +112,20 @@ export type ChannelMessagePublic = {
 
 export type ChannelPublic = {
   id: string
-  scopeType: "run" | "event"
+  scopeType: "run" | "event" | "challenge"
   runId: string | null
   eventId: string
+  /** Challenge scope (#team/#announce, v17): the owning challenge. */
+  challengeId: string | null
   kind: "team" | "announce" | "dm"
   targetAgentId: string | null
   /** Display label: "#team" / "#announce" / "DM <agentName>". */
   label: string
   unread: number
   lastMessageAt: string | null
+  /** Challenge-scope channels only (v17 §11.5): how many live runs currently
+   * share this channel — the UI's 共享 badge. Null for DM/scheduler DM. */
+  sharedRunCount: number | null
 }
 
 export type ChannelServiceDeps = {
@@ -152,16 +160,32 @@ export function createChannelService(deps: ChannelServiceDeps) {
     return row
   }
 
-  /** Run channels (#team + #announce + every solver DM), canonical order. */
+  /** Run channels (v17): the challenge's #team + #announce (resolved via the
+   * run's challengeId — shared across every run of that challenge) + the
+   * run's own DM channels, canonical order. */
   function runChannels(runId: string): ChannelRow[] {
-    const rows = db
+    const row = queries.getRow(runId)
+    if (!row) return []
+    const groups = row.challengeId
+      ? db
+          .select()
+          .from(channels)
+          .where(
+            and(
+              eq(channels.challengeId, row.challengeId),
+              inArray(channels.kind, ["team", "announce"])
+            )
+          )
+          .all()
+      : []
+    const dms = db
       .select()
       .from(channels)
-      .where(eq(channels.runId, runId))
+      .where(and(eq(channels.runId, runId), eq(channels.kind, "dm")))
       .all()
     const rank = (kind: string) =>
       kind === "announce" ? 0 : kind === "team" ? 1 : 2
-    return rows.sort(
+    return [...groups, ...dms].sort(
       (a, b) =>
         rank(a.kind) - rank(b.kind) || a.createdAt.localeCompare(b.createdAt)
     )
@@ -183,9 +207,10 @@ export function createChannelService(deps: ChannelServiceDeps) {
   }
 
   function insertChannel(input: {
-    scopeType: "run" | "event"
+    scopeType: "run" | "event" | "challenge"
     runId: string | null
     eventId: string
+    challengeId?: string | null
     kind: "team" | "announce" | "dm"
     targetAgentId: string | null
   }): ChannelRow {
@@ -194,6 +219,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       scopeType: input.scopeType,
       runId: input.runId,
       eventId: input.eventId,
+      challengeId: input.challengeId ?? null,
       kind: input.kind,
       targetAgentId: input.targetAgentId,
       createdAt: deps.now(),
@@ -202,26 +228,51 @@ export function createChannelService(deps: ChannelServiceDeps) {
     return row as ChannelRow
   }
 
-  /** Idempotent: ensure #team + #announce exist for a run. */
-  function ensureRunChannels(runId: string): void {
+  /** Idempotent (v17 §11.2): get-or-create the CHALLENGE's #team +
+   * #announce. The first run on a challenge creates them; every later run
+   * reuses the same channels (and their history). DMs are per-run and created
+   * per agent (ensureAgentDm). */
+  function ensureChallengeChannels(runId: string): void {
     const row = queries.getRow(runId)
     if (!row) throw new RunActionError("not_found", "Run not found")
+    if (!row.challengeId) return // event-scope scheduler run: no group channels
     for (const kind of ["team", "announce"] as const) {
       const existing = db
         .select({ id: channels.id })
         .from(channels)
-        .where(and(eq(channels.runId, runId), eq(channels.kind, kind)))
+        .where(
+          and(
+            eq(channels.challengeId, row.challengeId),
+            eq(channels.kind, kind)
+          )
+        )
         .get()
       if (!existing) {
         insertChannel({
-          scopeType: "run",
-          runId,
+          scopeType: "challenge",
+          runId: null,
           eventId: row.eventId,
+          challengeId: row.challengeId,
           kind,
           targetAgentId: null,
         })
       }
     }
+  }
+
+  /** The challenge's group channel of a kind (v17: the single #team/#announce
+   * of the challenge — the fan-out target for system notifications). */
+  function challengeChannel(
+    challengeId: string,
+    kind: "team" | "announce"
+  ): ChannelRow | undefined {
+    return db
+      .select()
+      .from(channels)
+      .where(
+        and(eq(channels.challengeId, challengeId), eq(channels.kind, kind))
+      )
+      .get()
   }
 
   /** Idempotent: ensure the agent's DM channel exists (create + add_agent +
@@ -543,8 +594,9 @@ export function createChannelService(deps: ChannelServiceDeps) {
       }
     }
 
-    // SSE broadcast: run channels on the run's channel, the scheduler DM on
-    // the event's channel.
+    // SSE broadcast: run DM channels on the run's channel; challenge-scope
+    // group channels + the scheduler DM on the event's channel (challenge
+    // channels outlive any single run; timelines poll).
     bus.emit(channel.runId ?? channel.eventId, {
       type: "channel.message",
       message,
@@ -659,7 +711,10 @@ export function createChannelService(deps: ChannelServiceDeps) {
     return message
   }
 
-  /** Author name/permission resolution per channel kind (§2.3 writers). */
+  /** Author name/permission resolution per channel kind (§2.3 writers).
+   * v17 §11.4: agent posts carry a run-suffix snapshot (`Solver 2 · run-a3f1`)
+   * — the same string renders in the UI timeline and the steer text, so
+   * cross-run attribution is unambiguous in the shared challenge channels. */
   function resolveAuthor(
     channel: ChannelRow,
     author: MessageAuthor
@@ -675,23 +730,37 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
     const agent = agentRow(author.agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
-    const name = agent.name ?? agent.slot
-    if (channel.scopeType === "run") {
-      // Same-run agents post to #team / their own DM; the event's scheduler
-      // agent may post to any run channel (announce / DM steering) but not
-      // #team (that is the solvers' room).
+    const name = `${agent.name ?? agent.slot} · run-${agent.runId.slice(0, 4)}`
+    if (channel.scopeType === "challenge") {
+      // Solvers of any run on THIS challenge post to #team (their shared
+      // room) and #announce; the event's scheduler may post #announce (and DM
+      // steering) but not #team — that is the solvers' room.
+      const agentRun = queries.getRow(agent.runId)
+      const sameChallenge =
+        agentRun?.scopeType === "challenge" &&
+        agentRun.challengeId === channel.challengeId
+      const scheduler = schedulerAgentOf(channel.eventId)
+      if (!sameChallenge && scheduler?.id !== agent.id) {
+        throw new RunActionError(
+          "invalid",
+          "无权向该频道发帖（不属于此题目，也非本 event 调度者）"
+        )
+      }
+      if (channel.kind === "team" && !sameChallenge) {
+        throw new RunActionError(
+          "invalid",
+          "#team 只接受本题目 run 成员发帖（调度者请用 #announce 或 DM）"
+        )
+      }
+    } else if (channel.scopeType === "run") {
+      // Same-run agents post to their own DM; the event's scheduler agent may
+      // post to any run's DM (steering) — legacy run-scope DM permission.
       const sameRun = agent.runId === channel.runId
       const scheduler = schedulerAgentOf(channel.eventId)
       if (!sameRun && scheduler?.id !== agent.id) {
         throw new RunActionError(
           "invalid",
           "无权向该频道发帖（不属于此 run，也非本 event 调度者）"
-        )
-      }
-      if (channel.kind === "team" && !sameRun) {
-        throw new RunActionError(
-          "invalid",
-          "#team 只接受本 run 成员发帖（调度者请用 #announce 或 DM）"
         )
       }
     }
@@ -716,23 +785,30 @@ export function createChannelService(deps: ChannelServiceDeps) {
   // --- delivery engine ---------------------------------------------------------
 
   /** Channels whose unread counts toward an agent's deliver snapshot. Solver:
-   * #team + #announce + own DM. The scheduler DM is digest-policy territory. */
+   * the challenge's #team + #announce (v17 — shared across runs of the
+   * challenge) + own DM. The scheduler DM is digest-policy territory. */
   function deliverableChannels(
     agent: typeof agents.$inferSelect
   ): ChannelRow[] {
-    const rows = db
+    const runRow = queries.getRow(agent.runId)
+    const groups = runRow?.challengeId
+      ? db
+          .select()
+          .from(channels)
+          .where(
+            and(
+              eq(channels.challengeId, runRow.challengeId),
+              inArray(channels.kind, ["team", "announce"])
+            )
+          )
+          .all()
+      : []
+    const dms = db
       .select()
       .from(channels)
-      .where(
-        and(
-          eq(channels.runId, agent.runId),
-          inArray(channels.kind, ["team", "announce", "dm"])
-        )
-      )
+      .where(and(eq(channels.runId, agent.runId), eq(channels.kind, "dm")))
       .all()
-    return rows.filter(
-      (channel) => channel.kind !== "dm" || channel.targetAgentId === agent.id
-    )
+    return [...groups, ...dms.filter((c) => c.targetAgentId === agent.id)]
   }
 
   /** The one push exit: collect unread across the agent's visible channels,
@@ -819,7 +895,10 @@ export function createChannelService(deps: ChannelServiceDeps) {
     await lifecycle.send(agentId, text, deliverAs)
   }
 
-  /** Per-channel delivery trigger (§2.3 table). */
+  /** Per-channel delivery trigger (§2.3 table). v17: group channels are
+   * challenge-scoped — the recipient query is every solver of every LIVE run
+   * on the challenge (closed-run members only store, per the restore red
+   * line); DMs target their agent as before. */
   function triggerDelivery(
     channel: ChannelRow,
     _message: ChannelMessagePublic,
@@ -836,13 +915,24 @@ export function createChannelService(deps: ChannelServiceDeps) {
       }
       return
     }
-    // Group channels: steer every live member of the run.
-    const runRow = queries.getRow(channel.runId!)
-    if (!runRow || runRow.status === "closed") return
-    for (const agent of queries.listAgents(channel.runId!)) {
-      if (agent.role !== "solver") continue
-      if (skipAgentIds.includes(agent.id)) continue
-      deliver(agent.id, deliverAs)
+    // Group channels: steer every live solver on the challenge.
+    const liveRuns = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.challengeId, channel.challengeId!),
+          eq(runs.scopeType, "challenge"),
+          inArray(runs.status, ["running", "idle"])
+        )
+      )
+      .all()
+    for (const { id } of liveRuns) {
+      for (const agent of queries.listAgents(id)) {
+        if (agent.role !== "solver") continue
+        if (skipAgentIds.includes(agent.id)) continue
+        deliver(agent.id, deliverAs)
+      }
     }
   }
 
@@ -903,7 +993,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
   }
 
   /** Resolve "#team" / "#announce" / a channel id for an agent, enforcing
-   * visibility (solver: own run's group channels + own DM + the event's
+   * visibility (solver: the challenge's group channels + own DM + the event's
    * scheduler DM; scheduler: every channel in its event). */
   function resolveSelector(
     agent: typeof agents.$inferSelect,
@@ -925,12 +1015,16 @@ export function createChannelService(deps: ChannelServiceDeps) {
           "调度者请用频道 id 寻址 run 频道（channels.list 提供）"
         )
       }
+      const runRow = queries.getRow(agent.runId)
+      if (!runRow?.challengeId) {
+        throw new RunActionError("not_found", "Channel not found")
+      }
       const channel = db
         .select()
         .from(channels)
         .where(
           and(
-            eq(channels.runId, agent.runId),
+            eq(channels.challengeId, runRow.challengeId),
             eq(channels.kind, selectorNorm === "#team" ? "team" : "announce")
           )
         )
@@ -947,7 +1041,11 @@ export function createChannelService(deps: ChannelServiceDeps) {
       }
       return channel
     }
+    // Solver visibility (v17): the challenge's group channels, own DM, and
+    // the event's scheduler DM.
     const visible =
+      (channel.scopeType === "challenge" &&
+        ownRun?.challengeId === channel.challengeId) ||
       channel.runId === agent.runId ||
       (channel.scopeType === "event" &&
         channel.kind === "dm" &&
@@ -975,6 +1073,24 @@ export function createChannelService(deps: ChannelServiceDeps) {
     return row?.n ?? 0
   }
 
+  /** Live (running/idle) challenge runs sharing a challenge channel — the
+   * v17 共享 badge count. */
+  function sharedRunCount(channel: ChannelRow): number | null {
+    if (channel.scopeType !== "challenge") return null
+    const row = db
+      .select({ n: sql<number>`count(*)` })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.challengeId, channel.challengeId!),
+          eq(runs.scopeType, "challenge"),
+          inArray(runs.status, ["running", "idle"])
+        )
+      )
+      .get()
+    return row?.n ?? 0
+  }
+
   function toChannelPublic(
     channel: ChannelRow,
     agentId: string
@@ -988,14 +1104,16 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .get()
     return {
       id: channel.id,
-      scopeType: channel.scopeType as "run" | "event",
+      scopeType: channel.scopeType as "run" | "event" | "challenge",
       runId: channel.runId,
       eventId: channel.eventId,
+      challengeId: channel.challengeId,
       kind: channel.kind as "team" | "announce" | "dm",
       targetAgentId: channel.targetAgentId,
       label: channelLabel(channel),
       unread: agentId ? unreadCount(channel, agentId) : 0,
       lastMessageAt: last?.createdAt ?? null,
+      sharedRunCount: sharedRunCount(channel),
     }
   }
 
@@ -1043,7 +1161,9 @@ export function createChannelService(deps: ChannelServiceDeps) {
   }
 
   /** Best-effort disk cleanup when a run is deleted (DB rows cascade; the
-   * files under data/channel-files/<channelId>/ do not). */
+   * files under data/channel-files/<channelId>/ do not). v17: only the run's
+   * DM channels are run-scoped — the challenge group channels (and their
+   * attachment history) survive a single run's deletion. */
   function cleanupRunFiles(runId: string): void {
     const ids = db
       .select({ id: channels.id })
@@ -1058,12 +1178,29 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
   }
 
+  /** Best-effort disk cleanup when a CHALLENGE is deleted (v17: its group
+   * channels + history cascade in SQL; the attachment dirs do not). */
+  function cleanupChallengeFiles(challengeId: string): void {
+    const ids = db
+      .select({ id: channels.id })
+      .from(channels)
+      .where(eq(channels.challengeId, challengeId))
+      .all()
+    for (const { id } of ids) {
+      rmSync(join(dataDir, "channel-files", id), {
+        recursive: true,
+        force: true,
+      })
+    }
+  }
+
   return {
-    ensureRunChannels,
+    ensureChallengeChannels,
     ensureAgentDm,
     ensureSchedulerDm,
     schedulerDm,
     runChannels,
+    challengeChannel,
     runChannelTree,
     agentChannels,
     channelById,
@@ -1079,6 +1216,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     readCursor,
     fileById,
     cleanupRunFiles,
+    cleanupChallengeFiles,
     channelLabel,
   }
 }

@@ -158,6 +158,36 @@ describe("schema bootstrap", () => {
           .all() as Array<{ name: string }>
       ).map((c) => c.name)
       expect(idxCols).toEqual(["event_id", "source_key", "remote_id"])
+
+      // v17 (0011): challenge-scope channels — challenge_id FK column +
+      // index, scopeType gains 'challenge', and the two new checks (scope
+      // biconditional; team/announce ↔ challenge, dm ↔ non-challenge).
+      const channelCols = new Set(
+        (
+          sqlite.query(`PRAGMA table_info(channels)`).all() as Array<{
+            name: string
+          }>
+        ).map((c) => c.name)
+      )
+      expect(channelCols.has("challenge_id")).toBe(true)
+      const channelIdx = (
+        sqlite
+          .query(
+            `SELECT name FROM pragma_index_list('channels') WHERE origin = 'c'`
+          )
+          .all() as Array<{ name: string }>
+      ).map((i) => i.name)
+      expect(channelIdx).toContain("channels_challenge_id_idx")
+      const ddl = (
+        sqlite
+          .query(
+            `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channels'`
+          )
+          .get() as { sql: string }
+      ).sql
+      expect(ddl).toContain("'run', 'event', 'challenge'")
+      expect(ddl).toContain("channels_scope_challenge_check")
+      expect(ddl).toContain("channels_kind_scope_check")
       sqlite.close()
       releaseLock()
     } finally {

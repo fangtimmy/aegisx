@@ -78,6 +78,13 @@
       "when": 1790100000000,
       "tag": "0010_im_channels",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": 12,
+      "when": 1790200000000,
+      "tag": "0011_challenge_scope_channels",
+      "breakpoints": true
     }
   ]
 }

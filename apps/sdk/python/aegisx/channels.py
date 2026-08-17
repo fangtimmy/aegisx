@@ -121,8 +121,9 @@ def fetch(file_id: str, dest: str | None = None) -> str:
 
 
 def announce(run_id: str, text: str) -> ChannelMessage:
-    """Scheduler-only: broadcast to a run's #announce (steers every live
-    solver). Use for FYI guidance; use `aegisx.agents.message` for directives
+    """Scheduler-only: broadcast to the challenge's #announce (v17: the
+    channel is shared by every run on that challenge — steers all their live
+    solvers). Use for FYI guidance; use `aegisx.agents.message` for directives
     targeting one solver."""
     from .client import require_manager
 
@@ -161,7 +162,11 @@ def _scheduler_dm() -> Channel | None:
 
 
 def _run_channel(run_id: str, kind: str) -> Channel:
-    for channel in list():
-        if channel.run_id == run_id and channel.kind == kind:
-            return channel
+    """Resolve a run's group channel. v17: #team/#announce are challenge-
+    scoped (channel.run_id is None), so the run's channel tree endpoint is the
+    authoritative run → challenge-channel mapping."""
+    data = get_client().request("GET", f"/api/runs/{run_id}/channels")
+    for item in data.get("items", []):
+        if item.get("kind") == kind:
+            return from_dict(Channel, item)
     raise AegisxError("not_found", f"No {kind} channel for run {run_id}")

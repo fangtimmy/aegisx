@@ -29,6 +29,7 @@ import {
   DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
   LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+  LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_CHANNELS,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
@@ -196,6 +197,16 @@ export function createRunService(options: RunServiceOptions) {
     db,
     "mainSystem",
     LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_PRE_CHANNELS,
+    DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
+  )
+  // v17 challenge-level channels (docs/im-channels.md §11): #team is shared
+  // across the challenge's runs — the mainSystem channel section gains the
+  // herding-discipline line (stick to your assigned angle/strategy unless
+  // #team evidence directly contradicts it). Exact-match refresh.
+  upgradeBuiltinTemplate(
+    db,
+    "mainSystem",
+    LEGACY_MAIN_SYSTEM_PROMPT_TEMPLATE_V16_CHANNELS,
     DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE
   )
   upgradeBuiltinTemplate(
@@ -858,11 +869,11 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
-   * (TSecBench partial — the challenge is NOT fully solved). Posts a system
-   * message into every live run's #team (team delivery steers all live
-   * members — behavior parity with the former direct steer loop, minus the
-   * submitter) + a non-urgent scheduler-DM notice (learned with the next
-   * digest). */
+   * (TSecBench partial — the challenge is NOT fully solved). v17 §11.5: ONE
+   * system post into the challenge-level #team (the channel layer fans it
+   * out to every live run's solvers on the challenge — replacing the former
+   * per-run post loop; the submitter is skipped for parity) + a non-urgent
+   * scheduler-DM notice (learned with the next digest). */
   function notifyFlagPartial(
     runId: string,
     message: string | null,
@@ -891,42 +902,24 @@ export function createRunService(options: RunServiceOptions) {
       `[多 flag 进度]「${name}」部分解出${message ? `（${message}）` : ""}。` +
       `已确认的 flag：${confirmed.join("、") || "（无）"}。` +
       `请专注解出剩余 flag；已确认的无需重复提交。`
-    // System message → each live run's #team; the team policy steers every
-    // live member (skipAgentIds keeps the exact old submitter exception).
-    for (const target of liveRunsOnChallenge(row.challengeId)) {
-      const team = channels
-        .runChannels(target.id)
-        .find((channel) => channel.kind === "team")
-      if (team) {
-        channels.post({
-          channelId: team.id,
-          author: { type: "system" },
-          body: text,
-          meta: { runId, eventType: "flagPartial" },
-          ...(submitterAgentId ? { skipAgentIds: [submitterAgentId] } : {}),
-        })
-      }
+    // Single post → the challenge's #team; the group delivery policy steers
+    // every live solver on the challenge (skipAgentIds keeps the exact old
+    // submitter exception; closed-run members store only).
+    const team = channels.challengeChannel(row.challengeId, "team")
+    if (team) {
+      channels.post({
+        channelId: team.id,
+        author: { type: "system" },
+        body: text,
+        meta: { runId, eventType: "flagPartial" },
+        ...(submitterAgentId ? { skipAgentIds: [submitterAgentId] } : {}),
+      })
     }
     digests
       .get(row.eventId)
       ?.pushNotice(
         `部分解出：「${name}」${message ?? "多 flag 未集齐"}（run-${runId.slice(0, 8)}）`
       )
-  }
-
-  /** Live challenge-scope runs on a challenge (running + idle). */
-  function liveRunsOnChallenge(challengeId: string) {
-    return db
-      .select({ id: runs.id })
-      .from(runs)
-      .where(
-        and(
-          eq(runs.challengeId, challengeId),
-          eq(runs.scopeType, "challenge"),
-          inArray(runs.status, ["running", "idle"])
-        )
-      )
-      .all()
   }
 
   /** Full-solve cleanup (see notifyFlagAccepted). Returns a summary line of

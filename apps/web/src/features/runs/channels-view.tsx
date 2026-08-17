@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Hash, Paperclip, Send, X } from "lucide-react"
+import { Hash, Paperclip, Send, Users, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { channelsApi, keys, type ChannelMessageInfo } from "@/api"
@@ -283,6 +283,16 @@ export function ChannelsView({ runId }: { runId: string }) {
                 <Hash className="size-3.5 shrink-0 text-muted-foreground" />
               )}
               <span className="truncate">{channel.label}</span>
+              {/* v17：题目级共享频道（同题全部 live run 同一频道 + 历史） */}
+              {channel.sharedRunCount !== null && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground"
+                  title={`同题共享频道 · ${channel.sharedRunCount} 个 live run`}
+                >
+                  <Users className="size-2.5" aria-hidden />
+                  {channel.sharedRunCount}
+                </span>
+              )}
               {unseen && (
                 <span
                   aria-label="未读"
