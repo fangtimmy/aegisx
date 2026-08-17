@@ -1,0 +1,330 @@
+import { describe, expect, test } from "bun:test"
+
+import { DasCtfAdapter } from "../../src/platforms/adapters/dasctf"
+import type { PlatformConfig } from "../../src/platforms/core"
+import { PlatformError } from "../../src/platforms/core"
+
+const config: PlatformConfig = {
+  type: "dasctf",
+  baseUrl: "https://pro.dasctf.com",
+  credential: "ak_test",
+  remoteEventId: "match",
+}
+
+type Route = {
+  match: string | RegExp
+  body?: unknown
+  status?: number
+}
+
+/** Stub globalThis.fetch with URL-matched JSON routes; record every call.
+ * Routes are consumed in order: each request removes the first matching
+ * route, so sequential calls to the same URL get distinct responses. */
+function stubFetch(routes: Route[]) {
+  const original = globalThis.fetch
+  const queue = [...routes]
+  const calls: { url: string; init: RequestInit | undefined }[] = []
+  globalThis.fetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = input instanceof URL ? input.toString() : String(input)
+    calls.push({ url, init })
+    const index = queue.findIndex((r) =>
+      typeof r.match === "string" ? url.includes(r.match) : r.match.test(url)
+    )
+    const route = index >= 0 ? queue.splice(index, 1)[0] : undefined
+    if (!route) {
+      return new Response("no stub route", {
+        status: 404,
+        headers: { "Content-Type": "text/plain" },
+      })
+    }
+    return new Response(JSON.stringify(route.body ?? {}), {
+      status: route.status ?? 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  }) as typeof fetch
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = original
+    },
+  }
+}
+
+const envelope = (data: unknown) => ({ code: "00000", message: "", data })
+
+const detailRoute = (detail: unknown) => ({
+  match: "/ctf/exercise?",
+  body: envelope(detail),
+})
+
+const sampleDetail = {
+  id: 1001,
+  name: "easy-web",
+  description: "题目描述",
+  hasSolved: false,
+  score: "100",
+  difficulty: "EASY",
+  attachment: {
+    files: [
+      {
+        name: "attachment.zip",
+        url: "https://pro.dasctf.com/file/1",
+        ext: "zip",
+      },
+    ],
+  },
+  endpoints: [],
+  isNeedInit: false,
+  isNeedCheck: false,
+}
+
+function headersOf(calls: { init: RequestInit | undefined }[], index = 0) {
+  return calls[index].init?.headers as Record<string, string>
+}
+
+describe("dasctf adapter", () => {
+  test("authenticates with X-Agent-AccessKey and unwraps the envelope", async () => {
+    const fetch = stubFetch([
+      { match: "match-info", body: envelope({ note: "n", rule: "r" }) },
+    ])
+    try {
+      await new DasCtfAdapter(config).testConnection()
+      expect(fetch.calls[0].url).toBe(
+        "https://pro.dasctf.com/slab-match/api/v1/agent/match/notice/match-info"
+      )
+      expect(headersOf(fetch.calls)["X-Agent-AccessKey"]).toBe("ak_test")
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("throws on a non-success envelope code", async () => {
+    const fetch = stubFetch([
+      { match: "match-info", body: { code: "A0001", message: "invalid key" } },
+    ])
+    try {
+      await expect(new DasCtfAdapter(config).testConnection()).rejects.toThrow(
+        "invalid key"
+      )
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("listEvents returns a single synthetic match event", async () => {
+    const fetch = stubFetch([
+      { match: "match-info", body: envelope({ note: "n", rule: "r" }) },
+    ])
+    try {
+      const events = await new DasCtfAdapter(config).listEvents()
+      expect(events).toEqual([{ id: "match", name: "DASCTF Match" }])
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("listChallenges flattens categories and skips closed exercises", async () => {
+    const fetch = stubFetch([
+      {
+        match: "exercise-list",
+        body: envelope([
+          {
+            id: 10,
+            name: "Web",
+            corpus: [
+              { id: 1001, name: "easy-web", isOpen: true, hasSolved: false },
+              { id: 1002, name: "hidden", isOpen: false, hasSolved: false },
+            ],
+          },
+          {
+            id: 20,
+            name: "Pwn",
+            corpus: [{ id: 2001, name: "easy-pwn", hasSolved: true }],
+          },
+        ]),
+      },
+    ])
+    try {
+      const items = await new DasCtfAdapter(config).listChallenges()
+      expect(items).toEqual([
+        {
+          id: "1001",
+          name: "easy-web",
+          category: "Web",
+          points: null,
+          solved: false,
+        },
+        {
+          id: "2001",
+          name: "easy-pwn",
+          category: "Pwn",
+          points: null,
+          solved: true,
+        },
+      ])
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("getChallenge maps detail fields, attachments and target support", async () => {
+    const fetch = stubFetch([detailRoute(sampleDetail)])
+    try {
+      const challenge = await new DasCtfAdapter(config).getChallenge("1001")
+      expect(challenge.description).toBe("题目描述")
+      expect(challenge.points).toBe(100)
+      expect(challenge.category).toBe("EASY")
+      expect(challenge.attachments).toEqual([
+        {
+          id: "https://pro.dasctf.com/file/1",
+          filename: "attachment.zip",
+          url: "https://pro.dasctf.com/file/1",
+          authenticated: true,
+        },
+      ])
+      expect(challenge.targetSupported).toBe(false)
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("getSolveState reads hasSolved; missing exercise is a 404", async () => {
+    const fetch = stubFetch([
+      detailRoute({ ...sampleDetail, hasSolved: true }),
+      detailRoute({}),
+    ])
+    try {
+      const adapter = new DasCtfAdapter(config)
+      expect(await adapter.getSolveState("1001")).toBe(true)
+      try {
+        await adapter.getSolveState("1001")
+        expect.unreachable()
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError)
+        expect((error as PlatformError).status).toBe(404)
+      }
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("submitFlag maps verdicts and envelope errors, but propagates HTTP failures", async () => {
+    const fetch = stubFetch([
+      { match: "answer-panel/answer", body: envelope({ isCorrect: true }) },
+      {
+        match: "answer-panel/answer",
+        body: { code: "B1001", message: "flag 错误" },
+      },
+      { match: "answer-panel/answer", status: 502, body: "bad gateway" },
+    ])
+    try {
+      const adapter = new DasCtfAdapter(config)
+      expect(await adapter.submitFlag("1001", "flag{ok}")).toEqual({
+        status: "accepted",
+      })
+      expect(await adapter.submitFlag("1001", "flag{bad}")).toEqual({
+        status: "rejected",
+        message: "flag 错误",
+      })
+      // POST body carries the numeric exerciseId.
+      expect(fetch.calls[1]?.init?.body).toBe(
+        JSON.stringify({ exerciseId: 1001, flag: "flag{bad}" })
+      )
+      try {
+        await adapter.submitFlag("1001", "flag{x}")
+        expect.unreachable()
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformError)
+        expect((error as PlatformError).status).toBe(502)
+      }
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("getTarget maps needInit/needCheck and proxy endpoints with credentials", async () => {
+    const fetch = stubFetch([
+      detailRoute({ ...sampleDetail, isNeedInit: true }),
+      detailRoute({ ...sampleDetail, isNeedCheck: true }),
+      detailRoute({
+        ...sampleDetail,
+        endpoints: [
+          {
+            exposeIps: ["10.0.0.10"],
+            ports: ["80", "22"],
+            users: [{ username: "root", password: "pw" }],
+            portMappings: [{ type: "tcp", port: "80", proxy: "30080" }],
+            proxyIps: ["1.2.3.4"],
+            isProxy: true,
+            expireTime: 1_780_000_000_000,
+          },
+        ],
+      }),
+      detailRoute({
+        ...sampleDetail,
+        endpoints: [
+          {
+            exposeIps: ["10.9.9.9"],
+            ports: ["8080"],
+            isProxy: false,
+          },
+        ],
+      }),
+    ])
+    try {
+      const adapter = new DasCtfAdapter(config)
+      expect(await adapter.getTarget("1001")).toEqual({
+        status: "absent",
+        endpoints: [],
+        expiresAt: null,
+      })
+      expect(await adapter.getTarget("1001")).toEqual({
+        status: "starting",
+        endpoints: [],
+        expiresAt: null,
+      })
+      expect(await adapter.getTarget("1001")).toEqual({
+        status: "running",
+        endpoints: [
+          {
+            name: "endpoint 1:30080",
+            address: "1.2.3.4:30080",
+            protocol: "tcp",
+            guidance: ["credentials: root / pw"],
+          },
+        ],
+        expiresAt: new Date(1_780_000_000_000).toISOString(),
+      })
+      // Non-proxy endpoints expand hosts × ports directly.
+      expect((await adapter.getTarget("1001")).endpoints).toEqual([
+        {
+          name: "endpoint 1:8080",
+          address: "10.9.9.9:8080",
+          protocol: "tcp",
+        },
+      ])
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("startTarget builds the environment; stopTarget recovers it", async () => {
+    const fetch = stubFetch([
+      { match: "build-exercise-env", body: envelope({}) },
+      detailRoute({ ...sampleDetail, isNeedCheck: true }),
+      { match: "recover-exercise-env", body: envelope({}) },
+      detailRoute({ ...sampleDetail, isNeedInit: true }),
+    ])
+    try {
+      const adapter = new DasCtfAdapter(config)
+      expect((await adapter.startTarget("1001")).status).toBe("starting")
+      expect(fetch.calls[0].init?.method).toBe("POST")
+      expect(fetch.calls[0].init?.body).toBe(
+        JSON.stringify({ exerciseId: 1001 })
+      )
+      expect((await adapter.stopTarget("1001")).status).toBe("absent")
+    } finally {
+      fetch.restore()
+    }
+  })
+})

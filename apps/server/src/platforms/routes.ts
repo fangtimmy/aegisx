@@ -14,6 +14,7 @@ const platformType = Type.Union([
   Type.Literal("ret2shell"),
   Type.Literal("a1ctf"),
   Type.Literal("tsecbench"),
+  Type.Literal("dasctf"),
 ])
 
 const connectionInput = Type.Object(

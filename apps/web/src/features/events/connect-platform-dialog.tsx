@@ -36,9 +36,23 @@ import {
 import {
   credentialLabels,
   credentialPrefixes,
+  defaultBaseUrls,
+  fixedRemoteEventIds,
   platformLabels,
   refreshEvent,
 } from "./platform-config"
+
+/** Connect-dialog initial values, prefilling the platform's default URL for
+ * new bindings (existing bindings keep their stored URL). */
+function initialFormValues(platform?: EventPlatform) {
+  const type = platform?.type ?? "ctfd"
+  return {
+    type,
+    baseUrl: platform?.baseUrl ?? defaultBaseUrls[type] ?? "",
+    credential: platform?.credential ?? "",
+    remoteEventId: platform?.remoteEventId ?? "",
+  }
+}
 
 export function ConnectPlatformDialog({
   eventId,
@@ -54,14 +68,7 @@ export function ConnectPlatformDialog({
     baseUrl: string
     credential: string
     remoteEventId: string
-  }>({
-    defaultValues: {
-      type: platform?.type ?? "ctfd",
-      baseUrl: platform?.baseUrl ?? "",
-      credential: platform?.credential ?? "",
-      remoteEventId: platform?.remoteEventId ?? "",
-    },
-  })
+  }>({ defaultValues: initialFormValues(platform) })
   const type = form.watch("type")
   const baseUrl = form.watch("baseUrl")
   const credential = form.watch("credential")
@@ -98,27 +105,17 @@ export function ConnectPlatformDialog({
         type: values.type,
         baseUrl: values.baseUrl.trim(),
         credential: values.credential,
-        remoteEventId:
-          values.type === "ctfd"
-            ? "site"
-            : values.type === "tsecbench"
-              ? "task"
-              : values.remoteEventId,
+        remoteEventId: fixedRemoteEventIds[values.type] ?? values.remoteEventId,
       }),
     onSuccess: async () => {
       await refreshEvent(queryClient, eventId)
       setOpen(false)
-      form.reset({
-        type: platform?.type ?? "ctfd",
-        baseUrl: platform?.baseUrl ?? "",
-        credential: platform?.credential ?? "",
-        remoteEventId: platform?.remoteEventId ?? "",
-      })
+      form.reset(initialFormValues(platform))
     },
   })
   const discoverData = discover.data
   const needsDiscovery =
-    !platform && type !== "ctfd" && type !== "tsecbench" && !discoverData
+    !platform && !(type in fixedRemoteEventIds) && !discoverData
 
   return (
     <Dialog
@@ -128,12 +125,7 @@ export function ConnectPlatformDialog({
           discover.reset()
           testConnection.reset()
           bind.reset()
-          form.reset({
-            type: platform?.type ?? "ctfd",
-            baseUrl: platform?.baseUrl ?? "",
-            credential: platform?.credential ?? "",
-            remoteEventId: platform?.remoteEventId ?? "",
-          })
+          form.reset(initialFormValues(platform))
         }
       }}
       open={open}
@@ -177,7 +169,16 @@ export function ConnectPlatformDialog({
                     disabled={Boolean(platform)}
                     items={platformLabels}
                     onValueChange={(value) => {
-                      field.onChange(value as PlatformType)
+                      const next = value as PlatformType
+                      field.onChange(next)
+                      // Swap the URL only while it is empty or still a
+                      // pristine platform default; keep user-typed URLs.
+                      if (
+                        !baseUrl ||
+                        Object.values(defaultBaseUrls).includes(baseUrl)
+                      ) {
+                        form.setValue("baseUrl", defaultBaseUrls[next] ?? "")
+                      }
                       form.setValue("remoteEventId", "")
                       discover.reset()
                       testConnection.reset()
@@ -261,7 +262,7 @@ export function ConnectPlatformDialog({
                 rules={{ required: true }}
               />
             </Field>
-            {discoverData && type !== "ctfd" && type !== "tsecbench" && (
+            {discoverData && !(type in fixedRemoteEventIds) && (
               <Field>
                 <FieldLabel>赛事</FieldLabel>
                 <Controller
@@ -337,8 +338,7 @@ export function ConnectPlatformDialog({
                 testConnection.isPending ||
                 Boolean(
                   discoverData &&
-                  type !== "ctfd" &&
-                  type !== "tsecbench" &&
+                  !(type in fixedRemoteEventIds) &&
                   !remoteEventId
                 )
               }

@@ -1,4 +1,9 @@
-export type PlatformType = "ctfd" | "ret2shell" | "a1ctf" | "tsecbench"
+export type PlatformType =
+  | "ctfd"
+  | "ret2shell"
+  | "a1ctf"
+  | "tsecbench"
+  | "dasctf"
 
 export type ProviderType =
   | "openai-compatible"

@@ -53,6 +53,7 @@ const platformLabels = {
   ret2shell: "Ret2Shell",
   a1ctf: "A1CTF",
   tsecbench: "TSecBench",
+  dasctf: "DASCTF",
 } as const
 
 const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {

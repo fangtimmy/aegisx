@@ -15,6 +15,7 @@ import type { createStorage } from "../infrastructure/storage"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { A1CtfAdapter } from "./adapters/a1ctf"
 import { CtfdAdapter } from "./adapters/ctfd"
+import { DasCtfAdapter } from "./adapters/dasctf"
 import { Ret2ShellAdapter } from "./adapters/ret2shell"
 import { TsecBenchAdapter } from "./adapters/tsecbench"
 import type {
@@ -40,6 +41,8 @@ function createPlatformAdapter(
   }
   if (config.type === "tsecbench")
     return new TsecBenchAdapter(config, onError, timeoutMs)
+  if (config.type === "dasctf")
+    return new DasCtfAdapter(config, onError, timeoutMs)
   return new A1CtfAdapter(config, onError, timeoutMs)
 }
 
@@ -379,9 +382,11 @@ function platformSourceKey(config: PlatformConfig) {
 }
 
 /** Platforms with no real event concept get a fixed synthetic remoteEventId
- * (mirrors ctfd → "site"). TSecBench's token already identifies the task. */
+ * (mirrors ctfd → "site"). TSecBench's token and the DASCTF access key each
+ * already identify the single match/task. */
 function syntheticRemoteEventId(type: PlatformType): string | null {
   if (type === "ctfd") return "site"
   if (type === "tsecbench") return "task"
+  if (type === "dasctf") return "match"
   return null
 }
