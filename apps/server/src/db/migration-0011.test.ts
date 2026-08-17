@@ -18,11 +18,19 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 import { createDatabase } from "./index"
 import { SCHEMA_VERSION } from "./schema"
 
-/** The real migrations folder (12 entries incl. 0011). */
+/**
+ * The full historical chain (v16 → v17 → v18) through the REAL boot path.
+ * Migration 0011 merges v16's per-run team/announce channels into
+ * per-challenge canonicals (min channel id, run-suffix author snapshots,
+ * cursor max-merge); migration 0012 then maps those onto derived keys and
+ * flattens the attachment dirs. A v16 database upgrading straight to a v18
+ * binary rides both in one boot — this test pins the composed end state.
+ * (The v17-seeded waypoint is covered by migration-0012.test.ts.)
+ */
 const realFolder = resolve(import.meta.dir, "../../drizzle")
 
 /** Build a v16 database in `dir`: apply migrations 0000–0010 from a
- * truncated journal copy (the exact runtime migrator path, minus 0011). */
+ * truncated journal copy (the exact runtime migrator path). */
 function buildV16Database(dir: string) {
   const sqlite = new Database(join(dir, "aegisx.sqlite"), { create: true })
   sqlite.run("PRAGMA journal_mode = WAL")
@@ -44,30 +52,32 @@ function buildV16Database(dir: string) {
   return sqlite
 }
 
-describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md §11.6)", () => {
-  test("v16 run-scope team/announce merge into per-challenge canonical channels with history, cursors, attribution and files intact", () => {
+describe("migration 0011+0012 — v16 run-scope channels survive into v18 derived keys", () => {
+  test("per-run team/announce merge (order, suffixes, cursors) then re-key onto derived keys, files flattened", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-mig0011-"))
     try {
       const sqlite = buildV16Database(dir)
       const ts = "2025-01-01T00:00:00.000Z"
 
       // --- v16 seed: two runs on ch-1, one on ch-2 (isolation check) ------
-      // Parents via raw SQL (the v16 channels tables predate challenge_id —
-      // the current drizzle schema cannot touch them).
       sqlite.run(`PRAGMA foreign_keys = ON`)
       sqlite.run(
-        `INSERT INTO events (id, name, created_at, updated_at) VALUES ('evt-1', 'e', '${ts}', '${ts}')`
+        `INSERT INTO events (id, name, created_at, updated_at) VALUES ('evt-1', 'e', ?, ?)`,
+        [ts, ts]
       )
       sqlite.run(
-        `INSERT INTO challenges (id, event_id, name, description, created_at, updated_at) VALUES ('ch-1', 'evt-1', 'c1', 'd', '${ts}', '${ts}')`
+        `INSERT INTO challenges (id, event_id, name, description, created_at, updated_at) VALUES ('ch-1', 'evt-1', 'c1', 'd', ?, ?)`,
+        [ts, ts]
       )
       sqlite.run(
-        `INSERT INTO challenges (id, event_id, name, description, created_at, updated_at) VALUES ('ch-2', 'evt-1', 'c2', 'd', '${ts}', '${ts}')`
+        `INSERT INTO challenges (id, event_id, name, description, created_at, updated_at) VALUES ('ch-2', 'evt-1', 'c2', 'd', ?, ?)`,
+        [ts, ts]
       )
       const insertRun = (id: string, challengeId: string) =>
         sqlite.run(
           `INSERT INTO runs (id, scope_type, event_id, challenge_id, params, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, started_at, updated_at)
-           VALUES ('${id}', 'challenge', 'evt-1', '${challengeId}', '{}', 'closed', 'm:off', 'img', 1, 512, 64, 'c-${id}', 'w', 's', 'manual', '${ts}', '${ts}', '${ts}')`
+           VALUES (?, 'challenge', 'evt-1', ?, '{}', 'closed', 'm:off', 'img', 1, 512, 64, ?, 'w', 's', 'manual', ?, ?, ?)`,
+          [id, challengeId, `c-${id}`, ts, ts, ts]
         )
       insertRun("runA", "ch-1")
       insertRun("runB", "ch-1")
@@ -75,7 +85,8 @@ describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md �
       const insertAgent = (id: string, runId: string) =>
         sqlite.run(
           `INSERT INTO agents (id, run_id, slot, role, is_entry, model, system_prompt, tools, status, created_at, updated_at, name)
-           VALUES ('${id}', '${runId}', 'solver', 'solver', 1, 'm:off', 'sp', '[]', 'idle', '${ts}', '${ts}', '${id}')`
+           VALUES (?, ?, 'solver', 'solver', 1, 'm:off', 'sp', '[]', 'idle', ?, ?, ?)`,
+          [id, runId, ts, ts, id]
         )
       insertAgent("a1", "runA")
       insertAgent("a2", "runB")
@@ -91,7 +102,8 @@ describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md �
       ) =>
         sqlite.run(
           `INSERT INTO channels (id, scope_type, run_id, event_id, kind, target_agent_id, created_at)
-           VALUES ('${id}', '${scope}', ${runId ? `'${runId}'` : "NULL"}, 'evt-1', '${kind}', ${target ? `'${target}'` : "NULL"}, '${ts}')`
+           VALUES (?, ?, ?, 'evt-1', ?, ?, ?)`,
+          [id, scope, runId, kind, target, ts]
         )
       insertChannel("tA1", "run", "runA", "team", null) // canonical (min id)
       insertChannel("aA1", "run", "runA", "announce", null) // canonical
@@ -113,7 +125,8 @@ describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md �
       ) =>
         sqlite.run(
           `INSERT INTO channel_messages (id, channel_id, kind, author_type, author_agent_id, author_name, body, meta, created_at)
-           VALUES (${id}, '${channelId}', 'text', '${authorType}', ${authorAgentId ? `'${authorAgentId}'` : "NULL"}, '${authorName}', '${body}', '{}', '${ts}')`
+           VALUES (?, ?, 'text', ?, ?, ?, ?, '{}', ?)`,
+          [id, channelId, authorType, authorAgentId, authorName, body, ts]
         )
       insertMessage(1, "tA1", "agent", "a1", "Solver a1", "finding A1")
       insertMessage(2, "tB1", "agent", "a2", "Solver a2", "finding B1")
@@ -129,25 +142,31 @@ describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md �
 
       // Read cursors: a1 on tA1; a2 on BOTH merged channels (max wins).
       sqlite.run(
-        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('tA1', 'a1', 3, '${ts}')`
+        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('tA1', 'a1', 3, ?)`,
+        [ts]
       )
       sqlite.run(
-        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('tA1', 'a2', 1, '${ts}')`
+        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('tA1', 'a2', 1, ?)`,
+        [ts]
       )
       sqlite.run(
-        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('tB1', 'a2', 4, '${ts}')`
+        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('tB1', 'a2', 4, ?)`,
+        [ts]
       )
       sqlite.run(
-        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('dm1', 'a1', 7, '${ts}')`
+        `INSERT INTO channel_reads (channel_id, agent_id, last_read_msg_id, updated_at) VALUES ('dm1', 'a1', 7, ?)`,
+        [ts]
       )
 
       // Attachments: one in a to-be-merged channel (tB1), one in the DM
       // (must stay put) — with their on-disk v16 directories.
       sqlite.run(
-        `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f1', 4, 'tB1', 'dump.bin', 10, '${ts}')`
+        `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f1', 4, 'tB1', 'dump.bin', 10, ?)`,
+        [ts]
       )
       sqlite.run(
-        `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f2', 8, 'dm1', 'note.txt', 5, '${ts}')`
+        `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f2', 8, 'dm1', 'note.txt', 5, ?)`,
+        [ts]
       )
       const fileRoot = join(dir, "channel-files")
       mkdirSync(join(fileRoot, "tB1", "4"), { recursive: true })
@@ -156,7 +175,7 @@ describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md �
       writeFileSync(join(fileRoot, "dm1", "8", "note.txt"), "hello")
       sqlite.close()
 
-      // --- run the real boot path: pending 0011 + file reconciliation -----
+      // --- run the real boot path: 0011 + 0012 + file reconciliation -----
       const boot = createDatabase(dir)
       try {
         expect(
@@ -167,66 +186,39 @@ describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md �
           ).user_version
         ).toBe(SCHEMA_VERSION)
 
-        const channelsRows = boot.sqlite
-          .query(`SELECT * FROM channels ORDER BY id`)
-          .all() as Array<Record<string, unknown>>
-        const byId = new Map(channelsRows.map((c) => [String(c.id), c]))
-        // Canonical per (challenge, kind); the losing rows are GONE.
-        expect([...byId.keys()].sort()).toEqual([
-          "aA1",
-          "dm1",
-          "sdm",
-          "tA1",
-          "tC1",
-        ])
-        expect(byId.has("tB1")).toBe(false)
-        expect(byId.has("aB1")).toBe(false)
-        expect(byId.get("tA1")).toMatchObject({
-          scope_type: "challenge",
-          run_id: null,
-          challenge_id: "ch-1",
-          kind: "team",
-        })
-        expect(byId.get("aA1")).toMatchObject({
-          scope_type: "challenge",
-          challenge_id: "ch-1",
-          kind: "announce",
-        })
-        // DMs + the scheduler DM are untouched.
-        expect(byId.get("dm1")).toMatchObject({
-          scope_type: "run",
-          run_id: "runA",
-        })
-        expect(byId.get("sdm")).toMatchObject({
-          scope_type: "event",
-          run_id: null,
-        })
-        expect(byId.get("tC1")).toMatchObject({
-          scope_type: "challenge",
-          challenge_id: "ch-2",
-        })
+        // The channels directory table is gone (v18 end state).
+        const tables = new Set(
+          (
+            boot.sqlite
+              .query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+              .all() as Array<{ name: string }>
+          ).map((row) => row.name)
+        )
+        expect(tables.has("channels")).toBe(false)
 
-        // Messages: re-pointed at the canonical channel, GLOBAL id order
-        // preserved (tA1/tB1 interleave → [1,2,3,4,10] on tA1 in id order).
+        // Messages: BOTH merges compose — run-scope tA1/tB1 interleave AND
+        // the announce rows fold into the same team:ch-1, all in global id
+        // order. The scheduler DM became orch:<eventId>.
         const msgs = boot.sqlite
           .query(`SELECT * FROM channel_messages ORDER BY id`)
           .all() as Array<Record<string, unknown>>
-        expect(msgs.map((m) => [m.channel_id, m.id])).toEqual([
-          ["tA1", 1],
-          ["tA1", 2],
-          ["tA1", 3],
-          ["tA1", 4],
-          ["aA1", 5],
-          ["aA1", 6],
-          ["dm1", 7],
-          ["dm1", 8],
-          ["sdm", 9],
-          ["tA1", 10],
-          ["tC1", 11],
+        expect(msgs.map((m) => [m.id, m.channel_key])).toEqual([
+          [1, "team:ch-1"],
+          [2, "team:ch-1"],
+          [3, "team:ch-1"],
+          [4, "team:ch-1"],
+          [5, "team:ch-1"],
+          [6, "team:ch-1"],
+          [7, "dm:a1"],
+          [8, "dm:a1"],
+          [9, "orch:evt-1"],
+          [10, "team:ch-1"],
+          [11, "team:ch-2"],
         ])
-        // Author snapshots: agent posts in merged group channels get the run
-        // suffix (from the OLD channel's run); user/system and DM/scheduler
-        // rows are untouched.
+
+        // Author snapshots: 0011 stamped the run suffix on agent posts in
+        // the merged group channels (from the OLD channel's run); user and
+        // system rows and DM rows are untouched.
         const nameOf = (id: number) =>
           msgs.find((m) => m.id === id)!.author_name
         expect(nameOf(1)).toBe("Solver a1 · run-runA")
@@ -237,53 +229,58 @@ describe("migration 0011 — v17 challenge-scope channels (docs/im-channels.md �
         expect(nameOf(8)).toBe("Solver a1") // DM: no suffix
         expect(nameOf(9)).toBe("Scheduler") // scheduler DM (run NULL): no suffix
 
-        // Read cursors: re-pointed + MAX-merged per (canonical, agent).
+        // Read cursors: re-keyed onto derived keys; a2's two merged cursors
+        // collapsed to MAX across the whole composed chain.
         const reads = boot.sqlite
-          .query(`SELECT * FROM channel_reads ORDER BY agent_id, channel_id`)
+          .query(`SELECT * FROM channel_reads ORDER BY reader_key, channel_key`)
           .all() as Array<Record<string, unknown>>
         expect(reads).toEqual([
           {
-            channel_id: "dm1",
-            agent_id: "a1",
+            channel_key: "dm:a1",
+            reader_key: "a1",
             last_read_msg_id: 7,
             updated_at: ts,
           },
           {
-            channel_id: "tA1",
-            agent_id: "a1",
+            channel_key: "team:ch-1",
+            reader_key: "a1",
             last_read_msg_id: 3,
             updated_at: ts,
           },
           {
-            channel_id: "tA1",
-            agent_id: "a2",
+            channel_key: "team:ch-1",
+            reader_key: "a2",
             last_read_msg_id: 4,
             updated_at: ts,
           },
         ])
 
-        // Files: the DB row re-points at the canonical channel AND the disk
-        // directory followed (boot-time reconciliation); the DM file stays.
+        // Files: rows survive (channel_id column gone) and the on-disk
+        // directories landed on the FLAT <messageId>/ layout — the tB1
+        // file followed its message through both merges and the flatten.
         const files = boot.sqlite
           .query(`SELECT * FROM channel_files ORDER BY id`)
           .all() as Array<Record<string, unknown>>
-        expect(files.map((f) => [f.id, f.channel_id, f.message_id])).toEqual([
-          ["f1", "tA1", 4],
-          ["f2", "dm1", 8],
+        expect(files.map((f) => [f.id, f.message_id])).toEqual([
+          ["f1", 4],
+          ["f2", 8],
         ])
-        expect(existsSync(join(fileRoot, "tA1", "4", "dump.bin"))).toBe(true)
-        expect(existsSync(join(fileRoot, "tB1", "4", "dump.bin"))).toBe(false)
-        expect(existsSync(join(fileRoot, "dm1", "8", "note.txt"))).toBe(true)
+        expect("channel_id" in files[0]!).toBe(false)
+        expect(existsSync(join(fileRoot, "4", "dump.bin"))).toBe(true)
+        expect(existsSync(join(fileRoot, "8", "note.txt"))).toBe(true)
+        expect(existsSync(join(fileRoot, "tB1"))).toBe(false)
+        expect(existsSync(join(fileRoot, "dm1"))).toBe(false)
 
         // Integrity: FK graph clean, and the AUTOINCREMENT sequence survived
-        // the table recreation (the next message id stays monotonic).
+        // both table recreations (the next message id stays monotonic).
         expect(
           (boot.sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[])
             .length
         ).toBe(0)
         boot.sqlite.run(
-          `INSERT INTO channel_messages (channel_id, kind, author_type, author_agent_id, author_name, body, meta, created_at)
-           VALUES ('tA1', 'text', 'system', NULL, 'system', 'post-migration', '{}', '${ts}')`
+          `INSERT INTO channel_messages (channel_key, author_type, author_agent_id, author_name, body, meta, created_at)
+           VALUES ('team:ch-1', 'system', NULL, 'system', 'post-migration', '{}', ?)`,
+          [ts]
         )
         expect(
           (

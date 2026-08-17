@@ -85,9 +85,14 @@ export function registerEventRoutes(
       ReturnType<typeof createCatalogReader>,
       "getEvent" | "getChallenge" | "listEvents" | "listChallengesForEvent"
     >
-    /** v17: sweep the challenge's channel attachment directories when the
-     * challenge (and its challenge-scope channels) is deleted. */
+    /** v18 §八: sweep the challenge's team:<cid> data (messages + cursors +
+     * flat attachment dirs) when the challenge is deleted. */
     cleanupChallengeChannelFiles(challengeId: string): void
+    /** v18 §八: sweep ALL channel data tied to the event (orch:<eid> + every
+     * team of the event's challenges + every dm of the event's agents) —
+     * MUST run before the event row delete cascades the entities the key
+     * enumeration needs. */
+    cleanupEventChannelData(eventId: string): void
   }
 ) {
   const { db, storage, platformService, runManager, catalog } = options
@@ -223,6 +228,9 @@ export function registerEventRoutes(
     const path = storage.eventPath(eventId)
     const trashedPath = storage.moveToTrash(path)
     try {
+      // v18 §八: derived-key channel data has no FK cascade — sweep it while
+      // the challenge/run/agent rows still exist (the enumeration needs them).
+      options.cleanupEventChannelData(eventId)
       db.delete(events).where(eq(events.id, eventId)).run()
     } catch (error) {
       if (trashedPath) storage.restore(trashedPath, path)
@@ -395,9 +403,8 @@ export function registerEventRoutes(
     const path = storage.challengePath(challenge.eventId, challenge.id)
     const trashedPath = storage.moveToTrash(path)
     try {
-      // v17: the challenge-scope channels (#team/#announce + their message
-      // history) cascade with the challenge row; their attachment dirs on
-      // disk need the explicit sweep (mirrors deleteRun's cleanupRunFiles).
+      // v18 §八: the team:<cid> knowledge base has no FK cascade — sweep it
+      // (messages + cursors + flat attachment dirs) with the challenge.
       options.cleanupChallengeChannelFiles(challenge.id)
       db.delete(challenges).where(eq(challenges.id, challenge.id)).run()
     } catch (error) {

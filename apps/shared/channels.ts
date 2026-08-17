@@ -1,43 +1,53 @@
-/** Channel-layer wire types (docs/im-channels.md). Canonical definition —
- * the server's channel service and the web UI both import from here. */
+/** Channel-layer wire types (docs/im-simplify-v18.md). Canonical definition —
+ * the server's channel service, the Python SDK and the web UI all import
+ * from here.
+ *
+ * v18: a channel is a DERIVED KEY, not a table row — `team:<challengeId>`
+ * (#team, shared by every run on the challenge), `dm:<agentId>` (scheduler/
+ * user/system → one solver), `orch:<eventId>` (solver asks + system run/queue
+ * events → the scheduler). The first message makes a channel "exist"; there
+ * is no directory table and no get-or-create. */
 
-/** One channel in a run's tree / challenge tree (GET /api/runs/:id/channels
- * etc.). v17: #team/#announce are challenge-scoped (shared across the
- * challenge's runs — `sharedRunCount` = live runs on the challenge, the UI
- * 共享 badge). */
+/** The three derived-key shapes. */
+export type ChannelKind = "team" | "dm" | "orch"
+
+/** One channel entry (GET /api/runs/:id/channels etc.). `unread` is the
+ * per-reader cursor delta (SDK list); UI trees pass a null reader and get 0. */
 export type ChannelPublic = {
-  id: string
-  scopeType: "run" | "event" | "challenge"
-  runId: string | null
-  eventId: string
-  /** Challenge scope (#team/#announce, v17): the owning challenge. */
-  challengeId: string | null
-  kind: "team" | "announce" | "dm"
-  targetAgentId: string | null
-  /** Display label: "#team" / "#announce" / "DM <agentName>". */
+  /** Derived key: "team:<challengeId>" | "dm:<agentId>" | "orch:<eventId>". */
+  key: string
+  kind: ChannelKind
+  /** Display label: "#team" / "DM <agent label>" / "#orch". */
   label: string
+  eventId: string
+  /** team: the owning challenge. */
+  challengeId: string | null
+  /** dm: the target agent. */
+  agentId: string | null
+  /** dm: the target agent's run (UI routing / SSE split). */
+  runId: string | null
   unread: number
   lastMessageAt: string | null
-  /** Challenge-scope channels only (v17 §11.5): how many live runs currently
-   * share this channel — the UI's 共享 badge. Null for DM/scheduler DM. */
+  /** team only: how many live (running/idle) runs currently share this
+   * channel — the UI's 共享 badge. Null otherwise. */
   sharedRunCount: number | null
 }
 
-/** One channel message (timeline + SDK read). */
+/** One channel message (timeline + SDK read + SSE push). */
 export type ChannelMessagePublic = {
   id: number
-  channelId: string
-  kind: "text" | "recap"
+  channelKey: string
   authorType: "system" | "user" | "agent"
   authorAgentId: string | null
   authorName: string
   body: string
+  /** { urgent?, runId?, eventType?, noticeType?, tags? }. */
   meta: Record<string, unknown>
   createdAt: string
   files: Array<{ id: string; filename: string; size: number }>
 }
 
-/** Paginated channel timeline (GET /api/channels/:id/messages). */
+/** Paginated channel timeline (GET /api/channels/:channelKey/messages). */
 export type ChannelMessageList = {
   items: ChannelMessagePublic[]
   nextAfter: number

@@ -2,25 +2,51 @@
 from __future__ import annotations
 
 from builtins import list as builtin_list
+from typing import Any
 
 from .client import AegisxError, get_client, require_manager, wire_solvers
-from .models import AgentSummary, Run, RunRead, from_dict
+from .models import AgentSummary, ChannelMessage, Run, RunRead, from_dict
 
 # Mirrors the server's read_run defaults (scheduler-admin.ts).
 DEFAULT_LAST_N = 10
 READ_CHAR_BUDGET = 12_000
 
+#: Hoisted aliases — the module-level name `list` shadows the builtin for
+#: every later annotation and isinstance call below.
+RunList = list[Run]
+AgentSummaries = list[AgentSummary]
+RecentLines = list[str]
+SolverSpecs = list[dict]
+
+
+def _run(data: Any) -> Run:
+    run = from_dict(Run, data)
+    if run is None:
+        raise AegisxError("bad_response", "malformed run payload")
+    return run
+
+
+def _msg(data: Any) -> ChannelMessage:
+    message = from_dict(ChannelMessage, data)
+    if message is None:
+        raise AegisxError("bad_response", "malformed message payload")
+    return message
+
 
 def list(
     challenge_id: str | None = None,
     status: str | None = None,
-) -> list[Run]:
+) -> RunList:
     """Enumerate the event's challenge runs (recent first), optionally
     filtered by challenge or status (client-side — the endpoint has no filter
     params). Use to review history before re-trying a failed strategy."""
     client = get_client()
     data = client.request("GET", client.event_path("/runs"))
-    runs = [from_dict(Run, item) for item in data.get("items", [])]
+    runs: RunList = []
+    for item in data.get("items", []):
+        run = from_dict(Run, item)
+        if run is not None:
+            runs.append(run)
     if challenge_id:
         runs = [r for r in runs if r.challenge_id == challenge_id]
     if status:
@@ -33,7 +59,7 @@ def start(
     strategy: str | None = None,
     model: str | None = None,
     solver_count: int | None = None,
-    solvers: list[dict] | None = None,
+    solvers: SolverSpecs | None = None,
     timeout_ms: int | None = None,
 ) -> Run:
     """Start a fresh solver run directly (escape hatch — bypasses the queue).
@@ -54,7 +80,7 @@ def start(
     if timeout_ms:
         body["timeoutMs"] = timeout_ms
     data = get_client().request("POST", "/api/runs/start", body=body)
-    return from_dict(Run, data)
+    return _run(data)
 
 
 def stop(run_id: str) -> Run:
@@ -62,22 +88,32 @@ def stop(run_id: str) -> Run:
     stuck or off-track running turn before messaging new direction."""
     require_manager()
     data = get_client().request("POST", f"/api/runs/{run_id}/stop")
-    return from_dict(Run, data)
+    return _run(data)
 
 
-def message(run_id: str, text: str, deliver_as: str | None = None) -> Run:
-    """Send guidance to a run (its entry agent). On an idle or closed run this
-    starts/continues a turn (a closed run is cold-restored, keeping context +
-    workspace); on a running run `deliver_as` steers ("steer") or queues
-    ("followUp") into the current turn."""
+def message(run_id: str, text: str, urgent: bool = True) -> ChannelMessage:
+    """Send guidance to a run's ENTRY agent (v18 §9.3: an IM post into its
+    dm:<agentId> channel — the run keeps a ledger of your directives).
+    Default urgent=True wakes it immediately (a closed run is cold-restored,
+    keeping context + workspace); urgent=False rides the next delivery
+    tick. Use `aegisx.agents.message` to target a specific solver."""
     require_manager()
-    body: dict = {"text": text}
-    if deliver_as:
-        body["deliverAs"] = deliver_as
+    entry = _entry_agent(run_id)
     data = get_client().request(
-        "POST", f"/api/runs/{run_id}/message", body=body
+        "POST",
+        f"/api/channels/dm:{entry}/messages",
+        body={"text": text, "urgent": bool(urgent)},
     )
-    return from_dict(Run, data)
+    return _msg(data)
+
+
+def _entry_agent(run_id: str) -> str:
+    """The run's entry agent id (message's dm target)."""
+    detail = get_client().request("GET", f"/api/runs/{run_id}")
+    for item in detail.get("agents", []):
+        if item.get("isEntry"):
+            return str(item.get("id", ""))
+    raise AegisxError("not_found", f"Run {run_id} has no entry agent")
 
 
 def close(run_id: str) -> Run:
@@ -85,7 +121,7 @@ def close(run_id: str) -> Run:
     later with message). Use to free resources on runs you are pausing."""
     require_manager()
     data = get_client().request("POST", f"/api/runs/{run_id}/close")
-    return from_dict(Run, data)
+    return _run(data)
 
 
 def set_timeout(run_id: str, timeout_ms: int) -> Run:
@@ -94,7 +130,7 @@ def set_timeout(run_id: str, timeout_ms: int) -> Run:
     data = get_client().request(
         "POST", f"/api/runs/{run_id}/timeout", body={"timeoutMs": timeout_ms}
     )
-    return from_dict(Run, data)
+    return _run(data)
 
 
 def read(
@@ -109,23 +145,26 @@ def read(
     newest kept, within a character budget."""
     client = get_client()
     detail = client.request("GET", f"/api/runs/{run_id}")
-    run = from_dict(Run, detail["run"])
-    agents = [
-        from_dict(AgentSummary, item) for item in detail.get("agents", [])
-    ]
+    run = _run(detail["run"])
+    agents: AgentSummaries = []
+    for item in detail.get("agents", []):
+        summary = from_dict(AgentSummary, item)
+        if summary is not None:
+            agents.append(summary)
     target = _pick_agent(agents, agent_id)
     if target is None:
         raise AegisxError(
             "not_found", f"No agent found in run {run_id}"
         )
     messages = _recent_lines(
-        client, run_id, target.id, last_n if last_n and last_n > 0 else DEFAULT_LAST_N
+        client, run_id, target.id,
+        last_n if last_n and last_n > 0 else DEFAULT_LAST_N,
     )
     return RunRead(run=run, agents=agents, agent=target, messages=messages)
 
 
 def _pick_agent(
-    agents: list[AgentSummary], agent_id: str | None
+    agents: AgentSummaries, agent_id: str | None
 ) -> AgentSummary | None:
     if agent_id:
         return next((a for a in agents if a.id == agent_id), None)
@@ -134,7 +173,7 @@ def _pick_agent(
 
 def _recent_lines(
     client, run_id: str, agent_id: str, last_n: int
-) -> list[str]:
+) -> RecentLines:
     """Mirror the server's read_run message extraction (scheduler-admin.ts
     messageLine): newest → oldest, capped by last_n + a char budget, returned
     oldest-first."""
@@ -143,7 +182,7 @@ def _recent_lines(
         f"/api/runs/{run_id}/messages",
         query={"agentId": agent_id},
     )
-    lines: list[str] = []
+    lines: RecentLines = []
     budget = READ_CHAR_BUDGET
     for item in reversed(data.get("items", [])):
         line = _message_line(item)
@@ -160,8 +199,7 @@ def _recent_lines(
 def _text_parts(content) -> str:
     if isinstance(content, str):
         return content.strip()
-    # `list` here is the builtin — module-level `runs.list` shadows the name,
-    # so reference the type explicitly.
+    # `builtin_list` — the module-level `runs.list` shadows the builtin name.
     if not isinstance(content, builtin_list):
         return ""
     return "\n".join(
@@ -184,7 +222,7 @@ def _message_line(item: dict) -> str | None:
         if body:
             return f"[assistant] {body}"
         tools = [
-            part.get("name")
+            str(part["name"])
             for part in (message.get("content") or [])
             if isinstance(part, dict)
             and part.get("type") == "toolCall"

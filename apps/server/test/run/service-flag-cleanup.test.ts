@@ -9,6 +9,7 @@ import {
   runQueue,
   runs,
 } from "../../src/db/schema"
+import { orchKey, teamKey } from "../../src/run/channels"
 import { createRunService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
@@ -61,7 +62,6 @@ function makeService(
     } as never,
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
-    inboxSilenceMs: 30,
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
       const list: string[] = []
@@ -91,8 +91,16 @@ function stageRunning(db: Db, agentId: string) {
     .run()
 }
 
+function orchRows(db: Db, eventId = "evt-1") {
+  return db
+    .select()
+    .from(channelMessages)
+    .where(eq(channelMessages.channelKey, orchKey(eventId)))
+    .all()
+}
+
 describe("solved-challenge cleanup (flag hooks)", () => {
-  test("full solve stops sibling runs, aborts co-solvers, cancels pending items", async () => {
+  test("full solve stops sibling runs, aborts co-solvers, cancels pending items; the scheduler learns via orch messages", async () => {
     const { db, sqlite, dir, close } = setupDb()
     let service: ReturnType<typeof makeService>["service"] | undefined
     try {
@@ -101,7 +109,7 @@ describe("solved-challenge cleanup (flag hooks)", () => {
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
       const made = makeService(db, sqlite, dir)
       service = made.service
-      const { promptLog, abortLog } = made
+      const { abortLog } = made
 
       const sched = await service.create({
         scopeType: "event" as const,
@@ -110,11 +118,9 @@ describe("solved-challenge cleanup (flag hooks)", () => {
         container: containerInput,
       })
       await settle()
-      const orch = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, sched.id))
-        .get()!
+      expect(
+        db.select().from(agents).where(eq(agents.runId, sched.id)).get()!.id
+      ).toBeTruthy()
 
       // Submitting run: two solvers; sibling run on the same challenge.
       const submitter = await service.create({
@@ -176,26 +182,29 @@ describe("solved-challenge cleanup (flag hooks)", () => {
         db.select().from(runQueue).where(eq(runQueue.id, id)).get()!
       expect(rawItem(stale.id).status).toBe("cancelled")
       expect(rawItem(keep.id).status).toBe("pending")
-      // The digests carried the cleanup: flagAccepted + the solved notice.
-      // (Cancelling the stale ch-1 item dropped pending 2→1, so the starved
-      // edge fired an urgent digest carrying the queued flagAccepted line;
-      // the cleanup notice rode the next quiet flush.)
-      const texts = promptLog.get(orch.id) ?? []
-      const cleanup = texts.find(
-        (t) => t.includes("[调度事件摘要") && t.includes("已完全解出")
-      )
+
+      // The scheduler learns via orch messages (v18 §五: events are
+      // messages): the flagAccepted run event + the cleanup summary notice.
+      const orch = orchRows(db)
+      expect(
+        orch.some((r) => r.body === "flagAccepted")
+      ).toBe(true)
+      const cleanup = orch.find((r) => r.body.includes("已完全解出"))
       expect(cleanup).toBeDefined()
-      expect(cleanup).toContain("停止 1 个同题 run")
-      expect(cleanup).toContain("取消 1 个排队项")
-      expect(texts.some((t) => t.includes("flagAccepted"))).toBe(true)
-      expect(texts.some((t) => t.includes("队列不足"))).toBe(true)
+      expect(cleanup!.body).toContain("停止 1 个同题 run")
+      expect(cleanup!.body).toContain("取消 1 个排队项")
+      // The queue-starved edge (pending 2→1 after the cancel) posted an
+      // URGENT orch line.
+      const starved = orch.find((r) => r.body.includes("队列不足"))
+      expect(starved).toBeDefined()
+      expect(JSON.parse(starved!.meta).urgent).toBe(true)
     } finally {
       await service?.close().catch(() => undefined)
       close()
     }
   })
 
-  test("partial multi-flag solve steers every other solver with the confirmed flags", async () => {
+  test("partial multi-flag solve posts ONE #team notice; the tick steers every live solver on the challenge", async () => {
     const { db, sqlite, dir, close } = setupDb()
     let service: ReturnType<typeof makeService>["service"] | undefined
     try {
@@ -262,27 +271,29 @@ describe("solved-challenge cleanup (flag hooks)", () => {
         "flag 2/3 已确认（+10 分）",
         submitter.id
       )
-      await wait(80)
       await settle()
 
-      // v17 §11.5: ONE system post in the challenge-level #team (not one per
-      // run) — the channel fan-out covers every live run on the challenge.
-      const teamChannel = service.channels.challengeChannel("ch-1", "team")!
+      // v18 §五: ONE non-urgent system post in the challenge's #team (not
+      // one per run) — the tick fans it out to every live solver.
       const partialPosts = db
         .select()
         .from(channelMessages)
-        .where(eq(channelMessages.channelId, teamChannel.id))
+        .where(eq(channelMessages.channelKey, teamKey("ch-1")))
         .all()
         .filter((row) => row.body.includes("[多 flag 进度]"))
       expect(partialPosts).toHaveLength(1)
 
-      // The co-solver and the sibling run's agent got the progress steer;
-      // the submitter did not.
+      // Nothing steered yet (notice level, rides the tick)…
       const steered = (id: string) =>
         (promptLog.get(id) ?? []).filter((t) => t.includes("[多 flag 进度]"))
+      expect(steered(coSolver.id)).toHaveLength(0)
+      // …then one tick delivers it to EVERY live solver on the challenge
+      // (v18 dropped the submitter skip — one extra message is harmless).
+      service.channels.runFlushTick()
+      await wait(60)
       expect(steered(coSolver.id)).toHaveLength(1)
       expect(steered(runBAgent.id)).toHaveLength(1)
-      expect(steered(submitter.id)).toHaveLength(0)
+      expect(steered(submitter.id)).toHaveLength(1)
       expect(steered(coSolver.id)[0]).toContain("flag{one}")
       expect(steered(coSolver.id)[0]).toContain("flag 2/3 已确认")
       // Nothing was torn down — the challenge is not fully solved.
@@ -292,11 +303,11 @@ describe("solved-challenge cleanup (flag hooks)", () => {
       expect(
         db.select().from(runs).where(eq(runs.id, runB.id)).get()!.status
       ).not.toBe("closed")
-      // The scheduler learns the progress with the next digest.
-      const texts = promptLog.get(orch.id) ?? []
-      expect(
-        texts.some((t) => t.includes("[调度事件摘要") && t.includes("部分解出"))
-      ).toBe(true)
+      // The scheduler gets a non-urgent orch notice with the next flush.
+      const orchNotice = orchRows(db).find((r) => r.body.includes("部分解出"))
+      expect(orchNotice).toBeDefined()
+      expect(JSON.parse(orchNotice!.meta).urgent).toBeUndefined()
+      expect(orch.id).toBeTruthy()
     } finally {
       await service?.close().catch(() => undefined)
       close()

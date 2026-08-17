@@ -68,7 +68,7 @@ export function createApp(options: { dataDir: string }) {
   app.onError((error, c) => {
     console.error("Request failed", {
       method: c.req.method,
-      path: new URL(c.req.url).pathname,
+      path: c.req.path,
       error: error instanceof Error ? error.message : String(error),
     })
     return c.json(
@@ -105,7 +105,9 @@ export function createApp(options: { dataDir: string }) {
     getSettings,
     catalog,
     cleanupChallengeChannelFiles: (challengeId: string) =>
-      runService.channels.cleanupChallengeFiles(challengeId),
+      runService.channels.cleanupChallengeChannels(challengeId),
+    cleanupEventChannelData: (eventId: string) =>
+      runService.channels.cleanupEventChannels(eventId),
   })
   registerRunRoutes(app, {
     db,

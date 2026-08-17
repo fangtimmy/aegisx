@@ -31,7 +31,6 @@ import {
   runQueue,
   runs,
 } from "../db/schema"
-import { EventScopeEmitter } from "../orchestration/event-scope"
 import {
   loadTemplateMap,
   renderTemplate,
@@ -61,7 +60,6 @@ import {
   copyAttachments,
 } from "./prompt"
 import type { RunQueries } from "./queries"
-import type { SchedulerDigest } from "./scheduler-digest"
 import { createMainTools, type RunToolContext } from "./tools"
 
 type PlatformService = ReturnType<typeof createPlatformService>
@@ -186,14 +184,7 @@ export type RunFactoryDeps = {
   bus: LiveBus
   /** Reusable per-run handles (entry snapshot lives on the agent row). */
   contexts: Map<string, RunContext>
-  /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
-  eventScopes: Map<string, EventScopeEmitter>
-  /** Lazy per-event scheduler digest (docs/im-channels.md §三 — the DM:
-   * scheduler delivery policy): lifecycle events are posted as system
-   * messages into the scheduler DM; the digest policy flushes steers. Created
-   * here, torn down with the scheduler run. */
-  digestFor(eventId: string, orchestratorAgentId: string): SchedulerDigest
-  /** Unified message layer core (channels). */
+  /** Unified message layer core (derived-key channels, v18). */
   channels: ChannelService
   /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
   pendingFinish: Map<string, { summary: string; runId: string }>
@@ -252,8 +243,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
     queries,
     bus,
     contexts,
-    eventScopes,
-    digestFor,
     channels,
     pendingFinish,
     finishFlagWarned,
@@ -296,35 +285,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
   const ORCHESTRATOR_TOOLS: string[] = []
 
   /** The per-event run-lifecycle emitter (created lazily). */
-  function eventScopeFor(eventId: string): EventScopeEmitter {
-    let emitter = eventScopes.get(eventId)
-    if (!emitter) {
-      emitter = new EventScopeEmitter()
-      eventScopes.set(eventId, emitter)
-    }
-    return emitter
-  }
-
-  /** Built-in scheduler wake-up (v9: replaces the scheduler plugin's wire;
-   * channels era, docs/im-channels.md §三): the event's scheduler DM channel
-   * is ensured, then child-run lifecycle events are posted into it as system
-   * messages — the digest policy (run/scheduler-digest.ts) decides when to
-   * flush a steer. The emitter's callbacks are already wrapped in try/catch
-   * (EventScopeEmitter). */
-  function attachSchedulerWakeup(
-    eventId: string,
-    orchestratorAgentId: string
-  ): void {
-    const emitter = eventScopeFor(eventId)
-    channels.ensureSchedulerDm(eventId, orchestratorAgentId)
-    const digest = digestFor(eventId, orchestratorAgentId)
-    emitter.on("run.started", (e) => digest.push(e))
-    emitter.on("run.idle", (e) => digest.push(e))
-    emitter.on("run.flagAccepted", (e) => digest.push(e))
-    emitter.on("run.finished", (e) => digest.push(e))
-    emitter.on("run.timedOut", (e) => digest.push(e))
-    emitter.on("run.resumed", (e) => digest.push(e))
-  }
 
   /** Build the per-agent native tool context. */
   function buildAgentToolContext(
@@ -469,7 +429,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
         systemPrompt,
         tools,
       })
-      channels.ensureAgentDm(runId, agentId)
       await prepareAgent(runId, agentId)
       await lifecycle.send(
         agentId,
@@ -487,9 +446,9 @@ export function createRunFactory(deps: RunFactoryDeps) {
   }
 
   /** Shared create/restore tail: persist the run-level context (container
-   * refs, model, prompt context) and, for the event scope, attach the built-in
-   * scheduler wake-up. The differences (fence/slot reservation, the container
-   * build, agent creation/priming) stay in the callers. */
+   * refs, model, prompt context). v18: no per-event wiring to attach —
+   * run lifecycle events post directly into orch:<eventId> and delivery
+   * rides the global tick/urgent policy. */
   async function buildRunContext(opts: {
     runId: string
     scope: "challenge" | "event"
@@ -503,8 +462,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
     defaultModelRef: ModelRef
     thinkingLevel: ThinkingLevel
     promptContext: PromptContext
-    /** event scope only: the orchestrator agent the wake-up events send to. */
-    orchestratorAgentId?: string
   }): Promise<void> {
     contexts.set(opts.runId, {
       containerName: opts.containerName,
@@ -518,15 +475,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
       promptContext: opts.promptContext,
       challengeId: opts.challengeId ?? "",
     })
-    if (opts.scope === "event") {
-      if (!opts.orchestratorAgentId) {
-        throw new RunActionError(
-          "invalid_state",
-          "Event-scope run context requires the orchestrator agent id"
-        )
-      }
-      attachSchedulerWakeup(opts.eventId, opts.orchestratorAgentId)
-    }
   }
 
   async function create(input: CreateRunInput): Promise<RunPublic> {
@@ -771,11 +719,8 @@ export function createRunFactory(deps: RunFactoryDeps) {
           thinkingLevel: entryTarget.thinkingLevel,
           promptContext,
         })
-        // Channel tree first (§2.1 + v17 §11.2): the challenge's #team +
-        // #announce exist (get-or-create — shared with every other run on
-        // this challenge) before any solver can post; each solver's DM is
-        // created with its agent row.
-        channels.ensureChallengeChannels(runId)
+        // v18: channels are derived keys — nothing to ensure before the
+        // solvers exist; the first post makes each channel "exist".
         // Directly create + prime the N solver agents (v9: every solver
         // primes with its own rendered initial prompt).
         await createSolvers(
@@ -830,7 +775,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
           defaultModelRef: entryModel.ref,
           thinkingLevel: entryTarget.thinkingLevel,
           promptContext,
-          orchestratorAgentId: agentId,
         })
         await prepareAgent(runId, agentId)
         await lifecycle.send(
@@ -1011,24 +955,11 @@ export function createRunFactory(deps: RunFactoryDeps) {
         )
       }
 
-      // Channel backfill for pre-channels (v≤15) runs: the tree is ensured
-      // idempotently — a legacy challenge run cold-restored gets the
-      // challenge's #team/#announce (v17: created if absent) + a DM per
-      // persisted agent so the first post does not 404. Event runs keep
-      // their scheduler DM (attached below).
-      if (row.scopeType === "challenge") {
-        channels.ensureChallengeChannels(runId)
-        for (const agent of queries.listAgents(runId)) {
-          channels.ensureAgentDm(runId, agent.id)
-        }
-      }
+      // v18: no channel backfill — channels are derived keys, and every
+      // persisted agent row already carries its dm:<agentId> identity.
 
-      // Run-level live context + (event scope) the built-in wake-up — the
-      // same shared tail as create(). Agent rows are NOT touched.
-      const orchestrator =
-        row.scopeType === "event"
-          ? queries.listAgents(runId).find((agent) => agent.isEntry)
-          : undefined
+      // Run-level live context — the same shared tail as create(). Agent
+      // rows are NOT touched.
       await buildRunContext({
         runId,
         scope: row.scopeType === "event" ? "event" : "challenge",
@@ -1042,7 +973,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
         defaultModelRef: row.model,
         thinkingLevel: modelDisplay.thinkingLevel,
         promptContext,
-        orchestratorAgentId: orchestrator?.id,
       })
       deps.armRunTimers(runId, row.deadlineAt)
       // The run is live again — notify the event's scheduler so it does not
@@ -1167,8 +1097,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
       systemPrompt,
       tools,
     })
-    // New solver → new DM channel (§2.1, add_agent 增建)。
-    channels.ensureAgentDm(runId, agentId)
     emitAgents(runId)
     await prepareAgent(runId, agentId)
     // No run-level strategy is persisted — the spec's prompt is the whole
@@ -1339,7 +1267,6 @@ export function createRunFactory(deps: RunFactoryDeps) {
     prepareAgent,
     recoverOnBoot,
     buildAgentToolContext,
-    eventScopeFor,
   }
 }
 

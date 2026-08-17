@@ -19,35 +19,39 @@ import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import {
   agents,
+  challenges,
   channelFiles,
   channelMessages,
   channelReads,
-  channels,
-  challenges,
   runs,
 } from "../db/schema"
 import { RunActionError } from "./errors"
 import type { RunQueries } from "./queries"
 
 /**
- * Unified message layer core (docs/im-channels.md). One channel tree per
- * run (challenge-scope #team/#announce + DM per solver) + one event-scope
- * channel (DM: scheduler). v17 (§11): #team/#announce are CHALLENGE-scoped —
- * they persist across runs of the same challenge, so a retry run's fresh
- * solvers mechanically see every prior finding/dead-end/announcement (the
- * onboarding deliver sweeps it into their first turn). Messages are written
- * once, stored once, rendered once — delivery (whether/when to wake whom) is
- * a per-channel POLICY implemented here, not a per-call-site decision.
+ * Derived-key channel core (docs/im-simplify-v18.md). A channel is NOT a
+ * table row — it is a derived key:
  *
- * Delivery = steer via `lifecycle.send(agentId, text, "steer")` (three-state
- * semantics owned by the lifecycle: streaming → inject at turn end, idle →
- * fresh turn, closed → onResume cold-restore). Red lines honored:
- *  - #team / #announce only store for agents on a closed run (restore touches
- *    only the triggered agent); DMs may cold-wake their target.
- *  - Steer text carries 📎 filename/size metadata lines only — attachment
- *    CONTENT is never injected (agents materialize via SDK fetch).
- *  - Attachment sources are resolve-checked inside the posting agent's run
- *    workspace (no escape).
+ *   #team          team:<challengeId>   same-challenge knowledge base shared
+ *                                       by every run on the challenge (v17
+ *                                       semantics kept: cross-run history,
+ *                                       onboarding sweep, run-signed authors,
+ *                                       closed runs store-only)
+ *   DM solver-N    dm:<agentId>         scheduler / user / system → one solver
+ *   DM scheduler   orch:<eventId>       solver asks + system run/queue events
+ *                                       → the scheduler (stable "scheduler"
+ *                                       read cursor across scheduler restarts)
+ *
+ * The first message makes a channel exist; there is no directory table and
+ * no get-or-create. Delivery is ONE policy for all three kinds (§3.2):
+ * post persists first (crash-safe), then urgent=true delivers immediately,
+ * everything else rides the global flush tick (N=5min). The one push exit
+ * is deliverAgent — one reader, one steer, the whole backlog.
+ *
+ * Cold-wake red line (§3.3): urgent dm deliveries may cold-restore a closed
+ * run (lifecycle.send → onResume — the old message_agent semantics); team
+ * and orch only ever store for closed runs (restore touches only the
+ * triggered agent).
  */
 
 /** Server-side message body cap (characters). */
@@ -62,16 +66,43 @@ const MAX_DELIVER_CHARS = 8_000
 /** Default page size for timeline reads. */
 const DEFAULT_PAGE = 50
 
-/** Stable read-cursor key for the event-scope scheduler DM — the scheduler
- * agent id churns across restarts, the cursor must not. */
-const SCHEDULER_READ_KEY = "scheduler"
+/** Flush tick interval (§3.4): non-urgent messages merge-deliver every N
+ * minutes. Code constant; tests override via `flushIntervalMs`. */
+export const FLUSH_INTERVAL_MS = 5 * 60_000
 
-export type ChannelRow = typeof channels.$inferSelect
+/** Stable read-cursor key for orch channels — the scheduler agent id churns
+ * across restarts, the cursor must not. */
+export const SCHEDULER_READ_KEY = "scheduler"
+
+export function teamKey(challengeId: string): string {
+  return `team:${challengeId}`
+}
+
+export function dmKey(agentId: string): string {
+  return `dm:${agentId}`
+}
+
+export function orchKey(eventId: string): string {
+  return `orch:${eventId}`
+}
+
+export type ParsedChannelKey = { kind: "team" | "dm" | "orch"; id: string }
+
+export function parseChannelKey(key: string): ParsedChannelKey | undefined {
+  const idx = key.indexOf(":")
+  if (idx <= 0) return undefined
+  const kind = key.slice(0, idx)
+  const id = key.slice(idx + 1)
+  if (!id) return undefined
+  if (kind === "team" || kind === "dm" || kind === "orch") {
+    return { kind, id }
+  }
+  return undefined
+}
+
 export type ChannelMessageRow = typeof channelMessages.$inferSelect
 export type ChannelFileRow = typeof channelFiles.$inferSelect
 
-/** Public channel shapes (timeline + SDK read). Canonical definitions live in
- * @aegisx/shared/channels; re-exported here for server-side importers. */
 export type {
   ChannelMessageList,
   ChannelMessagePublic,
@@ -84,23 +115,19 @@ export type MessageAuthor =
   | { type: "agent"; agentId: string; name?: string }
 
 export type PostInput = {
-  channelId: string
+  channelKey: string
   author: MessageAuthor
   body: string
+  /** §3.2: urgent=true → immediate deliverChannel; otherwise the flush tick
+   * merges it. Defaults per writer are the CALLER's business (SDK/UI/system
+   * call sites encode the §3.2 matrix). */
+  urgent?: boolean
   meta?: Record<string, unknown>
   /** Workspace-relative paths copied out of the POSTING agent's run
-   * workspace (snapshot semantics, §2.5). */
+   * workspace (snapshot semantics, §六). */
   files?: string[]
-  /** Delivery-time skip (partial-flag steer parity: the submitter is not
-   * re-steered). Only applies to challenge-scope group channels. */
-  skipAgentIds?: string[]
-  /** Push mode for deliveries triggered by this post (default "steer").
-   * The scheduler tools' message_run/message_agent use "followUp". */
+  /** Push mode for deliveries triggered by this post (default "steer"). */
   deliverAs?: "steer" | "followUp"
-  /** Suppress the automatic fire-and-forget delivery; the caller delivers
-   * itself (awaited) via deliverAwaited — the user-facing send wrappers'
-   * contract (cold-restore must complete before the call returns). */
-  deferDelivery?: boolean
 }
 
 export type AttachmentInput = {
@@ -115,261 +142,112 @@ export type ChannelServiceDeps = {
   dataDir: string
   bus: LiveBus
   queries: RunQueries
-  lifecycle: SessionLifecycle
+  /** Late-bound lifecycle getter (the delivery engine calls lifecycle.send;
+   * the service constructs channels before the lifecycle — the getter is
+   * only invoked after both exist). */
+  lifecycle(): SessionLifecycle
   now(): string
   /** Absolute host workspace path for a run (attachment source / validation). */
   workspaceAbs(runId: string): string
-  /** New message landed in an event-scope scheduler DM → the digest policy
-   * (scheduler-digest.ts) decides flushing. No live scheduler → no-op (the
-   * message stays stored). */
-  onSchedulerDmMessage(eventId: string, message: ChannelMessagePublic): void
+  /** Test seam: flush tick interval. */
+  flushIntervalMs?: number
 }
 
 export type ChannelService = ReturnType<typeof createChannelService>
 
 export function createChannelService(deps: ChannelServiceDeps) {
-  const { db, dataDir, bus, queries, lifecycle } = deps
+  const { db, dataDir, bus, queries } = deps
+  const intervalMs = deps.flushIntervalMs ?? FLUSH_INTERVAL_MS
 
-  // --- channel tree ---------------------------------------------------------
+  // --- hold (deliveryPaused, per event — §3.4) --------------------------------
 
-  function channelById(channelId: string): ChannelRow | undefined {
-    return db.select().from(channels).where(eq(channels.id, channelId)).get()
+  /** Paused events: the tick AND urgent deliveries skip them entirely (posts
+   * only store); the next tick/urgent after resume catches up. In-memory
+   * only (a service restart resets it — same lifetime as the old digest's
+   * hold). */
+  const deliveryPausedEvents = new Set<string>()
+
+  function setDeliveryPaused(eventId: string, paused: boolean): void {
+    if (paused) deliveryPausedEvents.add(eventId)
+    else deliveryPausedEvents.delete(eventId)
   }
 
-  function requireChannel(channelId: string): ChannelRow {
-    const row = channelById(channelId)
-    if (!row) throw new RunActionError("not_found", "Channel not found")
-    return row
+  function isDeliveryPaused(eventId: string): boolean {
+    return deliveryPausedEvents.has(eventId)
   }
 
-  /** Run channels (v17): the challenge's #team + #announce (resolved via the
-   * run's challengeId — shared across every run of that challenge) + the
-   * run's own DM channels, canonical order. */
-  function runChannels(runId: string): ChannelRow[] {
-    const row = queries.getRow(runId)
-    if (!row) return []
-    const groups = row.challengeId
-      ? db
-          .select()
-          .from(channels)
-          .where(
-            and(
-              eq(channels.challengeId, row.challengeId),
-              inArray(channels.kind, ["team", "announce"])
-            )
-          )
-          .all()
-      : []
-    const dms = db
-      .select()
-      .from(channels)
-      .where(and(eq(channels.runId, runId), eq(channels.kind, "dm")))
-      .all()
-    const rank = (kind: string) =>
-      kind === "announce" ? 0 : kind === "team" ? 1 : 2
-    return [...groups, ...dms].sort(
-      (a, b) =>
-        rank(a.kind) - rank(b.kind) || a.createdAt.localeCompare(b.createdAt)
-    )
-  }
-
-  /** The event's scheduler DM channel (event-scope, persistent). */
-  function schedulerDm(eventId: string): ChannelRow | undefined {
-    return db
-      .select()
-      .from(channels)
-      .where(
-        and(
-          eq(channels.eventId, eventId),
-          eq(channels.scopeType, "event"),
-          eq(channels.kind, "dm")
-        )
-      )
-      .get()
-  }
-
-  function insertChannel(input: {
-    scopeType: "run" | "event" | "challenge"
-    runId: string | null
-    eventId: string
-    challengeId?: string | null
-    kind: "team" | "announce" | "dm"
-    targetAgentId: string | null
-  }): ChannelRow {
-    const row: typeof channels.$inferInsert = {
-      id: crypto.randomUUID(),
-      scopeType: input.scopeType,
-      runId: input.runId,
-      eventId: input.eventId,
-      challengeId: input.challengeId ?? null,
-      kind: input.kind,
-      targetAgentId: input.targetAgentId,
-      createdAt: deps.now(),
-    }
-    db.insert(channels).values(row).run()
-    return row as ChannelRow
-  }
-
-  /** Idempotent (v17 §11.2): get-or-create the CHALLENGE's #team +
-   * #announce. The first run on a challenge creates them; every later run
-   * reuses the same channels (and their history). DMs are per-run and created
-   * per agent (ensureAgentDm). */
-  function ensureChallengeChannels(runId: string): void {
-    const row = queries.getRow(runId)
-    if (!row) throw new RunActionError("not_found", "Run not found")
-    if (!row.challengeId) return // event-scope scheduler run: no group channels
-    for (const kind of ["team", "announce"] as const) {
-      const existing = db
-        .select({ id: channels.id })
-        .from(channels)
-        .where(
-          and(
-            eq(channels.challengeId, row.challengeId),
-            eq(channels.kind, kind)
-          )
-        )
-        .get()
-      if (!existing) {
-        insertChannel({
-          scopeType: "challenge",
-          runId: null,
-          eventId: row.eventId,
-          challengeId: row.challengeId,
-          kind,
-          targetAgentId: null,
-        })
-      }
-    }
-  }
-
-  /** The challenge's group channel of a kind (v17: the single #team/#announce
-   * of the challenge — the fan-out target for system notifications). */
-  function challengeChannel(
-    challengeId: string,
-    kind: "team" | "announce"
-  ): ChannelRow | undefined {
-    return db
-      .select()
-      .from(channels)
-      .where(
-        and(eq(channels.challengeId, challengeId), eq(channels.kind, kind))
-      )
-      .get()
-  }
-
-  /** Idempotent: ensure the agent's DM channel exists (create + add_agent +
-   * legacy-run backfill on first message). */
-  function ensureAgentDm(runId: string, agentId: string): ChannelRow {
-    const existing = db
-      .select()
-      .from(channels)
-      .where(
-        and(
-          eq(channels.runId, runId),
-          eq(channels.kind, "dm"),
-          eq(channels.targetAgentId, agentId)
-        )
-      )
-      .get()
-    if (existing) return existing
-    const row = queries.getRow(runId)
-    if (!row) throw new RunActionError("not_found", "Run not found")
-    return insertChannel({
-      scopeType: "run",
-      runId,
-      eventId: row.eventId,
-      kind: "dm",
-      targetAgentId: agentId,
-    })
-  }
-
-  /** Idempotent: ensure the event's scheduler DM exists; re-stamps the target
-   * agent pointer on each scheduler start (the channel + history persist). */
-  function ensureSchedulerDm(
-    eventId: string,
-    schedulerAgentId: string
-  ): ChannelRow {
-    const existing = schedulerDm(eventId)
-    if (!existing) {
-      return insertChannel({
-        scopeType: "event",
-        runId: null,
-        eventId,
-        kind: "dm",
-        targetAgentId: schedulerAgentId,
-      })
-    }
-    if (existing.targetAgentId !== schedulerAgentId) {
-      db.update(channels)
-        .set({ targetAgentId: schedulerAgentId })
-        .where(eq(channels.id, existing.id))
-        .run()
-    }
-    return existing
-  }
+  // --- entity lookups -----------------------------------------------------------
 
   function agentRow(agentId: string): typeof agents.$inferSelect | undefined {
     return db.select().from(agents).where(eq(agents.id, agentId)).get()
   }
 
-  function channelLabel(channel: ChannelRow): string {
-    if (channel.kind === "team") return "#team"
-    if (channel.kind === "announce") return "#announce"
-    const target = channel.targetAgentId
-      ? agentRow(channel.targetAgentId)
-      : undefined
+  function challengeRow(
+    challengeId: string
+  ): typeof challenges.$inferSelect | undefined {
+    return db
+      .select()
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+  }
+
+  /** The event's scheduler agent (entry agent of the single event-scope run;
+   * at most one row exists per event — a fresh start deletes the closed row
+   * first). */
+  function schedulerAgentOf(
+    eventId: string
+  ): typeof agents.$inferSelect | undefined {
+    const runRow = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.eventId, eventId), eq(runs.scopeType, "event")))
+      .get()
+    if (!runRow) return undefined
+    return db.select().from(agents).where(eq(agents.runId, runRow.id)).get()
+  }
+
+  function channelLabel(key: ParsedChannelKey): string {
+    if (key.kind === "team") return "#team"
+    if (key.kind === "orch") return "#orch"
+    const target = agentRow(key.id)
     return `DM ${target?.name ?? target?.slot ?? "agent"}`
   }
 
-  // --- read cursors ----------------------------------------------------------
+  // --- read cursors (§3.5: 已读 = 投递状态) ---------------------------------------
 
-  function readCursor(channelId: string, agentId: string): number {
+  function readCursor(channelKey: string, readerKey: string): number {
     const row = db
       .select({ lastReadMsgId: channelReads.lastReadMsgId })
       .from(channelReads)
       .where(
         and(
-          eq(channelReads.channelId, channelId),
-          eq(channelReads.agentId, agentId)
+          eq(channelReads.channelKey, channelKey),
+          eq(channelReads.readerKey, readerKey)
         )
       )
       .get()
     return row?.lastReadMsgId ?? 0
   }
 
-  function cursorFor(channel: ChannelRow, agentId: string): number {
-    return readCursor(channel.id, agentId)
-  }
-
-  function advanceCursor(
-    channel: ChannelRow,
-    agentId: string,
-    msgId: number
-  ): void {
-    advanceCursorKey(channel.id, agentId, msgId)
-  }
-
-  /** Explicit stable-key advance for the event-scope scheduler DM (digest
-   * flush recap cursor; the scheduler agent id churns, the key must not). */
-  function advanceSchedulerCursor(channel: ChannelRow, msgId: number): void {
-    advanceCursorKey(channel.id, SCHEDULER_READ_KEY, msgId)
-  }
-
-  function advanceCursorKey(
-    channelId: string,
-    key: string,
+  /** The single cursor-advance point (takes max). The three progression
+   * points — deliverAgent after injection, SDK read (pull = consume), and an
+   * agent's own post — all funnel here. */
+  function markRead(
+    channelKey: string,
+    readerKey: string,
     msgId: number
   ): void {
     const ts = deps.now()
     db.insert(channelReads)
       .values({
-        channelId,
-        agentId: key,
+        channelKey,
+        readerKey,
         lastReadMsgId: msgId,
         updatedAt: ts,
       })
       .onConflictDoUpdate({
-        target: [channelReads.channelId, channelReads.agentId],
+        target: [channelReads.channelKey, channelReads.readerKey],
         set: {
           lastReadMsgId: sql`max(${channelReads.lastReadMsgId}, ${msgId})`,
           updatedAt: ts,
@@ -378,10 +256,10 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .run()
   }
 
-  // --- messages + attachments -------------------------------------------------
+  // --- messages + attachments -----------------------------------------------------
 
-  function filesDir(channelId: string, messageId: number): string {
-    return join(dataDir, "channel-files", channelId, String(messageId))
+  function filesDir(messageId: number): string {
+    return join(dataDir, "channel-files", String(messageId))
   }
 
   function messageFiles(messageId: number): ChannelFileRow[] {
@@ -394,13 +272,13 @@ export function createChannelService(deps: ChannelServiceDeps) {
   }
 
   /** Roll back a message whose attachment write failed part-way: drop the
-   * file rows + the message row + the files dir so no orphan state remains.
-   * The author cursor / SSE emit / delivery all run after the attachment
-   * block, so nothing else needs undoing. */
-  function rollbackMessage(channelId: string, messageId: number) {
+   * file rows + the message row + the flat files dir so no orphan state
+   * remains. The author cursor / SSE emit / delivery all run after the
+   * attachment block, so nothing else needs undoing. */
+  function rollbackMessage(messageId: number) {
     db.delete(channelFiles).where(eq(channelFiles.messageId, messageId)).run()
     db.delete(channelMessages).where(eq(channelMessages.id, messageId)).run()
-    rmSync(filesDir(channelId, messageId), { recursive: true, force: true })
+    rmSync(filesDir(messageId), { recursive: true, force: true })
   }
 
   function toPublic(row: ChannelMessageRow): ChannelMessagePublic {
@@ -415,8 +293,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
     return {
       id: row.id,
-      channelId: row.channelId,
-      kind: row.kind as "text" | "recap",
+      channelKey: row.channelKey,
       authorType: row.authorType as "system" | "user" | "agent",
       authorAgentId: row.authorAgentId,
       authorName: row.authorName,
@@ -436,7 +313,6 @@ export function createChannelService(deps: ChannelServiceDeps) {
    * absolute host path + the sanitized filename. */
   function resolveWorkspaceFile(
     runId: string,
-    agentId: string,
     path: string
   ): { abs: string; filename: string } {
     if (!path || path.includes("\0") || path.startsWith("/")) {
@@ -473,22 +349,55 @@ export function createChannelService(deps: ChannelServiceDeps) {
   }
 
   /** Server-stamped meta for stored messages: agent posts always carry
-   * their run id (digest run attribution + spoof-proof; callers may not
-   * override it). */
+   * their run id (spoof-proof attribution; callers may not override it) and
+   * urgent=true collapses to a single flag. */
   function serverMeta(
     author: { type: "system" | "user" | "agent"; agentId?: string },
-    meta: Record<string, unknown> | undefined
+    meta: Record<string, unknown> | undefined,
+    urgent: boolean
   ): Record<string, unknown> {
-    if (author.type !== "agent" || !author.agentId) return meta ?? {}
-    const agent = agentRow(author.agentId)
-    return { ...meta, runId: agent?.runId ?? null }
+    const stamped: Record<string, unknown> = { ...meta }
+    if (urgent) stamped.urgent = true
+    else delete stamped.urgent
+    if (author.type === "agent" && author.agentId) {
+      const agent = agentRow(author.agentId)
+      stamped.runId = agent?.runId ?? null
+    }
+    return stamped
   }
 
-  /** Post one message (the single write path). Persists the row + snapshot
-   * attachments, advances the author's own cursor, broadcasts SSE, and
-   * triggers the channel's delivery policy. */
+  function insertMessage(
+    key: string,
+    author:
+      | { type: "system"; name: string }
+      | { type: "user"; name: string }
+      | { type: "agent"; agentId: string; name: string },
+    body: string,
+    meta: Record<string, unknown>
+  ): ChannelMessagePublic {
+    const ts = deps.now()
+    const inserted = db
+      .insert(channelMessages)
+      .values({
+        channelKey: key,
+        authorType: author.type,
+        authorAgentId: author.type === "agent" ? author.agentId : null,
+        authorName: author.name,
+        body,
+        meta: JSON.stringify(meta),
+        createdAt: ts,
+      })
+      .returning()
+      .get()
+    return toPublic(inserted)
+  }
+
+  /** Post one message (the single write path): persist first (crash-safe),
+   * snapshot attachments, advance the author's own cursor, broadcast SSE,
+   * then apply the urgent/tick delivery policy. Sync — the workspace
+   * attachment copy is a filesystem copy. */
   function post(input: PostInput): ChannelMessagePublic {
-    const channel = requireChannel(input.channelId)
+    const parsed = requireKey(input.channelKey)
     const body = input.body ?? ""
     if (body.length > MAX_MESSAGE_CHARS) {
       throw new RunActionError(
@@ -496,8 +405,9 @@ export function createChannelService(deps: ChannelServiceDeps) {
         `消息超过 ${MAX_MESSAGE_CHARS} 字符上限（当前 ${body.length}）`
       )
     }
-    // Author resolution + write permission (light, see design §四 gate note).
-    const author = resolveAuthor(channel, input.author)
+    const urgent = input.urgent === true
+    // Author resolution + write permission (the 3 rules, §2.1).
+    const author = resolveAuthor(parsed, input.author)
 
     // Attachment sources resolved BEFORE the row insert (escape check).
     if ((input.files?.length ?? 0) > MAX_FILES_PER_MESSAGE) {
@@ -516,7 +426,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       }
       const agent = agentRow(author.agentId)!
       for (const path of input.files) {
-        const resolved = resolveWorkspaceFile(agent.runId, agent.id, path)
+        const resolved = resolveWorkspaceFile(agent.runId, path)
         sources.push({
           abs: resolved.abs,
           filename: resolved.filename,
@@ -532,47 +442,18 @@ export function createChannelService(deps: ChannelServiceDeps) {
       }
     }
 
-    const ts = deps.now()
-    const inserted = db
-      .insert(channelMessages)
-      .values({
-        channelId: channel.id,
-        kind: "text",
-        authorType: author.type,
-        authorAgentId: author.type === "agent" ? author.agentId : null,
-        authorName: author.name,
-        body,
-        meta: JSON.stringify(serverMeta(author, input.meta)),
-        createdAt: ts,
-      })
-      .returning()
-      .get()
-    const message = toPublic(inserted)
+    const message = insertMessage(
+      parsed.raw,
+      author,
+      body,
+      serverMeta(author, input.meta, urgent)
+    )
 
-    // Snapshot-copy attachments (post-time freeze, §2.5). On any failure the
-    // partial message is rolled back (row + files) so a failed post never
-    // leaves a message with missing attachments.
+    // Snapshot-copy attachments (post-time freeze, §六). On any failure the
+    // partial message is rolled back so a failed post never leaves a
+    // message with missing attachments.
     if (sources.length > 0) {
-      const dir = filesDir(channel.id, message.id)
-      try {
-        mkdirSync(dir, { recursive: true })
-        for (const source of sources) {
-          copyFileSync(source.abs, join(dir, source.filename))
-          db.insert(channelFiles)
-            .values({
-              id: crypto.randomUUID(),
-              messageId: message.id,
-              channelId: channel.id,
-              filename: source.filename,
-              size: source.size,
-              createdAt: ts,
-            })
-            .run()
-        }
-      } catch (error) {
-        rollbackMessage(channel.id, message.id)
-        throw error
-      }
+      storeFileCopies(message.id, sources)
       message.files = messageFiles(message.id).map((file) => ({
         id: file.id,
         filename: file.filename,
@@ -580,48 +461,26 @@ export function createChannelService(deps: ChannelServiceDeps) {
       }))
     }
 
-    // Own posts are never the author's unread. On the event-scope scheduler
-    // DM the DELIVERY reader is the scheduler: the scheduler's own post
-    // advances the stable scheduler key, a solver's ask only the solver's
-    // own (observation) cursor.
+    // Own posts are never the author's unread (§3.5 progression point 3).
     if (author.type === "agent") {
-      const agent = agentRow(author.agentId)!
-      if (channel.scopeType === "event" && agent.role === "orchestrator") {
-        advanceSchedulerCursor(channel, message.id)
-      } else {
-        advanceCursor(channel, author.agentId, message.id)
-      }
+      markRead(parsed.raw, author.agentId, message.id)
     }
 
-    // SSE broadcast: run DM channels on the run's channel; challenge-scope
-    // group channels + the scheduler DM on the event's channel (challenge
-    // channels outlive any single run; timelines poll).
-    bus.emit(channel.runId ?? channel.eventId, {
-      type: "channel.message",
-      message,
-    })
+    emitChannelMessage(parsed, message)
 
-    // Delivery policy per channel (§2.3). Deferred: the caller owns delivery
-    // (awaited) — see deliverAwaited.
-    if (!input.deferDelivery) {
-      triggerDelivery(
-        channel,
-        message,
-        input.skipAgentIds ?? [],
-        input.deliverAs ?? "steer"
-      )
-    }
-    if (channel.scopeType === "event") {
-      deps.onSchedulerDmMessage(channel.eventId, message)
+    if (urgent) {
+      deliverChannel(parsed.raw, input.deliverAs ?? "steer")
     }
     return message
   }
 
-  /** User multipart upload variant: files arrive as raw bytes. */
+  /** User multipart upload variant: files arrive as raw bytes. `urgent`
+   * defaults TRUE on this path (§3.2 — a user IM post is rare and intended,
+   * carrying over the old "user post flushes immediately" semantics). */
   async function postWithUpload(
     input: Omit<PostInput, "files"> & { uploads: AttachmentInput[] }
   ): Promise<ChannelMessagePublic> {
-    const channel = requireChannel(input.channelId)
+    const parsed = requireKey(input.channelKey)
     const body = input.body ?? ""
     if (body.length > MAX_MESSAGE_CHARS) {
       throw new RunActionError(
@@ -651,76 +510,121 @@ export function createChannelService(deps: ChannelServiceDeps) {
         `单条消息附件总量超过 128MB 上限（${formatSize(total)}）`
       )
     }
-    const author = resolveAuthor(channel, input.author)
-    const ts = deps.now()
-    const inserted = db
-      .insert(channelMessages)
-      .values({
-        channelId: channel.id,
-        kind: "text",
-        authorType: author.type,
-        authorAgentId: author.type === "agent" ? author.agentId : null,
-        authorName: author.name,
-        body,
-        meta: JSON.stringify(serverMeta(author, input.meta)),
-        createdAt: ts,
-      })
-      .returning()
-      .get()
-    const message = toPublic(inserted)
+    const urgent = input.urgent ?? true
+    const author = resolveAuthor(parsed, input.author)
+    const message = insertMessage(
+      parsed.raw,
+      author,
+      body,
+      serverMeta(author, input.meta, urgent)
+    )
     if (input.uploads.length > 0) {
-      const dir = filesDir(channel.id, message.id)
-      try {
-        mkdirSync(dir, { recursive: true })
-        for (const upload of input.uploads) {
-          const safe = basename(upload.filename) || "attachment"
-          const bytes = Buffer.from(await upload.stream())
-          writeFileSync(join(dir, safe), bytes)
-          db.insert(channelFiles)
-            .values({
-              id: crypto.randomUUID(),
-              messageId: message.id,
-              channelId: channel.id,
-              filename: safe,
-              size: bytes.byteLength,
-              createdAt: ts,
-            })
-            .run()
-        }
-      } catch (error) {
-        rollbackMessage(channel.id, message.id)
-        throw error
-      }
+      await storeUploads(message.id, input.uploads)
       message.files = messageFiles(message.id).map((file) => ({
         id: file.id,
         filename: file.filename,
         size: file.size,
       }))
     }
-    bus.emit(channel.runId ?? channel.eventId, {
-      type: "channel.message",
-      message,
-    })
-    if (!input.deferDelivery) {
-      triggerDelivery(
-        channel,
-        message,
-        input.skipAgentIds ?? [],
-        input.deliverAs ?? "steer"
-      )
+    if (author.type === "agent") {
+      markRead(parsed.raw, author.agentId, message.id)
     }
-    if (channel.scopeType === "event") {
-      deps.onSchedulerDmMessage(channel.eventId, message)
+    emitChannelMessage(parsed, message)
+    if (urgent) {
+      deliverChannel(parsed.raw, input.deliverAs ?? "steer")
     }
     return message
   }
 
-  /** Author name/permission resolution per channel kind (§2.3 writers).
-   * v17 §11.4: agent posts carry a run-suffix snapshot (`Solver 2 · run-a3f1`)
-   * — the same string renders in the UI timeline and the steer text, so
-   * cross-run attribution is unambiguous in the shared challenge channels. */
+  function requireKey(raw: string): ParsedChannelKey & { raw: string } {
+    const parsed = parseChannelKey(raw)
+    if (!parsed) {
+      throw new RunActionError("invalid", `非法频道键：${raw}`)
+    }
+    return { ...parsed, raw }
+  }
+
+  /** Snapshot-copy workspace attachments for a freshly inserted message;
+   * rolls the message back on any failure so a failed post never leaves a
+   * message with missing attachments. */
+  function storeFileCopies(
+    messageId: number,
+    sources: Array<{ abs: string; filename: string; size: number }>
+  ): void {
+    const dir = filesDir(messageId)
+    const ts = deps.now()
+    try {
+      mkdirSync(dir, { recursive: true })
+      for (const source of sources) {
+        copyFileSync(source.abs, join(dir, source.filename))
+        db.insert(channelFiles)
+          .values({
+            id: crypto.randomUUID(),
+            messageId,
+            filename: source.filename,
+            size: source.size,
+            createdAt: ts,
+          })
+          .run()
+      }
+    } catch (error) {
+      rollbackMessage(messageId)
+      throw error
+    }
+  }
+
+  /** Write uploaded attachment bytes (user multipart path); same rollback
+   * contract as storeFileCopies. */
+  async function storeUploads(
+    messageId: number,
+    uploads: AttachmentInput[]
+  ): Promise<void> {
+    const dir = filesDir(messageId)
+    const ts = deps.now()
+    try {
+      mkdirSync(dir, { recursive: true })
+      for (const upload of uploads) {
+        const safe = basename(upload.filename) || "attachment"
+        writeFileSync(join(dir, safe), Buffer.from(await upload.stream()))
+        db.insert(channelFiles)
+          .values({
+            id: crypto.randomUUID(),
+            messageId,
+            filename: safe,
+            size: upload.size,
+            createdAt: ts,
+          })
+          .run()
+      }
+    } catch (error) {
+      rollbackMessage(messageId)
+      throw error
+    }
+  }
+
+  /** SSE split (§9.2): dm → the target's run channel; team/orch → the
+   * event's channel. */
+  function emitChannelMessage(
+    parsed: ParsedChannelKey,
+    message: ChannelMessagePublic
+  ): void {
+    const channel = emitChannelOf(parsed)
+    if (channel) {
+      bus.emit(channel, { type: "channel.message", message })
+    }
+  }
+
+  function emitChannelOf(parsed: ParsedChannelKey): string | undefined {
+    if (parsed.kind === "dm") return agentRow(parsed.id)?.runId
+    if (parsed.kind === "orch") return parsed.id
+    return challengeRow(parsed.id)?.eventId
+  }
+
+  /** Author name/permission resolution — the three write rules (§2.1).
+   * Agent posts carry a run-suffix snapshot (`Solver 2 · run-a3f1`, v17
+   * §11.4) — the same string renders in the UI timeline and the steer text. */
   function resolveAuthor(
-    channel: ChannelRow,
+    parsed: ParsedChannelKey,
     author: MessageAuthor
   ):
     | { type: "system"; name: string }
@@ -735,133 +639,119 @@ export function createChannelService(deps: ChannelServiceDeps) {
     const agent = agentRow(author.agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
     const name = `${agent.name ?? agent.slot} · run-${agent.runId.slice(0, 4)}`
-    if (channel.scopeType === "challenge") {
-      // Solvers of any run on THIS challenge post to #team (their shared
-      // room) and #announce; the event's scheduler may post #announce (and DM
-      // steering) but not #team — that is the solvers' room.
+    if (parsed.kind === "team") {
+      // Writers: this challenge's solvers, the event's scheduler, user,
+      // system. (v18: the scheduler posts #team — its signed agent post IS
+      // the announcement; #announce is gone.)
       const agentRun = queries.getRow(agent.runId)
       const sameChallenge =
         agentRun?.scopeType === "challenge" &&
-        agentRun.challengeId === channel.challengeId
-      const scheduler = schedulerAgentOf(channel.eventId)
+        agentRun.challengeId === parsed.id
+      const scheduler = schedulerAgentOf(
+        challengeRow(parsed.id)?.eventId ?? ""
+      )
       if (!sameChallenge && scheduler?.id !== agent.id) {
         throw new RunActionError(
           "invalid",
           "无权向该频道发帖（不属于此题目，也非本 event 调度者）"
         )
       }
-      if (channel.kind === "team" && !sameChallenge) {
+    } else if (parsed.kind === "dm") {
+      // Writers: the event's scheduler, user, system — the target agent
+      // itself never writes its own DM.
+      if (agent.id === parsed.id) {
         throw new RunActionError(
           "invalid",
-          "#team 只接受本题目 run 成员发帖（调度者请用 #announce 或 DM）"
+          "DM 目标 agent 不能向自己的 DM 发帖（用 #team 或 ask）"
         )
       }
-    } else if (channel.scopeType === "run") {
-      // Same-run agents post to their own DM; the event's scheduler agent may
-      // post to any run's DM (steering) — legacy run-scope DM permission.
-      const sameRun = agent.runId === channel.runId
-      const scheduler = schedulerAgentOf(channel.eventId)
-      if (!sameRun && scheduler?.id !== agent.id) {
+      const target = agentRow(parsed.id)
+      const targetRun = target ? queries.getRow(target.runId) : undefined
+      const scheduler = schedulerAgentOf(targetRun?.eventId ?? "")
+      if (scheduler?.id !== agent.id) {
         throw new RunActionError(
           "invalid",
-          "无权向该频道发帖（不属于此 run，也非本 event 调度者）"
+          "无权向该频道发帖（仅本 event 调度者可向 solver DM 发帖）"
+        )
+      }
+    } else {
+      // orch: solvers of this event (ask), user, system. The scheduler agent
+      // itself never writes orch (it RECEIVES it).
+      const agentRun = queries.getRow(agent.runId)
+      if (agent.role === "orchestrator") {
+        throw new RunActionError(
+          "invalid",
+          "调度者不写 orch 频道（它是调度者的收件频道）"
+        )
+      }
+      if (agentRun?.eventId !== parsed.id) {
+        throw new RunActionError(
+          "invalid",
+          "无权向该频道发帖（不属于此 event）"
         )
       }
     }
-    // Event-scope scheduler DM: solvers (ask), users, system, the scheduler
-    // itself — no further restriction (accepted boundary: no API token).
     return { type: "agent", agentId: agent.id, name }
   }
 
-  /** The event's live scheduler agent (entry agent of its event-scope run). */
-  function schedulerAgentOf(
-    eventId: string
-  ): typeof agents.$inferSelect | undefined {
-    const runRow = db
-      .select()
-      .from(runs)
-      .where(and(eq(runs.eventId, eventId), eq(runs.scopeType, "event")))
-      .get()
-    if (!runRow) return undefined
-    return db.select().from(agents).where(eq(agents.runId, runRow.id)).get()
+  // --- delivery engine (§3.3) ------------------------------------------------------
+
+  /** The functional read key of an agent: solvers read under their own id;
+   * the scheduler reads orch under the stable "scheduler" key. */
+  function readerKeyOf(agent: typeof agents.$inferSelect): string {
+    return agent.role === "orchestrator" ? SCHEDULER_READ_KEY : agent.id
   }
 
-  // --- delivery engine ---------------------------------------------------------
-
-  /** Channels whose unread counts toward an agent's deliver snapshot. Solver:
-   * the challenge's #team + #announce (v17 — shared across runs of the
-   * challenge) + own DM. The scheduler DM is digest-policy territory. */
-  function deliverableChannels(
-    agent: typeof agents.$inferSelect
-  ): ChannelRow[] {
+  /** The agent's delivery face (§3.3): solver = its challenge's #team + own
+   * dm; scheduler = orch. */
+  function deliveryKeys(agent: typeof agents.$inferSelect): string[] {
     const runRow = queries.getRow(agent.runId)
-    const groups = runRow?.challengeId
-      ? db
-          .select()
-          .from(channels)
-          .where(
-            and(
-              eq(channels.challengeId, runRow.challengeId),
-              inArray(channels.kind, ["team", "announce"])
-            )
-          )
-          .all()
-      : []
-    const dms = db
-      .select()
-      .from(channels)
-      .where(and(eq(channels.runId, agent.runId), eq(channels.kind, "dm")))
-      .all()
-    return [...groups, ...dms.filter((c) => c.targetAgentId === agent.id)]
+    if (!runRow) return []
+    if (agent.role === "orchestrator") return [orchKey(runRow.eventId)]
+    const keys: string[] = []
+    if (runRow.challengeId) keys.push(teamKey(runRow.challengeId))
+    keys.push(dmKey(agent.id))
+    return keys
   }
 
-  /** The one push exit: collect unread across the agent's visible channels,
-   * render ONE merged steer text (8K cap, overflow folding), advance cursors,
-   * lifecycle.send. Red line: group channels only deliver on a live run
-   * (closed → store only); DMs may cold-wake (lifecycle onResume).
-   *
-   * The event-scope scheduler DM never enters this path (it is not a channel
-   * of any run) — its delivery policy is the digest. A DIRECT DM to an
-   * orchestrator (its run-scope DM, via sendMessage/sendAgentMessage) steers
-   * it like any agent. */
-  function deliver(
+  /** The one push exit: collect unread across the agent's delivery face,
+   * render ONE merged text (8K cap, overflow folding, ⚠ urgent marks),
+   * advance cursors, lifecycle.send. Cold-wake red line: team/orch only
+   * deliver on a live run; dm may cold-restore a closed run when the caller
+   * is an urgent post (coldWake=true). */
+  async function deliverAgentAwaited(
     agentId: string,
-    deliverAs: "steer" | "followUp" = "steer"
-  ): void {
-    void deliverAwaited(agentId, deliverAs).catch(() => undefined)
-  }
-
-  /** Awaited variant for the user-facing send wrappers: the push (and any
-   * cold-restore it triggers) completes before the caller returns. Errors
-   * propagate (the old `await lifecycle.send` contract). */
-  async function deliverAwaited(
-    agentId: string,
-    deliverAs: "steer" | "followUp" = "steer"
+    opts: { coldWake?: boolean; deliverAs?: "steer" | "followUp" } = {}
   ): Promise<void> {
     const agent = agentRow(agentId)
     if (!agent) return
     const runRow = queries.getRow(agent.runId)
     if (!runRow) return
+    if (isDeliveryPaused(runRow.eventId)) return
     const runLive = runRow.status !== "closed"
+    if (!runLive && !opts.coldWake) return
+    const readerKey = readerKeyOf(agent)
+    const coldWake = opts.coldWake === true
 
     type Snapshot = {
-      channel: ChannelRow
+      key: string
+      label: string
       messages: ChannelMessageRow[]
       maxId: number
     }
     const snapshots: Snapshot[] = []
-    for (const channel of deliverableChannels(agent)) {
-      const groupOnly = channel.kind !== "dm"
-      if (groupOnly && !runLive) continue // closed run: store only
-      const cursor = cursorFor(channel, agentId)
+    for (const key of deliveryKeys(agent)) {
+      const parsed = parseChannelKey(key)!
+      if (parsed.kind !== "dm" && !runLive) continue // closed: store only
+      if (parsed.kind === "dm" && !runLive && !coldWake) continue
+      const cursor = readCursor(key, readerKey)
       const rows = db
         .select()
         .from(channelMessages)
         .where(
           and(
-            eq(channelMessages.channelId, channel.id),
-            gt(channelMessages.id, cursor),
-            sql`${channelMessages.kind} != 'recap'`
+            eq(channelMessages.channelKey, key),
+            gt(channelMessages.id, cursor)
           )
         )
         .orderBy(asc(channelMessages.id))
@@ -872,7 +762,8 @@ export function createChannelService(deps: ChannelServiceDeps) {
         )
       if (rows.length === 0) continue
       snapshots.push({
-        channel,
+        key,
+        label: channelLabel(parsed),
         messages: rows,
         maxId: rows[rows.length - 1]!.id,
       })
@@ -880,12 +771,13 @@ export function createChannelService(deps: ChannelServiceDeps) {
     if (snapshots.length === 0) return
 
     const text = renderMerged(
-      snapshots.map(({ channel, messages }) => ({
-        label: channelLabel(channel),
+      snapshots.map(({ label, messages }) => ({
+        label,
         messages: messages.map((row) => ({
           authorName: row.authorName,
           createdAt: row.createdAt,
           body: row.body,
+          urgent: isUrgent(row),
           files: messageFiles(row.id).map((file) => ({
             filename: file.filename,
             size: file.size,
@@ -893,60 +785,162 @@ export function createChannelService(deps: ChannelServiceDeps) {
         })),
       }))
     )
-    for (const { channel, maxId } of snapshots) {
-      advanceCursor(channel, agentId, maxId)
+    for (const { key, maxId } of snapshots) {
+      markRead(key, readerKey, maxId)
     }
-    await lifecycle.send(agentId, text, deliverAs)
+    await deps.lifecycle().send(agentId, text, opts.deliverAs ?? "steer")
   }
 
-  /** Per-channel delivery trigger (§2.3 table). v17: group channels are
-   * challenge-scoped — the recipient query is every solver of every LIVE run
-   * on the challenge (closed-run members only store, per the restore red
-   * line); DMs target their agent as before. */
-  function triggerDelivery(
-    channel: ChannelRow,
-    _message: ChannelMessagePublic,
-    skipAgentIds: string[],
-    deliverAs: "steer" | "followUp"
+  function isUrgent(row: ChannelMessageRow): boolean {
+    try {
+      return JSON.parse(row.meta)?.urgent === true
+    } catch {
+      return false
+    }
+  }
+
+  /** Fire-and-forget delivery (onboarding sweep after prime — v17 §11.3
+   * semantics kept: a fresh solver's cursor is 0, one deliver sweeps the
+   * challenge's whole #team history into its first turn's tail). */
+  function deliver(agentId: string): void {
+    void deliverAgentAwaited(agentId).catch(() => undefined)
+  }
+
+  /** Urgent-post delivery trigger (§3.2/§3.3 matrix):
+   *  - team → every live run's solvers on the challenge (closed: store only)
+   *  - dm   → the target agent, cold-waking a closed run (lifecycle.send →
+   *           onResume — restore touches ONLY the triggered agent)
+   *  - orch → the event's scheduler, only if its run is live (closed → store;
+   *           the stable "scheduler" cursor catches up on next start) */
+  function deliverChannel(
+    key: string,
+    deliverAs: "steer" | "followUp" = "steer"
   ): void {
-    if (channel.scopeType === "event") return // scheduler DM → digest policy
-    if (channel.kind === "dm") {
-      if (
-        channel.targetAgentId &&
-        !skipAgentIds.includes(channel.targetAgentId)
-      ) {
-        deliver(channel.targetAgentId, deliverAs)
+    const parsed = parseChannelKey(key)
+    if (!parsed) return
+    if (isDeliveryPaused(eventOfKey(parsed))) return
+    if (parsed.kind === "team") {
+      const liveRuns = db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          and(
+            eq(runs.challengeId, parsed.id),
+            eq(runs.scopeType, "challenge"),
+            inArray(runs.status, ["running", "idle"])
+          )
+        )
+        .all()
+      for (const { id } of liveRuns) {
+        for (const agent of queries.listAgents(id)) {
+          if (agent.role !== "solver") continue
+          void deliverAgentAwaited(agent.id, { deliverAs }).catch(
+            () => undefined
+          )
+        }
       }
       return
     }
-    // Group channels: steer every live solver on the challenge.
-    const liveRuns = db
+    if (parsed.kind === "dm") {
+      void deliverAgentAwaited(parsed.id, { coldWake: true, deliverAs }).catch(
+        () => undefined
+      )
+      return
+    }
+    // orch: only a live scheduler run receives pushes.
+    const schedRun = db
       .select({ id: runs.id })
       .from(runs)
-      .where(
-        and(
-          eq(runs.challengeId, channel.challengeId!),
-          eq(runs.scopeType, "challenge"),
-          inArray(runs.status, ["running", "idle"])
-        )
-      )
-      .all()
-    for (const { id } of liveRuns) {
-      for (const agent of queries.listAgents(id)) {
-        if (agent.role !== "solver") continue
-        if (skipAgentIds.includes(agent.id)) continue
-        deliver(agent.id, deliverAs)
-      }
+      .where(and(eq(runs.eventId, parsed.id), eq(runs.scopeType, "event")))
+      .get()
+    if (!schedRun) return
+    if (
+      db
+        .select({ status: runs.status })
+        .from(runs)
+        .where(eq(runs.id, schedRun.id))
+        .get()?.status === "closed"
+    ) {
+      return
+    }
+    const orch = db
+      .select()
+      .from(agents)
+      .where(eq(agents.runId, schedRun.id))
+      .get()
+    if (orch) {
+      void deliverAgentAwaited(orch.id, { deliverAs }).catch(() => undefined)
     }
   }
 
-  // --- reads ---------------------------------------------------------------------
+  function eventOfKey(parsed: ParsedChannelKey): string {
+    if (parsed.kind === "orch") return parsed.id
+    if (parsed.kind === "team") {
+      return challengeRow(parsed.id)?.eventId ?? ""
+    }
+    const target = agentRow(parsed.id)
+    return target ? (queries.getRow(target.runId)?.eventId ?? "") : ""
+  }
+
+  // --- flush tick (§3.4) -----------------------------------------------------------
+
+  let flushTimer: ReturnType<typeof setInterval> | null = null
+  let nextFlushAt: number | null = null
+
+  /** One global interval; no per-event objects, no catch-up code — messages
+   * are persisted, so a missed tick's backlog settles on the next one. */
+  function startFlushLoop(): void {
+    if (flushTimer) return
+    nextFlushAt = Date.now() + intervalMs
+    flushTimer = setInterval(() => runFlushTick(), intervalMs)
+  }
+
+  /** The tick: every live (running/idle) run's solvers deliverAgent; every
+   * live scheduler agent delivers from orch. Hold skips the whole event. */
+  function runFlushTick(): void {
+    nextFlushAt = Date.now() + intervalMs
+    try {
+      const live = db
+        .select({
+          id: runs.id,
+          scopeType: runs.scopeType,
+          eventId: runs.eventId,
+        })
+        .from(runs)
+        .where(inArray(runs.status, ["running", "idle"]))
+        .all()
+      for (const row of live) {
+        if (isDeliveryPaused(row.eventId)) continue
+        if (row.scopeType === "event") {
+          const orch = db
+            .select()
+            .from(agents)
+            .where(eq(agents.runId, row.id))
+            .get()
+          if (orch) {
+            void deliverAgentAwaited(orch.id).catch(() => undefined)
+          }
+          continue
+        }
+        for (const agent of queries.listAgents(row.id)) {
+          if (agent.role !== "solver") continue
+          void deliverAgentAwaited(agent.id).catch(() => undefined)
+        }
+      }
+    } catch (error) {
+      console.error("channel flush tick failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // --- reads / listings ---------------------------------------------------------------
 
   function listMessages(
-    channelId: string,
+    channelKey: string,
     opts: { after?: number; limit?: number } = {}
   ): ChannelMessageList {
-    const channel = requireChannel(channelId)
+    requireKey(channelKey)
     const after = opts.after ?? 0
     const limit = Math.min(Math.max(opts.limit ?? DEFAULT_PAGE, 1), 200)
     const rows = db
@@ -954,7 +948,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .from(channelMessages)
       .where(
         and(
-          eq(channelMessages.channelId, channel.id),
+          eq(channelMessages.channelKey, channelKey),
           gt(channelMessages.id, after)
         )
       )
@@ -971,8 +965,8 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
   }
 
-  /** SDK read: pull = read (marks the cursor). Enforces the reader's
-   * visibility. `selector` is a channel id or "#team"/"#announce". */
+  /** SDK read: pull = read (marks the cursor). `selector` is "#team" (or
+   * "team"), "orch", or a raw channel key; visibility enforced. */
   function readForAgent(
     agentId: string,
     selector: string,
@@ -985,108 +979,89 @@ export function createChannelService(deps: ChannelServiceDeps) {
   } {
     const agent = agentRow(agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
-    const channel = resolveSelector(agent, selector)
-    const result = listMessages(channel.id, opts)
+    const key = resolveSelector(agent, selector)
+    const result = listMessages(key, opts)
+    const readerKey = readerKeyOf(agent)
     if (opts.markRead !== false && result.items.length > 0) {
-      advanceCursor(channel, agentId, result.items[result.items.length - 1]!.id)
+      markRead(key, readerKey, result.items[result.items.length - 1]!.id)
     }
     return {
-      channel: toChannelPublic(channel, agentId),
+      channel: channelInfo(parseChannelKey(key)!, agentId),
       ...result,
     }
   }
 
-  /** Resolve "#team" / "#announce" / a channel id for an agent, enforcing
-   * visibility (solver: the challenge's group channels + own DM + the event's
-   * scheduler DM; scheduler: every channel in its event). */
+  /** Resolve "#team"/"team"/"orch"/a raw key for an agent, enforcing
+   * visibility (§2.2: solver = own team + own dm + orch; scheduler = every
+   * team + every dm + orch of its event). */
   function resolveSelector(
     agent: typeof agents.$inferSelect,
     selector: string
-  ): ChannelRow {
-    const isScheduler = agent.role === "orchestrator"
-    // Normalize "team"/"announce" to the "#"-prefixed form (URL path params
-    // cannot carry the "#" — the SDK strips it).
-    const selectorNorm =
-      selector === "team"
-        ? "#team"
-        : selector === "announce"
-          ? "#announce"
-          : selector
-    if (selectorNorm === "#team" || selectorNorm === "#announce") {
-      if (isScheduler) {
+  ): string {
+    const runRow = queries.getRow(agent.runId)
+    if (!runRow) throw new RunActionError("not_found", "Run not found")
+    const norm = selector === "team" ? "#team" : selector
+    if (norm === "#team") {
+      if (agent.role === "orchestrator" || !runRow.challengeId) {
         throw new RunActionError(
           "invalid",
-          "调度者请用频道 id 寻址 run 频道（channels.list 提供）"
+          "调度者请用 channels.list 返回的键寻址题目频道"
         )
       }
-      const runRow = queries.getRow(agent.runId)
-      if (!runRow?.challengeId) {
-        throw new RunActionError("not_found", "Channel not found")
-      }
-      const channel = db
-        .select()
-        .from(channels)
-        .where(
-          and(
-            eq(channels.challengeId, runRow.challengeId),
-            eq(channels.kind, selectorNorm === "#team" ? "team" : "announce")
-          )
-        )
-        .get()
-      if (!channel) throw new RunActionError("not_found", "Channel not found")
-      return channel
+      return teamKey(runRow.challengeId)
     }
-    const channel = channelById(selectorNorm)
-    if (!channel) throw new RunActionError("not_found", "Channel not found")
-    const ownRun = queries.getRow(agent.runId)
-    if (isScheduler) {
-      if (!ownRun || ownRun.eventId !== channel.eventId) {
-        throw new RunActionError("invalid", "频道不在本 event 内")
-      }
-      return channel
-    }
-    // Solver visibility (v17): the challenge's group channels, own DM, and
-    // the event's scheduler DM.
-    const visible =
-      (channel.scopeType === "challenge" &&
-        ownRun?.challengeId === channel.challengeId) ||
-      channel.runId === agent.runId ||
-      (channel.scopeType === "event" &&
-        channel.kind === "dm" &&
-        ownRun?.eventId === channel.eventId)
-    if (!visible) {
+    if (norm === "orch") return orchKey(runRow.eventId)
+    const parsed = parseChannelKey(norm)
+    if (!parsed) throw new RunActionError("not_found", "Channel not found")
+    if (!visibleTo(agent, runRow, parsed)) {
       throw new RunActionError("invalid", "无权读取该频道")
     }
-    return channel
+    return norm
   }
 
-  function unreadCount(channel: ChannelRow, agentId: string): number {
-    const cursor = cursorFor(channel, agentId)
+  function visibleTo(
+    agent: typeof agents.$inferSelect,
+    runRow: { challengeId: string | null; eventId: string },
+    parsed: ParsedChannelKey
+  ): boolean {
+    if (agent.role === "orchestrator") {
+      if (parsed.kind === "orch") return runRow.eventId === parsed.id
+      if (parsed.kind === "team") {
+        return challengeRow(parsed.id)?.eventId === runRow.eventId
+      }
+      const target = agentRow(parsed.id)
+      const targetRun = target ? queries.getRow(target.runId) : undefined
+      return targetRun?.eventId === runRow.eventId
+    }
+    if (parsed.kind === "team") return runRow.challengeId === parsed.id
+    if (parsed.kind === "dm") return agent.id === parsed.id
+    return runRow.eventId === parsed.id
+  }
+
+  function unreadCount(key: string, readerKey: string): number {
     const row = db
       .select({ n: sql<number>`count(*)` })
       .from(channelMessages)
       .where(
         and(
-          eq(channelMessages.channelId, channel.id),
-          gt(channelMessages.id, cursor),
-          sql`${channelMessages.kind} != 'recap'`,
-          sql`not (${channelMessages.authorType} = 'agent' and ${channelMessages.authorAgentId} = ${agentId})`
+          eq(channelMessages.channelKey, key),
+          gt(channelMessages.id, readCursor(key, readerKey)),
+          sql`not (${channelMessages.authorType} = 'agent' and ${channelMessages.authorAgentId} = ${readerKey})`
         )
       )
       .get()
     return row?.n ?? 0
   }
 
-  /** Live (running/idle) challenge runs sharing a challenge channel — the
-   * v17 共享 badge count. */
-  function sharedRunCount(channel: ChannelRow): number | null {
-    if (channel.scopeType !== "challenge") return null
+  /** Live (running/idle) challenge runs sharing a team channel — the v17
+   * 共享 badge count. */
+  function sharedRunCount(challengeId: string): number {
     const row = db
       .select({ n: sql<number>`count(*)` })
       .from(runs)
       .where(
         and(
-          eq(runs.challengeId, channel.challengeId!),
+          eq(runs.challengeId, challengeId),
           eq(runs.scopeType, "challenge"),
           inArray(runs.status, ["running", "idle"])
         )
@@ -1095,101 +1070,139 @@ export function createChannelService(deps: ChannelServiceDeps) {
     return row?.n ?? 0
   }
 
-  function toChannelPublic(
-    channel: ChannelRow,
-    agentId: string
+  function channelInfo(
+    parsed: ParsedChannelKey,
+    readerKey: string | null
   ): ChannelPublic {
+    let eventId = ""
+    let challengeId: string | null = null
+    let agentId: string | null = null
+    let runId: string | null = null
+    let shared: number | null = null
+    if (parsed.kind === "team") {
+      const challenge = challengeRow(parsed.id)
+      eventId = challenge?.eventId ?? ""
+      challengeId = parsed.id
+      shared = sharedRunCount(parsed.id)
+    } else if (parsed.kind === "dm") {
+      const target = agentRow(parsed.id)
+      runId = target?.runId ?? null
+      agentId = parsed.id
+      eventId = target
+        ? (queries.getRow(target.runId)?.eventId ?? "")
+        : ""
+    } else {
+      eventId = parsed.id
+    }
     const last = db
       .select({ createdAt: channelMessages.createdAt })
       .from(channelMessages)
-      .where(eq(channelMessages.channelId, channel.id))
+      .where(eq(channelMessages.channelKey, `${parsed.kind}:${parsed.id}`))
       .orderBy(desc(channelMessages.id))
       .limit(1)
       .get()
     return {
-      id: channel.id,
-      scopeType: channel.scopeType as "run" | "event" | "challenge",
-      runId: channel.runId,
-      eventId: channel.eventId,
-      challengeId: channel.challengeId,
-      kind: channel.kind as "team" | "announce" | "dm",
-      targetAgentId: channel.targetAgentId,
-      label: channelLabel(channel),
-      unread: agentId ? unreadCount(channel, agentId) : 0,
+      key: `${parsed.kind}:${parsed.id}`,
+      kind: parsed.kind,
+      label: channelLabel(parsed),
+      eventId,
+      challengeId,
+      agentId,
+      runId,
+      unread: readerKey ? unreadCount(`${parsed.kind}:${parsed.id}`, readerKey) : 0,
       lastMessageAt: last?.createdAt ?? null,
-      sharedRunCount: sharedRunCount(channel),
+      sharedRunCount: shared,
     }
   }
 
-  /** SDK channels.list: the agent's visible channels + unread counts. */
+  /** SDK channels.list (§2.2): solver = own #team + own dm + orch; scheduler
+   * = every #team of its event's challenges + every dm of its event's
+   * solver agents + orch. */
   function agentChannels(agentId: string): ChannelPublic[] {
     const agent = agentRow(agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
     const runRow = queries.getRow(agent.runId)
     if (!runRow) throw new RunActionError("not_found", "Run not found")
+    const readerKey = readerKeyOf(agent)
     if (agent.role === "orchestrator") {
-      return db
+      const out: ChannelPublic[] = []
+      const eventChallenges = db
         .select()
-        .from(channels)
-        .where(eq(channels.eventId, runRow.eventId))
+        .from(challenges)
+        .where(eq(challenges.eventId, runRow.eventId))
+        .orderBy(asc(challenges.name))
         .all()
-        .map((channel) => toChannelPublic(channel, agentId))
-    }
-    const list = runChannels(agent.runId).filter(
-      (channel) => channel.kind !== "dm" || channel.targetAgentId === agentId
-    )
-    const scheduler = schedulerDm(runRow.eventId)
-    if (scheduler) list.push(scheduler)
-    return list.map((channel) => toChannelPublic(channel, agentId))
-  }
-
-  /** UI run channel tree (no per-agent unread — UI unread is client-side
-   * session state by design §5.2). */
-  function runChannelTree(runId: string): ChannelPublic[] {
-    return runChannels(runId).map((channel) => toChannelPublic(channel, ""))
-  }
-
-  /** The challenge's group channels (#team + #announce, get-or-create) — the
-   * challenge-level IM view (v17 knowledge base). Mirrors runChannelTree but
-   * keyed by challenge: works even when the challenge currently has no run. */
-  function challengeChannelTree(challengeId: string): ChannelPublic[] {
-    const challenge = db
-      .select()
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()
-    if (!challenge) throw new RunActionError("not_found", "Challenge not found")
-    for (const kind of ["team", "announce"] as const) {
-      const existing = db
-        .select({ id: channels.id })
-        .from(channels)
-        .where(
-          and(eq(channels.challengeId, challengeId), eq(channels.kind, kind))
-        )
-        .get()
-      if (!existing) {
-        insertChannel({
-          scopeType: "challenge",
-          runId: null,
-          eventId: challenge.eventId,
-          challengeId,
-          kind,
-          targetAgentId: null,
-        })
+      for (const challenge of eventChallenges) {
+        out.push(channelInfo(parseChannelKey(teamKey(challenge.id))!, readerKey))
       }
-    }
-    return db
-      .select()
-      .from(channels)
-      .where(
-        and(
-          eq(channels.challengeId, challengeId),
-          inArray(channels.kind, ["team", "announce"])
+      out.push(channelInfo(parseChannelKey(orchKey(runRow.eventId))!, readerKey))
+      const eventRuns = db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          and(
+            eq(runs.eventId, runRow.eventId),
+            eq(runs.scopeType, "challenge")
+          )
         )
-      )
-      .orderBy(asc(channels.kind))
-      .all()
-      .map((channel) => toChannelPublic(channel, ""))
+        .orderBy(asc(runs.createdAt))
+        .all()
+      for (const run of eventRuns) {
+        for (const candidate of queries.listAgents(run.id)) {
+          if (candidate.role !== "solver") continue
+          out.push(channelInfo(parseChannelKey(dmKey(candidate.id))!, readerKey))
+        }
+      }
+      return out
+    }
+    return [
+      ...(runRow.challengeId
+        ? [channelInfo(parseChannelKey(teamKey(runRow.challengeId))!, readerKey)]
+        : []),
+      channelInfo(parseChannelKey(dmKey(agent.id))!, readerKey),
+      channelInfo(parseChannelKey(orchKey(runRow.eventId))!, readerKey),
+    ]
+  }
+
+  /** UI run channel tree (§9.1): #team + one DM per solver. No per-reader
+   * unread — UI unread is client-side session state by design. */
+  function runChannelTree(runId: string): ChannelPublic[] {
+    const runRow = queries.getRow(runId)
+    if (!runRow) throw new RunActionError("not_found", "Run not found")
+    const out: ChannelPublic[] = []
+    if (runRow.challengeId) {
+      out.push(channelInfo(parseChannelKey(teamKey(runRow.challengeId))!, null))
+    }
+    for (const agent of queries.listAgents(runId)) {
+      if (agent.role !== "solver") continue
+      out.push(channelInfo(parseChannelKey(dmKey(agent.id))!, null))
+    }
+    return out
+  }
+
+  /** The challenge's #team (§9.1: exactly one) — the challenge-level IM view
+   * (v17 knowledge base; works with no run on the challenge). */
+  function challengeChannelTree(challengeId: string): ChannelPublic[] {
+    if (!challengeRow(challengeId)) {
+      throw new RunActionError("not_found", "Challenge not found")
+    }
+    return [channelInfo(parseChannelKey(teamKey(challengeId))!, null)]
+  }
+
+  /** Simplified scheduler inbox snapshot (§9.1): the orch key + unread
+   * (stable scheduler cursor) + tick state + hold. */
+  function inboxSnapshot(eventId: string): {
+    channelKey: string
+    unreadCount: number
+    nextFlushAt: number | null
+    deliveryPaused: boolean
+  } {
+    return {
+      channelKey: orchKey(eventId),
+      unreadCount: unreadCount(orchKey(eventId), SCHEDULER_READ_KEY),
+      nextFlushAt,
+      deliveryPaused: isDeliveryPaused(eventId),
+    }
   }
 
   // --- files ----------------------------------------------------------------------
@@ -1201,71 +1214,118 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .where(eq(channelFiles.id, fileId))
       .get()
     if (!row) throw new RunActionError("not_found", "File not found")
-    return {
-      row,
-      path: join(filesDir(row.channelId, row.messageId), row.filename),
+    return { row, path: join(filesDir(row.messageId), row.filename) }
+  }
+
+  // --- explicit cleanup (§八: no FK cascades — derived keys need sweeps) ----------
+
+  /** Delete the messages + read cursors + attachment dirs for the given
+   * channel keys (channel_files rows cascade from their messages). */
+  function deleteChannelData(keys: string[]): void {
+    if (keys.length === 0) return
+    const messageIds = db
+      .select({ id: channelMessages.id })
+      .from(channelMessages)
+      .where(inArray(channelMessages.channelKey, keys))
+      .all()
+    db.delete(channelMessages)
+      .where(inArray(channelMessages.channelKey, keys))
+      .run()
+    db.delete(channelReads)
+      .where(inArray(channelReads.channelKey, keys))
+      .run()
+    for (const { id } of messageIds) {
+      rmSync(filesDir(id), { recursive: true, force: true })
     }
   }
 
-  /** Best-effort disk cleanup when a run is deleted (DB rows cascade; the
-   * files under data/channel-files/<channelId>/ do not). v17: only the run's
-   * DM channels are run-scoped — the challenge group channels (and their
-   * attachment history) survive a single run's deletion. */
-  function cleanupRunFiles(runId: string): void {
-    const ids = db
-      .select({ id: channels.id })
-      .from(channels)
-      .where(eq(channels.runId, runId))
-      .all()
-    for (const { id } of ids) {
-      rmSync(join(dataDir, "channel-files", id), {
-        recursive: true,
-        force: true,
-      })
-    }
+  /** Run deletion: each agent's dm:<aid> data goes (its #team posts stay —
+   * the knowledge base survives single runs). */
+  function cleanupRunChannels(runId: string): void {
+    const keys = queries
+      .listAgents(runId)
+      .map((agent) => dmKey(agent.id))
+    deleteChannelData(keys)
   }
 
-  /** Best-effort disk cleanup when a CHALLENGE is deleted (v17: its group
-   * channels + history cascade in SQL; the attachment dirs do not). */
-  function cleanupChallengeFiles(challengeId: string): void {
-    const ids = db
-      .select({ id: channels.id })
-      .from(channels)
-      .where(eq(channels.challengeId, challengeId))
-      .all()
-    for (const { id } of ids) {
-      rmSync(join(dataDir, "channel-files", id), {
-        recursive: true,
-        force: true,
-      })
-    }
+  /** Challenge deletion: the team:<cid> knowledge base. */
+  function cleanupChallengeChannels(challengeId: string): void {
+    deleteChannelData([teamKey(challengeId)])
   }
+
+  /** Event deletion: orch + every team of the event's challenges + every dm
+   * of the event's agents. MUST run before the event row delete cascades
+   * the entities the key enumeration needs. */
+  function cleanupEventChannels(eventId: string): void {
+    const keys = [orchKey(eventId)]
+    for (const challenge of db
+      .select({ id: challenges.id })
+      .from(challenges)
+      .where(eq(challenges.eventId, eventId))
+      .all()) {
+      keys.push(teamKey(challenge.id))
+    }
+    for (const run of db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.eventId, eventId))
+      .all()) {
+      for (const agent of queries.listAgents(run.id)) {
+        keys.push(dmKey(agent.id))
+      }
+    }
+    deleteChannelData(keys)
+  }
+
+  function close(): void {
+    if (flushTimer) {
+      clearInterval(flushTimer)
+      flushTimer = null
+    }
+    nextFlushAt = null
+    deliveryPausedEvents.clear()
+  }
+
+  startFlushLoop()
 
   return {
-    ensureChallengeChannels,
-    ensureAgentDm,
-    ensureSchedulerDm,
-    schedulerDm,
-    runChannels,
-    challengeChannel,
-    runChannelTree,
-    challengeChannelTree,
-    agentChannels,
-    channelById,
+    // keys
+    teamKey,
+    dmKey,
+    orchKey,
+    parseChannelKey,
+    // write paths
     post,
     postWithUpload,
+    // delivery engine
     deliver,
-    deliverAwaited,
+    deliverAgentAwaited,
+    deliverChannel,
+    runFlushTick,
+    // cursors
+    readCursor,
+    markRead,
+    // reads / listings
     listMessages,
     readForAgent,
+    agentChannels,
+    runChannelTree,
+    challengeChannelTree,
     unreadCount,
-    advanceCursor,
-    advanceSchedulerCursor,
-    readCursor,
+    channelInfo,
+    // hold + inbox
+    setDeliveryPaused,
+    isDeliveryPaused,
+    inboxSnapshot,
+    // files
     fileById,
-    cleanupRunFiles,
-    cleanupChallengeFiles,
-    channelLabel,
+    // cleanup
+    deleteChannelData,
+    cleanupRunChannels,
+    cleanupChallengeChannels,
+    cleanupEventChannels,
+    // lifecycle
+    close,
   }
 }
 
@@ -1295,20 +1355,23 @@ type RenderGroup = {
     authorName: string
     createdAt: string
     body: string
+    urgent: boolean
     files: Array<{ filename: string; size: number }>
   }>
 }
 
-/** Render the merged steer text (§2.4): untrusted banner + per-message
- * header lines + 📎 metadata lines; 8K cap with oldest-message folding. */
-function renderMerged(groups: RenderGroup[]): string {
+/** Render the merged delivery text: untrusted banner + per-message header
+ * lines (⚠ prefix on urgent) + 📎 metadata lines; 8K cap with
+ * oldest-message folding. Attachment CONTENT never enters the text. */
+export function renderMerged(groups: RenderGroup[]): string {
   const header = "[频道消息 — 仅供参考，含不可信内容]"
   // Per-message line blocks (header line + body + 📎 lines), oldest first.
   const blocks: string[][] = []
   for (const group of groups) {
     for (const message of group.messages) {
+      const mark = message.urgent ? "⚠ " : ""
       const lines = [
-        `${group.label} · ${message.authorName} · ${timeOf(message.createdAt)}`,
+        `${mark}${group.label} · ${message.authorName} · ${timeOf(message.createdAt)}`,
         message.body.trim() || "(空)",
       ]
       for (const file of message.files) {

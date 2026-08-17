@@ -11,7 +11,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 17
+export const SCHEMA_VERSION = 18
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -397,107 +397,32 @@ export const runQueue = sqliteTable(
 )
 
 /**
- * Unified message layer (docs/im-channels.md, schema v16→v17): one channel
- * tree per run (#team / #announce / DM per solver) + one event-scope channel
- * (DM: scheduler). v17 promotes #team/#announce to CHALLENGE scope — they
- * persist across runs of the same challenge (the same-challenge knowledge
- * base) and cascade on challenge delete. DMs stay run-scoped (agent
- * lifecycle) and the scheduler DM stays event-scoped (survives scheduler
- * restarts) with a plain-text `targetAgentId` pointer that is re-stamped on
- * each scheduler start.
- */
-export const channels = sqliteTable(
-  "channels",
-  {
-    id: text("id").primaryKey(),
-    /** "run" (DM) | "event" (scheduler DM) | "challenge" (#team/#announce). */
-    scopeType: text("scope_type").notNull(),
-    /** Run scope (DM): the owning run (cascade). Otherwise null. */
-    runId: text("run_id").references(() => runs.id, { onDelete: "cascade" }),
-    /** Always set (run channels derive it from the run; challenge channels
-     * from the challenge's event; scheduler DM is event-scoped). Powers the
-     * scheduler's whole-event visibility. */
-    eventId: text("event_id")
-      .notNull()
-      .references(() => events.id, { onDelete: "cascade" }),
-    /** Challenge scope (#team/#announce): the challenge (cascade) — the
-     * channel persists across runs of the same challenge (v17 §11.2). */
-    challengeId: text("challenge_id").references(() => challenges.id, {
-      onDelete: "cascade",
-    }),
-    /** "team" | "announce" | "dm". */
-    kind: text("kind").notNull(),
-    /** DM target agent id (kind=dm). No FK: the scheduler agent churns across
-     * scheduler restarts while the channel (and its history) persists. */
-    targetAgentId: text("target_agent_id"),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [
-    index("channels_run_id_idx").on(table.runId),
-    index("channels_event_id_idx").on(table.eventId),
-    index("channels_challenge_id_idx").on(table.challengeId),
-    check(
-      "channels_scope_type_check",
-      sql`${table.scopeType} in ('run', 'event', 'challenge')`
-    ),
-    check(
-      "channels_kind_check",
-      sql`${table.kind} in ('team', 'announce', 'dm')`
-    ),
-    check(
-      "channels_dm_target_check",
-      sql`(${table.kind} != 'dm') or (${table.targetAgentId} is not null)`
-    ),
-    check(
-      "channels_scope_run_check",
-      sql`(${table.scopeType} != 'run') or (${table.runId} is not null)`
-    ),
-    // v17 §11.2: scope=challenge ↔ challengeId set AND runId null.
-    check(
-      "channels_scope_challenge_check",
-      sql`((${table.scopeType} = 'challenge') and (${table.challengeId} is not null) and (${table.runId} is null)) or ((${table.scopeType} != 'challenge') and (${table.challengeId} is null))`
-    ),
-    // Group channels are exactly the challenge-scoped ones; DMs never are.
-    check(
-      "channels_kind_scope_check",
-      sql`(((${table.kind} = 'team') or (${table.kind} = 'announce')) and (${table.scopeType} = 'challenge')) or ((${table.kind} = 'dm') and (${table.scopeType} != 'challenge'))`
-    ),
-  ]
-)
-
-/**
- * Channel message ledger (the single write/store/render point for ALL
- * inter-agent communication). `id` is a global autoincrement — the monotonic
- * comparison basis for read cursors. `kind="recap"` rows are rendered digest
- * snapshots stored back into the scheduler DM (delivery history, Slack
- * bot-summary style); they never steer on their own.
+ * Channel message ledger (docs/im-simplify-v18.md, schema v18): the single
+ * write/store/render point for ALL inter-agent communication. A channel is a
+ * DERIVED KEY — "team:<challengeId>" | "dm:<agentId>" | "orch:<eventId>" —
+ * stored on the row; there is no channels directory table (dropped in 0012).
+ * `id` is a global autoincrement, the monotonic comparison basis for read
+ * cursors.
  */
 export const channelMessages = sqliteTable(
   "channel_messages",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    channelId: text("channel_id")
-      .notNull()
-      .references(() => channels.id, { onDelete: "cascade" }),
-    /** "text" | "recap". */
-    kind: text("kind").notNull(),
+    /** Derived key: "team:<cid>" | "dm:<aid>" | "orch:<eid>". */
+    channelKey: text("channel_key").notNull(),
     /** "system" | "user" | "agent". */
     authorType: text("author_type").notNull(),
     authorAgentId: text("author_agent_id"),
-    /** Display-name snapshot ("Solver 2" / "Scheduler" / "system" / "用户"). */
+    /** Display-name snapshot ("Solver 2 · run-a3f1" / "Scheduler" / "system" / "用户"). */
     authorName: text("author_name").notNull(),
     /** Server-side cap: 16K characters. */
     body: text("body").notNull(),
-    /** JSON: { runId?, eventType?, urgent?, noticeType? }. */
+    /** JSON: { urgent?, runId?, eventType?, noticeType?, tags? }. */
     meta: text("meta").notNull().default("{}"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("channel_messages_channel_id_idx").on(table.channelId, table.id),
-    check(
-      "channel_messages_kind_check",
-      sql`${table.kind} in ('text', 'recap')`
-    ),
+    index("channel_messages_channel_key_idx").on(table.channelKey, table.id),
     check(
       "channel_messages_author_type_check",
       sql`${table.authorType} in ('system', 'user', 'agent')`
@@ -506,29 +431,29 @@ export const channelMessages = sqliteTable(
 )
 
 /**
- * Read cursors: (channelId, agentId) → lastReadMsgId. The dedup anchor for
- * delivery — a message is steered at most once. `agentId` is a plain key:
- * solver DMs use the agent uuid; the event-scope scheduler DM uses the stable
- * literal "scheduler" so the cursor survives scheduler-agent churn.
+ * Read cursors: (channelKey, readerKey) → lastReadMsgId. The dedup anchor
+ * for delivery — a message is delivered at most once. `readerKey` = the
+ * agent id for agent readers, or the stable literal "scheduler" for orch
+ * channels (the scheduler agent id churns across restarts; the cursor must
+ * not).
  */
 export const channelReads = sqliteTable(
   "channel_reads",
   {
-    channelId: text("channel_id")
-      .notNull()
-      .references(() => channels.id, { onDelete: "cascade" }),
-    agentId: text("agent_id").notNull(),
+    channelKey: text("channel_key").notNull(),
+    readerKey: text("reader_key").notNull(),
     lastReadMsgId: integer("last_read_msg_id").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [primaryKey({ columns: [table.channelId, table.agentId] })]
+  (table) => [primaryKey({ columns: [table.channelKey, table.readerKey] })]
 )
 
 /**
- * Message attachments (docs/im-channels.md §2.5). Snapshot semantics: the
- * bytes are copied out of the poster's workspace at post time into
- * data/channel-files/<channelId>/<messageId>/<filename> — later workspace
- * edits never mutate a sent attachment. Storage dir is host-only (never bind
+ * Message attachments (docs/im-simplify-v18.md §六). Snapshot semantics:
+ * the bytes are copied out of the poster's workspace at post time into
+ * data/channel-files/<messageId>/<filename> — later workspace edits never
+ * mutate a sent attachment, and the flat dir never moves (the channel key
+ * is derived; there is no channel dir layer). Host-only storage (never bind
  * mounted into any container); agents materialize via SDK fetch, users via
  * HTTP download.
  */
@@ -539,9 +464,6 @@ export const channelFiles = sqliteTable(
     messageId: integer("message_id")
       .notNull()
       .references(() => channelMessages.id, { onDelete: "cascade" }),
-    channelId: text("channel_id")
-      .notNull()
-      .references(() => channels.id, { onDelete: "cascade" }),
     filename: text("filename").notNull(),
     size: integer("size").notNull(),
     createdAt: text("created_at").notNull(),

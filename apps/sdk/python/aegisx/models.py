@@ -22,7 +22,7 @@ T = TypeVar("T")
 def _now_ms() -> int:
     """Current epoch time in milliseconds (container clock shares the host
     kernel clock, so epoch deltas against server ISO strings are reliable)."""
-    return int(time.time() * 1000)
+    return round(time.time() * 1000)
 
 
 def _parse_iso_ms(iso: str) -> int:
@@ -32,14 +32,14 @@ def _parse_iso_ms(iso: str) -> int:
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp() * 1000)
+    return round(dt.timestamp() * 1000)
 
 
 def fmt_ms(ms: int) -> str:
-    """Milliseconds → human duration, shared format with the server digest:
-    `3500` → `"4s"`, `210000` → `"3m30s"`, `60000` → `"1m"`, `-45000` →
-    `"-45s(超时)"`. Use integer ms properties for comparisons; this is for
-    display only."""
+    """Milliseconds → human duration, shared format with the server's
+    watchdog/delivery lines: `3500` → `"4s"`, `210000` → `"3m30s"`,
+    `60000` → `"1m"`, `-45000` → `"-45s(超时)"`. Use integer ms properties for
+    comparisons; this is for display only."""
     if ms < 0:
         return f"-{fmt_ms(-ms)}(超时)"
     total_sec = round(ms / 1000)
@@ -61,7 +61,7 @@ def from_dict(cls: type[T], payload: dict[str, Any] | None) -> T | None:
     """Build a dataclass from a wire dict (camelCase → snake_case)."""
     if payload is None:
         return None
-    fields = cls.__dataclass_fields__
+    fields = getattr(cls, "__dataclass_fields__", {})
     return cls(
         **{_snake(k): v for k, v in payload.items() if _snake(k) in fields}
     )
@@ -236,24 +236,23 @@ class RunRead:
 
 @dataclass
 class Channel:
-    """One channel in the caller's visible face (docs/im-channels.md). `kind`:
-    team | announce | dm. `scope_type`: run (solver DM) | event (scheduler
-    DM) | challenge (#team/#announce — v17: shared by every run on that
-    challenge; `challenge_id` set, `run_id` None). `label` is the display
-    name ("#team" / "#announce" / "DM Solver 1" / the event scheduler DM).
-    `unread` counts messages past the caller's read cursor (recaps + own
-    posts excluded)."""
+    """One channel in the caller's visible face (docs/im-simplify-v18.md).
+    Channels are DERIVED KEYS stored on messages: `key` is
+    "team:<challengeId>" (#team, shared by every run on the challenge) |
+    "dm:<agentId>" (scheduler/user/system → one solver) |
+    "orch:<eventId>" (solver asks + system events → the scheduler).
+    `kind`: team | dm | orch. `unread` counts messages past the caller's read
+    cursor (own posts excluded)."""
 
-    id: str
-    scope_type: str
-    run_id: str | None
-    event_id: str
+    key: str
     kind: str
-    target_agent_id: str | None
     label: str
+    event_id: str
+    challenge_id: str | None
+    agent_id: str | None
+    run_id: str | None
     unread: int
     last_message_at: str | None
-    challenge_id: str | None = None
     shared_run_count: int | None = None
 
 
@@ -269,12 +268,11 @@ class ChannelFile:
 
 @dataclass
 class ChannelMessage:
-    """One channel message. `kind`: text | recap (a stored digest snapshot).
-    `author_type`: system | user | agent."""
+    """One channel message. `author_type`: system | user | agent. `meta`
+    carries `urgent` (immediate delivery), `runId`, `eventType`, `tags`."""
 
     id: int
-    channel_id: str
-    kind: str
+    channel_key: str
     author_type: str
     author_agent_id: str | None
     author_name: str

@@ -235,17 +235,18 @@ export function registerRunRoutes(
     }
   })
 
-  // --- unified message layer (docs/im-channels.md §5.1) ---------------------
+  // --- unified message layer (docs/im-simplify-v18.md §9.1) -------------------
 
-  /** A run's channel tree (#announce / #team / DM per solver). */
+  /** A run's channel tree: #team + one DM per solver (derived keys; the
+   * tree exists as long as the run's agent rows do — no announce). */
   app.get("/api/runs/:runId/channels", (c) => {
     const runId = c.req.param("runId")
     if (!runService.get(runId)) return notFound(c, "Run not found")
     return c.json({ items: runService.channels.runChannelTree(runId) })
   })
 
-  /** The challenge's group channels (#team/#announce, get-or-create) — the
-   * challenge-level IM view (v17 knowledge base; works with no run). */
+  /** The challenge's #team (exactly one) — the challenge-level IM view
+   * (v17 knowledge base; works with no run on the challenge). */
   app.get("/api/challenges/:challengeId/channels", (c) => {
     try {
       return c.json({
@@ -271,9 +272,11 @@ export function registerRunRoutes(
 
   /** Channel timeline (paginated by the global message-id cursor). With the
    * agent identity header this is the SDK read path: visibility-enforced and
-   * pull-is-read (the cursor advances unless markRead=0). */
-  app.get("/api/channels/:channelId/messages", (c) => {
-    const channelId = c.req.param("channelId")
+   * pull-is-read (the cursor advances unless markRead=0). `channelKey` is a
+   * derived key (`team:<cid>` / `dm:<aid>` / `orch:<eid>`) — ':' is a legal
+   * path character. */
+  app.get("/api/channels/:channelKey/messages", (c) => {
+    const channelKey = c.req.param("channelKey")
     const afterRaw = Number.parseInt(c.req.query("after") ?? "0", 10)
     const after = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10)
@@ -283,43 +286,44 @@ export function registerRunRoutes(
     try {
       if (agentId) {
         return c.json(
-          runService.channels.readForAgent(agentId, channelId, {
+          runService.channels.readForAgent(agentId, channelKey, {
             after,
             limit,
             markRead,
           })
         )
       }
-      const channel = runService.channels.channelById(channelId)
-      if (!channel) return notFound(c, "Channel not found")
       return c.json(
-        runService.channels.listMessages(channelId, { after, limit })
+        runService.channels.listMessages(channelKey, { after, limit })
       )
     } catch (error) {
       return runError(c, error)
     }
   })
 
-  /** Post a channel message. Two faces on one route (design §5.1):
+  /** Post a channel message. Two faces on one route (§9.1):
    *  - JSON + agent identity header → the SDK path (files = workspace paths,
-   *    server-side resolve check + snapshot copy).
-   *  - multipart/form-data (text + files[]) → the UI user post (file blobs).
-   * Both run the same ledger write + delivery policy. */
-  app.post("/api/channels/:channelId/messages", async (c) => {
-    const channelId = c.req.param("channelId")
+   *    server-side resolve check + snapshot copy; `urgent` explicit, SDK
+   *    defaults false per §3.2).
+   *  - multipart/form-data (text + files[] + urgent) → the UI user post
+   *    (file blobs; urgent defaults TRUE — a user IM post is intended). */
+  app.post("/api/channels/:channelKey/messages", async (c) => {
+    const channelKey = c.req.param("channelKey")
     const contentType = c.req.header("content-type")?.split(";", 1)[0]
     try {
       if (contentType === "multipart/form-data") {
         const form = await c.req.formData()
         const text = String(form.get("text") ?? "").trim()
         if (!text) return badRequest(c, "invalid", "text is required")
+        const urgent = String(form.get("urgent") ?? "") !== "false"
         const uploads = [...form.getAll("files")].filter(
           (entry): entry is File => entry instanceof File
         )
         const message = await runService.channels.postWithUpload({
-          channelId,
+          channelKey,
           author: { type: "user" },
           body: text,
+          urgent,
           uploads: uploads.map((file) => ({
             filename: file.name,
             size: file.size,
@@ -341,6 +345,7 @@ export function registerRunRoutes(
         text?: unknown
         tags?: unknown
         urgent?: unknown
+        deliverAs?: unknown
         files?: unknown
       }
       if (typeof input.text !== "string" || !input.text.trim()) {
@@ -359,14 +364,15 @@ export function registerRunRoutes(
             .filter((f): f is string => typeof f === "string")
             .slice(0, 8)
         : []
+      const deliverAs =
+        input.deliverAs === "followUp" ? "followUp" : "steer"
       const message = runService.channels.post({
-        channelId,
+        channelKey,
         author: { type: "agent", agentId },
         body: input.text,
-        meta: {
-          ...(tags.length ? { tags } : {}),
-          ...(input.urgent === true ? { urgent: true } : {}),
-        },
+        urgent: input.urgent === true,
+        deliverAs,
+        meta: tags.length ? { tags } : undefined,
         ...(files.length ? { files } : {}),
       })
       return c.json(message, 201)

@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents } from "../../src/db/schema"
+import { agents, channelMessages } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
@@ -85,9 +85,12 @@ describe("cold-restore single-flight (code-review P3.2)", () => {
       })
 
       await runService.sendAgentMessage("a-1", { text: "wake legacy" })
-      // The restore backfilled #announce + #team + the agent's DM.
+      // v18: the channel tree is DERIVED from entities — nothing to
+      // backfill. A pre-channels row gets #team + its DM naturally.
       const tree = runService.channels.runChannelTree("r-1")
-      expect(tree.map((c) => c.kind)).toEqual(["announce", "team", "dm"])
+      expect(tree.map((c) => c.kind)).toEqual(["team", "dm"])
+      expect(tree[0]!.key).toBe("team:ch-1")
+      expect(tree[1]!.key).toBe("dm:a-1")
       await runService.close()
     } finally {
       close()
@@ -184,15 +187,30 @@ describe("cold-restore single-flight (code-review P3.2)", () => {
       // re-created the same-named container).
       expect(created).toHaveLength(1)
       expect(removed).toHaveLength(0)
-      // Both agents came online and both messages were driven (channel-era
-      // format: merged render with the untrusted banner + DM header).
+      // Both agents came online and both messages were driven (v18 §四:
+      // direct connection — the text IS the message, no channel row).
       expect([...promptLog.keys()].sort()).toEqual(["a-1", "a-2"])
       const textOf = (id: string) => promptLog.get(id)![0]!
       expect(promptLog.get("a-1")!.length).toBe(1)
-      expect(textOf("a-1")).toContain("[频道消息 — 仅供参考，含不可信内容]")
       expect(textOf("a-1")).toContain("wake 1")
       expect(promptLog.get("a-2")!.length).toBe(1)
       expect(textOf("a-2")).toContain("wake 2")
+      // No channel rows were produced by the direct messages (the only
+      // channel_messages rows are orch lifecycle notices like run.resumed).
+      expect(
+        db
+          .select()
+          .from(channelMessages)
+          .where(eq(channelMessages.channelKey, "dm:a-1"))
+          .all()
+      ).toHaveLength(0)
+      expect(
+        db
+          .select()
+          .from(channelMessages)
+          .where(eq(channelMessages.channelKey, "dm:a-2"))
+          .all()
+      ).toHaveLength(0)
       const rows = db.select().from(agents).where(eq(agents.runId, "r-1")).all()
       expect(rows.every((a) => a.sessionFile && a.status === "idle")).toBe(true)
       await runService.close()

@@ -1,13 +1,11 @@
 import type { SessionLifecycle } from "../agents/lifecycle"
 import type { LiveBus } from "../agents/live"
 import { agents, runs } from "../db/schema"
-import type { EventScopeEmitter } from "../orchestration/event-scope"
 import type { EventScopePayload } from "../orchestration/types"
 import type { ContainerManager } from "./container/container-manager"
 import type { RunQueries } from "./queries"
 import type { QueueService } from "./queue"
 import type { RunContext } from "./run-factory"
-import type { SchedulerDigest } from "./scheduler-digest"
 
 /** Grace between SIGTERM and a forced SIGKILL on container teardown. */
 const FORCE_KILL_GRACE_MS = 10_000
@@ -21,11 +19,6 @@ export type RunTeardownDeps = {
   contexts: Map<string, RunContext>
   /** Scheduler task queue (assigned after construction; read via getter). */
   queue: () => QueueService | undefined
-  /** Per-event run-lifecycle emitters, owned by the event's scheduler run. */
-  eventScopes: Map<string, EventScopeEmitter>
-  /** Per-event scheduler digests, same lifetime as their emitter (closed +
-   * dropped together). The channel messages themselves persist. */
-  digests: Map<string, SchedulerDigest>
   /** Runs finish_run already warned about a missing flag (once per run). */
   finishFlagWarned: Set<string>
   now(): string
@@ -57,8 +50,6 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     lifecycle,
     contexts,
     queue,
-    eventScopes,
-    digests,
     finishFlagWarned,
     now,
     updateRun,
@@ -133,16 +124,10 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     }
     clearRunTimers(runId)
     terminateContainer(runId, containerName(runId))
-    // A closed scheduler run stops receiving child-run events; the emitter
-    // and its digest are dropped and rebuilt fresh by the next scheduler
-    // start (unread channel messages survive — catch-up on re-attach).
-    const row = queries.getRow(runId)
-    if (row?.scopeType === "event") {
-      eventScopes.get(row.eventId)?.close()
-      eventScopes.delete(row.eventId)
-      digests.get(row.eventId)?.close()
-      digests.delete(row.eventId)
-    }
+    // v18: a closed scheduler run simply stops receiving pushes — orch
+    // messages keep storing (events post regardless of scheduler liveness)
+    // and the stable "scheduler" cursor catches up on the next start. No
+    // per-event wiring to tear down.
     // Dispose every live agent session, then drop the run-level context.
     for (const agent of agents) {
       const session = lifecycle.get(agent.id)
@@ -162,6 +147,7 @@ export function createRunTeardown(deps: RunTeardownDeps) {
     emitRun(runId)
     emitAgents(runId)
     if (opts.finished) emitRunEvent(runId, { type: "run.finished", runId })
+    const row = queries.getRow(runId)
     // W4.3: a sanctioned teardown on the last live run of a target-capable
     // challenge orphans its platform target — stop it (fire-and-forget).
     stopTargetIfOrphaned(runId, row?.challengeId ?? null)

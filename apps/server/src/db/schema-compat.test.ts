@@ -33,7 +33,6 @@ describe("schema bootstrap", () => {
         "session_entries",
         "run_queue",
         "scheduler_config",
-        "channels",
         "channel_messages",
         "channel_reads",
         "channel_files",
@@ -46,6 +45,9 @@ describe("schema bootstrap", () => {
       // v16: the scheduler inbox digest history table is dropped (recap
       // messages in the scheduler DM channel replace it).
       expect(names.has("scheduler_inbox_digests")).toBe(false)
+      // v18 (0012): the channels directory table is dropped — a channel is
+      // a derived key on the message rows, not a table row.
+      expect(names.has("channels")).toBe(false)
       // orchestrators merged into runs; drizzle tracking present
       expect(names.has("orchestrators")).toBe(false)
       expect(names.has("__drizzle_migrations")).toBe(true)
@@ -159,35 +161,58 @@ describe("schema bootstrap", () => {
       ).map((c) => c.name)
       expect(idxCols).toEqual(["event_id", "source_key", "remote_id"])
 
-      // v17 (0011): challenge-scope channels — challenge_id FK column +
-      // index, scopeType gains 'challenge', and the two new checks (scope
-      // biconditional; team/announce ↔ challenge, dm ↔ non-challenge).
-      const channelCols = new Set(
+      // v18 (0012): derived-key channel shapes — channel_messages carries
+      // the derived key (no channel id, no kind); channel_reads is keyed
+      // (channel_key, reader_key); channel_files lost its channel column.
+      const msgCols = new Set(
         (
-          sqlite.query(`PRAGMA table_info(channels)`).all() as Array<{
+          sqlite.query(`PRAGMA table_info(channel_messages)`).all() as Array<{
             name: string
           }>
         ).map((c) => c.name)
       )
-      expect(channelCols.has("challenge_id")).toBe(true)
-      const channelIdx = (
+      expect([...msgCols]).toEqual(
+        expect.arrayContaining([
+          "id",
+          "channel_key",
+          "author_type",
+          "body",
+          "meta",
+          "created_at",
+        ])
+      )
+      expect(msgCols.has("channel_id")).toBe(false)
+      expect(msgCols.has("kind")).toBe(false)
+      const msgIdx = (
         sqlite
           .query(
-            `SELECT name FROM pragma_index_list('channels') WHERE origin = 'c'`
+            `SELECT name FROM pragma_index_list('channel_messages') WHERE origin = 'c'`
           )
           .all() as Array<{ name: string }>
       ).map((i) => i.name)
-      expect(channelIdx).toContain("channels_challenge_id_idx")
-      const ddl = (
-        sqlite
-          .query(
-            `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channels'`
-          )
-          .get() as { sql: string }
-      ).sql
-      expect(ddl).toContain("'run', 'event', 'challenge'")
-      expect(ddl).toContain("channels_scope_challenge_check")
-      expect(ddl).toContain("channels_kind_scope_check")
+      expect(msgIdx).toContain("channel_messages_channel_key_idx")
+      const readCols = (
+        sqlite.query(`PRAGMA table_info(channel_reads)`).all() as Array<{
+          name: string
+        }>
+      ).map((c) => c.name)
+      expect(readCols).toEqual([
+        "channel_key",
+        "reader_key",
+        "last_read_msg_id",
+        "updated_at",
+      ])
+      const fileCols = new Set(
+        (
+          sqlite.query(`PRAGMA table_info(channel_files)`).all() as Array<{
+            name: string
+          }>
+        ).map((c) => c.name)
+      )
+      expect(fileCols.has("channel_id")).toBe(false)
+      expect([...fileCols]).toEqual(
+        expect.arrayContaining(["id", "message_id", "filename", "size"])
+      )
       sqlite.close()
       releaseLock()
     } finally {

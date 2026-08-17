@@ -46,6 +46,9 @@ from .models import (
     fmt_ms,
     from_dict,
 )
+from typing import TypeVar
+
+T = TypeVar("T")
 
 __all__ = [
     "AegisxError",
@@ -73,11 +76,30 @@ __all__ = [
 
 
 def ask(text: str, urgent: bool = False, files: list[str] | None = None):
-    """Ask the event scheduler (solver face; docs/im-channels.md §四): posts
-    into the scheduler DM. urgent=True flushes the digest immediately (e.g.
-    "target expires in 3min — extend or drop?"); otherwise the question rides
-    the next digest. Returns the posted ChannelMessage."""
+    """Ask the event scheduler (solver face; docs/im-simplify-v18.md): posts
+    into orch:<eventId>. urgent=True wakes the scheduler immediately (e.g.
+    "target expires in 3min — extend or drop?"); otherwise the question
+    rides the next delivery tick. Returns the posted ChannelMessage."""
     return channels.ask(text, urgent=urgent, files=files)
+
+
+def _items(cls: type[T], raw):
+    """Build a compact list from raw wire items (from_dict Nones dropped —
+    a malformed item is skipped, not fatal)."""
+    out = []
+    for item in raw or []:
+        built = from_dict(cls, item)
+        if built is not None:
+            out.append(built)
+    return out
+
+
+def _one(cls: type[T], raw):
+    """from_dict narrowed to non-None (the server always sends the object)."""
+    built = from_dict(cls, raw)
+    if built is None:
+        raise AegisxError("bad_response", f"malformed {cls.__name__} payload")
+    return built
 
 
 def snapshot() -> Snapshot:
@@ -88,34 +110,24 @@ def snapshot() -> Snapshot:
     queue_data = client.request("GET", client.event_path("/queue"))
     event_data = client.request("GET", client.event_path(""))
     return Snapshot(
-        challenges=[
-            from_dict(Challenge, item)
-            for item in event_data.get("challenges", [])
-        ],
-        queue=[
-            from_dict(QueueItem, item) for item in queue_data.get("items", [])
-        ],
+        challenges=_items(Challenge, event_data.get("challenges", [])),
+        queue=_items(QueueItem, queue_data.get("items", [])),
         queue_state=queue_data.get("state", ""),
-        runs=[from_dict(Run, item) for item in fleet.get("runs", [])],
+        runs=_items(Run, fleet.get("runs", [])),
         agents_by_run={
-            run_id: [from_dict(AgentSummary, a) for a in agent_list]
+            run_id: _items(AgentSummary, agent_list)
             for run_id, agent_list in fleet.get("agentsByRun", {}).items()
         },
         scheduler_run=(
-            from_dict(Run, fleet["schedulerRun"])
+            _one(Run, fleet["schedulerRun"])
             if fleet.get("schedulerRun")
             else None
         ),
-        scheduler_agents=[
-            from_dict(AgentSummary, item)
-            for item in fleet.get("schedulerAgents", [])
-        ],
-        scheduler_config=fleet.get("config"),
-        status=(
-            from_dict(SchedulerStatus, fleet.get("status", {}))
-            if fleet.get("status")
-            else None
+        scheduler_agents=_items(
+            AgentSummary, fleet.get("schedulerAgents", [])
         ),
+        scheduler_config=fleet.get("config"),
+        status=_one(SchedulerStatus, fleet.get("status", {})),
     )
 
 
@@ -124,4 +136,4 @@ def status() -> SchedulerStatus:
     action so you respect the hard caps."""
     client = get_client()
     data = client.request("GET", client.event_path("/scheduler"))
-    return from_dict(SchedulerStatus, data.get("status", {}))
+    return _one(SchedulerStatus, data.get("status", {}))

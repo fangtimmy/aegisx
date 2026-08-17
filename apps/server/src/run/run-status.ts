@@ -5,8 +5,8 @@ import { and, eq, inArray, sql } from "drizzle-orm"
 import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, runs } from "../db/schema"
-import type { EventScopeEmitter } from "../orchestration/event-scope"
 import type { EventScopePayload } from "../orchestration/types"
+import { orchKey, type ChannelService } from "./channels"
 import type { RunQueries } from "./queries"
 
 export type RunStatusDeps = {
@@ -15,15 +15,15 @@ export type RunStatusDeps = {
   sqlite: Sqlite
   queries: RunQueries
   bus: LiveBus
-  /** Per-event run-lifecycle emitters (scheduler observation). */
-  eventScopes: Map<string, EventScopeEmitter>
+  /** Derived-key channel core — run lifecycle events post into orch. */
+  channels: ChannelService
   /** Whether the event's scheduler is paused (W3): paused → the run-lifecycle
    * events are dropped before they reach the orchestrator. */
   isSchedulerPaused(eventId: string): boolean
   now(): string
   updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
-  /** Agent turn settled (idle/failed): arms the scheduler inbox's stall
-   * watchdog for the run (challenge-scope only — the wiring gates scope). */
+  /** Agent turn settled (idle/failed): arms the stall watchdog for the run
+   * (challenge-scope only — the watchdog gates scope itself). */
   onAgentSettled(agentId: string, runId: string): void
 }
 
@@ -32,11 +32,12 @@ export type RunStatus = ReturnType<typeof createRunStatus>
 /**
  * Run status + live-emit helpers. A run's status is SQL-derived from its
  * agents' statuses (running ↔ idle) plus sanctioned explicit `closed`
- * transitions; the emit helpers broadcast the run/agent snapshots and dispatch
- * run lifecycle events to the event's scheduler.
+ * transitions; the emit helpers broadcast the run/agent snapshots and post
+ * run lifecycle events as system messages into the event's orch channel
+ * (v18 §五: events ARE messages — urgent per the §五 table).
  */
 export function createRunStatus(deps: RunStatusDeps) {
-  const { db, sqlite, queries, bus, eventScopes, now, updateAgent } = deps
+  const { db, sqlite, queries, bus, channels, now, updateAgent } = deps
 
   function emitRun(runId: string) {
     const run = queries.get(runId)
@@ -49,19 +50,45 @@ export function createRunStatus(deps: RunStatusDeps) {
     }
   }
 
-  /** Dispatch a run lifecycle event to its event's scheduler. Only
-   * challenge-scoped runs emit — the scheduler observes its child runs, never
-   * itself (an event-scoped run's own turns don't re-notify it). The payload
-   * carries the run's `source` (W5) so the scheduler can tell manual runs
-   * apart. A paused scheduler (W3) is silent: events are dropped here (no
-   * memory buildup) — it re-syncs on resume. */
+  /** Event display line (the orch message body). */
+  function eventName(p: EventScopePayload): string {
+    switch (p.type) {
+      case "run.started":
+        return p.source === "manual" ? "started(手动)" : "started"
+      case "run.idle":
+        return p.failed ? "idle(failed)" : "idle"
+      case "run.flagAccepted":
+        return "flagAccepted"
+      case "run.finished":
+        return "finished"
+      case "run.timedOut":
+        return `timedOut(${p.outcome})`
+      case "run.resumed":
+        return "resumed"
+    }
+  }
+
+  /** Dispatch a run lifecycle event as an orch system message (§五). Only
+   * challenge-scoped runs emit — the scheduler observes its child runs,
+   * never itself. A paused scheduler (W3) is silent: events are dropped
+   * here (the one-line gate before post). Urgent = timedOut only. The
+   * payload carries the run's `source` (W5) so the scheduler can tell
+   * manual runs apart. */
   function emitRunEvent(runId: string, payload: EventScopePayload): void {
     const run = queries.getRow(runId)
     if (run?.scopeType !== "challenge") return
     if (deps.isSchedulerPaused(run.eventId)) return
-    eventScopes
-      .get(run.eventId)
-      ?.emit({ ...payload, source: run.source as "manual" | "scheduler" })
+    channels.post({
+      channelKey: orchKey(run.eventId),
+      author: { type: "system" },
+      body: eventName({ ...payload, source: run.source as "manual" | "scheduler" }),
+      meta: {
+        runId,
+        eventType: payload.type,
+        source: run.source as "manual" | "scheduler",
+      },
+      urgent: payload.type === "run.timedOut",
+    })
   }
 
   /** Recompute a run's status from its agents' statuses. No-op once the run is

@@ -9,6 +9,7 @@ import {
   runs,
 } from "../../src/db/schema"
 import { createRunService } from "../../src/run/service"
+import { teamKey } from "../../src/run/channels"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
@@ -285,36 +286,30 @@ describe("v9 direct N-solver creation", () => {
   })
 })
 
-describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
+
+describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3)", () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-  /** Seed group-channel history on the challenge WITHOUT triggering delivery
-   * (deferDelivery) — simulates prior-run knowledge sitting in #team/#announce. */
+  /** Seed #team history WITHOUT triggering delivery (non-urgent posts; the
+   * runs stay hanging/primed) — prior-run knowledge sitting in #team. */
   function seedChallengeHistory(
     runService: ReturnType<typeof makeService>["runService"],
-    priorRunId: string,
     priorAgentId: string
   ) {
-    const tree = runService.channels.runChannelTree(priorRunId)
-    const team = tree.find((c) => c.kind === "team")!
-    const announce = tree.find((c) => c.kind === "announce")!
     runService.channels.post({
-      channelId: team.id,
+      channelKey: teamKey("ch-1"),
       author: { type: "agent", agentId: priorAgentId },
       body: "prior finding: heap overflow in edit()",
-      deferDelivery: true,
     })
     runService.channels.post({
-      channelId: announce.id,
+      channelKey: teamKey("ch-1"),
       author: { type: "system" },
       body: "remote libc 2.35 — trust the target",
-      deferDelivery: true,
     })
-    return { team, announce }
   }
 
-  test("onboarding: a second run on the challenge sweeps #team + #announce history into the first turn, exactly once", async () => {
+  test("onboarding: a second run on the challenge sweeps the whole #team history into the first turn, exactly once", async () => {
     const { db, sqlite, dir, close } = setupDb()
     let service: ReturnType<typeof makeService>["runService"] | undefined
     try {
@@ -325,7 +320,7 @@ describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
       const { runService, promptLog } = made
       service = runService
 
-      // Prior run leaves knowledge in the challenge's channels.
+      // Prior run leaves knowledge in the challenge's #team.
       const prior = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
@@ -337,28 +332,24 @@ describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
         .from(agents)
         .where(eq(agents.runId, prior.id))
         .get()!
-      const { team, announce } = seedChallengeHistory(
-        runService,
-        prior.id,
-        priorAgent.id
-      )
+      seedChallengeHistory(runService, priorAgent.id)
 
       // The prior solver's own prime saw nothing (fresh challenge, no
       // history at creation time).
       expect(promptLog.get(priorAgent.id)).toHaveLength(1)
 
-      // Second run on the SAME challenge reuses the channels…
+      // A second run on the SAME challenge shares team:ch-1…
       const second = await runService.create({
         scopeType: "challenge" as const,
         challengeId: "ch-1",
         container: containerInput,
       })
       await wait(150)
-      const secondTree = runService.channels.runChannelTree(second.id)
-      expect(secondTree.find((c) => c.kind === "team")!.id).toBe(team.id)
+      const tree = runService.channels.runChannelTree(second.id)
+      expect(tree.find((c) => c.kind === "team")!.key).toBe(teamKey("ch-1"))
 
       // …and its solver onboarded: prime + exactly ONE merged steer carrying
-      // both the #team finding and the #announce history.
+      // BOTH knowledge posts (v17 §11.3 semantics kept).
       const newcomer = db
         .select()
         .from(agents)
@@ -370,36 +361,33 @@ describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
       expect(prompts[1]).toContain("[频道消息 — 仅供参考，含不可信内容]")
       expect(prompts[1]).toContain("prior finding: heap overflow in edit()")
       expect(prompts[1]).toContain("remote libc 2.35 — trust the target")
-      expect(prompts[1]).toContain("#team")
-      expect(prompts[1]).toContain("#announce")
 
-      // Exactly once: a manual re-deliver finds nothing new (cursor advanced
-      // to the snapshot max on both group channels).
+      // Exactly once: a manual re-deliver finds nothing new (the cursor
+      // advanced to the snapshot max on the sweep).
       runService.channels.deliver(newcomer.id)
       await wait(100)
       expect(promptLog.get(newcomer.id)).toHaveLength(2)
-      const cursorOf = (channelId: string) =>
+      expect(
         db
           .select()
           .from(channelReads)
           .where(
             and(
-              eq(channelReads.channelId, channelId),
-              eq(channelReads.agentId, newcomer.id)
+              eq(channelReads.channelKey, teamKey("ch-1")),
+              eq(channelReads.readerKey, newcomer.id)
             )
           )
           .get()!.lastReadMsgId
-      const maxIdOf = (channelId: string) =>
-        db
-          .select({ id: channelMessages.id })
-          .from(channelMessages)
-          .where(eq(channelMessages.channelId, channelId))
-          .all()
-          .map((r) => r.id)
-          .sort((a, b) => a - b)
-          .at(-1)!
-      expect(cursorOf(team.id)).toBe(maxIdOf(team.id))
-      expect(cursorOf(announce.id)).toBe(maxIdOf(announce.id))
+      ).toBe(
+        Math.max(
+          ...db
+            .select({ id: channelMessages.id })
+            .from(channelMessages)
+            .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+            .all()
+            .map((r) => r.id)
+        )
+      )
 
       await runService.close()
     } finally {
@@ -430,7 +418,7 @@ describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
         .from(agents)
         .where(eq(agents.runId, run.id))
         .get()!
-      seedChallengeHistory(runService, run.id, first.id)
+      seedChallengeHistory(runService, first.id)
 
       await runService.addAgent(run.id, {
         prompt: "fresh angle: fuzz the parser",
@@ -455,7 +443,7 @@ describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
     }
   })
 
-  test("cold-restore does NOT onboard: a DM wake delivers only the DM, the group backlog stays unread", async () => {
+  test("cold-restore does NOT onboard: a direct DM-less wake delivers only the message; the #team backlog stays unread", async () => {
     const { db, sqlite, dir, close } = setupDb()
     let service: ReturnType<typeof makeService>["runService"] | undefined
     try {
@@ -484,8 +472,8 @@ describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
           updatedAt: now(),
         })
         .run()
-      // Challenge-scope channels with unread history (another run's
-      // knowledge) — a cold restore must NOT sweep it (§11.3 red line).
+      // #team with unread history (another run's knowledge) — a cold restore
+      // must NOT sweep it (§11.3 red line; v18 §四: user input is direct).
       const provider = makeProvider()
       const { manager } = stubContainerManager()
       const promptLog = new Map<string, string[]>()
@@ -519,40 +507,29 @@ describe("v17 challenge-scope channels (docs/im-channels.md §十一)", () => {
       })
       service = runService
 
-      // Backfill the channel tree for the closed run, then leave UNREAD
-      // group history on the challenge channels.
-      runService.channels.ensureChallengeChannels("r-1")
-      const team = runService.channels.challengeChannel("ch-1", "team")!
-      const announce = runService.channels.challengeChannel("ch-1", "announce")!
+      // Unread group history on the challenge's #team.
       runService.channels.post({
-        channelId: team.id,
+        channelKey: teamKey("ch-1"),
         author: { type: "system" },
         body: "old knowledge: libc 2.35",
-        deferDelivery: true,
-      })
-      runService.channels.post({
-        channelId: announce.id,
-        author: { type: "system" },
-        body: "old announcement",
-        deferDelivery: true,
       })
 
-      await runService.sendAgentMessage("a-1", { text: "wake" })
+      await runService.sendMessage("r-1", { text: "wake" })
       await wait(100)
 
-      // Exactly the DM wake — no group-history sweep.
+      // Exactly the direct message — no group-history sweep.
       const prompts = promptLog.get("a-1") ?? []
       expect(prompts).toHaveLength(1)
       expect(prompts[0]).toContain("wake")
       expect(prompts[0]).not.toContain("libc 2.35")
-      expect(prompts[0]).not.toContain("old announcement")
       // The run is live again and the backlog is still there, unread.
       expect(
         db.select().from(runs).where(eq(runs.id, "r-1")).get()!.status
       ).toBe("idle")
       expect(
-        runService.channels.agentChannels("a-1").find((c) => c.kind === "team")!
-          .unread
+        runService.channels
+          .agentChannels("a-1")
+          .find((c) => c.kind === "team")!.unread
       ).toBe(1)
 
       await runService.close()

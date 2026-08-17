@@ -7,12 +7,12 @@ import {
 import type { RunPublic } from "./run"
 
 /** One channel message (the ledger row — shared wire shape for timelines,
- * SDK reads, and the SSE `channel.message` push). Attachments render as
- * metadata only (📎 filename · size); content is fetched separately. */
+ * SDK reads, and the SSE `channel.message` push; v18: keyed by the derived
+ * channel key). Attachments render as metadata only (📎 filename · size);
+ * content is fetched separately. */
 export type ChannelMessage = {
   id: number
-  channelId: string
-  kind: "text" | "recap"
+  channelKey: string
   authorType: "system" | "user" | "agent"
   authorAgentId: string | null
   authorName: string
