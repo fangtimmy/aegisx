@@ -5,10 +5,10 @@ import { Type } from "typebox"
 
 import type { Database } from "../db"
 import { events } from "../db/schema"
-import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
+import { badRequest, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { EmptyInputSchema } from "../lib/schemas"
-import { RunActionError } from "../run/errors"
+import { runActionError as runError } from "../run/errors"
 import type { RunService } from "../run/service"
 import { streamRun } from "../run/sse"
 
@@ -421,21 +421,4 @@ export function registerSchedulerRoutes(
     if (!sched) return notFound(c, "No scheduler run for this event")
     return streamRun(c, runService, sched.id)
   })
-}
-
-function runError(c: Context, error: unknown) {
-  if (!(error instanceof RunActionError)) throw error
-  return jsonError(
-    c,
-    { code: error.code, message: error.message },
-    error.code === "not_found"
-      ? 404
-      : error.code === "launch_failed"
-        ? 500
-        : error.code === "capacity"
-          ? 429
-          : error.code === "invalid"
-            ? 400
-            : 409
-  )
 }

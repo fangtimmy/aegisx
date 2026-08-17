@@ -9,7 +9,7 @@ function mockBackend(bytes: Uint8Array): WorkspaceBackend {
     cwd: "/workspace",
     resolvePath: (p: string) => `/workspace/${p}`,
     async read() {
-      return bytes
+      return { data: bytes, truncated: false, totalBytes: bytes.byteLength }
     },
     async write() {},
     async list() {

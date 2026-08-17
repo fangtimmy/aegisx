@@ -65,19 +65,8 @@ export function addRunAgent(
   )
 }
 
-export function stopRun(runId: string) {
-  return apiRequest<RunPublic>(`/runs/${runId}/stop`, jsonRequest("POST", {}))
-}
-
 export function closeRun(runId: string) {
   return apiRequest<RunPublic>(`/runs/${runId}/close`, jsonRequest("POST", {}))
-}
-
-export function setQueue(
-  runId: string,
-  input: { steering: string[]; followUp: string[] }
-) {
-  return apiRequest<void>(`/runs/${runId}/queue`, jsonRequest("PUT", input))
 }
 
 /**

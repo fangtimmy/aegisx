@@ -6,9 +6,9 @@ from .models import QueueItem, from_dict
 
 
 def list() -> list[QueueItem]:
-    require_manager()
     """The event's actionable queue items (pending + running + failed), FIFO.
     The queue content IS the plan."""
+    require_manager()
     client = get_client()
     data = client.request("GET", client.event_path("/queue"))
     return [from_dict(QueueItem, item) for item in data.get("items", [])]
@@ -23,7 +23,6 @@ def enqueue(
     timeout_ms: int | None = None,
     source: str = "scheduler",
 ) -> QueueItem:
-    require_manager()
     """Add (or re-arm) a task in the queue — upserts by challenge; a hit
     including done/cancelled/failed resets to pending. The queue drains FIFO
     under the concurrency caps; with a free slot the run launches right away.
@@ -36,6 +35,7 @@ def enqueue(
 
     `source` marks who enqueued ("scheduler" by default — the SDK is the
     scheduler's face; pass "manual" only for user-driven scripts)."""
+    require_manager()
     body: dict = {"strategy": strategy} if strategy else {}
     if model:
         body["model"] = model
@@ -55,24 +55,24 @@ def enqueue(
 
 
 def remove(item_id: str) -> None:
-    require_manager()
     """Remove a queue item (pending/done/cancelled/failed). A running item
     cannot be removed — close its run first."""
+    require_manager()
     client = get_client()
     client.request("DELETE", client.event_path(f"/queue/{item_id}"))
 
 
 def clear() -> None:
-    require_manager()
     """Remove every non-running queue item (pending + failed)."""
+    require_manager()
     client = get_client()
     client.request("POST", client.event_path("/queue/clear"))
 
 
 def reorder(item_ids: list[str]) -> None:
-    require_manager()
     """Reorder pending queue items by listing their ids front-first.
     Running/failed items keep their place."""
+    require_manager()
     client = get_client()
     client.request(
         "POST",

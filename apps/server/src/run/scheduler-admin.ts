@@ -379,15 +379,27 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         )
       )
       .all()
+    // One prefetch for all challenge names instead of a SELECT per run.
+    const challengeIds = [
+      ...new Set(
+        active
+          .map((row) => row.challengeId)
+          .filter((id): id is string => id !== null)
+      ),
+    ]
+    const names = new Map<string, string>()
+    if (challengeIds.length > 0) {
+      const rows = db
+        .select({ id: challenges.id, name: challenges.name })
+        .from(challenges)
+        .where(inArray(challenges.id, challengeIds))
+        .all()
+      for (const row of rows) names.set(row.id, row.name)
+    }
     const activeRuns = active.map((row) => ({
       id: row.id,
       challengeId: row.challengeId,
-      challengeName:
-        db
-          .select({ name: challenges.name })
-          .from(challenges)
-          .where(eq(challenges.id, row.challengeId ?? ""))
-          .get()?.name ?? "",
+      challengeName: row.challengeId ? (names.get(row.challengeId) ?? "") : "",
       status: row.status,
     }))
     return { ...snap, activeRuns }

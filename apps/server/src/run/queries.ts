@@ -85,16 +85,39 @@ export function createRunQueries(options: {
     }
   }
 
+  /** Batch challenge-meta lookup for a set of challenge ids (one query). */
+  function challengeMetaMap(
+    challengeIds: string[]
+  ): Map<string, ChallengeMeta> {
+    const map = new Map<string, ChallengeMeta>()
+    if (challengeIds.length === 0) return map
+    const rows = db
+      .select({ challenge: challenges, remote: challengeRemote })
+      .from(challenges)
+      .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
+      .where(inArray(challenges.id, challengeIds))
+      .all()
+    for (const row of rows) {
+      map.set(row.challenge.id, {
+        name: row.challenge.name,
+        eventId: row.challenge.eventId,
+        targetSupported: isTargetCapable(row.remote ?? undefined),
+      })
+    }
+    return map
+  }
+
   function mapRow(
     row: typeof runs.$inferSelect,
-    flags: ChallengeFlag[] = []
+    flags: ChallengeFlag[] = [],
+    options?: { meta?: ChallengeMeta; display?: RunModelDisplay }
   ): RunPublic {
     return toRunPublic(
       row,
-      challengeMeta(row.challengeId),
+      options?.meta ?? challengeMeta(row.challengeId),
       flags,
       undefined,
-      resolveModelDisplay(row.model)
+      options?.display ?? resolveModelDisplay(row.model)
     )
   }
 
@@ -133,8 +156,25 @@ export function createRunQueries(options: {
       db,
       rows.map(({ runs: run }) => run.id)
     )
+    // Fleet endpoint (polled every few seconds): prefetch challenge metas in
+    // one query and memoize model-display resolution per distinct ref instead
+    // of re-parsing every provider model per run.
+    const metas = challengeMetaMap(
+      rows.map(({ runs: run }) => run.challengeId ?? "")
+    )
+    const displayCache = new Map<string, RunModelDisplay>()
+    const displayFor = (ref: string): RunModelDisplay => {
+      const cached = displayCache.get(ref)
+      if (cached) return cached
+      const display = resolveModelDisplay(ref)
+      displayCache.set(ref, display)
+      return display
+    }
     return rows.map(({ runs: run }) =>
-      mapRow(run, flagsByRun.get(run.id) ?? [])
+      mapRow(run, flagsByRun.get(run.id) ?? [], {
+        meta: run.challengeId ? metas.get(run.challengeId) : undefined,
+        display: displayFor(run.model),
+      })
     )
   }
 

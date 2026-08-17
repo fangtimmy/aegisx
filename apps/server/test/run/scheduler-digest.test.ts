@@ -328,6 +328,32 @@ describe("scheduler digest (docs/im-channels.md §三)", () => {
     }
   })
 
+  test("unread backlog beyond 200 folds into a fold line", async () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      // system posts are non-urgent: they accumulate (silence-timer flush)
+      // instead of flushing per message, so a >200 backlog is reachable.
+      const { channels, sent } = makeDigest(db, dir, { silenceMs: 30 })
+      const dm = channels.schedulerDm("evt-1")!.id
+      for (let i = 0; i < 210; i++) {
+        channels.post({
+          channelId: dm,
+          author: { type: "system" },
+          body: `notice-${i}`,
+        })
+      }
+      await wait(120)
+      const digestText = sent[0]!
+      expect(digestText).toContain("另有 10 条更早消息未读")
+      expect(digestText).toContain("notice-209")
+      expect(digestText).toContain("notice-10") // newest page kept
+    } finally {
+      close()
+    }
+  })
+
   test("stats line counts active runs and pending queue items", async () => {
     const { db, dir, close } = setupDbLite()
     try {

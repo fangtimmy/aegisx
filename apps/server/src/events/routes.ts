@@ -193,11 +193,26 @@ export function registerEventRoutes(
         )
       )
       .get()
-    if (activeRun) {
+    // Event-scope scheduler runs carry challengeId = NULL, so the challenge
+    // join above cannot see them. Deleting the event under a live scheduler
+    // would cascade the run row away while its agent session + container keep
+    // running (orphan, burning tokens). Guard both shapes.
+    const schedulerRun = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.eventId, eventId),
+          eq(runs.scopeType, "event"),
+          inArray(runs.status, ["running", "idle"])
+        )
+      )
+      .get()
+    if (activeRun || schedulerRun) {
       return conflict(
         c,
         "active_run",
-        "Close active runs before deleting this event"
+        "Close active runs / stop the scheduler before deleting this event"
       )
     }
     try {

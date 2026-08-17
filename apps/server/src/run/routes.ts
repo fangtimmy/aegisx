@@ -14,7 +14,7 @@ import {
 } from "../infrastructure/workspace-files"
 import { EmptyInputSchema } from "../lib/schemas"
 import { platformActionHttpError } from "../platforms/errors"
-import { RunActionError } from "./errors"
+import { runActionError as runError } from "./errors"
 import { toAgentSummary } from "./public"
 import type { RunService } from "./service"
 import { streamRun } from "./sse"
@@ -784,23 +784,6 @@ export function registerRunRoutes(
       return runError(c, error)
     }
   })
-}
-
-function runError(c: Context, error: unknown) {
-  if (!(error instanceof RunActionError)) throw error
-  return jsonError(
-    c,
-    { code: error.code, message: error.message },
-    error.code === "not_found"
-      ? 404
-      : error.code === "launch_failed"
-        ? 500
-        : error.code === "capacity"
-          ? 429
-          : error.code === "invalid"
-            ? 400
-            : 409
-  )
 }
 
 function workspaceFileError(c: Context, error: unknown) {

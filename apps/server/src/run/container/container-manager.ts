@@ -22,6 +22,36 @@ type ContainerLimits = {
   pidsLimit: number
 }
 
+/** Writable that collects chunks into a buffer list, dropping bytes beyond
+ * `maxCapture` while still counting them — bounds RAM on pathological output
+ * (e.g. `cat core.dump`) without losing the true byte count. Returns the sink
+ * plus a `bytes()` readout of the total bytes seen. */
+export function collectSink(
+  into: Buffer[],
+  maxCapture?: number
+): { sink: NodeJS.WritableStream; bytes: () => number } {
+  let total = 0
+  let buffered = 0
+  return {
+    sink: new Writable({
+      write(chunk, _encoding, cb) {
+        const buf = Buffer.from(chunk)
+        total += buf.length
+        if (maxCapture === undefined) {
+          into.push(buf)
+          buffered += buf.length
+        } else if (buffered < maxCapture) {
+          const room = Math.min(buf.length, maxCapture - buffered)
+          into.push(buf.subarray(0, room))
+          buffered += room
+        }
+        cb()
+      },
+    }),
+    bytes: () => total,
+  }
+}
+
 export type CreateOptions = {
   name: string
   image: string
@@ -141,16 +171,6 @@ export function createContainerManager(options?: { socketPath?: string }) {
     } catch {
       return false
     }
-  }
-
-  /** Writable that collects every chunk into a buffer list. */
-  function collectSink(into: Buffer[]): NodeJS.WritableStream {
-    return new Writable({
-      write(chunk, _encoding, cb) {
-        into.push(Buffer.from(chunk))
-        cb()
-      },
-    })
   }
 
   /** Writable that forwards every chunk to onData (merged stdout+stderr). */
@@ -287,22 +307,37 @@ export function createContainerManager(options?: { socketPath?: string }) {
       timeout?: number
       /** Per-call env additions ("KEY=value" entries). */
       env?: string[]
+      /** In-memory capture cap (bytes). Output beyond it is dropped from
+       * `stdout` but counted in `totalBytes`; `truncated` reports the drop. */
+      maxCapture?: number
     }
-  ): Promise<{ stdout: Buffer; stderr: string; exitCode: number | null }> {
+  ): Promise<{
+    stdout: Buffer
+    stderr: string
+    exitCode: number | null
+    truncated: boolean
+    totalBytes: number
+  }> {
     const outChunks: Buffer[] = []
     const errChunks: Buffer[] = []
+    const stdoutCollector = collectSink(outChunks, opts?.maxCapture)
+    const stderrCollector = collectSink(errChunks, opts?.maxCapture)
     const { exitCode } = await runHijacked(name, command, {
       workdir: opts?.workdir,
       signal: opts?.signal,
       timeout: opts?.timeout,
       env: opts?.env,
-      stdoutSink: collectSink(outChunks),
-      stderrSink: collectSink(errChunks),
+      stdoutSink: stdoutCollector.sink,
+      stderrSink: stderrCollector.sink,
     })
     return {
       stdout: Buffer.concat(outChunks),
       stderr: Buffer.concat(errChunks).toString("utf8"),
       exitCode,
+      truncated:
+        opts?.maxCapture !== undefined &&
+        stdoutCollector.bytes() > opts.maxCapture,
+      totalBytes: stdoutCollector.bytes(),
     }
   }
 

@@ -1,5 +1,5 @@
 import { get, type FlatSettings } from "@aegisx/shared"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, count, eq, gt, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
@@ -184,15 +184,36 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
 
   // --- unread ----------------------------------------------------------------
 
-  function unread(): ChannelMessagePublic[] {
+  function unread(): { items: ChannelMessagePublic[]; overflow: number } {
     const channel = channels.schedulerDm(deps.eventId)
-    if (!channel) return []
-    const { items } = channels.listMessages(channel.id, {
+    if (!channel) return { items: [], overflow: 0 }
+    const result = channels.listMessages(channel.id, {
       // stable scheduler cursor key — survives scheduler restarts/crashes
       after: channels.readCursor(channel.id, "scheduler"),
       limit: 200,
     })
-    return items.filter((item) => item.kind !== "recap")
+    const items = result.items.filter((item) => item.kind !== "recap")
+    // Backlog beyond the 200-item page would be silently skipped when the
+    // cursor advances — surface the true count as a fold line.
+    let overflow = 0
+    if (result.hasMore) {
+      const total = db
+        .select({ count: count() })
+        .from(channelMessages)
+        .where(
+          and(
+            eq(channelMessages.channelId, channel.id),
+            gt(
+              channelMessages.id,
+              channels.readCursor(channel.id, "scheduler")
+            ),
+            sql`${channelMessages.kind} != 'recap'`
+          )
+        )
+        .get()!.count
+      overflow = Math.max(total - items.length, 0)
+    }
+    return { items, overflow }
   }
 
   // --- digest rendering --------------------------------------------------------
@@ -247,13 +268,21 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
   }
 
   /** 组装 digest 文本：未读消息 + 现查状态快照（总有 header + 统计行）。 */
-  function buildDigest(items: ChannelMessagePublic[]): string {
+  function buildDigest(
+    items: ChannelMessagePublic[],
+    unreadOverflow = 0
+  ): string {
     const nowMs = Date.now()
     const clock = new Date(nowMs)
     const hh = String(clock.getHours()).padStart(2, "0")
     const mm = String(clock.getMinutes()).padStart(2, "0")
     const ss = String(clock.getSeconds()).padStart(2, "0")
     const out: string[] = [`[调度事件摘要 now=${hh}:${mm}:${ss}]`]
+    if (unreadOverflow > 0) {
+      out.push(
+        `另有 ${unreadOverflow} 条更早消息未读（可 aegisx.channels.read 补读）`
+      )
+    }
 
     // Run 行：同 run 生命周期事件合并为一行（事件序列 + 现查时间列）。
     const runEvents = new Map<string, string[]>()
@@ -336,9 +365,9 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
   /** 一次性结算：渲染未读 + 状态快照 → steer → recap 存回频道 → 游标推进。 */
   function flush(): void {
     clearTimer()
-    const items = unread()
+    const { items, overflow } = unread()
     if (items.length === 0) return
-    const digest = buildDigest(items)
+    const digest = buildDigest(items, overflow)
     deps.send(digest)
     const channel = channels.schedulerDm(deps.eventId)
     if (!channel) return
@@ -425,7 +454,7 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
       return
     }
     armStallCatchUp()
-    if (unread().length > 0) flush()
+    if (unread().items.length > 0) flush()
   }
 
   /** 恢复补投的停滞 catch-up：live challenge run 中有已 settle agent 的
@@ -469,7 +498,7 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
   /** 只读实时快照（调度者 DM 视图状态头）：未读积压（按来源分组）+
    *  计时器状态。 */
   function snapshot() {
-    const items = unread()
+    const { items, overflow } = unread()
     const pending = new Map<string, string[]>()
     const notices: string[] = []
     const emergency: string[] = []
@@ -493,7 +522,7 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
     }
     return {
       deliveryPaused,
-      unreadCount: items.length,
+      unreadCount: items.length + overflow,
       pending: [...pending.entries()].map(([runId, events]) => ({
         runId,
         events: [...events],
@@ -511,7 +540,7 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
   // Catch-up on creation: unflushed unread (e.g. crash between persist and
   // flush, or messages that landed while the scheduler was down) arms the
   // silence timer so the backlog eventually settles.
-  if (unread().length > 0) armTimer()
+  if (unread().items.length > 0) armTimer()
 
   return {
     push,

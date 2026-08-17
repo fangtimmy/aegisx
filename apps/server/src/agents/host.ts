@@ -53,7 +53,8 @@ function buildHostFileTools(
 export type AgentHostInput = {
   /** Who the session belongs to (run agent vs. orchestrator). */
   owner: SessionOwner
-  /** LiveBus channel: the run id (solver) or event id (orchestrator). */
+  /** LiveBus channel: the run id — every agent (solver or orchestrator)
+   * publishes on its run's channel; the run id is the emit target. */
   channel: string
   /** Agent id for entry keys + SSE routing (main/child ids, ORCHESTRATOR_AGENT_ID). */
   agentId: string

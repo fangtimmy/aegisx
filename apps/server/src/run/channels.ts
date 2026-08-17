@@ -46,7 +46,7 @@ import type { RunQueries } from "./queries"
  */
 
 /** Server-side message body cap (characters). */
-export const MAX_MESSAGE_CHARS = 16_000
+const MAX_MESSAGE_CHARS = 16_000
 /** Per-file attachment cap. */
 const MAX_FILE_BYTES = 64 * 1024 * 1024
 /** Per-message attachment caps. */
@@ -55,7 +55,7 @@ const MAX_MESSAGE_TOTAL_BYTES = 128 * 1024 * 1024
 /** Deliver merged-text cap (characters); overflow folds to a catch-up line. */
 const MAX_DELIVER_CHARS = 8_000
 /** Default page size for timeline reads. */
-export const DEFAULT_PAGE = 50
+const DEFAULT_PAGE = 50
 
 /** Stable read-cursor key for the event-scope scheduler DM — the scheduler
  * agent id churns across restarts, the cursor must not. */
@@ -412,6 +412,16 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .all()
   }
 
+  /** Roll back a message whose attachment write failed part-way: drop the
+   * file rows + the message row + the files dir so no orphan state remains.
+   * The author cursor / SSE emit / delivery all run after the attachment
+   * block, so nothing else needs undoing. */
+  function rollbackMessage(channelId: string, messageId: number) {
+    db.delete(channelFiles).where(eq(channelFiles.messageId, messageId)).run()
+    db.delete(channelMessages).where(eq(channelMessages.id, messageId)).run()
+    rmSync(filesDir(channelId, messageId), { recursive: true, force: true })
+  }
+
   function toPublic(row: ChannelMessageRow): ChannelMessagePublic {
     let meta: Record<string, unknown> = {}
     try {
@@ -558,22 +568,29 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .get()
     const message = toPublic(inserted)
 
-    // Snapshot-copy attachments (post-time freeze, §2.5).
+    // Snapshot-copy attachments (post-time freeze, §2.5). On any failure the
+    // partial message is rolled back (row + files) so a failed post never
+    // leaves a message with missing attachments.
     if (sources.length > 0) {
       const dir = filesDir(channel.id, message.id)
-      mkdirSync(dir, { recursive: true })
-      for (const source of sources) {
-        copyFileSync(source.abs, join(dir, source.filename))
-        db.insert(channelFiles)
-          .values({
-            id: crypto.randomUUID(),
-            messageId: message.id,
-            channelId: channel.id,
-            filename: source.filename,
-            size: source.size,
-            createdAt: ts,
-          })
-          .run()
+      try {
+        mkdirSync(dir, { recursive: true })
+        for (const source of sources) {
+          copyFileSync(source.abs, join(dir, source.filename))
+          db.insert(channelFiles)
+            .values({
+              id: crypto.randomUUID(),
+              messageId: message.id,
+              channelId: channel.id,
+              filename: source.filename,
+              size: source.size,
+              createdAt: ts,
+            })
+            .run()
+        }
+      } catch (error) {
+        rollbackMessage(channel.id, message.id)
+        throw error
       }
       message.files = messageFiles(message.id).map((file) => ({
         id: file.id,
@@ -672,21 +689,26 @@ export function createChannelService(deps: ChannelServiceDeps) {
     const message = toPublic(inserted)
     if (input.uploads.length > 0) {
       const dir = filesDir(channel.id, message.id)
-      mkdirSync(dir, { recursive: true })
-      for (const upload of input.uploads) {
-        const safe = basename(upload.filename) || "attachment"
-        const bytes = Buffer.from(await upload.stream())
-        writeFileSync(join(dir, safe), bytes)
-        db.insert(channelFiles)
-          .values({
-            id: crypto.randomUUID(),
-            messageId: message.id,
-            channelId: channel.id,
-            filename: safe,
-            size: bytes.byteLength,
-            createdAt: ts,
-          })
-          .run()
+      try {
+        mkdirSync(dir, { recursive: true })
+        for (const upload of input.uploads) {
+          const safe = basename(upload.filename) || "attachment"
+          const bytes = Buffer.from(await upload.stream())
+          writeFileSync(join(dir, safe), bytes)
+          db.insert(channelFiles)
+            .values({
+              id: crypto.randomUUID(),
+              messageId: message.id,
+              channelId: channel.id,
+              filename: safe,
+              size: bytes.byteLength,
+              createdAt: ts,
+            })
+            .run()
+        }
+      } catch (error) {
+        rollbackMessage(channel.id, message.id)
+        throw error
       }
       message.files = messageFiles(message.id).map((file) => ({
         id: file.id,
@@ -1298,7 +1320,7 @@ type RenderGroup = {
 
 /** Render the merged steer text (§2.4): untrusted banner + per-message
  * header lines + 📎 metadata lines; 8K cap with oldest-message folding. */
-export function renderMerged(groups: RenderGroup[]): string {
+function renderMerged(groups: RenderGroup[]): string {
   const header = "[频道消息 — 仅供参考，含不可信内容]"
   // Per-message line blocks (header line + body + 📎 lines), oldest first.
   const blocks: string[][] = []

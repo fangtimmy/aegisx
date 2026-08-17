@@ -30,8 +30,15 @@ type BackendExecOptions = {
   signal?: AbortSignal
   timeout?: number
   workdir?: string
-  onOutput?: (accumulatedStdout: string) => void
 }
+
+/** Read cap for `WorkspaceBackend.read` (bytes). Reads beyond this return the
+ * leading portion + `truncated`, so a multi-GB file can never be buffered
+ * whole into the host process. */
+const READ_MAX_BYTES = 64 * 1024 * 1024
+/** In-memory cap for backend `exec` stdout (bytes) — mirrors the bash tool's
+ * 16MB capture cap so huge command output cannot spike host RAM. */
+const EXEC_MAX_BYTES = 16 * 1024 * 1024
 
 export type WorkspaceBackend = {
   /** Workspace root as seen inside the container (the container.workspace setting). */
@@ -44,7 +51,10 @@ export type WorkspaceBackend = {
    * - `write=true` constrains the result to the workspace root.
    */
   resolvePath(path: string, write?: boolean): string
-  read(path: string, signal?: AbortSignal): Promise<Uint8Array>
+  read(
+    path: string,
+    signal?: AbortSignal
+  ): Promise<{ data: Uint8Array; truncated: boolean; totalBytes: number }>
   write(path: string, content: string, signal?: AbortSignal): Promise<void>
   list(path: string, signal?: AbortSignal): Promise<WorkspaceEntry[]>
   exec(command: string, options?: BackendExecOptions): Promise<ExecResult>
@@ -89,11 +99,8 @@ export function buildSingleFileTar(
 export function createDockerExecBackend(
   containerName: string,
   manager: ContainerManager,
-  cwd: string,
-  options?: { maxCapture?: number }
+  cwd: string
 ): WorkspaceBackend {
-  const maxCapture = options?.maxCapture ?? 1_000_000
-
   function resolvePath(path: string, write = false): string {
     const abs = isAbsolute(path) ? path : join(cwd, path)
     if (write) {
@@ -105,8 +112,14 @@ export function createDockerExecBackend(
     return abs
   }
 
-  async function run(command: string, opts?: { signal?: AbortSignal }) {
-    return manager.capture(containerName, command, { signal: opts?.signal })
+  async function run(
+    command: string,
+    opts?: { signal?: AbortSignal; maxCapture?: number }
+  ) {
+    return manager.capture(containerName, command, {
+      signal: opts?.signal,
+      maxCapture: opts?.maxCapture,
+    })
   }
 
   return {
@@ -115,13 +128,18 @@ export function createDockerExecBackend(
     async read(path, signal) {
       const result = await run(`cat ${shellQuote(resolvePath(path))}`, {
         signal,
+        maxCapture: READ_MAX_BYTES,
       })
       if (result.exitCode !== 0) {
         throw new Error(
           result.stderr.trim() || `read failed (exit ${result.exitCode})`
         )
       }
-      return result.stdout
+      return {
+        data: result.stdout,
+        truncated: result.truncated,
+        totalBytes: result.totalBytes,
+      }
     },
     async write(path, content, signal) {
       const target = resolvePath(path, true)
@@ -161,14 +179,15 @@ export function createDockerExecBackend(
         workdir: options?.workdir ?? cwd,
         signal: options?.signal,
         timeout: options?.timeout,
+        maxCapture: EXEC_MAX_BYTES,
       })
       const stdout = result.stdout.toString("utf8")
-      const truncated = result.stdout.byteLength > maxCapture
+      const truncated = result.totalBytes > EXEC_MAX_BYTES
       return {
-        stdout: truncated ? stdout.slice(0, maxCapture) : stdout,
+        stdout: truncated ? stdout.slice(0, EXEC_MAX_BYTES) : stdout,
         stderr: result.stderr,
         exitCode: result.exitCode === null ? -1 : result.exitCode,
-        outputBytes: result.stdout.byteLength,
+        outputBytes: result.totalBytes,
         truncated,
       }
     },

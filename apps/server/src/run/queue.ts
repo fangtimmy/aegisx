@@ -1,5 +1,5 @@
 import type { SolverSpec } from "@aegisx/shared"
-import { and, asc, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, count, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, queueState, runQueue } from "../db/schema"
@@ -186,11 +186,15 @@ export function createQueueService(deps: QueueServiceDeps) {
 
   /** Pending items count for an event (queue-starved判定口径). */
   function pendingCount(eventId: string): number {
-    return db
-      .select({ id: runQueue.id })
-      .from(runQueue)
-      .where(and(eq(runQueue.eventId, eventId), eq(runQueue.status, "pending")))
-      .all().length
+    return (
+      db
+        .select({ count: count() })
+        .from(runQueue)
+        .where(
+          and(eq(runQueue.eventId, eventId), eq(runQueue.status, "pending"))
+        )
+        .get()?.count ?? 0
+    )
   }
 
   /** Check the 2→1 edge on a pending-count DECREASE (launch 拉走 / remove /

@@ -36,11 +36,11 @@ def start(
     solvers: list[dict] | None = None,
     timeout_ms: int | None = None,
 ) -> Run:
-    require_manager()
     """Start a fresh solver run directly (escape hatch — bypasses the queue).
     The `strategy` is per-run guidance — be specific. A concurrency/target-slot
     rejection comes back as AegisxError("capacity") — adjust the plan, do not
     retry blindly. Prefer `aegisx.queue.enqueue` for planned work."""
+    require_manager()
     body: dict = {"challengeId": challenge_id}
     if strategy:
         body["strategy"] = strategy
@@ -58,19 +58,19 @@ def start(
 
 
 def stop(run_id: str) -> Run:
-    require_manager()
     """Abort a run's current turn (→ idle; container kept warm). Use to cut a
     stuck or off-track running turn before messaging new direction."""
+    require_manager()
     data = get_client().request("POST", f"/api/runs/{run_id}/stop")
     return from_dict(Run, data)
 
 
 def message(run_id: str, text: str, deliver_as: str | None = None) -> Run:
-    require_manager()
     """Send guidance to a run (its entry agent). On an idle or closed run this
     starts/continues a turn (a closed run is cold-restored, keeping context +
     workspace); on a running run `deliver_as` steers ("steer") or queues
     ("followUp") into the current turn."""
+    require_manager()
     body: dict = {"text": text}
     if deliver_as:
         body["deliverAs"] = deliver_as
@@ -81,16 +81,16 @@ def message(run_id: str, text: str, deliver_as: str | None = None) -> Run:
 
 
 def close(run_id: str) -> Run:
-    require_manager()
     """Release a run's container (→ closed; session + history kept, resumable
     later with message). Use to free resources on runs you are pausing."""
+    require_manager()
     data = get_client().request("POST", f"/api/runs/{run_id}/close")
     return from_dict(Run, data)
 
 
 def set_timeout(run_id: str, timeout_ms: int) -> Run:
-    require_manager()
     """Set or extend a run's hard deadline (milliseconds from now)."""
+    require_manager()
     data = get_client().request(
         "POST", f"/api/runs/{run_id}/timeout", body={"timeoutMs": timeout_ms}
     )
