@@ -1,6 +1,6 @@
 # IM 简化 v18：派生键频道 + urgent 统一投递
 
-状态：**已实施**（P1–P4 服务端 + SDK：提交 `b488532`；P5 Web 适配 + P6 收尾随其后续变更落地）
+状态：**已实施**（P1–P4 服务端 + SDK：`b488532`；P5 Web 适配 + P6 收尾：`b904f6a`）
 前置：[im-channels.md](im-channels.md)（v16/v17 频道化 IM）、[orchestration-v9-simplify.md](orchestration-v9-simplify.md)（v9 编排模型）
 取代：[im-channels.md](im-channels.md) 全文（本文与其冲突处以本文为准；实施完成后前者标注 superseded）
 
