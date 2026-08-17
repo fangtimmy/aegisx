@@ -1,6 +1,6 @@
 # 调度者消极收件箱 + 时间可见性
 
-状态：**设计定稿，待实施**
+状态：**已实施**（P1–P3 已落地；后续补充：队列 pause/resume 通知行、agent 停滞紧急触发）
 前置：[scheduler-python-sdk.md](scheduler-python-sdk.md)（SDK 收敛后的工具面）；解决 [field-findings.md](field-findings.md) §4（通知风暴）与 §7a（时间可见性）
 
 ---
@@ -28,9 +28,12 @@
 
 | 触发器 | 判定 | 说明 |
 |---|---|---|
-| **紧急事件** | `timedOut`、**队列不足**、**启动失败** | 影响"解题队列正常运行"的事件，立即 flush（捎带已积攒的普通行）。`flagAccepted` **不紧急**——flag 后 run 自行走 finish 流程，无需即时决策 |
+| **紧急事件** | `timedOut`、**队列不足**、**启动失败**、**agent 停滞** | 影响"解题队列正常运行"的事件，立即 flush（捎带已积攒的普通行）。`flagAccepted` **不紧急**——flag 后 run 自行走 finish 流程，无需即时决策 |
 | **静默超时** | 距最后一条入队消息 **5 分钟**无新消息 | 风暴高峰时消息持续到达 → 队列一直攒着不 flush（天然抗风暴）；活动平息才结算一轮 |
 | 普通事件 | `idle` / `finished` / `started` / `resumed` / `flagAccepted` | 只入队，永不单独触发 |
+| 普通通知行 | 队列 pause / resume | 只入 notice 桶，随下一次 flush 投递，不单独触发；manual 来源标 `（用户手动控制）` |
+
+**agent 停滞（idle >2min）**：任意 agent turn settle 后 arm 该 run 的 2 分钟检查计时器；到点现查——仍有 idle/failed agent 且距今 ≥2min → 紧急行（`⚠ agent 停滞：run-xxxx Solver 1 idle 2m5s`）+ flush。每个 idle 周期触发一次（再次 settle 重新 arm）；fire 时现查 DB，中途 resumed/closed 由现状裁决，竞态安全。
 
 **队列不足（starved）判定**：pending 计数跨越 **2 → 1** 的边沿（无论因 launch 拉走、remove 还是失败）。已在 ≤1 时不重复触发；enqueue 补货使计数回到 ≥2 后再次下降会重新触发（边沿触发，非持续打扰）。初始单元素入队、boot 后即 ≤1 的场景因从未跨越边沿而天然不触发。最后一个排队项就是缓冲——调度者收到警告时仍有一项 pending + 刚启动的项在跑，有时间补货。
 
@@ -55,7 +58,14 @@ active 8/10 · pending 1
 - 行上限 20；超出折叠为「…另有 N 个 run 事件」。
 - 紧急触发时，紧急行 + 累积行合并同一条 digest（一次唤醒处理全部）。
 
-### 2.4 投递与配合约束
+### 2.4 投递历史与可观测性
+
+- **持久化**：每次 flush 将 digest 原文写入 `scheduler_inbox_digests`（schema v15，append-only，事件删除级联）——完整投递历史，跨调度者运行与重启保留。
+- **实时快照**：`GET /api/events/:id/inbox` 返回活收件箱的待结算积压（pending run 行 / 通知 / 紧急行）与计时器状态（静默 flush 倒计时、停滞观察中的 run）；无活收件箱时 `live:false`。
+- **历史查询**：`GET /api/events/:id/inbox/digests?limit&offset`（新→旧，分页）。
+- **UI**：调度者 agent dialog 的「收件箱」tab——状态头（运行徽章/静默倒计时/停滞观察）+ 待结算积压 + 投递历史（加载更多）。
+
+### 2.5 投递与配合约束
 
 - **投递用 steer**：streaming 中注入当前轮末尾（不打断正在生成的 token），非 streaming 时开新轮。
 - **长轮询警告（prompt 硬约束）**：紧急事件以 steer 注入，若调度者正在跑长时间脚本（sleep 循环、轮询脚本），steer 内容要等脚本返回才能被看到。orchestratorSystem 必须明确警告：**不要写长时间运行的轮询/等待脚本**——事件会送上门，轮询既烧 token 又阻塞紧急通知。

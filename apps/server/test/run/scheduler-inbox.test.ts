@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { runQueue } from "../../src/db/schema"
+import { runQueue, agents, schedulerInboxDigests } from "../../src/db/schema"
 import { createSchedulerInbox, fmtMs } from "../../src/run/scheduler-inbox"
 import {
   flatSettings,
@@ -19,7 +19,12 @@ const ago = (sec: number) => new Date(Date.now() - sec * 1000).toISOString()
 
 function makeInbox(
   db: Db,
-  opts: { eventId?: string; silenceMs?: number; paused?: boolean } = {}
+  opts: {
+    eventId?: string
+    silenceMs?: number
+    stallMs?: number
+    paused?: boolean
+  } = {}
 ) {
   const eventId = opts.eventId ?? "evt-1"
   const sent: string[] = []
@@ -32,8 +37,33 @@ function makeInbox(
     now: () => new Date().toISOString(),
     isPaused: () => opts.paused ?? false,
     silenceMs: opts.silenceMs,
+    stallMs: opts.stallMs,
   })
   return { inbox, sent }
+}
+
+/** Minimal agent row for stall-watchdog tests. */
+function seedAgent(
+  db: Db,
+  runId: string,
+  overrides: Partial<typeof agents.$inferInsert> = {}
+) {
+  db.insert(agents)
+    .values({
+      id: overrides.id ?? `ag-${runId}`,
+      runId,
+      slot: overrides.slot ?? "solver-1",
+      role: "solver",
+      isEntry: true,
+      model: "m",
+      systemPrompt: "s",
+      tools: "[]",
+      status: "idle",
+      createdAt: ago(600),
+      updatedAt: ago(600),
+      ...overrides,
+    })
+    .run()
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -278,6 +308,193 @@ describe("scheduler inbox (docs/scheduler-inbox.md)", () => {
       inbox.close()
       await wait(80)
       expect(sent).toHaveLength(0)
+    } finally {
+      close()
+    }
+  })
+
+  test("notices queue silently and ride the next digest; paused is silent", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "idle", updatedAt: ago(30) })
+      const { inbox, sent } = makeInbox(db, { silenceMs: 30 })
+      inbox.pushNotice("队列已暂停（用户手动控制）")
+      expect(sent).toHaveLength(0) // not urgent — queued, no immediate flush
+      await wait(80)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toContain("队列已暂停（用户手动控制）")
+      // Notice rides an urgent flush too (no waiting for the quiet window).
+      inbox.pushNotice("队列已恢复（用户手动控制）")
+      inbox.pushEmergency("队列不足：仅剩最后 1 项排队")
+      expect(sent[1]).toContain("队列已恢复（用户手动控制）")
+      expect(sent[1]).toContain("⚠ 队列不足")
+
+      const paused = makeInbox(db, { paused: true })
+      paused.inbox.pushNotice("队列已暂停（用户手动控制）")
+      expect(paused.sent).toHaveLength(0)
+    } finally {
+      close()
+    }
+  })
+
+  test("stall watchdog: agent idle past the window flushes an urgent line", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "running", updatedAt: ago(5) })
+      seedAgent(db, "r1", {
+        name: "Solver 1",
+        status: "idle",
+        updatedAt: ago(2), // idle for 2s ≥ 50ms window
+      })
+      const { inbox, sent } = makeInbox(db, { stallMs: 50 })
+      inbox.noteAgentIdle("r1")
+      expect(sent).toHaveLength(0)
+      await wait(100)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toContain("⚠ agent 停滞：run-r1 Solver 1 idle 2s")
+    } finally {
+      close()
+    }
+  })
+
+  test("stall watchdog: busy or closed runs never fire; close() cancels", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      // All agents running — nothing idle to report.
+      seedRun(db, { id: "r1", status: "running", updatedAt: ago(5) })
+      seedAgent(db, "r1", {
+        name: "Solver 1",
+        status: "running",
+        updatedAt: ago(2),
+      })
+      // Run already closed.
+      seedRun(db, { id: "r2", status: "closed", updatedAt: ago(5) })
+      seedAgent(db, "r2", {
+        name: "Solver 1",
+        status: "idle",
+        updatedAt: ago(2),
+      })
+      const { inbox, sent } = makeInbox(db, { stallMs: 50 })
+      inbox.noteAgentIdle("r1")
+      inbox.noteAgentIdle("r2")
+      await wait(100)
+      expect(sent).toHaveLength(0)
+
+      // close() drops the pending timer (no late flush).
+      seedRun(db, { id: "r3", status: "idle", updatedAt: ago(5) })
+      seedAgent(db, "r3", {
+        name: "Solver 1",
+        status: "idle",
+        updatedAt: ago(2),
+      })
+      inbox.noteAgentIdle("r3")
+      inbox.close()
+      await wait(100)
+      expect(sent).toHaveLength(0)
+    } finally {
+      close()
+    }
+  })
+
+  test("stall watchdog: re-settling refreshes the window; paused never arms", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "running", updatedAt: ago(5) })
+      const { inbox, sent } = makeInbox(db, { stallMs: 60 })
+      inbox.noteAgentIdle("r1")
+      await wait(30)
+      // The agent settled again (updatedAt refreshed) — no stall at fire time.
+      db.update(agents)
+        .set({ updatedAt: new Date().toISOString() })
+        .where(eq(agents.id, "ag-r1"))
+        .run()
+      inbox.noteAgentIdle("r1") // re-arm with the fresh settle
+      await wait(90)
+      expect(sent).toHaveLength(0)
+
+      const paused = makeInbox(db, { stallMs: 50, paused: true })
+      paused.inbox.noteAgentIdle("r1")
+      await wait(100)
+      expect(paused.sent).toHaveLength(0)
+    } finally {
+      close()
+    }
+  })
+
+  test("every flush persists the delivered digest text (history)", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "idle", updatedAt: ago(30) })
+      const { inbox, sent } = makeInbox(db, { silenceMs: 30 })
+      inbox.push({ type: "run.idle", runId: "r1" })
+      await wait(80)
+      inbox.pushEmergency("队列不足：仅剩最后 1 项排队")
+      expect(sent).toHaveLength(2)
+      const rows = db
+        .select()
+        .from(schedulerInboxDigests)
+        .orderBy(schedulerInboxDigests.createdAt)
+        .all()
+      expect(rows).toHaveLength(2)
+      expect(rows[0]!.text).toBe(sent[0])
+      expect(rows[0]!.eventId).toBe("evt-1")
+      expect(rows[1]!.text).toBe(sent[1])
+      expect(rows[1]!.text).toContain("⚠ 队列不足")
+    } finally {
+      close()
+    }
+  })
+
+  test("snapshot exposes the live backlog and timers; close clears it", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "running", updatedAt: ago(5) })
+      seedAgent(db, "r1", {
+        name: "Solver 1",
+        status: "idle",
+        updatedAt: ago(2),
+      })
+      const { inbox, sent } = makeInbox(db, { silenceMs: 5000, stallMs: 5000 })
+      inbox.push({ type: "run.started", runId: "r1" })
+      inbox.pushNotice("队列已暂停（用户手动控制）")
+      inbox.pushEmergency("启动失败：ch-1 — boom")
+      inbox.noteAgentIdle("r1")
+      expect(sent).toHaveLength(1) // the emergency flushed the rest
+      // Post-flush snapshot: everything drained, silence not armed.
+      let snap = inbox.snapshot()
+      expect(snap.pending).toEqual([])
+      expect(snap.notices).toEqual([])
+      expect(snap.emergency).toEqual([])
+      expect(snap.silence.armed).toBe(false)
+      expect(snap.silence.flushAt).toBeNull()
+      expect(snap.stallWatch).toEqual([
+        { runId: "r1", dueAt: expect.any(Number) },
+      ])
+
+      // Re-arm the silent timer and re-check the armed snapshot.
+      inbox.push({ type: "run.idle", runId: "r1" })
+      snap = inbox.snapshot()
+      expect(snap.pending).toEqual([{ runId: "r1", events: ["idle"] }])
+      expect(snap.silence.armed).toBe(true)
+      expect(snap.silence.flushAt).toBeGreaterThan(Date.now())
+
+      inbox.close()
+      snap = inbox.snapshot()
+      expect(snap.pending).toEqual([])
+      expect(snap.silence.armed).toBe(false)
+      expect(snap.stallWatch).toEqual([])
     } finally {
       close()
     }

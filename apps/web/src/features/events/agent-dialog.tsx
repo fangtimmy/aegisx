@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Files,
+  Inbox,
   MessageSquare,
   Settings2,
   SlidersHorizontal,
@@ -27,6 +28,7 @@ import { RunOverview } from "@/features/runs/run-overview"
 
 import { POLL_INTERVAL_MS, roleLabel } from "./event-agents-shared"
 import { SchedulerConfigTab } from "./scheduler-config-tab"
+import { SchedulerInboxTab } from "./scheduler-inbox-tab"
 
 export function AgentDialog({
   runId,
@@ -49,7 +51,7 @@ export function AgentDialog({
         : false,
   })
   const [view, setView] = useState<
-    "conversation" | "files" | "overview" | "config"
+    "conversation" | "files" | "overview" | "config" | "inbox"
   >("conversation")
 
   const run = detail.data?.run
@@ -177,7 +179,14 @@ export function AgentDialog({
           <Tabs
             className="flex h-full min-h-0 min-w-0 flex-col"
             onValueChange={(value) =>
-              setView(value as "conversation" | "files" | "overview" | "config")
+              setView(
+                value as
+                  | "conversation"
+                  | "files"
+                  | "overview"
+                  | "config"
+                  | "inbox"
+              )
             }
             value={view}
           >
@@ -197,6 +206,11 @@ export function AgentDialog({
               {run.scopeType === "event" && (
                 <TabsTab className="gap-2" value="config">
                   <SlidersHorizontal /> 配置
+                </TabsTab>
+              )}
+              {run.scopeType === "event" && (
+                <TabsTab className="gap-2" value="inbox">
+                  <Inbox /> 收件箱
                 </TabsTab>
               )}
             </TabsList>
@@ -247,6 +261,17 @@ export function AgentDialog({
                 value="config"
               >
                 <SchedulerConfigTab eventId={run.eventId} />
+              </TabsPanel>
+            )}
+            {run.scopeType === "event" && (
+              <TabsPanel
+                className="min-h-0 flex-1 overflow-hidden"
+                value="inbox"
+              >
+                <SchedulerInboxTab
+                  active={view === "inbox"}
+                  eventId={run.eventId}
+                />
               </TabsPanel>
             )}
           </Tabs>

@@ -20,6 +20,7 @@ def enqueue(
     solver_count: int | None = None,
     solvers: list[dict] | None = None,
     timeout_ms: int | None = None,
+    source: str = "scheduler",
 ) -> QueueItem:
     """Add (or re-arm) a task in the queue — upserts by challenge; a hit
     including done/cancelled/failed resets to pending. The queue drains FIFO
@@ -29,7 +30,10 @@ def enqueue(
     solver set with `model` / `solver_count` / `solvers` (per-solver
     {model?, prompt?, prompt_mode?}). A capacity rejection comes back as an
     AegisxError with code "capacity" — adjust the plan, do not retry blindly.
-    Prefer this over `aegisx.runs.start` for planned work."""
+    Prefer this over `aegisx.runs.start` for planned work.
+
+    `source` marks who enqueued ("scheduler" by default — the SDK is the
+    scheduler's face; pass "manual" only for user-driven scripts)."""
     body: dict = {"strategy": strategy} if strategy else {}
     if model:
         body["model"] = model
@@ -40,6 +44,8 @@ def enqueue(
         body["solvers"] = solvers_wire
     if timeout_ms:
         body["timeoutMs"] = timeout_ms
+    if source:
+        body["source"] = source
     data = get_client().request(
         "POST", f"/api/challenges/{challenge_id}/runs", body=body
     )

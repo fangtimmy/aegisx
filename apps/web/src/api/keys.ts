@@ -17,6 +17,9 @@ export const keys = {
   scheduler: {
     detail: (eventId: string) => ["events", eventId, "scheduler"] as const,
     queue: (eventId: string) => ["events", eventId, "queue"] as const,
+    inbox: (eventId: string) => ["events", eventId, "inbox"] as const,
+    inboxDigests: (eventId: string) =>
+      ["events", eventId, "inbox", "digests"] as const,
   },
   challenges: {
     target: (challengeId: string) =>

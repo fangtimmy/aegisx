@@ -51,6 +51,11 @@ const runInput = Type.Object(
         { maxItems: 4 }
       )
     ),
+    /** Who is enqueueing — the Python SDK sends "scheduler" (its default;
+     * the SDK is the scheduler's face), the web UI omits it (→ manual). */
+    source: Type.Optional(
+      Type.Union([Type.Literal("manual"), Type.Literal("scheduler")])
+    ),
   },
   { additionalProperties: false }
 )
@@ -185,7 +190,7 @@ export function registerRunRoutes(
           solverCount: input.solver_count,
           solvers: input.solvers,
           timeoutMs: input.timeoutMs,
-          source: "manual",
+          source: input.source ?? "manual",
         })
         await queue.drainOnce()
         return c.json(

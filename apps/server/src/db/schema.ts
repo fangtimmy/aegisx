@@ -10,7 +10,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 14
+export const SCHEMA_VERSION = 15
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -391,6 +391,30 @@ export const runQueue = sqliteTable(
     check(
       "run_queue_status_check",
       sql`${table.status} in ('pending', 'running', 'done', 'cancelled', 'failed')`
+    ),
+  ]
+)
+
+/**
+ * Per-event scheduler inbox delivery history: one row per flushed digest
+ * (the exact text steered into the orchestrator). Append-only; cascade on
+ * event delete. The live backlog itself stays in memory (scheduler-inbox.ts)
+ * — this table only records what WAS delivered.
+ */
+export const schedulerInboxDigests = sqliteTable(
+  "scheduler_inbox_digests",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("scheduler_inbox_digests_event_idx").on(
+      table.eventId,
+      table.createdAt
     ),
   ]
 )

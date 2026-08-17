@@ -64,6 +64,13 @@
       "when": 1789900000000,
       "tag": "0008_v14_orchestration_drop",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": 15,
+      "when": 1790000000000,
+      "tag": "0009_scheduler_inbox_digests",
+      "breakpoints": true
     }
   ]
 }

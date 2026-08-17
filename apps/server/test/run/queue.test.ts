@@ -24,6 +24,7 @@ function item(db: Db, id: string) {
 function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
   const launches: string[] = []
   const emergencies: string[] = []
+  const notices: string[] = []
   const svc = createQueueService({
     db,
     getSettings: flatSettings,
@@ -41,8 +42,9 @@ function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
     },
     onQueueEmergency: (eventId, line) =>
       emergencies.push(`${eventId}: ${line}`),
+    onQueueNotice: (eventId, line) => notices.push(`${eventId}: ${line}`),
   })
-  return { svc, launches, emergencies }
+  return { svc, launches, emergencies, notices }
 }
 
 function enqueue(
@@ -290,6 +292,22 @@ describe("queue per-event state (W2.1)", () => {
         .where(eq(queueState.eventId, "evt-1"))
         .get()
       expect(row?.status).toBe("running")
+    } finally {
+      close()
+    }
+  })
+
+  test("pause/resume push a notice line; manual flips are marked", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      const { svc, notices } = makeQueue(db, async () => "run-x")
+      svc.pause("evt-1") // default source: manual (the web UI sends nothing)
+      expect(svc.stateOf("evt-1")).toBe("paused")
+      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动控制）"])
+      svc.resume("evt-1", "scheduler")
+      expect(svc.stateOf("evt-1")).toBe("running")
+      expect(notices[1]).toBe("evt-1: 队列已恢复")
     } finally {
       close()
     }

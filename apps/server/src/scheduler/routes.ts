@@ -64,6 +64,17 @@ const schedulerStartInput = Type.Object(
 
 const emptyInput = EmptyInputSchema
 
+/** Queue state-flip body (pause/resume): `source` marks who flipped it — the
+ * web UI sends nothing (→ manual), an SDK script may declare "scheduler". */
+const queueStateInput = Type.Object(
+  {
+    source: Type.Optional(
+      Type.Union([Type.Literal("manual"), Type.Literal("scheduler")])
+    ),
+  },
+  { additionalProperties: false }
+)
+
 export function registerSchedulerRoutes(
   app: Hono,
   options: { db: Database; runService: RunService }
@@ -89,27 +100,47 @@ export function registerSchedulerRoutes(
     })
   })
 
+  /** Live scheduler-inbox snapshot (agent dialog's inbox tab): pending
+   * backlog, notices, emergency lines, silence/stall timers. No live inbox
+   * (no scheduler run) → live:false. */
+  app.get("/api/events/:eventId/inbox", (c) => {
+    const eventId = c.req.param("eventId")
+    const miss = requireEvent(c, eventId)
+    if (miss) return miss
+    return c.json(runService.inboxSnapshot(eventId))
+  })
+
+  /** Delivered-digest history (newest first; ?limit default 30, ?offset). */
+  app.get("/api/events/:eventId/inbox/digests", (c) => {
+    const eventId = c.req.param("eventId")
+    const miss = requireEvent(c, eventId)
+    if (miss) return miss
+    const limit = Math.min(Math.max(Number(c.req.query("limit")) || 30, 1), 200)
+    const offset = Math.max(Number(c.req.query("offset")) || 0, 0)
+    return c.json(runService.inboxHistory(eventId, limit, offset))
+  })
+
   app.post(
     "/api/events/:eventId/queue/pause",
-    validateJson(emptyInput),
+    validateJson(queueStateInput),
     (c) => {
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       // Blocks future launches only — running runs keep going (pause ≠ kill).
-      runService.queue().pause(eventId)
+      runService.queue().pause(eventId, c.req.valid("json").source ?? "manual")
       return c.json({ state: "paused" })
     }
   )
 
   app.post(
     "/api/events/:eventId/queue/resume",
-    validateJson(emptyInput),
+    validateJson(queueStateInput),
     (c) => {
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      runService.queue().resume(eventId)
+      runService.queue().resume(eventId, c.req.valid("json").source ?? "manual")
       runService.queue().scheduleDrain()
       return c.json({ state: "running" })
     }

@@ -33,6 +33,7 @@ describe("schema bootstrap", () => {
         "session_entries",
         "run_queue",
         "scheduler_config",
+        "scheduler_inbox_digests",
         "prompt_templates",
         "challenge_flags",
         "queue_state",

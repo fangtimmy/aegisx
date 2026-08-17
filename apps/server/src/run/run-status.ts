@@ -22,6 +22,9 @@ export type RunStatusDeps = {
   isSchedulerPaused(eventId: string): boolean
   now(): string
   updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
+  /** Agent turn settled (idle/failed): arms the scheduler inbox's stall
+   * watchdog for the run (challenge-scope only — the wiring gates scope). */
+  onAgentSettled(agentId: string, runId: string): void
 }
 
 export type RunStatus = ReturnType<typeof createRunStatus>
@@ -133,6 +136,7 @@ export function createRunStatus(deps: RunStatusDeps) {
     }
     emitRun(runId)
     emitAgents(runId)
+    deps.onAgentSettled(agentId, runId)
   }
 
   return {

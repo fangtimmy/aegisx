@@ -85,6 +85,31 @@ export type QueueSnapshot = {
   state: QueueState
 }
 
+/** GET /api/events/:id/inbox — live scheduler-inbox snapshot. */
+export type InboxSnapshot = {
+  live: boolean
+  pending: Array<{ runId: string; events: string[] }>
+  notices: string[]
+  emergency: string[]
+  silence: { armed: boolean; flushAt: number | null }
+  stallWatch: Array<{ runId: string; dueAt: number }>
+}
+
+/** One delivered digest row (GET /api/events/:id/inbox/digests). */
+export type InboxDigest = {
+  id: string
+  eventId: string
+  text: string
+  createdAt: string
+}
+
+/** GET /api/events/:id/inbox/digests — newest first, offset pagination. */
+export type InboxHistory = {
+  items: InboxDigest[]
+  total: number
+  hasMore: boolean
+}
+
 /** GET /api/events/:id/scheduler — config + run + fence status snapshot. */
 export type SchedulerInfo = {
   config: {

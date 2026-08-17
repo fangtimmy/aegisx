@@ -5,7 +5,7 @@ import { join } from "node:path"
 import type { RunPublic, SwitchModelInput } from "@aegisx/shared"
 import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
-import { and, eq, inArray, ne, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm"
 
 import { applyModelSwitch } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -13,7 +13,7 @@ import type { AgentLoopSettings } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { Database } from "../db"
-import { agents, runs } from "../db/schema"
+import { agents, runs, schedulerInboxDigests } from "../db/schema"
 import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { EventScopeEmitter } from "../orchestration/event-scope"
@@ -25,6 +25,7 @@ import {
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX,
   LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "../orchestration/prompt-defaults"
 import {
@@ -159,6 +160,15 @@ export function createRunService(options: RunServiceOptions) {
     LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
     DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
   )
+  // Stall watchdog + queue notices: the urgent list now includes agent
+  // stalls (idle >2min) and queue pause/resume notice lines. Exact-match
+  // refresh for rows still on the pre-stall inbox body.
+  upgradeBuiltinTemplate(
+    db,
+    "orchestratorSystem",
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX,
+    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
   upgradeBuiltinTemplate(
     db,
     "schedulerInitial",
@@ -274,6 +284,13 @@ export function createRunService(options: RunServiceOptions) {
     // W3: a paused scheduler's run-lifecycle events are dropped before they
     // reach the orchestrator (late-bound schedulerAdmin, read at call time).
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    // Stall watchdog wiring: a settled (idle/failed) challenge-scope solver
+    // arms the event inbox's 2-minute stall check (late-bound inboxes).
+    onAgentSettled: (_agentId, runId) => {
+      const row = queries.getRow(runId)
+      if (row?.scopeType !== "challenge") return
+      inboxes.get(row.eventId)?.noteAgentIdle(runId)
+    },
     now,
     updateAgent,
   })
@@ -851,7 +868,47 @@ export function createRunService(options: RunServiceOptions) {
     },
     onQueueEmergency: (eventId, line) =>
       inboxes.get(eventId)?.pushEmergency(line),
+    onQueueNotice: (eventId, line) => inboxes.get(eventId)?.pushNotice(line),
   })
+
+  /** Live inbox snapshot for an event (agent dialog's inbox tab). No live
+   * inbox (no scheduler run) → live:false; history is served separately
+   * (scheduler_inbox_digests persists across scheduler runs). */
+  function inboxSnapshot(eventId: string) {
+    const inbox = inboxes.get(eventId)
+    return inbox
+      ? { live: true, ...inbox.snapshot() }
+      : {
+          live: false,
+          pending: [],
+          notices: [],
+          emergency: [],
+          silence: { armed: false, flushAt: null },
+          stallWatch: [],
+        }
+  }
+
+  /** Delivered-digest history (newest first, offset pagination). */
+  function inboxHistory(eventId: string, limit: number, offset: number) {
+    const total =
+      db
+        .select({ n: sql<number>`count(*)` })
+        .from(schedulerInboxDigests)
+        .where(eq(schedulerInboxDigests.eventId, eventId))
+        .get()?.n ?? 0
+    const items = db
+      .select()
+      .from(schedulerInboxDigests)
+      .where(eq(schedulerInboxDigests.eventId, eventId))
+      .orderBy(
+        desc(schedulerInboxDigests.createdAt),
+        desc(schedulerInboxDigests.id)
+      )
+      .limit(limit)
+      .offset(offset)
+      .all()
+    return { items, total, hasMore: offset + items.length < total }
+  }
 
   return {
     create: runFactory.create,
@@ -877,6 +934,8 @@ export function createRunService(options: RunServiceOptions) {
     readRun: schedulerAdmin.readRun,
     getStatus: schedulerAdmin.getStatusSnapshot,
     getSchedulerRun: schedulerAdmin.getSchedulerRun,
+    inboxSnapshot,
+    inboxHistory,
     getSchedulerConfig: schedulerAdmin.getSchedulerConfig,
     upsertSchedulerConfig: schedulerAdmin.upsertSchedulerConfig,
     startScheduler: schedulerAdmin.startScheduler,

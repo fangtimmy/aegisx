@@ -133,6 +133,10 @@ export type QueueServiceDeps = {
    * a permanent launch failure, or the queue-starved edge (pending 2→1).
    * Never throws. */
   onQueueEmergency(eventId: string, line: string): void
+  /** Ordinary notice line for the inbox (queue pause/resume): queued into
+   * the inbox's notice bucket, flushed with the next digest — not urgent.
+   * Never throws. */
+  onQueueNotice(eventId: string, line: string): void
 }
 
 function toPublic(db: Database, row: QueueRow): QueueItemPublic {
@@ -550,12 +554,28 @@ export function createQueueService(deps: QueueServiceDeps) {
       .run()
   }
 
-  function pause(eventId: string): void {
-    setState(eventId, "paused")
+  /** Notice line for a state flip; `manual` marks a user-driven flip so the
+   * scheduler can tell its own actions from user intervention. */
+  function stateNotice(action: string, source: "manual" | "scheduler"): string {
+    return source === "manual"
+      ? `队列已${action}（用户手动控制）`
+      : `队列已${action}`
   }
 
-  function resume(eventId: string): void {
+  function pause(
+    eventId: string,
+    source: "manual" | "scheduler" = "manual"
+  ): void {
+    setState(eventId, "paused")
+    deps.onQueueNotice(eventId, stateNotice("暂停", source))
+  }
+
+  function resume(
+    eventId: string,
+    source: "manual" | "scheduler" = "manual"
+  ): void {
     setState(eventId, "running")
+    deps.onQueueNotice(eventId, stateNotice("恢复", source))
   }
 
   return {

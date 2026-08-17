@@ -216,8 +216,9 @@ Keep your workspace notes current: strategy, per-challenge status, decisions and
  * per-event texts — the Wake-up model section was rewritten (the previous
  * SDK-era body is kept verbatim as
  * LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK for the exact-match
- * boot refresh). */
-export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE =
+ * boot refresh). Kept verbatim as the upgrade source for the stall-watchdog
+ * refresh. */
+export const LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX =
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK.replace(
     "## Wake-up model\nYou are woken on events: a run went idle (finished a turn), a flag was accepted, or a run timed out. Act on each wake-up: `aegisx.snapshot()` / `aegisx.runs.read` to assess, then decide. Be decisive and concise. Do not poll repeatedly — wait for events.",
     `## Wake-up model (passive inbox)
@@ -235,6 +236,20 @@ active 8/10 · pending 1
 - URGENT digests flush immediately: a run timed out, the queue is starved (only 1 item left), or a launch failed. Everything else waits for the quiet flush.
 - Act per digest: \`aegisx.snapshot()\` / \`aegisx.runs.read\` to assess, then decide. Be decisive and concise. Do not poll — events come to you.
 - NEVER run long polling/wait loops (sleep cycles, poll scripts): a long script BLOCKS urgent digest delivery until it returns, and polling burns tokens.`
+  )
+
+/** Current default for `orchestratorSystem`: the urgent list now includes
+ * agent stalls (idle >2min after settling) and the digest may carry queue
+ * pause/resume notice lines. Rows still on the pre-stall body are refreshed
+ * by exact match (user edits survive untouched). */
+export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE =
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX.replace(
+    "⚠ 队列不足：仅剩最后 1 项排队\nactive 8/10 · pending 1",
+    "⚠ 队列不足：仅剩最后 1 项排队\n队列已暂停（用户手动控制）\nactive 8/10 · pending 1"
+  ).replace(
+    "- URGENT digests flush immediately: a run timed out, the queue is starved (only 1 item left), or a launch failed. Everything else waits for the quiet flush.",
+    `- URGENT digests flush immediately: a run timed out, the queue is starved (only 1 item left), a launch failed, or a solver agent has been idle >2 minutes after settling (停滞 — steer it, reassign it, or close it). Everything else waits for the quiet flush.
+- Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user-controlled flips are marked 用户手动控制). While the queue is paused, pending items never launch — resume it or start runs directly.`
   )
 
 /** v8-era default for `mainSystem` (pre-ENVIRONMENT-quick-reference). Kept as
