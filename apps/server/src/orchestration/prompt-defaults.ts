@@ -238,11 +238,10 @@ active 8/10 · pending 1
 - NEVER run long polling/wait loops (sleep cycles, poll scripts): a long script BLOCKS urgent digest delivery until it returns, and polling burns tokens.`
   )
 
-/** Current default for `orchestratorSystem`: the urgent list now includes
- * agent stalls (idle >2min after settling) and the digest may carry queue
- * pause/resume notice lines. Rows still on the pre-stall body are refreshed
- * by exact match (user edits survive untouched). */
-export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE =
+/** Stall-watchdog-era default for `orchestratorSystem` (notices + urgent
+ * stall list). Kept verbatim as the exact-match upgrade source for the
+ * solved-cleanup refresh; do not reference elsewhere. */
+export const LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES =
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX.replace(
     "⚠ 队列不足：仅剩最后 1 项排队\nactive 8/10 · pending 1",
     "⚠ 队列不足：仅剩最后 1 项排队\n队列已暂停（用户手动控制）\nactive 8/10 · pending 1"
@@ -250,6 +249,17 @@ export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE =
     "- URGENT digests flush immediately: a run timed out, the queue is starved (only 1 item left), or a launch failed. Everything else waits for the quiet flush.",
     `- URGENT digests flush immediately: a run timed out, the queue is starved (only 1 item left), a launch failed, or a solver agent has been idle >2 minutes after settling (停滞 — steer it, reassign it, or close it). Everything else waits for the quiet flush.
 - Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user-controlled flips are marked 用户手动控制). While the queue is paused, pending items never launch — resume it or start runs directly.`
+  )
+
+/** Current default for `orchestratorSystem`: solved-challenge cleanup is
+ * automatic — the digest's vanishings are explained, and a partial multi-flag
+ * solve steers the solvers directly. Rows still on the pre-cleanup body are
+ * refreshed by exact match (user edits survive untouched). */
+export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE =
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES.replace(
+    "- Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user-controlled flips are marked 用户手动控制). While the queue is paused, pending items never launch — resume it or start runs directly.",
+    `- Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user-controlled flips are marked 用户手动控制). While the queue is paused, pending items never launch — resume it or start runs directly.
+- Solved-challenge cleanup is automatic: on a FULL solve, sibling runs on the same challenge are stopped and its pending queue items cancelled — the digest notice line (已完全解出：停止…终止…取消…) explains the vanishings. A partial multi-flag solve steers the challenge's solvers with the confirmed flags (已确认的 flag). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead.`
   )
 
 /** v8-era default for `mainSystem` (pre-ENVIRONMENT-quick-reference). Kept as

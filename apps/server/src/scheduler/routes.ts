@@ -120,6 +120,33 @@ export function registerSchedulerRoutes(
     return c.json(runService.inboxHistory(eventId, limit, offset))
   })
 
+  /** Hold delivery: the inbox keeps collecting silently but flushes nothing —
+   * the orchestrator stays idle. Resume flushes the backlog in one digest.
+   * In-memory only (a scheduler-run rebuild resets it); no live inbox → no-op. */
+  app.post(
+    "/api/events/:eventId/inbox/pause",
+    validateJson(emptyInput),
+    (c) => {
+      const eventId = c.req.param("eventId")
+      const miss = requireEvent(c, eventId)
+      if (miss) return miss
+      runService.setInboxDeliveryPaused(eventId, true)
+      return c.json({ deliveryPaused: true })
+    }
+  )
+
+  app.post(
+    "/api/events/:eventId/inbox/resume",
+    validateJson(emptyInput),
+    (c) => {
+      const eventId = c.req.param("eventId")
+      const miss = requireEvent(c, eventId)
+      if (miss) return miss
+      runService.setInboxDeliveryPaused(eventId, false)
+      return c.json({ deliveryPaused: false })
+    }
+  )
+
   app.post(
     "/api/events/:eventId/queue/pause",
     validateJson(queueStateInput),

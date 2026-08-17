@@ -498,4 +498,66 @@ describe("queue drainer", () => {
       close()
     }
   })
+
+  test("a paused queue fires no starved emergency (the user stopped launches)", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      const { svc, emergencies, notices } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      const a = enqueue(svc, "evt-1", "ch-a", 1)
+      enqueue(svc, "evt-1", "ch-b", 2)
+      svc.pause("evt-1")
+      svc.remove(a.id) // 2→1 crossing while paused → silent
+      expect(emergencies).toHaveLength(0)
+      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动控制）"])
+      expect(svc.stateOf("evt-1")).toBe("paused")
+    } finally {
+      close()
+    }
+  })
+
+  test("pause/resume are idempotent (no duplicate notice lines)", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      const { svc, notices } = makeQueue(db, async () => "run-x")
+      svc.pause("evt-1")
+      svc.pause("evt-1")
+      svc.pause("evt-1", "scheduler")
+      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动控制）"])
+      svc.resume("evt-1")
+      svc.resume("evt-1")
+      expect(notices).toEqual([
+        "evt-1: 队列已暂停（用户手动控制）",
+        "evt-1: 队列已恢复（用户手动控制）",
+      ])
+      expect(svc.stateOf("evt-1")).toBe("running")
+    } finally {
+      close()
+    }
+  })
+
+  test("cancelPendingForChallenge cancels only that challenge's pending items", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      const { svc } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      const a = enqueue(svc, "evt-1", "ch-a", 1)
+      const b = enqueue(svc, "evt-1", "ch-b", 2)
+      const cancelled = svc.cancelPendingForChallenge("evt-1", "ch-a")
+      expect(cancelled).toBe(1)
+      expect(item(db, a.id).status).toBe("cancelled")
+      expect(item(db, b.id).status).toBe("pending")
+      // Nothing pending on ch-a → second cancel is a no-op.
+      expect(svc.cancelPendingForChallenge("evt-1", "ch-a")).toBe(0)
+    } finally {
+      close()
+    }
+  })
 })

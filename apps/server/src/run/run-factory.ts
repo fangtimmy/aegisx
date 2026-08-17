@@ -340,7 +340,7 @@ export function createRunFactory(deps: RunFactoryDeps) {
       agentId,
       submitFlag: (flag, verifyRemote = true) =>
         platformService
-          .submitFlag(runId, challengeId, flag, verifyRemote)
+          .submitFlag(runId, challengeId, flag, verifyRemote, agentId)
           .then((r) => r ?? null),
       targetAction: (action) =>
         platformService.targetAction(challengeId, action),

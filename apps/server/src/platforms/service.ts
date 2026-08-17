@@ -51,7 +51,16 @@ export function createPlatformService(
   maxAttachmentBytes: () => number,
   configStore: ConfigStore
 ) {
-  let onRunFlagAccepted: ((runId: string) => void) | undefined
+  let onRunFlagAccepted:
+    | ((runId: string, submitterAgentId?: string) => void)
+    | undefined
+  let onRunFlagPartial:
+    | ((
+        runId: string,
+        message: string | null,
+        submitterAgentId?: string
+      ) => void)
+    | undefined
   const logPlatformRequest = (info: PlatformRequestError) => {
     const now = new Date().toISOString()
     db.insert(platformRequestLog)
@@ -127,7 +136,12 @@ export function createPlatformService(
     db,
     storedPlatform,
     adapterForEvent,
-    { onRunFlagAccepted: (runId) => onRunFlagAccepted?.(runId) }
+    {
+      onRunFlagAccepted: (runId, submitterAgentId) =>
+        onRunFlagAccepted?.(runId, submitterAgentId),
+      onRunFlagPartial: (runId, message, submitterAgentId) =>
+        onRunFlagPartial?.(runId, message, submitterAgentId),
+    }
   )
   const platformTargets = createPlatformTargets(
     db,
@@ -318,10 +332,20 @@ export function createPlatformService(
     isBoundEvent: (eventId: string) => Boolean(storedPlatform(eventId)),
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
-    setRunHooks(hooks: { onRunFlagAccepted?(runId: string): void }) {
+    setRunHooks(hooks: {
+      onRunFlagAccepted?(runId: string, submitterAgentId?: string): void
+      onRunFlagPartial?(
+        runId: string,
+        message: string | null,
+        submitterAgentId?: string
+      ): void
+    }) {
       // Bound via a closure: the hook is a method on the caller's object, so
       // storing it detached would lose `this` (oxlint unbound-method).
-      onRunFlagAccepted = (runId: string) => hooks.onRunFlagAccepted?.(runId)
+      onRunFlagAccepted = (runId, submitterAgentId) =>
+        hooks.onRunFlagAccepted?.(runId, submitterAgentId)
+      onRunFlagPartial = (runId, message, submitterAgentId) =>
+        hooks.onRunFlagPartial?.(runId, message, submitterAgentId)
     },
     addManualFlag: platformFlags.addManualFlag,
     deleteFlag: platformFlags.deleteFlag,

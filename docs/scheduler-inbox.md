@@ -32,12 +32,32 @@
 | **静默超时** | 距最后一条入队消息 **5 分钟**无新消息 | 风暴高峰时消息持续到达 → 队列一直攒着不 flush（天然抗风暴）；活动平息才结算一轮 |
 | 普通事件 | `idle` / `finished` / `started` / `resumed` / `flagAccepted` | 只入队，永不单独触发 |
 | 普通通知行 | 队列 pause / resume | 只入 notice 桶，随下一次 flush 投递，不单独触发；manual 来源标 `（用户手动控制）` |
+| **完全解出清场** | 平台 accepted / already_solved | 非紧急通知行（`「题」已完全解出：停止 N 个同题 run、终止 K 个同 run solver、取消 M 个排队项`），见 §2.2.1 |
+| **部分解出 steer** | 平台 partial（多 flag 未集齐） | 不走 digest——直接 steer 同题所有 agent（含已确认 flag 清单，提交者除外）+ 通知行（见 §2.2.2） |
 
-**agent 停滞（idle >2min）**：任意 agent turn settle 后 arm 该 run 的 2 分钟检查计时器；到点现查——仍有 idle/failed agent 且距今 ≥2min → 紧急行（`⚠ agent 停滞：run-xxxx Solver 1 idle 2m5s`）+ flush。每个 idle 周期触发一次（再次 settle 重新 arm）；fire 时现查 DB，中途 resumed/closed 由现状裁决，竞态安全。
+**agent 停滞（idle >2min）**：任意 agent turn settle 后 arm 该 run 的 2 分钟检查计时器；到点现查——仍有 idle/failed agent 且距今 ≥2min → 紧急行（`⚠ agent 停滞：run-xxxx Solver 1 idle 2m5s`）+ flush。每个 idle 周期触发一次（再次 settle 重新 arm）；fire 时现查 DB，中途 resumed/closed/finishing 由现状裁决（finishing 的 run 不发假紧急），竞态安全。
 
-**队列不足（starved）判定**：pending 计数跨越 **2 → 1** 的边沿（无论因 launch 拉走、remove 还是失败）。已在 ≤1 时不重复触发；enqueue 补货使计数回到 ≥2 后再次下降会重新触发（边沿触发，非持续打扰）。初始单元素入队、boot 后即 ≤1 的场景因从未跨越边沿而天然不触发。最后一个排队项就是缓冲——调度者收到警告时仍有一项 pending + 刚启动的项在跑，有时间补货。
+**队列不足（starved）判定**：pending 计数跨越 **2 → 1** 的边沿（无论因 launch 拉走、remove、失败还是解出取消）。已在 ≤1 时不重复触发；enqueue 补货使计数回到 ≥2 后再次下降会重新触发（边沿触发，非持续打扰）。初始单元素入队、boot 后即 ≤1 的场景因从未跨越边沿而天然不触发。最后一个排队项就是缓冲——调度者收到警告时仍有一项 pending + 刚启动的项在跑，有时间补货。**队列 paused 时静默**（用户主动停止发射，调度者不应被唤醒补货）。
 
 **启动失败**：队列 drainer 的"启动失败 → failed + 通知"（queue.ts 现有的裸 send 通知）并入收件箱紧急级。
+
+#### 2.2.1 完全解出自动清场
+
+平台判定题目完全解出（accepted / already_solved，多 flag 题为全部集齐）时，run 层自动清理同题无效功：
+
+- **同题其他 live run**（≠ 提交 run）→ 制裁 teardown（`summary="同题已完全解出，自动停止""`）：容器终止、队列项 running→done、最后一个 run 关闭时平台 target 自动停（W4.3 既有机制）。
+- **提交 run 的其他 running co-solver** → `lifecycle.abort` 立即截断（提交者自己继续 finish_run 写 writeup；被截断的 settle 落 failed，digest 的清场行解释缘由）。平台路径拿不到提交者 agentId 时全部截断。
+- **该题 pending 队列项 → cancelled**（根治已解题陈旧项被 drain 重启；后续 re-enqueue 会按 upsert 重置）。取消使 pending 2→1 时 starved 边沿照常触发（语义正确——调度者该补货了）。
+- 幂等：兄弟已关则查询自然为空；重复通知（终态缓存命中）重复触发无副作用。
+- 手动记 flag（addManualFlag）不触发。
+
+#### 2.2.2 部分解出（多 flag）steer
+
+平台返回 partial（TSecBench 多 flag 题正确但未集齐）时题目**未完全解出**，不能清场：
+
+- 直接 steer 同题所有 live run 的 running agent（提交者除外）：`[多 flag 进度]「题」部分解出（flag 2/3 已确认…）已确认的 flag：…。请专注解出剩余 flag；已确认的无需重复提交。`——竞态求解收敛到剩余 flag 上。
+- 收件箱通知行（非紧急）：`部分解出：「题」flag 2/3（run-xxxx）`，调度者随下个 digest 知情。
+- flag 层终态缓存：partial 在 `challenge_flags` 存为 accepted（折叠语义），重复提交命中缓存时用 `challenge_remote.solved` 区分完全/部分解出再选 hook。
 
 ### 2.3 digest 格式
 
@@ -61,9 +81,11 @@ active 8/10 · pending 1
 ### 2.4 投递历史与可观测性
 
 - **持久化**：每次 flush 将 digest 原文写入 `scheduler_inbox_digests`（schema v15，append-only，事件删除级联）——完整投递历史，跨调度者运行与重启保留。
-- **实时快照**：`GET /api/events/:id/inbox` 返回活收件箱的待结算积压（pending run 行 / 通知 / 紧急行）与计时器状态（静默 flush 倒计时、停滞观察中的 run）；无活收件箱时 `live:false`。
+- **实时快照**：`GET /api/events/:id/inbox` 返回活收件箱的待结算积压（pending run 行 / 通知 / 紧急行）与计时器状态（静默 flush 倒计时、停滞观察中的 run、投递暂停态）；无活收件箱时 `live:false`。
 - **历史查询**：`GET /api/events/:id/inbox/digests?limit&offset`（新→旧，分页）。
-- **UI**：调度者 agent dialog 的「收件箱」tab——状态头（运行徽章/静默倒计时/停滞观察）+ 待结算积压 + 投递历史（加载更多）。
+- **UI**：调度者 agent dialog 的「收件箱」tab——状态头（运行徽章/静默倒计时/停滞观察/已暂停徽章 + 暂停/恢复投递按钮）+ 待结算积压 + 投递历史（加载更多）。
+
+**投递暂停（hold）**：`POST /api/events/:id/inbox/pause|resume`（仅 HTTP/UI，不暴露给调度者工具——自我静音是危险循环）。语义 = 只静默收集、不投递：调度者保持 idle；一切事件（含 timedOut / 紧急 / 通知）只入桶，不 arm 任何计时器；停滞检查不 arm、fire 时直接返回。恢复时有积压则一次性补投（"这是暂停期间积攒的一切"），并对 live run 中有已 settle agent 的重新 arm 停滞检查（catch-up）。内存态，不持久化（调度者 run 重建即恢复投递）；无活收件箱时 no-op。与 W3 调度者暂停正交：本层管投递，W3 管调度者本体。
 
 ### 2.5 投递与配合约束
 

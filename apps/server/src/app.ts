@@ -42,11 +42,17 @@ export function createApp(options: { dataDir: string }) {
   })
 
   // Flag writes are a side path (platform → DB); refresh the run view after
-  // and notify the event's scheduler (run.flagAccepted).
+  // and notify the event's scheduler. A full solve additionally stops the
+  // challenge's other solvers; a multi-flag partial steers them (partial
+  // carries the platform's progress message).
   platformService.setRunHooks({
-    onRunFlagAccepted: (runId) => {
+    onRunFlagAccepted: (runId, submitterAgentId) => {
       runService.refresh(runId)
-      runService.notifyFlagAccepted(runId)
+      runService.notifyFlagAccepted(runId, submitterAgentId)
+    },
+    onRunFlagPartial: (runId, message, submitterAgentId) => {
+      runService.refresh(runId)
+      runService.notifyFlagPartial(runId, message, submitterAgentId)
     },
   })
 

@@ -499,4 +499,100 @@ describe("scheduler inbox (docs/scheduler-inbox.md)", () => {
       close()
     }
   })
+
+  test("delivery pause holds everything silently; resume flushes the backlog in one digest", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "idle", updatedAt: ago(30) })
+      const { inbox, sent } = makeInbox(db, { silenceMs: 30 })
+
+      inbox.setDeliveryPaused(true)
+      // Everything queues silently — even a timedOut (normally urgent) and a
+      // queue emergency; no silence timer arms while paused.
+      inbox.push({ type: "run.started", runId: "r1" })
+      inbox.push({ type: "run.timedOut", runId: "r1", outcome: "idle" })
+      inbox.pushNotice("队列已暂停（用户手动控制）")
+      inbox.pushEmergency("队列不足：仅剩最后 1 项排队")
+      await wait(80)
+      expect(sent).toHaveLength(0)
+      let snap = inbox.snapshot()
+      expect(snap.deliveryPaused).toBe(true)
+      expect(snap.silence.armed).toBe(false)
+      expect(snap.emergency.length).toBe(1)
+      expect(snap.notices.length).toBe(1)
+
+      // Resume: one catch-up digest carries run line + notice + ⚠ emergency.
+      inbox.setDeliveryPaused(false)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toContain("timedOut")
+      expect(sent[0]).toContain("队列已暂停")
+      expect(sent[0]).toContain("⚠ 队列不足")
+      snap = inbox.snapshot()
+      expect(snap.deliveryPaused).toBe(false)
+      expect(snap.pending).toEqual([])
+      expect(snap.emergency).toEqual([])
+    } finally {
+      close()
+    }
+  })
+
+  test("delivery pause drops armed timers; resume catch-up re-arms stall checks for idle runs", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "running", updatedAt: ago(5) })
+      seedRun(db, { id: "r2", status: "idle", updatedAt: ago(5) })
+      seedAgent(db, "r1", {
+        name: "Solver 1",
+        status: "idle",
+        updatedAt: ago(2),
+      })
+      // r2 has NO settled agent (still streaming) → no catch-up arm.
+      const { inbox, sent } = makeInbox(db, { silenceMs: 5000, stallMs: 5000 })
+
+      // Armed pre-pause: a silence timer + a stall watch get dropped.
+      inbox.push({ type: "run.idle", runId: "r1" })
+      inbox.noteAgentIdle("r1")
+      inbox.setDeliveryPaused(true)
+      let snap = inbox.snapshot()
+      expect(snap.silence.armed).toBe(false)
+      expect(snap.stallWatch).toEqual([])
+      // Paused stall fire would be a no-op anyway; nothing sends.
+      await wait(30)
+      expect(sent).toHaveLength(0)
+
+      // Resume: backlog flush + catch-up re-arms r1 (idle agent), not r2.
+      inbox.setDeliveryPaused(false)
+      expect(sent).toHaveLength(1)
+      snap = inbox.snapshot()
+      expect(
+        snap.stallWatch.map((entry: { runId: string }) => entry.runId).sort()
+      ).toEqual(["r1"])
+    } finally {
+      close()
+    }
+  })
+
+  test("close while paused never flushes; a fresh inbox starts unpaused", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedRun(db, { id: "r1", status: "idle", updatedAt: ago(30) })
+      const held = makeInbox(db, { silenceMs: 30 })
+      held.inbox.setDeliveryPaused(true)
+      held.inbox.push({ type: "run.idle", runId: "r1" })
+      held.inbox.close()
+      await wait(80)
+      expect(held.sent).toHaveLength(0)
+
+      const fresh = makeInbox(db, { silenceMs: 30 })
+      expect(fresh.inbox.snapshot().deliveryPaused).toBe(false)
+    } finally {
+      close()
+    }
+  })
 })

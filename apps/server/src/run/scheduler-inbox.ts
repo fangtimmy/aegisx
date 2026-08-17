@@ -91,6 +91,10 @@ export function createSchedulerInbox(deps: SchedulerInboxDeps) {
   let timer: ReturnType<typeof setTimeout> | null = null
   /** 静默计时器预定 flush 时刻（epoch ms；null = 未 arm）。 */
   let timerDueAt: number | null = null
+  /** 投递暂停（用户手动）：只静默收集，不投递——调度者保持 idle。暂停时
+   * 不 arm 任何计时器；恢复时一次性补投积压并重新 arm 停滞检查。内存
+   * 态，不持久化（调度者 run 重建即恢复投递）。 */
+  let deliveryPaused = false
 
   function clearTimer(): void {
     if (timer) {
@@ -128,34 +132,38 @@ export function createSchedulerInbox(deps: SchedulerInboxDeps) {
     }
   }
 
-  /** 普通事件只入队；紧急事件（timedOut）立即 flush（捎带已积攒行）。 */
+  /** 普通事件只入队；紧急事件（timedOut）立即 flush（捎带已积攒行）。
+   * 投递暂停时一律只入队（含 timedOut——补投在恢复时）。 */
   function push(payload: EventScopePayload): void {
     const list = lines.get(payload.runId) ?? []
     list.push(eventName(payload))
     lines.set(payload.runId, list)
+    if (deliveryPaused) return
     if (payload.type === "run.timedOut") flush()
     else armTimer()
   }
 
-  /** 队列紧急事件（不足 / 启动失败）：入队紧急行并立即 flush。paused 时静默。 */
+  /** 队列紧急事件（不足 / 启动失败）：入队紧急行并立即 flush。paused 时静默
+   * （投递暂停：只入队，随恢复补投）。 */
   function pushEmergency(line: string): void {
     if (deps.isPaused()) return
     emergency.push(line)
-    flush()
+    if (!deliveryPaused) flush()
   }
 
   /** 普通通知行（队列 pause/resume 等）：只入队并重置静默计时器，随下一
-   * 次 flush 投递——不紧急，不打断。paused 时静默。 */
+   * 次 flush 投递——不紧急，不打断。paused 时静默（W3 或投递暂停：前者
+   * 丢弃，后者只入队）。 */
   function pushNotice(line: string): void {
     if (deps.isPaused()) return
     notices.push(line)
-    armTimer()
+    if (!deliveryPaused) armTimer()
   }
 
   /** agent turn settle：arm 该 run 的停滞检查计时器（fire 时现查，竞态
-   * 安全——中途 resumed/finished 由 DB 现状裁决）。paused 时静默。 */
+   * 安全——中途 resumed/finished 由 DB 现状裁决）。paused 时不 arm。 */
   function noteAgentIdle(runId: string): void {
-    if (deps.isPaused()) return
+    if (deps.isPaused() || deliveryPaused) return
     clearStallTimer(runId)
     const dueAt = Date.now() + stallMs
     const timer = setTimeout(() => {
@@ -174,11 +182,12 @@ export function createSchedulerInbox(deps: SchedulerInboxDeps) {
   }
 
   /** 停滞计时器到点：现查该 run，仍有 idle/failed agent 且距今 ≥
-   * stallMs → 紧急行 + flush；否则静默（下次 settle 重新 arm）。 */
+   * stallMs → 紧急行 + flush；否则静默（下次 settle 重新 arm）。正在
+   * finishing 的 run（finish_run 已认领 teardown）不发假紧急。 */
   function checkStall(runId: string): void {
-    if (deps.isPaused()) return
+    if (deps.isPaused() || deliveryPaused) return
     const row = db.select().from(runs).where(eq(runs.id, runId)).get()
-    if (!row || row.status === "closed") return
+    if (!row || row.status === "closed" || row.finishing) return
     const nowMs = Date.now()
     const stalled = db
       .select()
@@ -199,6 +208,52 @@ export function createSchedulerInbox(deps: SchedulerInboxDeps) {
     flush()
   }
 
+  /** 投递暂停/恢复（用户手动，仅 HTTP/UI——不暴露给调度者工具）。暂停：
+   * 停止 arm 一切计时器，只静默收集；恢复：对 live run 重新 arm 停滞
+   * 检查（catch-up——否则暂停期间的死解无人报），再一次性补投积压。 */
+  function setDeliveryPaused(paused: boolean): void {
+    if (deliveryPaused === paused) return
+    deliveryPaused = paused
+    if (paused) {
+      clearTimer()
+      timerDueAt = null
+      for (const { timer } of stallTimers.values()) clearTimeout(timer)
+      stallTimers.clear()
+      return
+    }
+    armStallCatchUp()
+    if (lines.size > 0 || notices.length > 0 || emergency.length > 0) flush()
+  }
+
+  /** 恢复补投的停滞 catch-up：live challenge run 中有已 settle agent 的
+   * 重新 arm 停滞检查（从恢复时刻起算）。 */
+  function armStallCatchUp(): void {
+    const live = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.eventId, deps.eventId),
+          eq(runs.scopeType, "challenge"),
+          inArray(runs.status, ["running", "idle"])
+        )
+      )
+      .all()
+    for (const run of live) {
+      const settled = db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.runId, run.id),
+            inArray(agents.status, ["idle", "failed"])
+          )
+        )
+        .get()
+      if (settled) noteAgentIdle(run.id)
+    }
+  }
+
   /** 清空队列与计时器（scheduler run teardown / service close）。 */
   function close(): void {
     clearTimer()
@@ -208,12 +263,14 @@ export function createSchedulerInbox(deps: SchedulerInboxDeps) {
     lines.clear()
     emergency.length = 0
     notices.length = 0
+    deliveryPaused = false
   }
 
   /** 只读实时快照（agent dialog 收件箱 tab）：待 flush 积压 + 计时器
    * 状态。历史投递不入内（持久化在 scheduler_inbox_digests，由服务查询）。 */
   function snapshot() {
     return {
+      deliveryPaused,
       pending: [...lines.entries()].map(([runId, events]) => ({
         runId,
         events: [...events],
@@ -361,5 +418,13 @@ export function createSchedulerInbox(deps: SchedulerInboxDeps) {
     deps.send(digest)
   }
 
-  return { push, pushEmergency, pushNotice, noteAgentIdle, close, snapshot }
+  return {
+    push,
+    pushEmergency,
+    pushNotice,
+    noteAgentIdle,
+    setDeliveryPaused,
+    close,
+    snapshot,
+  }
 }

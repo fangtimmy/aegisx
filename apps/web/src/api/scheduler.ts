@@ -53,6 +53,22 @@ export function getInboxDigests(
   )
 }
 
+/** Hold inbox delivery (collect silently — the orchestrator stays idle). */
+export function pauseInbox(eventId: string) {
+  return apiRequest<{ deliveryPaused: boolean }>(
+    `/events/${eventId}/inbox/pause`,
+    jsonRequest("POST", {})
+  )
+}
+
+/** Resume delivery — flushes any backlog as one digest. */
+export function resumeInbox(eventId: string) {
+  return apiRequest<{ deliveryPaused: boolean }>(
+    `/events/${eventId}/inbox/resume`,
+    jsonRequest("POST", {})
+  )
+}
+
 /** Pause the event's queue: blocks FUTURE launches (running runs keep going). */
 export function pauseQueue(eventId: string) {
   return apiRequest<{ state: "paused" }>(

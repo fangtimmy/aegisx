@@ -197,7 +197,9 @@ export function createQueueService(deps: QueueServiceDeps) {
    * fail): exactly one pending item left → fire once (the last queued item is
    * the buffer — the scheduler still has one pending + the just-launched run
    * to react within). Never fires for a count that never crossed the edge
-   * (initial single-item enqueue, or 2→0 bulk clears). */
+   * (initial single-item enqueue, or 2→0 bulk clears). A PAUSED queue stays
+   * silent — the user stopped launching on purpose; the edge is still
+   * consumed so a resumed queue never nags about it. */
   function checkStarved(eventId: string): void {
     const count = pendingCount(eventId)
     if (count >= 2) {
@@ -206,6 +208,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     }
     if (count === 1 && !starvedFired.get(eventId)) {
       starvedFired.set(eventId, true)
+      if (stateOf(eventId) === "paused") return
       deps.onQueueEmergency(eventId, "队列不足：仅剩最后 1 项排队")
     }
   }
@@ -341,6 +344,37 @@ export function createQueueService(deps: QueueServiceDeps) {
         and(eq(runQueue.eventId, eventId), sql`${runQueue.status} != 'running'`)
       )
       .run()
+  }
+
+  /** Fully-solved cleanup: cancel the challenge's pending items (stale work
+   * — a later re-enqueue resets them via the upsert). Returns the cancelled
+   * count. Running items are untouched (their runs close via teardown). */
+  function cancelPendingForChallenge(
+    eventId: string,
+    challengeId: string
+  ): number {
+    const rows = db
+      .select({ id: runQueue.id })
+      .from(runQueue)
+      .where(
+        and(
+          eq(runQueue.challengeId, challengeId),
+          eq(runQueue.status, "pending")
+        )
+      )
+      .all()
+    if (!rows.length) return 0
+    db.update(runQueue)
+      .set({ status: "cancelled", updatedAt: now() })
+      .where(
+        and(
+          eq(runQueue.challengeId, challengeId),
+          eq(runQueue.status, "pending")
+        )
+      )
+      .run()
+    checkStarved(eventId)
+    return rows.length
   }
 
   /** Update a pending item's prompt / timeout / params. Only
@@ -566,6 +600,8 @@ export function createQueueService(deps: QueueServiceDeps) {
     eventId: string,
     source: "manual" | "scheduler" = "manual"
   ): void {
+    // Idempotent: a repeat flip keeps silent (no duplicate notice lines).
+    if (stateOf(eventId) === "paused") return
     setState(eventId, "paused")
     deps.onQueueNotice(eventId, stateNotice("暂停", source))
   }
@@ -574,6 +610,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     eventId: string,
     source: "manual" | "scheduler" = "manual"
   ): void {
+    if (stateOf(eventId) === "running") return
     setState(eventId, "running")
     deps.onQueueNotice(eventId, stateNotice("恢复", source))
   }
@@ -583,6 +620,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     list,
     remove,
     clear,
+    cancelPendingForChallenge,
     update,
     reorder,
     markDone,

@@ -13,7 +13,13 @@ import type { AgentLoopSettings } from "../agents/host-session"
 import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { Database } from "../db"
-import { agents, runs, schedulerInboxDigests } from "../db/schema"
+import {
+  agents,
+  challengeFlags,
+  challenges,
+  runs,
+  schedulerInboxDigests,
+} from "../db/schema"
 import { createCatalogReader } from "../events/catalog"
 import type { ConfigStore } from "../infrastructure/config-store"
 import { EventScopeEmitter } from "../orchestration/event-scope"
@@ -26,6 +32,7 @@ import {
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V9_SDK,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V10_SDK,
   LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX,
+  LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES,
   LEGACY_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "../orchestration/prompt-defaults"
 import {
@@ -167,6 +174,15 @@ export function createRunService(options: RunServiceOptions) {
     db,
     "orchestratorSystem",
     LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V11_INBOX,
+    DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
+  )
+  // Solved-challenge cleanup: full solve auto-stops sibling runs / cancels
+  // stale queue items; a partial multi-flag solve steers the solvers. The
+  // digest's cleanup notice lines are now explained in the wake-up section.
+  upgradeBuiltinTemplate(
+    db,
+    "orchestratorSystem",
+    LEGACY_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE_V12_NOTICES,
     DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE
   )
   upgradeBuiltinTemplate(
@@ -766,10 +782,139 @@ export function createRunService(options: RunServiceOptions) {
   }
 
   /** Platform-side hook: a flag was accepted for this run — notify the event's
-   * scheduler (run.flagAccepted). Called by the app after the flag write;
-   * `agentId` is unknown on the platform path, so it stays optional. */
-  function notifyFlagAccepted(runId: string): void {
+   * scheduler (run.flagAccepted) and stop the challenge's other work: sibling
+   * runs tear down (同题已完全解出), the submitting run's other running
+   * solvers abort (the submitter keeps writing its write-up), the challenge's
+   * pending queue items cancel. Idempotent (siblings already closed → no-op).
+   * `submitterAgentId` is unknown on the HTTP/platform path — every running
+   * co-solver is then aborted. */
+  function notifyFlagAccepted(runId: string, submitterAgentId?: string): void {
     status.emitRunEvent(runId, { type: "run.flagAccepted", runId })
+    stopSiblingsOnSolved(runId, submitterAgentId)
+  }
+
+  /** Platform-side hook: a correct-but-incomplete multi-flag submission
+   * (TSecBench partial — the challenge is NOT fully solved). Steers every
+   * agent on the challenge's live runs with the confirmed flags so the
+   * solvers converge on the remaining ones; queues a non-urgent inbox
+   * notice (the scheduler learns the progress with the next digest). */
+  function notifyFlagPartial(
+    runId: string,
+    message: string | null,
+    submitterAgentId?: string
+  ): void {
+    const row = queries.getRow(runId)
+    if (!row?.challengeId || row.scopeType !== "challenge") return
+    const name =
+      db
+        .select({ name: challenges.name })
+        .from(challenges)
+        .where(eq(challenges.id, row.challengeId))
+        .get()?.name ?? row.challengeId
+    const confirmed = db
+      .select({ flag: challengeFlags.flag })
+      .from(challengeFlags)
+      .where(
+        and(
+          eq(challengeFlags.challengeId, row.challengeId),
+          eq(challengeFlags.status, "accepted")
+        )
+      )
+      .all()
+      .map((f) => f.flag)
+    const text =
+      `[多 flag 进度]「${name}」部分解出${message ? `（${message}）` : ""}。` +
+      `已确认的 flag：${confirmed.join("、") || "（无）"}。` +
+      `请专注解出剩余 flag；已确认的无需重复提交。`
+    // Every agent on the challenge's live runs except the submitter:
+    // streaming ones get the steer queued into their turn, idle ones start a
+    // fresh turn (lifecycle.send handles both).
+    for (const target of liveRunsOnChallenge(row.challengeId)) {
+      for (const agent of queries.listAgents(target.id)) {
+        if (agent.id !== submitterAgentId) steerAgent(agent.id, text)
+      }
+    }
+    inboxes
+      .get(row.eventId)
+      ?.pushNotice(
+        `部分解出：「${name}」${message ?? "多 flag 未集齐"}（run-${runId.slice(0, 8)}）`
+      )
+  }
+
+  /** Live challenge-scope runs on a challenge (running + idle). */
+  function liveRunsOnChallenge(challengeId: string) {
+    return db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.challengeId, challengeId),
+          eq(runs.scopeType, "challenge"),
+          inArray(runs.status, ["running", "idle"])
+        )
+      )
+      .all()
+  }
+
+  /** Fire-and-forget steer (queued if the agent is mid-turn). */
+  function steerAgent(agentId: string, text: string): void {
+    void lifecycle.send(agentId, text, "steer").catch(() => undefined)
+  }
+
+  /** Full-solve cleanup (see notifyFlagAccepted). Returns a summary line of
+   * what was stopped for the inbox notice. */
+  function stopSiblingsOnSolved(
+    runId: string,
+    submitterAgentId?: string
+  ): void {
+    const row = queries.getRow(runId)
+    if (!row?.challengeId || row.scopeType !== "challenge") return
+    const name =
+      db
+        .select({ name: challenges.name })
+        .from(challenges)
+        .where(eq(challenges.id, row.challengeId))
+        .get()?.name ?? row.challengeId
+    // Sibling live runs (≠ submitting run): sanctioned teardown — container
+    // down, queue item done, orphaned platform target stopped (W4.3).
+    const siblings = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(
+        and(
+          eq(runs.challengeId, row.challengeId),
+          eq(runs.scopeType, "challenge"),
+          inArray(runs.status, ["running", "idle"]),
+          ne(runs.id, runId)
+        )
+      )
+      .all()
+    for (const sibling of siblings) {
+      teardown.teardownRun(sibling.id, { summary: "同题已完全解出，自动停止" })
+    }
+    // Same-run co-solvers: abort streaming turns (the submitter finishes its
+    // write-up via finish_run; aborted settles land failed with the digest
+    // explaining why).
+    let aborted = 0
+    for (const agent of queries.listAgents(runId)) {
+      if (agent.status !== "running" || agent.id === submitterAgentId) continue
+      aborted += 1
+      void lifecycle.abort(agent.id).catch(() => undefined)
+    }
+    const cancelled = queue
+      ? queue.cancelPendingForChallenge(row.eventId, row.challengeId)
+      : 0
+    const parts: string[] = []
+    if (siblings.length > 0) parts.push(`停止 ${siblings.length} 个同题 run`)
+    if (aborted > 0) parts.push(`终止 ${aborted} 个同 run solver`)
+    if (cancelled > 0) parts.push(`取消 ${cancelled} 个排队项`)
+    if (parts.length > 0) {
+      inboxes
+        .get(row.eventId)
+        ?.pushNotice(
+          `「${name}」已完全解出（run-${runId.slice(0, 8)}）：${parts.join("、")}`
+        )
+    }
   }
 
   // Fresh-create + cold-restore orchestration (run-factory.ts); scheduler
@@ -936,6 +1081,8 @@ export function createRunService(options: RunServiceOptions) {
     getSchedulerRun: schedulerAdmin.getSchedulerRun,
     inboxSnapshot,
     inboxHistory,
+    setInboxDeliveryPaused: (eventId: string, paused: boolean) =>
+      inboxes.get(eventId)?.setDeliveryPaused(paused),
     getSchedulerConfig: schedulerAdmin.getSchedulerConfig,
     upsertSchedulerConfig: schedulerAdmin.upsertSchedulerConfig,
     startScheduler: schedulerAdmin.startScheduler,
@@ -956,6 +1103,7 @@ export function createRunService(options: RunServiceOptions) {
     runDirPath: queries.runDirPath,
     bus,
     notifyFlagAccepted,
+    notifyFlagPartial,
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,
     /** Test seam: the atomic finish claim. Exposed so tests can verify the

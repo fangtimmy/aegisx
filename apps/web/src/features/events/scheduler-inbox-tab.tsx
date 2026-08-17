@@ -1,4 +1,9 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 
 import { keys, schedulerApi } from "@/api"
@@ -48,6 +53,18 @@ export function SchedulerInboxTab({
     queryFn: () => schedulerApi.getInbox(eventId),
     refetchInterval: active ? POLL_INTERVAL_MS : false,
   })
+  const queryClient = useQueryClient()
+  const holdToggle = useMutation({
+    mutationFn: (paused: boolean) =>
+      paused
+        ? schedulerApi.pauseInbox(eventId)
+        : schedulerApi.resumeInbox(eventId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: keys.scheduler.inbox(eventId),
+      })
+    },
+  })
   const history = useInfiniteQuery({
     queryKey: keys.scheduler.inboxDigests(eventId),
     queryFn: ({ pageParam }) =>
@@ -86,6 +103,11 @@ export function SchedulerInboxTab({
               加载中…
             </Badge>
           )}
+          {snap?.deliveryPaused && (
+            <Badge size="sm" variant="warning">
+              已暂停（静默收集）
+            </Badge>
+          )}
           {snap?.silence.armed && snap.silence.flushAt !== null && (
             <Badge size="sm" variant="info">
               静默 {countdown(snap.silence.flushAt - nowMs)} 后结算
@@ -96,6 +118,20 @@ export function SchedulerInboxTab({
               run-{runId.slice(0, 8)} 停滞检查 {countdown(dueAt - nowMs)}
             </Badge>
           ))}
+          {snap?.live && (
+            <Button
+              disabled={holdToggle.isPending}
+              onClick={() => holdToggle.mutate(!snap.deliveryPaused)}
+              size="sm"
+              variant="outline"
+            >
+              {holdToggle.isPending
+                ? "…"
+                : snap.deliveryPaused
+                  ? "恢复投递"
+                  : "暂停投递"}
+            </Button>
+          )}
         </div>
 
         {/* Pending backlog */}

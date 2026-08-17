@@ -69,8 +69,17 @@ export function createPlatformFlags(
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
   adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined,
   options?: {
-    /** Notify the run layer after a flag becomes platform-accepted (SSE refresh). */
-    onRunFlagAccepted?(runId: string): void
+    /** Notify the run layer after a flag becomes platform-accepted (SSE
+     * refresh + solved-challenge cleanup). */
+    onRunFlagAccepted?(runId: string, submitterAgentId?: string): void
+    /** Notify the run layer after a correct-but-incomplete multi-flag
+     * submission (TSecBench partial): steers the challenge's solvers toward
+     * the remaining flags. */
+    onRunFlagPartial?(
+      runId: string,
+      message: string | null,
+      submitterAgentId?: string
+    ): void
   }
 ) {
   function lookup(challengeId: string, flag: string) {
@@ -159,6 +168,7 @@ export function createPlatformFlags(
     challengeId: string,
     flag: string | undefined,
     verifyRemote = true,
+    submitterAgentId?: string,
     signal?: AbortSignal
   ): Promise<FlagSubmissionResult> {
     const challenge = db
@@ -189,8 +199,21 @@ export function createPlatformFlags(
       (existing.status === "accepted" || existing.status === "rejected")
     ) {
       // A repeat submission of an accepted flag still counts for the
-      // submitting run — the scheduler's run.flagAccepted must fire for it.
-      if (existing.status === "accepted") options?.onRunFlagAccepted?.(runId)
+      // submitting run — but "accepted" at flag level also covers a multi-flag
+      // partial (collapsed on persist), and only a FULLY solved challenge may
+      // fire run.flagAccepted (its cleanup stops sibling runs). On a
+      // partially-solved challenge the repeat steers instead.
+      if (existing.status === "accepted") {
+        // Integrated platform → `challenge_remote.solved` is the full verdict
+        // (multi-flag partials never set it); non-integrated → an accepted
+        // flag IS the full local verdict.
+        const fullySolved = integrated ? Boolean(remote?.solved) : true
+        if (fullySolved) {
+          options?.onRunFlagAccepted?.(runId, submitterAgentId)
+        } else {
+          options?.onRunFlagPartial?.(runId, null, submitterAgentId)
+        }
+      }
       return {
         status: existing.status,
         ...(existing.message ? { message: existing.message } : {}),
@@ -226,8 +249,9 @@ export function createPlatformFlags(
         db.insert(challengeFlags).values(row).run()
       }
       // No remote judge here, but the acceptance is real — notify the run
-      // layer so the scheduler learns the flag (run.flagAccepted).
-      options?.onRunFlagAccepted?.(runId)
+      // layer so the scheduler learns the flag (run.flagAccepted). No
+      // platform → no multi-flag partial: accepted IS the full verdict.
+      options?.onRunFlagAccepted?.(runId, submitterAgentId)
       return { status: "accepted", verified: false }
     }
 
@@ -322,7 +346,14 @@ export function createPlatformFlags(
           .set({ solved: true })
           .where(eq(challengeRemote.challengeId, challengeId))
           .run()
-        options?.onRunFlagAccepted?.(runId)
+        options?.onRunFlagAccepted?.(runId, submitterAgentId)
+      }
+      if (result.status === "partial") {
+        options?.onRunFlagPartial?.(
+          runId,
+          result.message ?? null,
+          submitterAgentId
+        )
       }
       return {
         status: flagStatusFromResult(result.status),

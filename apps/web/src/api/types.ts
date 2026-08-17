@@ -88,6 +88,7 @@ export type QueueSnapshot = {
 /** GET /api/events/:id/inbox — live scheduler-inbox snapshot. */
 export type InboxSnapshot = {
   live: boolean
+  deliveryPaused: boolean
   pending: Array<{ runId: string; events: string[] }>
   notices: string[]
   emergency: string[]
