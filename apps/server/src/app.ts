@@ -101,6 +101,8 @@ export function createApp(options: { dataDir: string }) {
     runManager: {
       listForEvent: (eventId: string) => runService.listForEvent(eventId),
       usageForEvent: (eventId: string) => runService.usageForEvent(eventId),
+      deleteRunsForEvent: (eventId: string, scope: "challenge" | "all") =>
+        runService.deleteRunsForEvent(eventId, scope),
     },
     getSettings,
     catalog,

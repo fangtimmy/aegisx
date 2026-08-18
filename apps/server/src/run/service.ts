@@ -647,6 +647,35 @@ export function createRunService(options: RunServiceOptions) {
     })
   }
 
+  /** Event-settings bulk purge: delete every run of the event in scope —
+   * event-scope (scheduler) first so the orchestrator stops reacting to the
+   * teardowns that follow. Reuses deleteRun verbatim (target orphan stop,
+   * session abort/dispose, container removal, timers, dm channel sweep,
+   * workspace rmSync, row delete). */
+  async function deleteRunsForEvent(
+    eventId: string,
+    scope: "challenge" | "all"
+  ) {
+    const rows = db
+      .select({ id: runs.id, scopeType: runs.scopeType })
+      .from(runs)
+      .where(
+        scope === "all"
+          ? eq(runs.eventId, eventId)
+          : and(eq(runs.eventId, eventId), eq(runs.scopeType, "challenge"))
+      )
+      .all()
+    // Scheduler (event-scope) runs first — the orchestrator stops reacting
+    // to the teardowns that follow.
+    const ordered = [
+      ...rows.filter((row) => row.scopeType === "event"),
+      ...rows.filter((row) => row.scopeType !== "event"),
+    ]
+    for (const row of ordered) {
+      await deleteRun(row.id)
+    }
+  }
+
   /** W4.3: stop the challenge's platform target when a teardown orphans it —
    * the challenge is target-capable and no OTHER live (running/idle) run is
    * still attacking it. Fire-and-forget; errors swallowed. Only sanctioned
@@ -960,6 +989,7 @@ export function createRunService(options: RunServiceOptions) {
     setRunTimeout: schedulerAdmin.setRunTimeout,
     closeRun,
     delete: deleteRun,
+    deleteRunsForEvent,
     getStatus: schedulerAdmin.getStatusSnapshot,
     getSchedulerRun: schedulerAdmin.getSchedulerRun,
     inboxSnapshot,

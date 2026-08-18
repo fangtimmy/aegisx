@@ -71,6 +71,10 @@ type PlatformService = ReturnType<typeof createPlatformService>
 type RunList = {
   listForEvent(eventId: string): RunPublic[]
   usageForEvent(eventId: string): RunUsage | undefined
+  deleteRunsForEvent(
+    eventId: string,
+    scope: "challenge" | "all"
+  ): Promise<void>
 }
 
 export function registerEventRoutes(
@@ -237,6 +241,72 @@ export function registerEventRoutes(
       throw error
     }
     storage.purge(trashedPath)
+    return c.body(null, 204)
+  })
+
+  // Event-settings danger zone: wipe every run of the event (including the
+  // scheduler run — live runs are forcibly aborted, same as the per-run
+  // delete). Pending queue items stay: queued work is not history.
+  app.delete("/api/events/:eventId/runs", async (c) => {
+    const eventId = c.req.param("eventId")
+    if (!getEvent(eventId)) {
+      return notFound(c, "Event not found")
+    }
+    await runManager.deleteRunsForEvent(eventId, "all")
+    return c.body(null, 204)
+  })
+
+  // Event-settings danger zone: wipe every challenge of the event — challenge
+  // runs first (same active-run guard as the per-challenge delete), then
+  // team:<cid> channel sweeps and attachment dirs (trash-restored on error).
+  app.delete("/api/events/:eventId/challenges", async (c) => {
+    const eventId = c.req.param("eventId")
+    if (!getEvent(eventId)) {
+      return notFound(c, "Event not found")
+    }
+    const liveChallengeRun = db
+      .select({ id: runs.id })
+      .from(runs)
+      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+      .where(
+        and(
+          eq(challenges.eventId, eventId),
+          inArray(runs.status, ["running", "idle"])
+        )
+      )
+      .get()
+    if (liveChallengeRun) {
+      return conflict(
+        c,
+        "active_run",
+        "Close active runs before deleting this event's challenges"
+      )
+    }
+    try {
+      await platformService.assertNoActiveTargets(eventId)
+    } catch (error) {
+      return platformActionHttpError(c, error)
+    }
+    await runManager.deleteRunsForEvent(eventId, "challenge")
+    const items = listChallengesForEvent(eventId)
+    const trashedPaths: Array<[trashedPath: string, path: string]> = []
+    try {
+      for (const challenge of items) {
+        options.cleanupChallengeChannelFiles(challenge.id)
+        const path = storage.challengePath(eventId, challenge.id)
+        const trashedPath = storage.moveToTrash(path)
+        if (trashedPath) trashedPaths.push([trashedPath, path])
+      }
+      db.delete(challenges).where(eq(challenges.eventId, eventId)).run()
+    } catch (error) {
+      for (const [trashedPath, path] of trashedPaths) {
+        storage.restore(trashedPath, path)
+      }
+      throw error
+    }
+    for (const [trashedPath] of trashedPaths) {
+      storage.purge(trashedPath)
+    }
     return c.body(null, 204)
   })
 

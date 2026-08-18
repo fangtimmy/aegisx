@@ -32,6 +32,16 @@ export function deleteEvent(eventId: string) {
   return apiRequest<void>(`/events/${eventId}`, { method: "DELETE" })
 }
 
+export function deleteEventChallenges(eventId: string) {
+  return apiRequest<void>(`/events/${eventId}/challenges`, {
+    method: "DELETE",
+  })
+}
+
+export function deleteEventRuns(eventId: string) {
+  return apiRequest<void>(`/events/${eventId}/runs`, { method: "DELETE" })
+}
+
 /** Event-wide token usage + cost (session_entries.runId is the redundant
  * run-level key that makes this one indexed query). */
 export function getEventUsage(eventId: string) {

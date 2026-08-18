@@ -1,4 +1,8 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import {
+  type UseMutationResult,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { Trash2, TriangleAlert } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
@@ -26,6 +30,17 @@ import { PlatformBinding } from "./platform-binding"
 export function EventSettings({ event }: { event: EventSummary }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const invalidateEventCaches = async () => {
+    // events.detail is the prefix of the scheduler/queue/inbox keys and
+    // runs.byEvent of the fleet key, so three invalidations cover all views.
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: keys.events.detail(event.id),
+      }),
+      queryClient.invalidateQueries({ queryKey: keys.events.all }),
+      queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(event.id) }),
+    ])
+  }
   // Two independent forms: "名称" and "提示词指令" live in separate sections
   // and each save button only submits its own field (Partial update), so
   // editing one never implicitly re-submits the other.
@@ -68,6 +83,22 @@ export function EventSettings({ event }: { event: EventSummary }) {
       navigate("/")
     },
     onError: (error) => toast.error("删除赛事失败", error.message),
+  })
+  const purgeChallenges = useMutation({
+    mutationFn: () => eventsApi.deleteEventChallenges(event.id),
+    onSuccess: async () => {
+      await invalidateEventCaches()
+      toast.success("题目已清空")
+    },
+    onError: (error) => toast.error("清空题目失败", error.message),
+  })
+  const purgeRuns = useMutation({
+    mutationFn: () => eventsApi.deleteEventRuns(event.id),
+    onSuccess: async () => {
+      await invalidateEventCaches()
+      toast.success("运行历史已清空")
+    },
+    onError: (error) => toast.error("清空运行历史失败", error.message),
   })
 
   return (
@@ -182,55 +213,91 @@ export function EventSettings({ event }: { event: EventSummary }) {
         >
           危险区域
         </h2>
-        <Field className="mt-4 max-w-xl">
-          <FieldLabel>删除赛事</FieldLabel>
-          <FieldDescription>
-            永久删除本赛事及其题目、附件和任务历史。
-          </FieldDescription>
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={
-                <Button
-                  className="mt-2 w-fit"
-                  type="button"
-                  variant="destructive"
-                />
-              }
-            >
-              <Trash2 /> 删除赛事
-            </AlertDialogTrigger>
-            <AlertDialogPopup>
-              <AlertDialogHeader>
-                <AlertDialogTitle>删除 {event.name}？</AlertDialogTitle>
-                <AlertDialogDescription>
-                  此操作无法撤销。必须先停止所有活跃任务。
-                </AlertDialogDescription>
-                {remove.error && (
-                  <Alert variant="error">
-                    <TriangleAlert />
-                    <AlertDescription>{remove.error.message}</AlertDescription>
-                  </Alert>
-                )}
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogClose
-                  render={<Button type="button" variant="ghost" />}
-                >
-                  取消
-                </AlertDialogClose>
-                <Button
-                  loading={remove.isPending}
-                  onClick={() => remove.mutate()}
-                  type="button"
-                  variant="destructive"
-                >
-                  删除赛事
-                </Button>
-              </AlertDialogFooter>
-            </AlertDialogPopup>
-          </AlertDialog>
-        </Field>
+        <div className="mt-4 max-w-xl space-y-8">
+          <DangerAction
+            buttonLabel="清空题目"
+            description="永久删除全部题目、附件及题目级运行记录。"
+            dialogTitle={`清空 ${event.name} 的全部题目？`}
+            mutation={purgeChallenges}
+            onConfirm={() => purgeChallenges.mutate()}
+          />
+          <DangerAction
+            buttonLabel="清空运行历史"
+            description="永久删除全部运行记录及其容器、工作区与会话数据；题目与 flag 历史保留。运行中的 agent 将被强制中止。"
+            dialogTitle={`清空 ${event.name} 的运行历史？`}
+            mutation={purgeRuns}
+            onConfirm={() => purgeRuns.mutate()}
+          />
+          <DangerAction
+            buttonLabel="删除赛事"
+            description="永久删除本赛事及其题目、附件和任务历史。"
+            dialogTitle={`删除 ${event.name}？`}
+            mutation={remove}
+            onConfirm={() => remove.mutate()}
+          />
+        </div>
       </section>
     </div>
+  )
+}
+
+function DangerAction({
+  buttonLabel,
+  description,
+  dialogTitle,
+  mutation,
+  onConfirm,
+}: {
+  buttonLabel: string
+  description: string
+  dialogTitle: string
+  mutation: UseMutationResult<unknown, Error, void, unknown>
+  onConfirm: () => void
+}) {
+  return (
+    <Field>
+      <FieldLabel>{buttonLabel}</FieldLabel>
+      <FieldDescription>{description}</FieldDescription>
+      <AlertDialog>
+        <AlertDialogTrigger
+          render={
+            <Button
+              className="mt-2 w-fit"
+              type="button"
+              variant="destructive"
+            />
+          }
+        >
+          <Trash2 /> {buttonLabel}
+        </AlertDialogTrigger>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{dialogTitle}</AlertDialogTitle>
+            <AlertDialogDescription>
+              此操作无法撤销。必须先停止所有活跃任务。
+            </AlertDialogDescription>
+            {mutation.error && (
+              <Alert variant="error">
+                <TriangleAlert />
+                <AlertDescription>{mutation.error.message}</AlertDescription>
+              </Alert>
+            )}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+              取消
+            </AlertDialogClose>
+            <Button
+              loading={mutation.isPending}
+              onClick={onConfirm}
+              type="button"
+              variant="destructive"
+            >
+              {buttonLabel}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </Field>
   )
 }
