@@ -27,14 +27,10 @@ filename/size metadata — fetch to see content.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 from .client import AegisxError, get_client
 from .models import Channel, ChannelMessage, from_dict
-
-#: Default materialization dir (relative to the workspace cwd).
-FETCH_INBOX_DIR = "inbox"
 
 #: Type aliases hoisted above `def list` — the module-level name `list`
 #: shadows the builtin for every later annotation, so annotations must not
@@ -131,34 +127,15 @@ def ask(
     return _msg(data)
 
 
-def fetch(file_id: str, dest: str | None = None) -> str:
-    """Materialize an attachment into YOUR workspace (default
-    <workspace>/inbox/<original filename>) and return the written path. The
-    channel file store is never container-mounted — bytes move through this
-    HTTP copy, keeping the container boundary intact."""
-    meta = get_client().request(
-        "GET", f"/api/channel-files/{file_id}", query={"meta": "1"}
-    )
-    filename = "attachment"
-    if isinstance(meta, dict):
-        filename = meta.get("filename") or filename
-    target = dest or str(Path(FETCH_INBOX_DIR) / Path(filename).name)
-    if os.path.isabs(target):
-        raise AegisxError(
-            "invalid", "dest must be workspace-relative, not absolute"
-        )
-    return get_client().download(f"/api/channel-files/{file_id}", target)
-
-
-def announce(run_id: str, text: str) -> ChannelMessage:
-    """Scheduler-only: broadcast to the challenge's #team (v18: one shared
-    team channel per challenge — every live run's solvers receive it on the
-    next delivery tick; non-urgent FYI by design). Use for FYI guidance; use
-    `aegisx.agents.message` for directives targeting one solver."""
+def announce(challenge_id: str, text: str) -> ChannelMessage:
+    """Scheduler-only: broadcast to the challenge's #team (one shared team
+channel per challenge — every live agent on the challenge receives it on
+the next delivery tick; non-urgent FYI by design). Use for FYI guidance;
+use `aegisx.agents.message` for directives targeting one agent."""
     from .client import require_manager
 
     require_manager()
-    team = _run_team(run_id)
+    team = f"team:{challenge_id}"
     data = get_client().request(
         "POST",
         f"/api/channels/{_sel(team)}/messages",
@@ -196,13 +173,3 @@ def orch() -> str:
             "AEGISX_EVENT_ID is not set — call aegisx.configure(event_id=...)",
         )
     return f"orch:{client.event_id}"
-
-
-def _run_team(run_id: str) -> str:
-    """Resolve a run's #team key via the run's channel tree (the LLM never
-    assembles keys itself)."""
-    data = get_client().request("GET", f"/api/runs/{run_id}/channels")
-    for item in data.get("items", []):
-        if item.get("kind") == "team":
-            return str(item.get("key", ""))
-    raise AegisxError("not_found", f"No #team channel for run {run_id}")

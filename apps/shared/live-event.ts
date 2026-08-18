@@ -4,12 +4,13 @@ import {
   type EntryItem,
   type SessionEntry,
 } from "./agent"
-import type { RunPublic } from "./run"
+import type { ChannelFileMeta } from "./channels"
 
 /** One channel message (the ledger row — shared wire shape for timelines,
  * SDK reads, and the SSE `channel.message` push; v18: keyed by the derived
- * channel key). Attachments render as metadata only (📎 filename · size);
- * content is fetched separately. */
+ * channel key). v19 attachments are shared/-tree paths (copied by the
+ * server at post time); content is read directly from the workspace, not
+ * fetched. */
 export type ChannelMessage = {
   id: number
   channelKey: string
@@ -19,7 +20,7 @@ export type ChannelMessage = {
   body: string
   meta: Record<string, unknown>
   createdAt: string
-  files: Array<{ id: string; filename: string; size: number }>
+  files: ChannelFileMeta[]
 }
 
 export type TransientActivity = "retrying" | "compacting"
@@ -49,19 +50,14 @@ export type ContextSnapshot = {
 }
 
 /**
- * Live-only SSE events pushed over `GET /api/runs/:id/stream` (EventSource).
+ * Live-only SSE events pushed over `GET /api/agents/:id/stream` (EventSource).
  * Ephemeral: reconnect re-fetches durable entries from `GET .../messages` and
  * re-applies progress from the current stream.
  */
 export type LiveEvent =
   | {
       type: "ready"
-      runId: string
       agentId: string
-    }
-  | {
-      type: "run.updated"
-      run: RunPublic
     }
   | {
       type: "agent.updated"
@@ -131,7 +127,6 @@ export type LiveEvent =
       type: "channel.message"
       message: ChannelMessage
     }
-
 /**
  * Timing metadata for a `session_entries` row (the `meta` column, v10).
  *

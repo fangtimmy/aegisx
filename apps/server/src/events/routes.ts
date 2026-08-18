@@ -1,12 +1,12 @@
 import { existsSync } from "node:fs"
 
-import { get, type RunPublic, type RunUsage } from "@aegisx/shared"
+import { get, type AgentUsage } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
 
 import type { Database } from "../db"
-import { attachments, challenges, events, runs } from "../db/schema"
+import { agents, attachments, challenges, events } from "../db/schema"
 import {
   badRequest,
   conflict,
@@ -68,10 +68,9 @@ const manualFlagInput = Type.Object(
 
 type Storage = ReturnType<typeof createStorage>
 type PlatformService = ReturnType<typeof createPlatformService>
-type RunList = {
-  listForEvent(eventId: string): RunPublic[]
-  usageForEvent(eventId: string): RunUsage | undefined
-  deleteRunsForEvent(eventId: string, scope: "challenge" | "all"): Promise<void>
+type AgentManager = {
+  usageForEvent(eventId: string): AgentUsage | undefined
+  deleteAgentsForEvent(eventId: string, scope: "solver" | "all"): Promise<void>
 }
 
 export function registerEventRoutes(
@@ -80,23 +79,29 @@ export function registerEventRoutes(
     db: Database
     storage: Storage
     platformService: PlatformService
-    runManager: RunList
+    agentManager: AgentManager
     getSettings(): { "runtime.maxAttachmentMb": number }
     catalog: Pick<
       ReturnType<typeof createCatalogReader>,
       "getEvent" | "getChallenge" | "listEvents" | "listChallengesForEvent"
     >
     /** v18 §八: sweep the challenge's team:<cid> data (messages + cursors +
-     * flat attachment dirs) when the challenge is deleted. */
-    cleanupChallengeChannelFiles(challengeId: string): void
+     * shared copies) when the challenge is deleted. */
+    cleanupChallengeChannels(challengeId: string): void
+    /** Remove the challenge workspace tree (agents/ shared/ attachments/
+     * sessions/ runtime/) on challenge deletion. */
+    deleteChallengeWorkspace(eventId: string, challengeId: string): void
     /** v18 §八: sweep ALL channel data tied to the event (orch:<eid> + every
      * team of the event's challenges + every dm of the event's agents) —
      * MUST run before the event row delete cascades the entities the key
      * enumeration needs. */
-    cleanupEventChannelData(eventId: string): void
+    cleanupEventChannels(eventId: string): void
+    /** Remove the orchestrator workspace + every challenge workspace of the
+     * event on event deletion. */
+    deleteEventWorkspaces(eventId: string): void
   }
 ) {
-  const { db, storage, platformService, runManager, catalog } = options
+  const { db, storage, platformService, agentManager, catalog } = options
   // Method references through the options/catalog objects (not destructured)
   // so `this` survives (oxlint unbound-method).
   const getSettings = () => options.getSettings()
@@ -128,7 +133,7 @@ export function registerEventRoutes(
         ...event,
         challengeCount: 0,
         solvedCount: 0,
-        activeRunCount: 0,
+        activeAgentCount: 0,
         lastActivityAt: now,
         platform: null,
       },
@@ -144,20 +149,12 @@ export function registerEventRoutes(
     return c.json({ event, challenges: listChallengesForEvent(event.id) })
   })
 
-  app.get("/api/events/:eventId/runs", (c) => {
-    const eventId = c.req.param("eventId")
-    if (!getEvent(eventId)) {
-      return notFound(c, "Event not found")
-    }
-    return c.json({ items: runManager.listForEvent(eventId) })
-  })
-
   app.get("/api/events/:eventId/usage", (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
       return notFound(c, "Event not found")
     }
-    return c.json({ usage: runManager.usageForEvent(eventId) })
+    return c.json({ usage: agentManager.usageForEvent(eventId) })
   })
 
   app.patch("/api/events/:eventId", validateJson(updateEventInput), (c) => {
@@ -188,37 +185,24 @@ export function registerEventRoutes(
     if (!getEvent(eventId)) {
       return notFound(c, "Event not found")
     }
-    const activeRun = db
-      .select({ id: runs.id })
-      .from(runs)
-      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+    // Any live agent (solver OR scheduler — both carry eventId) blocks the
+    // delete: cascading the row away while its session + container keep
+    // running would orphan them (burning tokens).
+    const liveAgent = db
+      .select({ id: agents.id })
+      .from(agents)
       .where(
         and(
-          eq(challenges.eventId, eventId),
-          inArray(runs.status, ["running", "idle"])
+          eq(agents.eventId, eventId),
+          inArray(agents.status, ["running", "idle"])
         )
       )
       .get()
-    // Event-scope scheduler runs carry challengeId = NULL, so the challenge
-    // join above cannot see them. Deleting the event under a live scheduler
-    // would cascade the run row away while its agent session + container keep
-    // running (orphan, burning tokens). Guard both shapes.
-    const schedulerRun = db
-      .select({ id: runs.id })
-      .from(runs)
-      .where(
-        and(
-          eq(runs.eventId, eventId),
-          eq(runs.scopeType, "event"),
-          inArray(runs.status, ["running", "idle"])
-        )
-      )
-      .get()
-    if (activeRun || schedulerRun) {
+    if (liveAgent) {
       return conflict(
         c,
-        "active_run",
-        "Close active runs / stop the scheduler before deleting this event"
+        "active_agent",
+        "Close live agents / stop the scheduler before deleting this event"
       )
     }
     try {
@@ -230,8 +214,9 @@ export function registerEventRoutes(
     const trashedPath = storage.moveToTrash(path)
     try {
       // v18 §八: derived-key channel data has no FK cascade — sweep it while
-      // the challenge/run/agent rows still exist (the enumeration needs them).
-      options.cleanupEventChannelData(eventId)
+      // the challenge/agent rows still exist (the enumeration needs them).
+      options.cleanupEventChannels(eventId)
+      options.deleteEventWorkspaces(eventId)
       db.delete(events).where(eq(events.id, eventId)).run()
     } catch (error) {
       if (trashedPath) storage.restore(trashedPath, path)
@@ -241,42 +226,45 @@ export function registerEventRoutes(
     return c.body(null, 204)
   })
 
-  // Event-settings danger zone: wipe every run of the event (including the
-  // scheduler run — live runs are forcibly aborted, same as the per-run
-  // delete). Pending queue items stay: queued work is not history.
-  app.delete("/api/events/:eventId/runs", async (c) => {
+  // Event-settings danger zone: wipe every solver agent of the event (the
+  // scheduler agent included with ?scope=all — live agents are forcibly
+  // closed, same as the per-agent delete). Pending queue items stay: queued
+  // work is not history.
+  app.delete("/api/events/:eventId/agents", async (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
       return notFound(c, "Event not found")
     }
-    await runManager.deleteRunsForEvent(eventId, "all")
+    const scope = c.req.query("scope") === "all" ? "all" : "solver"
+    await agentManager.deleteAgentsForEvent(eventId, scope)
     return c.body(null, 204)
   })
 
-  // Event-settings danger zone: wipe every challenge of the event — challenge
-  // runs first (same active-run guard as the per-challenge delete), then
-  // team:<cid> channel sweeps and attachment dirs (trash-restored on error).
+  // Event-settings danger zone: wipe every challenge of the event — the
+  // challenges' agents first (same live-agent guard as the per-challenge
+  // delete), then team:<cid> channel sweeps and attachment dirs
+  // (trash-restored on error).
   app.delete("/api/events/:eventId/challenges", async (c) => {
     const eventId = c.req.param("eventId")
     if (!getEvent(eventId)) {
       return notFound(c, "Event not found")
     }
-    const liveChallengeRun = db
-      .select({ id: runs.id })
-      .from(runs)
-      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+    const liveChallengeAgent = db
+      .select({ id: agents.id })
+      .from(agents)
+      .innerJoin(challenges, eq(agents.challengeId, challenges.id))
       .where(
         and(
           eq(challenges.eventId, eventId),
-          inArray(runs.status, ["running", "idle"])
+          inArray(agents.status, ["running", "idle"])
         )
       )
       .get()
-    if (liveChallengeRun) {
+    if (liveChallengeAgent) {
       return conflict(
         c,
-        "active_run",
-        "Close active runs before deleting this event's challenges"
+        "active_agent",
+        "Close live agents before deleting this event's challenges"
       )
     }
     try {
@@ -284,12 +272,13 @@ export function registerEventRoutes(
     } catch (error) {
       return platformActionHttpError(c, error)
     }
-    await runManager.deleteRunsForEvent(eventId, "challenge")
+    await agentManager.deleteAgentsForEvent(eventId, "solver")
     const items = listChallengesForEvent(eventId)
     const trashedPaths: Array<[trashedPath: string, path: string]> = []
     try {
       for (const challenge of items) {
-        options.cleanupChallengeChannelFiles(challenge.id)
+        options.cleanupChallengeChannels(challenge.id)
+        options.deleteChallengeWorkspace(eventId, challenge.id)
         const path = storage.challengePath(eventId, challenge.id)
         const trashedPath = storage.moveToTrash(path)
         if (trashedPath) trashedPaths.push([trashedPath, path])
@@ -443,29 +432,30 @@ export function registerEventRoutes(
     if (!challenge) {
       return notFound(c, "Challenge not found")
     }
-    const activeRun = db
-      .select({ id: runs.id })
-      .from(runs)
+    const liveAgent = db
+      .select({ id: agents.id })
+      .from(agents)
       .where(
         and(
-          eq(runs.challengeId, challenge.id),
-          inArray(runs.status, ["running", "idle"])
+          eq(agents.challengeId, challenge.id),
+          inArray(agents.status, ["running", "idle"])
         )
       )
       .get()
-    if (activeRun) {
+    if (liveAgent) {
       return conflict(
         c,
-        "active_run",
-        "Close active runs before deleting this challenge"
+        "active_agent",
+        "Close live agents before deleting this challenge"
       )
     }
     const path = storage.challengePath(challenge.eventId, challenge.id)
     const trashedPath = storage.moveToTrash(path)
     try {
       // v18 §八: the team:<cid> knowledge base has no FK cascade — sweep it
-      // (messages + cursors + flat attachment dirs) with the challenge.
-      options.cleanupChallengeChannelFiles(challenge.id)
+      // (messages + cursors + shared copies) with the challenge.
+      options.cleanupChallengeChannels(challenge.id)
+      options.deleteChallengeWorkspace(challenge.eventId, challenge.id)
       db.delete(challenges).where(eq(challenges.id, challenge.id)).run()
     } catch (error) {
       if (trashedPath) storage.restore(trashedPath, path)

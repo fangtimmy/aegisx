@@ -1,10 +1,10 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
+  AgentUsage,
   Challenge,
   ChallengeInput,
   EventInput,
   EventSummary,
-  RunUsage,
 } from "./types"
 
 export function listEvents() {
@@ -38,14 +38,16 @@ export function deleteEventChallenges(eventId: string) {
   })
 }
 
-export function deleteEventRuns(eventId: string) {
-  return apiRequest<void>(`/events/${eventId}/runs`, { method: "DELETE" })
+export function deleteEventAgents(eventId: string, scope: "solver" | "all" = "solver") {
+  const query = scope === "all" ? "?scope=all" : ""
+  return apiRequest<void>(`/events/${eventId}/agents${query}`, {
+    method: "DELETE",
+  })
 }
 
-/** Event-wide token usage + cost (session_entries.runId is the redundant
- * run-level key that makes this one indexed query). */
+/** Event-wide token usage + cost (aggregated by agents.event_id). */
 export function getEventUsage(eventId: string) {
-  return apiRequest<{ usage?: RunUsage }>(`/events/${eventId}/usage`)
+  return apiRequest<{ usage?: AgentUsage }>(`/events/${eventId}/usage`)
 }
 
 export function createChallenge(eventId: string, input: ChallengeInput) {

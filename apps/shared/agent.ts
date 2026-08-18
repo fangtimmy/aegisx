@@ -1,4 +1,4 @@
-import type { AgentStatus } from "./run"
+import type { AgentUsage, WorkspaceInfo } from "./workspace"
 
 /** One active tool's definition snapshot (for the timeline 工具定义 panel).
  * `parameters` is the tool's TypeBox schema serialized to JSON Schema. */
@@ -20,43 +20,67 @@ export type ToolDefinitionSnapshot = {
   promptGuidelines?: string[]
 }
 
-/** v9 agent: a pi session + role + model + prompt + tools, snapshotted on the
- * row at createAgent time. A run declares 1..N solvers (`solver-1` = entry) or
- * one event scheduler (`orchestrator`); there are no child agents. */
+/** v19 agent: the execution unit. One attempt on a challenge = one agent row
+ * (challengeId null = the event's orchestrator). A pi session + role + model
+ * + prompt + tools, snapshotted on the row at spawn time. */
 export type AgentSummary = {
   id: string
-  runId: string
-  /** Run-unique agent slot: `solver-N` / `orchestrator`. */
-  slot: string
-  /** Free-form role ('solver' / 'orchestrator'). */
-  role: string
-  /** Kept for schema stability; always null in v9 (spawn child removed). */
-  parentAgentId: string | null
-  /** Entry agent (run-level default conversation target); at most one per run. */
-  isEntry: boolean
+  eventId: string
+  /** Null = the event's scheduler agent (one per event). */
+  challengeId: string | null
+  /** Display name of the agent's challenge ("" for the scheduler). */
+  challengeName: string
+  role: "solver" | "orchestrator"
   name: string | null
-  /** Delegated task text (spawn children); always null in v9. */
-  task: string | null
   /** Canonical model ref snapshot (`<providerKey>/<modelId>:<effort>` | alias),
-   * persisted on the agent row at createAgent/switch time. */
+   * persisted on the agent row at spawn/switch time. */
   model: string | null
-  /** Full system prompt snapshot (createAgent writes once; cold-restore
-   * reuses). Exposed so the timeline can render a system-config card. */
-  systemPrompt: string
-  /** Tool allowlist snapshot (real tool names; file tools always on, not
-   * listed). JSON-parsed from the agents row. */
-  tools: string[]
-  /** Active tool-definition snapshots (name/description/JSON-schema), incl.
-   * the always-on file tools. Empty for pre-v11 rows without a snapshot. */
-  toolDefinitions: ToolDefinitionSnapshot[]
   status: AgentStatus
-  /** Session id (DB) or legacy jsonl path for this agent (resume + audit). */
-  sessionFile: string | null
+  source: "manual" | "scheduler"
+  /** The spawn prompt (strategy input); reused on re-spawn. */
+  prompt: string | null
+  /** finish_run's result (written at the agent's terminal completed settle). */
+  summary: string | null
+  error: string | null
+  deadlineAt: string | null
+  lastTimeoutAt: string | null
   createdAt: string
   startedAt: string | null
   updatedAt: string
   completedAt: string | null
-  error: string | null
+}
+
+/** REST snapshot for one agent (GET /api/agents/:id). */
+export type AgentDetail = {
+  agent: AgentSummary
+  /** Tool allowlist snapshot (real tool names; file tools always on, not
+   * listed). JSON-parsed from the agents row. */
+  tools: string[]
+  /** Active tool-definition snapshots (name/description/JSON-schema), incl.
+   * the always-on file tools. */
+  toolDefinitions: ToolDefinitionSnapshot[]
+  /** Full system prompt snapshot (spawn writes once; cold-restore reuses). */
+  systemPrompt: string
+  /** Session id (DB) for this agent (resume + audit). */
+  sessionFile: string | null
+  usage?: AgentUsage
+  /** The agent's workspace (challenge workspace / scheduler workspace). */
+  workspace: WorkspaceInfo
+}
+
+/** Per-agent lifecycle. Solver + orchestrator agents use running|idle
+ * (turn-by-turn); terminal states keep the DB session + files for reopen. */
+export type AgentStatus =
+  | "running"
+  | "idle"
+  | "completed"
+  | "aborted"
+  | "failed"
+
+/** An agent holds live resources (a session; the challenge workspace's
+ * container is shared and lazily managed). */
+export function isActiveAgentStatus(status: string): boolean {
+  return status === "running" || status === "idle"
 }
 
 import type {
@@ -106,11 +130,8 @@ export type EntryItem = {
   meta?: TimingMeta
 }
 
-/** One entry in a `GET /runs/:id/messages` response (an `EntryItem` tagged with
- * which agent's session it belongs to — a run may have several agents). */
-export type MessageListItem = EntryItem & {
-  agentId: string
-}
+/** One entry in a `GET /agents/:id/messages` response. */
+export type MessageListItem = EntryItem
 
 export type MessageList = {
   items: MessageListItem[]

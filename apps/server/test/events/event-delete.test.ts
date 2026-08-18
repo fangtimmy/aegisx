@@ -34,25 +34,28 @@ async function createEvent(app: ReturnType<typeof createApp>["app"]) {
   return (await response.json()) as { id: string }
 }
 
-/** Insert a run row directly (the scheduler start path requires a live model
- * provider; the guard is DB-level so a raw row is the honest fixture). */
-function insertRun(
+/** Insert an agent row directly (the scheduler start path requires a live
+ * model provider; the guard is DB-level so a raw row is the honest fixture). */
+function insertAgent(
   dataDir: string,
-  runId: string,
+  agentId: string,
   eventId: string,
-  scopeType: "event" | "challenge",
+  role: "solver" | "orchestrator",
   challengeId: string | null,
   status: string
 ) {
   const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
   sqlite.run(
-    "insert into runs (id, scope_type, event_id, challenge_id, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, ?, ?, ?, ?, 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', 'scheduler', ?, ?)",
+    `insert into agents (id, event_id, challenge_id, role, name, model, system_prompt, tools, status, session_file, prompt, source, timeout_ms, created_at, started_at, updated_at)
+     values (?, ?, ?, ?, ?, 'm', 'sp', '[]', ?, null, null, 'manual', 3600000, ?, ?, ?)`,
     [
-      runId,
-      scopeType,
+      agentId,
       eventId,
       challengeId,
+      role,
+      agentId,
       status,
+      new Date().toISOString(),
       new Date().toISOString(),
       new Date().toISOString(),
     ]
@@ -60,17 +63,16 @@ function insertRun(
   return sqlite
 }
 
-describe("DELETE /api/events/:eventId — live run guard", () => {
-  test("blocks deletion while an event-scope scheduler run is live", async () => {
+describe("DELETE /api/events/:eventId — live agent guard", () => {
+  test("blocks deletion while an orchestrator agent is live", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)
-    // challengeId = NULL: the challenge innerJoin guard cannot see this row —
-    // the C1 regression (deleting under a live scheduler orphaned the run).
-    const sqlite = insertRun(
+    // challengeId = NULL (orchestrator): the guard sees it via agents.eventId.
+    const sqlite = insertAgent(
       dataDir,
-      "sched-run",
+      "sched-agent",
       event.id,
-      "event",
+      "orchestrator",
       null,
       "running"
     )
@@ -78,8 +80,10 @@ describe("DELETE /api/events/:eventId — live run guard", () => {
       (await app.request(`/api/events/${event.id}`, { method: "DELETE" }))
         .status
     ).toBe(409)
-    // Scheduler stopped (closed) → deletion proceeds.
-    sqlite.run("update runs set status = 'closed' where id = 'sched-run'")
+    // Scheduler terminal → deletion proceeds.
+    sqlite.run(
+      "update agents set status = 'completed' where id = 'sched-agent'"
+    )
     sqlite.close()
     expect(
       (await app.request(`/api/events/${event.id}`, { method: "DELETE" }))
@@ -88,10 +92,17 @@ describe("DELETE /api/events/:eventId — live run guard", () => {
     expect((await app.request(`/api/events/${event.id}`)).status).toBe(404)
   })
 
-  test("allows deletion with only a closed scheduler run", async () => {
+  test("allows deletion with only a terminal scheduler agent", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)
-    insertRun(dataDir, "sched-run", event.id, "event", null, "closed").close()
+    insertAgent(
+      dataDir,
+      "sched-agent",
+      event.id,
+      "orchestrator",
+      null,
+      "completed"
+    ).close()
     expect(
       (await app.request(`/api/events/${event.id}`, { method: "DELETE" }))
         .status

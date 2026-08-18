@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 
 import { createApp } from "../../src/app"
-import { runs, sessionEntries } from "../../src/db/schema"
+import { agents, sessionEntries } from "../../src/db/schema"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -29,7 +29,7 @@ function createTestApp() {
 }
 
 /** Raw write connection to the same sqlite file (WAL). FKs off — the session
- * graph isn't under test, only the runId-scoped usage aggregation. */
+ * graph isn't under test, only the agentId-scoped usage aggregation. */
 function seedDb(dataDir: string) {
   const raw = new Database(join(dataDir, "aegisx.sqlite"))
   raw.run("PRAGMA foreign_keys = OFF")
@@ -48,28 +48,30 @@ function assistantUsage(input: number, output: number, cost: number) {
   }
 }
 
-function seedRun(
+function seedAgent(
   db: ReturnType<typeof seedDb>,
   eventId: string,
   id: string,
-  scopeType: "challenge" | "event" = "challenge"
+  role: "solver" | "orchestrator" = "solver"
 ) {
-  db.insert(runs)
+  db.insert(agents)
     .values({
       id,
-      scopeType,
       eventId,
-      status: "closed",
+      challengeId: role === "solver" ? "ch-1" : null,
+      role,
+      name: `agent-${id.slice(0, 8)}`,
       model: "openai/gpt-4o-mini:off",
-      image: "img",
-      cpus: 1,
-      memoryMb: 512,
-      pidsLimit: 64,
-      containerName: "c",
-      workspacePath: "w",
-      sessionDir: "s",
+      systemPrompt: "sp",
+      tools: "[]",
+      status: "idle",
+      sessionFile: null,
+      prompt: null,
       source: "manual",
+      timeoutMs: 3_600_000,
+      deadlineAt: null,
       createdAt: "2025-01-01T00:00:00Z",
+      startedAt: "2025-01-01T00:00:00Z",
       updatedAt: "2025-01-01T00:00:00Z",
     })
     .run()
@@ -77,7 +79,7 @@ function seedRun(
 
 function seedEntry(
   db: ReturnType<typeof seedDb>,
-  runId: string,
+  agentId: string,
   seq: number,
   usage: ReturnType<typeof assistantUsage>
 ) {
@@ -85,8 +87,7 @@ function seedEntry(
     .values({
       id: `entry-${seq}`,
       sessionId: "sess-1",
-      agentId: "agent-1",
-      runId,
+      agentId,
       seq,
       type: "message",
       data: JSON.stringify({
@@ -98,20 +99,20 @@ function seedEntry(
     .run()
 }
 
-describe("event usage API (session_entries.runId aggregation)", () => {
-  test("GET aggregates usage across every run of the event (scheduler included)", async () => {
+describe("event usage API (session_entries.agentId aggregation)", () => {
+  test("GET aggregates usage across every agent of the event (scheduler included)", async () => {
     const { app, dataDir } = createTestApp()
     const event = (await (
       await app.request("/api/events", json("POST", { name: "Event" }))
     ).json()) as { id: string }
     const db = seedDb(dataDir)
-    // Two challenge runs + the event-scope scheduler run.
-    seedRun(db, event.id, "run-a")
-    seedRun(db, event.id, "run-b")
-    seedRun(db, event.id, "sched-run", "event")
-    seedEntry(db, "run-a", 1, assistantUsage(100, 50, 1))
-    seedEntry(db, "run-b", 2, assistantUsage(200, 75, 2))
-    seedEntry(db, "sched-run", 3, assistantUsage(300, 25, 0.5))
+    // Two solver agents + the scheduler agent.
+    seedAgent(db, event.id, "agent-a")
+    seedAgent(db, event.id, "agent-b")
+    seedAgent(db, event.id, "sched-agent", "orchestrator")
+    seedEntry(db, "agent-a", 1, assistantUsage(100, 50, 1))
+    seedEntry(db, "agent-b", 2, assistantUsage(200, 75, 2))
+    seedEntry(db, "sched-agent", 3, assistantUsage(300, 25, 0.5))
 
     const response = await app.request(`/api/events/${event.id}/usage`)
     expect(response.status).toBe(200)
@@ -148,17 +149,17 @@ describe("event usage API (session_entries.runId aggregation)", () => {
       await app.request("/api/events", json("POST", { name: "Other" }))
     ).json()) as { id: string }
     const db = seedDb(dataDir)
-    seedRun(db, event.id, "run-a")
-    seedRun(db, other.id, "other-run")
-    seedEntry(db, "run-a", 1, assistantUsage(10, 10, 1))
-    seedEntry(db, "other-run", 2, assistantUsage(1000, 1000, 100))
+    seedAgent(db, event.id, "agent-a")
+    seedAgent(db, other.id, "other-agent")
+    seedEntry(db, "agent-a", 1, assistantUsage(10, 10, 1))
+    seedEntry(db, "other-agent", 2, assistantUsage(1000, 1000, 100))
 
     const response = await app.request(`/api/events/${event.id}/usage`)
     const { usage } = (await response.json()) as { usage?: { input: number } }
     expect(usage?.input).toBe(10)
   })
 
-  test("GET returns no usage key for an event without runs", async () => {
+  test("GET returns no usage key for an event without agents", async () => {
     const { app } = createTestApp()
     const event = (await (
       await app.request("/api/events", json("POST", { name: "Empty" }))

@@ -99,9 +99,9 @@ def from_dict(cls: type[T], payload: dict[str, Any] | None) -> T | None:
 
 @dataclass
 class Challenge:
-    """One challenge in the event. `solved` / `run_status_counts` / attachments
-    / flags / targets are raw dicts — see the `solved_now` property for the
-    aggregate solved check."""
+    """One challenge in the event. `solved` / `agent_status_counts` /
+    attachments / flags / targets are raw dicts — see the `solved_now`
+    property for the aggregate solved check."""
 
     id: str
     event_id: str
@@ -112,8 +112,8 @@ class Challenge:
     created_at: str
     updated_at: str
     solved: dict[str, str]
-    run_count: int
-    run_status_counts: dict[str, int]
+    agent_count: int
+    agent_status_counts: dict[str, int]
     attachments: list[dict[str, Any]]
     flags: list[dict[str, Any]]
     remote_id: str | None
@@ -135,9 +135,9 @@ class Challenge:
 
 @dataclass
 class QueueItem:
-    """One item in the event task queue. `params` holds the v9 launch specs
-    (strategy/model/solverCount/solvers). `status`: pending | running | done |
-    cancelled | failed."""
+    """One item in the event spawn queue. `params` holds the v19 spawn specs
+    (prompt/model/promptMode). `status`: pending | running | done | cancelled
+    | failed. `agent_id` is back-filled when the drainer spawns the agent."""
 
     id: str
     event_id: str
@@ -149,73 +149,59 @@ class QueueItem:
     prompt: str
     source: str
     status: str
-    run_id: str | None
+    agent_id: str | None
     error: str | None
     created_at: str
     updated_at: str
 
 
 @dataclass
-class Run:
-    """A challenge solver run or the event scheduler run (scope_type)."""
+class AgentSummary:
+    """v19 agent: the execution unit. One attempt on a challenge = one agent
+    (challenge_id null = the event's scheduler agent). Snapshotted at spawn:
+    model, prompt, tools, deadline. Terminal: summary/error."""
 
     id: str
-    scope_type: str
     event_id: str
     challenge_id: str | None
     challenge_name: str
+    role: str
+    name: str | None
+    model: str | None
     status: str
-    finishing: bool
     source: str
-    target_supported: bool
-    provider: str
-    model_id: str
-    model_name: str
-    thinking_level: str
-    environment: str
-    image: str
-    cpus: int
-    memory_mb: int
-    pids_limit: int
-    container_name: str
+    prompt: str | None
+    summary: str | None
+    error: str | None
+    deadline_at: str | None
+    last_timeout_at: str | None
     created_at: str
     started_at: str | None
     updated_at: str
     completed_at: str | None
-    deadline_at: str | None
-    last_timeout_at: str | None
-    error: str | None
-    summary: str | None
-    has_accepted_flag: bool
-    # Present on detail responses only (absent → None).
-    usage: dict[str, Any] | None = None
 
     @property
     def active(self) -> bool:
         return self.status in ("running", "idle")
 
-    # --- time visibility (docs/scheduler-inbox.md §3.2) ---------------------
-    # Computed on every access (fresh); always integer ms. Judge with these
-    # values — do NOT parse the ISO strings yourself (timezone/naive traps).
-
     @property
     def elapsed_ms(self) -> int | None:
-        """started_at → now; None until the run starts."""
+        """started_at → now; None until the agent starts."""
         if not self.started_at:
             return None
         return _now_ms() - _parse_iso_ms(self.started_at)
 
     @property
     def deadline_remain_ms(self) -> int | None:
-        """deadline_at − now; None when there is no deadline or the run is
-        over (closed). Negative = already over the deadline."""
-        if not self.deadline_at or self.status == "closed":
+        """deadline_at − now; None when there is no deadline or the agent is
+        terminal. Negative = already over the deadline."""
+        if not self.deadline_at or not self.active:
             return None
         return _parse_iso_ms(self.deadline_at) - _now_ms()
 
     @property
     def overdue(self) -> bool:
-        """Deadline passed but the run is still active (running/idle)."""
+        """Deadline passed but the agent is still active (running/idle)."""
         remain = self.deadline_remain_ms
         return remain is not None and remain < 0
 
@@ -224,28 +210,6 @@ class Run:
         """updated_at → now."""
         return _now_ms() - _parse_iso_ms(self.updated_at)
 
-
-@dataclass
-class AgentSummary:
-    """One agent (solver-N or orchestrator) inside a run."""
-
-    id: str
-    run_id: str
-    slot: str
-    role: str
-    parent_agent_id: str | None
-    is_entry: bool
-    name: str | None
-    task: str | None
-    model: str | None
-    status: str
-    session_file: str | None
-    created_at: str
-    started_at: str | None
-    updated_at: str
-    completed_at: str | None
-    error: str | None
-
     @property
     def idle_age_ms(self) -> int:
         """updated_at → now (docs/scheduler-inbox.md §3.2)."""
@@ -253,25 +217,30 @@ class AgentSummary:
 
 
 @dataclass
-class RunRead:
-    """Composed run detail: the run, its agents, and the target agent's recent
-    message lines (rendered `[role] text` — see runs.read)."""
+class AgentRead:
+    """Composed agent detail: the agent summary + its recent message lines
+    (rendered `[role] text` — see agents.read). `messages` is filled by
+    `agents.read`; absent on a bare `agents.get`."""
 
-    run: Run
-    agents: list[AgentSummary]
-    agent: AgentSummary | None
-    messages: list[str]
+    agent: AgentSummary
+    tools: list[str]
+    tool_definitions: list[dict[str, Any]]
+    system_prompt: str
+    session_file: str | None
+    usage: dict[str, Any] | None
+    workspace: dict[str, Any] | None
+    messages: list[str] | None = None
 
 
 @dataclass
 class Channel:
-    """One channel in the caller's visible face (docs/im-simplify-v18.md).
-    Channels are DERIVED KEYS stored on messages: `key` is
-    "team:<challengeId>" (#team, shared by every run on the challenge) |
-    "dm:<agentId>" (scheduler/user/system → one solver) |
-    "orch:<eventId>" (solver asks + system events → the scheduler).
-    `kind`: team | dm | orch. `unread` counts messages past the caller's read
-    cursor (own posts excluded)."""
+    """One channel in the caller's visible face (v19). Channels are DERIVED
+    KEYS stored on messages: `key` is "team:<challengeId>" (#team, shared by
+    every agent on the challenge) | "dm:<agentId>" (scheduler/user/system →
+    one agent) | "orch:<eventId>" (solver asks + system events → the
+    scheduler). `kind`: team | dm | orch. `unread` counts messages past the
+    caller's read cursor (own posts excluded). `live_agent_count` (team
+    channel only) = live agents sharing the channel."""
 
     key: str
     kind: str
@@ -279,18 +248,19 @@ class Channel:
     event_id: str
     challenge_id: str | None
     agent_id: str | None
-    run_id: str | None
     unread: int
     last_message_at: str | None
-    shared_run_count: int | None = None
+    live_agent_count: int | None = None
 
 
 @dataclass
 class ChannelFile:
-    """Attachment metadata (📎 filename · size — content is fetched
-    separately via `aegisx.channels.fetch`)."""
+    """Attachment metadata: a shared/ path the reader opens directly (no
+    fetch). `path` is relative to the workspace root (e.g.
+    `shared/from-a3f1c2d9/exp2.py`); solvers read /workspace/<path>, the
+    scheduler reads /challenges/<cid>/workspace/<path>."""
 
-    id: str
+    path: str
     filename: str
     size: int
 
@@ -303,7 +273,8 @@ _NESTED_TYPES["ChannelFile"] = ChannelFile
 @dataclass
 class ChannelMessage:
     """One channel message. `author_type`: system | user | agent. `meta`
-    carries `urgent` (immediate delivery), `runId`, `eventType`, `tags`."""
+    carries `urgent` (immediate delivery), `agentId` (signed attribution),
+    `eventType`, `tags`."""
 
     id: int
     channel_key: str
@@ -318,26 +289,25 @@ class ChannelMessage:
 
 @dataclass
 class SchedulerStatus:
-    """Concurrency / target-slot usage snapshot for the event."""
+    """Concurrency / target-slot usage snapshot for the event (v19). The
+    scheduler agent never counts toward the live-agent cap."""
 
-    max_concurrent_runs: int
-    running_count: int
+    max_concurrent_agents: int
+    live_agent_count: int
     max_concurrent_targets: int
     active_target_challenges: list[str]
-    active_runs: list[dict[str, Any]]
+    active_agents: list[dict[str, Any]]
 
 
 @dataclass
 class Snapshot:
-    """One-shot full picture (aegisx.snapshot): challenges + queue + runs +
-    agents + scheduler status/config."""
+    """One-shot full picture (aegisx.snapshot): challenges + per-challenge
+    agents + the scheduler agent + scheduler status/config."""
 
     challenges: list[Challenge]
+    agents_by_challenge: dict[str, list[AgentSummary]]
+    scheduler_agent: AgentSummary | None
     queue: list[QueueItem]
     queue_state: str
-    runs: list[Run]
-    agents_by_run: dict[str, list[AgentSummary]]
-    scheduler_run: Run | None
-    scheduler_agents: list[AgentSummary]
     scheduler_config: dict[str, Any] | None
     status: SchedulerStatus

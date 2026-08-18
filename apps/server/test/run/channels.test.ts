@@ -6,13 +6,7 @@ import { eq } from "drizzle-orm"
 
 import { createLiveBus } from "../../src/agents/live"
 import { createDatabase } from "../../src/db"
-import {
-  agents,
-  channelFiles,
-  channelMessages,
-  channelReads,
-  runs,
-} from "../../src/db/schema"
+import { agents, channelMessages, channelReads } from "../../src/db/schema"
 import {
   FLUSH_INTERVAL_MS,
   SCHEDULER_READ_KEY,
@@ -25,8 +19,7 @@ import {
   teamKey,
   type ChannelService,
 } from "../../src/run/channels"
-import { createRunQueries } from "../../src/run/queries"
-import { seedChallenge, seedEvent, seedRun } from "../helpers"
+import { seedChallenge, seedEvent, now } from "../helpers"
 
 type Db = ReturnType<typeof setupDbLite>["db"]
 type Dir = ReturnType<typeof setupDbLite>["dir"]
@@ -42,21 +35,10 @@ type SentEntry = { agentId: string; text: string }
 
 function makeService(db: Db, dir: Dir) {
   const sent: SentEntry[] = []
-  const queries = createRunQueries({
-    db,
-    dataDir: dir,
-    resolveModelDisplay: () => ({
-      provider: "p",
-      modelId: "m",
-      modelName: "Model",
-      thinkingLevel: "off",
-    }),
-  })
   const channels: ChannelService = createChannelService({
     db,
     dataDir: dir,
     bus: createLiveBus(),
-    queries,
     // Late-bound lifecycle getter (the service constructs before the
     // lifecycle — same contract as production).
     lifecycle: () =>
@@ -66,55 +48,70 @@ function makeService(db: Db, dir: Dir) {
         },
       }) as never,
     now: () => new Date().toISOString(),
-    workspaceAbs: (runId: string) => join(dir, "runs", runId, "workspace"),
+    challengeWorkspaceRoot: (eventId, challengeId) =>
+      join(dir, "events", eventId, "challenges", challengeId, "workspace"),
   })
   return { channels, sent }
 }
 
-function seedSolver(
+function seedAgent(
   db: Db,
-  runId: string,
   id: string,
   overrides: Partial<typeof agents.$inferInsert> = {}
 ) {
   db.insert(agents)
     .values({
       id,
-      runId,
-      slot: overrides.slot ?? `solver-${id.slice(-1)}`,
+      eventId: overrides.eventId ?? "evt-1",
+      challengeId:
+        overrides.challengeId === undefined ? "ch-1" : overrides.challengeId,
       role: overrides.role ?? "solver",
-      isEntry: overrides.isEntry ?? false,
+      name: overrides.name ?? `agent-${id.slice(0, 8)}`,
       model: "m",
       systemPrompt: "s",
       tools: "[]",
-      status: "idle",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      name: overrides.name,
+      status: overrides.status ?? "idle",
+      source: "manual",
+      timeoutMs: 3_600_000,
+      createdAt: now(),
+      startedAt: now(),
+      updatedAt: now(),
       ...overrides,
     })
     .run()
+  return id
 }
 
-/** The event's scheduler: an event-scope run + its orchestrator agent. */
-function seedScheduler(db: Db, runId: string, id: string) {
-  seedRun(db, {
-    id: runId,
-    scopeType: "event",
+/** The event's scheduler: one orchestrator agent row (challengeId null). */
+function seedScheduler(db: Db, id: string, eventId = "evt-1") {
+  return seedAgent(db, id, {
+    eventId,
     challengeId: null,
-    status: "running",
-  })
-  seedSolver(db, runId, id, {
-    slot: "orchestrator",
     role: "orchestrator",
-    isEntry: true,
     name: "Scheduler",
   })
 }
 
-/** Workspace file for attachment tests. */
-function putWorkspaceFile(dir: Dir, runId: string, path: string, size: number) {
-  const abs = join(dir, "runs", runId, "workspace", path)
+/** A workspace file inside the agent's OWN directory (attachment source). */
+function putAgentFile(
+  db: Db,
+  dir: Dir,
+  agentId: string,
+  path: string,
+  size: number
+) {
+  const row = db.select().from(agents).where(eq(agents.id, agentId)).get()!
+  const abs = join(
+    dir,
+    "events",
+    row.eventId,
+    "challenges",
+    row.challengeId!,
+    "workspace",
+    "agents",
+    agentId.slice(0, 8),
+    path
+  )
   mkdirSync(join(abs, ".."), { recursive: true })
   writeFileSync(abs, "x".repeat(size))
   return abs
@@ -139,17 +136,16 @@ describe("derived keys (§二)", () => {
 })
 
 describe("channel trees (§2.2 / §9.1)", () => {
-  test("run tree: #team + one DM per solver — derived, no seeding, canonical order", () => {
+  test("challenge tree: #team + one DM per agent of the challenge, in creation order", () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1", isEntry: true })
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
+      seedAgent(db, "a1", { name: "agent-a1" })
+      seedAgent(db, "a2", { name: "agent-a2" })
       const { channels } = makeService(db, dir)
-      // No ensure*, no rows — the tree derives from entities alone.
-      const tree = channels.runChannelTree("r1")
+      // No ensure*, no rows — the tree derives from agent rows alone.
+      const tree = channels.challengeChannelTree("ch-1")
       expect(tree.map((c) => c.key)).toEqual([
         teamKey("ch-1"),
         dmKey("a1"),
@@ -157,9 +153,8 @@ describe("channel trees (§2.2 / §9.1)", () => {
       ])
       expect(tree.map((c) => c.kind)).toEqual(["team", "dm", "dm"])
       expect(tree[0]!.label).toBe("#team")
-      expect(tree[0]!.sharedRunCount).toBe(1)
       expect(tree[1]!.agentId).toBe("a1")
-      expect(tree[1]!.runId).toBe("r1")
+      expect(tree[1]!.label).toBe("DM agent-a1")
       // UI trees pass a null reader → no per-reader unread.
       expect(tree.every((c) => c.unread === 0)).toBe(true)
       channels.close()
@@ -168,7 +163,7 @@ describe("channel trees (§2.2 / §9.1)", () => {
     }
   })
 
-  test("challenge tree: exactly one #team, works with no run on the challenge", () => {
+  test("challenge tree works with no agent on the challenge", () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
@@ -183,17 +178,15 @@ describe("channel trees (§2.2 / §9.1)", () => {
     }
   })
 
-  test("SDK list: solver = own team + own dm + orch; scheduler = every team + orch + every solver dm", () => {
+  test("SDK list: solver = own team + own dm + orch; scheduler = every team + every solver dm + orch", () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
       seedChallenge(db, { id: "ch-2" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedRun(db, { id: "r9", status: "running", challengeId: "ch-2" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedSolver(db, "r9", "b1", { slot: "solver-1" })
-      seedScheduler(db, "rS", "s1")
+      seedAgent(db, "a1", { challengeId: "ch-1" })
+      seedAgent(db, "b1", { challengeId: "ch-2" })
+      seedScheduler(db, "s1")
       const { channels } = makeService(db, dir)
 
       expect(channels.agentChannels("a1").map((c) => c.key)).toEqual([
@@ -201,14 +194,14 @@ describe("channel trees (§2.2 / §9.1)", () => {
         dmKey("a1"),
         orchKey("evt-1"),
       ])
-      // The scheduler sees the whole event: both challenges' teams, orch,
-      // and every solver's dm (challenge runs ordered by createdAt).
+      // The scheduler sees the whole event: both challenges' teams, every
+      // solver's dm (creation order), and orch.
       expect(channels.agentChannels("s1").map((c) => c.key)).toEqual([
         teamKey("ch-1"),
         teamKey("ch-2"),
-        orchKey("evt-1"),
         dmKey("a1"),
         dmKey("b1"),
+        orchKey("evt-1"),
       ])
       channels.close()
     } finally {
@@ -223,25 +216,13 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     seedEvent(lite.db)
     seedChallenge(lite.db, { id: "ch-1" })
     seedChallenge(lite.db, { id: "ch-2" })
-    seedRun(lite.db, { id: "r1", status: "running" })
-    seedRun(lite.db, { id: "rX", status: "running", challengeId: "ch-2" })
-    seedRun(lite.db, {
-      id: "rY",
-      status: "running",
-      scopeType: "event",
-      challengeId: null,
-    })
-    seedSolver(lite.db, "r1", "a1", { slot: "solver-1" })
-    seedSolver(lite.db, "rX", "x1", { slot: "solver-1" })
-    seedSolver(lite.db, "rY", "s1", {
-      slot: "orchestrator",
-      role: "orchestrator",
-      name: "Scheduler",
-    })
+    seedAgent(lite.db, "a1", { challengeId: "ch-1" })
+    seedAgent(lite.db, "x1", { challengeId: "ch-2" })
+    seedScheduler(lite.db, "s1")
     return { ...lite, made: makeService(lite.db, lite.dir) }
   }
 
-  test("team:<cid>: same-challenge solver, the event scheduler, user, system; foreign solvers rejected", () => {
+  test("team:<cid>: same-challenge agents, the event scheduler, user, system; foreign agents rejected", () => {
     const { close, made } = setup()
     try {
       const { channels } = made
@@ -321,7 +302,7 @@ describe("write permissions — the 3 rules (§2.1)", () => {
         body: "same",
       })
       expect(viaBare.channelKey).toBe(teamKey("ch-1"))
-      // "orch" resolves to the run's event (the ask path).
+      // "orch" resolves to the agent's event (the ask path).
       const viaOrch = channels.post({
         channelKey: "orch",
         author: { type: "agent", agentId: "a1" },
@@ -350,7 +331,7 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     }
   })
 
-  test("agent posts carry the run-suffix author snapshot + stamped runId meta (§11.4)", () => {
+  test("agent posts carry the agent-name snapshot + stamped agentId meta", () => {
     const { close, made } = setup()
     try {
       const { channels } = made
@@ -359,15 +340,15 @@ describe("write permissions — the 3 rules (§2.1)", () => {
         author: { type: "agent", agentId: "a1" },
         body: "finding",
       })
-      expect(message.authorName).toBe("solver-1 · run-r1")
-      expect(message.meta.runId).toBe("r1")
+      expect(message.authorName).toBe("agent-a1")
+      expect(message.meta.agentId).toBe("a1")
       const sys = channels.post({
         channelKey: teamKey("ch-1"),
         author: { type: "system" },
         body: "sys",
       })
       expect(sys.authorName).toBe("系统")
-      expect(sys.meta.runId).toBeUndefined()
+      expect(sys.meta.agentId).toBeUndefined()
       channels.close()
     } finally {
       close()
@@ -376,36 +357,33 @@ describe("write permissions — the 3 rules (§2.1)", () => {
 })
 
 describe("urgent delivery matrix (§3.2 / §3.3)", () => {
-  test("team urgent: one steer per live solver across EVERY live run on the challenge; closed runs store only", async () => {
+  test("team urgent: one steer per live agent on the challenge; terminal agents store only", async () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedRun(db, { id: "r2", status: "idle" })
-      seedRun(db, { id: "r3", status: "closed" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1", name: "S1" })
-      seedSolver(db, "r1", "a2", { slot: "solver-2", name: "S2" })
-      seedSolver(db, "r2", "b1", { slot: "solver-1", name: "S1" })
-      seedSolver(db, "r3", "c1", { slot: "solver-1" })
+      seedAgent(db, "a1", { status: "running", name: "S1" })
+      seedAgent(db, "a2", { status: "running", name: "S2" })
+      seedAgent(db, "b1", { status: "idle", name: "S3" })
+      seedAgent(db, "c1", { status: "completed" })
       const { channels, sent } = makeService(db, dir)
 
       // a1 posts urgent — a1's own post is never a1's unread; recipients:
-      // a2 (same run) + b1 (the OTHER live run). c1's run is closed → store.
+      // a2 + b1 (the other live agents). c1 is terminal → store only.
       channels.post({
         channelKey: teamKey("ch-1"),
         author: { type: "agent", agentId: "a1" },
-        body: "cross-run finding",
+        body: "cross-attempt finding",
         urgent: true,
       })
       await settle()
       expect(sent.map((s) => s.agentId).sort()).toEqual(["a2", "b1"])
       for (const s of sent) {
-        expect(s.text).toContain("cross-run finding")
-        // Unambiguous attribution across runs: run trace in the author line.
-        expect(s.text).toContain("run-r1")
+        expect(s.text).toContain("cross-attempt finding")
+        // Unambiguous attribution: the agent's name in the author line.
+        expect(s.text).toContain("S1")
       }
-      // The closed-run member sees the message as UNREAD (store-only).
+      // The terminal agent sees the message as UNREAD (store-only).
       expect(
         channels.agentChannels("c1").find((c) => c.kind === "team")!.unread
       ).toBe(1)
@@ -415,16 +393,15 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
     }
   })
 
-  test("dm urgent: cold-wakes a closed run and delivers ONLY the dm (red line)", async () => {
+  test("dm urgent: cold-wakes a terminal agent and delivers ONLY the dm (red line)", async () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "closed" })
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
+      seedAgent(db, "a2", { status: "completed" })
       const { channels, sent } = makeService(db, dir)
 
-      // Stored team backlog for the closed run — never swept on cold wake.
+      // Stored team backlog for the terminal agent — never swept on cold wake.
       channels.post({
         channelKey: teamKey("ch-1"),
         author: { type: "user" },
@@ -442,8 +419,8 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       expect(sent).toHaveLength(1)
       expect(sent[0]!.agentId).toBe("a2")
       expect(sent[0]!.text).toContain("wake up")
-      // The stored #team backlog stays unread — restore touches only the
-      // triggered agent, and only its dm face.
+      // The stored #team backlog stays unread — the cold wake touches only
+      // the target agent, and only its dm face.
       expect(sent[0]!.text).not.toContain("stored only")
       expect(
         channels.agentChannels("a2").find((c) => c.kind === "team")!.unread
@@ -454,14 +431,13 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
     }
   })
 
-  test("orch urgent: a live scheduler receives immediately; a closed scheduler run stores for catch-up", async () => {
+  test("orch urgent: a live scheduler receives immediately; a terminal scheduler stores for catch-up", async () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedScheduler(db, "rS", "s1")
+      seedAgent(db, "a1", { status: "running" })
+      seedScheduler(db, "s1")
       const { channels, sent } = makeService(db, dir)
 
       channels.post({
@@ -474,9 +450,12 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       expect(sent.map((s) => s.agentId)).toEqual(["s1"])
       expect(sent[0]!.text).toContain("ask: which challenge next?")
 
-      // Scheduler run closed → urgent stores only (next start catches up).
+      // Scheduler terminal → urgent stores only (next start catches up).
       sent.length = 0
-      db.update(runs).set({ status: "closed" }).where(eq(runs.id, "rS")).run()
+      db.update(agents)
+        .set({ status: "completed" })
+        .where(eq(agents.id, "s1"))
+        .run()
       channels.post({
         channelKey: orchKey("evt-1"),
         author: { type: "agent", agentId: "a1" },
@@ -497,9 +476,8 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
+      seedAgent(db, "a1", { status: "running" })
+      seedAgent(db, "a2", { status: "running" })
       const { channels, sent } = makeService(db, dir)
 
       channels.post({
@@ -520,9 +498,8 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
+      seedAgent(db, "a1", { status: "running" })
+      seedAgent(db, "a2", { status: "running" })
       const { channels, sent } = makeService(db, dir)
       channels.post({
         channelKey: teamKey("ch-1"),
@@ -546,14 +523,11 @@ describe("flush tick (§3.4)", () => {
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedRun(db, { id: "r2", status: "running" })
-      seedRun(db, { id: "r3", status: "closed" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
-      seedSolver(db, "r2", "b1", { slot: "solver-1" })
-      seedSolver(db, "r3", "c1", { slot: "solver-1" })
-      seedScheduler(db, "rS", "s1")
+      seedAgent(db, "a1", { status: "running" })
+      seedAgent(db, "a2", { status: "running" })
+      seedAgent(db, "b1", { status: "idle" })
+      seedAgent(db, "c1", { status: "completed" })
+      seedScheduler(db, "s1")
       const { channels, sent } = makeService(db, dir)
 
       channels.post({
@@ -569,13 +543,13 @@ describe("flush tick (§3.4)", () => {
       channels.post({
         channelKey: orchKey("evt-1"),
         author: { type: "system" },
-        body: "run started",
+        body: "agent started",
       })
       channels.runFlushTick()
       await settle()
 
-      // a1 gets the author post m1 (not its own), a2 + b1 get both, s1 gets
-      // the orch notice — each as ONE steer. c1's closed run: store only.
+      // a1 gets the agent post m1 (not its own), a2 + b1 get both, s1 gets
+      // the orch notice — each as ONE steer. c1 (terminal): store only.
       const byAgent = new Map<string, string[]>()
       for (const s of sent) {
         byAgent.set(s.agentId, [...(byAgent.get(s.agentId) ?? []), s.text])
@@ -586,7 +560,7 @@ describe("flush tick (§3.4)", () => {
       }
       expect(byAgent.get("a2")![0]).toContain("m1")
       expect(byAgent.get("a2")![0]).toContain("m2")
-      expect(byAgent.get("s1")![0]).toContain("run started")
+      expect(byAgent.get("s1")![0]).toContain("agent started")
       // Second tick: cursors advanced → nothing new.
       sent.length = 0
       channels.runFlushTick()
@@ -603,8 +577,7 @@ describe("flush tick (§3.4)", () => {
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
+      seedAgent(db, "a1", { status: "running" })
       const { channels, sent } = makeService(db, dir)
 
       channels.setDeliveryPaused("evt-1", true)
@@ -670,9 +643,8 @@ describe("read cursors — three progression points (§3.5)", () => {
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
+      seedAgent(db, "a1", { status: "running" })
+      seedAgent(db, "a2", { status: "running" })
       const { channels, sent } = makeService(db, dir)
 
       // 1. Self-post: author cursor lands on the message id.
@@ -701,10 +673,8 @@ describe("read cursors — three progression points (§3.5)", () => {
       await channels.deliverAgentAwaited("a1")
       expect(sent).toHaveLength(0)
 
-      // a2 has not read: unread counts exclude a2's own... (a2 authored
-      // nothing) — one unread (hello; a1's own post is a1-read but still
-      // unread for a2's cursor... wait: own-post filter only applies to the
-      // author. a2 sees BOTH messages).
+      // a2 has authored nothing: BOTH messages are unread (own-post filter
+      // only applies to the author).
       expect(channels.unreadCount(teamKey("ch-1"), "a2")).toBe(2)
       await channels.deliverAgentAwaited("a2")
       expect(sent.map((s) => s.agentId)).toEqual(["a2"])
@@ -715,15 +685,14 @@ describe("read cursors — three progression points (§3.5)", () => {
     }
   })
 
-  test("onboarding deliver: a fresh solver (cursor 0) sweeps the whole #team history once (§11.3)", async () => {
+  test("onboarding deliver: a fresh agent (cursor 0) sweeps the whole #team history once (§11.3)", async () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "closed" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
+      seedAgent(db, "a1", { status: "completed" })
       const { channels, sent } = makeService(db, dir)
-      // Prior knowledge sitting in #team (run closed → stored, not delivered).
+      // Prior knowledge sitting in #team (terminal agent → stored, not delivered).
       channels.post({
         channelKey: teamKey("ch-1"),
         author: { type: "agent", agentId: "a1" },
@@ -735,9 +704,8 @@ describe("read cursors — three progression points (§3.5)", () => {
         body: "remote libc 2.35 — trust the target",
       })
 
-      // A second run's fresh solver: cursor 0 → one deliver sweeps BOTH.
-      seedRun(db, { id: "r2", status: "running" })
-      seedSolver(db, "r2", "b1", { slot: "solver-1" })
+      // A fresh agent on the same challenge: cursor 0 → one deliver sweeps BOTH.
+      seedAgent(db, "b1", { status: "running" })
       await channels.deliverAgentAwaited("b1")
       expect(sent.map((s) => s.agentId)).toEqual(["b1"])
       expect(sent[0]!.text).toContain("prior finding: heap overflow in edit()")
@@ -758,11 +726,9 @@ describe("read cursors — three progression points (§3.5)", () => {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
       seedChallenge(db, { id: "ch-2" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedRun(db, { id: "rX", status: "running", challengeId: "ch-2" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedSolver(db, "rX", "x1", { slot: "solver-1" })
-      seedScheduler(db, "rS", "s1")
+      seedAgent(db, "a1", { challengeId: "ch-1", status: "running" })
+      seedAgent(db, "x1", { challengeId: "ch-2", status: "running" })
+      seedScheduler(db, "s1")
       const { channels } = makeService(db, dir)
 
       expect(channels.readForAgent("a1", "#team").channel.key).toBe(
@@ -811,19 +777,27 @@ describe("renderMerged", () => {
         label: "#team",
         messages: [
           {
-            authorName: "S1 · run-r1",
+            authorName: "agent-a1",
             createdAt: "2025-01-01T00:00:00Z",
             body: "exp 骨架在 exp2.py",
             urgent: true,
-            files: [{ filename: "exp2.py", size: 4300 }],
+            files: [
+              {
+                filename: "exp2.py",
+                size: 4300,
+                path: "shared/from-a1/exp2.py",
+              },
+            ],
           },
         ],
       },
     ])
     expect(text).toContain("[频道消息]")
-    expect(text).toContain("⚠ #team · S1 · run-r1")
+    expect(text).toContain("⚠ #team · agent-a1")
     expect(text).toContain("exp 骨架在 exp2.py")
-    expect(text).toContain(`📎 exp2.py · ${formatSize(4300)}`)
+    expect(text).toContain(
+      `📎 exp2.py · ${formatSize(4300)} · shared/from-a1/exp2.py`
+    )
     expect(text).not.toContain("xxxx")
   })
 
@@ -847,21 +821,20 @@ describe("renderMerged", () => {
   })
 })
 
-describe("attachments (§六)", () => {
+describe("attachments — shared/ mechanism (§六)", () => {
   function setup() {
     const lite = setupDbLite()
     seedEvent(lite.db)
     seedChallenge(lite.db, { id: "ch-1" })
-    seedRun(lite.db, { id: "r1", status: "running" })
-    seedSolver(lite.db, "r1", "a1", { slot: "solver-1" })
+    seedAgent(lite.db, "a1", { status: "running" })
     return { ...lite, made: makeService(lite.db, lite.dir) }
   }
 
-  test("workspace snapshot: copied flat under channel-files/<messageId>/; row recorded", () => {
+  test("agent attachment: copied into shared/from-<id8>/; meta carries the shared path", () => {
     const { db, dir, close, made } = setup()
     try {
       const { channels } = made
-      putWorkspaceFile(dir, "r1", "exp2.py", 4300)
+      putAgentFile(db, dir, "a1", "exp2.py", 4300)
       const message = channels.post({
         channelKey: teamKey("ch-1"),
         author: { type: "agent", agentId: "a1" },
@@ -871,12 +844,46 @@ describe("attachments (§六)", () => {
       expect(message.files).toHaveLength(1)
       expect(message.files[0]!.filename).toBe("exp2.py")
       expect(message.files[0]!.size).toBe(4300)
-      const file = db.select().from(channelFiles).all()[0]!
-      expect(file.messageId).toBe(message.id)
-      // FLAT dir: data/channel-files/<messageId>/<filename> (no channel layer).
-      expect(channels.fileById(file.id).path).toBe(
-        join(dir, "channel-files", String(message.id), "exp2.py")
+      // The reader-facing shared path (relative to the workspace root).
+      expect(message.files[0]!.path).toBe("shared/from-a1/exp2.py")
+      // The bytes are a copy inside the challenge workspace's shared/ tree.
+      const host = join(
+        dir,
+        "events",
+        "evt-1",
+        "challenges",
+        "ch-1",
+        "workspace",
+        "shared",
+        "from-a1",
+        "exp2.py"
       )
+      expect(existsSync(host)).toBe(true)
+      made.channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("duplicate names in shared/from-<id8>/ get -2 suffixes", () => {
+    const { db, dir, close, made } = setup()
+    try {
+      const { channels } = made
+      putAgentFile(db, dir, "a1", "poc.py", 10)
+      const first = channels.post({
+        channelKey: teamKey("ch-1"),
+        author: { type: "agent", agentId: "a1" },
+        body: "one",
+        files: ["poc.py"],
+      })
+      const second = channels.post({
+        channelKey: teamKey("ch-1"),
+        author: { type: "agent", agentId: "a1" },
+        body: "two",
+        files: ["poc.py"],
+      })
+      expect(first.files[0]!.path).toBe("shared/from-a1/poc.py")
+      expect(second.files[0]!.path).toBe("shared/from-a1/poc-2.py")
       made.channels.close()
     } finally {
       close()
@@ -884,10 +891,10 @@ describe("attachments (§六)", () => {
   })
 
   test("path validation: escapes, absolute paths and missing files rejected", () => {
-    const { dir, close, made } = setup()
+    const { db, dir, close, made } = setup()
     try {
       const { channels } = made
-      putWorkspaceFile(dir, "r1", "poc.py", 100)
+      putAgentFile(db, dir, "a1", "poc.py", 100)
       const post = (files: string[]) =>
         channels.post({
           channelKey: teamKey("ch-1"),
@@ -905,11 +912,30 @@ describe("attachments (§六)", () => {
     }
   })
 
-  test("caps: 8 files per message, 16K body chars, 64MB per file", () => {
-    const { dir, close, made } = setup()
+  test("the scheduler cannot send workspace attachments (no agent dir)", () => {
+    const { db, close, made } = setup()
+    try {
+      seedScheduler(db, "s1")
+      const { channels } = made
+      expect(() =>
+        channels.post({
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "s1" },
+          body: "b",
+          files: ["whatever.py"],
+        })
+      ).toThrow(/只有解题 agent/)
+      made.channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("caps: 8 files per message, 16K body chars, 64MB per file, 128MB total", () => {
+    const { db, dir, close, made } = setup()
     try {
       const { channels } = made
-      for (let i = 0; i < 9; i += 1) putWorkspaceFile(dir, "r1", `f${i}`, 1)
+      for (let i = 0; i < 9; i += 1) putAgentFile(db, dir, "a1", `f${i}`, 1)
       expect(() =>
         channels.post({
           channelKey: teamKey("ch-1"),
@@ -926,7 +952,7 @@ describe("attachments (§六)", () => {
         })
       ).toThrow(/16_?000|16,000|16K/)
       // Sparse 65MB file: statSync sees the size, no data written.
-      const big = putWorkspaceFile(dir, "r1", "big.bin", 1)
+      const big = putAgentFile(db, dir, "a1", "big.bin", 1)
       truncateSync(big, 65 * 1024 * 1024)
       expect(() =>
         channels.post({
@@ -951,10 +977,10 @@ describe("attachments (§六)", () => {
     }
   })
 
-  test("user multipart upload: urgent defaults TRUE; blobs stored; stream failure rolls the whole message back", async () => {
-    const { db, dir, close, made } = setup()
+  test("user multipart upload: urgent defaults TRUE; blobs land in shared/upload-<ts>/; stream failure rolls the whole message back", async () => {
+    const { db, close, made } = setup()
     try {
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
+      seedAgent(db, "a2", { status: "running" })
       const { channels, sent } = made
       const message = await channels.postWithUpload({
         channelKey: teamKey("ch-1"),
@@ -969,18 +995,18 @@ describe("attachments (§六)", () => {
         ],
       })
       expect(message.files).toHaveLength(1)
-      const { row, path } = channels.fileById(message.files[0]!.id)
-      expect(row.size).toBe(5)
-      expect(path).toBe(
-        join(dir, "channel-files", String(message.id), "notes.txt")
-      )
-      // urgent default true on the user path → both live solvers got the
+      expect(message.files[0]!.filename).toBe("notes.txt")
+      expect(message.files[0]!.size).toBe(5)
+      expect(message.files[0]!.path).toMatch(/^shared\/upload-\d+\/notes\.txt$/)
+      // urgent default true on the user path → both live agents got the
       // steer (the author is the user — no own-post exclusion).
       await settle()
       expect(sent.map((s) => s.agentId).sort()).toEqual(["a1", "a2"])
       expect(sent[0]!.text).toContain("📎 notes.txt")
 
-      // Rollback: a failing second upload drops files AND the message row.
+      // Rollback: a failing second upload drops the message row (the first
+      // upload's shared copy is orphaned under upload-<ts>/ — best effort,
+      // swept with the workspace).
       const before = db.select().from(channelMessages).all().length
       await expect(
         channels.postWithUpload({
@@ -1004,13 +1030,6 @@ describe("attachments (§六)", () => {
         })
       ).rejects.toThrow(/disk full/)
       expect(db.select().from(channelMessages).all().length).toBe(before)
-      expect(
-        db
-          .select()
-          .from(channelFiles)
-          .all()
-          .filter((f) => f.filename === "ok.txt")
-      ).toHaveLength(0)
       made.channels.close()
     } finally {
       close()
@@ -1060,14 +1079,12 @@ describe("timeline pagination (§9.1)", () => {
 })
 
 describe("explicit cleanup (§八)", () => {
-  test("run deletion removes its agents' dm data; #team knowledge survives", () => {
+  test("agent deletion removes its dm data; #team knowledge survives", () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
-      seedSolver(db, "r1", "a2", { slot: "solver-2" })
+      seedAgent(db, "a1", { status: "running" })
       const { channels } = makeService(db, dir)
       channels.post({
         channelKey: teamKey("ch-1"),
@@ -1081,7 +1098,7 @@ describe("explicit cleanup (§八)", () => {
       })
       channels.markRead(dmKey("a1"), "a1", 99)
 
-      channels.cleanupRunChannels("r1")
+      channels.cleanupAgentChannels("a1")
       expect(
         db
           .select()
@@ -1096,7 +1113,7 @@ describe("explicit cleanup (§八)", () => {
           .where(eq(channelReads.channelKey, dmKey("a1")))
           .all()
       ).toHaveLength(0)
-      // The #team knowledge base survives single-run deletion.
+      // The #team knowledge base survives single-agent deletion.
       expect(
         db
           .select()
@@ -1110,20 +1127,17 @@ describe("explicit cleanup (§八)", () => {
     }
   })
 
-  test("event deletion sweeps orch + every team + every dm, with attachment dirs", () => {
+  test("event deletion sweeps orch + every team + every dm", () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "running" })
-      seedSolver(db, "r1", "a1", { slot: "solver-1" })
+      seedAgent(db, "a1", { status: "running" })
       const { channels } = makeService(db, dir)
-      putWorkspaceFile(dir, "r1", "dump.bin", 10)
-      const withFile = channels.post({
+      channels.post({
         channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "dump attached",
-        files: ["dump.bin"],
+        author: { type: "user" },
+        body: "team",
       })
       channels.post({
         channelKey: orchKey("evt-1"),
@@ -1135,13 +1149,10 @@ describe("explicit cleanup (§八)", () => {
         author: { type: "user" },
         body: "dm",
       })
-      const fileDir = join(dir, "channel-files", String(withFile.id))
 
       channels.cleanupEventChannels("evt-1")
       expect(db.select().from(channelMessages).all()).toHaveLength(0)
       expect(db.select().from(channelReads).all()).toHaveLength(0)
-      expect(db.select().from(channelFiles).all()).toHaveLength(0)
-      expect(existsSync(fileDir)).toBe(false)
       channels.close()
     } finally {
       close()

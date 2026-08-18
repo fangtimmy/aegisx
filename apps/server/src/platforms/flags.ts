@@ -39,7 +39,7 @@ function toPublic(row: typeof challengeFlags.$inferSelect): ChallengeFlag {
     flag: row.flag,
     status: row.status as ChallengeFlag["status"],
     source: row.source as ChallengeFlag["source"],
-    runId: row.runId,
+    agentId: row.agentId,
     remoteId: row.remoteId,
     message: row.message,
     createdAt: row.createdAt,
@@ -69,16 +69,17 @@ export function createPlatformFlags(
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
   adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined,
   options?: {
-    /** Notify the run layer after a flag becomes platform-accepted (SSE
-     * refresh + solved-challenge cleanup). */
-    onRunFlagAccepted?(runId: string, submitterAgentId?: string): void
-    /** Notify the run layer after a correct-but-incomplete multi-flag
-     * submission (TSecBench partial): steers the challenge's solvers toward
+    /** Notify the agent layer after a flag becomes platform-accepted (agent
+     * event + full-solve cleanup: stop the challenge's other live agents,
+     * cancel its pending queue items). */
+    onAgentFlagAccepted?(challengeId: string, agentId?: string): void
+    /** Notify the agent layer after a correct-but-incomplete multi-flag
+     * submission (TSecBench partial): steers the challenge's agents toward
      * the remaining flags. */
-    onRunFlagPartial?(
-      runId: string,
+    onAgentFlagPartial?(
+      challengeId: string,
       message: string | null,
-      submitterAgentId?: string
+      agentId?: string
     ): void
   }
 ) {
@@ -130,7 +131,7 @@ export function createPlatformFlags(
       flag: value,
       status: "accepted" as const,
       source: "manual" as const,
-      runId: null,
+      agentId: null,
       remoteId: null,
       message: null,
       createdAt: now,
@@ -164,11 +165,10 @@ export function createPlatformFlags(
   }
 
   async function submitFlag(
-    runId: string,
     challengeId: string,
+    agentId: string,
     flag: string | undefined,
     verifyRemote = true,
-    submitterAgentId?: string,
     signal?: AbortSignal
   ): Promise<FlagSubmissionResult> {
     const challenge = db
@@ -199,19 +199,20 @@ export function createPlatformFlags(
       (existing.status === "accepted" || existing.status === "rejected")
     ) {
       // A repeat submission of an accepted flag still counts for the
-      // submitting run — but "accepted" at flag level also covers a multi-flag
-      // partial (collapsed on persist), and only a FULLY solved challenge may
-      // fire run.flagAccepted (its cleanup stops sibling runs). On a
-      // partially-solved challenge the repeat steers instead.
+      // submitting agent — but "accepted" at flag level also covers a
+      // multi-flag partial (collapsed on persist), and only a FULLY solved
+      // challenge may fire agent.flagAccepted (its cleanup stops the
+      // challenge's other agents). On a partially-solved challenge the
+      // repeat steers instead.
       if (existing.status === "accepted") {
         // Integrated platform → `challenge_remote.solved` is the full verdict
         // (multi-flag partials never set it); non-integrated → an accepted
         // flag IS the full local verdict.
         const fullySolved = integrated ? Boolean(remote?.solved) : true
         if (fullySolved) {
-          options?.onRunFlagAccepted?.(runId, submitterAgentId)
+          options?.onAgentFlagAccepted?.(challengeId, agentId)
         } else {
-          options?.onRunFlagPartial?.(runId, null, submitterAgentId)
+          options?.onAgentFlagPartial?.(challengeId, null, agentId)
         }
       }
       return {
@@ -233,8 +234,8 @@ export function createPlatformFlags(
         challengeId,
         flag: value,
         status: "accepted" as const,
-        source: "run" as const,
-        runId,
+        source: "agent" as const,
+        agentId,
         remoteId: null,
         message: null,
         createdAt: existing?.createdAt ?? now,
@@ -242,16 +243,16 @@ export function createPlatformFlags(
       }
       if (existing) {
         db.update(challengeFlags)
-          .set({ status: "accepted", source: "run", runId, updatedAt: now })
+          .set({ status: "accepted", source: "agent", agentId, updatedAt: now })
           .where(eq(challengeFlags.id, existing.id))
           .run()
       } else {
         db.insert(challengeFlags).values(row).run()
       }
-      // No remote judge here, but the acceptance is real — notify the run
-      // layer so the scheduler learns the flag (run.flagAccepted). No
+      // No remote judge here, but the acceptance is real — notify the agent
+      // layer so the scheduler learns the flag (agent.flagAccepted). No
       // platform → no multi-flag partial: accepted IS the full verdict.
-      options?.onRunFlagAccepted?.(runId, submitterAgentId)
+      options?.onAgentFlagAccepted?.(challengeId, agentId)
       return { status: "accepted", verified: false }
     }
 
@@ -260,7 +261,7 @@ export function createPlatformFlags(
       const now = new Date().toISOString()
       if (existing) {
         db.update(challengeFlags)
-          .set({ status: "pending", source: "run", runId, updatedAt: now })
+          .set({ status: "pending", source: "agent", agentId, updatedAt: now })
           .where(eq(challengeFlags.id, existing.id))
           .run()
       } else {
@@ -270,8 +271,8 @@ export function createPlatformFlags(
             challengeId,
             flag: value,
             status: "pending",
-            source: "run",
-            runId,
+            source: "agent",
+            agentId,
             remoteId: null,
             message: null,
             createdAt: now,
@@ -291,8 +292,8 @@ export function createPlatformFlags(
       const now = new Date().toISOString()
       const patch = {
         status,
-        source: "run" as const,
-        runId,
+        source: "agent" as const,
+        agentId,
         remoteId: result.remoteId ?? existing?.remoteId ?? null,
         message: result.message ?? null,
         updatedAt: now,
@@ -346,13 +347,13 @@ export function createPlatformFlags(
           .set({ solved: true })
           .where(eq(challengeRemote.challengeId, challengeId))
           .run()
-        options?.onRunFlagAccepted?.(runId, submitterAgentId)
+        options?.onAgentFlagAccepted?.(challengeId, agentId)
       }
       if (result.status === "partial") {
-        options?.onRunFlagPartial?.(
-          runId,
+        options?.onAgentFlagPartial?.(
+          challengeId,
           result.message ?? null,
-          submitterAgentId
+          agentId
         )
       }
       return {

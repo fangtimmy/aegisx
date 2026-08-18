@@ -4,22 +4,22 @@ type Listener = (event: LiveEvent) => void
 
 /**
  * In-memory SSE fan-out. One bus per server; subscribers per channel (browser
- * tabs). A channel is the LiveBus key — a run id for solver agents, an event id
- * for the orchestrator. Events are ephemeral; durable history lives in
- * session_entries and is served by the messages API.
+ * tabs). A channel is the LiveBus key — the agent id for the per-agent SSE
+ * streams (plus the event/challenge ids the channel layer pushes to).
+ * Events are ephemeral; durable history lives in session_entries and is
+ * served by the messages API.
  *
- * Reconnect correctness: the bus snapshots the latest `run` / `context` /
- * `queue` per channel/agent AND the current ephemeral state — the active
- * `agent.activity` plus every still-running `tool.progress` (carrying the last
- * partial result). The SSE route replays these to a freshly connected
- * EventSource so a new tab / refresh sees an in-progress bash command's
- * streamed output immediately, instead of only catching events that arrive
- * after connect. Snapshots are cleared the moment their event goes terminal
- * (tool done/error, activity null), so they never leak stale state.
+ * Reconnect correctness: the bus snapshots the latest `context` / `queue`
+ * per agent AND the current ephemeral state — the active `agent.activity`
+ * plus every still-running `tool.progress` (carrying the last partial
+ * result). The SSE route replays these to a freshly connected EventSource
+ * so a new tab / refresh sees an in-progress bash command's streamed output
+ * immediately, instead of only catching events that arrive after connect.
+ * Snapshots are cleared the moment their event goes terminal (tool
+ * done/error, activity null), so they never leak stale state.
  */
 export function createLiveBus() {
   const subscribers = new Map<string, Set<Listener>>()
-  const lastRun = new Map<string, LiveEvent>()
   const lastContext = new Map<string, LiveEvent>()
   const lastQueue = new Map<string, LiveEvent>()
   /** Latest non-null activity per agent (transient badge state). */
@@ -42,7 +42,6 @@ export function createLiveBus() {
   }
 
   function emit(channel: string, event: LiveEvent) {
-    if (event.type === "run.updated") lastRun.set(channel, event)
     if (event.type === "context.updated") lastContext.set(event.agentId, event)
     if (event.type === "queue.updated") lastQueue.set(event.agentId, event)
     if (event.type === "agent.activity") {
@@ -82,13 +81,11 @@ export function createLiveBus() {
     return lastContext.get(agentId)
   }
 
-  /** Drop the snapshots for a closed run/channel: the channel's `lastRun` and
-   * every per-agent snapshot (context / queue / activity / running tools).
-   * Called on run teardown — a closed run has no new subscribers to replay,
-   * and its per-agent snapshots only grow the in-memory state. A cold-restored
-   * run rebuilds its snapshots from the first post-resume events. */
-  function forget(channel: string, agentIds: string[]): void {
-    lastRun.delete(channel)
+  /** Drop the per-agent snapshots (context / queue / activity / running
+   * tools) for a closed agent. Called on agent teardown — long-lived memory
+   * stays flat; a reopened agent rebuilds them from the first post-resume
+   * events. */
+  function forget(agentIds: string[]): void {
     for (const agentId of agentIds) {
       lastContext.delete(agentId)
       lastQueue.delete(agentId)
@@ -116,7 +113,6 @@ export function createLiveBus() {
 
   function close() {
     subscribers.clear()
-    lastRun.clear()
     lastContext.clear()
     lastQueue.clear()
     lastActivity.clear()

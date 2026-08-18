@@ -2,9 +2,9 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, channelMessages, runs } from "../../src/db/schema"
+import { agents, channelMessages } from "../../src/db/schema"
 import { orchKey } from "../../src/run/channels"
-import { createRunService } from "../../src/run/service"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
@@ -16,23 +16,20 @@ import {
   stubHostAgentSession,
 } from "../helpers"
 
-const containerInput = {
-  image: "aegisx/solve:latest",
-  cpus: 2,
-  memoryMb: 1024,
-  pidsLimit: 128,
-  tmpfsSize: "128m",
-  workspace: "/workspace",
-}
-
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 type Db = ReturnType<typeof setupDb>["db"]
 
 /** The event's orchestrator agent row. */
-function orchestratorOf(db: Db, runId: string) {
-  return db.select().from(agents).where(eq(agents.runId, runId)).get()!
+function orchestratorOf(db: Db, eventId = "evt-1") {
+  return db
+    .select()
+    .from(agents)
+    .where(eq(agents.eventId, eventId))
+    .all()
+    .filter((a) => a.role === "orchestrator")
+    .at(-1)!
 }
 
 /** orch channel message rows (id order) for an event. */
@@ -48,83 +45,96 @@ function metaOf(row: { meta: string }): Record<string, unknown> {
   return JSON.parse(row.meta)
 }
 
-describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)", () => {
+/** Service whose scheduler createHost records prompt texts per agent. */
+function makeService(
+  db: Db,
+  dir: string,
+  promptLog: Map<string, string[]>,
+  failSolver = false
+) {
+  const provider = makeProvider()
+  const { manager } = stubContainerManager()
+  return createAgentService({
+    db,
+    dataDir: dir,
+    containerManager: manager,
+    platformService: {
+      submitFlag: async () => undefined,
+      targetAction: async () => ({
+        status: "running",
+        endpoints: [],
+        expiresAt: null,
+      }),
+    } as never,
+    configStore: stubConfigStore([provider]),
+    getSettings: flatSettingsWithDefaultModel,
+    createHost: mock(async (input: { agentId: string }) => {
+      const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
+      const list: string[] = []
+      promptLog.set(input.agentId, list)
+      const sdk = stub.session as unknown as {
+        prompt: (text: string) => Promise<void>
+      }
+      sdk.prompt = async (text: string) => {
+        if (failSolver) {
+          const row = db
+            .select()
+            .from(agents)
+            .where(eq(agents.id, input.agentId))
+            .get()
+          if (row?.role === "solver") throw new Error("boom")
+        }
+        list.push(text)
+      }
+      return stub
+    }),
+  })
+}
+
+const tagOf = (agentId: string) =>
+  `「Test Challenge」agent-${agentId.slice(0, 8)}`
+
+describe("agent lifecycle events → orch messages (v19)", () => {
   test("started/idle post as NON-urgent orch messages; the live scheduler is not woken until the tick", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
       const promptLog = new Map<string, string[]>()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-          const list: string[] = []
-          promptLog.set(input.agentId, list)
-          const sdk = stub.session as unknown as {
-            prompt: (text: string) => Promise<void>
-          }
-          sdk.prompt = async (text: string) => {
-            list.push(text)
-          }
-          return stub
-        }),
-      })
+      service = makeService(db, dir, promptLog)
 
-      const sched = await service.create({
-        scopeType: "event" as const,
-        eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
+      const sched = await service.startScheduler("evt-1")
       await settle()
-      const orch = orchestratorOf(db, sched.id)
+      const orch = orchestratorOf(db)
       const primed = promptLog.get(orch.id)?.length ?? 0
 
-      const challenge = await service.create({
-        scopeType: "challenge" as const,
+      const solver = await service.spawn({
+        eventId: "evt-1",
         challengeId: "ch-1",
-        container: containerInput,
       })
       await settle()
 
       // Events ARE messages: started (manual marker) + idle both landed in
-      // orch as system posts, non-urgent. Bodies carry run short id +
-      // challenge name (the delivery text is self-contained).
+      // orch as system posts, non-urgent.
       const rows = orchRows(db)
-      const tag = `run-${challenge.id.slice(0, 8)}「Test Challenge」`
+      const tag = tagOf(solver.id)
       expect(
         rows.some(
           (r) =>
             r.body === `${tag}已启动（手动）` &&
-            metaOf(r).eventType === "run.started"
+            metaOf(r).eventType === "agent.started"
         )
       ).toBe(true)
       expect(
         rows.some(
-          (r) => r.body === `${tag}已空闲` && metaOf(r).eventType === "run.idle"
+          (r) =>
+            r.body === `${tag}已空闲` && metaOf(r).eventType === "agent.idle"
         )
       ).toBe(true)
       expect(rows.every((r) => metaOf(r).urgent !== true)).toBe(true)
       // No immediate wake: the scheduler saw nothing new.
       expect(promptLog.get(orch.id)?.length ?? 0).toBe(primed)
-      expect(challenge.id).toBeTruthy()
 
       // The tick delivers the backlog as ONE merged steer.
       service.channels.runFlushTick()
@@ -134,7 +144,6 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       expect(texts.at(-1)).toContain("[频道消息]")
       expect(texts.at(-1)).toContain("已启动（手动）")
       expect(texts.at(-1)).toContain("已空闲")
-      // A second tick: cursors advanced, nothing new.
       service.channels.runFlushTick()
       await settle()
       expect(promptLog.get(orch.id)?.length).toBe(primed + 1)
@@ -146,65 +155,40 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
   })
 
   test("flagAccepted and finished post orch messages; a failed settle carries the idle(failed) marker", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) =>
-          stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-        ),
-      })
+      const promptLog = new Map<string, string[]>()
+      service = makeService(db, dir, promptLog)
 
-      const sched = await service.create({
-        scopeType: "event" as const,
+      await service.startScheduler("evt-1")
+      await settle()
+      expect(orchestratorOf(db).id).toBeTruthy()
+
+      const solver = await service.spawn({
         eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
-      await settle()
-      expect(orchestratorOf(db, sched.id).id).toBeTruthy()
-
-      const challenge = await service.create({
-        scopeType: "challenge" as const,
         challengeId: "ch-1",
-        container: containerInput,
       })
       await settle()
 
-      service.notifyFlagAccepted(challenge.id)
-      const tag = `run-${challenge.id.slice(0, 8)}「Test Challenge」`
+      service.notifyFlagAccepted("ch-1", solver.id)
+      const tag = tagOf(solver.id)
       expect(
         orchRows(db).some(
           (r) =>
-            r.body === `${tag}flag 已接受` && metaOf(r).runId === challenge.id
+            r.body === `${tag}flag 已接受` && metaOf(r).agentId === solver.id
         )
       ).toBe(true)
 
-      await service.finish(challenge.id, "solved it")
+      await service.finishAgent(solver.id, "solved it")
       await settle()
       expect(
         orchRows(db).some(
           (r) =>
             r.body === `${tag}已完成` &&
-            metaOf(r).eventType === "run.finished" &&
+            metaOf(r).eventType === "agent.finished" &&
             metaOf(r).urgent !== true
         )
       ).toBe(true)
@@ -216,73 +200,28 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
   })
 
   test("a failed solver turn posts idle(failed) so the scheduler can tell a dead solver from a pause", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-          const sdk = stub.session as unknown as {
-            prompt: (text: string) => Promise<void>
-          }
-          sdk.prompt = async () => {
-            // Challenge solvers fail their turn; the scheduler's own agent
-            // stays healthy so the run-status emit still lands.
-            const agentRow = db
-              .select()
-              .from(agents)
-              .where(eq(agents.id, input.agentId))
-              .get()
-            const runRow = agentRow
-              ? db.select().from(runs).where(eq(runs.id, agentRow.runId)).get()
-              : undefined
-            if (runRow?.scopeType === "challenge") throw new Error("boom")
-          }
-          return stub
-        }),
-      })
+      const promptLog = new Map<string, string[]>()
+      service = makeService(db, dir, promptLog, true)
 
-      const sched = await service.create({
-        scopeType: "event" as const,
-        eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
+      await service.startScheduler("evt-1")
       await settle()
-      expect(orchestratorOf(db, sched.id).id).toBeTruthy()
+      expect(orchestratorOf(db).id).toBeTruthy()
 
-      await service.create({
-        scopeType: "challenge" as const,
-        challengeId: "ch-1",
-        container: containerInput,
-      })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       await wait(80)
 
-      // The failed settle flips the run idle with the failure marker — the
-      // scheduler can tell a dead solver from a healthy pause.
       expect(
         orchRows(db).some(
           (r) =>
-            r.body.endsWith("「Test Challenge」已空闲（有 solver 失败）") &&
-            metaOf(r).eventType === "run.idle"
+            r.body.endsWith("「Test Challenge」agent-") === false &&
+            r.body.includes("「Test Challenge」") &&
+            r.body.endsWith("已空闲（失败）") &&
+            metaOf(r).eventType === "agent.idle"
         )
       ).toBe(true)
       await service.close()
@@ -292,61 +231,37 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
     }
   })
 
-  test("a cold-resumed run posts run.resumed", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+  test("a reopened agent posts agent.reopened", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) =>
-          stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-        ),
-      })
+      const promptLog = new Map<string, string[]>()
+      service = makeService(db, dir, promptLog)
 
-      const sched = await service.create({
-        scopeType: "event" as const,
+      await service.startScheduler("evt-1")
+      await settle()
+      expect(orchestratorOf(db).id).toBeTruthy()
+
+      const solver = await service.spawn({
         eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
-      await settle()
-      expect(orchestratorOf(db, sched.id).id).toBeTruthy()
-
-      const challenge = await service.create({
-        scopeType: "challenge" as const,
         challengeId: "ch-1",
-        container: containerInput,
       })
       await settle()
-      await service.finish(challenge.id, "done")
+      await service.closeAgent(solver.id)
       await settle()
 
-      // Direct user message → lifecycle.send → onResume cold-restore; the
-      // restore posts run.resumed into orch.
-      await service.sendMessage(challenge.id, { text: "继续" })
+      // Direct user message → lifecycle.send → onResume reopen; the restore
+      // posts agent.reopened into orch.
+      await service.sendMessage(solver.id, { text: "继续" })
       await wait(80)
+      const tag = tagOf(solver.id)
       expect(
         orchRows(db).some(
           (r) =>
-            r.body.endsWith("「Test Challenge」已恢复") &&
-            metaOf(r).eventType === "run.resumed"
+            r.body === `${tag}已重开` &&
+            metaOf(r).eventType === "agent.reopened"
         )
       ).toBe(true)
       await service.close()
@@ -357,66 +272,32 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
   })
 
   test("the queue-starved edge posts an URGENT orch message that wakes the live scheduler immediately", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
-      const provider = makeProvider()
       const promptLog = new Map<string, string[]>()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-          const list: string[] = []
-          promptLog.set(input.agentId, list)
-          const sdk = stub.session as unknown as {
-            prompt: (text: string) => Promise<void>
-          }
-          sdk.prompt = async (text: string) => {
-            list.push(text)
-          }
-          return stub
-        }),
-      })
+      service = makeService(db, dir, promptLog)
 
-      const sched = await service.create({
-        scopeType: "event" as const,
-        eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
+      const sched = await service.startScheduler("evt-1")
       await settle()
-      const orch = orchestratorOf(db, sched.id)
+      const orch = orchestratorOf(db)
       const primed = promptLog.get(orch.id)?.length ?? 0
 
-      // Two queued items (different challenges — enqueue upserts per
-      // (event, challenge)), then the 2→1 edge (remove) fires the starved line.
       const queue = service.queue()
       const one = queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-1",
         source: "scheduler",
+        prompt: "p1",
       })
       queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-2",
         source: "scheduler",
+        prompt: "p2",
       })
       queue.cancelDrain()
       queue.remove(one.id)
@@ -437,67 +318,39 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
     }
   })
 
-  test("W3 paused: run events and queue urgent lines are dropped entirely; resume wakes with the re-sync message", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+  test("W3 paused: agent events and queue urgent lines are dropped entirely; resume wakes with the re-sync message", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
       const promptLog = new Map<string, string[]>()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-          const list: string[] = []
-          promptLog.set(input.agentId, list)
-          const sdk = stub.session as unknown as {
-            prompt: (text: string) => Promise<void>
-          }
-          sdk.prompt = async (text: string) => {
-            list.push(text)
-          }
-          return stub
-        }),
-      })
+      service = makeService(db, dir, promptLog)
 
       const sched = await service.startScheduler("evt-1")
       await settle()
-      const orch = orchestratorOf(db, sched.id)
+      const orch = orchestratorOf(db)
       const primed = promptLog.get(orch.id)?.length ?? 0
 
       await service.pauseScheduler("evt-1")
-      const challenge = await service.create({
-        scopeType: "challenge",
+      const solver = await service.spawn({
+        eventId: "evt-1",
         challengeId: "ch-1",
-        container: containerInput,
       })
       await settle()
-      service.notifyFlagAccepted(challenge.id)
+      service.notifyFlagAccepted("ch-1", solver.id)
       const queue = service.queue()
       const one = queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-1",
         source: "scheduler",
+        prompt: "p",
       })
       queue.enqueue({
         eventId: "evt-1",
         challengeId: "ch-1",
         source: "scheduler",
+        prompt: "q",
       })
       queue.cancelDrain()
       queue.remove(one.id)
@@ -519,57 +372,27 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
     }
   })
 
-  test("a closed scheduler run stores events unread; a restart restores the SAME run and the tick catches up (stable scheduler cursor)", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+  test("a terminal scheduler stores events unread; a restart reopens the SAME agent and the tick catches up", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
       const promptLog = new Map<string, string[]>()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-          const list: string[] = []
-          promptLog.set(input.agentId, list)
-          const sdk = stub.session as unknown as {
-            prompt: (text: string) => Promise<void>
-          }
-          sdk.prompt = async (text: string) => {
-            list.push(text)
-          }
-          return stub
-        }),
-      })
+      service = makeService(db, dir, promptLog)
 
       const sched = await service.startScheduler("evt-1")
       await settle()
-      const orchId = orchestratorOf(db, sched.id).id
+      const orchId = orchestratorOf(db).id
 
-      await service.closeRun(sched.id)
-      expect(service.get(sched.id)!.status).toBe("closed")
+      await service.closeScheduler("evt-1")
+      expect(service.getAgent(sched.id)?.status).toBe("aborted")
 
-      // Events while the scheduler is closed: stored under the stable
+      // Events while the scheduler is terminal: stored under the stable
       // 'scheduler' cursor, nothing delivered.
-      const challenge = await service.create({
-        scopeType: "challenge",
+      const solver = await service.spawn({
+        eventId: "evt-1",
         challengeId: "ch-1",
-        container: containerInput,
       })
       await settle()
       const stored = orchRows(db)
@@ -578,11 +401,10 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
         stored.length
       )
 
-      // Restore: SAME run id + agent row (memory kept)…
+      // Restore: SAME scheduler agent (memory kept)…
       const restored = await service.startScheduler("evt-1")
       await settle()
       expect(restored.id).toBe(sched.id)
-      expect(orchestratorOf(db, restored.id).id).toBe(orchId)
 
       // …and the next tick sweeps the stored backlog into the orchestrator.
       service.channels.runFlushTick()
@@ -593,7 +415,7 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       )
       expect(catchUp).toBeDefined()
       expect(catchUp).toContain("已空闲")
-      expect(challenge.id).toBeTruthy()
+      expect(solver.id).toBeTruthy()
       await service.close()
     } finally {
       await service?.close().catch(() => undefined)
@@ -601,43 +423,24 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
     }
   })
 
-  test("startScheduler reset recreates: the closed run is deleted, a fresh one made (W3.2)", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+  test("startScheduler reset recreates: the terminal scheduler is deleted, a fresh one made (W3.2)", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) =>
-          stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-        ),
-      })
+      const promptLog = new Map<string, string[]>()
+      service = makeService(db, dir, promptLog)
 
       const sched = await service.startScheduler("evt-1")
       await settle()
-      await service.closeRun(sched.id)
+      await service.closeScheduler("evt-1")
 
       const fresh = await service.startScheduler("evt-1", { reset: true })
       await settle()
       expect(fresh.id).not.toBe(sched.id)
-      expect(service.get(sched.id)).toBeUndefined()
-      expect(service.get(fresh.id)!.status).toBe("idle")
+      expect(service.getAgent(sched.id)).toBeUndefined()
+      expect(service.getAgent(fresh.id)?.status).toBe("idle")
       await service.close()
     } finally {
       await service?.close().catch(() => undefined)
@@ -645,57 +448,31 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
     }
   })
 
-  test("scheduler-launched runs carry no manual marker in the orch message (W5)", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof createRunService> | undefined
+  test("scheduler-launched agents carry no manual marker in the orch message (W5)", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof createAgentService> | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { manager } = stubContainerManager()
-      service = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) =>
-          stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-        ),
-      })
+      const promptLog = new Map<string, string[]>()
+      service = makeService(db, dir, promptLog)
 
-      const sched = await service.create({
-        scopeType: "event",
-        eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
+      await service.startScheduler("evt-1")
       await settle()
-      expect(orchestratorOf(db, sched.id).id).toBeTruthy()
+      expect(orchestratorOf(db).id).toBeTruthy()
 
-      // A scheduler-launched run: source='scheduler' — NO manual marker, so
-      // the scheduler knows it owns the run.
-      await service.create({
-        scopeType: "challenge",
+      // A scheduler-spawned agent: source='scheduler' — NO manual marker.
+      const solver = await service.spawn({
+        eventId: "evt-1",
         challengeId: "ch-1",
-        container: containerInput,
         source: "scheduler",
       })
       await settle()
       const started = orchRows(db).filter(
-        (r) => metaOf(r).eventType === "run.started"
+        (r) => metaOf(r).eventType === "agent.started"
       )
       expect(started).toHaveLength(1)
-      expect(started[0]!.body).toMatch(/^run-.{8}「Test Challenge」已启动$/)
+      expect(started[0]!.body).toBe(`${tagOf(solver.id)}已启动`)
       expect(metaOf(started[0]!).source).toBe("scheduler")
       await service.close()
     } finally {

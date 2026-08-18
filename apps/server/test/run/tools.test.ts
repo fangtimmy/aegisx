@@ -3,11 +3,10 @@ import { describe, expect, test } from "bun:test"
 import type { TargetState } from "@aegisx/shared/domain"
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 
-import { createMainTools, type RunToolContext } from "../../src/run/tools"
+import { createMainTools, type AgentToolContext } from "../../src/run/tools"
 
-function mockCtx(overrides: Partial<RunToolContext> = {}): RunToolContext {
+function mockCtx(overrides: Partial<AgentToolContext> = {}): AgentToolContext {
   return {
-    runId: "r",
     challengeId: "c",
     agentId: "main",
     submitFlag: async () => ({ status: "accepted" }),
@@ -119,7 +118,7 @@ describe("createMainTools", () => {
           endpoints: [],
           expiresAt: null,
         }),
-        requestFinish: (s) => {
+        requestFinish: (s: string) => {
           finished = s
         },
       }),

@@ -1,6 +1,17 @@
 /** Task-queue wire types (GET /api/events/:id/queue + the enqueue endpoints).
  * Canonical definition — the server's queue service and the web UI both
- * import from here (no hand-mirrored duplicates). */
+ * import from here (no hand-mirrored duplicates).
+ *
+ * v19: a queue item = "spawn one agent on challenge X". Enqueue always
+ * appends — one challenge may hold several pending items (parallel attempts
+ * are a legal plan). */
+
+/** The spawn specs a queue item carries (the parsed `params` JSON column). */
+export type SpawnQueueParams = {
+  model?: string
+  prompt?: string
+  promptMode?: "strategy" | "override"
+}
 
 /** Public queue item shape (REST + tools). */
 export type QueueItemPublic = {
@@ -9,12 +20,14 @@ export type QueueItemPublic = {
   ord: number
   challengeId: string
   challengeName: string
-  params: Record<string, unknown>
+  params: SpawnQueueParams
   timeoutMs: number | null
+  /** Display copy of params.prompt (the queue list's strategy column). */
   prompt: string
   source: "manual" | "scheduler"
   status: "pending" | "running" | "done" | "cancelled" | "failed"
-  runId: string | null
+  /** Back-filled when the drainer launches the agent. */
+  agentId: string | null
   error: string | null
   createdAt: string
   updatedAt: string

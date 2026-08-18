@@ -3,17 +3,20 @@ import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import {
+  agents,
   challengeRemote,
   challenges,
-  runs,
   schedulerConfig,
 } from "../../src/db/schema"
-import { checkLaunchFence, maxConcurrentRunsSetting } from "../../src/run/fence"
+import {
+  checkSpawnFence,
+  maxConcurrentAgentsSetting,
+} from "../../src/run/fence"
 import {
   flatSettings,
+  seedAgent,
   seedChallenge,
   seedEvent,
-  seedRun,
   setupDb,
   now,
 } from "../helpers"
@@ -51,104 +54,88 @@ function seedTarget(
     .run()
 }
 
-const challenge = (eventId: string, id: string) => ({
-  scopeType: "challenge" as const,
+const candidate = (eventId: string, challengeId: string) => ({
   eventId,
-  challengeId: id,
+  challengeId,
 })
 
-describe("launch fence", () => {
+describe("spawn fence", () => {
   test("admits when under the global cap; rejects at the cap", () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const settings = flatSettings()
-      expect(maxConcurrentRunsSetting(settings)).toBe(4)
+      expect(maxConcurrentAgentsSetting(settings)).toBe(4)
 
-      // 3 running runs → 4th admitted.
-      seedRun(db, { id: "r1", status: "running", challengeId: "ch-1" })
-      seedRun(db, { id: "r2", status: "running", challengeId: "ch-1" })
-      seedRun(db, { id: "r3", status: "running", challengeId: "ch-1" })
-      expect(
-        checkLaunchFence(db, settings, challenge("evt-1", "ch-1")).ok
-      ).toBe(true)
-
-      // 4 running → 5th rejected (global_capacity).
-      seedRun(db, { id: "r4", status: "running", challengeId: "ch-1" })
-      const decision = checkLaunchFence(
-        db,
-        settings,
-        challenge("evt-1", "ch-1")
+      // 3 live agents → 4th admitted.
+      seedAgent(db, { id: "a1", challengeId: "ch-1", status: "running" })
+      seedAgent(db, { id: "a2", challengeId: "ch-1", status: "running" })
+      seedAgent(db, { id: "a3", challengeId: "ch-1", status: "running" })
+      expect(checkSpawnFence(db, settings, candidate("evt-1", "ch-1")).ok).toBe(
+        true
       )
+
+      // 4 live → 5th rejected (global_capacity).
+      seedAgent(db, { id: "a4", challengeId: "ch-1", status: "running" })
+      const decision = checkSpawnFence(db, settings, candidate("evt-1", "ch-1"))
       expect(decision.ok).toBe(false)
       if (!decision.ok) {
         expect(decision.code).toBe("global_capacity")
-        expect(decision.message).toMatch(/Live container cap reached/)
+        expect(decision.message).toMatch(/Live agent cap reached/)
       }
     } finally {
       close()
     }
   })
 
-  test("idle runs count toward the live container cap (W4.1)", () => {
+  test("idle agents count toward the live cap; terminal agents free their slot", () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      // 4 idle runs (warm containers — still live, still consuming a slot) →
-      // a new launch is REJECTED.
+      // 4 idle agents (warm sessions — still live, still consuming a slot) →
+      // a new spawn is REJECTED.
       for (let i = 1; i <= 4; i++) {
-        seedRun(db, { id: `r${i}`, status: "idle", challengeId: "ch-1" })
+        seedAgent(db, { id: `a${i}`, challengeId: "ch-1", status: "idle" })
       }
-      const decision = checkLaunchFence(
+      const decision = checkSpawnFence(
         db,
         flatSettings(),
-        challenge("evt-1", "ch-1")
+        candidate("evt-1", "ch-1")
       )
       expect(decision.ok).toBe(false)
       if (!decision.ok) expect(decision.code).toBe("global_capacity")
-      // Closing one frees the slot.
-      seedRun(db, { id: "r5", status: "closed", challengeId: "ch-1" })
-      db.update(runs).set({ status: "closed" }).where(eq(runs.id, "r4")).run()
+      // A terminal agent frees the slot.
+      db.update(agents)
+        .set({ status: "aborted" })
+        .where(eq(agents.id, "a4"))
+        .run()
       expect(
-        checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-1")).ok
+        checkSpawnFence(db, flatSettings(), candidate("evt-1", "ch-1")).ok
       ).toBe(true)
     } finally {
       close()
     }
   })
 
-  test("scheduler (event-scope) runs never count and are never blocked", () => {
+  test("the scheduler agent (orchestrator) never counts toward the cap", () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      // An event-scope scheduler run is invisible to the fence.
-      db.insert(runs)
-        .values({
-          id: "sched",
-          scopeType: "event",
-          eventId: "evt-1",
-          challengeId: null,
-          status: "running",
-          model: "openai/gpt-4o-mini:off",
-          image: "i",
-          cpus: 1,
-          memoryMb: 1,
-          pidsLimit: 1,
-          containerName: "c",
-          workspacePath: "w",
-          sessionDir: "s",
-          source: "manual",
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .run()
-      const decision = checkLaunchFence(db, flatSettings(), {
-        scopeType: "event",
+      seedAgent(db, {
+        id: "sched",
         eventId: "evt-1",
+        challengeId: null,
+        role: "orchestrator",
+        status: "running",
       })
+      const decision = checkSpawnFence(
+        db,
+        flatSettings(),
+        candidate("evt-1", "ch-1")
+      )
       expect(decision.ok).toBe(true)
     } finally {
       close()
@@ -163,12 +150,12 @@ describe("launch fence", () => {
       seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
       seedTarget(db, "ch-a")
       seedTarget(db, "ch-b")
-      // One run attacking ch-a (default maxConcurrentTargets = 1).
-      seedRun(db, { id: "ra", status: "running", challengeId: "ch-a" })
-      const decision = checkLaunchFence(
+      // One live agent attacking ch-a (default maxConcurrentTargets = 1).
+      seedAgent(db, { id: "ra", challengeId: "ch-a", status: "running" })
+      const decision = checkSpawnFence(
         db,
         flatSettings(),
-        challenge("evt-1", "ch-b")
+        candidate("evt-1", "ch-b")
       )
       expect(decision.ok).toBe(false)
       if (!decision.ok) expect(decision.code).toBe("target_slots")
@@ -177,23 +164,23 @@ describe("launch fence", () => {
     }
   })
 
-  test("same target-capable challenge shares one slot (no new slot)", () => {
+  test("agents on the same target-capable challenge share one slot", () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
       seedTarget(db, "ch-a")
-      seedRun(db, { id: "ra", status: "running", challengeId: "ch-a" })
-      // Another run on the SAME challenge reuses the slot.
+      seedAgent(db, { id: "ra", challengeId: "ch-a", status: "running" })
+      // Another agent on the SAME challenge reuses the slot.
       expect(
-        checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-a")).ok
+        checkSpawnFence(db, flatSettings(), candidate("evt-1", "ch-a")).ok
       ).toBe(true)
     } finally {
       close()
     }
   })
 
-  test("an idle run on a target-capable challenge occupies its slot (W4.2)", () => {
+  test("an idle agent on a target-capable challenge occupies its slot", () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
@@ -201,13 +188,13 @@ describe("launch fence", () => {
       seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
       seedTarget(db, "ch-a")
       seedTarget(db, "ch-b")
-      // An IDLE run attacking ch-a still holds the slot (its target is very
-      // likely still running on the platform).
-      seedRun(db, { id: "ra", status: "idle", challengeId: "ch-a" })
-      const decision = checkLaunchFence(
+      // An IDLE agent attacking ch-a still holds the slot (its target is
+      // very likely still running on the platform).
+      seedAgent(db, { id: "ra", challengeId: "ch-a", status: "idle" })
+      const decision = checkSpawnFence(
         db,
         flatSettings(),
-        challenge("evt-1", "ch-b")
+        candidate("evt-1", "ch-b")
       )
       expect(decision.ok).toBe(false)
       if (!decision.ok) expect(decision.code).toBe("target_slots")
@@ -224,10 +211,10 @@ describe("launch fence", () => {
       seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
       seedTarget(db, "ch-a", { targetIgnored: true })
       seedTarget(db, "ch-b")
-      seedRun(db, { id: "ra", status: "running", challengeId: "ch-a" })
-      // ch-a's target is ignored → not under attack → ch-b may launch.
+      seedAgent(db, { id: "ra", challengeId: "ch-a", status: "running" })
+      // ch-a's target is ignored → not under attack → ch-b may spawn.
       expect(
-        checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-b")).ok
+        checkSpawnFence(db, flatSettings(), candidate("evt-1", "ch-b")).ok
       ).toBe(true)
     } finally {
       close()
@@ -242,10 +229,10 @@ describe("launch fence", () => {
       seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
       seedTarget(db, "ch-a", { solved: true })
       seedTarget(db, "ch-b")
-      seedRun(db, { id: "ra", status: "running", challengeId: "ch-a" })
-      // ch-a is solved → not under attack → ch-b may launch.
+      seedAgent(db, { id: "ra", challengeId: "ch-a", status: "running" })
+      // ch-a is solved → not under attack → ch-b may spawn.
       expect(
-        checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-b")).ok
+        checkSpawnFence(db, flatSettings(), candidate("evt-1", "ch-b")).ok
       ).toBe(true)
     } finally {
       close()
@@ -272,11 +259,11 @@ describe("launch fence", () => {
           updatedAt: now(),
         })
         .run()
-      seedRun(db, { id: "ra", status: "running", challengeId: "ch-a" })
-      seedRun(db, { id: "rb", status: "running", challengeId: "ch-b" })
+      seedAgent(db, { id: "ra", challengeId: "ch-a", status: "running" })
+      seedAgent(db, { id: "rb", challengeId: "ch-b", status: "running" })
       // 2/2 slots used → ch-c rejected.
       expect(
-        checkLaunchFence(db, flatSettings(), challenge("evt-1", "ch-c")).ok
+        checkSpawnFence(db, flatSettings(), candidate("evt-1", "ch-c")).ok
       ).toBe(false)
     } finally {
       close()

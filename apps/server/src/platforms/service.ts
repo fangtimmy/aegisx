@@ -3,12 +3,12 @@ import { and, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
+  agents,
   challengeRemote,
   challenges,
   eventPlatforms,
   events,
   platformRequestLog,
-  runs,
 } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
 import type { createStorage } from "../infrastructure/storage"
@@ -54,15 +54,11 @@ export function createPlatformService(
   maxAttachmentBytes: () => number,
   configStore: ConfigStore
 ) {
-  let onRunFlagAccepted:
-    | ((runId: string, submitterAgentId?: string) => void)
+  let onAgentFlagAccepted:
+    | ((challengeId: string, agentId?: string) => void)
     | undefined
-  let onRunFlagPartial:
-    | ((
-        runId: string,
-        message: string | null,
-        submitterAgentId?: string
-      ) => void)
+  let onAgentFlagPartial:
+    | ((challengeId: string, message: string | null, agentId?: string) => void)
     | undefined
   const logPlatformRequest = (info: PlatformRequestError) => {
     const now = new Date().toISOString()
@@ -140,10 +136,10 @@ export function createPlatformService(
     storedPlatform,
     adapterForEvent,
     {
-      onRunFlagAccepted: (runId, submitterAgentId) =>
-        onRunFlagAccepted?.(runId, submitterAgentId),
-      onRunFlagPartial: (runId, message, submitterAgentId) =>
-        onRunFlagPartial?.(runId, message, submitterAgentId),
+      onAgentFlagAccepted: (challengeId, agentId) =>
+        onAgentFlagAccepted?.(challengeId, agentId),
+      onAgentFlagPartial: (challengeId, message, agentId) =>
+        onAgentFlagPartial?.(challengeId, message, agentId),
     }
   )
   const platformTargets = createPlatformTargets(
@@ -241,18 +237,21 @@ export function createPlatformService(
     }
     const platform = storedPlatform(eventId)
     if (!platform) return
-    const activeRun = db
-      .select({ id: runs.id })
-      .from(runs)
-      .innerJoin(challenges, eq(runs.challengeId, challenges.id))
+    const activeAgent = db
+      .select({ id: agents.id })
+      .from(agents)
+      .innerJoin(challenges, eq(agents.challengeId, challenges.id))
       .where(
-        and(eq(challenges.eventId, eventId), inArray(runs.status, ["running"]))
+        and(
+          eq(challenges.eventId, eventId),
+          inArray(agents.status, ["running"])
+        )
       )
       .get()
-    if (activeRun) {
+    if (activeAgent) {
       throw new PlatformActionError(
         "invalid_state",
-        "Stop active runs before removing the platform binding"
+        "Stop active agents before removing the platform binding"
       )
     }
     await platformTargets.assertNoActiveTargets(eventId)
@@ -334,20 +333,20 @@ export function createPlatformService(
     ignoreTarget: platformTargets.ignoreTarget,
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
-    setRunHooks(hooks: {
-      onRunFlagAccepted?(runId: string, submitterAgentId?: string): void
-      onRunFlagPartial?(
-        runId: string,
+    setAgentHooks(hooks: {
+      onAgentFlagAccepted?(challengeId: string, agentId?: string): void
+      onAgentFlagPartial?(
+        challengeId: string,
         message: string | null,
-        submitterAgentId?: string
+        agentId?: string
       ): void
     }) {
       // Bound via a closure: the hook is a method on the caller's object, so
       // storing it detached would lose `this` (oxlint unbound-method).
-      onRunFlagAccepted = (runId, submitterAgentId) =>
-        hooks.onRunFlagAccepted?.(runId, submitterAgentId)
-      onRunFlagPartial = (runId, message, submitterAgentId) =>
-        hooks.onRunFlagPartial?.(runId, message, submitterAgentId)
+      onAgentFlagAccepted = (challengeId, agentId) =>
+        hooks.onAgentFlagAccepted?.(challengeId, agentId)
+      onAgentFlagPartial = (challengeId, message, agentId) =>
+        hooks.onAgentFlagPartial?.(challengeId, message, agentId)
     },
     addManualFlag: platformFlags.addManualFlag,
     deleteFlag: platformFlags.deleteFlag,

@@ -1,7 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 
 import type { Database } from "../db"
-import { agents, runs } from "../db/schema"
+import { agents } from "../db/schema"
 import { orchKey, type ChannelService } from "./channels"
 
 /** agent 停滞判定：turn settle 后超过该时长仍 idle/failed → urgent orch
@@ -27,8 +27,7 @@ export function fmtMs(ms: number): string {
 export type StallWatchdogDeps = {
   db: Database
   channels: ChannelService
-  /** W3: the event's scheduler is paused → stall checks do not arm (same
-   * arm condition as the digest-era watchdog). */
+  /** W3: the event's scheduler is paused → stall checks do not arm. */
   isSchedulerPaused(eventId: string): boolean
   /** Test seam: stall threshold. */
   stallMs?: number
@@ -37,10 +36,10 @@ export type StallWatchdogDeps = {
 export type StallWatchdog = ReturnType<typeof createStallWatchdog>
 
 /**
- * 停滞 watchdog（docs/im-simplify-v18.md §五）：agent turn settle 后 arm
- * 2min 计时器，到点现查该 run 仍有 idle/failed agent → post 一条 urgent
- * 消息到 orch:<eventId>（调度者不在线时只存储，下次启动 catch-up——不再
- * 依赖任何 live 实例）。每个 idle 周期只触发一次（再次 settle 重新 arm）。
+ * 停滞 watchdog（per-agent，docs/model-v19-challenge-centric.md §四）：agent
+ * turn settle 后 arm 2min 计时器，到点现查该 agent 仍 idle/failed → post
+ * 一条 urgent 消息到 orch:<eventId>（调度者不在线时只存储，下次启动
+ * catch-up）。每个 idle 周期只触发一次（再次 settle 重新 arm）。
  */
 export function createStallWatchdog(deps: StallWatchdogDeps) {
   const { db, channels } = deps
@@ -50,66 +49,55 @@ export function createStallWatchdog(deps: StallWatchdogDeps) {
     { timer: ReturnType<typeof setTimeout>; dueAt: number }
   >()
 
-  /** agent turn settled (idle/failed): arm the run's stall check. The fire
-   * time re-checks the DB, so a mid-timer resume/finish is judged from
-   * current state (race-safe). Challenge-scope only; paused events skip. */
-  function noteAgentIdle(runId: string): void {
+  /** Agent turn settled (idle/failed): arm the agent's stall check. The
+   * fire time re-checks the DB, so a mid-timer resume/finish is judged from
+   * current state (race-safe). Solver agents only; paused events skip. */
+  function noteAgentIdle(agentId: string): void {
     const row = db
       .select({
-        scopeType: runs.scopeType,
-        eventId: runs.eventId,
-        status: runs.status,
+        role: agents.role,
+        eventId: agents.eventId,
+        status: agents.status,
       })
-      .from(runs)
-      .where(eq(runs.id, runId))
+      .from(agents)
+      .where(eq(agents.id, agentId))
       .get()
-    if (!row || row.scopeType !== "challenge") return
+    if (!row || row.role !== "solver") return
     if (deps.isSchedulerPaused(row.eventId)) return
-    clearStallTimer(runId)
+    clearStallTimer(agentId)
     const dueAt = Date.now() + stallMs
     const timer = setTimeout(() => {
-      timers.delete(runId)
-      checkStall(runId)
+      timers.delete(agentId)
+      checkStall(agentId)
     }, stallMs)
-    timers.set(runId, { timer, dueAt })
+    timers.set(agentId, { timer, dueAt })
   }
 
-  function clearStallTimer(runId: string): void {
-    const entry = timers.get(runId)
+  function clearStallTimer(agentId: string): void {
+    const entry = timers.get(agentId)
     if (entry) {
       clearTimeout(entry.timer)
-      timers.delete(runId)
+      timers.delete(agentId)
     }
   }
 
-  /** Timer fired: re-check the run — an idle/failed agent still idle ≥
-   * stallMs posts the urgent orch message; otherwise silent. A finishing or
-   * closed run never fires a false alarm. */
-  function checkStall(runId: string): void {
-    const row = db.select().from(runs).where(eq(runs.id, runId)).get()
-    if (!row || row.status === "closed" || row.finishing) return
+  /** Timer fired: re-check the agent — an idle/failed agent still idle ≥
+   * stallMs posts the urgent orch message; otherwise silent. A terminal
+   * agent never fires a false alarm. */
+  function checkStall(agentId: string): void {
+    const row = db.select().from(agents).where(eq(agents.id, agentId)).get()
+    if (!row || row.role !== "solver") return
+    if (row.status !== "idle" && row.status !== "failed") {
+      return
+    }
     if (deps.isSchedulerPaused(row.eventId)) return
     const nowMs = Date.now()
-    const stalled = db
-      .select()
-      .from(agents)
-      .where(
-        and(eq(agents.runId, runId), inArray(agents.status, ["idle", "failed"]))
-      )
-      .all()
-      .filter((agent) => nowMs - Date.parse(agent.updatedAt) >= stallMs)
-    if (!stalled.length) return
-    const detail = stalled
-      .map(
-        (agent) =>
-          `${agent.name ?? agent.slot} 已闲置 ${fmtMs(nowMs - Date.parse(agent.updatedAt))}`
-      )
-      .join("、")
+    if (nowMs - Date.parse(row.updatedAt) < stallMs) return
     channels.post({
       channelKey: orchKey(row.eventId),
       author: { type: "system" },
-      body: `停滞：run-${runId.slice(0, 8)} — ${detail}`,
-      meta: { runId, noticeType: "emergency" },
+      body: `停滞：agent-${agentId.slice(0, 8)} 已闲置 ${fmtMs(nowMs - Date.parse(row.updatedAt))}`,
+      meta: { agentId, noticeType: "emergency" },
       urgent: true,
     })
   }

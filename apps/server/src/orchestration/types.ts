@@ -3,7 +3,7 @@ import type { PromptAttachment } from "@aegisx/shared"
 // --- per-agent capabilities (derived from the agent's tool list) -----------
 
 /** Per-agent capability flags. Derived from the agent's `tools` array,
- * NOT from the run/challenge — so each agent's rendered system
+ * NOT from the challenge — so each agent's rendered system
  * prompt advertises exactly the abilities its tool set grants. */
 export type Capabilities = {
   canFinish: boolean
@@ -28,11 +28,10 @@ export function deriveCapabilities(tools: string[]): Capabilities {
 // --- unified, scope-aware prompt render context --------------------------
 
 /**
- * Unified render context. Scope-aware: `challenge` is present only for
- * challenge-scoped runs; `instruction` only for event-scoped (scheduler) runs.
- * `agent` and `capabilities` are per-agent — filled when the system renders
- * that agent's system prompt (capabilities derived from the agent's tools).
- * Field names match the built-in handlebars templates.
+ * Unified render context. Scope-aware: `challenge` + `workspace` are present
+ * only for solver agents; `instruction` only for the scheduler agent.
+ * `capabilities` are derived from the agent's tools at spawn time. Field
+ * names match the built-in handlebars templates.
  */
 export type PromptContext = {
   event: {
@@ -51,87 +50,75 @@ export type PromptContext = {
     attachmentPaths: string[]
   }
   agent?: {
-    role: string
-    isMain: boolean
+    role: "solver" | "orchestrator"
     name: string
-    task: string | null
-    isEntry?: boolean
   }
   model?: {
     provider: string
     name: string
     id: string
   }
-  run?: {
-    id: string
-    environment: "container"
-    isContainer: true
-    workspace: string
-    targetSupported: boolean
-    platformIntegrated: boolean
+  workspace?: {
+    root: string
+    agentDir: string
+    sharedDir: string
+    attachmentsDir: string
+    siblingsDir: string
     containerImage: string
     cpus: number
     memoryMb: number
     pidsLimit: number
-    /** v9: true when the run has more than one solver — renders the
-     * shared-workspace collaboration section in `mainSystem`. */
-    multiSolver: boolean
   }
   capabilities?: Capabilities
-  /** event-scoped only (scheduler instruction). */
+  /** event-scope only (scheduler instruction). */
   instruction?: string
-  /** challenge-scope initial only: the per-run strategy appended as a
-   * `## Strategy` section (queue/scheduler `prompt` override). Injected by
-   * the run factory when a strategy was supplied; the standard blocks
-   * (challenge, environment, submission) are always rendered. */
+  /** solver initial only: the spawn prompt appended as a `## Strategy`
+   * section. Injected by the agent factory when a prompt was supplied; the
+   * standard blocks (challenge, environment, submission) are always
+   * rendered. */
   strategy?: string
 }
 
-// --- event-scope (scheduler wake-up) events -------------------------------
+// --- scheduler wake-up events (v19: agent-scoped) --------------------------
 
 export type EventScopeEvent =
-  | "run.started"
-  | "run.idle"
-  | "run.flagAccepted"
-  | "run.finished"
-  | "run.timedOut"
-  | "run.resumed"
+  | "agent.started"
+  | "agent.idle"
+  | "agent.flagAccepted"
+  | "agent.finished"
+  | "agent.timedOut"
+  | "agent.reopened"
 
 export type EventScopePayload =
   | {
-      type: "run.started"
-      runId: string
-      agentId?: string
+      type: "agent.started"
+      agentId: string
       source?: "manual" | "scheduler"
     }
   | {
-      type: "run.idle"
-      runId: string
-      agentId?: string
+      type: "agent.idle"
+      agentId: string
       failed?: boolean
       source?: "manual" | "scheduler"
     }
   | {
-      type: "run.flagAccepted"
-      runId: string
-      agentId?: string
+      type: "agent.flagAccepted"
+      agentId: string
       source?: "manual" | "scheduler"
     }
   | {
-      type: "run.finished"
-      runId: string
-      agentId?: string
+      type: "agent.finished"
+      agentId: string
       source?: "manual" | "scheduler"
     }
   | {
-      type: "run.timedOut"
-      runId: string
-      outcome: "idle" | "closed"
+      type: "agent.timedOut"
+      agentId: string
+      outcome: "idle" | "aborted"
       source?: "manual" | "scheduler"
     }
   | {
-      type: "run.resumed"
-      runId: string
-      agentId?: string
+      type: "agent.reopened"
+      agentId: string
       source?: "manual" | "scheduler"
     }

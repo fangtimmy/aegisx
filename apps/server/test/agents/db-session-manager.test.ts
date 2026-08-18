@@ -59,7 +59,6 @@ describe("DbSessionManager", () => {
     try {
       const sm = DbSessionManager.create({
         cwd: "/ws",
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -84,7 +83,6 @@ describe("DbSessionManager", () => {
     try {
       const sm = DbSessionManager.create({
         cwd: "/ws",
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -112,7 +110,6 @@ describe("DbSessionManager", () => {
       const ref = SessionManager.inMemory("/ws")
       const sm = DbSessionManager.create({
         cwd: "/ws",
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -141,7 +138,6 @@ describe("DbSessionManager", () => {
       const ref = SessionManager.inMemory("/ws")
       const sm = DbSessionManager.create({
         cwd: "/ws",
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -185,7 +181,6 @@ describe("DbSessionManager", () => {
     try {
       const sm = DbSessionManager.create({
         cwd: "/ws",
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -194,7 +189,6 @@ describe("DbSessionManager", () => {
       const id = sm.getSessionId()
 
       const reopened = DbSessionManager.open(id, {
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -215,7 +209,6 @@ describe("DbSessionManager", () => {
       const ref = SessionManager.inMemory("/ws")
       const sm = DbSessionManager.create({
         cwd: "/ws",
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -248,7 +241,6 @@ describe("DbSessionManager", () => {
     try {
       const sm = DbSessionManager.create({
         cwd: "/ws",
-        runId: "r1",
         agentId: "a1",
         db,
       })
@@ -257,7 +249,6 @@ describe("DbSessionManager", () => {
       expect(sm.getLabel(msgId)).toBe("important")
 
       const reopened = DbSessionManager.open(sm.getSessionId(), {
-        runId: "r1",
         agentId: "a1",
         db,
       })

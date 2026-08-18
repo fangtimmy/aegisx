@@ -6,12 +6,13 @@ import {
 import { defineTool } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 
-/** Per-run callbacks the native tools delegate to (wired by the service). */
-export type RunToolContext = {
-  runId: string
-  challengeId: string
-  /** This agent's id. */
+/** Per-agent callbacks the native tools delegate to (wired by the factory).
+ * v19: everything is agent-scoped — finish_run terminates THE AGENT, and
+ * the flag gate is challenge-level (any accepted flag on the agent's
+ * challenge). */
+export type AgentToolContext = {
   agentId: string
+  challengeId: string | null
   submitFlag(
     flag: string,
     verifyRemote?: boolean
@@ -24,11 +25,13 @@ export type RunToolContext = {
   targetAction(
     action: "get" | "start" | "extend" | "stop"
   ): Promise<TargetState>
-  /** Schedule a graceful finish after the current tool batch completes. */
+  /** Schedule a graceful self-termination after the current tool batch
+   * completes (consumed at the turn settle). */
   requestFinish(summary: string): void
-  /** Whether this run already recorded an accepted flag (finish_run guard). */
+  /** Whether the agent's challenge already recorded an accepted flag
+   * (finish_run guard — challenge-level in v19). */
   hasAcceptedFlag(): boolean
-  /** Whether finish_run already warned this run about a missing flag. */
+  /** Whether finish_run already warned THIS agent about a missing flag. */
   finishFlagWarned(): boolean
   markFinishFlagWarned(): void
 }
@@ -42,12 +45,12 @@ function textResult(text: string, details?: unknown) {
 
 /**
  * Build an agent's native tools from its persisted tool-list snapshot. The
- * snapshot is the single source of truth — the tools created here are exactly
- * the granted names (finish_run only when the snapshot has it, so a bootstrap
- * agent truly has no finish capability), and capabilities derived for prompt
- * rendering come from the same list.
+ * snapshot is the single source of truth — the tools created here are
+ * exactly the granted names (finish_run only when the snapshot has it, so a
+ * bootstrap agent truly has no finish capability), and capabilities derived
+ * for prompt rendering come from the same list.
  */
-export function createMainTools(ctx: RunToolContext, tools: string[]) {
+export function createMainTools(ctx: AgentToolContext, tools: string[]) {
   const has = (name: string) => tools.includes(name)
   const created = []
 
@@ -55,9 +58,9 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
     created.push(
       defineTool({
         name: "finish_run",
-        label: "Finish run",
+        label: "Finish task",
         description:
-          "Declare the run complete and stop further work. This terminates the ENTIRE run, including other agents. Call only once the solution is backed by reproducible evidence; when a remote target exists, it must be stopped first. If no flag has been accepted yet, the tool warns once — submit the flag first when you solved the challenge.",
+          "Declare YOUR OWN task complete and stop further work — this ends your agent only; sibling agents on the challenge keep running. Call only once your solution is backed by reproducible evidence; when a remote target exists and you are the last one working, stop it first. If no flag has been accepted on this challenge yet, the tool warns once — submit the flag first when you solved it.",
         parameters: Type.Object({
           summary: Type.String({
             description:
@@ -71,23 +74,23 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
             const target = await ctx.targetAction("get")
             if (isActiveTarget(target)) {
               throw new Error(
-                "Stop the remote target before finishing this Run"
+                "Stop the remote target before finishing your task"
               )
             }
           }
           // Don't lose a solved flag: cheap models tend to finish without
-          // submitting. Warn once per run (unsolved runs finish on the second
-          // call); the stop_target check above is the hard variant of the same
-          // guard.
+          // submitting. Warn once per agent (unsolved finishes land on the
+          // second call); the stop_target check above is the hard variant of
+          // the same guard.
           if (!ctx.hasAcceptedFlag() && !ctx.finishFlagWarned()) {
             ctx.markFinishFlagWarned()
             return textResult(
-              "No accepted flag on this run. If you solved the challenge, call submit_flag with the flag first, then finish_run again. If you did not solve it, call finish_run again to confirm."
+              "No accepted flag on this challenge. If you solved it, call submit_flag with the flag first, then finish_run again. If you did not solve it, call finish_run again to confirm."
             )
           }
           ctx.requestFinish(params.summary.trim())
           return {
-            content: [{ type: "text" as const, text: "Run completed" }],
+            content: [{ type: "text" as const, text: "Task completed" }],
             details: {},
             // Hint the agent loop to stop after this tool batch.
             terminate: true,
@@ -198,7 +201,7 @@ export function createMainTools(ctx: RunToolContext, tools: string[]) {
         targetTool(
           "stop_target",
           "Stop target",
-          "Stop the remote challenge target. Call before finishing the run.",
+          "Stop the remote challenge target. Call before finishing your task.",
           "stop"
         )
       )

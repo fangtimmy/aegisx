@@ -1,17 +1,17 @@
-/** Channel-layer wire types (docs/im-simplify-v18.md). Canonical definition —
- * the server's channel service, the Python SDK and the web UI all import
- * from here.
+/** Channel-layer wire types (docs/model-v19-challenge-centric.md §三).
+ * Canonical definition — the server's channel service, the Python SDK and the
+ * web UI all import from here.
  *
- * v18: a channel is a DERIVED KEY, not a table row — `team:<challengeId>`
- * (#team, shared by every run on the challenge), `dm:<agentId>` (scheduler/
- * user/system → one solver), `orch:<eventId>` (solver asks + system run/queue
- * events → the scheduler). The first message makes a channel "exist"; there
- * is no directory table and no get-or-create. */
+ * A channel is a DERIVED KEY, not a table row — `team:<challengeId>`
+ * (#team, shared by every agent on the challenge), `dm:<agentId>`
+ * (scheduler/user/system → one solver), `orch:<eventId>` (solver asks +
+ * system agent/queue events → the scheduler). The first message makes a
+ * channel "exist"; there is no directory table and no get-or-create. */
 
 /** The three derived-key shapes. */
 export type ChannelKind = "team" | "dm" | "orch"
 
-/** One channel entry (GET /api/runs/:id/channels etc.). `unread` is the
+/** One channel entry (GET /api/challenges/:id/channels etc.). `unread` is the
  * per-reader cursor delta (SDK list); UI trees pass a null reader and get 0. */
 export type ChannelPublic = {
   /** Derived key: "team:<challengeId>" | "dm:<agentId>" | "orch:<eventId>". */
@@ -24,13 +24,11 @@ export type ChannelPublic = {
   challengeId: string | null
   /** dm: the target agent. */
   agentId: string | null
-  /** dm: the target agent's run (UI routing / SSE split). */
-  runId: string | null
   unread: number
   lastMessageAt: string | null
-  /** team only: how many live (running/idle) runs currently share this
+  /** team only: how many live (running/idle) agents currently share this
    * channel — the UI's 共享 badge. Null otherwise. */
-  sharedRunCount: number | null
+  liveAgentCount: number | null
 }
 
 /** Typed message meta — the single contract between the server (stamps +
@@ -39,18 +37,29 @@ export type ChannelPublic = {
 export type ChannelMessageMeta = {
   /** urgent=true → delivered immediately (else rides the flush tick). */
   urgent?: true
-  /** Agent posts: the author's run (server-stamped, spoof-proof). System
-   * posts: the run the event is about. */
-  runId?: string
-  /** System lifecycle posts: how the run was started (manual vs scheduler). */
+  /** Agent posts: the author's agent id (server-stamped, spoof-proof).
+   * System posts: the agent the event is about. */
+  agentId?: string
+  /** System lifecycle posts: how the agent was started (manual vs scheduler). */
   source?: "manual" | "scheduler"
-  /** System posts: run.started | run.idle | run.flagAccepted | run.finished |
-   * run.timedOut | run.resumed | flagPartial. */
+  /** System posts: agent.started | agent.idle | agent.flagAccepted |
+   * agent.finished | agent.timedOut | agent.reopened | flagPartial. */
   eventType?: string
   /** System posts: ordinary notice vs emergency. */
   noticeType?: "notice" | "emergency"
   /** Agent posts: free-form tags (SDK post). */
   tags?: string[]
+}
+
+/** One attachment on a channel message: the file was copied into the
+ * challenge workspace's `shared/` tree at post time. `path` is
+ * workspace-relative (`shared/from-<agentId8>/<filename>`); solvers read it
+ * at `<workspace root>/shared/...` in their container, the scheduler via its
+ * read-only `/challenges/<cid>/workspace/shared/...` mount. */
+export type ChannelFileMeta = {
+  path: string
+  filename: string
+  size: number
 }
 
 /** One channel message (timeline + SDK read + SSE push). */
@@ -63,7 +72,7 @@ export type ChannelMessagePublic = {
   body: string
   meta: ChannelMessageMeta
   createdAt: string
-  files: Array<{ id: string; filename: string; size: number }>
+  files: ChannelFileMeta[]
 }
 
 /** Paginated channel timeline (GET /api/channels/:channelKey/messages). */

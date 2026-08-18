@@ -4,21 +4,20 @@ import { eq } from "drizzle-orm"
 
 import { createLiveBus } from "../../src/agents/live"
 import { createDatabase } from "../../src/db"
-import { agents, channelMessages, runs } from "../../src/db/schema"
+import { agents, channelMessages } from "../../src/db/schema"
 import {
   SCHEDULER_READ_KEY,
   createChannelService,
   orchKey,
   type ChannelService,
 } from "../../src/run/channels"
-import { createRunQueries } from "../../src/run/queries"
 import {
   AGENT_STALL_MS,
   createStallWatchdog,
   fmtMs,
   type StallWatchdog,
 } from "../../src/run/stall-watchdog"
-import { seedChallenge, seedEvent, seedRun } from "../helpers"
+import { seedChallenge, seedEvent, now } from "../helpers"
 
 type Db = ReturnType<typeof setupLite>["db"]
 
@@ -37,19 +36,10 @@ function makeWatchdog(
     db,
     dataDir: dir,
     bus: createLiveBus(),
-    queries: createRunQueries({
-      db,
-      dataDir: dir,
-      resolveModelDisplay: () => ({
-        provider: "p",
-        modelId: "m",
-        modelName: "Model",
-        thinkingLevel: "off",
-      }),
-    }),
     lifecycle: () => ({ send: async () => {} }) as never,
     now: () => new Date().toISOString(),
-    workspaceAbs: (runId: string) => `${dir}/runs/${runId}/workspace`,
+    challengeWorkspaceRoot: (eventId, challengeId) =>
+      `${dir}/events/${eventId}/challenges/${challengeId}/workspace`,
   })
   const watchdog: StallWatchdog = createStallWatchdog({
     db,
@@ -62,25 +52,29 @@ function makeWatchdog(
 
 function seedAgent(
   db: Db,
-  runId: string,
   id: string,
-  status: "idle" | "failed" | "running",
-  idleForMs = 0
+  opts: {
+    status?: "idle" | "failed" | "running" | "completed"
+    role?: "solver" | "orchestrator"
+    idleForMs?: number
+  } = {}
 ) {
   db.insert(agents)
     .values({
       id,
-      runId,
-      slot: `solver-${id}`,
-      role: "solver",
-      isEntry: false,
+      eventId: "evt-1",
+      challengeId: opts.role === "orchestrator" ? null : "ch-1",
+      role: opts.role ?? "solver",
+      name: id,
       model: "m",
       systemPrompt: "s",
       tools: "[]",
-      status,
-      name: id,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date(Date.now() - idleForMs).toISOString(),
+      status: opts.status ?? "idle",
+      source: "manual",
+      timeoutMs: 3_600_000,
+      createdAt: now(),
+      startedAt: now(),
+      updatedAt: new Date(Date.now() - (opts.idleForMs ?? 0)).toISOString(),
     })
     .run()
 }
@@ -100,27 +94,26 @@ describe("stall watchdog (docs/im-simplify-v18.md §五)", () => {
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "idle" })
-      seedAgent(db, "r1", "a1", "idle", 5 * 60_000)
+      seedAgent(db, "a1", { idleForMs: 5 * 60_000 })
       const { channels, watchdog } = makeWatchdog(db, dir, { stallMs: 20 })
 
-      watchdog.noteAgentIdle("r1")
+      watchdog.noteAgentIdle("a1")
       await wait(50)
       const rows = orchRows(db)
       expect(rows).toHaveLength(1)
       expect(rows[0]!.body).toContain("停滞")
-      expect(rows[0]!.body).toContain("run-r1")
-      expect(rows[0]!.body).toContain("a1 已闲置")
+      expect(rows[0]!.body).toContain("agent-a1")
+      expect(rows[0]!.body).toContain("已闲置")
       const meta = JSON.parse(rows[0]!.meta)
       expect(meta.urgent).toBe(true)
       expect(meta.noticeType).toBe("emergency")
-      expect(meta.runId).toBe("r1")
+      expect(meta.agentId).toBe("a1")
 
       // One shot per idle cycle: the fired timer does not re-arm itself.
       await wait(50)
       expect(orchRows(db)).toHaveLength(1)
       // A fresh settle re-arms (next idle cycle may fire again).
-      watchdog.noteAgentIdle("r1")
+      watchdog.noteAgentIdle("a1")
       await wait(50)
       expect(orchRows(db)).toHaveLength(2)
       watchdog.close()
@@ -130,20 +123,19 @@ describe("stall watchdog (docs/im-simplify-v18.md §五)", () => {
     }
   })
 
-  test("a fresh agent (settled < threshold) never fires; resumed runs are race-safe", async () => {
+  test("a fresh agent (settled < threshold) never fires; resumed agents are race-safe", async () => {
     const { db, dir, close } = setupLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "idle" })
-      seedAgent(db, "r1", "a1", "idle", 100) // settled 100ms ago, threshold 20ms
+      seedAgent(db, "a1", { idleForMs: 100 }) // settled 100ms ago, threshold 60s
       const { channels, watchdog } = makeWatchdog(db, dir, { stallMs: 60_000 })
 
-      watchdog.noteAgentIdle("r1")
+      watchdog.noteAgentIdle("a1")
       await wait(50)
       expect(orchRows(db)).toHaveLength(0)
 
-      // The timer fires AFTER the run went running again — the re-check
+      // The timer fires AFTER the agent went running again — the re-check
       // finds a running agent row and stays silent.
       db.update(agents)
         .set({ status: "running", updatedAt: new Date().toISOString() })
@@ -156,31 +148,23 @@ describe("stall watchdog (docs/im-simplify-v18.md §五)", () => {
     }
   })
 
-  test("closed / finishing / paused-event / scheduler runs never arm or fire", async () => {
+  test("terminal / scheduler-agent / paused-event cases never arm or fire", async () => {
     const { db, dir, close } = setupLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "closed" })
-      seedRun(db, { id: "r2", status: "idle", finishing: true })
-      seedRun(db, { id: "r3", status: "idle" }) // live, but the event is paused
-      seedRun(db, {
-        id: "rS",
-        status: "idle",
-        scopeType: "event",
-        challengeId: null,
-      })
-      seedAgent(db, "r1", "c1", "idle", 5 * 60_000)
-      seedAgent(db, "r2", "f1", "idle", 5 * 60_000)
-      seedAgent(db, "r3", "p1", "idle", 5 * 60_000)
-      seedAgent(db, "rS", "s1", "idle", 5 * 60_000)
+      seedAgent(db, "c1", { status: "completed", idleForMs: 5 * 60_000 })
+      seedAgent(db, "s1", {
+        role: "orchestrator",
+        idleForMs: 5 * 60_000,
+      }) // the scheduler agent never counts
+      seedAgent(db, "p1", { idleForMs: 5 * 60_000 }) // live, but the event is paused
       const { channels, watchdog } = makeWatchdog(db, dir, {
         stallMs: 20,
         paused: true,
       })
 
-      for (const runId of ["r1", "r2", "r3", "rS"])
-        watchdog.noteAgentIdle(runId)
+      for (const agentId of ["c1", "s1", "p1"]) watchdog.noteAgentIdle(agentId)
       await wait(60)
       expect(orchRows(db)).toHaveLength(0)
       watchdog.close()
@@ -195,11 +179,10 @@ describe("stall watchdog (docs/im-simplify-v18.md §五)", () => {
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
-      seedRun(db, { id: "r1", status: "idle" })
-      seedAgent(db, "r1", "a1", "idle", 5 * 60_000)
-      // No scheduler run at all — the orch message just sits in the channel.
+      seedAgent(db, "a1", { idleForMs: 5 * 60_000 })
+      // No scheduler agent at all — the orch message just sits in the channel.
       const { channels, watchdog } = makeWatchdog(db, dir, { stallMs: 20 })
-      watchdog.noteAgentIdle("r1")
+      watchdog.noteAgentIdle("a1")
       await wait(50)
       expect(channels.unreadCount(orchKey("evt-1"), SCHEDULER_READ_KEY)).toBe(1)
       watchdog.close()

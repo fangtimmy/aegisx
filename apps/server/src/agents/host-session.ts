@@ -22,12 +22,11 @@ import {
 import type { LiveBus } from "./live"
 
 /**
- * Who a host-side session belongs to: exactly one agent (and, redundantly
- * for run-level queries, its run). Every session is agent-scoped in v8.
+ * Who a host-side session belongs to: exactly one agent (v19 — sessions
+ * are agent-scoped; the workspace/context layering lives above this).
  */
 export type SessionOwner = {
   agentId: string
-  runId: string
 }
 
 /**
@@ -65,9 +64,9 @@ export type HostAgentSession = {
 
 export type CreateHostAgentSessionInput = {
   owner: SessionOwner
-  /** LiveBus channel: the run id (solver) or event id (orchestrator). */
+  /** LiveBus channel: the agent id. */
   channel: string
-  /** Agent id for entry keys + SSE routing (main/child ids, or ORCHESTRATOR_AGENT_ID). */
+  /** Agent id for entry keys + SSE routing. */
   agentId: string
   /** Container-internal workspace path surfaced to the model as its cwd (pi
    * appends `Current working directory: <cwd>` to the system prompt). The host
@@ -95,7 +94,7 @@ export type CreateHostAgentSessionInput = {
 
 /** Map a {@link SessionOwner} onto `DbSessionManager` create/open params. */
 function ownerManagerOpts(owner: SessionOwner) {
-  return { agentId: owner.agentId, runId: owner.runId }
+  return { agentId: owner.agentId }
 }
 
 /**

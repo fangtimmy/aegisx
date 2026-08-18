@@ -1,21 +1,35 @@
-import type { Database as Sqlite } from "bun:sqlite"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
-import type { RunPublic, SwitchModelInput } from "@aegisx/shared"
+import type {
+  AgentDetail,
+  AgentSummary,
+  FleetInfo,
+  SwitchModelInput,
+  WorkspaceFile,
+  WorkspaceInfo,
+} from "@aegisx/shared"
 import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
-import { and, eq, inArray, ne, sql } from "drizzle-orm"
+import { and, eq, inArray, ne } from "drizzle-orm"
 
 import { applyModelSwitch } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
 import type { AgentLoopSettings } from "../agents/host-session"
-import { chainLock, createSessionLifecycle } from "../agents/lifecycle"
+import {
+  chainLock,
+  createSessionLifecycle,
+  type SessionLifecycle,
+} from "../agents/lifecycle"
 import { createLiveBus, type LiveBus } from "../agents/live"
 import type { Database } from "../db"
-import { agents, challengeFlags, challenges, runs } from "../db/schema"
+import { agents, challengeFlags, challenges } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
-import { refreshBuiltinTemplateSections } from "../orchestration/prompt-refresh-v18"
+import {
+  readWorkspacePath,
+  workspaceDownload,
+} from "../infrastructure/workspace-files"
+import { refreshBuiltinTemplateSections } from "../orchestration/prompt-refresh-v19"
 import { seedBuiltinTemplates } from "../orchestration/prompt-templates"
 import {
   getChallengeRemote,
@@ -24,40 +38,45 @@ import {
 import type { createPlatformService } from "../platforms/service"
 import { generateModelsJson } from "../providers/models-json"
 import { getProviderConnections } from "../providers/public"
+import { createAgentFactory, type AgentFactory } from "./agent-factory"
 import { createAgentSessionOps } from "./agent-session-ops"
+import { createAgentStatus, type AgentStatus } from "./agent-status"
 import {
   createChannelService,
   orchKey,
   teamKey,
   type ChannelService,
 } from "./channels"
+import {
+  createContainerLifecycle,
+  type ContainerLifecycle,
+} from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
-import { createRunDeadlines, type RunDeadlines } from "./deadlines"
+import { createAgentDeadlines, type AgentDeadlines } from "./deadlines"
 import { RunActionError } from "./errors"
 import { createModelResolver } from "./model-resolver"
-import { createRunQueries } from "./queries"
+import { parseAgentToolDefinitions, parseAgentTools } from "./public"
+import { createAgentQueries } from "./queries"
 import {
   createQueueService,
-  parseQueueLaunchSpecs,
+  parseSpawnQueueParams,
   type QueueService,
 } from "./queue"
-import { createRunFactory, type RunFactory } from "./run-factory"
-import type { RunContext } from "./run-factory"
-import { createRunStatus, type RunStatus } from "./run-status"
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
 import { createStallWatchdog, type StallWatchdog } from "./stall-watchdog"
-import { createRunTeardown, type RunTeardown } from "./teardown"
+import {
+  challengeRoot,
+  orchestratorKey,
+  orchestratorRoot,
+  workspaceDir as workspaceDirOf,
+} from "./workspace-resolver"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
-export type { CreateRunInput } from "./run-factory"
+export type { SpawnAgentInput } from "./agent-factory"
 
-const RUNS_SUBDIR = "runs"
-
-export type RunServiceOptions = {
+export type AgentServiceOptions = {
   db: Database
-  /** Raw sqlite handle (rows-affected for the atomic finishing UPDATE). */
-  sqlite: Sqlite
   dataDir: string
   containerManager: ContainerManager
   platformService: PlatformService
@@ -65,8 +84,12 @@ export type RunServiceOptions = {
   getSettings(): import("@aegisx/shared").FlatSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost?: typeof createAgentHost
-  /** Test seam: grace between deadline-abort and a forced SIGKILL. */
+  /** Test seam: grace between deadline-abort and a forced dispose. */
   timeoutGraceMs?: number
+  /** Test seam: container idle-sweep cadence. */
+  sweepIntervalMs?: number
+  /** Test seam: container idle TTL. */
+  idleTtlMs?: number
   /** Test seam: channel flush tick interval (default 5min). */
   flushIntervalMs?: number
   /** Test seam: stall watchdog threshold (default 2min). */
@@ -79,17 +102,11 @@ export type SendMessageInput = {
   deliverAs?: "steer" | "followUp"
 }
 
-export type RunService = ReturnType<typeof createRunService>
+export type AgentService = ReturnType<typeof createAgentService>
 
-export function createRunService(options: RunServiceOptions) {
-  const {
-    db,
-    sqlite,
-    dataDir,
-    containerManager,
-    platformService,
-    configStore,
-  } = options
+export function createAgentService(options: AgentServiceOptions) {
+  const { db, dataDir, containerManager, platformService, configStore } =
+    options
   const createHost = options.createHost ?? createAgentHost
   const getSettings = () => options.getSettings()
 
@@ -97,48 +114,35 @@ export function createRunService(options: RunServiceOptions) {
     return getProviderConnections(configStore)
   }
 
-  /** Model-ref resolution (default ref, run display fields), factored out of
-   * the service (model-resolver.ts). */
+  /** Model-ref resolution, factored out of the service (model-resolver.ts). */
   const modelResolver = createModelResolver({
     getSettings,
     providers,
   })
-  const queries = createRunQueries({
-    db,
-    dataDir,
-    resolveModelDisplay: modelResolver.resolveModelDisplay,
-  })
+  const queries = createAgentQueries({ db })
   const bus: LiveBus = createLiveBus()
 
   // Seed the four built-in prompt templates (idempotent) so the service is
-  // self-sufficient — any agent created here renders. Then apply the one-time
-  // v18 section refresh (user-edited sections keep their edits).
+  // self-sufficient — any agent spawned here renders. Then apply the one-time
+  // v19 section refresh (user-edited sections keep their edits).
   seedBuiltinTemplates(db)
   refreshBuiltinTemplateSections(db)
-  seedBuiltinTemplates(db)
   // Idempotent guard: plugin-owned template rows (a pre-v9 concept) must
-  // never come back — re-delete any that got re-seeded.
-  db.run(sql`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
+  // never come back — re-delete any who got re-seeded.
+  db.run(`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
 
   /** Per-agent promise-chaining locks (the only concurrency mechanism). */
   const locks = new Map<string, Promise<unknown>>()
   /** Global fence lock: serializes fence check + slot reservation across all
-   * launches (drainer / direct start / cold-restore) so the concurrency caps
-   * hold under interleaving. One key — local single-user. */
+   * spawns so the concurrency caps hold under interleaving. */
   const fenceLocks = new Map<string, Promise<unknown>>()
-  /** Finish winner per agent: the agent whose atomic finishing UPDATE hit. */
-  const pendingFinish = new Map<string, { summary: string; runId: string }>()
-  /** Runs finish_run already warned about a missing flag (once per run). */
+  /** finish_run winners: agentId → summary (consumed at turn settle). */
+  const pendingFinish = new Map<string, string>()
+  /** Agents finish_run already warned about a missing flag (once each). */
   const finishFlagWarned = new Set<string>()
-  /** Reusable per-run handles (entry snapshot lives on the agent row). */
-  const contexts = new Map<string, RunContext>()
-  /** Scheduler task queue + drainer. Assigned after construction (it calls back
-   * into the launch callback); read via closures (teardownRun, routes). */
-  let queue: QueueService | undefined
   let closed = false
-  /** Monotonic timestamp: never returns the same value twice, so agents/runs
-   * declared within one millisecond still get a strictly-ordered `createdAt`
-   * (deterministic ordering by createdAt alone). */
+  /** Monotonic timestamp: never returns the same value twice, so agents
+   * declared within one millisecond still get a strictly-ordered `createdAt`. */
   let lastNowMs = 0
   const now = () => {
     let ms = Date.now()
@@ -150,43 +154,25 @@ export function createRunService(options: RunServiceOptions) {
   function withLock<T>(agentId: string, op: () => T | Promise<T>): Promise<T> {
     if (closed) {
       return Promise.reject(
-        new RunActionError("invalid_state", "Run service is closed")
+        new RunActionError("invalid_state", "Agent service is closed")
       )
     }
     return chainLock(locks, agentId, op)
   }
 
   /** Global fence critical section. Serializes the fence check + slot
-   * reservation so concurrent launches can't overshoot the caps. Holds only the
-   * quick DB op (row insert / status flip); container builds and setup run
-   * outside.
+   * reservation so concurrent spawns can't overshoot the caps. Holds only
+   * the quick DB op (row insert); container builds and setup run outside.
    *
-   * Lock order: every fence critical section (create / restoreRunContext)
-   * runs OUTSIDE any agent lock — no fence section ever acquires an agent
-   * lock, so the order is acyclic (no deadlock). The former onTurnGate fence
-   * hook is gone (W4): waking a warm idle run adds no container and no target
-   * slot (its challenge is already counted), so fresh turns are never
-   * capacity-rejected. The fence lives only at the two container-creating
-   * points: create() and restoreRunContext(). */
+   * Lock order: every fence critical section (spawn) runs OUTSIDE any agent
+   * lock — no fence section ever acquires an agent lock, so the order is
+   * acyclic (no deadlock). */
   async function withFence<T>(op: () => T | Promise<T>): Promise<T> {
     return chainLock(fenceLocks, "global-fence", op)
   }
 
-  const runDir = (runId: string) => join(dataDir, RUNS_SUBDIR, runId)
-  const workspaceAbs = (runId: string) => join(runDir(runId), "workspace")
-  const sessionsAbs = (runId: string) => join(runDir(runId), "sessions")
-  const runtimeAbs = (runId: string) => join(runDir(runId), "agent-runtime")
-  const containerName = (runId: string) => `aegisx-run-${runId}`
-
-  function requireRun(runId: string) {
-    const run = queries.get(runId)
-    if (!run) throw new RunActionError("not_found", "Run not found")
-    return run
-  }
-
-  function updateRun(runId: string, patch: Partial<typeof runs.$inferInsert>) {
-    db.update(runs).set(patch).where(eq(runs.id, runId)).run()
-  }
+  const challengeWorkspaceRoot = (eventId: string, challengeId: string) =>
+    workspaceDirOf(challengeRoot(dataDir, eventId, challengeId))
 
   function updateAgent(
     agentId: string,
@@ -195,108 +181,99 @@ export function createRunService(options: RunServiceOptions) {
     db.update(agents).set(patch).where(eq(agents.id, agentId)).run()
   }
 
-  function runIdOf(agentId: string): string | undefined {
-    return db
-      .select({ runId: agents.runId })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .get()?.runId
+  function requireAgent(agentId: string): AgentSummary {
+    const agent = queries.getAgent(agentId)
+    if (!agent) throw new RunActionError("not_found", "Agent not found")
+    return agent
   }
 
-  /** The run's entry agent (default conversation target). */
-  function entryAgent(runId: string) {
-    return queries.listAgents(runId).find((a) => a.isEntry)
-  }
+  // --- unified message layer ------------------------------------------------
 
-  // --- unified message layer (docs/im-simplify-v18.md) ----------------------
-
-  /** Derived-key channel core: the single write/store/render point + the
-   * urgent/tick delivery engine + the global flush loop. Created FIRST —
-   * run-status posts lifecycle events into orch and the stall watchdog
-   * posts urgent messages; the delivery engine reaches the lifecycle
-   * lazily through the getter (both are constructed below). */
   const channels: ChannelService = createChannelService({
     db,
     dataDir,
     bus,
-    queries,
     lifecycle: () => lifecycle,
     now,
-    workspaceAbs,
+    challengeWorkspaceRoot,
     ...(options.flushIntervalMs !== undefined
       ? { flushIntervalMs: options.flushIntervalMs }
       : {}),
   })
 
-  // Run status + live emits (run-status.ts): SQL-derived run status, the
-  // atomic finish claim, and the bus emit helpers (lifecycle events post
-  // directly into orch). The stall watchdog is service-level (v18: no live
-  // digest instance to depend on — messages store, delivery rides tick).
   const stallWatchdog: StallWatchdog = createStallWatchdog({
     db,
     channels,
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
     ...(options.stallMs !== undefined ? { stallMs: options.stallMs } : {}),
   })
-  const status: RunStatus = createRunStatus({
+
+  const status: AgentStatus = createAgentStatus({
     db,
-    sqlite,
     queries,
     bus,
     channels,
-    // W3: a paused scheduler's run-lifecycle events are dropped before they
-    // reach the orchestrator (late-bound schedulerAdmin, read at call time).
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
-    onAgentSettled: (_agentId, runId) => stallWatchdog.noteAgentIdle(runId),
+    onAgentSettled: (agentId) => stallWatchdog.noteAgentIdle(agentId),
     now,
     updateAgent,
+    queue: () => queue,
   })
 
-  // Late-bound module refs: the factories below reference each other (and the
-  // lifecycle hooks reference them). None of the closures run during
-  // construction — they are all assigned before the service is usable.
-  let runFactory!: RunFactory
+  // Late-bound module refs: the factories below reference each other. None
+  // of the closures run during construction — they are all assigned before
+  // the service is usable.
+  let factory!: AgentFactory
   let schedulerAdmin!: SchedulerAdmin
-  let teardown!: RunTeardown
+  let queue: QueueService | undefined
 
-  // --- per-agent turn lifecycle (entry agent) ------------------------------
+  /** Force terminal after a timeout grace: dispose the stuck session and
+   * mark the agent aborted (the shared container is NEVER killed). */
+  function forceAbortAgent(agentId: string): void {
+    const session = lifecycle.get(agentId)
+    if (session) {
+      void session.dispose()
+      lifecycle.delete(agentId)
+    }
+    status.terminalizeAgent(agentId, { status: "aborted" })
+    bus.forget([agentId])
+  }
 
-  const lifecycle = createSessionLifecycle({
+  const lifecycle: SessionLifecycle = createSessionLifecycle({
     kind: "agent",
     withLock,
     onTurnStart(agentId) {
-      const runId = runIdOf(agentId)
-      if (runId) status.agentTurnStart(agentId, runId)
+      status.agentTurnStart(agentId)
     },
     onTurnSettled(agentId, error) {
-      const runId = runIdOf(agentId)
-      if (!runId) return
       const pending = pendingFinish.get(agentId)
-      if (pending && pending.runId === runId) {
+      if (pending !== undefined) {
+        // finish_run's graceful self-termination: dispose the session and
+        // land the agent terminal with its summary.
         pendingFinish.delete(agentId)
-        teardown.teardownRun(runId, {
-          summary: pending.summary,
-          finished: true,
+        finishFlagWarned.delete(agentId)
+        const session = lifecycle.get(agentId)
+        if (session) {
+          void session.dispose()
+          lifecycle.delete(agentId)
+        }
+        deadlines.clearAgentTimers(agentId)
+        status.terminalizeAgent(agentId, {
+          status: "completed",
+          summary: pending,
+          event: "agent.finished",
         })
         return
       }
-      status.agentTurnSettled(agentId, runId, error)
+      status.agentTurnSettled(agentId, error)
     },
     onBeforeNewTurn(agentId) {
       pendingFinish.delete(agentId)
     },
-    // No onTurnGate (W4): waking a warm idle run adds no container and no
-    // target slot — its challenge is already counted by the fence — so fresh
-    // turns are never capacity-rejected. Fence enforcement lives only at the
-    // two container-creating points (create / restoreRunContext);
-    // agentTurnStart's status recompute below still maintains run status.
     async onResume(agentId) {
-      const runId = runIdOf(agentId)
-      if (runId) await runFactory.prepareAgent(runId, agentId)
+      await factory.resumeAgent(agentId)
     },
   })
-
-  // --- providers / settings / tools ---------------------------------------
 
   function agentSettings(): AgentLoopSettings {
     const s = getSettings()
@@ -309,123 +286,188 @@ export function createRunService(options: RunServiceOptions) {
     }
   }
 
-  // Per-run hard-deadline timers (deadlines.ts). Created before teardown (its
-  // clearRunTimers is injected there); teardown is injected back via the let.
-  const deadlines: RunDeadlines = createRunDeadlines({
-    queries,
+  // Per-agent hard-deadline timers (deadlines.ts).
+  const deadlines: AgentDeadlines = createAgentDeadlines({
     lifecycle,
-    updateRun,
+    updateAgent,
     now,
-    teardownRun: (runId) => teardown.teardownRun(runId),
-    emitRunEvent: status.emitRunEvent,
+    forceTerminal: forceAbortAgent,
+    emitAgentEvent: status.emitAgentEvent,
     timeoutGraceMs: options.timeoutGraceMs,
   })
 
-  // Container force-kill + sanctioned `closed` teardown (teardown.ts).
-  teardown = createRunTeardown({
+  // Per-challenge container lifecycle (lazy create + idle TTL sweep; the
+  // scheduler container is managed by its agent's lifecycle).
+  const containerLifecycle: ContainerLifecycle = createContainerLifecycle({
+    db,
     containerManager,
-    queries,
-    bus,
-    lifecycle,
-    contexts,
-    queue: () => queue,
-    finishFlagWarned,
-    now,
-    updateRun,
-    updateAgent,
-    containerName,
-    clearRunTimers: deadlines.clearRunTimers,
-    emitRun: status.emitRun,
-    emitAgents: status.emitAgents,
-    emitRunEvent: status.emitRunEvent,
-    stopTargetIfOrphaned,
+    ...(options.sweepIntervalMs !== undefined
+      ? { sweepIntervalMs: options.sweepIntervalMs }
+      : {}),
+    ...(options.idleTtlMs !== undefined
+      ? { idleTtlMs: options.idleTtlMs }
+      : {}),
   })
 
   // --- multi-session + flat backtrack (v12) --------------------------------
-  // Sessions are per-agent conversation threads: exactly one is active
-  // (agents.sessionFile), /new creates a fresh one, activate switches the
-  // pointer (old sessions stay in the DB), backtrack truncates the active one
-  // flat (no pi tree-branching — the abandoned tail is physically deleted).
-  // All ops require an idle agent (a running turn is rejected, matching
-  // /compact) and are rejected for spawn children (they run unattended).
-  // Implemented in agent-session-ops.ts (injected deps; shared db/locks).
   const sessionOps = createAgentSessionOps({
     db,
     lifecycle,
-    contexts,
     withLock,
-    prepareAgent: (runId, agentId) => runFactory.prepareAgent(runId, agentId),
-    runIdOf,
+    prepareAgent: (agentId) => factory.prepareAgent(agentId),
     updateAgent,
-    emitAgents: status.emitAgents,
-    requireRun,
+    emitAgent: status.emitAgent,
+    requireAgent,
     now,
   })
 
-  // --- run facade (routes-facing) -----------------------------------------
+  // --- agent facade (routes-facing) -----------------------------------------
 
-  /** Run-level stop: abort every streaming agent (declared + children). Each
-   * settles to idle; the container stays warm. lifecycle.abort serializes per
-   * agent, so no outer lock is needed. */
-  async function stop(runId: string): Promise<RunPublic> {
-    for (const agentId of deadlines.streamingAgentIds(runId)) {
-      await lifecycle.abort(agentId).catch(() => undefined)
-    }
-    return requireRun(runId)
-  }
-
-  /** Lazy model-runtime sync: regenerate the run's models.json from the
-   * current providers and hot-reload its ModelRuntime (pi SDK refresh re-reads
-   * models.json + rebuilds providers), making providers/models added while the
-   * run is live visible to model switches. Single-flighted per run so
-   * concurrent triggers (parallel agent switches) coalesce; agents keep their
-   * own model snapshot until explicitly switched, so this only affects the
-   * switch that requested it. */
+  /** Lazy model-runtime sync per workspace: regenerate models.json from the
+   * current providers and hot-reload the workspace's ModelRuntime, making
+   * providers/models added while live visible to model switches.
+   * Single-flighted per workspace; agents keep their own model snapshot
+   * until explicitly switched. */
   const runtimeRefreshes = new Map<string, Promise<void>>()
-  function refreshRunModelRuntime(runId: string): Promise<void> {
-    const existing = runtimeRefreshes.get(runId)
+  function refreshWorkspaceModelRuntime(workspaceKey: string): Promise<void> {
+    const existing = runtimeRefreshes.get(workspaceKey)
     if (existing) return existing
     const pending = (async () => {
-      const ctx = contexts.get(runId)
+      const ctx = factory.contexts.get(workspaceKey)
       if (!ctx) return
-      mkdirSync(runtimeAbs(runId), { recursive: true })
+      const runtimeDir = join(ctx.rootDir, "runtime")
+      mkdirSync(runtimeDir, { recursive: true })
       writeFileSync(
-        join(runtimeAbs(runId), "models.json"),
+        join(runtimeDir, "models.json"),
         `${JSON.stringify(generateModelsJson(providers()), null, 2)}\n`
       )
-      // allowNetwork: false — the run's models.json is the only model source
-      // (offline semantics like createRunModelRuntime); a network catalog
-      // refresh would hit pi.dev and can hang/block the switch.
       await ctx.modelRuntime.refresh({ allowNetwork: false })
     })().finally(() => {
-      runtimeRefreshes.delete(runId)
+      runtimeRefreshes.delete(workspaceKey)
     })
-    runtimeRefreshes.set(runId, pending)
+    runtimeRefreshes.set(workspaceKey, pending)
     return pending
   }
 
-  /** Per-agent model switch (POST /api/agents/:agentId/model + the run-level
-   * entry switch). Takes effect next turn; persists the snapshot on the agent
-   * row. Serialized on the agent's lock against its turns. */
-  function switchAgentModelById(
+  /** Spawn one solver agent (the direct path — fence full → capacity
+   * error). The queue's drainer calls the factory directly. */
+  async function spawn(input: {
+    eventId: string
+    challengeId: string
+    model?: string
+    prompt?: string
+    promptMode?: "strategy" | "override"
+    timeoutMs?: number
+    source?: "manual" | "scheduler"
+  }): Promise<AgentSummary> {
+    const agentId = await factory.spawnAgent({
+      eventId: input.eventId,
+      challengeId: input.challengeId,
+      role: "solver",
+      model: input.model,
+      prompt: input.prompt,
+      promptMode: input.promptMode,
+      timeoutMs: input.timeoutMs,
+      source: input.source ?? "manual",
+    })
+    return requireAgent(agentId)
+  }
+
+  /** Per-agent stop: abort the current turn; it settles to idle (the shared
+   * container stays warm). */
+  async function stopAgent(agentId: string): Promise<AgentSummary> {
+    await lifecycle.abort(agentId).catch(() => undefined)
+    return requireAgent(agentId)
+  }
+
+  /** Terminal close (user/scheduler): abort + dispose the session, land
+   * aborted. Files and the DB session survive (reopen on demand). */
+  async function closeAgent(agentId: string): Promise<AgentSummary> {
+    const agent = requireAgent(agentId)
+    if (
+      agent.status === "completed" ||
+      agent.status === "aborted" ||
+      agent.status === "failed"
+    ) {
+      throw new RunActionError("invalid_state", "Agent is already closed")
+    }
+    await withLock(agentId, async () => {
+      const session = lifecycle.get(agentId)
+      if (session?.session.isStreaming) {
+        await session.session.abort().catch(() => undefined)
+      }
+      if (session) {
+        void session.dispose()
+        lifecycle.delete(agentId)
+      }
+      deadlines.clearAgentTimers(agentId)
+      pendingFinish.delete(agentId)
+      finishFlagWarned.delete(agentId)
+      status.terminalizeAgent(agentId, { status: "aborted" })
+      bus.forget([agentId])
+    })
+    return requireAgent(agentId)
+  }
+
+  /** Force-finish (HTTP /finish): the sanctioned terminal transition with a
+   * summary. Idempotent on an already-completed agent. */
+  async function finishAgent(
+    agentId: string,
+    summary: string
+  ): Promise<AgentSummary> {
+    const agent = requireAgent(agentId)
+    if (agent.status === "completed") return agent
+    if (agent.status === "aborted" || agent.status === "failed") {
+      throw new RunActionError("invalid_state", "Agent is already closed")
+    }
+    await withLock(agentId, async () => {
+      const session = lifecycle.get(agentId)
+      if (session?.session.isStreaming) {
+        await session.session.abort().catch(() => undefined)
+      }
+      if (session) {
+        void session.dispose()
+        lifecycle.delete(agentId)
+      }
+      deadlines.clearAgentTimers(agentId)
+      pendingFinish.delete(agentId)
+      finishFlagWarned.delete(agentId)
+      status.terminalizeAgent(agentId, {
+        status: "completed",
+        summary,
+        event: "agent.finished",
+      })
+      bus.forget([agentId])
+    })
+    return requireAgent(agentId)
+  }
+
+  /** Per-agent message — a DIRECT lifecycle.send (no channel row, no double
+   * bookkeeping). Three-state semantics: streaming → steer at turn end,
+   * idle → fresh turn, terminal → onResume reopen. */
+  async function sendMessage(
+    agentId: string,
+    input: SendMessageInput
+  ): Promise<AgentSummary> {
+    await lifecycle.send(agentId, input.text, input.deliverAs)
+    return requireAgent(agentId)
+  }
+
+  /** Per-agent model switch: takes effect next turn; persists the snapshot
+   * on the agent row. Serialized on the agent's lock against its turns. */
+  function switchAgentModel(
     agentId: string,
     input: SwitchModelInput
-  ): Promise<RunPublic> {
+  ): Promise<AgentSummary> {
     return withLock(agentId, async () => {
-      const runId = runIdOf(agentId)
-      if (!runId) throw new RunActionError("not_found", "Agent not found")
       const session = lifecycle.get(agentId)
       if (!session) {
         throw new RunActionError(
           "invalid_state",
-          "Agent has no live session; start or reopen its run first"
+          "Agent has no live session; send it a message first"
         )
       }
-      const agentRow = db
-        .select({ model: agents.model })
-        .from(agents)
-        .where(eq(agents.id, agentId))
-        .get()
+      const agentRow = queries.getAgentRow(agentId)
       let result: Awaited<ReturnType<typeof applyModelSwitch>>
       try {
         result = await applyModelSwitch(
@@ -435,11 +477,13 @@ export function createRunService(options: RunServiceOptions) {
           agentRow?.model ?? null
         )
       } catch {
-        // The target may be a provider/model added while the run was live —
-        // missing from this run's ModelRuntime snapshot. Lazy-refresh the
+        // The target may be a provider/model added while live — missing
+        // from this workspace's ModelRuntime snapshot. Lazy-refresh the
         // runtime once and retry; a genuine resolution failure (bad ref,
         // disabled/unconfigured model) fails the retry with the same error.
-        await refreshRunModelRuntime(runId).catch(() => undefined)
+        await refreshWorkspaceModelRuntime(
+          factory.workspaceKeyOf(agentRow ?? { eventId: "", challengeId: null })
+        ).catch(() => undefined)
         try {
           result = await applyModelSwitch(
             session,
@@ -457,104 +501,44 @@ export function createRunService(options: RunServiceOptions) {
         }
       }
       const { target } = result
-      // Persist the ACTUAL (SDK-clamped) thinking level so the agent snapshot
-      // matches runtime reality.
-      const nextModelRef = formatModelRef(
-        target.provider,
-        target.model,
-        result.thinkingLevel
-      )
-      updateAgent(agentId, { model: nextModelRef, updatedAt: now() })
-      // runs.model is the run's entry-model snapshot: display source for
-      // RunPublic.model* and the addAgent default. Sync it when the ENTRY
-      // agent's model changes; per-agent switches of non-entry agents leave
-      // the run-level default untouched.
-      if (agentId === entryAgent(runId)?.id) {
-        updateRun(runId, { model: nextModelRef, updatedAt: now() })
-      }
-      status.emitAgents(runId)
-      return requireRun(runId)
+      // Persist the ACTUAL (SDK-clamped) thinking level so the agent
+      // snapshot matches runtime reality.
+      updateAgent(agentId, {
+        model: formatModelRef(
+          target.provider,
+          target.model,
+          result.thinkingLevel
+        ),
+        updatedAt: now(),
+      })
+      status.emitAgent(agentId)
+      return requireAgent(agentId)
     })
   }
 
-  /** Run-level model switch (POST /api/runs/:runId/switch-model): the UI
-   * switches the entry agent's model — delegate to the per-agent path. */
-  function switchModel(
-    runId: string,
-    input: SwitchModelInput
-  ): Promise<RunPublic> {
-    const entry = entryAgent(runId)
-    if (!entry) throw new RunActionError("not_found", "Run has no entry agent")
-    return switchAgentModelById(entry.id, input)
-  }
-
-  /** Force-finish (HTTP /finish): the sanctioned closed transition — teardown
-   * aborts every streaming agent and disposes all sessions. Idempotent; the
-   * finish_run tool path (atomic finishing claim + settle-driven teardown)
-   * is separate and already handles the multi-agent race. */
-  async function finish(runId: string, summary: string): Promise<RunPublic> {
-    const run = requireRun(runId)
-    if (run.status === "closed") {
-      throw new RunActionError("invalid_state", "Run is already closed")
-    }
-    teardown.teardownRun(runId, { summary, finished: true })
-    return requireRun(runId)
-  }
-
-  /** Run-level message (POST /api/runs/:id/message) — v18 §四: the session
-   * timeline input is a DIRECT lifecycle.send (no channel row, no double
-   * bookkeeping). Three-state semantics unchanged: streaming → steer at
-   * turn end, idle → fresh turn, closed → onResume cold-restore. */
-  async function sendMessage(
-    runId: string,
-    input: SendMessageInput
-  ): Promise<RunPublic> {
-    const entry = entryAgent(runId)
-    if (!entry) throw new RunActionError("not_found", "Run has no entry agent")
-    await lifecycle.send(entry.id, input.text, input.deliverAs)
-    return requireRun(runId)
-  }
-
-  /** Per-agent send (POST /api/agents/:agentId/message) — same direct
-   * connection as sendMessage, addressed by agent (a closed run
-   * cold-restores via lifecycle.send → onResume → prepareAgent — only the
-   * triggered agent wakes). */
-  async function sendAgentMessage(
+  /** Replace an agent's steer/followUp queue. Serialized against its turns;
+   * uses the SDK queue API directly. */
+  function setQueue(
     agentId: string,
-    input: SendMessageInput
-  ): Promise<RunPublic> {
-    const runId = runIdOf(agentId)
-    if (!runId) throw new RunActionError("not_found", "Agent not found")
-    await lifecycle.send(agentId, input.text, input.deliverAs)
-    return requireRun(runId)
+    input: { steering: string[]; followUp: string[] }
+  ): Promise<void> {
+    return withLock(agentId, async () => {
+      const session = lifecycle.get(agentId)
+      if (!session) return
+      session.session.clearQueue()
+      for (const text of input.steering) {
+        const trimmed = text.trim()
+        if (trimmed) await session.session.steer(trimmed)
+      }
+      for (const text of input.followUp) {
+        const trimmed = text.trim()
+        if (trimmed) await session.session.followUp(trimmed)
+      }
+    })
   }
 
-  /** Per-agent model switch (POST /api/agents/:agentId/model). Unlike the
-   * run-level switchModel (which always targets the entry agent), this switches
-   * the named agent's own snapshot; takes effect next turn. */
-  async function switchAgentModel(
-    agentId: string,
-    input: SwitchModelInput
-  ): Promise<RunPublic> {
-    return switchAgentModelById(agentId, input)
-  }
-
-  /** Per-agent stop (POST /api/agents/:agentId/stop): abort the agent's current
-   * turn; it settles to idle (the run stays warm). */
-  async function stopAgent(agentId: string): Promise<RunPublic> {
-    const runId = runIdOf(agentId)
-    if (!runId) throw new RunActionError("not_found", "Agent not found")
-    await lifecycle.abort(agentId).catch(() => undefined)
-    return requireRun(runId)
-  }
-
-  /** Manually compact an agent's context (pi SDK `session.compact()`). The
-   * session must be live (prepared) and idle — compaction runs a model turn,
-   * so it can't overlap a running turn. Summarizes the history in place; the
-   * SSE pipeline emits a context snapshot so the UI updates. */
-  async function compactAgent(agentId: string): Promise<RunPublic> {
-    const runId = runIdOf(agentId)
-    if (!runId) throw new RunActionError("not_found", "Agent not found")
+  /** Manually compact an agent's context (pi SDK `session.compact()`). */
+  async function compactAgent(agentId: string): Promise<AgentSummary> {
     await withLock(agentId, async () => {
       const session = lifecycle.get(agentId)
       if (!session) {
@@ -571,197 +555,225 @@ export function createRunService(options: RunServiceOptions) {
       }
       await session.session.compact()
     })
-    return requireRun(runId)
+    return requireAgent(agentId)
   }
 
-  /** Replace the entry agent's steer/followUp queue. Serialized on the entry
-   * agent's lock against its turns; uses the SDK queue API directly. */
-  function setQueue(
-    runId: string,
-    input: { steering: string[]; followUp: string[] }
-  ): Promise<void> {
-    const entry = entryAgent(runId)
-    if (!entry) return Promise.resolve()
-    return withLock(entry.id, async () => {
-      const session = lifecycle.get(entry.id)
-      if (!session) return
-      session.session.clearQueue()
-      for (const text of input.steering) {
-        const trimmed = text.trim()
-        if (trimmed) await session.session.steer(trimmed)
-      }
-      for (const text of input.followUp) {
-        const trimmed = text.trim()
-        if (trimmed) await session.session.followUp(trimmed)
-      }
-    })
-  }
-
-  /** Release a run's container + sessions (→ closed). The closed transition is
-   * an atomic sanctioned UPDATE; a concurrently settling turn is a no-op once
-   * closed (the aggregate SQL guards on status). */
-  async function closeRun(runId: string): Promise<RunPublic> {
-    const run = requireRun(runId)
-    if (run.status === "closed") {
-      throw new RunActionError("invalid_state", "Run is already closed")
+  /** Set / extend / shorten an agent's hard deadline; re-arms the live
+   * timer. Usable on terminal agents (pre-sets the next reopen). */
+  function setAgentTimeout(agentId: string, timeoutMs: number): AgentSummary {
+    const agent = schedulerAdmin.setAgentTimeout(
+      agentId,
+      timeoutMs,
+      updateAgent
+    )
+    const row = queries.getAgentRow(agentId)
+    if (row && (row.status === "running" || row.status === "idle")) {
+      deadlines.armAgentTimers(agentId, row.deadlineAt)
     }
-    teardown.teardownRun(runId)
-    return requireRun(runId)
+    status.emitAgent(agentId)
+    return agent
   }
 
-  async function deleteRun(runId: string) {
-    // Serialize against one agent's turns (direct session.abort below — not
-    // lifecycle.abort — to avoid re-entering the same lock). Disposes every
-    // live session, not just the entry's.
-    const agents = queries.listAgents(runId)
-    const lockKey = agents[0]?.id ?? runId
-    await withLock(lockKey, async () => {
-      const row = queries.getRow(runId)
-      if (!row) throw new RunActionError("not_found", "Run not found")
-      // W4.3: deleting the last live run on a target-capable challenge
-      // orphans its platform target — stop it before the row is gone.
-      stopTargetIfOrphaned(runId, row.challengeId)
-      for (const agent of agents) {
-        const session = lifecycle.get(agent.id)
-        if (session?.session.isStreaming) {
-          await session.session.abort().catch(() => undefined)
-        }
-      }
-      teardown.clearForceKill(runId)
-      deadlines.clearRunTimers(runId)
-      // v18 §八: each agent's dm:<agentId> data (messages + cursors + flat
-      // attachment dirs) needs the explicit sweep — its #team posts stay.
-      channels.cleanupRunChannels(runId)
-      await containerManager.remove(row.containerName).catch(() => undefined)
-      for (const agent of agents) {
-        const session = lifecycle.get(agent.id)
-        if (session) {
-          void session.dispose()
-          lifecycle.delete(agent.id)
-        }
-        pendingFinish.delete(agent.id)
-      }
-      contexts.delete(runId)
-      rmSync(runDir(runId), { recursive: true, force: true })
-      db.delete(runs).where(eq(runs.id, runId)).run()
-    })
-  }
-
-  /** Event-settings bulk purge: delete every run of the event in scope —
-   * event-scope (scheduler) first so the orchestrator stops reacting to the
-   * teardowns that follow. Reuses deleteRun verbatim (target orphan stop,
-   * session abort/dispose, container removal, timers, dm channel sweep,
-   * workspace rmSync, row delete). */
-  async function deleteRunsForEvent(
-    eventId: string,
-    scope: "challenge" | "all"
-  ) {
-    const rows = db
-      .select({ id: runs.id, scopeType: runs.scopeType })
-      .from(runs)
-      .where(
-        scope === "all"
-          ? eq(runs.eventId, eventId)
-          : and(eq(runs.eventId, eventId), eq(runs.scopeType, "challenge"))
-      )
-      .all()
-    // Scheduler (event-scope) runs first — the orchestrator stops reacting
-    // to the teardowns that follow.
-    const ordered = [
-      ...rows.filter((row) => row.scopeType === "event"),
-      ...rows.filter((row) => row.scopeType !== "event"),
-    ]
-    for (const row of ordered) {
-      await deleteRun(row.id)
+  /** Full agent detail (the AgentDialog view). */
+  function getAgentDetail(agentId: string): AgentDetail | undefined {
+    const row = queries.getAgentRow(agentId)
+    if (!row) return undefined
+    const agent = requireAgent(agentId)
+    const workspace = workspaceInfoOf(row)
+    return {
+      agent,
+      tools: parseAgentTools(row.tools),
+      toolDefinitions: parseAgentToolDefinitions(row.toolDefinitions),
+      systemPrompt: row.systemPrompt,
+      sessionFile: row.sessionFile,
+      usage: queries.usageOfAgent(agentId),
+      workspace,
     }
   }
 
-  /** W4.3: stop the challenge's platform target when a teardown orphans it —
-   * the challenge is target-capable and no OTHER live (running/idle) run is
-   * still attacking it. Fire-and-forget; errors swallowed. Only sanctioned
-   * teardowns call this (close/finish/timeout via teardownRun, plus
-   * deleteRun). */
-  function stopTargetIfOrphaned(
-    runId: string,
-    challengeId: string | null
-  ): void {
-    if (!challengeId) return
-    if (!isTargetCapable(getChallengeRemote(db, challengeId))) return
-    const other = db
-      .select({ id: runs.id })
-      .from(runs)
+  function workspaceInfoOf(row: typeof agents.$inferSelect): WorkspaceInfo {
+    const s = getSettings()
+    const key = row.challengeId ?? orchestratorKey(row.eventId)
+    // containerRunning is inherently async (docker inspect) — the fleet
+    // polls every few seconds and a stale registry read is acceptable; a
+    // registered container is treated as running.
+    return {
+      containerRunning: containerLifecycle.registered(key),
+      liveAgentCount: liveAgentCountOf(row.challengeId),
+      image: get(s, "container.image"),
+      cpus: get(s, "container.cpus"),
+      memoryMb: get(s, "container.memoryMb"),
+      pidsLimit: get(s, "container.pidsLimit"),
+    }
+  }
+
+  function liveAgentCountOf(challengeId: string | null): number {
+    if (!challengeId) {
+      const row = db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.role, "orchestrator"),
+            inArray(agents.status, ["running", "idle"])
+          )
+        )
+        .get()
+      return row ? 1 : 0
+    }
+    return db
+      .select({ id: agents.id })
+      .from(agents)
       .where(
         and(
-          eq(runs.challengeId, challengeId),
-          inArray(runs.status, ["running", "idle"]),
-          ne(runs.id, runId)
+          eq(agents.challengeId, challengeId),
+          inArray(agents.status, ["running", "idle"])
         )
       )
-      .get()
-    if (other) return
-    void platformService
-      .targetAction(challengeId, "stop")
-      .catch(() => undefined)
+      .all().length
   }
 
-  async function close() {
-    closed = true
-    await Promise.allSettled(locks.values())
-    locks.clear()
-    for (const timer of teardown.forceKillTimers.values()) clearTimeout(timer)
-    teardown.forceKillTimers.clear()
-    for (const t of deadlines.timeoutTimers.values()) {
-      if (t.deadline) clearTimeout(t.deadline)
-      if (t.grace) clearTimeout(t.grace)
+  /** The fleet view: challenges + per-challenge agents + scheduler agent +
+   * config/status (the event overview's single poll). */
+  function fleet(eventId: string): FleetInfo {
+    const challengeRows = db
+      .select({
+        id: challenges.id,
+        name: challenges.name,
+        category: challenges.category,
+      })
+      .from(challenges)
+      .where(eq(challenges.eventId, eventId))
+      .all()
+    const solverAgents = queries.listAgents({ eventId, role: "solver" })
+    const agentsByChallenge: Record<string, AgentSummary[]> = {}
+    for (const agent of solverAgents) {
+      if (!agent.challengeId) continue
+      const list = agentsByChallenge[agent.challengeId] ?? []
+      list.push(agent)
+      agentsByChallenge[agent.challengeId] = list
     }
-    deadlines.timeoutTimers.clear()
-    queue?.cancelDrain()
-    await lifecycle.closeAll()
-    pendingFinish.clear()
-    finishFlagWarned.clear()
-    stallWatchdog.close()
-    channels.close()
-    bus.close()
+    return {
+      challenges: challengeRows,
+      agentsByChallenge,
+      schedulerAgent: schedulerAdmin.getSchedulerAgent(eventId) ?? null,
+      config: schedulerAdmin.getSchedulerConfig(eventId),
+      status: schedulerAdmin.getStatusSnapshot(eventId),
+    }
   }
 
-  /** Platform-side hook: a flag was accepted for this run — notify the event's
-   * scheduler (run.flagAccepted) and stop the challenge's other work: sibling
-   * runs tear down (同题已完全解出), the submitting run's other running
-   * solvers abort (the submitter keeps writing its write-up), the challenge's
-   * pending queue items cancel. Idempotent (siblings already closed → no-op).
-   * `submitterAgentId` is unknown on the HTTP/platform path — every running
-   * co-solver is then aborted. */
-  function notifyFlagAccepted(runId: string, submitterAgentId?: string): void {
-    status.emitRunEvent(runId, { type: "run.flagAccepted", runId })
-    stopSiblingsOnSolved(runId, submitterAgentId)
+  /** Challenge workspace file tree (agents/ shared/ attachments/ visible). */
+  function workspaceFiles(
+    eventId: string,
+    challengeId: string,
+    path: string
+  ): WorkspaceFile {
+    return readWorkspacePath(challengeWorkspaceRoot(eventId, challengeId), path)
+  }
+
+  function workspaceDownloadPath(
+    eventId: string,
+    challengeId: string,
+    path: string
+  ) {
+    return workspaceDownload(challengeWorkspaceRoot(eventId, challengeId), path)
+  }
+
+  // --- agent deletion ---------------------------------------------------------
+
+  /** Delete one agent: dispose its live session, drop the row (cascades its
+   * sessions), sweep its dm channel data. Workspaces persist (challenge
+   * property). */
+  async function deleteAgent(agentId: string): Promise<void> {
+    await withLock(agentId, async () => {
+      const row = queries.getAgentRow(agentId)
+      if (!row) throw new RunActionError("not_found", "Agent not found")
+      const session = lifecycle.get(agentId)
+      if (session?.session.isStreaming) {
+        await session.session.abort().catch(() => undefined)
+      }
+      if (session) {
+        void session.dispose()
+        lifecycle.delete(agentId)
+      }
+      deadlines.clearAgentTimers(agentId)
+      pendingFinish.delete(agentId)
+      finishFlagWarned.delete(agentId)
+      channels.cleanupAgentChannels(agentId)
+      bus.forget([agentId])
+      if (row.role === "orchestrator") {
+        containerLifecycle.removeContainer(orchestratorKey(row.eventId))
+      }
+      db.delete(agents).where(eq(agents.id, agentId)).run()
+    })
+  }
+
+  /** Event-settings bulk purge: delete every agent of the event in scope —
+   * the scheduler agent first (scope=all) so it stops reacting to the
+   * teardowns that follow. Challenge workspaces persist (challenge
+   * property; delete the challenges to clear them). */
+  async function deleteAgentsForEvent(
+    eventId: string,
+    scope: "solver" | "all"
+  ): Promise<void> {
+    const rows = db
+      .select({ id: agents.id, role: agents.role })
+      .from(agents)
+      .where(
+        scope === "all"
+          ? eq(agents.eventId, eventId)
+          : and(eq(agents.eventId, eventId), eq(agents.role, "solver"))
+      )
+      .all()
+    const ordered = [
+      ...rows.filter((row) => row.role === "orchestrator"),
+      ...rows.filter((row) => row.role !== "orchestrator"),
+    ]
+    for (const row of ordered) {
+      await deleteAgent(row.id)
+    }
+  }
+
+  // --- flag hooks -------------------------------------------------------------
+
+  /** Platform-side hook: a flag was accepted — notify the event's scheduler
+   * (agent.flagAccepted) and stop the challenge's other live agents
+   * (同题已完全解出 — the submitter finishes its write-up via finish_run),
+   * cancel the challenge's pending queue items, stop the target when
+   * orphaned. Idempotent. */
+  function notifyFlagAccepted(
+    challengeId: string,
+    submitterAgentId?: string
+  ): void {
+    if (submitterAgentId) {
+      status.emitAgentEvent(submitterAgentId, {
+        type: "agent.flagAccepted",
+        agentId: submitterAgentId,
+      })
+    }
+    stopOthersOnSolved(challengeId, submitterAgentId)
   }
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
-   * (TSecBench partial — the challenge is NOT fully solved). v18 §五: ONE
-   * non-urgent system post into the challenge's #team (the tick fans it
-   * out to every live solver on the challenge — closed-run members store
-   * only; v18 drops the old submitter skip: one more message to the
-   * trigger's own author is harmless and filtered by the own-post rule
-   * for the author's cursor) + a non-urgent orch notice for the scheduler. */
+   * (TSecBench partial — the challenge is NOT fully solved). ONE non-urgent
+   * system post into the challenge's #team + a non-urgent orch notice. */
   function notifyFlagPartial(
-    runId: string,
+    challengeId: string,
     message: string | null,
     _submitterAgentId?: string
   ): void {
-    const row = queries.getRow(runId)
-    if (!row?.challengeId || row.scopeType !== "challenge") return
     const name =
       db
         .select({ name: challenges.name })
         .from(challenges)
-        .where(eq(challenges.id, row.challengeId))
-        .get()?.name ?? row.challengeId
+        .where(eq(challenges.id, challengeId))
+        .get()?.name ?? challengeId
     const confirmed = db
       .select({ flag: challengeFlags.flag })
       .from(challengeFlags)
       .where(
         and(
-          eq(challengeFlags.challengeId, row.challengeId),
+          eq(challengeFlags.challengeId, challengeId),
           eq(challengeFlags.status, "accepted")
         )
       )
@@ -771,25 +783,27 @@ export function createRunService(options: RunServiceOptions) {
       `多 flag 进度：「${name}」部分解出${message ? `（${message}）` : ""}。` +
       `已确认：${confirmed.join("、") || "（无）"}。` +
       `请专注剩余 flag；已确认的无需重复提交。`
-    // Single non-urgent post → the challenge's #team (§五 flagPartial =
-    // notice level); the tick fans it out to every live solver on the
-    // challenge (v18: no skipAgentIds — the submitter may see its own
-    // trigger as one more message, harmless). A non-urgent orch notice
-    // keeps the scheduler in the loop with the next flush.
+    const eventId = db
+      .select({ eventId: challenges.eventId })
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()?.eventId
     channels.post({
-      channelKey: teamKey(row.challengeId),
+      channelKey: teamKey(challengeId),
       author: { type: "system" },
       body: text,
-      meta: { runId, eventType: "flagPartial" },
+      meta: { eventType: "flagPartial" },
     })
-    postOrchNotice(
-      row.eventId,
-      `部分解出：「${name}」${message ?? "多 flag 未集齐"}（run-${runId.slice(0, 8)}）`
-    )
+    if (eventId) {
+      postOrchNotice(
+        eventId,
+        `部分解出：「${name}」${message ?? "多 flag 未集齐"}`
+      )
+    }
   }
 
   /** Non-urgent system notice into orch:<eventId> (rides the next flush;
-   * W3 paused → silently dropped, same gate as the old digest notices). */
+   * paused → silently dropped). */
   function postOrchNotice(eventId: string, line: string): void {
     if (schedulerAdmin.isSchedulerPaused(eventId)) return
     channels.post({
@@ -800,75 +814,161 @@ export function createRunService(options: RunServiceOptions) {
     })
   }
 
-  /** Full-solve cleanup (see notifyFlagAccepted). Returns a summary line of
-   * what was stopped for the scheduler-DM notice. */
-  function stopSiblingsOnSolved(
-    runId: string,
+  /** Full-solve cleanup (see notifyFlagAccepted). */
+  function stopOthersOnSolved(
+    challengeId: string,
     submitterAgentId?: string
   ): void {
-    const row = queries.getRow(runId)
-    if (!row?.challengeId || row.scopeType !== "challenge") return
+    const eventId = db
+      .select({ eventId: challenges.eventId })
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()?.eventId
+    if (!eventId) return
     const name =
       db
         .select({ name: challenges.name })
         .from(challenges)
-        .where(eq(challenges.id, row.challengeId))
-        .get()?.name ?? row.challengeId
-    // Sibling live runs (≠ submitting run): sanctioned teardown — container
-    // down, queue item done, orphaned platform target stopped (W4.3).
+        .where(eq(challenges.id, challengeId))
+        .get()?.name ?? challengeId
+    // Other live agents on the challenge: terminal close (aborted). The
+    // submitter keeps its session to finish the write-up via finish_run.
     const siblings = db
-      .select({ id: runs.id })
-      .from(runs)
+      .select({ id: agents.id })
+      .from(agents)
       .where(
         and(
-          eq(runs.challengeId, row.challengeId),
-          eq(runs.scopeType, "challenge"),
-          inArray(runs.status, ["running", "idle"]),
-          ne(runs.id, runId)
+          eq(agents.challengeId, challengeId),
+          inArray(agents.status, ["running", "idle"]),
+          submitterAgentId ? ne(agents.id, submitterAgentId) : undefined
         )
       )
       .all()
     for (const sibling of siblings) {
-      teardown.teardownRun(sibling.id, { summary: "同题已完全解出，自动停止" })
-    }
-    // Same-run co-solvers: abort streaming turns (the submitter finishes its
-    // write-up via finish_run; aborted settles land failed with the digest
-    // explaining why).
-    let aborted = 0
-    for (const agent of queries.listAgents(runId)) {
-      if (agent.status !== "running" || agent.id === submitterAgentId) continue
-      aborted += 1
-      void lifecycle.abort(agent.id).catch(() => undefined)
+      void closeAgent(sibling.id).catch(() => undefined)
     }
     const cancelled = queue
-      ? queue.cancelPendingForChallenge(row.eventId, row.challengeId)
+      ? queue.cancelPendingForChallenge(eventId, challengeId)
       : 0
+    // Orphaned platform target: the challenge is fully solved — its target
+    // is no longer needed (the submitter finishes its write-up without it).
+    if (isTargetCapable(getChallengeRemote(db, challengeId))) {
+      void platformService
+        .targetAction(challengeId, "stop")
+        .catch(() => undefined)
+    }
     const parts: string[] = []
-    if (siblings.length > 0) parts.push(`已停止 ${siblings.length} 个同题 run`)
-    if (aborted > 0) parts.push(`已终止 ${aborted} 个同 run solver`)
+    if (siblings.length > 0)
+      parts.push(`已停止 ${siblings.length} 个同题 agent`)
     if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
     if (parts.length > 0) {
-      postOrchNotice(
-        row.eventId,
-        `「${name}」已完全解出（run-${runId.slice(0, 8)}）：${parts.join("；")}`
-      )
+      postOrchNotice(eventId, `「${name}」已完全解出：${parts.join("；")}`)
     }
   }
 
-  // Fresh-create + cold-restore orchestration (run-factory.ts); scheduler
-  // policy + run management (scheduler-admin.ts). The two reference each other
-  // (prepareAgent → scheduler tools, scheduler start → create), resolved via
-  // the lets above.
-  runFactory = createRunFactory({
+  // --- scheduler (event orchestrator) lifecycle -------------------------------
+
+  /** Wake text sent on resume / reopen so the orchestrator re-syncs. */
+  const SCHEDULER_RESUME_MESSAGE =
+    "调度已恢复。请重新同步状态（aegisx.snapshot()）后再行动。"
+
+  /** Start (or restart) the event's scheduler agent from its config. The
+   * orchestrator's model is the per-event `scheduler_config.modelId`
+   * override when set, else the global default.
+   *
+   *  - live scheduler agent: paused → resume (un-pause + wake); else error.
+   *  - terminal scheduler agent: reopen — wake it (onResume → resumeAgent:
+   *    container + session rebuilt, memory kept). `reset: true` deletes the
+   *    row and spawns fresh.
+   *  - no scheduler agent: fresh spawn (also clears paused). */
+  async function startScheduler(
+    eventId: string,
+    opts: { reset?: boolean } = {}
+  ): Promise<AgentSummary> {
+    const config = schedulerAdmin.getSchedulerConfig(eventId)
+    const existing = schedulerAdmin.getSchedulerAgent(eventId)
+    if (
+      existing &&
+      (existing.status === "running" || existing.status === "idle")
+    ) {
+      if (config.paused) {
+        await resumeScheduler(eventId)
+        return requireAgent(existing.id)
+      }
+      throw new RunActionError(
+        "invalid_state",
+        "A scheduler agent is already active for this event"
+      )
+    }
+    if (existing && !opts.reset) {
+      // Reopen keeps memory — wake the orchestrator (onResume → resumeAgent:
+      // container + session rebuilt, session kept).
+      schedulerAdmin.setSchedulerPaused(eventId, false)
+      await sendMessage(existing.id, { text: SCHEDULER_RESUME_MESSAGE })
+      return requireAgent(existing.id)
+    }
+    if (existing && opts.reset) {
+      await deleteAgent(existing.id)
+    }
+    schedulerAdmin.setSchedulerPaused(eventId, false)
+    const agentId = await factory.spawnAgent({
+      eventId,
+      challengeId: null,
+      role: "orchestrator",
+      source: "manual",
+    })
+    return requireAgent(agentId)
+  }
+
+  /** Disable the scheduler (W3): set paused=1 (the event gate drops its
+   * agent-lifecycle notifications) + abort the current turn (the container
+   * stays warm — scheduler containers are lifecycle-managed, never swept). */
+  async function pauseScheduler(eventId: string): Promise<AgentSummary | null> {
+    schedulerAdmin.setSchedulerPaused(eventId, true)
+    const sched = schedulerAdmin.getSchedulerAgent(eventId)
+    if (sched && (sched.status === "running" || sched.status === "idle")) {
+      await stopAgent(sched.id)
+      return requireAgent(sched.id)
+    }
+    return null
+  }
+
+  /** Re-enable the scheduler (W3): set paused=0 + tell the orchestrator to
+   * re-sync before acting. No-op messaging when absent/terminal (the flag is
+   * still written). */
+  async function resumeScheduler(
+    eventId: string
+  ): Promise<AgentSummary | null> {
+    schedulerAdmin.setSchedulerPaused(eventId, false)
+    const sched = schedulerAdmin.getSchedulerAgent(eventId)
+    if (sched && (sched.status === "running" || sched.status === "idle")) {
+      await sendMessage(sched.id, { text: SCHEDULER_RESUME_MESSAGE })
+      return requireAgent(sched.id)
+    }
+    return null
+  }
+
+  /** Close the scheduler agent (terminal aborted) + remove its container. */
+  async function closeScheduler(eventId: string): Promise<AgentSummary> {
+    const sched = schedulerAdmin.getSchedulerAgent(eventId)
+    if (!sched) throw new RunActionError("not_found", "No scheduler agent")
+    const result = await closeAgent(sched.id)
+    containerLifecycle.removeContainer(orchestratorKey(eventId))
+    return result
+  }
+
+  // --- construction of the factory + queue -------------------------------------
+
+  factory = createAgentFactory({
     db,
     dataDir,
     containerManager,
+    containerLifecycle,
     platformService,
     providers,
     modelResolver,
     queries,
     bus,
-    contexts,
     channels,
     pendingFinish,
     finishFlagWarned,
@@ -876,26 +976,16 @@ export function createRunService(options: RunServiceOptions) {
     withFence,
     getSettings,
     now,
-    updateRun,
     updateAgent,
-    requireRun,
-    containerName,
-    workspaceAbs,
-    sessionsAbs,
-    runtimeAbs,
-    markFinishing: status.markFinishing,
-    teardownRun: (runId, opts) => teardown.teardownRun(runId, opts),
-    clearForceKill: (runId) => teardown.clearForceKill(runId),
-    terminateContainer: (runId, name) =>
-      teardown.terminateContainer(runId, name),
-    armRunTimers: (runId, deadlineAt) =>
-      deadlines.armRunTimers(runId, deadlineAt),
-    emitRun: status.emitRun,
-    emitAgents: status.emitAgents,
-    emitRunEvent: status.emitRunEvent,
+    status,
+    deadlines: () => deadlines,
+    queue: () => queue,
     agentSettings,
     createHost,
     getSchedulerConfig: (eventId) => schedulerAdmin.getSchedulerConfig(eventId),
+    ...(options.timeoutGraceMs !== undefined
+      ? { timeoutGraceMs: options.timeoutGraceMs }
+      : {}),
   })
 
   schedulerAdmin = createSchedulerAdmin({
@@ -905,43 +995,28 @@ export function createRunService(options: RunServiceOptions) {
     now,
     providers,
     modelResolver,
-    contexts,
-    updateRun,
-    emitRun: status.emitRun,
-    requireRun,
-    armRunTimers: (runId, deadlineAt) =>
-      deadlines.armRunTimers(runId, deadlineAt),
-    create: (input) => runFactory.create(input),
-    stop,
-    sendMessage,
   })
 
-  // Construct the queue service now that resolveAndCreate + the failure
-  // notifier exist. The drainer's launch callback builds the run from the
-  // queue item's snapshot — the v9 launch specs stored in the item's `params`
-  // JSON, with the `prompt` column as the strategy fallback for rows written
-  // before the params serialization landed.
+  // The queue's drainer spawns one agent per item from the item's snapshot.
   queue = createQueueService({
     db,
     getSettings,
     isDisposed: () => closed,
     launch: async (item) => {
-      const specs = parseQueueLaunchSpecs(item.params)
-      const run = await schedulerAdmin.resolveAndCreate({
+      const params = parseSpawnQueueParams(item.params)
+      return factory.spawnAgent({
+        eventId: item.eventId,
         challengeId: item.challengeId,
-        strategy: specs.strategy || item.prompt || undefined,
-        model: specs.model,
-        solverCount: specs.solverCount,
-        solvers: specs.solvers,
-        timeoutMs: item.timeoutMs,
+        role: "solver",
+        model: params.model,
+        prompt: params.prompt ?? (item.prompt || undefined),
+        promptMode: params.promptMode,
+        timeoutMs: item.timeoutMs ?? undefined,
         source: item.source as "manual" | "scheduler",
         queueItemId: item.id,
       })
-      return run.id
     },
     onQueueEmergency: (eventId, line) => {
-      // Queue emergencies are urgent orch messages (immediate flush); W3
-      // paused → silently dropped (same gate as the old digest).
       if (schedulerAdmin.isSchedulerPaused(eventId)) return
       channels.post({
         channelKey: orchKey(eventId),
@@ -954,71 +1029,114 @@ export function createRunService(options: RunServiceOptions) {
     onQueueNotice: (eventId, line) => postOrchNotice(eventId, line),
   })
 
-  /** Simplified scheduler inbox snapshot (§9.1): the orch key + unread
-   * (stable scheduler cursor) + flush tick state + hold. The timeline
-   * itself is served by the generic channel-messages endpoint. */
-  function inboxSnapshot(eventId: string) {
-    return channels.inboxSnapshot(eventId)
+  async function close(): Promise<void> {
+    closed = true
+    await Promise.allSettled(locks.values())
+    locks.clear()
+    for (const timer of deadlines.timeoutTimers.values()) {
+      if (timer.deadline) clearTimeout(timer.deadline)
+      if (timer.grace) clearTimeout(timer.grace)
+    }
+    deadlines.timeoutTimers.clear()
+    containerLifecycle.close()
+    queue?.cancelDrain()
+    await lifecycle.closeAll()
+    pendingFinish.clear()
+    finishFlagWarned.clear()
+    stallWatchdog.close()
+    channels.close()
+    bus.close()
+  }
+
+  /** Remove a challenge's workspace tree (agents/ shared/ attachments/
+   * sessions/ runtime/) — called on challenge deletion. Idempotent. */
+  function deleteChallengeWorkspace(
+    eventId: string,
+    challengeId: string
+  ): void {
+    rmSync(challengeRoot(dataDir, eventId, challengeId), {
+      recursive: true,
+      force: true,
+    })
+  }
+
+  /** Remove the orchestrator workspace tree — called on event deletion /
+   * scheduler reset. Idempotent. */
+  function deleteSchedulerWorkspace(eventId: string): void {
+    rmSync(orchestratorRoot(dataDir, eventId), {
+      recursive: true,
+      force: true,
+    })
+  }
+
+  /** Remove every challenge workspace + the orchestrator workspace of the
+   * event on event deletion. Idempotent per directory. */
+  function deleteEventWorkspaces(eventId: string): void {
+    const challengeRows = db
+      .select({ id: challenges.id })
+      .from(challenges)
+      .where(eq(challenges.eventId, eventId))
+      .all()
+    for (const { id } of challengeRows) {
+      rmSync(challengeRoot(dataDir, eventId, id), {
+        recursive: true,
+        force: true,
+      })
+    }
+    deleteSchedulerWorkspace(eventId)
   }
 
   return {
-    create: runFactory.create,
-    addAgent: (
-      runId: string,
-      spec: {
-        model?: string
-        prompt: string
-        promptMode?: "strategy" | "override"
-      }
-    ) => withLock(runId, () => runFactory.addAgent(runId, spec)),
-    resolveAndCreate: schedulerAdmin.resolveAndCreate,
-    assertModelsResolvable: schedulerAdmin.assertModelsResolvable,
-    stop,
-    switchModel,
-    finish,
-    sendMessage,
-    sendAgentMessage,
-    switchAgentModel,
+    spawn,
+    getAgent: queries.getAgent,
+    getAgentDetail,
+    listAgents: queries.listAgents,
+    fleet,
     stopAgent,
+    closeAgent,
+    finishAgent,
+    sendMessage,
+    switchAgentModel,
     compactAgent,
     setQueue,
+    setAgentTimeout,
     listAgentSessions: sessionOps.listAgentSessions,
     createAgentSession: sessionOps.createAgentSession,
     activateAgentSession: sessionOps.activateAgentSession,
     backtrackAgent: sessionOps.backtrackAgent,
-    setRunTimeout: schedulerAdmin.setRunTimeout,
-    closeRun,
-    delete: deleteRun,
-    deleteRunsForEvent,
+    delete: deleteAgent,
+    deleteAgentsForEvent,
     getStatus: schedulerAdmin.getStatusSnapshot,
-    getSchedulerRun: schedulerAdmin.getSchedulerRun,
-    inboxSnapshot,
+    getSchedulerAgent: schedulerAdmin.getSchedulerAgent,
+    inboxSnapshot: channels.inboxSnapshot,
     setInboxDeliveryPaused: (eventId: string, paused: boolean) =>
       channels.setDeliveryPaused(eventId, paused),
+    assertModelsResolvable: schedulerAdmin.assertModelsResolvable,
     getSchedulerConfig: schedulerAdmin.getSchedulerConfig,
     upsertSchedulerConfig: schedulerAdmin.upsertSchedulerConfig,
-    startScheduler: schedulerAdmin.startScheduler,
-    pauseScheduler: schedulerAdmin.pauseScheduler,
-    resumeScheduler: schedulerAdmin.resumeScheduler,
+    startScheduler,
+    pauseScheduler,
+    resumeScheduler,
+    closeScheduler,
     queue: () => queue!,
-    refresh: queries.get,
-    recoverOnBoot: runFactory.recoverOnBoot,
+    refresh: queries.getAgent,
+    recoverOnBoot: factory.recoverOnBoot,
     close,
     listMessages: queries.listMessages,
-    get: queries.get,
-    detail: queries.detail,
-    listForEvent: queries.listForEvent,
+    usageOfAgent: queries.usageOfAgent,
     usageForEvent: queries.usageForEvent,
-    listAgents: queries.listAgents,
-    runDirPath: queries.runDirPath,
+    agentFlags: queries.agentFlags,
     bus,
     channels,
     notifyFlagAccepted,
     notifyFlagPartial,
     submitFlag: platformService.submitFlag,
     targetAction: platformService.targetAction,
-    /** Test seam: the atomic finish claim. Exposed so tests can verify the
-     * closed-run guard directly; no route reaches it. */
-    markFinishing: status.markFinishing,
+    workspaceFiles,
+    workspaceDownloadPath,
+    deleteChallengeWorkspace,
+    deleteSchedulerWorkspace,
+    deleteEventWorkspaces,
+    containerLifecycle,
   }
 }

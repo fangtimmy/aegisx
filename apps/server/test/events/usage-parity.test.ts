@@ -12,8 +12,8 @@ import {
   sumUsageTotals,
   usageTotalsSql,
 } from "../../src/agents/session-queries"
-import { agents, sessionEntries, sessions } from "../../src/db/schema"
-import { seedChallenge, seedEvent, seedRun, setupDb, now } from "../helpers"
+import { sessionEntries, sessions } from "../../src/db/schema"
+import { seedAgent, seedChallenge, seedEvent, setupDb, now } from "../helpers"
 
 /** Assistant-message usage payload (entry-usage.ts accumulator shape). */
 function usage(overrides: Partial<EntryUsage> = {}): EntryUsage {
@@ -33,7 +33,6 @@ function usage(overrides: Partial<EntryUsage> = {}): EntryUsage {
  * readSessionEntries reads the JSON). */
 function insertEntry(
   db: ReturnType<typeof setupDb>["db"],
-  runId: string,
   agentId: string,
   sessionId: string,
   seq: number,
@@ -48,7 +47,6 @@ function insertEntry(
       id: `parity-${seq}`,
       sessionId,
       agentId,
-      runId,
       seq,
       type: entry.type,
       data: JSON.stringify(entry),
@@ -64,24 +62,7 @@ function setup(
 ) {
   seedEvent(db, "evt-1")
   seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-  seedRun(db, { id: "run-1", status: "closed", challengeId: "ch-1" })
-  db.insert(agents)
-    .values({
-      id: "a-1",
-      runId: "run-1",
-      slot: "solver",
-      role: "solver",
-      isEntry: true,
-      model: "openai/gpt-4o-mini:off",
-      systemPrompt: "sp",
-      tools: "[]",
-      status: "idle",
-      sessionFile: "sess-1",
-      name: "Solver",
-      createdAt: now(),
-      updatedAt: now(),
-    })
-    .run()
+  seedAgent(db, { id: "a-1", challengeId: "ch-1", sessionFile: "sess-1" })
   db.insert(sessions)
     .values({
       id: "sess-1",
@@ -93,7 +74,7 @@ function setup(
 }
 
 const scopeOf = (_db: ReturnType<typeof setupDb>["db"]) =>
-  eq(sessionEntries.runId, "run-1")
+  eq(sessionEntries.agentId, "a-1")
 
 describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
   test("mixed entry mix aggregates identically (tokens, cost, turns, cacheHitRate)", () => {
@@ -103,30 +84,30 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
       // assistant w/ usage, toolResult w/ usage, assistant w/o usage,
       // compaction w/ usage, branch_summary w/ usage, malformed usage field,
       // and a row whose data is not JSON at all.
-      insertEntry(db, "run-1", "a-1", "sess-1", 1, {
+      insertEntry(db, "a-1", "sess-1", 1, {
         type: "message",
         message: {
           role: "assistant",
           usage: usage({ input: 100, cost: { total: 2 } }),
         },
       })
-      insertEntry(db, "run-1", "a-1", "sess-1", 2, {
+      insertEntry(db, "a-1", "sess-1", 2, {
         type: "message",
         message: { role: "toolResult", usage: usage({ input: 7, output: 0 }) },
       })
-      insertEntry(db, "run-1", "a-1", "sess-1", 3, {
+      insertEntry(db, "a-1", "sess-1", 3, {
         type: "message",
         message: { role: "assistant" }, // no usage at all
       })
-      insertEntry(db, "run-1", "a-1", "sess-1", 4, {
+      insertEntry(db, "a-1", "sess-1", 4, {
         type: "compaction",
         usage: usage({ input: 50, reasoning: 1, cost: { total: 0.5 } }),
       })
-      insertEntry(db, "run-1", "a-1", "sess-1", 5, {
+      insertEntry(db, "a-1", "sess-1", 5, {
         type: "branch_summary",
         usage: usage({ input: 3, cost: { total: 0.1 } }),
       })
-      insertEntry(db, "run-1", "a-1", "sess-1", 6, {
+      insertEntry(db, "a-1", "sess-1", 6, {
         type: "message",
         message: { role: "assistant", usage: "garbage" }, // non-object usage
       })
@@ -136,7 +117,6 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
           id: "parity-bad-json",
           sessionId: "sess-1",
           agentId: "a-1",
-          runId: "run-1",
           seq: 7,
           type: "message",
           data: "{not json",
@@ -172,7 +152,7 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
       setup(db, sqlite, dir)
       // A toolResult with zeroed usage: turns counts assistant messages only,
       // so turns=0 and every total is zero → sumUsageTotals stays undefined.
-      insertEntry(db, "run-1", "a-1", "sess-1", 1, {
+      insertEntry(db, "a-1", "sess-1", 1, {
         type: "message",
         message: {
           role: "toolResult",
@@ -207,14 +187,14 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
     const { db, sqlite, dir, close } = setupDb()
     try {
       setup(db, sqlite, dir)
-      insertEntry(db, "run-1", "a-1", "sess-1", 1, {
+      insertEntry(db, "a-1", "sess-1", 1, {
         type: "message",
         message: {
           role: "assistant",
           usage: usage({ input: 100, cacheRead: 50, cacheWrite: 0 }), // 50% hit
         },
       })
-      insertEntry(db, "run-1", "a-1", "sess-1", 2, {
+      insertEntry(db, "a-1", "sess-1", 2, {
         type: "message",
         message: {
           role: "assistant",
@@ -222,7 +202,7 @@ describe("usage aggregation SQL/JS parity (code-review P4.1)", () => {
         },
       })
       // A later assistant with no prompt tokens must NOT overwrite the rate.
-      insertEntry(db, "run-1", "a-1", "sess-1", 3, {
+      insertEntry(db, "a-1", "sess-1", 3, {
         type: "message",
         message: {
           role: "assistant",

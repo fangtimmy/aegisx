@@ -12,7 +12,7 @@ import { createPlatformService } from "./platforms/service"
 import { registerProviderRoutes } from "./providers/routes"
 import { createContainerManager } from "./run/container/container-manager"
 import { registerRunRoutes } from "./run/routes"
-import { createRunService } from "./run/service"
+import { createAgentService } from "./run/service"
 import { registerSchedulerRoutes } from "./scheduler/routes"
 import { registerSettingsRoutes } from "./settings/routes"
 
@@ -31,9 +31,8 @@ export function createApp(options: { dataDir: string }) {
   )
 
   const containerManager = createContainerManager()
-  const runService = createRunService({
+  const agentService = createAgentService({
     db,
-    sqlite,
     dataDir: options.dataDir,
     containerManager,
     platformService,
@@ -41,22 +40,22 @@ export function createApp(options: { dataDir: string }) {
     getSettings,
   })
 
-  // Flag writes are a side path (platform → DB); refresh the run view after
-  // and notify the event's scheduler. A full solve additionally stops the
-  // challenge's other solvers; a multi-flag partial steers them (partial
-  // carries the platform's progress message).
-  platformService.setRunHooks({
-    onRunFlagAccepted: (runId, submitterAgentId) => {
-      runService.refresh(runId)
-      runService.notifyFlagAccepted(runId, submitterAgentId)
+  // Flag writes are a side path (platform → DB); refresh the submitting
+  // agent's view and notify the event's scheduler. A full solve additionally
+  // stops the challenge's other live agents; a multi-flag partial steers
+  // them (partial carries the platform's progress message).
+  platformService.setAgentHooks({
+    onAgentFlagAccepted: (challengeId, agentId) => {
+      if (agentId) agentService.refresh(agentId)
+      agentService.notifyFlagAccepted(challengeId, agentId)
     },
-    onRunFlagPartial: (runId, message, submitterAgentId) => {
-      runService.refresh(runId)
-      runService.notifyFlagPartial(runId, message, submitterAgentId)
+    onAgentFlagPartial: (challengeId, message, agentId) => {
+      if (agentId) agentService.refresh(agentId)
+      agentService.notifyFlagPartial(challengeId, message, agentId)
     },
   })
 
-  void runService.recoverOnBoot().catch((error) => {
+  void agentService.recoverOnBoot().catch((error: unknown) => {
     console.error("Boot recovery failed", {
       error: error instanceof Error ? error.message : String(error),
     })
@@ -98,32 +97,34 @@ export function createApp(options: { dataDir: string }) {
     db,
     storage,
     platformService,
-    runManager: {
-      listForEvent: (eventId: string) => runService.listForEvent(eventId),
-      usageForEvent: (eventId: string) => runService.usageForEvent(eventId),
-      deleteRunsForEvent: (eventId: string, scope: "challenge" | "all") =>
-        runService.deleteRunsForEvent(eventId, scope),
+    agentManager: {
+      usageForEvent: (eventId: string) => agentService.usageForEvent(eventId),
+      deleteAgentsForEvent: (eventId: string, scope: "solver" | "all") =>
+        agentService.deleteAgentsForEvent(eventId, scope),
     },
     getSettings,
     catalog,
-    cleanupChallengeChannelFiles: (challengeId: string) =>
-      runService.channels.cleanupChallengeChannels(challengeId),
-    cleanupEventChannelData: (eventId: string) =>
-      runService.channels.cleanupEventChannels(eventId),
+    cleanupChallengeChannels: (challengeId: string) =>
+      agentService.channels.cleanupChallengeChannels(challengeId),
+    deleteChallengeWorkspace: (eventId, challengeId) =>
+      agentService.deleteChallengeWorkspace(eventId, challengeId),
+    cleanupEventChannels: (eventId: string) =>
+      agentService.channels.cleanupEventChannels(eventId),
+    deleteEventWorkspaces: (eventId: string) =>
+      agentService.deleteEventWorkspaces(eventId),
   })
   registerRunRoutes(app, {
     db,
-    dataDir: options.dataDir,
-    runService,
+    agentService,
   })
-  registerSchedulerRoutes(app, { db, runService })
+  registerSchedulerRoutes(app, { db, agentService })
 
   app.get("/api/platform/status", (c) => c.json({ available: true }))
 
   return {
     app,
     close: async () => {
-      await runService.close()
+      await agentService.close()
       sqlite.close()
       releaseLock()
     },

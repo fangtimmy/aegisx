@@ -3,6 +3,7 @@ import {
   copyFileSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -11,7 +12,6 @@ import { basename, join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
-import { reconcileChannelFileDirs } from "./channel-files"
 import * as schema from "./schema"
 import { SCHEMA_VERSION } from "./schema"
 
@@ -218,11 +218,12 @@ export function createDatabase(dataDir: string) {
       )
     }
     sqlite.run(`PRAGMA user_version = ${SCHEMA_VERSION}`)
-    // v17 (0011) moved attachment dirs' owning channels in SQL; the
-    // filesystem side is healed here (idempotent, self-limiting — see
-    // db/channel-files.ts). Runs on every open so a crash between the SQL
-    // commit and the relocate still heals on the next boot.
-    reconcileChannelFileDirs(db, dataDir)
+    // v19 swept legacy execution data: the run workspaces (data/runs) and
+    // the channel attachment store (data/channel-files) are unreachable
+    // after 0013 dropped their tables — remove the dead directories.
+    for (const legacy of ["runs", "channel-files"]) {
+      rmSync(join(dataDir, legacy), { recursive: true, force: true })
+    }
     return { db, sqlite, releaseLock }
   } catch (error) {
     releaseLock()

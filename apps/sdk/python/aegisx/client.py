@@ -103,29 +103,6 @@ class Client:
                 "bad_response", f"Invalid JSON from {url}: {error}"
             ) from None
 
-    def download(self, path: str, dest: str) -> str:
-        """GET binary content and write it to `dest` (returns the absolute-ish
-        dest path as given). Used by `aegisx.channels.fetch` to materialize
-        attachments into the caller's workspace."""
-        url = self.api_url + path
-        req = urllib.request.Request(url)
-        caller = agent_id()
-        if caller:
-            req.add_header("X-Aegisx-Agent-Id", caller)
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                payload = resp.read()
-        except urllib.error.HTTPError as error:
-            raise _http_error(error) from None
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise AegisxError(
-                "network_error", f"Download from {url} failed: {error}"
-            ) from None
-        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-        with open(dest, "wb") as fh:
-            fh.write(payload)
-        return dest
-
     def event_path(self, suffix: str = "") -> str:
         """`/api/events/<event_id><suffix>` — event-scoped API base."""
         if not self.event_id:
@@ -170,20 +147,3 @@ def configure(api_url: str | None = None, event_id: str | None = None) -> None:
     optional; omitted values fall back to the env-based defaults."""
     global _default_client
     _default_client = Client(api_url=api_url, event_id=event_id)
-
-
-def wire_solvers(
-    solvers: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]] | None:
-    """Map SDK-style per-solver dicts ({model, prompt, prompt_mode}) onto the
-    wire shape ({model, prompt, promptMode})."""
-    if not solvers:
-        return None
-    return [
-        {
-            **({"model": s["model"]} if s.get("model") else {}),
-            **({"prompt": s["prompt"]} if s.get("prompt") else {}),
-            **({"promptMode": s["prompt_mode"]} if s.get("prompt_mode") else {}),
-        }
-        for s in solvers
-    ]

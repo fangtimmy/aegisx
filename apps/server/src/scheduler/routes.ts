@@ -9,7 +9,7 @@ import { notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { EmptyInputSchema } from "../lib/schemas"
 import { runActionError as runError } from "../run/errors"
-import type { RunService } from "../run/service"
+import type { AgentService } from "../run/service"
 
 const reorderInput = Type.Object(
   { itemIds: Type.Array(Type.String({ minLength: 1 })) },
@@ -68,9 +68,9 @@ const queueStateInput = Type.Object(
 
 export function registerSchedulerRoutes(
   app: Hono,
-  options: { db: Database; runService: RunService }
+  options: { db: Database; agentService: AgentService }
 ) {
-  const { db, runService } = options
+  const { db, agentService } = options
 
   function requireEvent(c: Context, eventId: string) {
     const event = db.select().from(events).where(eq(events.id, eventId)).get()
@@ -84,7 +84,7 @@ export function registerSchedulerRoutes(
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
     if (miss) return miss
-    const queue = runService.queue()
+    const queue = agentService.queue()
     return c.json({
       items: queue.list(eventId),
       state: queue.stateOf(eventId),
@@ -98,7 +98,7 @@ export function registerSchedulerRoutes(
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
     if (miss) return miss
-    return c.json(runService.inboxSnapshot(eventId))
+    return c.json(agentService.inboxSnapshot(eventId))
   })
 
   /** Hold delivery: the inbox keeps collecting silently but flushes nothing —
@@ -111,7 +111,7 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      runService.setInboxDeliveryPaused(eventId, true)
+      agentService.setInboxDeliveryPaused(eventId, true)
       return c.json({ deliveryPaused: true })
     }
   )
@@ -123,7 +123,7 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      runService.setInboxDeliveryPaused(eventId, false)
+      agentService.setInboxDeliveryPaused(eventId, false)
       return c.json({ deliveryPaused: false })
     }
   )
@@ -136,7 +136,9 @@ export function registerSchedulerRoutes(
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       // Blocks future launches only — running runs keep going (pause ≠ kill).
-      runService.queue().pause(eventId, c.req.valid("json").source ?? "manual")
+      agentService
+        .queue()
+        .pause(eventId, c.req.valid("json").source ?? "manual")
       return c.json({ state: "paused" })
     }
   )
@@ -148,8 +150,10 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      runService.queue().resume(eventId, c.req.valid("json").source ?? "manual")
-      runService.queue().scheduleDrain()
+      agentService
+        .queue()
+        .resume(eventId, c.req.valid("json").source ?? "manual")
+      agentService.queue().scheduleDrain()
       return c.json({ state: "running" })
     }
   )
@@ -159,7 +163,7 @@ export function registerSchedulerRoutes(
     const miss = requireEvent(c, eventId)
     if (miss) return miss
     try {
-      runService.queue().remove(c.req.param("itemId"))
+      agentService.queue().remove(c.req.param("itemId"))
       return c.body(null, 204)
     } catch (error) {
       return runError(c, error)
@@ -173,7 +177,7 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      runService.queue().clear(eventId)
+      agentService.queue().clear(eventId)
       return c.body(null, 204)
     }
   )
@@ -185,8 +189,8 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      runService.queue().reorder(eventId, c.req.valid("json").itemIds)
-      return c.json({ items: runService.queue().list(eventId) })
+      agentService.queue().reorder(eventId, c.req.valid("json").itemIds)
+      return c.json({ items: agentService.queue().list(eventId) })
     }
   )
 
@@ -200,7 +204,7 @@ export function registerSchedulerRoutes(
       try {
         const body = c.req.valid("json")
         return c.json(
-          runService.queue().update(c.req.param("itemId"), {
+          agentService.queue().update(c.req.param("itemId"), {
             ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
             ...(body.timeoutMs !== undefined
               ? { timeoutMs: body.timeoutMs }
@@ -216,16 +220,16 @@ export function registerSchedulerRoutes(
     }
   )
 
-  // --- scheduler (event-scoped run) ---------------------------------------
+  // --- scheduler (the event's orchestrator agent) -------------------------
 
   app.get("/api/events/:eventId/scheduler", (c) => {
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
     if (miss) return miss
     return c.json({
-      config: runService.getSchedulerConfig(eventId),
-      run: runService.getSchedulerRun(eventId) ?? null,
-      status: runService.getStatus(eventId),
+      config: agentService.getSchedulerConfig(eventId),
+      agent: agentService.getSchedulerAgent(eventId) ?? null,
+      status: agentService.getStatus(eventId),
     })
   })
 
@@ -237,7 +241,7 @@ export function registerSchedulerRoutes(
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       const body = c.req.valid("json")
-      return c.json(runService.upsertSchedulerConfig({ eventId, ...body }))
+      return c.json(agentService.upsertSchedulerConfig({ eventId, ...body }))
     }
   )
 
@@ -251,7 +255,7 @@ export function registerSchedulerRoutes(
       try {
         const { reset } = c.req.valid("json")
         return c.json(
-          await runService.startScheduler(eventId, { reset: reset ?? false }),
+          await agentService.startScheduler(eventId, { reset: reset ?? false }),
           201
         )
       } catch (error) {
@@ -267,10 +271,10 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      const sched = runService.getSchedulerRun(eventId)
-      if (!sched) return notFound(c, "No scheduler run for this event")
+      const sched = agentService.getSchedulerAgent(eventId)
+      if (!sched) return notFound(c, "No scheduler agent for this event")
       try {
-        return c.json(await runService.stop(sched.id))
+        return c.json(await agentService.stopAgent(sched.id))
       } catch (error) {
         return runError(c, error)
       }
@@ -284,10 +288,8 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      const sched = runService.getSchedulerRun(eventId)
-      if (!sched) return notFound(c, "No scheduler run for this event")
       try {
-        return c.json(await runService.closeRun(sched.id))
+        return c.json(await agentService.closeScheduler(eventId))
       } catch (error) {
         return runError(c, error)
       }
@@ -305,7 +307,7 @@ export function registerSchedulerRoutes(
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       try {
-        return c.json(await runService.pauseScheduler(eventId))
+        return c.json(await agentService.pauseScheduler(eventId))
       } catch (error) {
         return runError(c, error)
       }
@@ -320,7 +322,7 @@ export function registerSchedulerRoutes(
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       try {
-        return c.json(await runService.resumeScheduler(eventId))
+        return c.json(await agentService.resumeScheduler(eventId))
       } catch (error) {
         return runError(c, error)
       }
@@ -334,12 +336,12 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      const sched = runService.getSchedulerRun(eventId)
-      if (!sched) return notFound(c, "No scheduler run for this event")
+      const sched = agentService.getSchedulerAgent(eventId)
+      if (!sched) return notFound(c, "No scheduler agent for this event")
       try {
         const body = c.req.valid("json")
         return c.json(
-          await runService.sendMessage(sched.id, {
+          await agentService.sendMessage(sched.id, {
             text: body.text,
             deliverAs: body.deliverAs,
           })

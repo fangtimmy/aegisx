@@ -53,23 +53,32 @@ describe("W1 prompt fixes", () => {
     expect(main).toContain("/opt/solver/knowledges")
   })
 
-  test("mainSystem renders the Channels section for every solver run (channels era)", () => {
-    const single = renderSystemPrompt(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE, {
-      ...samplePromptContext,
-      run: { ...samplePromptContext.run, multiSolver: false },
-    })
-    const multi = renderSystemPrompt(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE, {
-      ...samplePromptContext,
-      run: { ...samplePromptContext.run, multiSolver: true },
-    })
-    // The legacy multiSolver-gated Co-solvers file convention is REPLACED by
-    // the channel layer (docs/im-channels.md §6) — rendered for EVERY run
-    // (single-solver keeps ask/attachments/#team).
-    expect(single).toContain("## Channels（团队频道）")
-    expect(multi).toContain("## Channels（团队频道）")
-    expect(single).not.toContain("## Co-solvers")
-    expect(multi).not.toContain("## Co-solvers")
-    expect(multi).toContain('aegisx.channels.post("#team"')
+  test("mainSystem renders the Channels section for every solver agent (v19)", () => {
+    const main = renderSystemPrompt(
+      DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
+      samplePromptContext
+    )
+    // The channel layer is rendered for every solver agent; attachments are
+    // shared/ paths (no fetch), and finish_run ends only the agent's own task.
+    expect(main).toContain("## Channels（团队频道）")
+    expect(main).not.toContain("## Co-solvers")
+    expect(main).toContain('aegisx.channels.post("#team"')
+    expect(main).toContain("附件即 shared/ 路径")
+    expect(main).toContain("ends YOUR task")
+  })
+
+  test("initial renders the v19 workspace layout (agent dir + shared + attachments + siblings)", () => {
+    const rendered = renderTemplateBody(
+      DEFAULT_INITIAL_PROMPT_TEMPLATE,
+      samplePromptContext
+    )
+    expect(rendered).toContain("/workspace/agents/a3f1c2d9")
+    expect(rendered).toContain("/workspace/attachments/")
+    expect(rendered).toContain("/workspace/shared/")
+    expect(rendered).toContain(
+      "Sibling agents' directories: /workspace/agents/"
+    )
+    expect(rendered).toContain("End your own task with the `finish_run` tool")
   })
 })
 
@@ -85,7 +94,7 @@ describe("prompt preview", () => {
 
   test("marks bare true/false tokens as highlighted even outside variables", () => {
     const segments = previewSystemPrompt(
-      "Container: {{run.isContainer}} submit: {{capabilities.canSubmitFlag}}",
+      "Submit: {{capabilities.canSubmitFlag}} finish: {{capabilities.canFinish}}",
       samplePromptContext
     )
     // booleans are not marker-wrapped by markPreviewValues, but previewSegments
@@ -110,7 +119,8 @@ describe("prompt preview", () => {
   })
 
   test("preview and plain render agree on the non-marker text", () => {
-    const template = "Task: {{challenge.name}} @ {{run.workspace}}"
+    const template =
+      "Task: {{challenge.name}} @ {{workspace.root}}/{{workspace.agentDir}}"
     const plain = renderSystemPrompt(template, samplePromptContext)
     const joined = previewSystemPrompt(template, samplePromptContext)
       .map((s) => s.text)

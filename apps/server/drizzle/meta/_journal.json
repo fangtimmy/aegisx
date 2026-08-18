@@ -92,6 +92,13 @@
       "when": 1790300000000,
       "tag": "0012_derived_channel_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": 13,
+      "when": 1790400000000,
+      "tag": "0013_challenge_centric",
+      "breakpoints": true
     }
   ]
 }

@@ -3,8 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents, sessionEntries, sessions } from "../../src/db/schema"
-import type { CreateRunInput } from "../../src/run/service"
-import { createRunService } from "../../src/run/service"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
@@ -16,36 +15,14 @@ import {
   stubHostAgentSession,
 } from "../helpers"
 
-const containerInput = {
-  image: "aegisx/solve:latest",
-  cpus: 2,
-  memoryMb: 1024,
-  pidsLimit: 128,
-  tmpfsSize: "128m",
-  workspace: "/workspace",
-}
-
-function baseCreateInput(challengeId: string): CreateRunInput {
-  return {
-    scopeType: "challenge" as const,
-    challengeId,
-    container: containerInput,
-  }
-}
-
 /** Stub service: every createHost call records the prepared agent and returns
  * a stub session (no real pi / DbSessionManager). Session rows/entries are
  * seeded directly via the DB in the tests below. */
-function makeService(
-  db: ReturnType<typeof setupDb>["db"],
-  sqlite: ReturnType<typeof setupDb>["sqlite"],
-  dir: string
-) {
+function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
   const { manager } = stubContainerManager()
   const prepared: string[] = []
-  const service = createRunService({
+  const service = createAgentService({
     db,
-    sqlite,
     dataDir: dir,
     containerManager: manager,
     platformService: {
@@ -66,9 +43,7 @@ function makeService(
         resumeFrom?: { sessionId: string }
       }) => {
         prepared.push(input.agentId)
-        // Honor the resume pointer like DbSessionManager.open would: reopening a
-        // session keeps its id, so prepareAgent's write-back doesn't clobber the
-        // active session we seeded for the test.
+        // Honor the resume pointer like DbSessionManager.open would.
         const id =
           input.resumeFrom?.sessionId ?? "sess-" + input.agentId.slice(0, 6)
         return stubHostAgentSession(id)
@@ -101,13 +76,11 @@ function entryData(role: string, text: string, id: string): string {
   })
 }
 
-/** Seed one session for the agent with `n` entries (seq 1..n), returning the
- * session id. `agentId`/`runId` come from the caller's seeded graph. */
+/** Seed one session for the agent with `n` entries (seq 1..n). */
 function seedSession(
   db: ReturnType<typeof setupDb>["db"],
   sessionId: string,
   agentId: string,
-  runId: string,
   n: number,
   createdAt = new Date().toISOString()
 ) {
@@ -120,8 +93,6 @@ function seedSession(
         id: `${sessionId}-e${seq}`,
         sessionId,
         agentId,
-        runId,
-        parentId: null,
         seq,
         type: "message",
         data: entryData(
@@ -148,18 +119,21 @@ function remainingSeqs(
     .map((row) => row.seq)
 }
 
+async function spawnAgent(service: ReturnType<typeof makeService>["service"]) {
+  return service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+}
+
 describe("multi-session + flat backtrack (v12)", () => {
   test("listAgentSessions returns sessions with counts + active flag", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, sqlite, dir)
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const { service } = makeService(db, dir)
+      const agent = await spawnAgent(service)
 
-      seedSession(db, "sess-1", agent.id, run.id, 3, "2025-01-01T00:00:00.000Z")
-      seedSession(db, "sess-2", agent.id, run.id, 1, "2025-01-01T00:00:01.000Z")
+      seedSession(db, "sess-1", agent.id, 3, "2025-01-01T00:00:00.000Z")
+      seedSession(db, "sess-2", agent.id, 1, "2025-01-01T00:00:01.000Z")
       db.update(agents)
         .set({ sessionFile: "sess-2" })
         .where(eq(agents.id, agent.id))
@@ -175,38 +149,30 @@ describe("multi-session + flat backtrack (v12)", () => {
     }
   })
 
-  test("listMessages filters each agent to its active session", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("listMessages filters to the agent's active session", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, sqlite, dir)
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const { service } = makeService(db, dir)
+      const agent = await spawnAgent(service)
 
-      seedSession(db, "sess-1", agent.id, run.id, 3)
-      seedSession(db, "sess-2", agent.id, run.id, 2)
+      seedSession(db, "sess-1", agent.id, 3)
+      seedSession(db, "sess-2", agent.id, 2)
       db.update(agents)
         .set({ sessionFile: "sess-1" })
         .where(eq(agents.id, agent.id))
         .run()
 
       // Per-agent: only the active session's entries.
-      const perAgent = service.listMessages(run.id, { agentId: agent.id })
+      const perAgent = service.listMessages(agent.id)
       expect(perAgent.items).toHaveLength(3)
       expect(perAgent.items.every((i) => i.entry.id.startsWith("sess-1"))).toBe(
         true
       )
 
-      // Run-level: the union of active sessions (sess-1 only here).
-      const runLevel = service.listMessages(run.id, {})
-      expect(runLevel.items).toHaveLength(3)
-
       // Explicit session override can still reach the inactive session.
-      const override = service.listMessages(run.id, {
-        agentId: agent.id,
-        sessionId: "sess-2",
-      })
+      const override = service.listMessages(agent.id, { sessionId: "sess-2" })
       expect(override.items).toHaveLength(2)
       await service.close()
     } finally {
@@ -215,13 +181,12 @@ describe("multi-session + flat backtrack (v12)", () => {
   })
 
   test("createAgentSession (/new) resets the pointer and rebuilds the live session", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service, prepared } = makeService(db, sqlite, dir)
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const { service, prepared } = makeService(db, dir)
+      const agent = await spawnAgent(service)
       expect(prepared).toHaveLength(1)
 
       const stubSessionId = "sess-" + agent.id.slice(0, 6)
@@ -231,7 +196,7 @@ describe("multi-session + flat backtrack (v12)", () => {
       ).toBe(stubSessionId)
 
       const result = await service.createAgentSession(agent.id)
-      expect(result.id).toBe(run.id)
+      expect(result.id).toBe(agent.id)
       // The live session was disposed + re-prepared (pointer nulled first).
       expect(prepared).toHaveLength(2)
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
@@ -243,16 +208,15 @@ describe("multi-session + flat backtrack (v12)", () => {
   })
 
   test("activateAgentSession switches the pointer and rebuilds; no-op when already active", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service, prepared } = makeService(db, sqlite, dir)
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const { service, prepared } = makeService(db, dir)
+      const agent = await spawnAgent(service)
 
-      seedSession(db, "sess-1", agent.id, run.id, 1)
-      seedSession(db, "sess-2", agent.id, run.id, 1)
+      seedSession(db, "sess-1", agent.id, 1)
+      seedSession(db, "sess-2", agent.id, 1)
       db.update(agents)
         .set({ sessionFile: "sess-1" })
         .where(eq(agents.id, agent.id))
@@ -280,15 +244,14 @@ describe("multi-session + flat backtrack (v12)", () => {
   })
 
   test("backtrackAgent deletes entries after the target and rebuilds the live session", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service, prepared } = makeService(db, sqlite, dir)
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const { service, prepared } = makeService(db, dir)
+      const agent = await spawnAgent(service)
 
-      seedSession(db, "sess-1", agent.id, run.id, 4)
+      seedSession(db, "sess-1", agent.id, 4)
       db.update(agents)
         .set({ sessionFile: "sess-1" })
         .where(eq(agents.id, agent.id))
@@ -315,13 +278,12 @@ describe("multi-session + flat backtrack (v12)", () => {
   })
 
   test("backtrackAgent rejects legacy jsonl sessions", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, sqlite, dir)
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const { service } = makeService(db, dir)
+      const agent = await spawnAgent(service)
 
       db.update(agents)
         .set({ sessionFile: "legacy.jsonl" })
@@ -336,48 +298,26 @@ describe("multi-session + flat backtrack (v12)", () => {
     }
   })
 
-  test("session ops reject spawn children and unknown agents", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("session ops reject unknown agents", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, sqlite, dir)
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const { service } = makeService(db, dir)
+      await spawnAgent(service)
 
-      db.insert(agents)
-        .values({
-          id: "child-1",
-          runId: run.id,
-          slot: "child-abc",
-          role: "child",
-          parentAgentId: agent.id,
-          isEntry: false,
-          model: "openai/gpt-4o-mini:off",
-          systemPrompt: "x",
-          tools: "[]",
-          status: "idle",
-          sessionFile: null,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        })
-        .run()
-
-      for (const op of [
-        () => service.createAgentSession("child-1"),
-        () => service.activateAgentSession("child-1", "sess-1"),
-        () => service.backtrackAgent("child-1", 1),
-      ]) {
-        await expect(op()).rejects.toThrow(
-          "Child agents run unattended and do not support session operations"
-        )
-      }
       // listAgentSessions is synchronous (read-only query).
       expect(() => service.listAgentSessions("ghost")).toThrow(
         "Agent not found"
       )
       await expect(service.createAgentSession("ghost")).rejects.toThrow(
         "Agent not found"
+      )
+      await expect(
+        service.activateAgentSession("ghost", "sess-1")
+      ).rejects.toThrow(/not found/)
+      await expect(service.backtrackAgent("ghost", 1)).rejects.toThrow(
+        /not found|no session/
       )
       await service.close()
     } finally {

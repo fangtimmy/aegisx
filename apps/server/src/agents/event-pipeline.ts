@@ -126,8 +126,8 @@ export type AgentEventPipeline = ReturnType<typeof createAgentEventPipeline>
  * positional guess. retry is intentionally transient (SSE activity only);
  * compaction / branch_summary surface as their own entries (centered markers).
  *
- * The `channel` is the LiveBus key: a run id for solver agents, an event id
- * for the orchestrator. The pipeline is agnostic to which.
+ * The `channel` is the LiveBus key: the agent id. The pipeline is agnostic
+ * to anything above the agent.
  */
 export function createAgentEventPipeline(options: {
   channel: string

@@ -54,9 +54,6 @@ export class DbSessionManager {
   private readonly db: Database
   private readonly sessionId: string
   private readonly agentId: string
-  /** The owning run; written redundantly on every session_entries row for
-   * run-level message queries. */
-  private readonly runId: string
   private readonly cwd: string
   private readonly createdAt: string
   private nextSeq = 0
@@ -77,7 +74,6 @@ export class DbSessionManager {
   private constructor(opts: {
     sessionId: string
     agentId: string
-    runId: string
     cwd: string
     createdAt: string
     db: Database
@@ -85,19 +81,15 @@ export class DbSessionManager {
     this.db = opts.db
     this.sessionId = opts.sessionId
     this.agentId = opts.agentId
-    this.runId = opts.runId
     this.cwd = opts.cwd
     this.createdAt = opts.createdAt
   }
 
   /**
-   * Create a new database session owned by one agent. `runId` is the agent's
-   * run (recorded redundantly on every session_entries row for run-level
-   * message queries).
+   * Create a new database session owned by one agent.
    */
   static create(opts: {
     agentId: string
-    runId: string
     cwd: string
     db: Database
   }): DbSessionManager {
@@ -115,18 +107,16 @@ export class DbSessionManager {
     return new DbSessionManager({
       sessionId,
       agentId: opts.agentId,
-      runId: opts.runId,
       cwd: opts.cwd,
       createdAt,
       db: opts.db,
     })
   }
 
-  /** Reopen an existing database session (resume / cold-restore). The agent +
-   * run ids come from the owning agent row (the caller has them). */
+  /** Reopen an existing database session (resume / cold-restore). */
   static open(
     sessionId: string,
-    opts: { agentId: string; runId: string; db: Database }
+    opts: { agentId: string; db: Database }
   ): DbSessionManager {
     const row = opts.db
       .select({ cwd: sessions.cwd, createdAt: sessions.createdAt })
@@ -139,7 +129,6 @@ export class DbSessionManager {
     const sm = new DbSessionManager({
       sessionId,
       agentId: opts.agentId,
-      runId: opts.runId,
       cwd: row.cwd,
       createdAt: row.createdAt,
       db: opts.db,
@@ -195,7 +184,6 @@ export class DbSessionManager {
         id: entry.id,
         sessionId: this.sessionId,
         agentId: this.agentId,
-        runId: this.runId,
         parentId: entry.parentId,
         seq,
         type: entry.type,

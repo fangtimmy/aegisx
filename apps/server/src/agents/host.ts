@@ -20,16 +20,17 @@ import {
 import type { LiveBus } from "./live"
 
 /**
- * Builtin file/coding tools every host agent gets. They operate on the shared
- * container workspace (the agent's cwd). Profile-specific tools (CTF / run
- * management) are layered on top via {@link createAgentHost}'s `extraTools`.
+ * Builtin file/coding tools every host agent gets. They operate on the
+ * agent's own workspace directory (the bash cwd + host file-tool root);
+ * other workspace areas (shared/, attachments/, sibling agents) are
+ * reachable read-only via absolute container paths.
  */
 const HOST_FILE_TOOLS = ["read", "bash", "edit", "write"] as const
 
 /**
  * Build the container-backed bash + file-workspace tool pair shared by every
- * host agent — solver main, solver child (worker), and the orchestrator. The
- * one place that knows how file tools reach a container.
+ * host agent — solver and orchestrator alike. The one place that knows how
+ * file tools reach a container.
  *
  * `multimodal` (derived from the model's `input` modalities) gates whether
  * `read` attaches image bytes for image files; pass false for text-only models.
@@ -51,19 +52,20 @@ function buildHostFileTools(
 }
 
 export type AgentHostInput = {
-  /** Who the session belongs to (run agent vs. orchestrator). */
+  /** Who the session belongs to (exactly one agent). */
   owner: SessionOwner
-  /** LiveBus channel: the run id — every agent (solver or orchestrator)
-   * publishes on its run's channel; the run id is the emit target. */
+  /** LiveBus channel: the agent id — every event for this agent (progress,
+   * commits, context, channel pushes) publishes on its own channel. */
   channel: string
-  /** Agent id for entry keys + SSE routing (main/child ids, ORCHESTRATOR_AGENT_ID). */
+  /** Agent id for entry keys + SSE routing. */
   agentId: string
-  /** Container-internal workspace path surfaced to the model as its cwd. */
+  /** Container-internal directory surfaced to the model as its cwd (the
+   * agent's own directory for solvers, the workspace root for the
+   * orchestrator). */
   cwd: string
   /** Live container the bash/file tools target. The host does NOT create it —
-   * the owning service manages container lifecycle (incl. cleanup-on-failure),
-   * then hands the container name here. Solver children reuse their run's
-   * container; the orchestrator and solver main each own one. */
+   * the factory manages container lifecycle (incl. cleanup-on-failure),
+   * then hands the container name here. */
   containerName: string
   containerManager: ContainerManager
   modelRuntime: ModelRuntime
@@ -72,17 +74,16 @@ export type AgentHostInput = {
   agentSettings: AgentLoopSettings
   /** Fully rendered system prompt. */
   systemPrompt: string
-  /** Profile-specific tools (CTF / management), merged after the file tools.
-   * Omit for agents that get file tools only (solver children). */
+  /** Profile-specific tools (CTF / management), merged after the file tools. */
   extraTools?: ToolDefinition[]
   /** Profile-specific tool names to enable. HOST_FILE_TOOLS are always added. */
   extraToolNames?: string[]
   /** Resume an existing session; omit for a new session. */
   resumeFrom?: SessionResume
   /** Per-call exec env for the bash tool ("KEY=value" entries) — per-agent
-   * identity (AEGISX_AGENT_ID / AEGISX_RUN_ID) injected into every bash exec
-   * so the container-side aegisx SDK knows who is calling (shared solver
-   * containers; docs/im-channels.md §四). */
+   * identity (AEGISX_AGENT_ID) injected into every bash exec so the
+   * container-side aegisx SDK knows who is calling (shared solver
+   * containers). */
   execEnv?: string[]
   /** Fired after a commit that may change usage (compaction / branch_summary). */
   onUsageMaybeChanged?: () => void
@@ -91,17 +92,11 @@ export type AgentHostInput = {
 }
 
 /**
- * Create a host-side pi `AgentSession` for ANY agent kind — solver main, solver
- * child (worker), or orchestrator. This is the single, homogeneous creation
- * path: it wires the shared container file tools, merges the profile's extra
- * tools, and builds the host session (event pipeline + DbSessionManager +
+ * Create a host-side pi `AgentSession` for ANY agent kind — solver or the
+ * event scheduler. This is the single, homogeneous creation path: it wires
+ * the shared container file tools, merges the profile's extra tools, and
+ * builds the host session (event pipeline + DbSessionManager +
  * zero-discovery resource loader).
- *
- * The three agent kinds are the same agent with a different profile — they
- * differ only in `owner`, `systemPrompt`, and `extraTools`. Routing all three
- * through here is what makes them isomorphic, and it is the seam future dynamic
- * agent templates will build on (a template supplies a system prompt + a tool
- * set; the host turns it into a live session).
  *
  * It is also the test seam: services accept a `createHost` override (default =
  * this) so tests inject a stub {@link HostAgentSession} and skip the real pi

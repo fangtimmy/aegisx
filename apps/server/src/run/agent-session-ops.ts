@@ -1,27 +1,22 @@
-import type { AgentSessionSummary, RunPublic } from "@aegisx/shared"
+import type { AgentSessionSummary, AgentSummary } from "@aegisx/shared"
 import { and, asc, count, eq, gt, inArray } from "drizzle-orm"
 
 import type { SessionLifecycle } from "../agents/lifecycle"
 import type { Database } from "../db"
 import { agents, sessionEntries, sessions } from "../db/schema"
 import { RunActionError } from "./errors"
-import type { RunContext } from "./run-factory"
 
 /** Dependencies the run service injects — the ops share its db, per-agent
- * locks, lifecycle map and run context, and call back into prepareAgent /
- * emit / status helpers. */
+ * locks, lifecycle map, and call back into prepareAgent / emit helpers. */
 export type AgentSessionOpsDeps = {
   db: Database
   lifecycle: SessionLifecycle
-  /** Per-run reusable handles (container/model/prompt context). */
-  contexts: Map<string, RunContext>
   withLock<T>(id: string, op: () => T | Promise<T>): Promise<T>
-  /** Prepare (or cold-restore) one agent's live session. */
-  prepareAgent(runId: string, agentId: string): Promise<void>
-  runIdOf(agentId: string): string | undefined
+  /** Prepare (or reopen) one agent's live session. */
+  prepareAgent(agentId: string): Promise<void>
   updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
-  emitAgents(runId: string): void
-  requireRun(runId: string): RunPublic
+  emitAgent(agentId: string): void
+  requireAgent(agentId: string): AgentSummary
   now(): string
 }
 
@@ -32,27 +27,9 @@ type AgentSessionOps = ReturnType<typeof createAgentSessionOps>
  * creates a fresh one, activate switches the pointer (old sessions stay in
  * the DB), backtrack truncates the active one flat (no pi tree-branching —
  * the abandoned tail is physically deleted). All ops require an idle agent
- * (a running turn is rejected, matching /compact) and are rejected for spawn
- * children (they run unattended). */
+ * (a running turn is rejected, matching /compact). */
 export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
-  const { db, lifecycle, contexts } = deps
-
-  /** The agent's run, throwing for unknown ids and spawn children. */
-  function mainAgentRunOf(agentId: string): string {
-    const row = db
-      .select({ runId: agents.runId, parentAgentId: agents.parentAgentId })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .get()
-    if (!row) throw new RunActionError("not_found", "Agent not found")
-    if (row.parentAgentId) {
-      throw new RunActionError(
-        "invalid_state",
-        "Child agents run unattended and do not support session operations"
-      )
-    }
-    return row.runId
-  }
+  const { db, lifecycle } = deps
 
   /** Reject a session op while the agent's turn is in flight. */
   function requireIdleAgent(agentId: string): void {
@@ -64,8 +41,8 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
     }
   }
 
-  /** Dispose the agent's live session (if any) and drop it from the lifecycle
-   * map. The caller re-prepares it when the run is warm. */
+  /** Dispose the agent's live session (if any) and drop it from the
+   * lifecycle map. The caller re-prepares it. */
   async function disposeLiveAgent(agentId: string): Promise<void> {
     const session = lifecycle.get(agentId)
     if (session) {
@@ -76,21 +53,22 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
 
   /** Rebuild the agent's live session after a session-pointer change
    * (/new / activate / backtrack): dispose the old one, then re-prepare from
-   * the (possibly new) active session when the run context is warm. Closed /
-   * cold runs rebuild lazily on the next send (prepareAgent via onResume). */
-  async function rebuildAgentSession(
-    runId: string,
-    agentId: string
-  ): Promise<void> {
+   * the (possibly new) active session. Terminal agents rebuild lazily on
+   * the next send (prepareAgent via onResume). */
+  async function rebuildAgentSession(agentId: string): Promise<void> {
     await disposeLiveAgent(agentId)
-    if (contexts.has(runId)) await deps.prepareAgent(runId, agentId)
+    await deps.prepareAgent(agentId)
   }
 
   /** List an agent's sessions (oldest first) with per-session message counts
    * and the active flag (the current sessionFile pointer). */
   function listAgentSessions(agentId: string): AgentSessionSummary[] {
-    const runId = deps.runIdOf(agentId)
-    if (!runId) throw new RunActionError("not_found", "Agent not found")
+    const row = db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .get()
+    if (!row) throw new RunActionError("not_found", "Agent not found")
     const rows = db
       .select()
       .from(sessions)
@@ -128,26 +106,24 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
 
   /** Create a brand-new session for the agent and make it active (/new). Old
    * sessions stay in the DB (switchable). Requires an idle agent. */
-  async function createAgentSession(agentId: string): Promise<RunPublic> {
-    const runId = mainAgentRunOf(agentId)
+  async function createAgentSession(agentId: string): Promise<AgentSummary> {
     return deps.withLock(agentId, async () => {
       requireIdleAgent(agentId)
       // Nulling the pointer makes prepareAgent's createHost build a fresh
       // DbSessionManager (new sessions row) and write the new id back.
       deps.updateAgent(agentId, { sessionFile: null, updatedAt: deps.now() })
-      await rebuildAgentSession(runId, agentId)
-      deps.emitAgents(runId)
-      return deps.requireRun(runId)
+      await rebuildAgentSession(agentId)
+      deps.emitAgent(agentId)
+      return deps.requireAgent(agentId)
     })
   }
 
-  /** Switch the agent's active session. The target must be one of the agent's
-   * own sessions. Requires an idle agent. */
+  /** Switch the agent's active session. The target must be one of the
+   * agent's own sessions. Requires an idle agent. */
   async function activateAgentSession(
     agentId: string,
     sessionId: string
-  ): Promise<RunPublic> {
-    const runId = mainAgentRunOf(agentId)
+  ): Promise<AgentSummary> {
     return deps.withLock(agentId, async () => {
       const row = db
         .select()
@@ -161,16 +137,16 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         .where(eq(agents.id, agentId))
         .get()?.sessionFile
       if (current === sessionId && lifecycle.has(agentId)) {
-        return deps.requireRun(runId) // already active + live — no-op
+        return deps.requireAgent(agentId) // already active + live — no-op
       }
       requireIdleAgent(agentId)
       deps.updateAgent(agentId, {
         sessionFile: sessionId,
         updatedAt: deps.now(),
       })
-      await rebuildAgentSession(runId, agentId)
-      deps.emitAgents(runId)
-      return deps.requireRun(runId)
+      await rebuildAgentSession(agentId)
+      deps.emitAgent(agentId)
+      return deps.requireAgent(agentId)
     })
   }
 
@@ -180,12 +156,12 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
    * removed, so the next turn continues from the truncated history. The live
    * session is rebuilt so pi re-derives its in-memory context (pi caches
    * `agent.state.messages` at session creation; a bare DB delete would not
-   * take effect). Requires an idle agent; legacy jsonl sessions are rejected. */
+   * take effect). Requires an idle agent; legacy jsonl sessions are
+   * rejected. */
   async function backtrackAgent(
     agentId: string,
     seq: number
-  ): Promise<RunPublic> {
-    const runId = mainAgentRunOf(agentId)
+  ): Promise<AgentSummary> {
     return deps.withLock(agentId, async () => {
       requireIdleAgent(agentId)
       const agentRow = db
@@ -225,14 +201,13 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
           )
         )
         .run()
-      if (contexts.has(runId)) await deps.prepareAgent(runId, agentId)
-      deps.emitAgents(runId)
-      return deps.requireRun(runId)
+      await deps.prepareAgent(agentId)
+      deps.emitAgent(agentId)
+      return deps.requireAgent(agentId)
     })
   }
 
   return {
-    mainAgentRunOf,
     requireIdleAgent,
     disposeLiveAgent,
     rebuildAgentSession,

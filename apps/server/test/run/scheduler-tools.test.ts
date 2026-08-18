@@ -2,14 +2,14 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, runQueue } from "../../src/db/schema"
-import { createRunService } from "../../src/run/service"
+import { agents } from "../../src/db/schema"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
+  seedAgent,
   seedChallenge,
   seedEvent,
-  seedRun,
   setupDb,
   stubConfigStore,
   stubContainerManager,
@@ -18,15 +18,6 @@ import {
   now,
 } from "../helpers"
 
-const containerInput = {
-  image: "aegisx/solve:latest",
-  cpus: 2,
-  memoryMb: 1024,
-  pidsLimit: 128,
-  tmpfsSize: "128m",
-  workspace: "/workspace",
-}
-
 type Db = ReturnType<typeof setupDb>["db"]
 
 /** Service with a stubbed container + host session (no real Docker / LLM).
@@ -34,7 +25,6 @@ type Db = ReturnType<typeof setupDb>["db"]
  * createHost — used to assert what an agent is actually granted. */
 function makeService(
   db: Db,
-  sqlite: ReturnType<typeof setupDb>["sqlite"],
   dir: string,
   opts: { hang?: boolean; grantedTools?: string[] } = {}
 ) {
@@ -42,9 +32,8 @@ function makeService(
   const provider = makeProvider()
   const { manager, created } = stubContainerManager()
   const grantedTools = opts.grantedTools
-  const service = createRunService({
+  const service = createAgentService({
     db,
-    sqlite,
     dataDir: dir,
     containerManager: manager,
     platformService: {
@@ -84,101 +73,78 @@ function makeService(
 const settle = () => new Promise((r) => setTimeout(r, 10))
 
 /**
- * Scheduler service behaviors the `aegisx` SDK maps to (scheduler-python-sdk.md).
- * The 18 native management tools are unmounted (ORCHESTRATOR_TOOLS = []) —
- * the SDK drives these service paths over HTTP, so the coverage lives here.
+ * Scheduler service behaviors the `aegisx` SDK maps to. The orchestrator's
+ * native management tool set is EMPTY (ORCHESTRATOR_TOOLS = []) — the SDK
+ * drives these service paths over HTTP, so the coverage lives here.
  */
 describe("scheduler service behaviors (SDK backend)", () => {
-  test("event-scope orchestrator gets NO management tools (SDK replaces them)", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("the orchestrator agent gets NO management tools (SDK replaces them)", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
-      const { service } = makeService(db, sqlite, dir)
+      const { service } = makeService(db, dir)
 
-      const run = await service.create({
-        scopeType: "event" as const,
-        eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
+      const sched = await service.startScheduler("evt-1")
 
-      expect(run.scopeType).toBe("event")
-      const rows = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, run.id))
-        .all()
-      expect(rows).toHaveLength(1)
-      expect(rows[0]!.slot).toBe("orchestrator")
-      expect(rows[0]!.role).toBe("orchestrator")
-      expect(rows[0]!.isEntry).toBe(true)
+      expect(sched.role).toBe("orchestrator")
+      const row = db.select().from(agents).where(eq(agents.id, sched.id)).get()!
       // SDK convergence: the snapshot grants no management tools; the
       // orchestrator manages via `aegisx` + the four file/bash tools.
-      expect(JSON.parse(rows[0]!.tools)).toEqual([])
+      expect(JSON.parse(row.tools)).toEqual([])
       await service.close()
     } finally {
       close()
     }
   })
 
-  test("cold restore of a legacy orchestrator grants NO management tools", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("reopening a legacy orchestrator grants NO management tools", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
-      seedRun(db, {
-        id: "legacy-sched",
-        scopeType: "event",
+      // Pre-SDK snapshot: the old 18 management tool names.
+      seedAgent(db, {
+        id: "legacy-orch",
         eventId: "evt-1",
         challengeId: null,
-        status: "closed",
+        role: "orchestrator",
+        status: "completed",
+        sessionFile: "sess-legacy",
+        model: `${TEST_MODEL_REF}:off`,
+        systemPrompt: "sp",
+        tools: JSON.stringify([
+          "enqueue_run",
+          "list_queue",
+          "remove_queue",
+          "clear_queue",
+          "reorder_queue",
+          "start_run",
+          "stop_run",
+          "message_run",
+          "close_run",
+          "read_run",
+          "set_run_timeout",
+          "list_challenges",
+          "get_challenge",
+          "list_runs",
+          "get_status",
+          "list_agents",
+          "add_agent",
+          "message_agent",
+        ]),
+        name: "Scheduler",
+        createdAt: now(),
+        updatedAt: now(),
       })
-      db.insert(agents)
-        .values({
-          id: "legacy-orch",
-          runId: "legacy-sched",
-          slot: "orchestrator",
-          role: "orchestrator",
-          isEntry: true,
-          model: `${TEST_MODEL_REF}:off`,
-          systemPrompt: "sp",
-          // Pre-SDK snapshot: the old 18 management tool names.
-          tools: JSON.stringify([
-            "enqueue_run",
-            "list_queue",
-            "remove_queue",
-            "clear_queue",
-            "reorder_queue",
-            "start_run",
-            "stop_run",
-            "message_run",
-            "close_run",
-            "read_run",
-            "set_run_timeout",
-            "list_challenges",
-            "get_challenge",
-            "list_runs",
-            "get_status",
-            "list_agents",
-            "add_agent",
-            "message_agent",
-          ]),
-          status: "idle",
-          sessionFile: "sess-legacy",
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .run()
 
       const granted: string[] = []
-      const { service } = makeService(db, sqlite, dir, {
+      const { service } = makeService(db, dir, {
         hang: false,
         grantedTools: granted,
       })
-      await service.sendMessage("legacy-sched", { text: "wake up" })
+      await service.sendMessage("legacy-orch", { text: "wake up" })
       await settle()
       // SDK convergence: the legacy snapshot is intersected with the (now
-      // empty) ORCHESTRATOR_TOOLS — no management tool is resurrected. The
-      // four file tools are host-side always-on, not part of this grant.
+      // empty) ORCHESTRATOR_TOOLS — no management tool is resurrected.
       expect(granted).toEqual([])
       await service.close()
     } finally {
@@ -186,64 +152,32 @@ describe("scheduler service behaviors (SDK backend)", () => {
     }
   })
 
-  test("event container gets SDK + /runs mounts; solver gets SDK-only (no /runs)", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("scheduler container gets SDK + /challenges mounts; solver gets SDK-only (no /challenges)", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedRun(db, {
-        id: "sched-1",
-        scopeType: "event",
+      // Seed a terminal orchestrator agent so the first wake builds its
+      // container; the solver is spawned fresh below.
+      seedAgent(db, {
+        id: "orch-1",
         eventId: "evt-1",
         challengeId: null,
-        status: "closed",
+        role: "orchestrator",
+        status: "completed",
+        sessionFile: "sess-orch-1",
+        model: `${TEST_MODEL_REF}:off`,
+        systemPrompt: "sp",
+        name: "Scheduler",
+        createdAt: now(),
+        updatedAt: now(),
       })
-      db.insert(agents)
-        .values({
-          id: "orch-1",
-          runId: "sched-1",
-          slot: "orchestrator",
-          role: "orchestrator",
-          isEntry: true,
-          model: `${TEST_MODEL_REF}:off`,
-          systemPrompt: "sp",
-          tools: "[]",
-          status: "idle",
-          sessionFile: "sess-orch-1",
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .run()
-      seedRun(db, {
-        id: "solver-1",
-        scopeType: "challenge",
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        status: "closed",
-      })
-      db.insert(agents)
-        .values({
-          id: "sol-a1",
-          runId: "solver-1",
-          slot: "solver-1",
-          role: "solver",
-          isEntry: true,
-          model: `${TEST_MODEL_REF}:off`,
-          systemPrompt: "sp",
-          tools: "[]",
-          status: "idle",
-          sessionFile: "sess-sol-1",
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .run()
 
-      const { service, created } = makeService(db, sqlite, dir, {
-        hang: false,
-      })
-      await service.sendMessage("sched-1", { text: "wake" })
+      const { service, created } = makeService(db, dir, { hang: false })
+      await service.sendMessage("orch-1", { text: "wake" })
       await settle()
-      await service.sendMessage("solver-1", { text: "wake" })
+      // A fresh solver spawn builds the challenge container.
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       await settle()
 
       expect(created.length).toBe(2)
@@ -251,23 +185,30 @@ describe("scheduler service behaviors (SDK backend)", () => {
         extraBinds?: string[]
         env?: string[]
       }>
-      // The scheduler container: read-only SDK mount + read-only run
+      // The scheduler container: read-only SDK mount + read-only challenge
       // workspaces (so it reads WRITEUP.md / solve.sh directly) + event env.
-      expect(schedOpts.extraBinds).toContain(`${dir}/runs:/runs:ro`)
+      expect(
+        schedOpts.extraBinds?.some(
+          (b) =>
+            b.endsWith("/challenges:ro") &&
+            b.includes(`${dir}/events/evt-1/challenges`)
+        )
+      ).toBe(true)
       expect(
         schedOpts.extraBinds?.some((b) => b.includes("/opt/aegisx-sdk:ro"))
       ).toBe(true)
       expect(schedOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
       expect(schedOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
-      // The solver container (channels era, docs/im-channels.md §4): the
-      // same read-only SDK mount + event/API env with AEGISX_ROLE=solver, but
-      // NO /runs mount (a solver never sees other runs' workspaces).
-      expect(solverOpts.extraBinds).toEqual(
-        schedOpts.extraBinds?.filter((b) => b.includes("/opt/aegisx-sdk:ro"))
-      )
-      expect(solverOpts.extraBinds?.some((b) => b.includes("/runs:ro"))).toBe(
-        false
-      )
+      expect(schedOpts.env).toContain("AEGISX_ROLE=scheduler")
+      // The solver container (channels era): the same read-only SDK mount +
+      // event/API env with AEGISX_ROLE=solver, but NO /challenges mount
+      // (a solver reaches its OWN challenge at /workspace, never others).
+      expect(
+        solverOpts.extraBinds?.some((b) => b.includes("/opt/aegisx-sdk:ro"))
+      ).toBe(true)
+      expect(
+        solverOpts.extraBinds?.some((b) => b.includes("/challenges:ro"))
+      ).toBe(false)
       expect(solverOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
       expect(solverOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
       expect(solverOpts.env).toContain("AEGISX_ROLE=solver")
@@ -277,24 +218,17 @@ describe("scheduler service behaviors (SDK backend)", () => {
     }
   })
 
-  test("enqueue rejects a hallucinated model ref with the available list", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("assertModelsResolvable rejects a hallucinated model ref with the available list", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, sqlite, dir)
-      service.queue().cancelDrain()
+      const { service } = makeService(db, dir)
 
       const bad = `nope/hallucinated:off`
-      // Run-level ref (the HTTP enqueue / runs.start fail-fast path).
-      expect(() => service.assertModelsResolvable(bad, undefined)).toThrow(
+      expect(() => service.assertModelsResolvable(bad)).toThrow(
         new RegExp(`Available models: .*${TEST_MODEL_REF}`)
       )
-      // Solver-level refs are checked too.
-      expect(() =>
-        service.assertModelsResolvable(undefined, [{ model: bad }])
-      ).toThrow(/Available models:/)
-      expect(db.select().from(runQueue).all()).toHaveLength(0)
       await service.close()
     } finally {
       close()

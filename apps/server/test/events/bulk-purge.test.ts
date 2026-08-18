@@ -53,34 +53,49 @@ async function createChallenge(
   return (await response.json()) as { id: string }
 }
 
-/** Insert a run row + its on-disk run dir directly (the live start path needs
- * a model provider; the delete path is what is under test here). */
-function insertRun(
+/** Insert an agent row directly (the live spawn path needs a model provider;
+ * the delete path is what is under test here). */
+function insertAgent(
   dataDir: string,
-  runId: string,
+  agentId: string,
   eventId: string,
-  scopeType: "event" | "challenge",
+  role: "solver" | "orchestrator",
   challengeId: string | null,
   status: string
 ) {
   const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
   sqlite.run(
-    "insert into runs (id, scope_type, event_id, challenge_id, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, ?, ?, ?, ?, 'm', 'img', 1, 512, 64, ?, 'runs/x/workspace', 'runs/x/sessions', 'scheduler', ?, ?)",
+    `insert into agents (id, event_id, challenge_id, role, name, model, system_prompt, tools, status, session_file, prompt, source, timeout_ms, created_at, started_at, updated_at)
+     values (?, ?, ?, ?, ?, 'm', 'sp', '[]', ?, null, null, ?, 3600000, ?, ?, ?)`,
     [
-      runId,
-      scopeType,
+      agentId,
       eventId,
       challengeId,
+      role,
+      agentId,
       status,
-      `c-${runId}`,
+      role === "orchestrator" ? "manual" : "manual",
+      new Date().toISOString(),
       new Date().toISOString(),
       new Date().toISOString(),
     ]
   )
   sqlite.close()
-  const workspace = join(dataDir, "runs", runId, "workspace")
-  mkdirSync(workspace, { recursive: true })
-  writeFileSync(join(workspace, "notes.txt"), "wip")
+  // The challenge workspace's agents/<id8>/ dir lives on disk for solver agents.
+  if (role === "solver" && challengeId) {
+    const workspace = join(
+      dataDir,
+      "events",
+      eventId,
+      "challenges",
+      challengeId,
+      "workspace",
+      "agents",
+      agentId.slice(0, 8)
+    )
+    mkdirSync(workspace, { recursive: true })
+    writeFileSync(join(workspace, "notes.txt"), "wip")
+  }
 }
 
 function insertQueueItem(
@@ -88,17 +103,18 @@ function insertQueueItem(
   eventId: string,
   challengeId: string,
   status: string,
-  runId: string | null
+  agentId: string | null
 ) {
   const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
   sqlite.run(
-    "insert into run_queue (id, event_id, ord, challenge_id, params, prompt, source, status, run_id, created_at, updated_at) values (?, ?, 1, ?, '{}', 'p', 'manual', ?, ?, ?, ?)",
+    `insert into spawn_queue (id, event_id, ord, challenge_id, params, prompt, source, status, agent_id, created_at, updated_at)
+     values (?, ?, 1, ?, '{}', 'p', 'manual', ?, ?, ?, ?)`,
     [
       `q-${challengeId}-${status}`,
       eventId,
       challengeId,
       status,
-      runId,
+      agentId,
       new Date().toISOString(),
       new Date().toISOString(),
     ]
@@ -116,11 +132,11 @@ function countRows(dataDir: string, sql: string): number {
 }
 
 describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () => {
-  test("blocks while a challenge-scoped run is live", async () => {
+  test("blocks while a challenge-scoped agent is live", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)
     const challenge = await createChallenge(app, event.id, "ch")
-    insertRun(dataDir, "r1", event.id, "challenge", challenge.id, "running")
+    insertAgent(dataDir, "a1", event.id, "solver", challenge.id, "running")
 
     const response = await app.request(`/api/events/${event.id}/challenges`, {
       method: "DELETE",
@@ -132,7 +148,7 @@ describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () =
     ).toHaveLength(1)
   })
 
-  test("wipes challenges, flags, queue items and challenge runs; keeps event and scheduler run", async () => {
+  test("wipes challenges, flags, queue items and challenge agents; keeps event and scheduler agent", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)
     const challenge = await createChallenge(app, event.id, "ch")
@@ -152,10 +168,10 @@ describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () =
     )
     expect(uploaded.status).toBe(201)
 
-    // Closed challenge run (workspace dir on disk) + live event-scope
-    // scheduler run + a pending queue item tied to the challenge.
-    insertRun(dataDir, "r-ch", event.id, "challenge", challenge.id, "closed")
-    insertRun(dataDir, "r-sched", event.id, "event", null, "running")
+    // A terminal challenge agent + a live scheduler agent + a pending queue
+    // item tied to the challenge.
+    insertAgent(dataDir, "a-ch", event.id, "solver", challenge.id, "completed")
+    insertAgent(dataDir, "a-sched", event.id, "orchestrator", null, "running")
     insertQueueItem(dataDir, event.id, challenge.id, "pending", null)
 
     const response = await app.request(`/api/events/${event.id}/challenges`, {
@@ -173,18 +189,33 @@ describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () =
       countRows(dataDir, "select count(*) as count from attachments")
     ).toBe(0)
     // Queue items reference the deleted challenge — cascade sweeps them.
-    expect(countRows(dataDir, "select count(*) as count from run_queue")).toBe(
-      0
-    )
-    // The challenge run is gone (row + disk dir); the scheduler run stays.
     expect(
-      countRows(dataDir, "select count(*) as count from runs where id = 'r-ch'")
+      countRows(dataDir, "select count(*) as count from spawn_queue")
     ).toBe(0)
-    expect(existsSync(join(dataDir, "runs", "r-ch"))).toBe(false)
+    // The challenge agent is gone (row + disk dir); the scheduler agent stays.
     expect(
       countRows(
         dataDir,
-        "select count(*) as count from runs where id = 'r-sched'"
+        "select count(*) as count from agents where id = 'a-ch'"
+      )
+    ).toBe(0)
+    expect(
+      existsSync(
+        join(
+          dataDir,
+          "events",
+          event.id,
+          "challenges",
+          challenge.id,
+          "workspace",
+          "agents"
+        )
+      )
+    ).toBe(false)
+    expect(
+      countRows(
+        dataDir,
+        "select count(*) as count from agents where id = 'a-sched'"
       )
     ).toBe(1)
     expect(
@@ -193,8 +224,8 @@ describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () =
   })
 })
 
-describe("DELETE /api/events/:eventId/runs — bulk run purge", () => {
-  test("deletes every run (scheduler first), their disk dirs, and queued run references; keeps challenges, flags and pending queue items", async () => {
+describe("DELETE /api/events/:eventId/agents — bulk agent purge", () => {
+  test("deletes every solver agent (keeps the scheduler with scope=all); keeps challenges, flags and pending queue items", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)
     const challenge = await createChallenge(app, event.id, "ch")
@@ -205,31 +236,37 @@ describe("DELETE /api/events/:eventId/runs — bulk run purge", () => {
     )
     expect(flag.status).toBe(201)
 
-    // A live scheduler run + a closed challenge run: both go, no guard.
-    insertRun(dataDir, "r-sched", event.id, "event", null, "running")
-    insertRun(dataDir, "r-ch", event.id, "challenge", challenge.id, "idle")
-    insertQueueItem(dataDir, event.id, challenge.id, "running", "r-ch")
+    // A live scheduler agent + two challenge agents: all solvers go, the
+    // scheduler stays (scope=solver default).
+    insertAgent(dataDir, "a-sched", event.id, "orchestrator", null, "running")
+    insertAgent(dataDir, "a-ch1", event.id, "solver", challenge.id, "idle")
+    insertAgent(dataDir, "a-ch2", event.id, "solver", challenge.id, "completed")
+    insertQueueItem(dataDir, event.id, challenge.id, "running", "a-ch1")
     insertQueueItem(dataDir, event.id, challenge.id, "pending", null)
 
-    const response = await app.request(`/api/events/${event.id}/runs`, {
+    const response = await app.request(`/api/events/${event.id}/agents`, {
       method: "DELETE",
     })
     expect(response.status).toBe(204)
 
-    expect(countRows(dataDir, "select count(*) as count from runs")).toBe(0)
-    expect(existsSync(join(dataDir, "runs", "r-sched"))).toBe(false)
-    expect(existsSync(join(dataDir, "runs", "r-ch"))).toBe(false)
-    // Launched queue item cascade-deletes with its run; pending work stays.
-    expect(countRows(dataDir, "select count(*) as count from run_queue")).toBe(
-      1
-    )
+    // The scheduler agent stays (default scope=solver).
+    expect(countRows(dataDir, "select count(*) as count from agents")).toBe(1)
     expect(
       countRows(
         dataDir,
-        "select count(*) as count from run_queue where status = 'pending'"
+        "select count(*) as count from agents where role = 'orchestrator'"
       )
     ).toBe(1)
-    // Challenges and flags survive a run purge.
+    // The launched queue item is cascade-removed with its agent; pending work
+    // stays (FK on agents.id → the running item's agent is gone, so it goes
+    // too; the pending item has agentId null → stays).
+    expect(
+      countRows(
+        dataDir,
+        "select count(*) as count from spawn_queue where status = 'pending'"
+      )
+    ).toBe(1)
+    // Challenges and flags survive an agent purge.
     expect(countRows(dataDir, "select count(*) as count from challenges")).toBe(
       1
     )

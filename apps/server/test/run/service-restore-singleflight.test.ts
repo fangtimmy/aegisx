@@ -3,13 +3,13 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents, channelMessages } from "../../src/db/schema"
-import { createRunService } from "../../src/run/service"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
+  seedAgent,
   seedChallenge,
   seedEvent,
-  seedRun,
   setupDb,
   stubConfigStore,
   stubContainerManager,
@@ -18,7 +18,8 @@ import {
 } from "../helpers"
 
 /** Container manager whose create is SLOW (simulates a real docker build) and
- * records calls — lets two concurrent cold-restores overlap and race. */
+ * records calls — lets two concurrent reopens overlap and race the shared
+ * challenge container. */
 function slowContainerManager(delayMs: number) {
   const { manager, created, removed } = stubContainerManager()
   const slow = {
@@ -32,124 +33,38 @@ function slowContainerManager(delayMs: number) {
   return { manager: slow, created, removed }
 }
 
-describe("cold-restore single-flight (code-review P3.2)", () => {
-  test("a pre-channels (v≤15) run cold-restored gets its channel tree backfilled", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+describe("reopen single-flight (v19)", () => {
+  test("concurrent reopens of terminal agents on the same challenge restore the shared container exactly once", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedRun(db, {
-        id: "r-1",
-        status: "closed",
-        challengeId: "ch-1",
+      seedAgent(db, {
+        id: "a-1",
         eventId: "evt-1",
-      })
-      db.insert(agents)
-        .values({
-          id: "a-1",
-          runId: "r-1",
-          slot: "solver",
-          role: "solver",
-          isEntry: true,
-          model: "openai/gpt-4o-mini:off",
-          systemPrompt: "sp",
-          tools: "[]",
-          status: "idle",
-          sessionFile: "sess-1",
-          name: "A",
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .run()
-      // No channels seeded — the v15-era row predates the message layer.
-
-      const provider = makeProvider()
-      const { manager } = stubContainerManager()
-      const runService = createRunService({
-        db,
-        sqlite,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: {
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        } as never,
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: async (input: { agentId: string }) =>
-          stubHostAgentSession("sess-" + input.agentId.slice(0, 6)),
-      })
-
-      await runService.sendAgentMessage("a-1", { text: "wake legacy" })
-      // v18: the channel tree is DERIVED from entities — nothing to
-      // backfill. A pre-channels row gets #team + its DM naturally.
-      const tree = runService.channels.runChannelTree("r-1")
-      expect(tree.map((c) => c.kind)).toEqual(["team", "dm"])
-      expect(tree[0]!.key).toBe("team:ch-1")
-      expect(tree[1]!.key).toBe("dm:a-1")
-      await runService.close()
-    } finally {
-      close()
-    }
-  })
-
-  test("concurrent wakes of one closed run restore the container exactly once", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedRun(db, {
-        id: "r-1",
-        status: "closed",
-        finishing: false,
         challengeId: "ch-1",
-        eventId: "evt-1",
+        status: "completed",
+        sessionFile: "sess-1",
+        name: "A",
+        createdAt: now(),
+        updatedAt: now(),
       })
-      db.insert(agents)
-        .values([
-          {
-            id: "a-1",
-            runId: "r-1",
-            slot: "solver",
-            role: "solver",
-            isEntry: true,
-            model: "openai/gpt-4o-mini:off",
-            systemPrompt: "sp",
-            tools: "[]",
-            status: "idle",
-            sessionFile: "sess-1",
-            name: "A",
-            createdAt: now(),
-            updatedAt: now(),
-          },
-          {
-            id: "a-2",
-            runId: "r-1",
-            slot: "observer",
-            role: "observer",
-            isEntry: false,
-            model: "openai/gpt-4o-mini:off",
-            systemPrompt: "sp",
-            tools: "[]",
-            status: "idle",
-            sessionFile: "sess-2",
-            name: "B",
-            createdAt: now(),
-            updatedAt: now(),
-          },
-        ])
-        .run()
+      seedAgent(db, {
+        id: "a-2",
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        status: "completed",
+        sessionFile: "sess-2",
+        name: "B",
+        createdAt: now(),
+        updatedAt: now(),
+      })
 
       const provider = makeProvider()
       const { manager, created, removed } = slowContainerManager(30)
       const promptLog = new Map<string, string[]>()
-      const runService = createRunService({
+      const service = createAgentService({
         db,
-        sqlite,
         dataDir: dir,
         containerManager: manager,
         platformService: {
@@ -176,27 +91,23 @@ describe("cold-restore single-flight (code-review P3.2)", () => {
         }),
       })
 
-      // Two agents woken at once (scheduler message_run + manual click) — each
-      // takes its own agent lock, so both reach prepareAgent concurrently.
+      // Two agents woken at once — each takes its own agent lock, so both
+      // reach prepareAgent concurrently and race the shared challenge
+      // container build.
       await Promise.all([
-        runService.sendAgentMessage("a-1", { text: "wake 1" }),
-        runService.sendAgentMessage("a-2", { text: "wake 2" }),
+        service.sendMessage("a-1", { text: "wake 1" }),
+        service.sendMessage("a-2", { text: "wake 2" }),
       ])
 
-      // The container was built ONCE (a second restore would have removed and
-      // re-created the same-named container).
+      // The shared challenge container was built ONCE.
       expect(created).toHaveLength(1)
       expect(removed).toHaveLength(0)
-      // Both agents came online and both messages were driven (v18 §四:
-      // direct connection — the text IS the message, no channel row).
+      // Both agents came online and both messages were driven.
       expect([...promptLog.keys()].sort()).toEqual(["a-1", "a-2"])
-      const textOf = (id: string) => promptLog.get(id)![0]!
-      expect(promptLog.get("a-1")!.length).toBe(1)
-      expect(textOf("a-1")).toContain("wake 1")
-      expect(promptLog.get("a-2")!.length).toBe(1)
-      expect(textOf("a-2")).toContain("wake 2")
-      // No channel rows were produced by the direct messages (the only
-      // channel_messages rows are orch lifecycle notices like run.resumed).
+      expect(promptLog.get("a-1")![0]).toContain("wake 1")
+      expect(promptLog.get("a-2")![0]).toContain("wake 2")
+      // No channel rows were produced by the direct messages (a reopen only
+      // emits an agent.reopened orch notice, not a dm row).
       expect(
         db
           .select()
@@ -204,16 +115,9 @@ describe("cold-restore single-flight (code-review P3.2)", () => {
           .where(eq(channelMessages.channelKey, "dm:a-1"))
           .all()
       ).toHaveLength(0)
-      expect(
-        db
-          .select()
-          .from(channelMessages)
-          .where(eq(channelMessages.channelKey, "dm:a-2"))
-          .all()
-      ).toHaveLength(0)
-      const rows = db.select().from(agents).where(eq(agents.runId, "r-1")).all()
-      expect(rows.every((a) => a.sessionFile && a.status === "idle")).toBe(true)
-      await runService.close()
+      const rows = db.select().from(agents).all()
+      expect(rows.every((a) => a.status === "idle")).toBe(true)
+      await service.close()
     } finally {
       close()
     }

@@ -2,7 +2,6 @@ import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import {
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,22 +14,19 @@ import { join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
-import { createDatabase } from "./index"
-import { SCHEMA_VERSION } from "./schema"
-
 /**
- * The full historical chain (v16 → v17 → v18) through the REAL boot path.
+ * The historical chain (v16 → v17 → v18) through the real migrator.
  * Migration 0011 merges v16's per-run team/announce channels into
  * per-challenge canonicals (min channel id, run-suffix author snapshots,
- * cursor max-merge); migration 0012 then maps those onto derived keys and
- * flattens the attachment dirs. A v16 database upgrading straight to a v18
- * binary rides both in one boot — this test pins the composed end state.
- * (The v17-seeded waypoint is covered by migration-0012.test.ts.)
+ * cursor max-merge); migration 0012 then maps those onto derived keys.
+ * The chain stops at v18 (a truncated journal — the production boot now
+ * continues into 0013's destructive rebuild, covered separately).
  */
 const realFolder = resolve(import.meta.dir, "../../drizzle")
 
 /** Build a v16 database in `dir`: apply migrations 0000–0010 from a
- * truncated journal copy (the exact runtime migrator path). */
+ * truncated journal copy (the exact runtime migrator path). The caller
+ * seeds v16 state, then `upgradeToV18` applies 0011+0012. */
 function buildV16Database(dir: string) {
   const sqlite = new Database(join(dir, "aegisx.sqlite"), { create: true })
   sqlite.run("PRAGMA journal_mode = WAL")
@@ -52,8 +48,27 @@ function buildV16Database(dir: string) {
   return sqlite
 }
 
-describe("migration 0011+0012 — v16 run-scope channels survive into v18 derived keys", () => {
-  test("per-run team/announce merge (order, suffixes, cursors) then re-key onto derived keys, files flattened", () => {
+/** Upgrade a seeded v16 database to v18 in place: extend the journal copy
+ * with 0011+0012 and re-run the migrator (same path the runtime takes). */
+function upgradeToV18(dir: string, sqlite: Database) {
+  const folder = join(dir, "mig-v16")
+  const journal = JSON.parse(
+    readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
+  ) as { entries: Array<{ tag: string }> }
+  journal.entries = journal.entries.slice(0, 13) // 0000–0012 = v18
+  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
+  for (const entry of journal.entries.slice(11)) {
+    cpSync(
+      join(realFolder, `${entry.tag}.sql`),
+      join(folder, `${entry.tag}.sql`)
+    )
+  }
+  migrate(drizzle(sqlite), { migrationsFolder: folder })
+  sqlite.run("PRAGMA user_version = 18")
+}
+
+describe("migration 0011+0012 — v16 run-scope channels map onto v18 derived keys", () => {
+  test("per-run team/announce merge (order, suffixes, cursors) then re-key onto derived keys", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-mig0011-"))
     try {
       const sqlite = buildV16Database(dir)
@@ -159,7 +174,7 @@ describe("migration 0011+0012 — v16 run-scope channels survive into v18 derive
       )
 
       // Attachments: one in a to-be-merged channel (tB1), one in the DM
-      // (must stay put) — with their on-disk v16 directories.
+      // (must stay put).
       sqlite.run(
         `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f1', 4, 'tB1', 'dump.bin', 10, ?)`,
         [ts]
@@ -168,28 +183,14 @@ describe("migration 0011+0012 — v16 run-scope channels survive into v18 derive
         `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f2', 8, 'dm1', 'note.txt', 5, ?)`,
         [ts]
       )
-      const fileRoot = join(dir, "channel-files")
-      mkdirSync(join(fileRoot, "tB1", "4"), { recursive: true })
-      writeFileSync(join(fileRoot, "tB1", "4", "dump.bin"), "0123456789")
-      mkdirSync(join(fileRoot, "dm1", "8"), { recursive: true })
-      writeFileSync(join(fileRoot, "dm1", "8", "note.txt"), "hello")
-      sqlite.close()
+      upgradeToV18(dir, sqlite)
 
-      // --- run the real boot path: 0011 + 0012 + file reconciliation -----
-      const boot = createDatabase(dir)
-      try {
-        expect(
-          (
-            boot.sqlite.query("PRAGMA user_version").get() as {
-              user_version: number
-            }
-          ).user_version
-        ).toBe(SCHEMA_VERSION)
-
+      // --- the upgraded v18 database ------------------------------------
+      {
         // The channels directory table is gone (v18 end state).
         const tables = new Set(
           (
-            boot.sqlite
+            sqlite
               .query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
               .all() as Array<{ name: string }>
           ).map((row) => row.name)
@@ -199,7 +200,7 @@ describe("migration 0011+0012 — v16 run-scope channels survive into v18 derive
         // Messages: BOTH merges compose — run-scope tA1/tB1 interleave AND
         // the announce rows fold into the same team:ch-1, all in global id
         // order. The scheduler DM became orch:<eventId>.
-        const msgs = boot.sqlite
+        const msgs = sqlite
           .query(`SELECT * FROM channel_messages ORDER BY id`)
           .all() as Array<Record<string, unknown>>
         expect(msgs.map((m) => [m.id, m.channel_key])).toEqual([
@@ -231,7 +232,7 @@ describe("migration 0011+0012 — v16 run-scope channels survive into v18 derive
 
         // Read cursors: re-keyed onto derived keys; a2's two merged cursors
         // collapsed to MAX across the whole composed chain.
-        const reads = boot.sqlite
+        const reads = sqlite
           .query(`SELECT * FROM channel_reads ORDER BY reader_key, channel_key`)
           .all() as Array<Record<string, unknown>>
         expect(reads).toEqual([
@@ -255,10 +256,8 @@ describe("migration 0011+0012 — v16 run-scope channels survive into v18 derive
           },
         ])
 
-        // Files: rows survive (channel_id column gone) and the on-disk
-        // directories landed on the FLAT <messageId>/ layout — the tB1
-        // file followed its message through both merges and the flatten.
-        const files = boot.sqlite
+        // Files: rows survive with the channel_id column gone.
+        const files = sqlite
           .query(`SELECT * FROM channel_files ORDER BY id`)
           .all() as Array<Record<string, unknown>>
         expect(files.map((f) => [f.id, f.message_id])).toEqual([
@@ -266,33 +265,26 @@ describe("migration 0011+0012 — v16 run-scope channels survive into v18 derive
           ["f2", 8],
         ])
         expect("channel_id" in files[0]!).toBe(false)
-        expect(existsSync(join(fileRoot, "4", "dump.bin"))).toBe(true)
-        expect(existsSync(join(fileRoot, "8", "note.txt"))).toBe(true)
-        expect(existsSync(join(fileRoot, "tB1"))).toBe(false)
-        expect(existsSync(join(fileRoot, "dm1"))).toBe(false)
 
         // Integrity: FK graph clean, and the AUTOINCREMENT sequence survived
         // both table recreations (the next message id stays monotonic).
         expect(
-          (boot.sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[])
-            .length
+          (sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[]).length
         ).toBe(0)
-        boot.sqlite.run(
+        sqlite.run(
           `INSERT INTO channel_messages (channel_key, author_type, author_agent_id, author_name, body, meta, created_at)
            VALUES ('team:ch-1', 'system', NULL, 'system', 'post-migration', '{}', ?)`,
           [ts]
         )
         expect(
           (
-            boot.sqlite
-              .query(`SELECT max(id) AS n FROM channel_messages`)
-              .get() as { n: number }
+            sqlite.query(`SELECT max(id) AS n FROM channel_messages`).get() as {
+              n: number
+            }
           ).n
         ).toBe(12)
-      } finally {
-        boot.sqlite.close()
-        boot.releaseLock()
       }
+      sqlite.close()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

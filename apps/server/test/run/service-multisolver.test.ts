@@ -2,20 +2,16 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { and, eq } from "drizzle-orm"
 
-import {
-  agents,
-  channelMessages,
-  channelReads,
-  runs,
-} from "../../src/db/schema"
+import { agents, channelMessages, channelReads } from "../../src/db/schema"
 import { teamKey } from "../../src/run/channels"
-import { createRunService } from "../../src/run/service"
+import { createAgentService } from "../../src/run/service"
 import {
+  flatSettings,
   flatSettingsWithDefaultModel,
   makeProvider,
+  seedAgent,
   seedChallenge,
   seedEvent,
-  seedRun,
   setupDb,
   stubConfigStore,
   stubContainerManager,
@@ -24,31 +20,20 @@ import {
   now,
 } from "../helpers"
 
-const containerInput = {
-  image: "aegisx/solve:latest",
-  cpus: 2,
-  memoryMb: 1024,
-  pidsLimit: 128,
-  tmpfsSize: "128m",
-  workspace: "/workspace",
-}
-
 type Db = ReturnType<typeof setupDb>
 
 /** Service whose createHost stub records every prompt text per agent id. */
 function makeService(
   db: Db["db"],
-  sqlite: Db["sqlite"],
   dir: string,
   provider: ReturnType<typeof makeProvider>,
-  opts: { hang?: boolean } = {}
+  opts: { hang?: boolean; getSettings?: () => Record<string, unknown> } = {}
 ) {
   const hang = opts.hang ?? true
   const { manager } = stubContainerManager()
   const promptLog = new Map<string, string[]>()
-  const runService = createRunService({
+  const agentService = createAgentService({
     db,
-    sqlite,
     dataDir: dir,
     containerManager: manager,
     platformService: {
@@ -60,7 +45,7 @@ function makeService(
       }),
     } as never,
     configStore: stubConfigStore([provider]),
-    getSettings: flatSettingsWithDefaultModel,
+    getSettings: (opts.getSettings ?? flatSettingsWithDefaultModel) as never,
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
         hang,
@@ -76,53 +61,47 @@ function makeService(
       return stub
     }),
   })
-  return { runService, promptLog }
+  return { agentService, promptLog }
 }
 
-describe("v9 direct N-solver creation", () => {
-  test("N=3 creates 3 solver rows (solver-1 entry), each primed with its own initial", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+describe("v19 multi-spawn on one challenge", () => {
+  test("three spawns create 3 solver agents, each primed with its own initial", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
-      const { runService, promptLog } = makeService(db, sqlite, dir, provider)
+      const { agentService, promptLog } = makeService(db, dir, provider)
 
-      const run = await runService.create({
-        scopeType: "challenge" as const,
-        challengeId: "ch-1",
-        solvers: [
-          { model: `${TEST_MODEL_REF}:off` },
-          { model: `${TEST_MODEL_REF}:low` },
-          { model: `${TEST_MODEL_REF}:high` },
-        ],
-        container: containerInput,
-      })
-      await runService.close()
+      const spawned = await Promise.all(
+        [
+          `${TEST_MODEL_REF}:off`,
+          `${TEST_MODEL_REF}:low`,
+          `${TEST_MODEL_REF}:high`,
+        ].map((model) =>
+          agentService.spawn({ eventId: "evt-1", challengeId: "ch-1", model })
+        )
+      )
+      await agentService.close()
 
+      expect(spawned).toHaveLength(3)
       const rows = db
         .select()
         .from(agents)
-        .where(eq(agents.runId, run.id))
-        .orderBy(agents.slot)
+        .where(eq(agents.challengeId, "ch-1"))
+        .orderBy(agents.createdAt)
         .all()
       expect(rows).toHaveLength(3)
-      expect(rows.map((a) => a.slot)).toEqual([
-        "solver-1",
-        "solver-2",
-        "solver-3",
-      ])
-      expect(rows.filter((a) => a.isEntry).map((a) => a.slot)).toEqual([
-        "solver-1",
-      ])
-      expect(rows.map((a) => a.model)).toEqual([
-        `${TEST_MODEL_REF}:off`,
-        `${TEST_MODEL_REF}:low`,
-        `${TEST_MODEL_REF}:high`,
-      ])
+      expect(new Set(rows.map((a) => a.model))).toEqual(
+        new Set([
+          `${TEST_MODEL_REF}:off`,
+          `${TEST_MODEL_REF}:low`,
+          `${TEST_MODEL_REF}:high`,
+        ])
+      )
       // All three prime and settle (the stub prompt resolves immediately).
       expect(rows.map((a) => a.status)).toEqual(["idle", "idle", "idle"])
-      // Three distinct prime deliveries arrived, one per solver session.
+      // Three distinct prime deliveries arrived, one per agent session.
       const primed = [...promptLog.values()].filter((list) => list.length > 0)
       expect(primed).toHaveLength(3)
       for (const list of primed) {
@@ -134,226 +113,188 @@ describe("v9 direct N-solver creation", () => {
     }
   })
 
-  test("multiSolver renders the co-solver section only when N>1", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("the system prompt carries the channel section for every solver", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
-      const { runService } = makeService(db, sqlite, dir, provider)
+      const { agentService } = makeService(db, dir, provider)
 
-      const single = await runService.create({
-        scopeType: "challenge" as const,
-        challengeId: "ch-1",
-        container: containerInput,
-      })
-      const triple = await runService.create({
-        scopeType: "challenge" as const,
-        challengeId: "ch-1",
-        solvers: [{}, {}, {}],
-        container: containerInput,
-      })
-      await runService.close()
+      await agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await agentService.close()
 
-      const singlePrompt = db
+      const row = db
         .select()
         .from(agents)
-        .where(eq(agents.runId, single.id))
-        .get()!.systemPrompt
-      const triplePrompt = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, triple.id))
-        .get()!.systemPrompt
-      // Channels era (docs/im-channels.md §6): the multiSolver-gated
-      // Co-solvers file convention is replaced by the channel section,
-      // rendered for every solver run (single keeps ask/#team/attachments).
-      expect(singlePrompt).toContain("## Channels（团队频道）")
-      expect(triplePrompt).toContain("## Channels（团队频道）")
-      expect(singlePrompt).not.toContain("## Co-solvers")
-      expect(triplePrompt).not.toContain("## Co-solvers")
-      expect(triplePrompt).toContain('aegisx.channels.post("#team"')
+        .where(eq(agents.challengeId, "ch-1"))
+        .get()!
+      expect(row.systemPrompt).toContain("## Channels（团队频道）")
+      expect(row.systemPrompt).not.toContain("## Co-solvers")
+      expect(row.systemPrompt).toContain('aegisx.channels.post("#team"')
     } finally {
       close()
     }
   })
 
-  test("override mode primes the raw prompt; strategy mode appends run-level + solver-level strategy", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("override mode primes the raw prompt; strategy mode appends the strategy section", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
-      const { runService, promptLog } = makeService(db, sqlite, dir, provider)
+      const { agentService, promptLog } = makeService(db, dir, provider)
 
-      const run = await runService.create({
-        scopeType: "challenge" as const,
-        challengeId: "ch-1",
-        strategy: "run-level strategy text",
-        solvers: [
-          { prompt: "OVERRIDE-BODY", promptMode: "override" },
-          { prompt: "solver-level strategy text" },
-        ],
-        container: containerInput,
-      })
-      await runService.close()
+      const [overrideAgent, strategyAgent] = await Promise.all([
+        agentService.spawn({
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          prompt: "OVERRIDE-BODY",
+          promptMode: "override",
+        }),
+        agentService.spawn({
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          prompt: "spawn strategy text",
+        }),
+      ])
+      await agentService.close()
 
-      const rows = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, run.id))
-        .orderBy(agents.slot)
-        .all()
       // override = the raw prompt is the whole first turn.
-      const overrideTexts = promptLog.get(rows[0]!.id) ?? []
+      const overrideTexts = promptLog.get(overrideAgent.id) ?? []
       expect(overrideTexts.join("\n")).toBe("OVERRIDE-BODY")
-      // strategy mode = standard blocks + a Strategy section with both parts.
-      const strategyTexts = (promptLog.get(rows[1]!.id) ?? []).join("\n")
+      // strategy mode = standard blocks + a Strategy section.
+      const strategyTexts = (promptLog.get(strategyAgent.id) ?? []).join("\n")
       expect(strategyTexts).toContain("## Challenge")
       expect(strategyTexts).toContain("## Strategy")
-      expect(strategyTexts).toContain("run-level strategy text")
-      expect(strategyTexts).toContain("solver-level strategy text")
-      // Run-level first, solver-level after.
-      expect(
-        strategyTexts.indexOf("run-level strategy text") <
-          strategyTexts.indexOf("solver-level strategy text")
-      ).toBe(true)
+      expect(strategyTexts).toContain("spawn strategy text")
     } finally {
       close()
     }
   })
 
-  test("rejects more than MAX_SOLVERS_PER_RUN solvers and unresolvable model refs", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("no per-challenge cap: 5 spawns on one challenge under a raised global cap; unresolvable refs reject", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
-      const { runService } = makeService(db, sqlite, dir, provider)
+      const { agentService } = makeService(db, dir, provider, {
+        getSettings: () =>
+          ({
+            ...flatSettingsWithDefaultModel(),
+            "scheduler.maxConcurrentAgents": 6,
+          }) as never,
+      })
 
-      await expect(
-        runService.create({
-          scopeType: "challenge" as const,
-          challengeId: "ch-1",
-          solvers: [{}, {}, {}, {}, {}],
-          container: containerInput,
-        })
-      ).rejects.toThrow(/at most 4 solvers/)
+      // v19 decision: parallel attempts on one challenge are legal — with
+      // the global cap raised, 5 agents on ONE challenge all spawn.
+      const spawned = []
+      for (let i = 0; i < 5; i += 1) {
+        spawned.push(
+          await agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+        )
+      }
+      expect(spawned).toHaveLength(5)
+      await agentService.close()
 
+      // An unresolvable model ref fails the spawn with the ref in the error.
+      const fresh = makeService(db, dir, provider)
       await expect(
-        runService.create({
-          scopeType: "challenge" as const,
+        fresh.agentService.spawn({
+          eventId: "evt-1",
           challengeId: "ch-1",
-          solvers: [{ model: "nope/hallucinated:off" }],
-          container: containerInput,
+          model: "nope/hallucinated:off",
         })
       ).rejects.toThrow(/hallucinated/)
+      await fresh.agentService.close()
     } finally {
       close()
     }
   })
 
-  test("finish race: one finish wins the teardown, the other is a no-op", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("no atomic flag: each spawned agent finishes independently with its own summary", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
-      const { runService } = makeService(db, sqlite, dir, provider)
+      const { agentService } = makeService(db, dir, provider)
 
-      const run = await runService.create({
-        scopeType: "challenge" as const,
-        challengeId: "ch-1",
-        solvers: [{}, {}],
-        container: containerInput,
-      })
-      await runService.close()
+      const [a, b] = await Promise.all([
+        agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }),
+        agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }),
+      ])
+      const first = await agentService.finishAgent(a.id, "summary A")
+      const second = await agentService.finishAgent(b.id, "summary B")
+      await agentService.close()
 
-      // Both solvers race finish_run's atomic claim (markFinishing): exactly
-      // one wins; the loser's claim is a no-op and never tears down twice.
-      const rows = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, run.id))
-        .orderBy(agents.slot)
-        .all()
-      const claims = rows.map((row) => runService.markFinishing(run.id))
-      expect(claims.filter(Boolean)).toHaveLength(1)
-      expect(claims.filter((won) => !won)).toHaveLength(1)
+      expect(first.status).toBe("completed")
+      expect(first.summary).toBe("summary A")
+      expect(second.status).toBe("completed")
+      expect(second.summary).toBe("summary B")
     } finally {
       close()
     }
   })
 })
 
-describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3)", () => {
+describe("v19 channels — onboarding", () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
   /** Seed #team history WITHOUT triggering delivery (non-urgent posts; the
-   * runs stay hanging/primed) — prior-run knowledge sitting in #team. */
+   * agents stay hanging/primed) — prior-attempt knowledge sitting in #team. */
   function seedChallengeHistory(
-    runService: ReturnType<typeof makeService>["runService"],
+    agentService: ReturnType<typeof makeService>["agentService"],
     priorAgentId: string
   ) {
-    runService.channels.post({
+    agentService.channels.post({
       channelKey: teamKey("ch-1"),
       author: { type: "agent", agentId: priorAgentId },
       body: "prior finding: heap overflow in edit()",
     })
-    runService.channels.post({
+    agentService.channels.post({
       channelKey: teamKey("ch-1"),
       author: { type: "system" },
       body: "remote libc 2.35 — trust the target",
     })
   }
 
-  test("onboarding: a second run on the challenge sweeps the whole #team history into the first turn, exactly once", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["runService"] | undefined
+  test("onboarding: a second spawn on the challenge sweeps the whole #team history into the first turn, exactly once", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["agentService"] | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
-      const made = makeService(db, sqlite, dir, provider)
-      const { runService, promptLog } = made
-      service = runService
+      const made = makeService(db, dir, provider)
+      const { agentService, promptLog } = made
+      service = agentService
 
-      // Prior run leaves knowledge in the challenge's #team.
-      const prior = await runService.create({
-        scopeType: "challenge" as const,
+      // A prior attempt leaves knowledge in the challenge's #team.
+      const prior = await agentService.spawn({
+        eventId: "evt-1",
         challengeId: "ch-1",
-        container: containerInput,
       })
       await settle()
-      const priorAgent = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, prior.id))
-        .get()!
-      seedChallengeHistory(runService, priorAgent.id)
+      seedChallengeHistory(agentService, prior.id)
 
-      // The prior solver's own prime saw nothing (fresh challenge, no
-      // history at creation time).
-      expect(promptLog.get(priorAgent.id)).toHaveLength(1)
+      // The prior agent's own prime saw nothing (fresh challenge, no history
+      // at creation time).
+      expect(promptLog.get(prior.id)).toHaveLength(1)
 
-      // A second run on the SAME challenge shares team:ch-1…
-      const second = await runService.create({
-        scopeType: "challenge" as const,
+      // A second spawn on the SAME challenge shares team:ch-1…
+      const newcomer = await agentService.spawn({
+        eventId: "evt-1",
         challengeId: "ch-1",
-        container: containerInput,
       })
       await wait(150)
-      const tree = runService.channels.runChannelTree(second.id)
+      const tree = agentService.channels.challengeChannelTree("ch-1")
       expect(tree.find((c) => c.kind === "team")!.key).toBe(teamKey("ch-1"))
 
-      // …and its solver onboarded: prime + exactly ONE merged steer carrying
-      // BOTH knowledge posts (v17 §11.3 semantics kept).
-      const newcomer = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, second.id))
-        .get()!
+      // …and the newcomer onboarded: prime + exactly ONE merged steer
+      // carrying BOTH knowledge posts.
       const prompts = promptLog.get(newcomer.id) ?? []
       expect(prompts).toHaveLength(2)
       expect(prompts[0]).toContain("## Challenge")
@@ -363,7 +304,7 @@ describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3
 
       // Exactly once: a manual re-deliver finds nothing new (the cursor
       // advanced to the snapshot max on the sweep).
-      runService.channels.deliver(newcomer.id)
+      agentService.channels.deliver(newcomer.id)
       await wait(100)
       expect(promptLog.get(newcomer.id)).toHaveLength(2)
       expect(
@@ -388,97 +329,37 @@ describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3
         )
       )
 
-      await runService.close()
+      await agentService.close()
     } finally {
       await service?.close().catch(() => undefined)
       close()
     }
   })
 
-  test("onboarding: add_agent sweeps the same history into the newcomer's first turn", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["runService"] | undefined
+  test("cold reopen does NOT onboard: a direct wake delivers only the message; the #team backlog stays unread", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["agentService"] | undefined
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const made = makeService(db, sqlite, dir, provider)
-      const { runService, promptLog } = made
-      service = runService
-
-      const run = await runService.create({
-        scopeType: "challenge" as const,
-        challengeId: "ch-1",
-        container: containerInput,
-      })
-      await settle()
-      const first = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, run.id))
-        .get()!
-      seedChallengeHistory(runService, first.id)
-
-      await runService.addAgent(run.id, {
-        prompt: "fresh angle: fuzz the parser",
-      })
-      await wait(150)
-      const rows = db
-        .select()
-        .from(agents)
-        .where(eq(agents.runId, run.id))
-        .orderBy(agents.slot)
-        .all()
-      const newcomer = rows.at(-1)!
-      const prompts = promptLog.get(newcomer.id) ?? []
-      expect(prompts).toHaveLength(2)
-      expect(prompts[0]).toContain("fresh angle: fuzz the parser")
-      expect(prompts[1]).toContain("prior finding: heap overflow in edit()")
-
-      await runService.close()
-    } finally {
-      await service?.close().catch(() => undefined)
-      close()
-    }
-  })
-
-  test("cold-restore does NOT onboard: a direct DM-less wake delivers only the message; the #team backlog stays unread", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["runService"] | undefined
-    try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedRun(db, {
-        id: "r-1",
-        status: "closed",
-        challengeId: "ch-1",
+      seedAgent(db, {
+        id: "a-1",
         eventId: "evt-1",
+        challengeId: "ch-1",
+        model: `${TEST_MODEL_REF}:off`,
+        status: "completed",
+        sessionFile: "sess-1",
+        name: "A",
+        createdAt: now(),
+        updatedAt: now(),
       })
-      db.insert(agents)
-        .values({
-          id: "a-1",
-          runId: "r-1",
-          slot: "solver",
-          role: "solver",
-          isEntry: true,
-          model: `${TEST_MODEL_REF}:off`,
-          systemPrompt: "sp",
-          tools: "[]",
-          status: "idle",
-          sessionFile: "sess-1",
-          name: "A",
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .run()
-      // #team with unread history (another run's knowledge) — a cold restore
-      // must NOT sweep it (§11.3 red line; v18 §四: user input is direct).
+      // #team with unread history (another attempt's knowledge) — a reopen
+      // must NOT sweep it (§11.3 red line; user input is direct).
       const provider = makeProvider()
       const { manager } = stubContainerManager()
       const promptLog = new Map<string, string[]>()
-      const runService = createRunService({
+      const agentService = createAgentService({
         db,
-        sqlite,
         dataDir: dir,
         containerManager: manager,
         platformService: {
@@ -504,16 +385,16 @@ describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3
           return stub
         }),
       })
-      service = runService
+      service = agentService
 
-      // Unread group history on the challenge's #team.
-      runService.channels.post({
+      // Unread challenge history on the #team.
+      agentService.channels.post({
         channelKey: teamKey("ch-1"),
         author: { type: "system" },
         body: "old knowledge: libc 2.35",
       })
 
-      await runService.sendMessage("r-1", { text: "wake" })
+      await agentService.sendMessage("a-1", { text: "wake" })
       await wait(100)
 
       // Exactly the direct message — no group-history sweep.
@@ -521,16 +402,17 @@ describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3
       expect(prompts).toHaveLength(1)
       expect(prompts[0]).toContain("wake")
       expect(prompts[0]).not.toContain("libc 2.35")
-      // The run is live again and the backlog is still there, unread.
+      // The agent is live again (reopened) and the backlog stays unread.
       expect(
-        db.select().from(runs).where(eq(runs.id, "r-1")).get()!.status
+        db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
       ).toBe("idle")
       expect(
-        runService.channels.agentChannels("a-1").find((c) => c.kind === "team")!
-          .unread
+        agentService.channels
+          .agentChannels("a-1")
+          .find((c) => c.kind === "team")!.unread
       ).toBe(1)
 
-      await runService.close()
+      await agentService.close()
     } finally {
       await service?.close().catch(() => undefined)
       close()

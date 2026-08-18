@@ -1,9 +1,9 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
+  AgentSummary,
   InboxSnapshot,
   QueueItem,
   QueueSnapshot,
-  RunPublic,
   SchedulerInfo,
 } from "./types"
 
@@ -12,8 +12,8 @@ export function getScheduler(eventId: string) {
 }
 
 /** PATCH the event-level scheduler config (model / instruction / target cap).
- * Affects the scheduler run at next start; the live model can also be switched
- * per-agent on a running scheduler. */
+ * Affects the scheduler agent at next start; the live model can also be
+ * switched per-agent on a running scheduler. */
 export function updateSchedulerConfig(
   eventId: string,
   patch: {
@@ -109,20 +109,20 @@ export function clearQueue(eventId: string) {
   )
 }
 
-/** Start the event-scoped scheduler run. W3.2: default = restore semantics
- * (closed run → cold-restore keeping memory); `reset: true` deletes the closed
- * run (cascade agents/sessions) and starts fresh. */
+/** Start the event's scheduler agent. W3.2: default = reopen semantics
+ * (terminal agent → reopened keeping files + memory); `reset: true` deletes
+ * the terminal agent (cascade sessions) and starts fresh. */
 export function startScheduler(eventId: string, reset = false) {
-  return apiRequest<SchedulerInfo>(
+  return apiRequest<AgentSummary>(
     `/events/${eventId}/scheduler/start`,
     jsonRequest("POST", { reset })
   )
 }
 
 /** W3.1: disable the scheduler (paused flag + abort current turn, container
- * kept warm). The flag is written even with no scheduler run. */
+ * kept warm). The flag is written even with no scheduler agent. */
 export function pauseScheduler(eventId: string) {
-  return apiRequest<RunPublic | null>(
+  return apiRequest<AgentSummary | null>(
     `/events/${eventId}/scheduler/pause`,
     jsonRequest("POST", {})
   )
@@ -131,15 +131,15 @@ export function pauseScheduler(eventId: string) {
 /** W3.1: re-enable the scheduler (clear flag + tell the orchestrator to
  * re-sync before acting). */
 export function resumeScheduler(eventId: string) {
-  return apiRequest<RunPublic | null>(
+  return apiRequest<AgentSummary | null>(
     `/events/${eventId}/scheduler/resume`,
     jsonRequest("POST", {})
   )
 }
 
-/** Close the scheduler run (→ closed; cold-restorable via start). */
+/** Close the scheduler agent (→ aborted; reopenable via start). */
 export function closeScheduler(eventId: string) {
-  return apiRequest<RunPublic>(
+  return apiRequest<AgentSummary>(
     `/events/${eventId}/scheduler/close`,
     jsonRequest("POST", {})
   )

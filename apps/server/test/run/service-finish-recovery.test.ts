@@ -2,33 +2,27 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, runs } from "../../src/db/schema"
-import { createRunService } from "../../src/run/service"
+import { agents } from "../../src/db/schema"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
+  seedAgent,
   seedChallenge,
   seedEvent,
-  seedRun,
   setupDb,
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  now,
 } from "../helpers"
 
-/** A service wired against a stub container/host (sessions hang so a restored
- * run stays deterministically `running`). */
-function makeService(
-  db: ReturnType<typeof setupDb>["db"],
-  sqlite: ReturnType<typeof setupDb>["sqlite"],
-  dir: string
-) {
+/** A service wired against a stub container/host (sessions hang so a reopened
+ * agent stays deterministically `running`). */
+function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
   const provider = makeProvider()
   const { manager } = stubContainerManager()
-  const service = createRunService({
+  const service = createAgentService({
     db,
-    sqlite,
     dataDir: dir,
     containerManager: manager,
     platformService: {
@@ -48,90 +42,94 @@ function makeService(
   return { service, manager }
 }
 
-describe("finishing flag lifecycle (code-review P1)", () => {
-  test("recoverOnBoot resets finishing on crashed running/idle runs", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+describe("terminal lifecycle + pendingFinish (v19, no atomic flag)", () => {
+  test("recoverOnBoot flips a running agent to idle; terminal states survive", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      // Crash mid-finish: finishing=1 with the teardown never run.
-      seedRun(db, { id: "r-1", status: "running", finishing: true })
-      seedRun(db, { id: "r-2", status: "idle", finishing: true })
-
-      const { service } = makeService(db, sqlite, dir)
+      seedAgent(db, { id: "a-1", status: "running" })
+      seedAgent(db, { id: "a-2", status: "completed" })
+      const { service } = makeService(db, dir)
       await service.recoverOnBoot()
-
-      for (const id of ["r-1", "r-2"]) {
-        const row = db.select().from(runs).where(eq(runs.id, id)).get()!
-        expect(row.status).toBe("closed")
-        expect(row.finishing).toBe(false)
-      }
+      expect(
+        db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
+      ).toBe("idle")
+      expect(
+        db.select().from(agents).where(eq(agents.id, "a-2")).get()!.status
+      ).toBe("completed")
       await service.close()
     } finally {
       close()
     }
   })
 
-  test("cold restore resets finishing so finish_run can claim again", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("finishAgent is idempotent on an already-completed agent (no double teardown)", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      // A closed run whose prior finish was interrupted (finishing still set).
-      seedRun(db, {
-        id: "r-1",
-        status: "closed",
-        finishing: true,
-        challengeId: "ch-1",
+      const { service } = makeService(db, dir)
+      const agent = await service.spawn({
         eventId: "evt-1",
+        challengeId: "ch-1",
       })
-      db.insert(agents)
-        .values({
-          id: "a-1",
-          runId: "r-1",
-          slot: "solver",
-          role: "solver",
-          isEntry: true,
-          model: "openai/gpt-4o-mini:off",
-          systemPrompt: "sp",
-          tools: "[]",
-          status: "idle",
-          sessionFile: "sess-1",
-          name: "Solver",
-          createdAt: now(),
-          updatedAt: now(),
-        })
-        .run()
 
-      const { service } = makeService(db, sqlite, dir)
-      // Messaging the closed run cold-restores it (hang session → running).
-      await service.sendMessage("r-1", { text: "ping" })
-
-      const row = db.select().from(runs).where(eq(runs.id, "r-1")).get()!
-      expect(row.status).toBe("running")
-      expect(row.finishing).toBe(false)
-      // finish_run can claim again — the stale intent is void.
-      expect(service.markFinishing("r-1")).toBe(true)
+      const first = await service.finishAgent(agent.id, "summary")
+      expect(first.status).toBe("completed")
+      expect(first.summary).toBe("summary")
+      // A late finish_run on the same completed agent is a no-op return.
+      const again = await service.finishAgent(agent.id, "second")
+      expect(again.status).toBe("completed")
+      expect(again.summary).toBe("summary")
       await service.close()
     } finally {
       close()
     }
   })
 
-  test("markFinishing refuses to claim a closed run (no double teardown)", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("finishAgent and closeAgent refuse a terminal agent (already closed)", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedRun(db, { id: "r-closed", status: "closed" })
-      seedRun(db, { id: "r-running", status: "running" })
+      const { service } = makeService(db, dir)
+      const agent = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      const closed = await service.closeAgent(agent.id)
+      expect(closed.status).toBe("aborted")
+      // A late close/finish on the aborted agent rejects.
+      await expect(service.closeAgent(agent.id)).rejects.toThrow(
+        /already closed/
+      )
+      await expect(service.finishAgent(agent.id, "x")).rejects.toThrow(
+        /already closed/
+      )
+      await service.close()
+    } finally {
+      close()
+    }
+  })
 
-      const { service } = makeService(db, sqlite, dir)
-      // A late finish_run on an already-closed run must not claim.
-      expect(service.markFinishing("r-closed")).toBe(false)
-      // Live runs still claim (idempotent once — second call loses).
-      expect(service.markFinishing("r-running")).toBe(true)
-      expect(service.markFinishing("r-running")).toBe(false)
+  test("a reopen drops any stale pendingFinish intent (fresh finish available)", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service } = makeService(db, dir)
+      const agent = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      await service.closeAgent(agent.id)
+      // Reopen + finish: the completed transition works on the reopened agent
+      // (pendingFinish was cleared at close; the reopen arms a fresh one).
+      await service.sendMessage(agent.id, { text: "resume" })
+      const finished = await service.finishAgent(agent.id, "final summary")
+      expect(finished.status).toBe("completed")
+      expect(finished.summary).toBe("final summary")
       await service.close()
     } finally {
       close()

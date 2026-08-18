@@ -2,22 +2,21 @@ import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { Context } from "hono"
 import { streamSSE } from "hono/streaming"
 
-import { notFound } from "../infrastructure/http-errors"
-import type { RunService } from "./service"
+import type { AgentService } from "./service"
 
 /**
- * Live run event stream (EventSource). Shared by the run-level stream and the
- * scheduler stream. Emits an initial snapshot (ready + run + per-agent state +
- * in-flight tools) so a fresh connection sees current state immediately, then
- * forwards bus events until the client disconnects. Reconnect re-reads durable
- * messages via GET .../messages.
+ * Live agent event stream (EventSource). Emits an initial snapshot (ready +
+ * the agent + its bus state: context / queue / activity / in-flight tools)
+ * so a fresh connection sees current state immediately, then forwards bus
+ * events on the agent's channel until the client disconnects. Reconnect
+ * re-reads durable messages via GET .../messages.
  */
-export function streamRun(
+export function streamAgent(
   c: Context,
-  runService: RunService,
-  runId: string
+  service: AgentService,
+  agentId: string
 ): Response {
-  const bus = runService.bus
+  const bus = service.bus
 
   return streamSSE(c, async (stream) => {
     let aborted = false
@@ -39,33 +38,28 @@ export function streamRun(
     // Subscribe BEFORE the initial snapshot so no event between snapshot
     // read and subscribe is missed. Duplicates (event X in both snapshot and
     // queue) are harmless — the UI handles them idempotently.
-    const unsubscribe = bus.subscribe(runId, (event) => {
+    const unsubscribe = bus.subscribe(agentId, (event) => {
       queue.push(event)
       drain()
     })
 
     // Fresh snapshot (re-read after subscribe, not before).
-    const detail = runService.detail(runId)
+    const detail = service.getAgentDetail(agentId)
     if (!detail) {
       unsubscribe()
       return
     }
-    const entryAgent = detail.agents.find((a) => a.isEntry)
-
-    queue.push({ type: "ready", runId, agentId: entryAgent?.id ?? "" })
-    queue.push({ type: "run.updated", run: detail.run })
-    for (const agent of detail.agents) {
-      queue.push({ type: "agent.updated", agent })
-      const context = bus.getContext(agent.id)
-      if (context) queue.push(context)
-      const queueState = bus.getQueue(agent.id)
-      if (queueState) queue.push(queueState)
-      const activity = bus.getActivity(agent.id)
-      if (activity) queue.push(activity)
-      // Replay in-flight tools (with their latest partial result) so a fresh
-      // connection sees an executing bash command's streamed output right away.
-      for (const tool of bus.getToolProgress(agent.id)) queue.push(tool)
-    }
+    queue.push({ type: "ready", agentId })
+    queue.push({ type: "agent.updated", agent: detail.agent })
+    const context = bus.getContext(agentId)
+    if (context) queue.push(context)
+    const queueState = bus.getQueue(agentId)
+    if (queueState) queue.push(queueState)
+    const activity = bus.getActivity(agentId)
+    if (activity) queue.push(activity)
+    // Replay in-flight tools (with their latest partial result) so a fresh
+    // connection sees an executing bash command's streamed output right away.
+    for (const tool of bus.getToolProgress(agentId)) queue.push(tool)
 
     try {
       while (!aborted) {

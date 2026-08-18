@@ -13,7 +13,7 @@ import type { ProviderConnection } from "@aegisx/shared/domain"
 
 import type { HostAgentSession } from "../src/agents/host-session"
 import { createDatabase, type Database } from "../src/db"
-import { challenges, events, runs } from "../src/db/schema"
+import { agents, challenges, events } from "../src/db/schema"
 import type {
   ConfigStore,
   ProviderData,
@@ -78,35 +78,36 @@ export function seedChallenge(
   return id
 }
 
-export function seedRun(
+export function seedAgent(
   db: Database,
-  overrides: Partial<typeof runs.$inferInsert> & {
+  overrides: Partial<typeof agents.$inferInsert> & {
     id?: string
     eventId?: string
     challengeId?: string | null
   } = {}
 ) {
-  const id = overrides.id ?? "run-1"
+  const id = overrides.id ?? "agent-1"
   const eventId = overrides.eventId ?? "evt-1"
   const challengeId =
     overrides.challengeId === undefined ? "ch-1" : overrides.challengeId
-  db.insert(runs)
+  db.insert(agents)
     .values({
       id,
-      scopeType: "challenge",
       eventId,
       challengeId,
-      status: "closed",
+      role: "solver",
+      name: `agent-${id.slice(0, 8)}`,
       model: `${TEST_MODEL_REF}:off`,
-      image: "img",
-      cpus: 1,
-      memoryMb: 512,
-      pidsLimit: 64,
-      containerName: "c",
-      workspacePath: "w",
-      sessionDir: "s",
+      systemPrompt: "sys",
+      tools: "[]",
+      status: "idle",
+      sessionFile: null,
+      prompt: null,
       source: "manual",
+      timeoutMs: 3_600_000,
+      deadlineAt: null,
       createdAt: now(),
+      startedAt: now(),
       updatedAt: now(),
       ...overrides,
     })
@@ -187,7 +188,7 @@ export function stubContainerManager() {
     kill: async (name: string) => {
       killed.push(name)
     },
-    isRunning: async () => false,
+    isRunning: async () => true,
     exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     capture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     putArchive: async () => {},

@@ -81,7 +81,7 @@ describe("event, challenge, and attachment API", () => {
     })
   })
 
-  test("summarizes event progress and active runs", async () => {
+  test("summarizes event progress and active agents", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)
     const challenge = await createChallenge(app, event.id)
@@ -91,12 +91,15 @@ describe("event, challenge, and attachment API", () => {
       [challenge.id, event.id, "2099-01-01T00:00:00.000Z"]
     )
     sqlite.run(
-      "insert into runs (id, scope_type, event_id, challenge_id, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, 'challenge', ?, ?, ?, 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', 'manual', ?, ?)",
+      `insert into agents (id, event_id, challenge_id, role, name, model, system_prompt, tools, status, session_file, prompt, source, timeout_ms, created_at, started_at, updated_at)
+       values (?, ?, ?, 'solver', ?, 'm', 'sp', '[]', ?, null, null, 'manual', 3600000, ?, ?, ?)`,
       [
-        "active-run-1",
+        "active-agent-1",
         event.id,
         challenge.id,
+        "active-agent-1",
         "running",
+        "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
       ]
@@ -109,32 +112,35 @@ describe("event, challenge, and attachment API", () => {
       id: event.id,
       challengeCount: 1,
       solvedCount: 1,
-      activeRunCount: 1,
+      activeAgentCount: 1,
       lastActivityAt: "2100-01-01T00:00:00.000Z",
     })
   })
 
-  test("derives local challenge progress from a flagged run", async () => {
+  test("derives local challenge progress from a flagged agent", async () => {
     const { app, dataDir } = createTestApp()
     const event = await createEvent(app)
     const challenge = await createChallenge(app, event.id)
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, scope_type, event_id, challenge_id, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, 'challenge', ?, ?, 'closed', 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', 'manual', ?, ?)",
+      `insert into agents (id, event_id, challenge_id, role, name, model, system_prompt, tools, status, session_file, prompt, source, timeout_ms, created_at, started_at, updated_at)
+       values (?, ?, ?, 'solver', ?, 'm', 'sp', '[]', 'completed', null, null, 'manual', 3600000, ?, ?, ?)`,
       [
-        "flagged-local-run",
+        "flagged-local-agent",
         event.id,
         challenge.id,
+        "flagged-local-agent",
+        "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
       ]
     )
     sqlite.run(
-      "insert into challenge_flags (id, challenge_id, flag, status, source, run_id, remote_id, message, created_at, updated_at) values (?, ?, 'flag{local}', 'accepted', 'run', ?, null, null, ?, ?)",
+      "insert into challenge_flags (id, challenge_id, flag, status, source, agent_id, remote_id, message, created_at, updated_at) values (?, ?, 'flag{local}', 'accepted', 'agent', ?, null, null, ?, ?)",
       [
         "flag-1",
         challenge.id,
-        "flagged-local-run",
+        "flagged-local-agent",
         "2100-01-01T00:00:00.000Z",
         "2100-01-01T00:00:00.000Z",
       ]
@@ -144,7 +150,7 @@ describe("event, challenge, and attachment API", () => {
     const detail = await (await app.request(`/api/events/${event.id}`)).json()
     expect(detail.event.solvedCount).toBe(1)
     expect(detail.challenges[0]).toMatchObject({
-      runCount: 1,
+      agentCount: 1,
       solved: { local: "solved" },
     })
   })
@@ -212,12 +218,15 @@ describe("event, challenge, and attachment API", () => {
 
     const sqlite = new Database(join(dataDir, "aegisx.sqlite"))
     sqlite.run(
-      "insert into runs (id, scope_type, event_id, challenge_id, status, model, image, cpus, memory_mb, pids_limit, container_name, workspace_path, session_dir, source, created_at, updated_at) values (?, 'challenge', ?, ?, ?, 'm', 'img', 1, 512, 64, 'c', 'runs/x/workspace', 'runs/x/sessions', 'manual', ?, ?)",
+      `insert into agents (id, event_id, challenge_id, role, name, model, system_prompt, tools, status, session_file, prompt, source, timeout_ms, created_at, started_at, updated_at)
+       values (?, ?, ?, 'solver', ?, 'm', 'sp', '[]', ?, null, null, 'manual', 3600000, ?, ?, ?)`,
       [
-        "active-run",
+        "active-agent",
         event.id,
         challenge.id,
+        "active-agent",
         "running",
+        new Date().toISOString(),
         new Date().toISOString(),
         new Date().toISOString(),
       ]
@@ -226,7 +235,9 @@ describe("event, challenge, and attachment API", () => {
       (await app.request(`/api/events/${event.id}`, { method: "DELETE" }))
         .status
     ).toBe(409)
-    sqlite.run("update runs set status = 'closed' where id = 'active-run'")
+    sqlite.run(
+      "update agents set status = 'completed' where id = 'active-agent'"
+    )
     sqlite.close()
 
     expect(

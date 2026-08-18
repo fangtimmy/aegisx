@@ -1,4 +1,5 @@
 import type {
+  AgentStatus,
   Attachment,
   Challenge as ChallengePublic,
   ChallengeFlag,
@@ -11,12 +12,12 @@ import { Value } from "typebox/value"
 
 import type { Database } from "../db"
 import {
+  agents,
   attachments,
   challengeFlags,
   challengeRemote,
   challenges,
   events,
-  runs,
 } from "../db/schema"
 import { RemoteTargetInfoSchema } from "../lib/schemas"
 import type { ChallengeRemote } from "../platforms/challenge-state"
@@ -36,10 +37,10 @@ export function createCatalogReader(
         challengeCount: count(challenges.id),
         solvedCount: sql<number>`coalesce(sum(case when ${challengeRemote.solved} = 1 or ${challenges.manualSolveState} != 'unsolved' or exists (select 1 from ${challengeFlags} where ${challengeFlags.challengeId} = ${challenges.id} and ${challengeFlags.status} = 'accepted') then 1 else 0 end), 0)`,
         lastChallengeAt: max(challenges.updatedAt),
-        activeRunCount: sql<number>`coalesce((select sum(case when r.status in ('running', 'idle') then 1 else 0 end) from runs r inner join challenges rc on r.challenge_id = rc.id where rc.event_id = events.id), 0)`,
-        lastRunAt: sql<
+        activeAgentCount: sql<number>`coalesce((select sum(case when a.status in ('running', 'idle') then 1 else 0 end) from agents a where a.event_id = events.id), 0)`,
+        lastAgentAt: sql<
           string | null
-        >`(select max(r.updated_at) from runs r inner join challenges rc on r.challenge_id = rc.id where rc.event_id = events.id)`,
+        >`(select max(a.updated_at) from agents a where a.event_id = events.id)`,
       })
       .from(events)
       .leftJoin(challenges, eq(challenges.eventId, events.id))
@@ -48,8 +49,8 @@ export function createCatalogReader(
       .groupBy(events.id)
       .orderBy(events.createdAt)
       .all()
-      .map(({ lastChallengeAt, activeRunCount, lastRunAt, ...event }) => {
-        const lastActivityAt = [lastChallengeAt, lastRunAt].reduce<string>(
+      .map(({ lastChallengeAt, activeAgentCount, lastAgentAt, ...event }) => {
+        const lastActivityAt = [lastChallengeAt, lastAgentAt].reduce<string>(
           (latest, value) => (value && value > latest ? value : latest),
           event.updatedAt
         )
@@ -57,7 +58,7 @@ export function createCatalogReader(
           ...event,
           challengeCount: Number(event.challengeCount),
           solvedCount: Number(event.solvedCount),
-          activeRunCount: Number(activeRunCount ?? 0),
+          activeAgentCount: Number(activeAgentCount ?? 0),
           lastActivityAt,
           platform: platformService.getPublic(event.id),
         }
@@ -97,19 +98,32 @@ export function createCatalogReader(
       .map(toFlagPublic)
   }
 
+  /** Per-status agent counts for a challenge (the Challenge wire's
+   * agentStatusCounts). Solver agents only (challengeId scope excludes the
+   * scheduler by construction). */
+  type AgentStatusSummary = {
+    agentCount: number
+    counts: Partial<Record<AgentStatus, number>>
+  }
+
+  function agentStatusSummaryOf(
+    rows: Array<{ status: string }>
+  ): AgentStatusSummary {
+    const counts: Partial<Record<AgentStatus, number>> = {}
+    for (const row of rows) {
+      counts[row.status as AgentStatus] =
+        (counts[row.status as AgentStatus] ?? 0) + 1
+    }
+    return { agentCount: rows.length, counts }
+  }
+
   const publicChallenge = (
     challenge: typeof challenges.$inferSelect,
     remote: ChallengeRemote | null,
     challengeAttachments: Attachment[],
     flags: ChallengeFlag[],
-    runSummary?: {
-      runCount: number
-      runningCount: number
-      idleCount: number
-      closedCount: number
-    }
+    agentSummary?: AgentStatusSummary
   ): ChallengePublic => {
-    const runCount = Number(runSummary?.runCount ?? 0)
     const ignored = remote?.targetIgnored ?? false
     const hasAcceptedFlag = flags.some((flag) => flag.status === "accepted")
     const solved: ChallengeSolved = {
@@ -129,12 +143,8 @@ export function createCatalogReader(
       attachments: challengeAttachments,
       flags,
       solved,
-      runCount,
-      runStatusCounts: {
-        running: Number(runSummary?.runningCount ?? 0),
-        idle: Number(runSummary?.idleCount ?? 0),
-        closed: Number(runSummary?.closedCount ?? 0),
-      },
+      agentCount: agentSummary?.agentCount ?? 0,
+      agentStatusCounts: agentSummary?.counts ?? {},
       remoteId: remote?.remoteId ?? null,
       remoteAvailable: remote ? remote.available : true,
       remoteTarget: remote?.targetSupported ?? false,
@@ -153,22 +163,17 @@ export function createCatalogReader(
       .where(eq(challenges.id, challengeId))
       .get()
     if (!row) return undefined
-    const runSummary = db
-      .select({
-        runCount: count(),
-        runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
-        idleCount: sql<number>`coalesce(sum(case when ${runs.status} = 'idle' then 1 else 0 end), 0)`,
-        closedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'closed' then 1 else 0 end), 0)`,
-      })
-      .from(runs)
-      .where(eq(runs.challengeId, challengeId))
-      .get()
+    const agentRows = db
+      .select({ status: agents.status })
+      .from(agents)
+      .where(eq(agents.challengeId, challengeId))
+      .all()
     return publicChallenge(
       row.challenge,
       row.remote,
       listAttachments([challengeId]),
       listFlagsFor([challengeId]),
-      runSummary
+      agentStatusSummaryOf(agentRows)
     )
   }
 
@@ -182,20 +187,16 @@ export function createCatalogReader(
     const ids = rows.map(({ challenge }) => challenge.id)
     const attachmentRows = listAttachments(ids)
     const flagRows = listFlagsFor(ids)
-    const runRows =
+    const agentRows =
       ids.length === 0
         ? []
         : db
             .select({
-              challengeId: runs.challengeId,
-              runCount: count(),
-              runningCount: sql<number>`coalesce(sum(case when ${runs.status} = 'running' then 1 else 0 end), 0)`,
-              idleCount: sql<number>`coalesce(sum(case when ${runs.status} = 'idle' then 1 else 0 end), 0)`,
-              closedCount: sql<number>`coalesce(sum(case when ${runs.status} = 'closed' then 1 else 0 end), 0)`,
+              challengeId: agents.challengeId,
+              status: agents.status,
             })
-            .from(runs)
-            .where(inArray(runs.challengeId, ids))
-            .groupBy(runs.challengeId)
+            .from(agents)
+            .where(inArray(agents.challengeId, ids))
             .all()
     const attachmentsByChallenge = new Map<string, typeof attachmentRows>()
     for (const attachment of attachmentRows) {
@@ -209,16 +210,20 @@ export function createCatalogReader(
       values.push(flag)
       flagsByChallenge.set(flag.challengeId, values)
     }
-    const runsByChallenge = new Map(
-      runRows.map((row) => [row.challengeId, row])
-    )
+    const agentsByChallenge = new Map<string, Array<{ status: string }>>()
+    for (const agent of agentRows) {
+      if (!agent.challengeId) continue
+      const values = agentsByChallenge.get(agent.challengeId) ?? []
+      values.push(agent)
+      agentsByChallenge.set(agent.challengeId, values)
+    }
     return rows.map(({ challenge, remote }) =>
       publicChallenge(
         challenge,
         remote,
         attachmentsByChallenge.get(challenge.id) ?? [],
         flagsByChallenge.get(challenge.id) ?? [],
-        runsByChallenge.get(challenge.id)
+        agentStatusSummaryOf(agentsByChallenge.get(challenge.id) ?? [])
       )
     )
   }

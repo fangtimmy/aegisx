@@ -2,9 +2,8 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, runs } from "../../src/db/schema"
-import type { CreateRunInput } from "../../src/run/service"
-import { createRunService } from "../../src/run/service"
+import { agents } from "../../src/db/schema"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
@@ -16,23 +15,6 @@ import {
   stubHostAgentSession,
   TEST_MODEL_REF,
 } from "../helpers"
-
-const containerInput = {
-  image: "aegisx/solve:latest",
-  cpus: 2,
-  memoryMb: 1024,
-  pidsLimit: 128,
-  tmpfsSize: "128m",
-  workspace: "/workspace",
-}
-
-function baseCreateInput(challengeId: string): CreateRunInput {
-  return {
-    scopeType: "challenge" as const,
-    challengeId,
-    container: containerInput,
-  }
-}
 
 /** Two-model provider so a per-agent switch to a *different* model is real
  * (both piBound so the live runtime resolves them offline). */
@@ -61,25 +43,22 @@ function twoModelProvider() {
   })
 }
 
-/** Canonical model refs for the two test models (pi-bound openai/*). */
 const MODEL_1_REF = `${TEST_MODEL_REF}:off` // openai/gpt-4o-mini:off
 const MODEL_2_REF = "openai/gpt-4o:high" // openai/gpt-4o:high
 
 /** Records host-session calls: which agents were prepared (createHost) and
- * which were aborted, and wires the real run-level model runtime into the stub
- * session so applyModelSwitch can resolve pi models offline. */
+ * which were aborted, and wires the real model runtime into the stub session
+ * so applyModelSwitch can resolve pi models offline. */
 function makeService(
   db: ReturnType<typeof setupDb>["db"],
-  sqlite: ReturnType<typeof setupDb>["sqlite"],
   dir: string,
   providers: ReturnType<typeof makeProvider>[]
 ) {
   const { manager } = stubContainerManager()
   const prepared: string[] = []
   const aborted: string[] = []
-  const service = createRunService({
+  const service = createAgentService({
     db,
-    sqlite,
     dataDir: dir,
     containerManager: manager,
     platformService: {
@@ -119,28 +98,34 @@ function makeService(
   return { service, prepared, aborted }
 }
 
-describe("per-agent actions", () => {
-  test("sendAgentMessage cold-restores a closed run's agent and drives a fresh turn", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+async function spawnAgent(
+  service: ReturnType<typeof makeService>["service"],
+  model = MODEL_1_REF
+) {
+  return service.spawn({ eventId: "evt-1", challengeId: "ch-1", model })
+}
+
+describe("per-agent actions (v19)", () => {
+  test("sendMessage cold-reopens a terminal agent and drives a fresh turn", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service, prepared } = makeService(db, sqlite, dir, [provider])
+      const { service, prepared } = makeService(db, dir, [provider])
 
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const agent = await spawnAgent(service)
       expect(prepared).toHaveLength(1)
 
-      // Warm run: per-agent message steers/follows-up (or drives) — no error.
-      await service.sendAgentMessage(agent.id, { text: "warm ping" })
-      // Close the run (container + sessions released, agents → idle).
-      const closed = await service.closeRun(run.id)
-      expect(closed.status).toBe("closed")
+      // Warm agent: per-agent message drives the turn — no error.
+      await service.sendMessage(agent.id, { text: "warm ping" })
+      // Close the agent (session released, agent → aborted).
+      const closed = await service.closeAgent(agent.id)
+      expect(closed.status).toBe("aborted")
 
-      // Cold restore: messaging the same agent rebuilds the run context +
-      // session (fence → container → setup → prepare) and drives a fresh turn.
-      const resumed = await service.sendAgentMessage(agent.id, {
+      // Cold reopen: messaging the same agent rebuilds its session (prepare)
+      // and drives a fresh turn.
+      const resumed = await service.sendMessage(agent.id, {
         text: "cold ping",
       })
       expect(prepared).toHaveLength(2) // create + restore
@@ -153,16 +138,15 @@ describe("per-agent actions", () => {
     }
   })
 
-  test("switchAgentModel updates the named agent's own snapshot (not just entry)", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("switchAgentModel updates the named agent's own snapshot", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service } = makeService(db, sqlite, dir, [provider])
+      const { service } = makeService(db, dir, [provider])
 
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const agent = await spawnAgent(service)
       expect(
         db.select().from(agents).where(eq(agents.id, agent.id)).get()!.model
       ).toBe(MODEL_1_REF)
@@ -170,7 +154,7 @@ describe("per-agent actions", () => {
       const switched = await service.switchAgentModel(agent.id, {
         model: MODEL_2_REF,
       })
-      expect(switched.id).toBe(run.id)
+      expect(switched.id).toBe(agent.id)
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.model).toBe(MODEL_2_REF)
       await service.close()
@@ -180,19 +164,18 @@ describe("per-agent actions", () => {
   })
 
   test("stopAgent aborts the named agent's current turn", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service, aborted } = makeService(db, sqlite, dir, [provider])
+      const { service, aborted } = makeService(db, dir, [provider])
 
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
-      expect(run.status).toBe("running") // prime hangs → turn in flight
+      const agent = await spawnAgent(service)
+      expect(agent.status).toBe("running") // prime hangs → turn in flight
 
       const stopped = await service.stopAgent(agent.id)
-      expect(stopped.id).toBe(run.id)
+      expect(stopped.id).toBe(agent.id)
       expect(aborted).toContain(agent.id)
       await service.close()
     } finally {
@@ -201,19 +184,19 @@ describe("per-agent actions", () => {
   })
 
   test("unknown agentId rejects with not_found on all three actions", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service } = makeService(db, sqlite, dir, [provider])
+      const { service } = makeService(db, dir, [provider])
 
       await expect(
-        service.sendAgentMessage("ghost", { text: "hi" })
+        service.sendMessage("ghost", { text: "hi" })
       ).rejects.toThrow("Agent not found")
       await expect(
         service.switchAgentModel("ghost", { model: MODEL_2_REF })
-      ).rejects.toThrow("Agent not found")
+      ).rejects.toThrow(/not found|no live session/)
       await expect(service.stopAgent("ghost")).rejects.toThrow(
         "Agent not found"
       )
@@ -223,21 +206,18 @@ describe("per-agent actions", () => {
     }
   })
 
-  test("switchAgentModel lazy-refreshes the run runtime for providers added while live", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("switchAgentModel lazy-refreshes the workspace runtime for providers added while live", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const providers = [twoModelProvider()]
-      const { service, prepared } = makeService(db, sqlite, dir, providers)
+      const { service, prepared } = makeService(db, dir, providers)
 
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const agent = await spawnAgent(service)
       expect(prepared).toHaveLength(1)
 
-      // Simulate adding a brand-new custom provider while the run is live: its
-      // model is absent from the run's ModelRuntime snapshot, so the switch
-      // must lazy-refresh the runtime and retry.
+      // Simulate adding a brand-new custom provider while the agent is live.
       providers.push({
         id: "prov-2",
         label: "New Provider",
@@ -269,50 +249,15 @@ describe("per-agent actions", () => {
     }
   })
 
-  test("switching the ENTRY agent syncs runs.model; non-entry switches leave it", async () => {
-    const { db, sqlite, dir, close } = setupDb()
-    try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { service } = makeService(db, sqlite, dir, [provider])
-
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [entry] = service.listAgents(run.id)
-      expect(
-        db.select().from(runs).where(eq(runs.id, run.id)).get()!.model
-      ).toBe(MODEL_1_REF)
-
-      // Entry switch syncs runs.model (RunPublic display + addAgent default).
-      await service.switchAgentModel(entry.id, { model: MODEL_2_REF })
-      const runRow = db.select().from(runs).where(eq(runs.id, run.id)).get()!
-      expect(runRow.model).toBe(MODEL_2_REF)
-      const pub = service.get(run.id)!
-      expect(pub.modelId).toBe("gpt-4o")
-
-      // A per-agent switch on a non-entry agent leaves runs.model untouched.
-      await service.addAgent(run.id, { model: MODEL_1_REF, prompt: "extra" })
-      const extra = service.listAgents(run.id).find((a) => !a.isEntry)!
-      await service.switchAgentModel(extra.id, { model: MODEL_1_REF })
-      expect(
-        db.select().from(runs).where(eq(runs.id, run.id)).get()!.model
-      ).toBe(MODEL_2_REF)
-      await service.close()
-    } finally {
-      close()
-    }
-  })
-
   test("switchAgentModel persists the SDK-clamped thinking level", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
       const { manager } = stubContainerManager()
-      const service = createRunService({
+      const service = createAgentService({
         db,
-        sqlite,
         dataDir: dir,
         containerManager: manager,
         platformService: {
@@ -339,8 +284,7 @@ describe("per-agent actions", () => {
             }
             sdk.modelRuntime = input.modelRuntime
             sdk.thinkingLevel = "off"
-            // Simulate the SDK clamping: the target model only supports
-            // thinking up to medium.
+            // Simulate the SDK clamping: high → medium on the target model.
             sdk.setThinkingLevel = (level: string) => {
               sdk.thinkingLevel = level === "high" ? "medium" : level
             }
@@ -350,8 +294,7 @@ describe("per-agent actions", () => {
         ),
       })
 
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const agent = await spawnAgent(service)
       await service.switchAgentModel(agent.id, { model: MODEL_2_REF })
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.model).toBe("openai/gpt-4o:medium")
@@ -362,15 +305,14 @@ describe("per-agent actions", () => {
   })
 
   test("switchAgentModel surfaces diagnosable resolution errors", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = twoModelProvider()
-      const { service } = makeService(db, sqlite, dir, [provider])
+      const { service } = makeService(db, dir, [provider])
 
-      const run = await service.create(baseCreateInput("ch-1"))
-      const [agent] = service.listAgents(run.id)
+      const agent = await spawnAgent(service)
       await expect(
         service.switchAgentModel(agent.id, { model: "garbage" })
       ).rejects.toThrow("Invalid model ref")

@@ -2,7 +2,6 @@ import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import {
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,21 +14,16 @@ import { join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
-import { createDatabase } from "./index"
-import { SCHEMA_VERSION } from "./schema"
-
-/** The real migrations folder (13 entries incl. 0012). */
+/** The real migrations folder (14 entries incl. 0013). */
 const realFolder = resolve(import.meta.dir, "../../drizzle")
 
 /** Build a v17 database in `dir`: apply migrations 0000–0011 from a
- * truncated journal copy (the exact runtime migrator path, minus 0012). */
+ * truncated journal copy (the exact runtime migrator path). */
 function buildV17Database(dir: string) {
   const sqlite = new Database(join(dir, "aegisx.sqlite"), { create: true })
   sqlite.run("PRAGMA journal_mode = WAL")
   // FK ON matches the production boot (createDatabase enables it before
-  // migrating): RENAME TABLE rewrites FK references only with FK ON —
-  // otherwise 0011's table recreation leaves dangling `channels_new`
-  // references and every later child insert fails.
+  // migrating): RENAME TABLE rewrites FK references only with FK ON.
   sqlite.run("PRAGMA foreign_keys = ON")
   const folder = join(dir, "mig-v17")
   mkdirSync(join(folder, "meta"), { recursive: true })
@@ -47,6 +41,23 @@ function buildV17Database(dir: string) {
   migrate(drizzle(sqlite), { migrationsFolder: folder })
   sqlite.run("PRAGMA user_version = 17")
   return sqlite
+}
+
+/** Apply 0012 to a seeded v17 database in place (the journal copy grows by
+ * one entry; the migrator replays the same path the runtime takes). */
+function applyV18(dir: string, sqlite: Database) {
+  const folder = join(dir, "mig-v17")
+  const journal = JSON.parse(
+    readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
+  ) as { entries: Array<{ tag: string }> }
+  journal.entries = journal.entries.slice(0, 13) // +0012 = v18
+  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
+  cpSync(
+    join(realFolder, "0012_derived_channel_keys.sql"),
+    join(folder, "0012_derived_channel_keys.sql")
+  )
+  migrate(drizzle(sqlite), { migrationsFolder: folder })
+  sqlite.run("PRAGMA user_version = 18")
 }
 
 describe("migration 0012 — v18 derived channel keys (docs/im-simplify-v18.md §7.1)", () => {
@@ -194,8 +205,7 @@ describe("migration 0012 — v18 derived channel keys (docs/im-simplify-v18.md �
       )
 
       // Attachments: one in announce (merges into team:ch-1), one in the DM,
-      // one on the recap row (deleted with the digest mechanism) — with
-      // their on-disk v17 directories.
+      // one on the recap row (deleted with the digest mechanism).
       sqlite.run(
         `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f1', 2, 'aA1', 'remote.md', 8, '${ts}')`
       )
@@ -205,124 +215,94 @@ describe("migration 0012 — v18 derived channel keys (docs/im-simplify-v18.md �
       sqlite.run(
         `INSERT INTO channel_files (id, message_id, channel_id, filename, size, created_at) VALUES ('f3', 7, 'tA1', 'gone.txt', 3, '${ts}')`
       )
-      const fileRoot = join(dir, "channel-files")
-      mkdirSync(join(fileRoot, "aA1", "2"), { recursive: true })
-      writeFileSync(join(fileRoot, "aA1", "2", "remote.md"), "libc2.35")
-      mkdirSync(join(fileRoot, "dm1", "5"), { recursive: true })
-      writeFileSync(join(fileRoot, "dm1", "5", "dump.bin"), "0123456789")
-      mkdirSync(join(fileRoot, "tA1", "7"), { recursive: true })
-      writeFileSync(join(fileRoot, "tA1", "7", "gone.txt"), "x")
+
+      // --- apply 0012 -----------------------------------------------------
+      applyV18(dir, sqlite)
+
+      // The channels directory table is GONE.
+      const tables = new Set(
+        (
+          sqlite
+            .query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+            .all() as Array<{ name: string }>
+        ).map((row) => row.name)
+      )
+      expect(tables.has("channels")).toBe(false)
+
+      // Messages: derived keys; #announce folded into #team with the
+      // global id order intact; recap rows deleted; the event-scope
+      // scheduler DM became orch:<eventId>.
+      const msgs = sqlite
+        .query(`SELECT * FROM channel_messages ORDER BY id`)
+        .all() as Array<Record<string, unknown>>
+      expect(msgs.map((m) => [m.id, m.channel_key])).toEqual([
+        [1, "team:ch-1"],
+        [2, "team:ch-1"],
+        [3, "team:ch-1"],
+        [4, "team:ch-1"],
+        [5, "dm:a1"],
+        [6, "orch:evt-1"],
+        [8, "team:ch-2"],
+      ])
+      expect(msgs.filter((m) => m.body === "recap snapshot")).toHaveLength(0)
+      // Author snapshots + meta carried verbatim (no kind column left).
+      expect("kind" in msgs[0]!).toBe(false)
+      expect(msgs[0]!.author_name).toBe("Solver a1 · run-runA")
+
+      // Read cursors: re-keyed onto derived keys, team/announce merged
+      // to MAX; the scheduler reader row keeps 'scheduler'.
+      const reads = sqlite
+        .query(`SELECT * FROM channel_reads ORDER BY channel_key`)
+        .all() as Array<Record<string, unknown>>
+      expect(reads).toEqual([
+        {
+          channel_key: "dm:a1",
+          reader_key: "a1",
+          last_read_msg_id: 5,
+          updated_at: ts,
+        },
+        {
+          channel_key: "orch:evt-1",
+          reader_key: "scheduler",
+          last_read_msg_id: 6,
+          updated_at: ts,
+        },
+        {
+          channel_key: "team:ch-1",
+          reader_key: "a1",
+          last_read_msg_id: 4,
+          updated_at: ts,
+        },
+      ])
+
+      // Files: channel_id column gone; the recap attachment dropped with
+      // the digest mechanism.
+      const files = sqlite
+        .query(`SELECT * FROM channel_files ORDER BY id`)
+        .all() as Array<Record<string, unknown>>
+      expect(files.map((f) => [f.id, f.message_id, f.filename])).toEqual([
+        ["f1", 2, "remote.md"],
+        ["f2", 5, "dump.bin"],
+      ])
+      expect("channel_id" in files[0]!).toBe(false)
+
+      // Integrity + the AUTOINCREMENT sequence survived the table
+      // recreation (the next message id stays monotonic past the recap).
+      expect(
+        (sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[]).length
+      ).toBe(0)
+      sqlite.run(
+        `INSERT INTO channel_messages (channel_key, author_type, author_agent_id, author_name, body, meta, created_at)
+         VALUES ('team:ch-1', 'system', NULL, 'system', 'post-migration', '{}', '${ts}')`
+      )
+      expect(
+        (
+          sqlite.query(`SELECT max(id) AS n FROM channel_messages`).get() as {
+            n: number
+          }
+        ).n
+      ).toBe(9)
       sqlite.close()
-
-      // --- run the real boot path: pending 0012 + file reconciliation ----
-      const boot = createDatabase(dir)
-      try {
-        expect(
-          (
-            boot.sqlite.query("PRAGMA user_version").get() as {
-              user_version: number
-            }
-          ).user_version
-        ).toBe(SCHEMA_VERSION)
-
-        // The channels directory table is GONE.
-        const tables = new Set(
-          (
-            boot.sqlite
-              .query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
-              .all() as Array<{ name: string }>
-          ).map((row) => row.name)
-        )
-        expect(tables.has("channels")).toBe(false)
-
-        // Messages: derived keys; #announce folded into #team with the
-        // global id order intact; recap rows deleted; the event-scope
-        // scheduler DM became orch:<eventId>.
-        const msgs = boot.sqlite
-          .query(`SELECT * FROM channel_messages ORDER BY id`)
-          .all() as Array<Record<string, unknown>>
-        expect(msgs.map((m) => [m.id, m.channel_key])).toEqual([
-          [1, "team:ch-1"],
-          [2, "team:ch-1"],
-          [3, "team:ch-1"],
-          [4, "team:ch-1"],
-          [5, "dm:a1"],
-          [6, "orch:evt-1"],
-          [8, "team:ch-2"],
-        ])
-        expect(msgs.filter((m) => m.body === "recap snapshot")).toHaveLength(0)
-        // Author snapshots + meta carried verbatim (no kind column left).
-        expect("kind" in msgs[0]!).toBe(false)
-        expect(msgs[0]!.author_name).toBe("Solver a1 · run-runA")
-
-        // Read cursors: re-keyed onto derived keys, team/announce merged
-        // to MAX; the scheduler reader row keeps 'scheduler'.
-        const reads = boot.sqlite
-          .query(`SELECT * FROM channel_reads ORDER BY channel_key`)
-          .all() as Array<Record<string, unknown>>
-        expect(reads).toEqual([
-          {
-            channel_key: "dm:a1",
-            reader_key: "a1",
-            last_read_msg_id: 5,
-            updated_at: ts,
-          },
-          {
-            channel_key: "orch:evt-1",
-            reader_key: "scheduler",
-            last_read_msg_id: 6,
-            updated_at: ts,
-          },
-          {
-            channel_key: "team:ch-1",
-            reader_key: "a1",
-            last_read_msg_id: 4,
-            updated_at: ts,
-          },
-        ])
-
-        // Files: channel_id column gone; the recap attachment dropped; the
-        // on-disk dirs flattened to <messageId>/ by the boot reconcile and
-        // the empty legacy channel dirs swept.
-        const files = boot.sqlite
-          .query(`SELECT * FROM channel_files ORDER BY id`)
-          .all() as Array<Record<string, unknown>>
-        expect(files.map((f) => [f.id, f.message_id, f.filename])).toEqual([
-          ["f1", 2, "remote.md"],
-          ["f2", 5, "dump.bin"],
-        ])
-        expect("channel_id" in files[0]!).toBe(false)
-        expect(existsSync(join(fileRoot, "2", "remote.md"))).toBe(true)
-        expect(existsSync(join(fileRoot, "5", "dump.bin"))).toBe(true)
-        expect(existsSync(join(fileRoot, "aA1", "2", "remote.md"))).toBe(false)
-        expect(existsSync(join(fileRoot, "dm1"))).toBe(false)
-        // The recap attachment's ROW is gone (deleted with the digest
-        // mechanism) — its on-disk file becomes unreferenced residue and the
-        // conservative sweep keeps non-empty legacy dirs (no data loss risk;
-        // nothing in the DB can reach it anymore).
-        expect(existsSync(join(fileRoot, "tA1", "7", "gone.txt"))).toBe(true)
-
-        // Integrity + the AUTOINCREMENT sequence survived the table
-        // recreation (the next message id stays monotonic past the recap).
-        expect(
-          (boot.sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[])
-            .length
-        ).toBe(0)
-        boot.sqlite.run(
-          `INSERT INTO channel_messages (channel_key, author_type, author_agent_id, author_name, body, meta, created_at)
-           VALUES ('team:ch-1', 'system', NULL, 'system', 'post-migration', '{}', '${ts}')`
-        )
-        expect(
-          (
-            boot.sqlite
-              .query(`SELECT max(id) AS n FROM channel_messages`)
-              .get() as { n: number }
-          ).n
-        ).toBe(9)
-      } finally {
-        boot.sqlite.close()
-        boot.releaseLock()
-      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

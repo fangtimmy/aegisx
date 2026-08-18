@@ -3,8 +3,9 @@ import { describe, expect, mock, test } from "bun:test"
 import { and, eq } from "drizzle-orm"
 
 import type { HostAgentSession } from "../../src/agents/host-session"
-import { agents, runs } from "../../src/db/schema"
-import { createRunService } from "../../src/run/service"
+import { agents } from "../../src/db/schema"
+import { orchKey } from "../../src/run/channels"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
@@ -16,23 +17,15 @@ import {
   stubHostAgentSession,
 } from "../helpers"
 
-const containerInput = {
-  image: "aegisx/solve:latest",
-  cpus: 2,
-  memoryMb: 1024,
-  pidsLimit: 128,
-  tmpfsSize: "128m",
-  workspace: "/workspace",
-}
-
 type Db = ReturnType<typeof setupDb>
 
 /**
  * A session that stays streaming (its prompt never settles) so the timeout
  * path sees a live agent. `abortResolves` selects the grace outcome:
- * true → abort clears streaming so the run settles within the grace and
- * stays warm (`outcome: 'idle'`); false → abort is a no-op, the run is still
- * streaming past the grace, gets SIGKILLed (`outcome: 'closed'`).
+ * true → abort clears streaming so the agent settles within the grace and
+ * stays warm (`outcome: 'idle'`); false → abort is a no-op, the agent is
+ * still streaming past the grace and gets force-disposed
+ * (`outcome: 'aborted'` — the shared container is NEVER killed).
  */
 function streamingSession(abortResolves: boolean): HostAgentSession {
   const session = {
@@ -57,11 +50,10 @@ function streamingSession(abortResolves: boolean): HostAgentSession {
   } as unknown as HostAgentSession
 }
 
-/** Classic solver run whose prime lands on a streaming (never-settling)
- * session, so the run sits `running` at the deadline. */
-async function createHangingRun(
+/** A solver agent whose prime lands on a streaming (never-settling)
+ * session, so the agent sits `running` at the deadline. */
+async function createHangingAgent(
   db: Db["db"],
-  sqlite: Db["sqlite"],
   dir: string,
   abortResolves: boolean
 ) {
@@ -69,9 +61,8 @@ async function createHangingRun(
   seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
   const provider = makeProvider()
   const { manager, killed } = stubContainerManager()
-  const runService = createRunService({
+  const agentService = createAgentService({
     db,
-    sqlite,
     dataDir: dir,
     containerManager: manager,
     platformService: {
@@ -87,78 +78,73 @@ async function createHangingRun(
     timeoutGraceMs: 40,
     createHost: mock(async () => streamingSession(abortResolves)),
   })
-  const run = await runService.create({
-    scopeType: "challenge" as const,
+  const agent = await agentService.spawn({
+    eventId: "evt-1",
     challengeId: "ch-1",
-    container: containerInput,
     timeoutMs: 30,
   })
-  return { runService, run, manager, killed }
+  return { agentService, agent, killed }
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-describe("run timeout", () => {
-  test("deadline → abort → all settle within grace → run stays idle (warm), container kept", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+describe("agent timeout", () => {
+  test("deadline → abort → settle within grace → agent stays idle (warm), container kept", async () => {
+    const { db, dir, close } = setupDb()
     try {
-      const { runService, run, killed } = await createHangingRun(
+      const { agentService, agent, killed } = await createHangingAgent(
         db,
-        sqlite,
         dir,
         true
       )
       // deadline(30ms) fires → abort clears streaming → grace(40ms) sees
-      // nothing streaming → outcome idle, no teardown.
+      // nothing streaming → outcome idle, no force-abort.
       await wait(150)
 
-      const row = db.select().from(runs).where(eq(runs.id, run.id)).get()!
+      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.lastTimeoutAt).toBeTruthy()
-      // Warm: container untouched, run not closed.
+      expect(row.status).toBe("idle")
+      // Warm: the shared container is NEVER killed by a timeout.
       expect(killed).toEqual([])
-      expect(row.status).toBe("running")
-      await runService.close()
+      await agentService.close()
     } finally {
       close()
     }
   })
 
-  test("deadline → abort → still streaming past grace → SIGKILL → run closed", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("deadline → still streaming past grace → session force-disposed → agent aborted; container NEVER killed", async () => {
+    const { db, dir, close } = setupDb()
     try {
-      const { runService, run, killed } = await createHangingRun(
+      const { agentService, agent, killed } = await createHangingAgent(
         db,
-        sqlite,
         dir,
         false
       )
       await wait(150)
 
-      const row = db.select().from(runs).where(eq(runs.id, run.id)).get()!
+      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.lastTimeoutAt).toBeTruthy()
-      // Still streaming at the grace → teardown: container SIGTERM'd + closed.
-      expect(killed).toContain(`aegisx-run-${run.id}`)
-      expect(row.status).toBe("closed")
-      await runService.close()
+      expect(row.status).toBe("aborted")
+      // v19 red line: the agent is terminal, but the challenge's shared
+      // container survives (only the idle sweep may reclaim it).
+      expect(killed).toEqual([])
+      await agentService.close()
     } finally {
       close()
     }
   })
 
-  test("run.timedOut wakes the event's scheduler with the outcome", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("agent.timedOut wakes the event's scheduler with the outcome", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
       const { manager } = stubContainerManager()
       const promptLog = new Map<string, string[]>()
-      // First host creation = the scheduler's orchestrator (records prompts);
-      // the challenge solver hangs so its run times out into `closed`.
       let hostCalls = 0
-      const runService = createRunService({
+      const agentService = createAgentService({
         db,
-        sqlite,
         dataDir: dir,
         containerManager: manager,
         platformService: {
@@ -190,33 +176,30 @@ describe("run timeout", () => {
         }),
       })
 
-      const sched = await runService.create({
-        scopeType: "event" as const,
-        eventId: "evt-1",
-        instruction: "",
-        container: containerInput,
-      })
+      const sched = await agentService.startScheduler("evt-1")
       const orch = db
         .select()
         .from(agents)
-        .where(and(eq(agents.runId, sched.id), eq(agents.slot, "orchestrator")))
+        .where(and(eq(agents.id, sched.id), eq(agents.role, "orchestrator")))
         .get()!
 
-      const challenge = await runService.create({
-        scopeType: "challenge" as const,
+      const challenge = await agentService.spawn({
+        eventId: "evt-1",
         challengeId: "ch-1",
-        container: containerInput,
         timeoutMs: 30,
       })
       await wait(150)
 
       const texts = promptLog.get(orch.id) ?? []
       expect(
-        texts.some((t) => t.includes("超时（容器已终止，run 关闭）"))
+        texts.some((t) => t.includes("超时") && t.includes("已强制终止"))
       ).toBe(true)
-      // P2 wire: the run exposes its hard deadline.
+      // P2 wire: the agent exposes its hard deadline.
       expect(challenge.deadlineAt).not.toBeNull()
-      await runService.close()
+      // The urgent orch message rides the timeline too.
+      const orchPosts = agentService.channels.listMessages(orchKey("evt-1"))
+      expect(orchPosts.items.some((m) => m.body.includes("超时"))).toBe(true)
+      await agentService.close()
     } finally {
       close()
     }

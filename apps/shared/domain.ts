@@ -148,7 +148,7 @@ export type EventSummary = {
   updatedAt: string
   challengeCount: number
   solvedCount: number
-  activeRunCount: number
+  activeAgentCount: number
   lastActivityAt: string
 }
 export type TargetEndpointProtocol =
@@ -192,7 +192,7 @@ export type RemoteTargetInfo = {
   name: string
   services: string[]
 }
-import type { RunStatus } from "./run"
+import type { AgentStatus } from "./agent"
 
 export type Attachment = {
   id: string
@@ -220,8 +220,8 @@ export type ChallengeFlag = {
   challengeId: string
   flag: string
   status: "pending" | "accepted" | "rejected" | "error"
-  source: "run" | "manual"
-  runId: string | null
+  source: "agent" | "manual"
+  agentId: string | null
   remoteId: string | null
   message: string | null
   createdAt: string
@@ -253,8 +253,8 @@ export type Challenge = {
   attachments: Attachment[]
   flags: ChallengeFlag[]
   solved: ChallengeSolved
-  runCount: number
-  runStatusCounts: Record<RunStatus, number>
+  agentCount: number
+  agentStatusCounts: Partial<Record<AgentStatus, number>>
   remoteId: string | null
   remoteAvailable: boolean
   remoteTarget: boolean

@@ -1,80 +1,69 @@
 import type { SessionLifecycle } from "../agents/lifecycle"
-import { runs } from "../db/schema"
+import { agents } from "../db/schema"
 import type { EventScopePayload } from "../orchestration/types"
-import type { RunQueries } from "./queries"
 
-/** Grace between deadline-abort and a forced SIGKILL (deadline → abort →
- * grace → idle|closed). */
+/** Grace between deadline-abort and a forced session dispose. */
 const TIMEOUT_GRACE_MS = 30_000
 
-export type RunDeadlinesDeps = {
-  queries: RunQueries
+export type AgentDeadlinesDeps = {
   lifecycle: SessionLifecycle
-  updateRun(runId: string, patch: Partial<typeof runs.$inferInsert>): void
+  updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
   now(): string
-  /** Sanctioned closed transition (still-streaming after grace). */
-  teardownRun(runId: string): void
-  emitRunEvent(runId: string, payload: EventScopePayload): void
-  /** Test seam: grace between deadline-abort and a forced SIGKILL. */
+  /** Still streaming after grace → force terminal (aborted). */
+  forceTerminal(agentId: string): void
+  emitAgentEvent(agentId: string, payload: EventScopePayload): void
+  /** Test seam: grace between deadline-abort and a forced dispose. */
   timeoutGraceMs?: number
 }
 
-export type RunDeadlines = ReturnType<typeof createRunDeadlines>
+export type AgentDeadlines = ReturnType<typeof createAgentDeadlines>
 
-/** Per-run hard-deadline timers. At expiry every streaming agent is aborted;
- * if all settle within the grace the run stays `idle` (warm), else the
- * container is SIGKILLed and the run goes `closed`. The outcome is reported to
- * the event's scheduler (`run.timedOut`). */
-export function createRunDeadlines(deps: RunDeadlinesDeps) {
-  const { queries, lifecycle, updateRun, now, emitRunEvent } = deps
+/** Per-agent hard-deadline timers (v19: the deadline belongs to the agent,
+ * never to the shared container). At expiry the agent's turn is aborted; a
+ * clean settle within the grace lands idle (warm), else the session is
+ * force-disposed and the agent goes aborted. The outcome is reported to the
+ * event's scheduler (`agent.timedOut`). */
+export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
+  const { lifecycle, updateAgent, now, emitAgentEvent } = deps
   const timeoutTimers = new Map<
     string,
     { deadline?: NodeJS.Timeout; grace?: NodeJS.Timeout }
   >()
 
-  function clearRunTimers(runId: string): void {
-    const t = timeoutTimers.get(runId)
+  function clearAgentTimers(agentId: string): void {
+    const t = timeoutTimers.get(agentId)
     if (t?.deadline) clearTimeout(t.deadline)
     if (t?.grace) clearTimeout(t.grace)
-    timeoutTimers.delete(runId)
+    timeoutTimers.delete(agentId)
   }
 
-  /** Every agent with an in-flight turn. */
-  function streamingAgentIds(runId: string): string[] {
-    const ids: string[] = []
-    for (const agent of queries.listAgents(runId)) {
-      if (lifecycle.get(agent.id)?.session.isStreaming) ids.push(agent.id)
-    }
-    return ids
+  function isStreaming(agentId: string): boolean {
+    return Boolean(lifecycle.get(agentId)?.session.isStreaming)
   }
 
-  /** Arm a run's hard-deadline timer. At expiry every streaming agent is
-   * aborted; if all settle within the grace the run stays `idle` (warm), else
-   * the container is SIGKILLed and the run goes `closed`. The outcome is
-   * reported to the event's scheduler (`run.timedOut`). Idempotent. */
-  function armRunTimers(runId: string, deadlineAt: string | null): void {
-    clearRunTimers(runId)
+  /** Arm an agent's hard-deadline timer. Idempotent. */
+  function armAgentTimers(agentId: string, deadlineAt: string | null): void {
+    clearAgentTimers(agentId)
     if (!deadlineAt) return
     const delay = Math.max(new Date(deadlineAt).getTime() - Date.now(), 0)
     const entry: { deadline?: NodeJS.Timeout; grace?: NodeJS.Timeout } = {}
     entry.deadline = setTimeout(() => {
-      for (const agentId of streamingAgentIds(runId)) {
-        void lifecycle.abort(agentId).catch(() => undefined)
-      }
-      updateRun(runId, { lastTimeoutAt: now() })
+      updateAgent(agentId, { lastTimeoutAt: now() })
+      void lifecycle.abort(agentId).catch(() => undefined)
       entry.grace = setTimeout(() => {
-        // Still streaming after grace → SIGKILL the container → closed.
-        const stillStreaming = streamingAgentIds(runId).length > 0
-        if (stillStreaming) deps.teardownRun(runId)
-        emitRunEvent(runId, {
-          type: "run.timedOut",
-          runId,
-          outcome: stillStreaming ? "closed" : "idle",
+        // Still streaming after grace → force-dispose the session →
+        // aborted. A clean settle already landed idle.
+        const stillStreaming = isStreaming(agentId)
+        if (stillStreaming) deps.forceTerminal(agentId)
+        emitAgentEvent(agentId, {
+          type: "agent.timedOut",
+          agentId,
+          outcome: stillStreaming ? "aborted" : "idle",
         })
       }, deps.timeoutGraceMs ?? TIMEOUT_GRACE_MS)
     }, delay)
-    timeoutTimers.set(runId, entry)
+    timeoutTimers.set(agentId, entry)
   }
 
-  return { clearRunTimers, streamingAgentIds, armRunTimers, timeoutTimers }
+  return { clearAgentTimers, armAgentTimers, timeoutTimers }
 }

@@ -5,18 +5,20 @@ import type {
   ChannelPublic,
 } from "./types"
 
-/** A run's channel tree (#team + one DM per solver) — the IM view's left
- * rail. Unread is CLIENT-side session state: the server's per-agent
- * cursors are the functional state for agents, not the UI. */
-export function getRunChannels(runId: string) {
-  return apiRequest<{ items: ChannelPublic[] }>(`/runs/${runId}/channels`)
-}
-
-/** The challenge's #team (exactly one channel — the challenge-level IM
- * view, works with no run on the challenge). */
+/** The challenge's channel tree: #team + one DM per agent that ever attacked
+ * the challenge (the IM view's left rail). Unread is CLIENT-side session
+ * state: the server's per-agent cursors are the functional state for
+ * agents, not the UI. */
 export function getChallengeChannels(challengeId: string) {
   return apiRequest<{ items: ChannelPublic[] }>(
     `/challenges/${challengeId}/channels`
+  )
+}
+
+/** SDK channels.list: the agent's visible channels + unread counts. */
+export function getAgentChannels(agentId: string) {
+  return apiRequest<{ items: ChannelPublic[] }>(
+    `/agents/${agentId}/channels`
   )
 }
 
@@ -69,9 +71,4 @@ export function postChannelMessage(
     }
     return response.json() as Promise<ChannelMessagePublic>
   })
-}
-
-/** Attachment download / preview URL. */
-export function channelFileUrl(fileId: string) {
-  return `/api/channel-files/${fileId}`
 }

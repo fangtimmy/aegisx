@@ -22,44 +22,40 @@ import {
   isTargetCapable,
 } from "../platforms/challenge-state"
 import { RunStartError } from "./errors"
+import { agentId8 } from "./workspace-resolver"
 
 type Challenge = typeof challenges.$inferSelect
 
-export type RunPromptInputs = {
-  runId: string
+export type SolverPromptInputs = {
   challenge: Challenge
   remote: ChallengeRemote | undefined
   challengeAttachments: PromptAttachment[]
   environment: EnvironmentConfig
   model: ModelConfig
-  /** v9: true when the run has more than one solver — feeds
-   * `run.multiSolver` (renders the co-solver section in mainSystem). */
-  multiSolver: boolean
+  agentId: string
+  containerWorkspace: string
 }
 
 /**
- * Build the run-level {@link PromptContext} for a challenge-scoped run
- * (scope-aware). `agent` and per-agent `capabilities` are intentionally
- * LEFT BLANK here — `agent` is filled per-agent by `createAgent`, and
- * `capabilities` is the RUN-LEVEL view (challenge-derived) used to render
- * `initialPrompt`. createAgent OVERRIDES `capabilities` with the value derived
- * from each agent's own tool list when rendering that agent's system prompt.
- * For classic (single solver) the two coincide, so the rendered initial prompt
- * advertises exactly the solver's abilities.
+ * Build the spawn-time {@link PromptContext} for a solver agent. The
+ * workspace block describes the derived path tree: the agent's own directory
+ * (`agents/<id8>` — its bash cwd + host file-tool root), the server-written
+ * read-only `shared/` area, the one-shot `attachments/` materialization, and
+ * the sibling agent directories. `capabilities` are derived from the agent's
+ * own tool list (filled by the factory when rendering the system prompt).
  */
-export function buildPromptContext(
-  inputs: RunPromptInputs,
-  db: Database,
-  containerWorkspace: string
+export function buildSolverPromptContext(
+  inputs: SolverPromptInputs,
+  db: Database
 ): PromptContext {
   const {
-    runId,
     challenge,
     remote,
     challengeAttachments,
     environment,
     model,
-    multiSolver,
+    agentId,
+    containerWorkspace,
   } = inputs
   const event = db
     .select()
@@ -95,18 +91,16 @@ export function buildPromptContext(
       name: model.modelLabel ?? model.modelId,
       id: model.modelId,
     },
-    run: {
-      id: runId,
-      environment: "container",
-      isContainer: true,
-      workspace: containerWorkspace,
-      targetSupported,
-      platformIntegrated,
+    workspace: {
+      root: containerWorkspace,
+      agentDir: `agents/${agentId8(agentId)}`,
+      sharedDir: "shared",
+      attachmentsDir: "attachments",
+      siblingsDir: "agents",
       containerImage: environment.image,
       cpus: environment.cpus,
       memoryMb: environment.memoryMb,
       pidsLimit: environment.pidsLimit,
-      multiSolver,
     },
     capabilities: {
       canFinish: true,
@@ -117,24 +111,21 @@ export function buildPromptContext(
 }
 
 /**
- * Build the run-level {@link PromptContext} for an event-scoped (scheduler)
- * run. No `challenge` block — the scheduler manages an event, not
- * one challenge — and no `capabilities` (the scheduler's abilities come from
- * its own tool list via createAgent). `instruction` carries the user's
- * strategic direction for the event.
+ * Build the {@link PromptContext} for the scheduler (orchestrator) agent. No
+ * `challenge`/`workspace` block — the scheduler works at its workspace root
+ * and manages the event, not one challenge. No `capabilities` (the
+ * scheduler's abilities come from its tool list — empty after the SDK
+ * convergence).
  */
-export function buildEventPromptContext(
+export function buildSchedulerPromptContext(
   inputs: {
-    runId: string
     eventId: string
     instruction: string
-    environment: EnvironmentConfig
     model: ModelConfig
   },
-  db: Database,
-  containerWorkspace: string
+  db: Database
 ): PromptContext {
-  const { runId, eventId, instruction, environment, model } = inputs
+  const { eventId, instruction, model } = inputs
   const event = db.select().from(events).where(eq(events.id, eventId)).get()
   if (!event) throw new RunStartError("Event is unavailable")
   const platform = db
@@ -154,19 +145,11 @@ export function buildEventPromptContext(
       name: model.modelLabel ?? model.modelId,
       id: model.modelId,
     },
-    run: {
-      id: runId,
-      environment: "container",
-      isContainer: true,
-      workspace: containerWorkspace,
-      // The scheduler run does not solve challenges — no flag/target context.
-      targetSupported: false,
-      platformIntegrated: false,
-      containerImage: environment.image,
-      cpus: environment.cpus,
-      memoryMb: environment.memoryMb,
-      pidsLimit: environment.pidsLimit,
-      multiSolver: false,
+    // The scheduler does not solve challenges — no flag/target context.
+    capabilities: {
+      canFinish: false,
+      canSubmitFlag: false,
+      canManageTarget: false,
     },
     instruction,
   }
@@ -198,6 +181,9 @@ function attachmentFiles(db: Database, challengeId: string) {
   })
 }
 
+/** Materialize the challenge's attachments into the workspace's
+ * `attachments/` dir (overwrite semantics — naturally idempotent, so
+ * re-spawns on the same workspace do not duplicate copies). */
 export function copyAttachments(
   db: Database,
   dataDir: string,
@@ -208,7 +194,7 @@ export function copyAttachments(
     ({ storageKey, ...attachment }) => {
       copyFileSync(
         join(dataDir, "attachments", ...storageKey.split("/")),
-        join(workspacePath, attachment.path)
+        join(workspacePath, "attachments", attachment.path)
       )
       return attachment
     }

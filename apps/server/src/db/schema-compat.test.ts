@@ -8,7 +8,7 @@ import { createDatabase } from "./index"
 import { SCHEMA_VERSION } from "./schema"
 
 describe("schema bootstrap", () => {
-  test("fresh database migrates to SCHEMA_VERSION and drops the merged orchestrators table", () => {
+  test("fresh database migrates to SCHEMA_VERSION with the v19 table set", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
       const { db, sqlite, releaseLock } = createDatabase(dir)
@@ -25,30 +25,30 @@ describe("schema bootstrap", () => {
             .all() as Array<{ name: string }>
         ).map((row) => row.name)
       )
-      // v8+ execution + new tables present
       for (const t of [
-        "runs",
         "agents",
         "sessions",
         "session_entries",
-        "run_queue",
+        "spawn_queue",
         "scheduler_config",
         "channel_messages",
         "channel_reads",
-        "channel_files",
         "prompt_templates",
         "challenge_flags",
         "queue_state",
       ]) {
         expect(names.has(t)).toBe(true)
       }
-      // v16: the scheduler inbox digest history table is dropped (recap
-      // messages in the scheduler DM channel replace it).
-      expect(names.has("scheduler_inbox_digests")).toBe(false)
       // v18 (0012): the channels directory table is dropped — a channel is
       // a derived key on the message rows, not a table row.
       expect(names.has("channels")).toBe(false)
-      // orchestrators merged into runs; drizzle tracking present
+      // v19 (0013): the run layer is dropped (agents anchor challenges
+      // directly; the queue spawns agents; channel attachments are shared/
+      // workspace copies).
+      expect(names.has("runs")).toBe(false)
+      expect(names.has("run_queue")).toBe(false)
+      expect(names.has("channel_files")).toBe(false)
+      // orchestrators merged into runs in v8; runs dropped in v19.
       expect(names.has("orchestrators")).toBe(false)
       expect(names.has("__drizzle_migrations")).toBe(true)
       expect(db).toBeDefined()
@@ -59,29 +59,10 @@ describe("schema bootstrap", () => {
     }
   })
 
-  test("v8 preserved columns: single canonical model ref on runs/agents, session_entries.meta", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aegisx-cols-"))
+  test("v19 column shapes: agents anchor events/challenges; spawn_queue carries agent_id", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aegisx-db-cols-"))
     try {
       const { sqlite, releaseLock } = createDatabase(dir)
-      const runCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(runs)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
-      )
-      expect(runCols.has("scope_type")).toBe(true)
-      expect(runCols.has("orchestration")).toBe(false)
-      expect(runCols.has("finishing")).toBe(true)
-      expect(runCols.has("queue_item_id")).toBe(true)
-      expect(runCols.has("params")).toBe(true)
-      expect(runCols.has("last_timeout_at")).toBe(true)
-      // v9: single canonical model ref column (not provider/model_id/etc.)
-      expect(runCols.has("model")).toBe(true)
-      expect(runCols.has("provider")).toBe(false)
-      expect(runCols.has("model_id")).toBe(false)
-      expect(runCols.has("halfway_notified_at")).toBe(false)
-
       const agentCols = new Set(
         (
           sqlite.query(`PRAGMA table_info(agents)`).all() as Array<{
@@ -89,13 +70,38 @@ describe("schema bootstrap", () => {
           }>
         ).map((c) => c.name)
       )
-      for (const c of ["slot", "is_entry", "system_prompt", "tools", "model"]) {
+      for (const c of [
+        "event_id",
+        "challenge_id",
+        "role",
+        "model",
+        "system_prompt",
+        "tools",
+        "tool_definitions",
+        "status",
+        "session_file",
+        "prompt",
+        "source",
+        "timeout_ms",
+        "deadline_at",
+        "last_timeout_at",
+        "queue_item_id",
+        "summary",
+      ]) {
         expect(agentCols.has(c)).toBe(true)
       }
-      // v11: tool-definition snapshot column (nullable)
-      expect(agentCols.has("tool_definitions")).toBe(true)
-      expect(agentCols.has("model_id")).toBe(false)
-      expect(agentCols.has("provider")).toBe(false)
+      // The run-layer and v8-v18 inheritance columns are gone.
+      for (const gone of [
+        "run_id",
+        "slot",
+        "is_entry",
+        "parent_agent_id",
+        "task",
+        "model_id",
+        "provider",
+      ]) {
+        expect(agentCols.has(gone)).toBe(false)
+      }
 
       const sessionCols = (
         sqlite.query(`PRAGMA table_info(sessions)`).all() as Array<{
@@ -104,7 +110,6 @@ describe("schema bootstrap", () => {
       ).map((c) => c.name)
       expect(sessionCols).toEqual(["id", "agent_id", "cwd", "created_at"])
 
-      // v10: session_entries.meta (nullable timing JSON column)
       const entryCols = new Set(
         (
           sqlite.query(`PRAGMA table_info(session_entries)`).all() as Array<{
@@ -112,7 +117,9 @@ describe("schema bootstrap", () => {
           }>
         ).map((c) => c.name)
       )
+      // v10 meta + v19 run_id removal.
       expect(entryCols.has("meta")).toBe(true)
+      expect(entryCols.has("run_id")).toBe(false)
 
       // 0006: queue_state rows + scheduler_config.paused (W2/W3)
       const queueStateCols = new Set(
@@ -163,7 +170,7 @@ describe("schema bootstrap", () => {
 
       // v18 (0012): derived-key channel shapes — channel_messages carries
       // the derived key (no channel id, no kind); channel_reads is keyed
-      // (channel_key, reader_key); channel_files lost its channel column.
+      // (channel_key, reader_key).
       const msgCols = new Set(
         (
           sqlite.query(`PRAGMA table_info(channel_messages)`).all() as Array<{
@@ -202,17 +209,45 @@ describe("schema bootstrap", () => {
         "last_read_msg_id",
         "updated_at",
       ])
-      const fileCols = new Set(
+
+      // v19 (0013): spawn_queue — agent back-fill + append semantics (no
+      // challenge unique constraint).
+      const queueCols = new Set(
         (
-          sqlite.query(`PRAGMA table_info(channel_files)`).all() as Array<{
+          sqlite.query(`PRAGMA table_info(spawn_queue)`).all() as Array<{
             name: string
           }>
         ).map((c) => c.name)
       )
-      expect(fileCols.has("channel_id")).toBe(false)
-      expect([...fileCols]).toEqual(
-        expect.arrayContaining(["id", "message_id", "filename", "size"])
+      expect([...queueCols]).toEqual(
+        expect.arrayContaining([
+          "event_id",
+          "challenge_id",
+          "params",
+          "timeout_ms",
+          "prompt",
+          "source",
+          "status",
+          "agent_id",
+        ])
       )
+      const queueUnique = sqlite
+        .query(
+          `SELECT name FROM pragma_index_list('spawn_queue') WHERE "unique" = 1 AND origin = 'c'`
+        )
+        .all() as Array<{ name: string }>
+      expect(queueUnique).toEqual([])
+
+      // v19: challenge_flags anchors agent_id (text, no FK).
+      const flagCols = new Set(
+        (
+          sqlite.query(`PRAGMA table_info(challenge_flags)`).all() as Array<{
+            name: string
+          }>
+        ).map((c) => c.name)
+      )
+      expect(flagCols.has("agent_id")).toBe(true)
+      expect(flagCols.has("run_id")).toBe(false)
       sqlite.close()
       releaseLock()
     } finally {

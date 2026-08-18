@@ -3,15 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from .client import AegisxError, get_client, require_manager, wire_solvers
+from .client import AegisxError, get_client, require_manager
 from .models import QueueItem, from_dict
 
 #: Hoisted aliases — the module-level name `list` shadows the builtin for
-#: every later annotation, so annotations must not subscript `list` directly
-#: (same pattern as channels/runs/agents).
+#: every later annotation, so annotations must not subscript `list` directly.
 QueueItemList = list[QueueItem]
-StrList = list[str]
-SolverSpecs = list[dict]
 
 
 def _item(data: Any) -> QueueItem:
@@ -38,47 +35,40 @@ def list() -> QueueItemList:
 
 def enqueue(
     challenge_id: str,
-    strategy: str | None = None,
+    prompt: str | None = None,
     model: str | None = None,
-    solver_count: int | None = None,
-    solvers: SolverSpecs | None = None,
     timeout_ms: int | None = None,
     source: str = "scheduler",
 ) -> QueueItem:
-    """Add (or re-arm) a task in the queue — upserts by challenge; a hit
-    including done/cancelled/failed resets to pending. The queue drains FIFO
-    under the concurrency caps; with a free slot the run launches right away.
+    """Append a spawn item in the queue — one challenge may hold several
+    pending items (parallel attempts are a legal plan). The queue drains FIFO
+    under the concurrency caps; with a free slot the agent spawns right away.
 
-    `strategy` is the run-level guidance every solver receives. Shape the
-    solver set with `model` / `solver_count` / `solvers` (per-solver
-    {model?, prompt?, prompt_mode?}). A capacity rejection comes back as an
-    AegisxError with code "capacity" — adjust the plan, do not retry blindly.
-    Prefer this over `aegisx.runs.start` for planned work.
+    `prompt` is the spawned agent's strategy (appended as a Strategy section;
+    pass `prompt_mode="override"` server-side to replace the first prompt
+    entirely). A capacity rejection stays pending (no failure); adjust the
+    plan, do not retry blindly. Prefer this over `aegisx.agents.start` for
+    planned work.
 
     `source` marks who enqueued ("scheduler" by default — the SDK is the
     scheduler's face; pass "manual" only for user-driven scripts)."""
     require_manager()
-    body: dict = {"strategy": strategy} if strategy else {}
+    body: dict = {"challengeId": challenge_id, "source": source}
+    if prompt:
+        body["prompt"] = prompt
     if model:
         body["model"] = model
-    if solver_count:
-        body["solver_count"] = solver_count
-    solvers_wire = wire_solvers(solvers)
-    if solvers_wire:
-        body["solvers"] = solvers_wire
     if timeout_ms:
         body["timeoutMs"] = timeout_ms
-    if source:
-        body["source"] = source
     data = get_client().request(
-        "POST", f"/api/challenges/{challenge_id}/runs", body=body
+        "POST", get_client().event_path("/queue"), body=body
     )
     return _item(data)
 
 
 def remove(item_id: str) -> None:
     """Remove a queue item (pending/done/cancelled/failed). A running item
-    cannot be removed — close its run first."""
+    cannot be removed — close its agent first."""
     require_manager()
     client = get_client()
     client.request("DELETE", client.event_path(f"/queue/{item_id}"))
@@ -91,7 +81,7 @@ def clear() -> None:
     client.request("POST", client.event_path("/queue/clear"))
 
 
-def reorder(item_ids: StrList) -> None:
+def reorder(item_ids: list[str]) -> None:
     """Reorder pending queue items by listing their ids front-first.
     Running/failed items keep their place."""
     require_manager()

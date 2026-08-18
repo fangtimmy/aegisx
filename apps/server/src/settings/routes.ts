@@ -43,7 +43,6 @@ const promptPreviewInput = Type.Object(
   {
     kind: Type.Union([
       Type.Literal("mainSystemPrompt"),
-      Type.Literal("childSystemPrompt"),
       Type.Literal("initialPrompt"),
       Type.Literal("orchestratorSystemPrompt"),
     ]),
@@ -90,30 +89,12 @@ export function registerSettingsRoutes(
   const { db, configStore } = options
   // Reference through the options object (not destructured) so `this` survives.
   const syncModels = () => options.syncModels()
-  const childSampleContext = {
-    ...samplePromptContext,
-    agent: {
-      role: "child" as const,
-      isMain: false,
-      name: "Recon agent",
-      task: "Inspect the application endpoints.",
-    },
-  }
   const previewPrompt = (
-    kind:
-      | "mainSystemPrompt"
-      | "childSystemPrompt"
-      | "initialPrompt"
-      | "orchestratorSystemPrompt",
+    kind: "mainSystemPrompt" | "initialPrompt" | "orchestratorSystemPrompt",
     template: string
   ) => {
     if (kind === "mainSystemPrompt") {
       return previewSystemPrompt(template, samplePromptContext)
-    }
-    if (kind === "childSystemPrompt") {
-      // v9: childSystem is gone; kept as an accepted kind so older clients
-      // get a sane preview instead of a validation error.
-      return previewSystemPrompt(template, childSampleContext)
     }
     if (kind === "orchestratorSystemPrompt") {
       return previewOrchestratorSystemPrompt(

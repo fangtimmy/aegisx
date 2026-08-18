@@ -1,12 +1,12 @@
 import { get, type FlatSettings } from "@aegisx/shared"
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
+  agents,
   challengeFlags,
   challengeRemote,
   challenges,
-  runs,
   schedulerConfig,
 } from "../db/schema"
 
@@ -14,79 +14,65 @@ export type FenceDecision =
   | { ok: true }
   | { ok: false; code: "global_capacity" | "target_slots"; message: string }
 
-/** A candidate run whose launch the fence must admit. Event-scope (scheduler)
- * runs never count and are never blocked; challenge-scope runs are checked. */
-export type FenceCandidate = {
-  scopeType: "challenge" | "event"
-  eventId: string
-  /** The challenge being attacked (challenge-scope only). */
-  challengeId?: string | null
-}
-
-/** Default global cap when the setting is somehow absent. */
-const DEFAULT_MAX_CONCURRENT_RUNS = 4
 /** Default per-event target cap when no scheduler_config row exists. */
 const DEFAULT_MAX_CONCURRENT_TARGETS = 1
 
-/** Read the global challenge-run concurrency cap from settings. */
-export function maxConcurrentRunsSetting(settings: FlatSettings): number {
-  return get(settings, "scheduler.maxConcurrentRuns")
+/** Read the global live-solver-agent cap from settings. */
+export function maxConcurrentAgentsSetting(settings: FlatSettings): number {
+  return get(settings, "scheduler.maxConcurrentAgents")
 }
 
 /** A read-only snapshot of the fence state for one event (the scheduler's
- * get_status tool + the status route). `runningCount` is global; the target
+ * status tool + the status route). `liveAgentCount` is global; the target
  * figures are per-event. */
 export function fenceSnapshot(
   db: Database,
   settings: FlatSettings,
   eventId: string
 ): {
-  maxConcurrentRuns: number
-  runningCount: number
+  maxConcurrentAgents: number
+  liveAgentCount: number
   maxConcurrentTargets: number
   activeTargetChallenges: string[]
 } {
   return {
-    maxConcurrentRuns: maxConcurrentRunsSetting(settings),
-    runningCount: liveChallengeRunCount(db),
+    maxConcurrentAgents: maxConcurrentAgentsSetting(settings),
+    liveAgentCount: liveSolverAgentCount(db),
     maxConcurrentTargets: maxConcurrentTargetsFor(db, eventId),
     activeTargetChallenges: [...activeTargetSlots(db, eventId)],
   }
 }
 
-/** Count challenge-scope runs currently LIVE (running + idle). Idle keeps a
- * warm container and its target may still run on the platform, so it consumes
- * a container slot until closed (W4.1). Scheduler runs never count. */
-function liveChallengeRunCount(db: Database): number {
+/** Count live solver agents (running + idle, challengeId set). Idle keeps a
+ * warm session and its target may still run on the platform, so it consumes
+ * a concurrency slot until terminal. The scheduler agent never counts. */
+export function liveSolverAgentCount(db: Database): number {
   const row = db
     .select({ n: sql<number>`count(*)` })
-    .from(runs)
+    .from(agents)
     .where(
       and(
-        eq(runs.scopeType, "challenge"),
-        inArray(runs.status, ["running", "idle"])
+        isNotNull(agents.challengeId),
+        inArray(agents.status, ["running", "idle"])
       )
     )
     .get()
   return row?.n ?? 0
 }
 
-/** Distinct target-capable AND unsolved challenges with a LIVE run in this
- * event ("different target-capable challenges under attack"; W4.2 counts idle
- * too — its target is very likely still running on the platform). Solved
- * challenges free their slot; the same challenge attacked by several runs
- * shares one slot (DISTINCT). */
+/** Distinct target-capable AND unsolved challenges with a LIVE agent in this
+ * event. Solved challenges free their slot; the same challenge attacked by
+ * several agents shares one slot (DISTINCT). */
 function activeTargetSlots(db: Database, eventId: string): Set<string> {
   const rows = db
-    .select({ challengeId: runs.challengeId })
-    .from(runs)
-    .innerJoin(challenges, eq(challenges.id, runs.challengeId))
+    .select({ challengeId: agents.challengeId })
+    .from(agents)
+    .innerJoin(challenges, eq(challenges.id, agents.challengeId))
     .innerJoin(challengeRemote, eq(challengeRemote.challengeId, challenges.id))
     .where(
       and(
-        eq(runs.scopeType, "challenge"),
-        inArray(runs.status, ["running", "idle"]),
-        eq(runs.eventId, eventId),
+        eq(agents.eventId, eventId),
+        inArray(agents.status, ["running", "idle"]),
         eq(challengeRemote.available, true),
         eq(challengeRemote.targetSupported, true),
         eq(challengeRemote.targetIgnored, false),
@@ -144,48 +130,47 @@ function occupiesTargetSlot(db: Database, challengeId: string): boolean {
 }
 
 /**
- * Decide whether a candidate run may launch under the concurrency fence.
+ * Decide whether a solver agent may spawn under the concurrency fence.
  * Two independent caps:
  *
- *  1. Global: challenge-scope LIVE runs (running + idle — idle keeps a warm
- *     container) ≤ `scheduler.maxConcurrentRuns`.
- *  2. Per-event: distinct target-capable unsolved challenges under attack
- *     (running + idle runs) ≤ `scheduler_config.maxConcurrentTargets`. The
- *     candidate shares its slot if its challenge is already under attack;
- *     otherwise it adds one.
+ *  1. Global: live solver agents (running + idle — idle keeps a warm session)
+ *     ≤ `scheduler.maxConcurrentAgents`.
+ *  2. Per-event: distinct target-capable unsolved challenges with a live
+ *     agent ≤ `scheduler_config.maxConcurrentTargets`. The candidate shares
+ *     its slot if its challenge already has a live agent; otherwise it adds
+ *     one.
  *
- * Scheduler (event-scope) runs are always admitted — they neither count nor
- * consume slots. Pure (reads only); the caller wraps check + launch in the
- * global fence lock for atomicity.
+ * The scheduler agent is always admitted — it neither counts nor consumes
+ * slots. Pure (reads only); the caller wraps check + spawn in the global
+ * fence lock for atomicity.
  */
-export function checkLaunchFence(
+export function checkSpawnFence(
   db: Database,
   settings: FlatSettings,
-  candidate: FenceCandidate
+  candidate: { eventId: string; challengeId: string }
 ): FenceDecision {
-  if (candidate.scopeType === "event") return { ok: true }
-
-  const cap = maxConcurrentRunsSetting(settings)
-  const live = liveChallengeRunCount(db)
+  const cap = maxConcurrentAgentsSetting(settings)
+  const live = liveSolverAgentCount(db)
   if (live + 1 > cap) {
     return {
       ok: false,
       code: "global_capacity",
-      message: `Live container cap reached (${live}/${cap} solver containers). Close or wait for a run to free a slot.`,
+      message: `Live agent cap reached (${live}/${cap} solver agents). Close or wait for an agent to free a slot.`,
     }
   }
 
   const challengeId = candidate.challengeId
-  if (challengeId && occupiesTargetSlot(db, challengeId)) {
+  if (occupiesTargetSlot(db, challengeId)) {
     const maxTargets = maxConcurrentTargetsFor(db, candidate.eventId)
     const active = activeTargetSlots(db, candidate.eventId)
-    // The candidate's run does not exist yet, so it is never in the active set
-    // unless another run is already attacking the same challenge (shared slot).
+    // The candidate's agent row does not exist yet, so it is never in the
+    // active set unless another agent is already attacking the same
+    // challenge (shared slot).
     if (!active.has(challengeId) && active.size + 1 > maxTargets) {
       return {
         ok: false,
         code: "target_slots",
-        message: `Target-slot cap reached for this event (${active.size}/${maxTargets} distinct targets under attack). Close a run on another target first.`,
+        message: `Target-slot cap reached for this event (${active.size}/${maxTargets} distinct targets under attack). Close an agent on another target first.`,
       }
     }
   }

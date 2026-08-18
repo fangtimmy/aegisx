@@ -1,7 +1,6 @@
 import {
   formatModelRef,
   get,
-  parseModelRef,
   resolveModelRef,
   type FlatSettings,
   type ModelRef,
@@ -10,7 +9,6 @@ import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { ThinkingLevel } from "@aegisx/shared/live-event"
 
 import { RunActionError } from "./errors"
-import type { RunModelDisplay } from "./public"
 
 /** A resolved per-agent model snapshot: what the run factory persists on the
  * agent row (the concrete ref) plus the display fields that feed the
@@ -75,35 +73,9 @@ export function createModelResolver(deps: ModelResolverDeps) {
     }
   }
 
-  /** Derive the run-level model display fields (provider/modelId/modelName/
-   * thinkingLevel) for {@link toRunPublic} from a stored ref string. Falls back
-   * to parsing the ref when no provider matches (e.g. provider since disabled). */
-  function resolveModelDisplay(ref: ModelRef): RunModelDisplay {
-    const target = resolveModelTarget(ref)
-    if (target) {
-      return {
-        provider: target.provider.label,
-        modelId: target.model.modelId,
-        modelName: target.model.label,
-        thinkingLevel: target.thinkingLevel,
-      }
-    }
-    const parsed = parseModelRef(ref)
-    if (parsed?.kind === "model") {
-      return {
-        provider: parsed.providerKey,
-        modelId: parsed.modelId,
-        modelName: parsed.modelId,
-        thinkingLevel: parsed.effort,
-      }
-    }
-    return { provider: "", modelId: "", modelName: ref, thinkingLevel: "off" }
-  }
-
   return {
     defaultModelRef,
     resolveModelTarget,
     resolveSlotModelFromRef,
-    resolveModelDisplay,
   }
 }

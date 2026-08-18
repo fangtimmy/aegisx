@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents, challengeRemote, challenges } from "../../src/db/schema"
-import { createRunService } from "../../src/run/service"
+import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
@@ -14,26 +14,6 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
-
-const containerInput = {
-  image: "aegisx/solve:latest",
-  cpus: 2,
-  memoryMb: 1024,
-  pidsLimit: 128,
-  tmpfsSize: "128m",
-  workspace: "/workspace",
-}
-
-function baseCreateInput(challengeId: string) {
-  return {
-    input: {
-      scopeType: "challenge" as const,
-      challengeId,
-      container: containerInput,
-    },
-    provider: makeProvider(),
-  }
-}
 
 /** Seed a challenge_remote row marking the challenge platform-integrated and
  * target-capable (drives isPlatformIntegrated / isTargetCapable). */
@@ -69,14 +49,12 @@ function seedRemote(
 
 function makeService(
   db: ReturnType<typeof setupDb>["db"],
-  sqlite: ReturnType<typeof setupDb>["sqlite"],
   dir: string,
   provider: ReturnType<typeof makeProvider>
 ) {
   const { manager } = stubContainerManager()
-  return createRunService({
+  return createAgentService({
     db,
-    sqlite,
     dataDir: dir,
     containerManager: manager,
     platformService: {
@@ -95,26 +73,24 @@ function makeService(
   })
 }
 
-describe("classic-parity: N=1 solver run (v9 path)", () => {
+describe("classic-parity: spawn on a challenge (v19 path)", () => {
   test("platform + target challenge → solver tools snapshot includes flag + target tools; systemPrompt rendered from builtin mainSystem", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       seedRemote(db, "ch-1")
-      const { input, provider } = baseCreateInput("ch-1")
-      const runService = makeService(db, sqlite, dir, provider)
+      const provider = makeProvider()
+      const service = makeService(db, dir, provider)
 
-      const run = await runService.create(input)
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       const agent = db
         .select()
         .from(agents)
-        .where(eq(agents.runId, run.id))
+        .where(eq(agents.role, "solver"))
         .get()!
-      await runService.close()
+      await service.close()
 
-      expect(agent.slot).toBe("solver-1")
-      expect(agent.isEntry).toBe(true)
       const tools = JSON.parse(agent.tools) as string[]
       expect(tools).toEqual(
         expect.arrayContaining([
@@ -135,21 +111,21 @@ describe("classic-parity: N=1 solver run (v9 path)", () => {
   })
 
   test("plain challenge (no platform/target) → submit_flag granted, no target tools", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       // no challenge_remote row
-      const { input, provider } = baseCreateInput("ch-1")
-      const runService = makeService(db, sqlite, dir, provider)
+      const provider = makeProvider()
+      const service = makeService(db, dir, provider)
 
-      const run = await runService.create(input)
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       const agent = db
         .select()
         .from(agents)
-        .where(eq(agents.runId, run.id))
+        .where(eq(agents.role, "solver"))
         .get()!
-      await runService.close()
+      await service.close()
 
       const tools = JSON.parse(agent.tools) as string[]
       expect(tools).toContain("finish_run")
@@ -158,8 +134,7 @@ describe("classic-parity: N=1 solver run (v9 path)", () => {
       expect(tools).not.toContain("read_agent")
       // Target tools stay conditional on target capability.
       expect(tools.filter((t) => t.endsWith("_target"))).toEqual([])
-      // mainSystem rendered WITH the submit_flag section — the tool records
-      // non-platform flags as locally accepted (see flags.ts).
+      // mainSystem rendered WITH the submit_flag section.
       expect(agent.systemPrompt).toContain("CTF-solving agent")
       expect(agent.systemPrompt).toContain("submit_flag")
     } finally {
@@ -167,21 +142,20 @@ describe("classic-parity: N=1 solver run (v9 path)", () => {
     }
   })
 
-  test("exactly one entry agent declared", async () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("spawn yields exactly one solver agent", async () => {
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { input, provider } = baseCreateInput("ch-1")
-      const runService = makeService(db, sqlite, dir, provider)
+      const provider = makeProvider()
+      const service = makeService(db, dir, provider)
 
-      const run = await runService.create(input)
-      await runService.close()
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await service.close()
 
-      expect(run.scopeType).toBe("challenge")
-      const all = db.select().from(agents).where(eq(agents.runId, run.id)).all()
+      const all = db.select().from(agents).all()
       expect(all).toHaveLength(1)
-      expect(all.filter((a) => a.isEntry)).toHaveLength(1)
+      expect(all[0]!.role).toBe("solver")
     } finally {
       close()
     }

@@ -1,7 +1,9 @@
 export type {
+  AgentDetail,
   AgentSessionSummary,
   AgentStatus,
   AgentSummary,
+  AgentUsage,
   Attachment,
   Challenge,
   ChallengeFlag,
@@ -31,12 +33,6 @@ export type {
   ProviderType,
   RemoteChallengeSummary,
   RemoteEvent,
-  RunDetail,
-  RunFile,
-  RunFileEntry,
-  RunPublic,
-  RunStatus,
-  RunUsage,
   SessionEntry,
   SessionMessageEntry,
   SettingDef,
@@ -47,6 +43,8 @@ export type {
   ThinkingLevel,
   TimingBlock,
   TimingMeta,
+  WorkspaceFile,
+  WorkspaceInfo,
 } from "@aegisx/shared"
 export {
   isSessionEntry,
@@ -60,8 +58,6 @@ export type { ContextSnapshot } from "@aegisx/shared/live-event"
 import type { FlatSettings } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
 
-import type { RunPublic } from "./types"
-
 /** Task-queue item (mirrors the server's QueueItemPublic). */
 export type QueueItem = {
   id: string
@@ -74,7 +70,7 @@ export type QueueItem = {
   prompt: string
   source: "manual" | "scheduler"
   status: "pending" | "running" | "done" | "cancelled" | "failed"
-  runId: string | null
+  agentId: string | null
   error: string | null
   createdAt: string
   updatedAt: string
@@ -89,23 +85,24 @@ export type QueueSnapshot = {
   state: QueueState
 }
 
-/** GET /api/events/:id/scheduler — config + run + fence status snapshot. */
+/** GET /api/events/:id/scheduler — config + the scheduler agent + fence
+ * status snapshot. */
 export type SchedulerInfo = {
   config: {
     eventId: string
     modelId: string | null
     instruction: string
     maxConcurrentTargets: number
-    /** W3: scheduler disabled (run-lifecycle events gated). */
+    /** W3: scheduler disabled (agent-lifecycle events gated). */
     paused: boolean
   }
-  run: RunPublic | null
+  agent: AgentSummary | null
   status: {
-    maxConcurrentRuns: number
-    runningCount: number
+    maxConcurrentAgents: number
+    liveAgentCount: number
     maxConcurrentTargets: number
     activeTargetChallenges: string[]
-    activeRuns: Array<{
+    activeAgents: Array<{
       id: string
       challengeId: string | null
       challengeName: string
@@ -114,13 +111,12 @@ export type SchedulerInfo = {
   }
 }
 
-/** W7.3: GET /api/events/:id/fleet — the overview's single poll (runs +
- * agents + scheduler run/agents + scheduler config/status). */
+/** GET /api/events/:id/fleet — the overview's single poll (challenges +
+ * per-challenge agents + the scheduler agent + scheduler config/status). */
 export type FleetInfo = {
-  runs: RunPublic[]
-  agentsByRun: Record<string, AgentSummary[]>
-  schedulerRun: RunPublic | null
-  schedulerAgents: AgentSummary[]
+  challenges: { id: string; name: string; category: string | null }[]
+  agentsByChallenge: Record<string, AgentSummary[]>
+  schedulerAgent: AgentSummary | null
   config: SchedulerInfo["config"]
   status: SchedulerInfo["status"]
 }

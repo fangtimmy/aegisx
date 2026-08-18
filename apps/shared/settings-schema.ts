@@ -58,7 +58,7 @@ export type FlatSettings = {
   "agent.compactionEnabled": boolean
   "agent.retryEnabled": boolean
   "agent.retryMaxRetries": number
-  "scheduler.maxConcurrentRuns": number
+  "scheduler.maxConcurrentAgents": number
   "scheduler.defaultRunTimeoutMs": number
   "runtime.maxAttachmentMb": number
   "runtime.platformRequestTimeoutMs": number
@@ -120,15 +120,15 @@ export const SETTINGS_DEFS: SettingDef[] = [
     order: 35,
   },
   {
-    key: "scheduler.maxConcurrentRuns",
+    key: "scheduler.maxConcurrentAgents",
     type: "integer",
     default: 4,
     minimum: 1,
     maximum: 32,
     group: "调度器",
-    title: "最大并发任务数",
+    title: "最大并发 agent 数",
     description:
-      "同时存活的解题容器上限（运行中 + 空闲保温）。由编排器强制限制。",
+      "同时存活的解题 agent 上限（运行中 + 空闲保温）。由调度器强制限制。",
     widget: "number",
     order: 10,
   },

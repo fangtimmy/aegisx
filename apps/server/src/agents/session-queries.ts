@@ -2,7 +2,7 @@ import {
   isTimingMeta,
   type MessageList,
   type MessageListItem,
-  type RunUsage,
+  type AgentUsage,
   type TimingMeta,
 } from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
@@ -160,7 +160,7 @@ export function cacheHitRateSql(
 export function sumUsageTotals(
   db: Database,
   where: SQL | undefined
-): RunUsage | undefined {
+): AgentUsage | undefined {
   const totals = usageTotalsSql(db, where)
   if (totals.turns === 0 && totals.cost === 0 && totals.totalTokens === 0) {
     return undefined
@@ -244,7 +244,6 @@ export function listRenderableEntries(
       entry,
       seq: row.seq,
       key: entryKeyOf(row.agentId, entry),
-      agentId: row.agentId,
       ...(meta ? { meta } : {}),
     })
     nextCursor = cursor === "rowid" ? row.rowid : row.seq

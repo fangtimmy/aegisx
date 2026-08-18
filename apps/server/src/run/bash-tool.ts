@@ -204,18 +204,21 @@ For multi-step logic (especially the scheduler's \`aegisx\` management SDK), wri
 Single quotes around PY stop shell interpolation of $/backticks. The scheduler container has PYTHONPATH preset so \`import aegisx\` just works. A script failure prints a traceback — read it, fix the script, re-run (do not switch to a different mechanism).`
 
 export function createBashTool(
-  containerWorkspace: string,
+  /** Container-internal working directory for every exec (the agent's own
+   * dir, or the workspace root for the scheduler). */
+  containerCwd: string,
   containerName: string,
   manager: ContainerManager,
   /** Per-call exec env ("KEY=value" entries) — per-agent identity for the
-   * container-side aegisx SDK (AEGISX_AGENT_ID / AEGISX_RUN_ID) on shared
-   * solver containers (docs/im-channels.md §四). */
+   * container-side aegisx SDK (AEGISX_AGENT_ID) on shared solver
+   * containers. */
   execEnv?: string[]
 ): ToolDefinition {
-  const overflowDirAbs = `${containerWorkspace}/${OVERFLOW_DIR_REL}`.replace(
-    /\/+/g,
-    "/"
-  )
+  const overflowDirAbs =
+    `${containerCwd.replace(/\/+$/, "")}/${OVERFLOW_DIR_REL}`.replace(
+      /\/{2,}/g,
+      "/"
+    )
 
   return defineTool({
     name: "bash",
@@ -272,6 +275,7 @@ export function createBashTool(
             signal,
             timeout,
             env: execEnv,
+            workdir: containerCwd,
           })
           exitCode = res.exitCode
           timedOut = res.timedOut

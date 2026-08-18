@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { queueState, runQueue } from "../../src/db/schema"
+import { queueState, spawnQueue } from "../../src/db/schema"
 import { RunActionError } from "../../src/run/errors"
-import { createQueueService, parseQueueLaunchSpecs } from "../../src/run/queue"
+import { createQueueService, parseSpawnQueueParams } from "../../src/run/queue"
 import {
   flatSettings,
+  seedAgent,
   seedChallenge,
   seedEvent,
-  seedRun,
   setupDb,
   now,
 } from "../helpers"
@@ -17,28 +17,30 @@ import {
 type Db = ReturnType<typeof setupDb>["db"]
 
 function item(db: Db, id: string) {
-  return db.select().from(runQueue).where(eq(runQueue.id, id)).get()!
+  return db.select().from(spawnQueue).where(eq(spawnQueue.id, id)).get()!
 }
 
-/** QueueService with a stubbed launch (records calls, controls outcome). */
+/** QueueService with a stubbed launch (records calls, controls outcome).
+ * Each launch seeds the agent row the drainer's markRunning references. */
 function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
   const launches: string[] = []
   const emergencies: string[] = []
   const notices: string[] = []
+  let n = 0
   const svc = createQueueService({
     db,
     getSettings: flatSettings,
     isDisposed: () => false,
     launch: async (row) => {
       launches.push(row.id)
-      const runId = await launch(row.id)
-      // Satisfy the run_queue.runId → runs FK for the markRunning UPDATE.
-      seedRun(db, {
-        id: runId,
+      const agentId = await launch(row.id)
+      n += 1
+      seedAgent(db, {
+        id: agentId === "run-x" ? `agent-${n}` : agentId,
         eventId: row.eventId,
         challengeId: row.challengeId,
       })
-      return runId
+      return agentId === "run-x" ? `agent-${n}` : agentId
     },
     onQueueEmergency: (eventId, line) =>
       emergencies.push(`${eventId}: ${line}`),
@@ -83,32 +85,21 @@ describe("queue CRUD", () => {
     }
   })
 
-  test("enqueue upserts by challenge: resets done/failed to pending", async () => {
+  test("v19 append: one challenge may hold several pending items (no upsert)", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
-      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       const first = enqueue(svc, "evt-1", "ch-a", 1)
-      // Force it to done, then re-enqueue → same row, status pending, new ord.
-      seedRun(db, { id: "r-old", eventId: "evt-1", challengeId: "ch-a" })
-      db.update(runQueue)
-        .set({ status: "done", runId: "r-old", updatedAt: now() })
-        .where(eq(runQueue.id, first.id))
-        .run()
-      enqueue(svc, "evt-1", "ch-b", 2) // bump max ord
-      const re = svc.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "manual",
-        prompt: "new-strategy",
-      })
-      expect(re.id).toBe(first.id)
-      expect(re.status).toBe("pending")
-      expect(re.runId).toBeNull()
-      expect(re.prompt).toBe("new-strategy")
+      const second = enqueue(svc, "evt-1", "ch-a", 2)
+      // Two DISTINCT pending rows on the same challenge — parallel attempts
+      // are a legal plan.
+      expect(second.id).not.toBe(first.id)
+      expect([first.status, second.status]).toEqual(["pending", "pending"])
+      expect([first.ord, second.ord]).toEqual([1, 2])
+      expect(second.prompt).toBe("prompt-2")
     } finally {
       close()
     }
@@ -126,10 +117,9 @@ describe("queue CRUD", () => {
       expect(item(db, pending.id)).toBeUndefined()
 
       const running = enqueue(svc, "evt-1", "ch-a", 2)
-      seedRun(db, { id: "r1", eventId: "evt-1", challengeId: "ch-a" })
-      db.update(runQueue)
-        .set({ status: "running", runId: "r1", updatedAt: now() })
-        .where(eq(runQueue.id, running.id))
+      db.update(spawnQueue)
+        .set({ status: "running", updatedAt: now() })
+        .where(eq(spawnQueue.id, running.id))
         .run()
       expect(() => svc.remove(running.id)).toThrow(RunActionError)
     } finally {
@@ -153,9 +143,9 @@ describe("queue CRUD", () => {
       expect(updated.timeoutMs).toBe(99)
 
       const running = enqueue(svc, "evt-1", "ch-a", 2)
-      db.update(runQueue)
+      db.update(spawnQueue)
         .set({ status: "running", updatedAt: now() })
-        .where(eq(runQueue.id, running.id))
+        .where(eq(spawnQueue.id, running.id))
         .run()
       expect(() => svc.update(running.id, { prompt: "x" })).toThrow(
         RunActionError
@@ -185,92 +175,81 @@ describe("queue CRUD", () => {
     }
   })
 
-  test("markDone is guarded by (id, runId, running)", async () => {
+  test("markDone is guarded by (id, agentId, running)", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedAgent(db, { id: "a-1", eventId: "evt-1", challengeId: "ch-a" })
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       const it = enqueue(svc, "evt-1", "ch-a", 1)
-      seedRun(db, { id: "r1", eventId: "evt-1", challengeId: "ch-a" })
-      db.update(runQueue)
-        .set({ status: "running", runId: "r1", updatedAt: now() })
-        .where(eq(runQueue.id, it.id))
+      db.update(spawnQueue)
+        .set({ status: "running", agentId: "a-1", updatedAt: now() })
+        .where(eq(spawnQueue.id, it.id))
         .run()
-      // Wrong runId → no-op.
-      svc.markDone(it.id, "other-run")
+      // Wrong agentId → no-op.
+      svc.markDone(it.id, "a-other")
       expect(item(db, it.id).status).toBe("running")
       // Correct guard → done.
-      svc.markDone(it.id, "r1")
+      svc.markDone(it.id, "a-1")
       expect(item(db, it.id).status).toBe("done")
     } finally {
       close()
     }
   })
 
-  test("enqueue serializes the v9 launch specs into params; prompt keeps the strategy", async () => {
+  test("enqueue serializes the v19 spawn params; prompt mirrors params.prompt", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
-      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
-      const specs = {
-        strategy: "run-level strategy",
-        model: "openai/gpt-4o-mini",
-        solverCount: 3,
-        solvers: [
-          { model: "a/b:off" },
-          { prompt: "angle b", promptMode: "override" as const },
-        ],
-      }
       const item = svc.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
         source: "scheduler",
-        ...specs,
+        prompt: "spawn strategy text",
+        model: "openai/gpt-4o-mini",
+        promptMode: "override",
+        timeoutMs: 3_600_000,
       })
-      expect(item.prompt).toBe("run-level strategy")
-      expect(item.params).toEqual(specs)
-      // A prompt-only (legacy HTTP field) enqueue lands in both places too.
-      const legacy = enqueue(svc, "evt-1", "ch-b", 1)
-      expect(legacy.prompt).toBe("prompt-1")
-      expect(legacy.params).toEqual({ strategy: "prompt-1" })
+      expect(item.prompt).toBe("spawn strategy text")
+      expect(item.params).toEqual({
+        prompt: "spawn strategy text",
+        model: "openai/gpt-4o-mini",
+        promptMode: "override",
+      })
+      expect(item.timeoutMs).toBe(3_600_000)
+      expect(item.agentId).toBeNull()
     } finally {
       close()
     }
   })
 
-  test("parseQueueLaunchSpecs reads the specs back defensively", () => {
-    expect(parseQueueLaunchSpecs("{}")).toEqual({})
-    expect(parseQueueLaunchSpecs("not json")).toEqual({})
+  test("parseSpawnQueueParams reads the params back defensively", () => {
+    expect(parseSpawnQueueParams("{}")).toEqual({})
+    expect(parseSpawnQueueParams("not json")).toEqual({})
     expect(
-      parseQueueLaunchSpecs(
+      parseSpawnQueueParams(
         JSON.stringify({
-          strategy: "s",
+          prompt: "s",
           model: "m",
-          solverCount: 2,
-          solvers: [{ model: "a" }],
+          promptMode: "override",
         })
       )
-    ).toEqual({
-      strategy: "s",
-      model: "m",
-      solverCount: 2,
-      solvers: [{ model: "a" }],
-    })
-    // Wrong shapes drop the affected key; bad solver entries are filtered.
+    ).toEqual({ prompt: "s", model: "m", promptMode: "override" })
+    // Wrong shapes drop the affected key.
     expect(
-      parseQueueLaunchSpecs(
+      parseSpawnQueueParams(
         JSON.stringify({
-          strategy: 42,
-          solverCount: -1,
-          solvers: [{ bogus: 1 }, { prompt: "ok" }],
+          prompt: 42,
+          model: "",
+          promptMode: "nonsense",
         })
       )
-    ).toEqual({ solvers: [{ prompt: "ok" }] })
+    ).toEqual({})
   })
 })
 
@@ -410,7 +389,7 @@ describe("queue drainer", () => {
       await svc.drainOnce()
       expect(launches).toEqual([a.id, b.id])
       expect(item(db, a.id).status).toBe("running")
-      expect(item(db, a.id).runId).toBe("run-1")
+      expect(item(db, a.id).agentId).toBe("run-1")
       expect(item(db, b.id).status).toBe("running")
     } finally {
       close()

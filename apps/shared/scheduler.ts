@@ -2,16 +2,15 @@
  * scheduler-admin + routes and the web UI both import from here. */
 
 import type { AgentSummary } from "./agent"
-import type { RunPublic } from "./run"
 
-/** Fence + active-run snapshot returned by get_status (the scheduler status
+/** Fence + active-agent snapshot returned by get_status (the scheduler status
  * block of GET /api/events/:id/scheduler and /fleet). */
 export type SchedulerStatusSnapshot = {
-  maxConcurrentRuns: number
-  runningCount: number
+  maxConcurrentAgents: number
+  liveAgentCount: number
   maxConcurrentTargets: number
   activeTargetChallenges: string[]
-  activeRuns: Array<{
+  activeAgents: Array<{
     id: string
     challengeId: string | null
     challengeName: string
@@ -30,19 +29,25 @@ export type InboxSnapshot = {
   deliveryPaused: boolean
 }
 
-/** W7.3: GET /api/events/:id/fleet — the overview's single poll (runs +
- * agents + scheduler run/agents + scheduler config/status). */
+/** Light challenge shape for the fleet view. */
+export type ChallengeLite = {
+  id: string
+  name: string
+  category: string | null
+}
+
+/** GET /api/events/:id/fleet — the overview's single poll (challenges +
+ * per-challenge agents + scheduler agent + scheduler config/status). */
 export type FleetInfo = {
-  runs: RunPublic[]
-  agentsByRun: Record<string, AgentSummary[]>
-  schedulerRun: RunPublic | null
-  schedulerAgents: AgentSummary[]
+  challenges: ChallengeLite[]
+  agentsByChallenge: Record<string, AgentSummary[]>
+  schedulerAgent: AgentSummary | null
   config: {
     eventId: string
     modelId: string | null
     instruction: string
     maxConcurrentTargets: number
-    /** W3: scheduler disabled (run-lifecycle events gated). */
+    /** W3: scheduler disabled (agent-lifecycle events gated). */
     paused: boolean
   }
   status: SchedulerStatusSnapshot
