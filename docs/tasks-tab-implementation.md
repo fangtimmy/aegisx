@@ -1,6 +1,6 @@
 # 任务 Tab 实施计划
 
-状态：**待实施**。设计依据：[tasks-tab-design.md](tasks-tab-design.md)（先读）。
+状态：**已实施**。设计依据：[tasks-tab-design.md](tasks-tab-design.md)（先读）。
 前置：v19 P0（shared 类型）+ P1（server: fleet 形状、agent/challenge 路由）+ P3（web api 层：agents/challenges/keys）就位。本批次**纯 web、零服务端改动**。
 规则：不碰 Agents tab / agents-graph / AgentDialog（行为不变）；`components/ui/**` 只读；一次性改完再统一检查。
 
@@ -21,21 +21,18 @@
 
 ### 复用（不复制）
 
-- `Conversation`（`features/runs/conversation.tsx`，传 `agents=[selected]`）
-- `ChannelsView`（`features/runs/channels-view.tsx`，传题频道树或 orch 键）
-- `FilesWorkspace`（`features/runs/files-workspace.tsx`，传题/调度者工作区 files adapter）
-- `SchedulerConfigTab`（`features/events/scheduler-config-tab.tsx`，调度者配置 tab）
-- `TargetPanel`（见下「前置抽取」）
-- `SpawnAgentDialog`（v19 P3 改造自 create-run-dialog；预填 challengeId）
-
-### 前置抽取（机械、行为不变）
-
-`features/runs/target-panel.tsx`：从 `run-overview.tsx` 抽出 `TargetPanel`（~80 行 + targetAction mutation），`run-overview` 改 import。若 v19 P3 agent-overview 改造时已抽，跳过。调度者控制面板 `scheduler-control-panel.tsx` 同模式新写（不复用靶机代码），结构对称。
+- `Conversation`（`features/runs/conversation.tsx`，v19 签名：`agent: AgentSummary` + `detail`，单 agent；对话 pane 照抄 AgentDialog 的适配层接线：status 映射 running/idle→idle/terminal→closed、streamPath=`/api/agents/:id/stream`、loadMessages/switchModel/sessionOps/stopAgent/closeAgent/compactAgent）
+- `ChannelsView({challengeId})`（题变体频道 tab）
+- `SchedulerDmTab({eventId, active})`（调度者变体频道 tab —— orch 收件箱 + 时间线）
+- `FilesWorkspace`（`files: FilesApi` adapter：题工作区走 `getChallengeFiles(challengeId, path)`；调度者变体 v19 无工作区端点，占位说明）
+- `SchedulerConfigTab`（调度者配置 tab）
+- `TargetPanel({challengeId})`（已抽到 `features/runs/target-panel.tsx`）
+- `SpawnAgentDialog`（`challenge` prop 预填本题；`onSpawned?: () => void` 无 agent id 回传 —— 见 S5 策略）
 
 ### 路由注册（唯一两处对既有文件的触碰）
 
-- `App.tsx`：`eventTabs` 数组加 `"tasks"`；lazy load `TasksPage`
-- `event-page.tsx`：左侧 `TabsList` 加一项「任务」（概览之后、Agents 之前）；`tabFromPath`/`pathForTab` 的 tab 联合类型加 `tasks`
+- `App.tsx`：`eventTabs` 数组加 `"tasks"`（路由 `/events/:eventId/tasks` 随数组自动注册，加载 EventPage）
+- `event-page.tsx`：左侧 `TabsList` 加一项「任务」（概览之后、Agents 之前）+ 对应 `TabsPanel` 挂载 `TasksPage`；`tabFromPath`/`pathForTab` 的 tab 联合类型加 `tasks`
 
 不改 Agents tab / agents-graph / AgentDialog / challenge-card / timeline-tab / queue-list 任何行为。
 
@@ -61,24 +58,23 @@
 - **验证**：切调度者/题 tab 集正确切换；c 变重置
 
 ### S4 概览
-- `overview-pane.tsx` 题变体：头 + flag 条 + `TargetPanel` + 花名册 + 「新尝试」/「入队」+ usage
+- `overview-pane.tsx` 题变体：头（events.detail 的题元信息 + 解出/flag 状态）+ `TargetPanel` + 花名册 + 「新尝试」/「入队」。无 usage 段（零服务端改动承诺）
 - 花名册行：`onClick → onSelectAgent(agentId)` → 父设 tab=对话 + `?a=`
-- 调度者变体：`SchedulerControlPanel` + 配置摘要 + usage
-- 前置：抽取 TargetPanel（若未做）
+- 调度者变体：`SchedulerControlPanel`（start/pause/resume/close + `getScheduler` 状态；仿 TargetPanel 模式新写）+ 配置摘要 + `getInbox` 摘要 chip
 - **验证**：花名册点击跳对话且 a 正确；靶机/调度者控制动作可用
 
 ### S5 对话
-- `conversation-pane.tsx`：agent 列表（时间序、terminal 置灰）+ 默认选中推导 + Conversation 复用
-- 「新尝试」spawn → 成功后失效 fleet + 设 `?a=新id`
+- `conversation-pane.tsx`：agent 列表（时间序、terminal 置灰）+ 默认选中推导 + Conversation 复用（适配层照抄 AgentDialog）
+- 「新尝试」spawn（`SpawnAgentDialog challenge={题}`）：`onSpawned` → `await invalidate(fleet)` → **清空 `?a`** → 默认推导自动选中最新 live agent（即新 agent，它 running）；留在对话 tab
 - 「仅活跃」chip
-- 调度者选中隐藏列表
+- 调度者选中隐藏列表，Conversation 直连 schedulerAgent
 - **验证**：切 agent 对话流正常、SSE 接通；spawn 后自动盯新 agent
 
 ### S6 频道 / 文件 / 配置
-- 频道：`ChannelsView` + 题频道树 / orch
-- 文件：`FilesWorkspace` + 题/调度者工作区 adapter
+- 频道（题）：`ChannelsView({challengeId})`；频道（调度者）：`SchedulerDmTab({eventId, active})`
+- 文件：`FilesWorkspace` + `getChallengeFiles(challengeId, path)` adapter；调度者变体占位说明（v19 无 orchestrator 工作区端点）
 - 配置：`SchedulerConfigTab` 嵌入
-- **验证**：题频道树含 team + dm；调度者频道=orch；文件树含 agents/shared/attachments
+- **验证**：题频道树含 team + dm；调度者频道为 orch 收件箱；文件树含 agents/shared/attachments
 
 ---
 

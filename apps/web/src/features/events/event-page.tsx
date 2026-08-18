@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowUpDown,
   ClipboardList,
+  Crosshair,
   Flag,
   LayoutPanelTop,
   ListChecks,
@@ -56,6 +57,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { TasksPage } from "@/features/tasks/tasks-page"
 import { toast } from "@/lib/toast"
 
 import { AgentDialog } from "./agent-dialog"
@@ -84,12 +86,13 @@ import { ImportChallengesDialog } from "./platform-binding"
 import { QueueList } from "./queue-list"
 import { TimelineTab } from "./timeline-tab"
 
-type EventTab = "overview" | "agents" | "challenges" | "settings"
+type EventTab = "overview" | "tasks" | "agents" | "challenges" | "settings"
 
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
   if (pathname === `/events/${eventId}/challenges`) return "challenges"
   if (pathname === `/events/${eventId}/agents`) return "agents"
+  if (pathname === `/events/${eventId}/tasks`) return "tasks"
   return "overview"
 }
 
@@ -97,6 +100,7 @@ function pathForTab(eventId: string, tab: EventTab) {
   if (tab === "challenges") return `/events/${eventId}/challenges`
   if (tab === "settings") return `/events/${eventId}/settings`
   if (tab === "agents") return `/events/${eventId}/agents`
+  if (tab === "tasks") return `/events/${eventId}/tasks`
   return `/events/${eventId}`
 }
 
@@ -528,6 +532,9 @@ export function EventPage() {
               <TabsTab className="justify-start gap-2" value="overview">
                 <LayoutPanelTop /> 概览
               </TabsTab>
+              <TabsTab className="justify-start gap-2" value="tasks">
+                <Crosshair /> 任务
+              </TabsTab>
               <TabsTab className="justify-start gap-2" value="agents">
                 <Users /> Agents
               </TabsTab>
@@ -553,6 +560,9 @@ export function EventPage() {
                 challenges={eventQuery.data.challenges}
                 eventId={eventId}
               />
+            </TabsPanel>
+            <TabsPanel className="h-[calc(100svh-5.5rem)]" value="tasks">
+              <TasksPage />
             </TabsPanel>
             <TabsPanel className="h-[calc(100svh-5.5rem)]" value="agents">
               <EventAgentsPanel

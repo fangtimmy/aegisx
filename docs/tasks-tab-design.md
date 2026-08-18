@@ -1,6 +1,6 @@
 # 任务 Tab 设计：题中心作战视图
 
-状态：**设计已定，待实施**（2026-08-18）
+状态：**已实施**（2026-08-18，纯 web 批次，零服务端改动）
 前置：[model-v19-challenge-centric.md](model-v19-challenge-centric.md)（题中心模型；本 tab 建于 v19 形状之上，服务端无需任何改动）
 关系：与 Agents tab **并行**，本轮不碰 Agents / agents-graph / AgentDialog（它们留待后续收敛）。本 tab 是纯 web 增量批次。
 
@@ -62,18 +62,18 @@ tab 状态组件内 `useState`，c 变化时重置为概览。
 
 - 头：题名 + 分类 + 分值 + 描述（可折叠 markdown）
 - flag 状态条：accepted 数 / partial（多 flag `2/3`）。只读展示，完整 CRUD 留在题目 tab
-- **靶机面板**：复用 `TargetPanel`（v19 P3 从 run-overview 抽到 `features/runs/target-panel.tsx`）
-- **agent 花名册**：按尝试序——行：状态点 + 短 id + 模型短名 + 创建时间 + deadline/剩余 + summary 一行。点击 → 切到对话 tab 并设 `?a=该 agent`
+- **靶机面板**：复用 `TargetPanel`（v19 P3 已抽到 `features/runs/target-panel.tsx`，签名 `({challengeId})`）
+- **agent 花名册**：按尝试序——行：状态点 + 短 id + 模型短名 + 创建时间 + deadline/剩余 + summary 一行。点击 → 切到对话 tab 并选中该 agent
 - 动作：「新尝试」（spawn，预填本题）+「入队」
 - 工作区/容器状态行：live agent 数 + 容器运行中/已回收
-- 题级 token/费用汇总
+- 不做题级 usage（无廉价数据源：usage 仅事件级端点 + AgentDetail 级；保持零服务端改动，留作后续可选项）
 
 ### 4.2 概览（调度者）
 
-- **调度者控制面板**（仿靶机面板）：状态 + start / pause / resume / close 四个动作（调既有 scheduler API）。未启动时只显示 start
+- **调度者控制面板**（仿靶机面板）：状态 + start / pause / resume / close 四个动作（既有 scheduler API：`startScheduler/pauseScheduler/resumeScheduler/closeScheduler`）。未启动时只显示 start
 - 配置摘要（模型 / instruction 片段 / maxTargets）+ 跳转「配置」tab
-- orch inbox 摘要（未读数 + 下次 flush）——轻量，可选
-- 调度者 token/费用
+- orch inbox 摘要（`getInbox`：未读数 + deliveryPaused）——轻量，可选
+- 不做 usage（同 4.1）
 
 ### 4.3 对话（题）
 
@@ -97,11 +97,12 @@ tab 状态组件内 `useState`，c 变化时重置为概览。
 
 ### 4.4 频道
 
-`ChannelsView` + 题频道树（team + 各 agent dm），默认选 team；调度者则 orch 键。
+题变体：`ChannelsView({challengeId})`（v19 后签名已按 challengeId 直取，内部自带频道树 + 未读点 + composer）。
+调度者变体：**复用 `SchedulerDmTab({eventId, active})`**（orch 收件箱 + 时间线 + composer 现成组件；`ChannelsView` 不支持 orch 键）。
 
 ### 4.5 文件
 
-`FilesWorkspace` 适配题工作区 API（agents/ shared/ attachments/ 树一目了然）；调度者适配 orchestrator 工作区 API。
+`FilesWorkspace` 适配题工作区 API（agents/ shared/ attachments/ 树一目了然）。调度者变体：v19 无 orchestrator 工作区文件端点（仅 `/api/challenges/:id/files`），显示占位说明（与 AgentDialog 行为一致）；待后续服务端批次补齐后再接。
 
 ### 4.6 配置（仅调度者）
 
