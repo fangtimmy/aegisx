@@ -29,6 +29,7 @@ import {
   Server,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 
 import type { AgentSummary, Challenge, RunPublic } from "@/api"
 import { keys, schedulerApi } from "@/api"
@@ -486,8 +487,8 @@ function GraphCanvas({
     )
   }, [selected, graph, flow])
 
-  const onNodeClick = useCallback<NodeMouseHandler>(
-    (_, node) => {
+  const activateNode = useCallback(
+    (node: Node) => {
       const data = node.data as GraphNodeData
       if (data.kind === "scheduler") {
         // The scheduler node IS the orchestrator agent — open its conversation.
@@ -506,6 +507,27 @@ function GraphCanvas({
     [onOpenAgent, onOpenChallenge, onToggleRun, onToggleArchive]
   )
 
+  const onNodeClick = useCallback<NodeMouseHandler>(
+    (_, node) => activateNode(node),
+    [activateNode]
+  )
+
+  // Enter/Space on a focused node runs the same activation as a click — RF's
+  // built-in keydown only toggles selection, it never fires onNodeClick.
+  const onKeyDown = useCallback(
+    (event: ReactKeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return
+      const id = (event.target as HTMLElement).closest<HTMLElement>(
+        ".react-flow__node"
+      )?.dataset.id
+      const node = id ? graph.nodes.find((n) => n.id === id) : undefined
+      if (!node) return
+      event.preventDefault()
+      activateNode(node)
+    },
+    [activateNode, graph.nodes]
+  )
+
   return (
     <ReactFlow
       edges={graph.edges}
@@ -518,6 +540,7 @@ function GraphCanvas({
       nodesConnectable={false}
       nodesDraggable={false}
       onNodeClick={onNodeClick}
+      onKeyDown={onKeyDown}
       onlyRenderVisibleElements
       panOnScroll
       panOnScrollSpeed={1}
@@ -649,13 +672,17 @@ export function AgentsGraph({
     onError: (error) => toast.error("关闭调度者失败", error.message),
   })
 
-  const sortedRuns = [...runs].sort((left, right) => {
-    const activeRank = (run: RunPublic) => (run.status === "closed" ? 1 : 0)
-    return (
-      activeRank(left) - activeRank(right) ||
-      right.updatedAt.localeCompare(left.updatedAt)
-    )
-  })
+  const sortedRuns = useMemo(
+    () =>
+      [...runs].sort((left, right) => {
+        const activeRank = (run: RunPublic) => (run.status === "closed" ? 1 : 0)
+        return (
+          activeRank(left) - activeRank(right) ||
+          right.updatedAt.localeCompare(left.updatedAt)
+        )
+      }),
+    [runs]
+  )
 
   // Build + lay out the graph from the fleet state. Recomputed only when the
   // underlying data or the expand toggles change; status-only poll updates

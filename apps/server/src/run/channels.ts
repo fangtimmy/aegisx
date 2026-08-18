@@ -12,7 +12,7 @@ import type {
   ChannelMessagePublic,
   ChannelPublic,
 } from "@aegisx/shared/channels"
-import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm"
 
 import type { SessionLifecycle } from "../agents/lifecycle"
 import type { LiveBus } from "../agents/live"
@@ -936,20 +936,24 @@ export function createChannelService(deps: ChannelServiceDeps) {
 
   function listMessages(
     channelKey: string,
-    opts: { after?: number; limit?: number } = {}
+    opts: { after?: number; limit?: number; before?: number } = {}
   ): ChannelMessageList {
     requireKey(channelKey)
     const after = opts.after ?? 0
     const limit = Math.min(Math.max(opts.limit ?? DEFAULT_PAGE, 1), 200)
+    // The newest `limit` messages inside (after, before), ascending — desc +
+    // reverse so a `before` page is the window immediately older than the
+    // cursor, and no `before` is the channel tail.
+    const bounds = [
+      eq(channelMessages.channelKey, channelKey),
+      gt(channelMessages.id, after),
+    ]
+    if (opts.before !== undefined)
+      bounds.push(lt(channelMessages.id, opts.before))
     const rows = db
       .select()
       .from(channelMessages)
-      .where(
-        and(
-          eq(channelMessages.channelKey, channelKey),
-          gt(channelMessages.id, after)
-        )
-      )
+      .where(and(...bounds))
       .orderBy(desc(channelMessages.id))
       .limit(limit + 1)
       .all()

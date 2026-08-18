@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Hash, Paperclip, Send, Users, X } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import {
+  ArrowDown,
+  ArrowUp,
+  Hash,
+  Paperclip,
+  Send,
+  Users,
+  X,
+} from "lucide-react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 
 import { channelsApi, keys, type ChannelMessagePublic } from "@/api"
 import { Badge } from "@/components/ui/badge"
@@ -197,14 +205,175 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
 }
 
 /**
+ * The open channel's timeline. Loads the latest window once, then tails via
+ * the `after` cursor (poll); "加载更早" pages backwards via the `before`
+ * cursor with the viewport anchored. Follows the latest message unless the
+ * user scrolled up (a jump button returns); prepending history keeps the
+ * viewport anchored.
+ */
+function ChannelTimeline({ channelKey }: { channelKey: string }) {
+  const [items, setItems] = useState<ChannelMessagePublic[]>([])
+  const [hasOlder, setHasOlder] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [olderError, setOlderError] = useState<string | null>(null)
+  const [showJump, setShowJump] = useState(false)
+  const listRef = useRef<HTMLDivElement>(null)
+  const followsLatest = useRef(true)
+  const anchor = useRef<{ height: number; top: number } | null>(null)
+  const newestId = useRef(0)
+  const gotFirstPage = useRef(false)
+
+  // gcTime 0: leaving a channel drops its cached tail, so re-entering starts
+  // from the full latest window (after=0) instead of a partial tail response.
+  const tail = useQuery({
+    queryKey: keys.runs.channelMessages(channelKey),
+    queryFn: () =>
+      channelsApi.listChannelMessages(channelKey, newestId.current, PAGE_SIZE),
+    refetchInterval: POLL_INTERVAL_MS,
+    gcTime: 0,
+  })
+
+  useEffect(() => {
+    const data = tail.data
+    if (!data) return
+    const first = !gotFirstPage.current
+    gotFirstPage.current = true
+    setItems((prev) => {
+      if (first) return data.items
+      const seen = new Set(prev.map((message) => message.id))
+      const fresh = data.items.filter((message) => !seen.has(message.id))
+      return fresh.length > 0 ? [...prev, ...fresh] : prev
+    })
+    if (first) setHasOlder(data.hasMore)
+  }, [tail.data])
+
+  useEffect(() => {
+    newestId.current = items.at(-1)?.id ?? 0
+  }, [items])
+
+  const loadOlder = async () => {
+    const oldest = items[0]?.id
+    if (oldest === undefined || loadingOlder) return
+    const el = listRef.current
+    if (el) anchor.current = { height: el.scrollHeight, top: el.scrollTop }
+    setLoadingOlder(true)
+    setOlderError(null)
+    try {
+      const data = await channelsApi.listChannelMessages(
+        channelKey,
+        0,
+        PAGE_SIZE,
+        oldest
+      )
+      setItems((prev) => {
+        const seen = new Set(prev.map((message) => message.id))
+        const older = data.items.filter((message) => !seen.has(message.id))
+        return older.length > 0 ? [...older, ...prev] : prev
+      })
+      setHasOlder(data.hasMore)
+    } catch (error) {
+      setOlderError(error instanceof Error ? error.message : "加载失败")
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
+
+  const onScroll = () => {
+    const el = listRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4
+    followsLatest.current = atBottom
+    setShowJump(!atBottom)
+  }
+
+  // After a prepend, restore the viewport position (scrollHeight grew by the
+  // inserted history); otherwise follow the tail when the user is at bottom.
+  useLayoutEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    if (anchor.current) {
+      el.scrollTop =
+        anchor.current.top + (el.scrollHeight - anchor.current.height)
+      anchor.current = null
+    } else if (followsLatest.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [items])
+
+  const jumpToLatest = () => {
+    followsLatest.current = true
+    setShowJump(false)
+    const el = listRef.current
+    el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+  }
+
+  if (tail.isPending) {
+    return (
+      <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Spinner aria-hidden /> 加载中…
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative min-h-0 flex-1">
+      <div
+        className="h-full overflow-y-auto py-2"
+        onScroll={onScroll}
+        ref={listRef}
+        role="log"
+      >
+        {hasOlder && (
+          <div className="flex justify-center pb-2">
+            {olderError ? (
+              <p className="text-xs text-destructive">{olderError}</p>
+            ) : (
+              <Button
+                disabled={loadingOlder}
+                onClick={() => void loadOlder()}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                {loadingOlder ? <Spinner /> : <ArrowUp />} 加载更早消息
+              </Button>
+            )}
+          </div>
+        )}
+        {items.length === 0 && (
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+            尚无消息。
+          </p>
+        )}
+        {items.map((message) => (
+          <MessageBubble key={message.id} message={message} />
+        ))}
+      </div>
+      {showJump && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
+          <Button
+            className="pointer-events-auto"
+            onClick={jumpToLatest}
+            size="sm"
+            type="button"
+          >
+            <ArrowDown aria-hidden /> 最新
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * The IM view (v18 派生键频道): channel rail + message timeline + composer
  * with attachments + urgent switch. Two data sources:
  *  - runId: a run's tree (#team + one DM per solver, derived keys)
  *  - challengeId: the challenge's single #team (v17 knowledge base, shared
  *    across the challenge's runs — the 共享 badge)
  * Channels are addressed by their derived `key` (team:<cid> / dm:<aid>).
- * UI unread is client-side session state (messages newer than the last id
- * seen at mount / on channel switch) — never persisted.
+ * UI unread is client-side session state (the open channel's baseline is the
+ * latest message the rail poll has seen for it) — never persisted.
  */
 export function ChannelsView({
   runId,
@@ -219,7 +388,6 @@ export function ChannelsView({
    * accounted for. A channel whose live `lastMessageAt` is newer shows an
    * unread dot. */
   const [seenAt, setSeenAt] = useState<Record<string, string | null>>({})
-  const timelineRef = useRef<HTMLDivElement>(null)
 
   const channels = useQuery({
     queryKey: challengeId
@@ -251,30 +419,18 @@ export function ChannelsView({
     })
   }, [list])
 
-  const messages = useQuery({
-    queryKey: keys.runs.channelMessages(active?.key ?? ""),
-    enabled: Boolean(active),
-    queryFn: () => channelsApi.listChannelMessages(active!.key, 0, PAGE_SIZE),
-    refetchInterval: POLL_INTERVAL_MS,
-  })
-
-  // Mark the open channel read: the newest loaded message timestamp becomes
-  // its seen baseline.
+  // The open channel is read: its latest rail-known message timestamp is
+  // the seen baseline (the rail poll carries lastMessageAt).
+  const activeKeyResolved = active?.key
+  const activeLastMessageAt = active?.lastMessageAt
   useEffect(() => {
-    if (!messages.data || !active) return
-    const newest = messages.data.items.at(-1)?.createdAt ?? null
+    if (!activeKeyResolved) return
     setSeenAt((prev) =>
-      prev[active.key] === newest ? prev : { ...prev, [active.key]: newest }
+      prev[activeKeyResolved] === activeLastMessageAt
+        ? prev
+        : { ...prev, [activeKeyResolved]: activeLastMessageAt }
     )
-  }, [messages.data, active])
-
-  // Auto-scroll to the newest message.
-  useEffect(() => {
-    const node = timelineRef.current
-    if (node) node.scrollTop = node.scrollHeight
-  }, [messages.data])
-
-  const items = messages.data?.items ?? []
+  }, [activeKeyResolved, activeLastMessageAt])
 
   return (
     <div className="flex h-full min-h-0 min-w-0">
@@ -331,26 +487,7 @@ export function ChannelsView({
         <div className="flex items-center gap-2 border-b px-3 py-1.5 text-sm font-medium">
           {active?.label ?? "频道"}
         </div>
-        {messages.isPending ? (
-          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Spinner aria-hidden /> 加载中…
-          </div>
-        ) : (
-          <div
-            className="flex-1 overflow-y-auto py-2"
-            ref={timelineRef}
-            role="log"
-          >
-            {items.length === 0 && (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                尚无消息。
-              </p>
-            )}
-            {items.map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))}
-          </div>
-        )}
+        {active && <ChannelTimeline channelKey={active.key} key={active.key} />}
         {active && <ChannelComposer channelKey={active.key} />}
       </div>
     </div>

@@ -25,6 +25,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 
 import { GeneralSettings } from "./general-settings"
@@ -73,12 +74,14 @@ export function SettingsScreen() {
       setSelectedId(null)
       queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
+    onError: (error) => toast.error("删除供应商失败", error.message),
   })
   const toggleProvider = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       providersApi.updateProvider(id, { enabled }),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: keys.providers.all }),
+    onError: (error) => toast.error("切换供应商失败", error.message),
   })
 
   if (providers.isPending || settings.isPending) {
@@ -108,7 +111,7 @@ export function SettingsScreen() {
     <Tabs
       className="w-full flex-row items-start gap-4"
       onValueChange={(value) =>
-        navigate(sectionPaths[value as SettingsSection])
+        void navigate(sectionPaths[value as SettingsSection])
       }
       orientation="vertical"
       value={section}

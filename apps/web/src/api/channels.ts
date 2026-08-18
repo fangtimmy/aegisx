@@ -20,17 +20,20 @@ export function getChallengeChannels(challengeId: string) {
   )
 }
 
-/** Channel timeline, paginated by the global message-id cursor. `channelKey`
- * is a derived key (`team:<cid>` / `dm:<aid>` / `orch:<eid>`) — ':' is a
- * legal path character. */
+/** Channel timeline. Forward: `after` is the global message-id cursor — 0
+ * returns the latest window. Backward: `before` pages history older than a
+ * message id. `channelKey` is a derived key (`team:<cid>` / `dm:<aid>` /
+ * `orch:<eid>`) — ':' is a legal path character. */
 export function listChannelMessages(
   channelKey: string,
   after = 0,
-  limit = 100
+  limit = 100,
+  before?: number
 ) {
   const params = new URLSearchParams()
   if (after > 0) params.set("after", String(after))
   if (limit !== 100) params.set("limit", String(limit))
+  if (before !== undefined && before > 0) params.set("before", String(before))
   const query = params.toString() ? `?${params.toString()}` : ""
   return apiRequest<ChannelMessageList>(
     `/channels/${channelKey}/messages${query}`

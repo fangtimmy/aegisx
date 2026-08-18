@@ -279,6 +279,9 @@ export function registerRunRoutes(
     const channelKey = c.req.param("channelKey")
     const afterRaw = Number.parseInt(c.req.query("after") ?? "0", 10)
     const after = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0
+    const beforeRaw = Number.parseInt(c.req.query("before") ?? "", 10)
+    const before =
+      Number.isFinite(beforeRaw) && beforeRaw > 0 ? beforeRaw : undefined
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10)
     const limit = Number.isFinite(limitRaw) ? limitRaw : 50
     const markRead = c.req.query("markRead") !== "0"
@@ -294,7 +297,11 @@ export function registerRunRoutes(
         )
       }
       return c.json(
-        runService.channels.listMessages(channelKey, { after, limit })
+        runService.channels.listMessages(channelKey, {
+          after,
+          limit,
+          before,
+        })
       )
     } catch (error) {
       return runError(c, error)
