@@ -177,9 +177,9 @@ function EventCard({ event }: { event: EventSummary }) {
               </p>
             </div>
           )}
-          {event.activeRunCount > 0 && (
+          {event.activeAgentCount > 0 && (
             <Badge className="w-fit" variant="info">
-              <Activity /> {event.activeRunCount} 个活跃任务
+              <Activity /> {event.activeAgentCount} 个活跃任务
             </Badge>
           )}
         </CardPanel>

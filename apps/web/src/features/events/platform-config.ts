@@ -43,6 +43,6 @@ export async function refreshEvent(queryClient: QueryClient, eventId: string) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
     queryClient.invalidateQueries({ queryKey: keys.events.all }),
-    queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(eventId) }),
+    queryClient.invalidateQueries({ queryKey: keys.agents.fleet(eventId) }),
   ])
 }

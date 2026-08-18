@@ -16,11 +16,12 @@ function validMessageEntry(overrides: Record<string, unknown> = {}) {
 }
 
 describe("parseLiveEvent", () => {
-  test("ready requires runId + agentId", () => {
-    expect(
-      parseLiveEvent({ type: "ready", runId: "r1", agentId: "a1" })
-    ).toEqual({ type: "ready", runId: "r1", agentId: "a1" })
-    expect(parseLiveEvent({ type: "ready", runId: "r1" })).toBeUndefined()
+  test("ready requires agentId", () => {
+    expect(parseLiveEvent({ type: "ready", agentId: "a1" })).toEqual({
+      type: "ready",
+      agentId: "a1",
+    })
+    expect(parseLiveEvent({ type: "ready" })).toBeUndefined()
   })
 
   test("channel.message passes the payload through", () => {
@@ -31,18 +32,15 @@ describe("parseLiveEvent", () => {
     })
   })
 
-  test("run.updated / agent.updated require a record payload", () => {
-    const run = { id: "r1", status: "running" }
-    expect(parseLiveEvent({ type: "run.updated", run })).toEqual({
-      type: "run.updated",
-      run,
-    })
-    expect(parseLiveEvent({ type: "run.updated", run: "nope" })).toBeUndefined()
-    const agent = { id: "a1", slot: "solver-1" }
+  test("agent.updated requires a record payload", () => {
+    const agent = { id: "a1", status: "running" }
     expect(parseLiveEvent({ type: "agent.updated", agent })).toEqual({
       type: "agent.updated",
       agent,
     })
+    expect(
+      parseLiveEvent({ type: "agent.updated", agent: "nope" })
+    ).toBeUndefined()
     expect(parseLiveEvent({ type: "agent.updated" })).toBeUndefined()
   })
 

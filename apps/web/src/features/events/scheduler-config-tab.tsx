@@ -86,8 +86,8 @@ export function SchedulerConfigTab({ eventId }: { eventId: string }) {
         }}
       >
         <SchedulerStateBadge
+          agent={scheduler.data?.agent ?? null}
           paused={config.paused}
-          run={scheduler.data?.run ?? null}
         />
         <SchedulerConfigFields
           instruction={instruction}
@@ -111,12 +111,13 @@ export function SchedulerConfigTab({ eventId }: { eventId: string }) {
  * graph panel — no duplicate buttons here). */
 function SchedulerStateBadge({
   paused,
-  run,
+  agent,
 }: {
   paused: boolean
-  run: SchedulerInfo["run"]
+  agent: SchedulerInfo["agent"]
 }) {
-  const active = run !== null && run.status !== "closed"
+  const active =
+    (agent !== null && agent.status === "running") || agent?.status === "idle"
   const label = active ? (paused ? "已暂停" : "运行中") : "未启用"
   const variant = active ? (paused ? "warning" : "success") : "secondary"
   return (

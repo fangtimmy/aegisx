@@ -32,7 +32,7 @@ export function localChallengeStatus(
 ): LocalChallengeStatus {
   const overall = overallSolved(challenge)
   if (overall === "solved") return "solved"
-  if (overall === "partial" || challenge.runCount > 0) return "in_progress"
+  if (overall === "partial" || challenge.agentCount > 0) return "in_progress"
   return "not_started"
 }
 

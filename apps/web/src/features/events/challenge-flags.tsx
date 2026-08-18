@@ -125,7 +125,7 @@ function FlagRow({
           {FLAG_STATUS_LABEL[flag.status]}
           {flag.source === "manual"
             ? " · 手动"
-            : flag.runId
+            : flag.agentId
               ? " · 任务提交"
               : ""}
         </p>

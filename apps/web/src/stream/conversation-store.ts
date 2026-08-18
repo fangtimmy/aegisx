@@ -3,7 +3,6 @@ import type {
   ContextSnapshot,
   EntryItem,
   LiveEvent,
-  RunPublic,
   SessionEntry,
 } from "@/api"
 import {
@@ -102,7 +101,6 @@ export class ConversationStore {
   private readonly pendingNotifications = new Set<string>()
   private notificationFrame: number | null = null
   private source: EventSource | null = null
-  private run: RunPublic | null = null
   private agents = new Map<string, AgentSummary>()
 
   subscribe(agentId: string, listener: Listener) {
@@ -117,10 +115,6 @@ export class ConversationStore {
 
   get(agentId: string) {
     return this.snapshots.get(agentId) ?? emptyItems
-  }
-
-  getRun() {
-    return this.run
   }
 
   getAgents() {
@@ -283,13 +277,6 @@ export class ConversationStore {
 
   applyEvent(event: LiveEvent) {
     if (event.type === "ready") return
-    if (event.type === "run.updated") {
-      this.run = event.run
-      for (const listeners of this.listeners.values()) {
-        for (const listener of listeners) listener()
-      }
-      return
-    }
     if (event.type === "agent.updated") {
       this.agents.set(event.agent.id, event.agent)
       for (const listeners of this.listeners.values()) {
@@ -390,17 +377,19 @@ export class ConversationStore {
   }
 
   /**
-   * Connect the SSE stream for a run. On (re)connect, `onReconnect` is called
-   * so the caller can re-fetch durable committed entries from the API.
+   * Connect the SSE stream for an agent. On (re)connect, `onReconnect` is
+   * called so the caller can re-fetch durable committed entries from the API.
    */
   connect(
-    runId: string,
+    agentId: string,
     onReconnect: () => void,
     onDisconnectedChange: (disconnected: boolean) => void,
     streamPath?: string
   ) {
     this.close()
-    const source = new EventSource(streamPath ?? `/api/runs/${runId}/stream`)
+    const source = new EventSource(
+      streamPath ?? `/api/agents/${agentId}/stream`
+    )
     this.source = source
     let opened = false
     source.onopen = () => {

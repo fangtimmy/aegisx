@@ -34,7 +34,7 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 
-import type { AgentSummary } from "@/api"
+import type { AgentDetail } from "@/api"
 import { Markdown } from "@/components/markdown"
 import { Button } from "@/components/ui/button"
 import {
@@ -517,7 +517,7 @@ const ConversationRow = memo(function ConversationRow({
 function ToolDefinitionRow({
   tool,
 }: {
-  tool: AgentSummary["toolDefinitions"][number]
+  tool: AgentDetail["toolDefinitions"][number]
 }) {
   return (
     <Collapsible>
@@ -564,7 +564,7 @@ function ToolDefinitionRow({
  * rows that sit before the first user message. Both are immutable per run
  * (createAgent writes them once). Collapsed by default — system prompts are
  * long. Falls back to name-only chips when no definition snapshot exists. */
-function AgentConfig({ agent }: { agent: AgentSummary }) {
+function AgentConfig({ agent }: { agent: AgentDetail }) {
   const toolCount =
     agent.toolDefinitions.length > 0
       ? agent.toolDefinitions.length
@@ -626,7 +626,7 @@ export function Timeline({
 }: {
   agentId: string
   stream: ConversationStore
-  agent?: AgentSummary
+  agent?: AgentDetail
   /** Show the flat-backtrack affordance on committed rows (v12). */
   canBacktrack?: boolean
   onBacktrack?: (seq: number) => void

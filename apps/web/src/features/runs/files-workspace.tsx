@@ -11,7 +11,7 @@ import {
 } from "lucide-react"
 import { useCallback, useRef, useState } from "react"
 
-import { type RunFileEntry } from "@/api"
+import { type WorkspaceFile, type WorkspaceFileEntry } from "@/api"
 import { CodePreview } from "@/components/code-preview"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -55,7 +55,7 @@ function DirectoryEntry({
   depth = 0,
   defaultExpanded = false,
 }: {
-  entry: RunFileEntry
+  entry: WorkspaceFileEntry
   files: FilesApi
   onSelect: (path: string) => void
   depth?: number
@@ -147,7 +147,7 @@ export type FilesApi = {
   /** React Query key for a path (stable per path). */
   key: (path: string) => readonly unknown[]
   /** Fetch a file/directory entry at a path. */
-  get: (path: string) => Promise<import("@/api").RunFile>
+  get: (path: string) => Promise<WorkspaceFile>
   /** Download URL for a path (anchor href). */
   downloadUrl: (path: string) => string
 }

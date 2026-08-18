@@ -1,6 +1,6 @@
 import { useMemo } from "react"
 
-import type { Challenge, RunPublic } from "@/api"
+import type { Challenge, AgentSummary } from "@/api"
 import {
   Empty,
   EmptyDescription,
@@ -15,7 +15,7 @@ import { TIMELINE_ICONS, type TimelineEvent } from "./event-agents-shared"
 
 function buildTimeline(
   challenges: Challenge[],
-  runs: RunPublic[]
+  runs: AgentSummary[]
 ): TimelineEvent[] {
   const events: TimelineEvent[] = []
   for (const challenge of challenges) {
@@ -34,7 +34,7 @@ function buildTimeline(
         kind: "flag",
         title: "Flag 通过",
         detail: `${challenge.name} · ${flag.flag}`,
-        runId: flag.runId ?? undefined,
+        runId: flag.agentId ?? undefined,
       })
     }
   }
@@ -59,7 +59,7 @@ function buildTimeline(
         kind: "timeout",
         title: "任务超时",
         detail: `${run.challengeName} · ${
-          run.status === "closed" ? "超时未恢复，已强制关闭" : "已恢复"
+          run.status === "aborted" ? "超时未恢复，已强制关闭" : "已恢复"
         }`,
         runId: run.id,
       })
@@ -86,7 +86,7 @@ export function TimelineTab({
   onSelectRun,
 }: {
   challenges: Challenge[]
-  runs: RunPublic[]
+  runs: AgentSummary[]
   /** W7: click a run-linked entry → select the run's entry agent (highlight,
    * no dialog). */
   onSelectRun?: (runId: string) => void

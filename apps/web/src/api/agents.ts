@@ -1,5 +1,10 @@
 import { apiRequest, jsonRequest } from "./client"
-import type { AgentDetail, AgentSummary, SwitchModelInput } from "./types"
+import type {
+  AgentDetail,
+  AgentSummary,
+  FleetInfo,
+  SwitchModelInput,
+} from "./types"
 
 /** Per-agent message (POST /api/agents/:agentId/message). A terminal agent
  * is reopened (files + memory kept — only that agent wakes). */
@@ -19,10 +24,7 @@ export type SpawnAgentInput = {
 
 export type EnqueueSpawnInput = SpawnAgentInput & { challengeId: string }
 
-export function spawnAgent(
-  challengeId: string,
-  input: SpawnAgentInput = {}
-) {
+export function spawnAgent(challengeId: string, input: SpawnAgentInput = {}) {
   return apiRequest<AgentSummary>(
     `/challenges/${challengeId}/agents`,
     jsonRequest("POST", input)
@@ -113,10 +115,7 @@ export function setAgentQueue(
   agentId: string,
   input: { steering: string[]; followUp: string[] }
 ) {
-  return apiRequest<void>(
-    `/agents/${agentId}/queue`,
-    jsonRequest("PUT", input)
-  )
+  return apiRequest<void>(`/agents/${agentId}/queue`, jsonRequest("PUT", input))
 }
 
 /** Submit a flag for the agent's challenge (POST /api/agents/:id/flag). */
@@ -167,4 +166,10 @@ export function backtrack(agentId: string, seq: number) {
     `/agents/${agentId}/backtrack`,
     jsonRequest("POST", { seq })
   )
+}
+
+/** The event overview's single fleet poll: challenges + per-challenge
+ * agents + the scheduler agent + scheduler config/status. */
+export function getFleet(eventId: string) {
+  return apiRequest<FleetInfo>(`/events/${eventId}/fleet`)
 }

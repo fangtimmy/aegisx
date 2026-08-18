@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import type { AgentSummary, EntryItem, LiveEvent, RunPublic } from "@/api"
+import type { AgentSummary, EntryItem, LiveEvent } from "@/api"
 import { ConversationStore } from "@/stream/conversation-store"
 
 // The store batches listener notifications on requestAnimationFrame; the test
@@ -109,10 +109,6 @@ function toolEvent(
     status,
     ...extra,
   }
-}
-
-function runUpdatedEvent(run: Partial<RunPublic>): LiveEvent {
-  return { type: "run.updated", run: run as RunPublic }
 }
 
 function agentUpdatedEvent(agent: Partial<AgentSummary>): LiveEvent {
@@ -243,17 +239,13 @@ describe("ConversationStore", () => {
     expect(store.get("a1")).toHaveLength(0)
   })
 
-  test("run.updated / agent.updated update store state and notify listeners", async () => {
+  test("agent.updated updates store state and notifies listeners", async () => {
     const store = new ConversationStore()
     let notified = 0
     const unsubscribe = store.subscribe("a1", () => {
       notified += 1
     })
-    store.applyEvent(runUpdatedEvent({ id: "r1", status: "running" }))
-    store.applyEvent(
-      agentUpdatedEvent({ id: "a1", slot: "solver-1", role: "solver" })
-    )
-    expect(store.getRun()).toMatchObject({ id: "r1" })
+    store.applyEvent(agentUpdatedEvent({ id: "a1", role: "solver" }))
     expect(store.getAgents()).toHaveLength(1)
     await flush()
     expect(notified).toBeGreaterThan(0)

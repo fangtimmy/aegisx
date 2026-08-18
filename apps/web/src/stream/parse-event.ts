@@ -3,7 +3,6 @@ import {
   isSessionEntry,
   isTimingMeta,
   type LiveEvent,
-  type RunPublic,
 } from "@/api"
 import { isRecord } from "@/domain/conversation"
 
@@ -43,8 +42,8 @@ function optStr(value: unknown): string | undefined {
 export function parseLiveEvent(value: unknown): LiveEvent | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined
   if (value.type === "ready") {
-    return typeof value.runId === "string" && typeof value.agentId === "string"
-      ? { type: "ready", runId: value.runId, agentId: value.agentId }
+    return typeof value.agentId === "string"
+      ? { type: "ready", agentId: value.agentId }
       : undefined
   }
   if (value.type === "channel.message") {
@@ -52,10 +51,6 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
     // derived channelKey; timeline views currently poll, so this is a
     // pass-through.
     return { type: "channel.message", message: value.message as never }
-  }
-  if (value.type === "run.updated") {
-    if (!isRecord(value.run)) return undefined
-    return { type: "run.updated", run: value.run as RunPublic }
   }
   if (value.type === "agent.updated") {
     if (!isRecord(value.agent)) return undefined

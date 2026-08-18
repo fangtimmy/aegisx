@@ -17,9 +17,7 @@ export function getChallengeChannels(challengeId: string) {
 
 /** SDK channels.list: the agent's visible channels + unread counts. */
 export function getAgentChannels(agentId: string) {
-  return apiRequest<{ items: ChannelPublic[] }>(
-    `/agents/${agentId}/channels`
-  )
+  return apiRequest<{ items: ChannelPublic[] }>(`/agents/${agentId}/channels`)
 }
 
 /** Channel timeline. Forward: `after` is the global message-id cursor — 0

@@ -51,24 +51,25 @@ function formatSize(bytes: number): string {
 
 // --- message rendering (Discord-style grouped rows) -----------------------
 
-/** 📎 attachment chip (metadata only — content downloads on click). */
+/** 📎 attachment chip: the shared/ path (read directly — no download
+ * endpoint in v19). Solver agents read /workspace/<path>; the scheduler
+ * reads /challenges/<cid>/workspace/<path>. */
 function AttachmentChip({
   file,
 }: {
   file: ChannelMessagePublic["files"][number]
 }) {
   return (
-    <a
-      className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs hover:bg-muted"
-      download
-      href={channelsApi.channelFileUrl(file.id)}
+    <span
+      className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs"
+      title={file.path}
     >
       <Paperclip className="size-3 shrink-0" aria-hidden />
       <span className="truncate">{file.filename}</span>
       <span className="shrink-0 text-muted-foreground">
         · {formatSize(file.size)}
       </span>
-    </a>
+    </span>
   )
 }
 
@@ -145,7 +146,7 @@ function MessageRow({
       {message.files.length > 0 && (
         <div className="my-1 flex flex-wrap gap-1.5">
           {message.files.map((file) => (
-            <AttachmentChip file={file} key={file.id} />
+            <AttachmentChip file={file} key={file.path} />
           ))}
         </div>
       )}
@@ -262,7 +263,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
       if (fileInput.current) fileInput.current.value = ""
       setError(null)
       void queryClient.invalidateQueries({
-        queryKey: keys.runs.channelMessages(channelKey),
+        queryKey: keys.channels.messages(channelKey),
       })
     },
     onError: (err: Error) => setError(err.message),
@@ -383,7 +384,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
   // gcTime 0: leaving a channel drops its cached tail, so re-entering starts
   // from the full latest window (after=0) instead of a partial tail response.
   const tail = useQuery({
-    queryKey: keys.runs.channelMessages(channelKey),
+    queryKey: keys.channels.messages(channelKey),
     queryFn: () =>
       channelsApi.listChannelMessages(channelKey, newestId.current, PAGE_SIZE),
     refetchInterval: POLL_INTERVAL_MS,
@@ -544,13 +545,13 @@ function RailItem({
         <Hash className="size-3.5 shrink-0 text-muted-foreground" />
       )}
       <span className="truncate">{channel.label}</span>
-      {channel.sharedRunCount !== null && (
+      {channel.liveAgentCount !== null && (
         <span
           className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground"
-          title={`同题共享频道 · ${channel.sharedRunCount} 个 live run`}
+          title={`同题共享频道 · ${channel.liveAgentCount} 个 live agent`}
         >
           <Users className="size-2.5" aria-hidden />
-          {channel.sharedRunCount}
+          {channel.liveAgentCount}
         </span>
       )}
       {unseen && (
@@ -604,22 +605,13 @@ function ChannelRail({
 // --- the IM view ------------------------------------------------------------
 
 /**
- * The IM view (v18 派生键频道): channel rail + message timeline + composer
- * with attachments + urgent switch. Two data sources:
- *  - runId: a run's tree (#team + one DM per solver, derived keys)
- *  - challengeId: the challenge's single #team (v17 knowledge base, shared
- *    across the challenge's runs — the 共享 badge)
+ * The IM view (v19 派生键频道): channel rail + message timeline + composer
+ * with attachments + urgent switch. Anchored on a challenge (its channel
+ * tree: #team + one DM per agent that ever attacked the challenge).
  * Channels are addressed by their derived `key` (team:<cid> / dm:<aid>).
- * UI unread is client-side session state (the open channel's baseline is the
- * latest message the rail poll has seen for it) — never persisted.
+ * UI unread is client-side session state — never persisted.
  */
-export function ChannelsView({
-  runId,
-  challengeId,
-}: {
-  runId?: string
-  challengeId?: string
-}) {
+export function ChannelsView({ challengeId }: { challengeId?: string }) {
   const [activeKey, setActiveKey] = useState<string | null>(null)
   /** Session-local unread baseline (UI unread is client session state,
    * never persisted): channel key → the last message timestamp this view has
@@ -630,12 +622,9 @@ export function ChannelsView({
   const channels = useQuery({
     queryKey: challengeId
       ? keys.challenges.channels(challengeId)
-      : keys.runs.channels(runId ?? ""),
-    enabled: Boolean(challengeId ?? runId),
-    queryFn: () =>
-      challengeId
-        ? channelsApi.getChallengeChannels(challengeId)
-        : channelsApi.getRunChannels(runId!),
+      : ["channels", "none"],
+    enabled: Boolean(challengeId),
+    queryFn: () => channelsApi.getChallengeChannels(challengeId!),
     refetchInterval: POLL_INTERVAL_MS,
   })
 

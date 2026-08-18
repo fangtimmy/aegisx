@@ -15,7 +15,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { CreateRunDialog } from "@/features/runs"
+import { SpawnAgentDialog } from "@/features/runs"
 import { cn } from "@/lib/utils"
 
 import { UNCATEGORIZED } from "./event-agents-shared"
@@ -76,7 +76,7 @@ export function ChallengesTreeTab({ challenges }: { challenges: Challenge[] }) {
 function ChallengeRow({ challenge }: { challenge: Challenge }) {
   const solved = isChallengeSolved(challenge)
   return (
-    <CreateRunDialog
+    <SpawnAgentDialog
       challenge={challenge}
       trigger={
         <>

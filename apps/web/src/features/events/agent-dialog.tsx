@@ -9,7 +9,7 @@ import {
 } from "lucide-react"
 import { useCallback, useMemo, useState } from "react"
 
-import { agentsApi, keys, type ModelRef, runsApi } from "@/api"
+import { agentsApi, challengesApi, keys, type ModelRef } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import {
   Dialog,
@@ -22,33 +22,31 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { AgentOverview } from "@/features/runs/agent-overview"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import { ChannelsView } from "@/features/runs/channels-view"
 import { Conversation } from "@/features/runs/conversation"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
-import { RunOverview } from "@/features/runs/run-overview"
 
 import { POLL_INTERVAL_MS, roleLabel } from "./event-agents-shared"
 import { SchedulerConfigTab } from "./scheduler-config-tab"
 import { SchedulerDmTab } from "./scheduler-dm-tab"
 
 export function AgentDialog({
-  runId,
   agentId,
   onClose,
 }: {
-  runId: string
   agentId: string
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
   const detail = useQuery({
-    queryKey: keys.runs.detail(runId),
-    queryFn: () => runsApi.getRun(runId),
+    queryKey: keys.agents.detail(agentId),
+    queryFn: () => agentsApi.getAgent(agentId),
     // Poll while running so the composer's send→stop swap and the dialog
     // status stay live (the fleet query doesn't feed this cache key).
     refetchInterval: (query) =>
-      query.state.data && query.state.data.run.status === "running"
+      query.state.data && query.state.data.agent.status === "running"
         ? POLL_INTERVAL_MS
         : false,
   })
@@ -56,79 +54,72 @@ export function AgentDialog({
     "conversation" | "files" | "channels" | "overview" | "config" | "inbox"
   >("conversation")
 
-  const run = detail.data?.run
-  const agents = detail.data?.agents ?? []
-  const agent = agents.find((item) => item.id === agentId)
+  const agent = detail.data?.agent
 
   // Conversation adapter — declared before the loading guard so hooks are
   // not placed behind a conditional return (Rules-of-hooks). The callbacks
-  // are only invoked once run/agent are defined, so the optional chaining in
-  // the deps is safe.
+  // are only invoked once the agent is defined.
   const sendMessage = useCallback(
-    (id: string, text: string, deliverAs?: "steer" | "followUp") =>
-      agentsApi.sendMessage(id, { text, deliverAs }),
-    []
+    (text: string, deliverAs?: "steer" | "followUp") =>
+      agentsApi.sendMessage(agentId, { text, deliverAs }),
+    [agentId]
   )
   const switchModel = useCallback(
-    (id: string, ref: ModelRef) =>
-      agentsApi.switchModel(id, { model: ref }).then(() =>
+    (ref: ModelRef) =>
+      agentsApi.switchModel(agentId, { model: ref }).then(() =>
         queryClient.invalidateQueries({
-          queryKey: keys.runs.fleet(run?.eventId ?? ""),
+          queryKey: keys.agents.fleet(agent?.eventId ?? ""),
         })
       ),
-    [run?.eventId, queryClient]
+    [agent?.eventId, queryClient, agentId]
   )
   const loadMessages = useCallback(
-    () => runsApi.listMessages(runId, 0, agentId).then((list) => list.items),
-    [runId, agentId]
+    () => agentsApi.listMessages(agentId).then((list) => list.items),
+    [agentId]
   )
 
-  // Agent-level controls now live in the composer: stop (send→stop swap),
-  // compact (/compact), close (/close). The header is identity-only; the
-  // graph only hosts the scheduler start entry.
   const invalidateAgent = useCallback(
     () =>
       Promise.all([
-        queryClient.invalidateQueries({ queryKey: keys.runs.detail(runId) }),
         queryClient.invalidateQueries({
-          queryKey: keys.runs.fleet(run?.eventId ?? ""),
+          queryKey: keys.agents.detail(agentId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: keys.agents.fleet(agent?.eventId ?? ""),
         }),
       ]),
-    [queryClient, runId, run?.eventId]
+    [queryClient, agentId, agent?.eventId]
   )
-  // Multi-session + flat backtrack (v12): per-agent session ops (orchestrator
-  // included — it is a main agent served by the same run service).
+  // Multi-session + flat backtrack (v12): per-agent session ops.
   const sessionOps = useMemo(
     () => ({
-      listSessions: (id: string) =>
-        agentsApi.listSessions(id).then((r) => r.items),
-      createSession: (id: string) =>
-        agentsApi.createSession(id).then(() => invalidateAgent()),
-      activateSession: (id: string, sessionId: string) =>
-        agentsApi.activateSession(id, sessionId).then(() => invalidateAgent()),
-      backtrack: (id: string, seq: number) =>
-        agentsApi.backtrack(id, seq).then(() => invalidateAgent()),
+      listSessions: () => agentsApi.listSessions(agentId).then((r) => r.items),
+      createSession: () =>
+        agentsApi.createSession(agentId).then(() => invalidateAgent()),
+      activateSession: (sessionId: string) =>
+        agentsApi
+          .activateSession(agentId, sessionId)
+          .then(() => invalidateAgent()),
+      backtrack: (seq: number) =>
+        agentsApi.backtrack(agentId, seq).then(() => invalidateAgent()),
     }),
-    [invalidateAgent]
+    [invalidateAgent, agentId]
   )
-  // Silent host callbacks for the composer: stop (send→stop swap) + close
-  // (/close). Toasts live at the Conversation call site.
   const stopAgent = useCallback(
-    (id: string) => agentsApi.stopAgent(id).then(() => invalidateAgent()),
-    [invalidateAgent]
+    () => agentsApi.stopAgent(agentId).then(() => invalidateAgent()),
+    [invalidateAgent, agentId]
   )
-  const closeRun = useCallback(
-    () => runsApi.closeRun(runId).then(() => invalidateAgent()),
-    [runId, invalidateAgent]
+  const closeAgent = useCallback(
+    () => agentsApi.closeAgent(agentId).then(() => invalidateAgent()),
+    [invalidateAgent, agentId]
   )
-  // Shared compact action (composer /compact command); toasts live at the
-  // Conversation call site.
-  const compactRun = useCallback(
+  const compactAgent = useCallback(
     () => agentsApi.compactAgent(agentId).then(() => invalidateAgent()),
-    [agentId, invalidateAgent]
+    [invalidateAgent, agentId]
   )
 
-  if (detail.isPending || !run || !agent) {
+  // #12: data arrived but the agent is gone → tell the user + close.
+  if (detail.isPending) {
     return (
       <Dialog onOpenChange={(open) => !open && onClose()} open>
         <DialogPopup className="max-w-5xl">
@@ -148,6 +139,32 @@ export function AgentDialog({
       </Dialog>
     )
   }
+  if (detail.error || !agent) {
+    return (
+      <Dialog onOpenChange={(open) => !open && onClose()} open>
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Agent 不存在</DialogTitle>
+            <DialogDescription>
+              该 agent 可能已被删除，或数据未到达。请刷新事件视图后重试。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <button
+              className="w-full rounded-md border px-3 py-2 text-sm hover:bg-secondary"
+              onClick={onClose}
+              type="button"
+            >
+              关闭
+            </button>
+          </DialogPanel>
+        </DialogPopup>
+      </Dialog>
+    )
+  }
+
+  const isScheduler = agent.role === "orchestrator"
+  const challengeId = agent.challengeId
 
   return (
     <Dialog onOpenChange={(open) => !open && onClose()} open>
@@ -165,18 +182,16 @@ export function AgentDialog({
             </span>
           </DialogTitle>
           <DialogDescription className="truncate">
-            {run.scopeType === "event" ? "调度者任务" : run.challengeName}
+            {isScheduler ? "调度者任务" : agent.challengeName}
             {" · "}
-            {run.provider} / {run.modelId}
-            {agent.isEntry ? " · 入口" : ""}
+            {agent.model ?? "默认模型"}
           </DialogDescription>
         </DialogHeader>
         {/* Plain flex div, NOT DialogPanel: DialogPanel wraps its children in
             a ScrollArea, which would scroll the tab bar and the composer
             along with the content. We need the TabsList pinned at top and
             (for the conversation tab) the composer pinned at bottom, so the
-            body owns the flex layout and each panel scrolls itself (the
-            layout formerly shared with run-workspace's CardPanel). */}
+            body owns the flex layout and each panel scrolls itself. */}
         <div className="flex min-h-0 flex-1 flex-col">
           <Tabs
             className="flex h-full min-h-0 min-w-0 flex-col"
@@ -200,7 +215,7 @@ export function AgentDialog({
               <TabsTab className="gap-2" value="conversation">
                 <MessageSquare /> 对话
               </TabsTab>
-              {run.scopeType === "challenge" && (
+              {!isScheduler && (
                 <TabsTab className="gap-2" value="channels">
                   <MessagesSquare /> 频道
                 </TabsTab>
@@ -211,12 +226,12 @@ export function AgentDialog({
               <TabsTab className="gap-2" value="overview">
                 <Settings2 /> 概览
               </TabsTab>
-              {run.scopeType === "event" && (
+              {isScheduler && (
                 <TabsTab className="gap-2" value="config">
                   <SlidersHorizontal /> 配置
                 </TabsTab>
               )}
-              {run.scopeType === "event" && (
+              {isScheduler && (
                 <TabsTab className="gap-2" value="inbox">
                   <Inbox /> 调度 DM
                 </TabsTab>
@@ -227,66 +242,79 @@ export function AgentDialog({
               value="conversation"
             >
               <Conversation
-                agents={[agent]}
+                agent={agent}
+                detail={detail.data ?? undefined}
                 canEditQueue={false}
-                channel={runId}
                 closedReopenable
-                closeRun={closeRun}
-                compactAgent={compactRun}
-                key={`${runId}:${agentId}`}
+                closeAgent={closeAgent}
+                compactAgent={compactAgent}
+                key={agentId}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
                 sessionOps={sessionOps}
-                status={run.status}
+                status={
+                  agent.status === "running"
+                    ? "running"
+                    : agent.status === "idle"
+                      ? "idle"
+                      : "closed"
+                }
                 stopAgent={stopAgent}
-                streamPath={`/api/runs/${runId}/stream`}
+                streamPath={`/api/agents/${agentId}/stream`}
                 switchModel={switchModel}
               />
             </TabsPanel>
-            {run.scopeType === "challenge" && (
+            {!isScheduler && challengeId && (
               <TabsPanel
                 className="min-h-0 flex-1 overflow-hidden"
                 value="channels"
               >
-                <ChannelsView runId={runId} />
+                <ChannelsView challengeId={challengeId} />
               </TabsPanel>
             )}
             <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="files">
-              <FilesWorkspace
-                enabled={view === "files"}
-                files={{
-                  key: (path) => keys.runs.files(runId, path),
-                  get: (path) => runsApi.getRunFile(runId, path),
-                  downloadUrl: (path) =>
-                    `/api/runs/${runId}/files/download?path=${encodeURIComponent(path)}`,
-                }}
-                key={runId}
-              />
+              {challengeId && agent.eventId ? (
+                <FilesWorkspace
+                  enabled={view === "files"}
+                  files={{
+                    key: (path) => keys.challenges.files(challengeId, path),
+                    get: (path) =>
+                      challengesApi.getChallengeFiles(challengeId, path),
+                    downloadUrl: (path) =>
+                      `/api/challenges/${challengeId}/files/download?path=${encodeURIComponent(path)}`,
+                  }}
+                  key={challengeId}
+                />
+              ) : (
+                <p className="px-6 py-4 text-sm text-muted-foreground">
+                  调度者无题工作区文件。
+                </p>
+              )}
             </TabsPanel>
             <TabsPanel
               className="min-h-0 flex-1 overflow-hidden"
               value="overview"
             >
               <ScrollArea className="h-full" scrollFade>
-                <RunOverview agents={agents} run={run} />
+                <AgentOverview detail={detail.data!} />
               </ScrollArea>
             </TabsPanel>
-            {run.scopeType === "event" && (
+            {isScheduler && (
               <TabsPanel
                 className="min-h-0 flex-1 overflow-hidden"
                 value="config"
               >
-                <SchedulerConfigTab eventId={run.eventId} />
+                <SchedulerConfigTab eventId={agent.eventId} />
               </TabsPanel>
             )}
-            {run.scopeType === "event" && (
+            {isScheduler && (
               <TabsPanel
                 className="min-h-0 flex-1 overflow-hidden"
                 value="inbox"
               >
                 <SchedulerDmTab
                   active={view === "inbox"}
-                  eventId={run.eventId}
+                  eventId={agent.eventId}
                 />
               </TabsPanel>
             )}

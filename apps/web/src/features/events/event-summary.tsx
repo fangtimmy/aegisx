@@ -1,16 +1,15 @@
 import { useQuery } from "@tanstack/react-query"
 import { BrainCircuit, ListOrdered, Network, Play } from "lucide-react"
-import { type ReactNode, useMemo } from "react"
+import { type ReactNode } from "react"
 
 import {
+  agentsApi,
   type AgentSummary,
+  type AgentUsage,
   type Challenge,
   eventsApi,
   keys,
   type QueueItem,
-  type RunPublic,
-  type RunUsage,
-  runsApi,
   schedulerApi,
   type SchedulerInfo,
 } from "@/api"
@@ -29,12 +28,12 @@ import {
 } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
-import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import {
+  agentStatusLabel,
   formatCost,
   formatTokens,
-  runStatusLabel,
-} from "@/features/runs/run-overview"
+} from "@/features/runs/agent-overview"
+import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 
 import { ErrorState, isChallengeSolved } from "./event-shared"
 
@@ -53,11 +52,8 @@ function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role
 }
 
-/** Scheduler endpoint payload + its run's agents (fetched in one query). */
-type SchedulerWithAgents = SchedulerInfo & { agents: AgentSummary[] }
-
-/** An agent + the run it belongs to (for cross-run aggregation). */
-type AgentRef = { agent: AgentSummary; run: RunPublic }
+/** Scheduler endpoint payload (the scheduler agent is `agent`). */
+type SchedulerData = SchedulerInfo
 
 /** Event-wide overview: challenge progress, fleet stats, token usage. */
 export function EventSummary({
@@ -67,28 +63,19 @@ export function EventSummary({
   eventId: string
   challenges: Challenge[]
 }) {
-  // Fleet: every challenge run + its agents (the overview's single source of
-  // truth). Always polls — the scheduler can start/stop runs server-side at
-  // any time, so the overview must stay current unconditionally.
+  // Fleet: challenges + per-challenge agents + the scheduler agent +
+  // config/status (the overview's single source of truth, one endpoint).
+  // Always polls — the scheduler acts server-side at any time.
   const fleet = useQuery({
-    queryKey: keys.runs.fleet(eventId),
-    queryFn: async () => {
-      const items = (await runsApi.listEventRuns(eventId)).items
-      const details = await Promise.all(
-        items.map((run) => runsApi.getRun(run.id))
-      )
-      return { items, details }
-    },
+    queryKey: keys.agents.fleet(eventId),
+    queryFn: () => agentsApi.getFleet(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
-  // Scheduler (event-scoped run) + its agents.
+  // Scheduler endpoint (config + the scheduler agent + status).
   const scheduler = useQuery({
     queryKey: keys.scheduler.detail(eventId),
-    queryFn: async (): Promise<SchedulerWithAgents> => {
-      const data = await schedulerApi.getScheduler(eventId)
-      const agents = data.run ? (await runsApi.getRun(data.run.id)).agents : []
-      return { ...data, agents }
-    },
+    queryFn: async (): Promise<SchedulerData> =>
+      schedulerApi.getScheduler(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
   // The queue snapshot.
@@ -104,12 +91,9 @@ export function EventSummary({
     refetchInterval: POLL_INTERVAL_MS,
   })
 
-  const detailsById = useMemo(() => {
-    const map = new Map<string, { run: RunPublic; agents: AgentSummary[] }>()
-    for (const detail of fleet.data?.details ?? [])
-      map.set(detail.run.id, detail)
-    return map
-  }, [fleet.data])
+  const agentsByChallenge = fleet.data?.agentsByChallenge ?? {}
+  const schedulerAgent =
+    fleet.data?.schedulerAgent ?? scheduler.data?.agent ?? null
 
   if (fleet.isPending || scheduler.isPending) {
     return (
@@ -126,16 +110,12 @@ export function EventSummary({
     return <ErrorState error={fleet.error} retry={() => fleet.refetch()} />
   }
 
-  const runs = fleet.data?.items ?? []
-  const schedulerData = scheduler.data
-
   return (
     <SummaryTab
       challenges={challenges}
-      detailsById={detailsById}
+      agentsByChallenge={agentsByChallenge}
+      schedulerAgent={schedulerAgent}
       queue={queue.data?.items ?? []}
-      runs={runs}
-      scheduler={schedulerData}
       usage={usage.data?.usage}
     />
   )
@@ -143,29 +123,30 @@ export function EventSummary({
 
 function SummaryTab({
   challenges,
-  runs,
-  detailsById,
-  scheduler,
+  agentsByChallenge,
+  schedulerAgent,
   queue,
   usage,
 }: {
   challenges: Challenge[]
-  runs: RunPublic[]
-  detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
-  scheduler?: SchedulerWithAgents
+  agentsByChallenge: Record<string, AgentSummary[]>
+  schedulerAgent: AgentSummary | null
   queue: QueueItem[]
-  usage?: RunUsage
+  usage?: AgentUsage
 }) {
   const solved = challenges.filter(isChallengeSolved).length
   const total = challenges.length
   const solvedPercent = total > 0 ? Math.round((solved / total) * 100) : 0
-  const activeRuns = runs.filter((run) => run.status !== "closed")
   const pendingQueue = queue.filter((item) => item.status === "pending")
 
-  const activeAgents: AgentRef[] = []
-  for (const run of activeRuns) {
-    for (const agent of detailsById.get(run.id)?.agents ?? []) {
-      activeAgents.push({ agent, run })
+  // Flatten the per-challenge agents into one active list (history included;
+  // the solver agents that ever attacked each challenge). Include the
+  // scheduler agent when live.
+  const activeAgents: AgentSummary[] = []
+  for (const list of Object.values(agentsByChallenge)) {
+    for (const agent of list) {
+      if (agent.status === "running" || agent.status === "idle")
+        activeAgents.push(agent)
     }
   }
 
@@ -192,7 +173,7 @@ function SummaryTab({
           <StatCard
             icon={<Play className="size-4" />}
             label="活跃任务"
-            value={String(activeRuns.length)}
+            value={String(activeAgents.length)}
           />
           <StatCard
             icon={<ListOrdered className="size-4" />}
@@ -208,7 +189,9 @@ function SummaryTab({
             icon={<Network className="size-4" />}
             label="调度者"
             value={
-              scheduler?.run ? runStatusLabel(scheduler.run.status) : "未启用"
+              schedulerAgent
+                ? agentStatusLabel(schedulerAgent.status)
+                : "未启用"
             }
           />
         </div>
@@ -282,7 +265,7 @@ function SummaryTab({
               </p>
             ) : (
               <div className="flex flex-col">
-                {activeAgents.map(({ agent, run }) => (
+                {activeAgents.map((agent) => (
                   <div
                     className="flex min-w-0 items-center gap-2.5 border-b px-4 py-2.5 last:border-b-0"
                     key={agent.id}
@@ -296,7 +279,7 @@ function SummaryTab({
                         {agent.name ?? roleLabel(agent.role)}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
-                        {run.challengeName}
+                        {agent.challengeName || "调度者"}
                       </span>
                     </span>
                     <Badge size="sm" variant="secondary">

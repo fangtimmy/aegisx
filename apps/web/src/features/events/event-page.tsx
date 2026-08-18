@@ -24,10 +24,9 @@ import {
   type Challenge,
   type QueueItem,
   type QueueState,
-  type RunPublic,
   eventsApi,
   keys,
-  runsApi,
+  agentsApi,
   schedulerApi,
 } from "@/api"
 import { AppLayout } from "@/components/shell/app-layout"
@@ -210,7 +209,7 @@ function invalidateQueue(
   void queryClient.invalidateQueries({
     queryKey: keys.scheduler.queue(eventId),
   })
-  void queryClient.invalidateQueries({ queryKey: keys.runs.fleet(eventId) })
+  void queryClient.invalidateQueries({ queryKey: keys.agents.fleet(eventId) })
 }
 
 /** W2.3: queue header with the per-event state badge + pause/resume controls;
@@ -219,12 +218,12 @@ function PlanPanel({
   eventId,
   queue,
   state,
-  onOpenRun,
+  onOpenAgent,
 }: {
   eventId: string
   queue: QueueItem[]
   state: QueueState
-  onOpenRun: (runId: string) => void
+  onOpenAgent: (agentId: string) => void
 }) {
   const queryClient = useQueryClient()
   const pause = useMutation({
@@ -305,7 +304,7 @@ function PlanPanel({
               <QueueList
                 eventId={eventId}
                 items={visibleQueue}
-                onOpenRun={onOpenRun}
+                onOpenAgent={onOpenAgent}
               />
             </CardPanel>
           </Card>
@@ -342,8 +341,8 @@ function EventAgentsPanel({
   // scheduler query pair into one endpoint. Always polls: the scheduler can
   // start/stop runs server-side at any time.
   const fleet = useQuery({
-    queryKey: keys.runs.fleet(eventId),
-    queryFn: () => runsApi.getFleet(eventId),
+    queryKey: keys.agents.fleet(eventId),
+    queryFn: () => agentsApi.getFleet(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
   // The queue snapshot (independent: plan tab + pause/resume controls).
@@ -354,11 +353,11 @@ function EventAgentsPanel({
   })
 
   const detailsById = useMemo(() => {
-    const map = new Map<string, { run: RunPublic; agents: AgentSummary[] }>()
-    for (const run of fleet.data?.runs ?? []) {
-      map.set(run.id, {
-        run,
-        agents: fleet.data?.agentsByRun[run.id] ?? [],
+    const map = new Map<string, { run: AgentSummary; agents: AgentSummary[] }>()
+    for (const ch of fleet.data?.challenges ?? []) {
+      map.set(ch.id, {
+        run: fleet.data?.agentsByChallenge[ch.id]?.[0] ?? ({} as AgentSummary),
+        agents: fleet.data?.agentsByChallenge[ch.id] ?? [],
       })
     }
     return map
@@ -369,27 +368,22 @@ function EventAgentsPanel({
     if (!data) return undefined
     return {
       config: data.config,
-      run: data.schedulerRun,
+      agent: data.schedulerAgent,
       status: data.status,
-      agents: data.schedulerAgents,
+      agents: data.schedulerAgent ? [data.schedulerAgent] : [],
     }
   }, [fleet.data])
 
-  const onSelectAgent = useCallback((runId: string, agentId: string) => {
-    setSelected({ runId, agentId })
+  const onSelectAgent = useCallback((agentId: string) => {
+    setSelected({ runId: "", agentId })
   }, [])
-  const onOpenAgent = useCallback((runId: string, agentId: string) => {
-    setDialog({ runId, agentId })
+  const onOpenAgent = useCallback((agentId: string) => {
+    setDialog({ runId: "", agentId })
   }, [])
-  /** W7.1: TimelineTab / QueueList entries select the run's ENTRY agent. */
-  const handleSelectRun = useCallback(
-    (runId: string) => {
-      const agents = fleet.data?.agentsByRun[runId] ?? []
-      const entry = agents.find((agent) => agent.isEntry) ?? agents[0]
-      if (entry) setSelected({ runId, agentId: entry.id })
-    },
-    [fleet.data]
-  )
+  /** W7.1: TimelineTab / QueueList entries select the agent. */
+  const handleSelectRun = useCallback((agentId: string) => {
+    setSelected({ runId: "", agentId })
+  }, [])
 
   if (fleet.isPending) {
     return (
@@ -406,7 +400,10 @@ function EventAgentsPanel({
     return <ErrorState error={fleet.error} retry={() => fleet.refetch()} />
   }
 
-  const runs = fleet.data?.runs ?? []
+  const runs = useMemo(
+    () => Object.values(fleet.data?.agentsByChallenge ?? {}).flat(),
+    [fleet.data]
+  )
   const imChallenge = challengeIm
     ? (challenges.find((ch) => ch.id === challengeIm) ?? null)
     : null
@@ -433,7 +430,7 @@ function EventAgentsPanel({
             <TabsPanel className="h-full" value="plan">
               <PlanPanel
                 eventId={eventId}
-                onOpenRun={handleSelectRun}
+                onOpenAgent={handleSelectRun}
                 queue={queue.data?.items ?? []}
                 state={queue.data?.state ?? "running"}
               />
@@ -450,9 +447,8 @@ function EventAgentsPanel({
             </TabsPanel>
             <TabsPanel className="h-full" value="agents">
               <AgentsTab
-                detailsById={detailsById}
+                agents={[...detailsById.values()].flatMap((d) => d.agents)}
                 onSelectAgent={onSelectAgent}
-                runs={runs}
                 scheduler={schedulerData}
               />
             </TabsPanel>
@@ -470,11 +466,7 @@ function EventAgentsPanel({
         selected={selected}
       />
       {dialog && (
-        <AgentDialog
-          agentId={dialog.agentId}
-          onClose={() => setDialog(null)}
-          runId={dialog.runId}
-        />
+        <AgentDialog agentId={dialog.agentId} onClose={() => setDialog(null)} />
       )}
       {imChallenge && (
         <ChallengeImDialog

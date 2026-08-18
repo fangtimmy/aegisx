@@ -6,6 +6,7 @@ import type {
   ChallengeInput,
   SolveState,
   TargetState,
+  WorkspaceFile,
 } from "./types"
 
 export function updateChallenge(challengeId: string, input: ChallengeInput) {
@@ -79,4 +80,11 @@ export function refreshChallengeRemote(challengeId: string) {
     `/challenges/${challengeId}/remote/refresh`,
     jsonRequest("POST", {})
   )
+}
+
+/** The challenge's workspace file tree (agents/ shared/ attachments/
+ * sessions/). `path` is relative to the workspace root; empty = root. */
+export function getChallengeFiles(challengeId: string, path = "") {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ""
+  return apiRequest<WorkspaceFile>(`/challenges/${challengeId}/files${query}`)
 }

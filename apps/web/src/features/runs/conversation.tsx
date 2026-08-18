@@ -1,15 +1,15 @@
 import { useMutation } from "@tanstack/react-query"
-import { Bot, CircleAlert, GitFork, LoaderCircle, Plus } from "lucide-react"
+import { CircleAlert, LoaderCircle, Plus } from "lucide-react"
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react"
 
 import type {
+  AgentDetail,
   AgentSessionSummary,
   AgentSummary,
   MessageListItem,
@@ -33,13 +33,11 @@ import {
   CardPanel,
 } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tabs, TabsList, TabsTab } from "@/components/ui/tabs"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
 
 import { AgentActivityBadge } from "./agent-activity-badge"
-import { AgentStatusIcon } from "./agent-status-icon"
 import { ContextStatStrip } from "./context-stat"
 import { MessageInput } from "./message-input"
 import { ModelRefPicker } from "./model-switcher"
@@ -48,71 +46,65 @@ import { Timeline } from "./timeline"
 
 /**
  * Data + lifecycle adapter for {@link Conversation}. The per-event
- * orchestrator (orchestrator-view) and any run-level consumer implement
+ * orchestrator (orchestrator-view) and any agent-level consumer implement
  * this; Conversation itself is agent-agnostic. The callbacks should be stable
  * (useCallback) so the SSE connection effect does not reconnect on re-render.
  */
 export type ConversationProps = {
-  /** LiveBus channel id (run id / event id). */
-  channel: string
   /** SSE endpoint path. */
   streamPath: string
-  /** Agents in this conversation (≥1). Re-renders agent tabs; does NOT affect
-   * the SSE connection. The orchestrator passes a single synthetic agent. */
-  agents: AgentSummary[]
+  /** The agent for this conversation (single). */
+  agent: AgentSummary
+  /** Optional agent detail (system prompt + tool definitions) for the
+   * timeline's config panel. Hosts that fetch AgentDetail pass it here. */
+  detail?: AgentDetail
   /** Aggregate status driving the input placeholder + switcher disabled state. */
   status: "running" | "idle" | "closed"
-  /** Whether messaging a closed entity reopens it (solver runs cold-restore).
+  /** Whether messaging a terminal agent reopens it (solver agents reopen).
    * When false (orchestrator), the composer is locked while closed and the
    * user must (re)start it via the header action. */
   closedReopenable: boolean
-  /** Offer steer/followUp queue editing (run main agent only). */
+  /** Offer steer/followUp queue editing. */
   canEditQueue: boolean
   /** Load durable committed messages (raw list; Conversation buckets by agent). */
   loadMessages: () => Promise<MessageListItem[]>
-  /** Send a message to one agent (steer / followUp / new turn). */
+  /** Send a message to the agent (steer / followUp / new turn). */
   sendMessage: (
-    agentId: string,
     text: string,
     deliverAs?: "steer" | "followUp"
   ) => Promise<unknown>
-  /** Switch an agent's live model (entry agent in the run workspace). */
-  switchModel: (agentId: string, ref: ModelRef) => Promise<unknown>
-  /** Replace an agent's steer/followUp queue (run main agent only). */
+  /** Switch the agent's live model. */
+  switchModel: (ref: ModelRef) => Promise<unknown>
+  /** Replace the agent's steer/followUp queue. */
   setQueue?: (
     agentId: string,
     body: { steering: string[]; followUp: string[] }
   ) => Promise<unknown>
-  /** Manually compact an agent's context (composer /compact command). The
-   * server rejects a running turn; hosts wire API + invalidation. */
-  compactAgent?: (agentId: string) => Promise<unknown>
-  /** Abort the agent's current turn (composer stop button — the send button
-   * becomes a stop button while the run is running and the input is empty).
-   * Hosts wire API + invalidation; the composer handles the toast. */
-  stopAgent?: (agentId: string) => Promise<unknown>
-  /** Close the run's container (composer /close command). Hosts wire API +
-   * invalidation; the composer handles the toast. */
-  closeRun?: () => Promise<unknown>
+  /** Manually compact the agent's context (composer /compact command). */
+  compactAgent?: () => Promise<unknown>
+  /** Abort the agent's current turn (composer stop button). */
+  stopAgent?: () => Promise<unknown>
+  /** Close the agent (composer /close command). */
+  closeAgent?: () => Promise<unknown>
   /** Multi-session + flat-backtrack ops (v12). Optional — the composer /new,
    * the session bar, and the timeline backtrack affordance render only when
-   * present. All ops are agent-scoped (spawn children are rejected
-   * server-side and hidden by the UI). */
+   * present. */
   sessionOps?: SessionOps
 }
 
 /** Per-agent session + backtrack ops (v12). */
 type SessionOps = {
-  listSessions: (agentId: string) => Promise<AgentSessionSummary[]>
-  createSession: (agentId: string) => Promise<unknown>
-  activateSession: (agentId: string, sessionId: string) => Promise<unknown>
-  backtrack: (agentId: string, seq: number) => Promise<unknown>
+  listSessions: () => Promise<AgentSessionSummary[]>
+  createSession: () => Promise<unknown>
+  activateSession: (sessionId: string) => Promise<unknown>
+  backtrack: (seq: number) => Promise<unknown>
 }
 
 export function Conversation(props: ConversationProps) {
   const {
-    channel,
     streamPath,
-    agents,
+    agent,
+    detail,
     status,
     canEditQueue,
     loadMessages: loadMessagesFn,
@@ -127,19 +119,12 @@ export function Conversation(props: ConversationProps) {
   if (storeRef.current === null) storeRef.current = new ConversationStore()
   const store = storeRef.current
 
-  const mainAgent = useMemo(
-    () => agents.find((a) => a.isEntry) ?? agents[0],
-    [agents]
-  )
-  const [selectedAgentId, setSelectedAgentId] = useState<string>(
-    mainAgent?.id ?? ""
-  )
+  const agentId = agent.id
   const [disconnected, setDisconnected] = useState(false)
   const [draft, setDraft] = useState("")
   const [deliverAs, setDeliverAs] = useState<"steer" | "followUp">("steer")
   const [loadError, setLoadError] = useState<string | null>(null)
-  /** The selected agent's sessions (null until first fetch); used for the
-   * session bar. Hidden for spawn children (session ops are main-agent only). */
+  /** The agent's sessions (null until first fetch); used for the session bar. */
   const [sessions, setSessions] = useState<AgentSessionSummary[] | null>(null)
   /** seq of the committed row a flat backtrack targets (confirm dialog). */
   const [backtrackTarget, setBacktrackTarget] = useState<number | null>(null)
@@ -154,23 +139,15 @@ export function Conversation(props: ConversationProps) {
     if (!running) setDeliverAs("steer")
   }, [running])
 
-  // Keep the selected agent valid as agents appear/disappear (e.g. a child
-  // spawns or completes).
-  const effectiveAgentId =
-    agents.find((a) => a.id === selectedAgentId)?.id ?? mainAgent?.id ?? ""
-  const selectedAgent = agents.find((a) => a.id === effectiveAgentId) ?? null
-  const isChildAgent = selectedAgent?.parentAgentId != null
-
-  // Fetch the selected agent's session list; re-run when the agent tab
-  // changes or after a session mutation (the mutation handlers reload too).
+  // Fetch the agent's session list; re-run after a session mutation.
   const loadSessions = useCallback(async () => {
-    if (!sessionOps || !effectiveAgentId) return
+    if (!sessionOps) return
     try {
-      setSessions(await sessionOps.listSessions(effectiveAgentId))
+      setSessions(await sessionOps.listSessions())
     } catch {
       // keep the previous list; the next reload retries
     }
-  }, [sessionOps, effectiveAgentId])
+  }, [sessionOps])
 
   useEffect(() => {
     if (sessionOps) void loadSessions()
@@ -183,20 +160,18 @@ export function Conversation(props: ConversationProps) {
   const [modelDraft, setModelDraft] = useState<ModelRef | null>(null)
   useEffect(() => {
     setModelDraft(null)
-  }, [selectedAgent?.id, selectedAgent?.model])
+  }, [agent.id, agent.model])
 
-  const queueAgentId = selectedAgent?.id ?? ""
   const queuedMessages = useSyncExternalStore(
     useCallback(
-      (listener) => store.subscribe(queueAgentId, listener),
-      [store, queueAgentId]
+      (listener) => store.subscribe(agentId, listener),
+      [store, agentId]
     ),
-    useCallback(() => store.getQueue(queueAgentId), [store, queueAgentId]),
-    useCallback(() => store.getQueue(queueAgentId), [store, queueAgentId])
+    useCallback(() => store.getQueue(agentId), [store, agentId]),
+    useCallback(() => store.getQueue(agentId), [store, agentId])
   )
   const showSteerQueue =
     running &&
-    selectedAgent?.isEntry &&
     canEditQueue &&
     setQueue !== undefined &&
     queuedMessages !== null &&
@@ -206,54 +181,40 @@ export function Conversation(props: ConversationProps) {
     try {
       const items = await loadMessagesFn()
       setLoadError(null)
-      const byAgent = new Map<string, MessageListItem[]>()
-      for (const message of items) {
-        const bucket = byAgent.get(message.agentId) ?? []
-        bucket.push(message)
-        byAgent.set(message.agentId, bucket)
-      }
-      for (const [agentId, messages] of byAgent) {
-        store.applySnapshot(agentId, messages)
-      }
+      store.applySnapshot(agentId, items)
     } catch (error) {
-      // Surface the failure (e.g. run deleted / unreachable) instead of a
+      // Surface the failure (e.g. agent deleted / unreachable) instead of a
       // silent empty timeline; a later reconnect retry that succeeds clears it.
       setLoadError(error instanceof Error ? error.message : "加载消息失败")
     }
-  }, [store, loadMessagesFn])
+  }, [store, loadMessagesFn, agentId])
 
   useEffect(() => {
     const disconnect = store.connect(
-      channel,
+      agentId,
       loadMessages,
       setDisconnected,
       streamPath
     )
     void loadMessages()
     return disconnect
-  }, [channel, streamPath, store, loadMessages])
-
-  // Re-fetch when the agent list grows (e.g. a child spawned) so its history
-  // is loaded even if committed SSE events raced ahead.
-  useEffect(() => {
-    void loadMessages()
-  }, [agents.length, loadMessages])
+  }, [agentId, streamPath, store, loadMessages])
 
   const send = useMutation({
-    mutationFn: () => sendMessageFn(effectiveAgentId, draft.trim(), deliverAs),
+    mutationFn: () => sendMessageFn(draft.trim(), deliverAs),
     onSuccess: () => setDraft(""),
     onError: (error) => toast.error("发送消息失败", error.message),
   })
 
   const switchModel = useMutation({
-    mutationFn: (ref: ModelRef) => switchModelFn(effectiveAgentId, ref),
+    mutationFn: (ref: ModelRef) => switchModelFn(ref),
     onError: (error) => toast.error("切换模型失败", error.message),
   })
 
   const compact = useMutation({
     mutationFn: () => {
       if (!compactAgentFn) throw new Error("压缩功能不可用")
-      return compactAgentFn(effectiveAgentId)
+      return compactAgentFn()
     },
     onSuccess: () => {
       setDraft("")
@@ -262,13 +223,13 @@ export function Conversation(props: ConversationProps) {
     onError: (error) => toast.error("压缩失败", error.message),
   })
 
-  // Composer-driven run/agent controls: stop (send→stop swap, Esc-equivalent)
+  // Composer-driven agent controls: stop (send→stop swap, Esc-equivalent)
   // and close (/close command). Both are silent host callbacks; toasts live
   // here so the header stays identity-only.
   const stop = useMutation({
     mutationFn: () => {
       if (!props.stopAgent) throw new Error("停止功能不可用")
-      return props.stopAgent(effectiveAgentId)
+      return props.stopAgent()
     },
     onSuccess: () => toast.success("已停止当前轮"),
     onError: (error) => toast.error("停止失败", error.message),
@@ -276,8 +237,8 @@ export function Conversation(props: ConversationProps) {
 
   const close = useMutation({
     mutationFn: () => {
-      if (!props.closeRun) throw new Error("关闭功能不可用")
-      return props.closeRun()
+      if (!props.closeAgent) throw new Error("关闭功能不可用")
+      return props.closeAgent()
     },
     onSuccess: () => {
       setDraft("")
@@ -293,12 +254,12 @@ export function Conversation(props: ConversationProps) {
   const newSession = useMutation({
     mutationFn: () => {
       if (!sessionOps) throw new Error("新会话功能不可用")
-      return sessionOps.createSession(effectiveAgentId)
+      return sessionOps.createSession()
     },
     onSuccess: async () => {
       setDraft("")
       toast.success("已创建新会话")
-      store.reset(effectiveAgentId)
+      store.reset(agentId)
       await loadMessages()
       void loadSessions()
     },
@@ -308,10 +269,10 @@ export function Conversation(props: ConversationProps) {
   const activate = useMutation({
     mutationFn: (sessionId: string) => {
       if (!sessionOps) throw new Error("会话切换不可用")
-      return sessionOps.activateSession(effectiveAgentId, sessionId)
+      return sessionOps.activateSession(sessionId)
     },
     onSuccess: async () => {
-      store.reset(effectiveAgentId)
+      store.reset(agentId)
       await loadMessages()
       void loadSessions()
     },
@@ -321,12 +282,12 @@ export function Conversation(props: ConversationProps) {
   const backtrack = useMutation({
     mutationFn: (seq: number) => {
       if (!sessionOps) throw new Error("回溯不可用")
-      return sessionOps.backtrack(effectiveAgentId, seq)
+      return sessionOps.backtrack(seq)
     },
     onSuccess: async () => {
       setBacktrackTarget(null)
       toast.success("已回溯")
-      store.reset(effectiveAgentId)
+      store.reset(agentId)
       await loadMessages()
       void loadSessions()
     },
@@ -377,36 +338,7 @@ export function Conversation(props: ConversationProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {agents.length > 1 && (
-        <Tabs
-          className="shrink-0"
-          onValueChange={(value) => setSelectedAgentId(value)}
-          value={effectiveAgentId}
-        >
-          <TabsList
-            className="mx-6 my-1.5 max-w-full overflow-x-auto border-b"
-            variant="underline"
-          >
-            {agents.map((agent) => (
-              <TabsTab className="gap-1.5 px-2" key={agent.id} value={agent.id}>
-                {agent.isEntry ? (
-                  <Bot aria-hidden="true" className="size-3.5" />
-                ) : (
-                  <GitFork aria-hidden="true" className="size-3.5" />
-                )}
-                <span className="max-w-40 truncate">
-                  {agent.isEntry ? "主" : (agent.name ?? "子")}
-                </span>
-                <AgentStatusIcon
-                  className="[&_svg]:size-3.5"
-                  status={agent.status}
-                />
-              </TabsTab>
-            ))}
-          </TabsList>
-        </Tabs>
-      )}
-      {sessions && sessions.length > 0 && sessionOps && !isChildAgent && (
+      {sessions && sessions.length > 0 && sessionOps && (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b px-6 py-1.5">
           {sessions.map((session, index) => (
             <button
@@ -450,10 +382,10 @@ export function Conversation(props: ConversationProps) {
       <div className="min-h-0 flex-1">
         <ScrollArea className="relative h-full" scrollFade>
           <Timeline
-            agent={selectedAgent ?? undefined}
-            agentId={effectiveAgentId}
-            canBacktrack={Boolean(sessionOps) && !running && !isChildAgent}
-            key={effectiveAgentId}
+            agent={detail}
+            agentId={agentId}
+            canBacktrack={Boolean(sessionOps) && !running}
+            key={agentId}
             onBacktrack={setBacktrackTarget}
             stream={store}
           />
@@ -470,60 +402,56 @@ export function Conversation(props: ConversationProps) {
           <LoaderCircle className="size-3 animate-spin" /> 正在重新连接…
         </div>
       )}
-      {selectedAgent && (
-        <div className="shrink-0 px-3 pb-3">
-          <CardFrame className="mx-auto max-w-3xl">
-            {showSteerQueue && setQueue && (
-              <CardFrameHeader className="px-3 py-2">
-                <SteerQueue
-                  agentId={selectedAgent.id}
-                  setQueue={setQueue}
-                  stream={store}
-                />
-              </CardFrameHeader>
+      <div className="shrink-0 px-3 pb-3">
+        <CardFrame className="mx-auto max-w-3xl">
+          {showSteerQueue && setQueue && (
+            <CardFrameHeader className="px-3 py-2">
+              <SteerQueue
+                setQueue={setQueue}
+                stream={store}
+                agentId={agentId}
+              />
+            </CardFrameHeader>
+          )}
+          <Card>
+            <CardPanel className="p-2">
+              <MessageInput
+                busy={send.isPending}
+                closed={closed}
+                closedReopenable={props.closedReopenable}
+                deliverAs={deliverAs}
+                draft={draft}
+                onDeliverAsChange={setDeliverAs}
+                onDraftChange={setDraft}
+                onStop={props.stopAgent ? () => stop.mutate() : undefined}
+                onSubmit={onSubmit}
+                running={running}
+                stopping={stop.isPending}
+              />
+            </CardPanel>
+          </Card>
+          <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
+            <ModelRefPicker
+              disabled={locked}
+              onChange={(ref) => {
+                if (!ref) return
+                setModelDraft(ref)
+                switchModel.mutate(ref)
+              }}
+              size="sm"
+              value={modelDraft ?? agent.model ?? null}
+            />
+            {running && (
+              <AgentActivityBadge
+                agentId={agentId}
+                agentStatus={agent.status}
+                stream={store}
+              />
             )}
-            <Card>
-              <CardPanel className="p-2">
-                <MessageInput
-                  busy={send.isPending}
-                  closed={closed}
-                  closedReopenable={props.closedReopenable}
-                  deliverAs={deliverAs}
-                  draft={draft}
-                  onDeliverAsChange={setDeliverAs}
-                  onDraftChange={setDraft}
-                  onStop={props.stopAgent ? () => stop.mutate() : undefined}
-                  onSubmit={onSubmit}
-                  running={running}
-                  stopping={stop.isPending}
-                />
-              </CardPanel>
-            </Card>
-            <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
-              {selectedAgent.isEntry && (
-                <ModelRefPicker
-                  disabled={locked}
-                  onChange={(ref) => {
-                    if (!ref) return
-                    setModelDraft(ref)
-                    switchModel.mutate(ref)
-                  }}
-                  size="sm"
-                  value={modelDraft ?? selectedAgent.model ?? null}
-                />
-              )}
-              {running && (
-                <AgentActivityBadge
-                  agentId={selectedAgent.id}
-                  agentStatus={selectedAgent.status}
-                  stream={store}
-                />
-              )}
-              <ContextStatStrip agentId={selectedAgent.id} stream={store} />
-            </CardFrameFooter>
-          </CardFrame>
-        </div>
-      )}
+            <ContextStatStrip agentId={agentId} stream={store} />
+          </CardFrameFooter>
+        </CardFrame>
+      </div>
       <AlertDialog
         onOpenChange={(open) => {
           if (!open) setBacktrackTarget(null)

@@ -38,7 +38,10 @@ export function deleteEventChallenges(eventId: string) {
   })
 }
 
-export function deleteEventAgents(eventId: string, scope: "solver" | "all" = "solver") {
+export function deleteEventAgents(
+  eventId: string,
+  scope: "solver" | "all" = "solver"
+) {
   const query = scope === "all" ? "?scope=all" : ""
   return apiRequest<void>(`/events/${eventId}/agents${query}`, {
     method: "DELETE",

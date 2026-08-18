@@ -50,11 +50,11 @@ import { toast } from "@/lib/toast"
 export function QueueList({
   eventId,
   items,
-  onOpenRun,
+  onOpenAgent,
 }: {
   eventId: string
   items: QueueItem[]
-  onOpenRun: (runId: string) => void
+  onOpenAgent: (runId: string) => void
 }) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<QueueItem | null>(null)
@@ -64,7 +64,7 @@ export function QueueList({
     void queryClient.invalidateQueries({
       queryKey: keys.scheduler.queue(eventId),
     })
-    void queryClient.invalidateQueries({ queryKey: keys.runs.fleet(eventId) })
+    void queryClient.invalidateQueries({ queryKey: keys.agents.fleet(eventId) })
   }
 
   const removeMutation = useMutation({
@@ -106,7 +106,7 @@ export function QueueList({
             <button
               className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
               onClick={() => {
-                if (item.runId) onOpenRun(item.runId)
+                if (item.agentId) onOpenAgent(item.agentId)
               }}
               type="button"
             >

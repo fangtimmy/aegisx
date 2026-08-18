@@ -38,7 +38,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
         queryKey: keys.events.detail(event.id),
       }),
       queryClient.invalidateQueries({ queryKey: keys.events.all }),
-      queryClient.invalidateQueries({ queryKey: keys.runs.byEvent(event.id) }),
+      queryClient.invalidateQueries({ queryKey: keys.agents.fleet(event.id) }),
     ])
   }
   // Two independent forms: "名称" and "提示词指令" live in separate sections
@@ -93,7 +93,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
     onError: (error) => toast.error("清空题目失败", error.message),
   })
   const purgeRuns = useMutation({
-    mutationFn: () => eventsApi.deleteEventRuns(event.id),
+    mutationFn: () => eventsApi.deleteEventAgents(event.id),
     onSuccess: async () => {
       await invalidateEventCaches()
       toast.success("运行历史已清空")

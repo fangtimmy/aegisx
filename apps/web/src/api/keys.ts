@@ -9,7 +9,7 @@ export const keys = {
     fleet: (eventId: string) => ["agents", "event", eventId, "fleet"] as const,
     detail: (agentId: string) => ["agents", agentId] as const,
     messages: (agentId: string, sessionId?: string) =>
-      ["agents", agentId, "messages",sessionId ?? "active"] as const,
+      ["agents", agentId, "messages", sessionId ?? "active"] as const,
     channels: (agentId: string) => ["agents", agentId, "channels"] as const,
   },
   challenges: {

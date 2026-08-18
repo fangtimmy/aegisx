@@ -16,7 +16,7 @@ import {
   type Challenge,
   challengesApi,
   keys,
-  type RunStatus,
+  type AgentStatus,
   type SolveState,
 } from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
@@ -49,8 +49,8 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu"
-import { CreateRunDialog } from "@/features/runs"
-import { runStatusLabel, statusVariant } from "@/features/runs/run-overview"
+import { SpawnAgentDialog } from "@/features/runs"
+import { agentStatusLabel, statusVariant } from "@/features/runs/agent-overview"
 import { toast } from "@/lib/toast"
 
 import { ChallengeDialog } from "./challenge-dialog"
@@ -267,7 +267,7 @@ export function ChallengeCard({
               />
             </IconTooltip>
             <IconTooltip label={`为 ${challenge.name} 启动任务`}>
-              <CreateRunDialog
+              <SpawnAgentDialog
                 challenge={challenge}
                 trigger={<Play />}
                 triggerSize="icon-sm"
@@ -307,12 +307,12 @@ export function ChallengeCard({
             {challenge.remoteTargetCount}
           </span>
         )}
-        {challenge.runCount > 0 && (
+        {challenge.agentCount > 0 && (
           <span className="ml-auto flex items-center gap-1.5">
-            {Object.entries(challenge.runStatusCounts).map(
+            {Object.entries(challenge.agentStatusCounts).map(
               ([status, count]) => {
                 if (count <= 0) return null
-                const runStatus = status as RunStatus
+                const runStatus = status as AgentStatus
                 const Icon =
                   runStatus === "running"
                     ? Play
@@ -329,7 +329,7 @@ export function ChallengeCard({
                     <Icon className="size-3" />
                     <span className="sr-only">
                       {" "}
-                      {runStatusLabel(runStatus)}
+                      {agentStatusLabel(runStatus)}
                     </span>
                   </Badge>
                 )

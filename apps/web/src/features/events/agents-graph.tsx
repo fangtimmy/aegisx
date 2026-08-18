@@ -21,7 +21,6 @@ import {
   Archive,
   BrainCircuit,
   ChevronDown,
-  GitFork,
   Network,
   Pause,
   Play,
@@ -31,7 +30,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 
-import type { AgentSummary, Challenge, RunPublic } from "@/api"
+import type { AgentSummary, Challenge } from "@/api"
 import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -42,8 +41,8 @@ import {
   CardPanel,
   CardTitle,
 } from "@/components/ui/card"
+import { agentStatusLabel, statusVariant } from "@/features/runs/agent-overview"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
-import { runStatusLabel, statusVariant } from "@/features/runs/run-overview"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 
@@ -84,7 +83,7 @@ type GraphNodeData =
       activeRunCount: number
     }
   | { kind: "archive"; count: number; open: boolean }
-  | { kind: "run"; run: RunPublic; active: boolean }
+  | { kind: "run"; run: AgentSummary; active: boolean }
   | { kind: "agent"; agent: AgentSummary; runId: string; selected: boolean }
 
 /** Lay out nodes top-to-bottom with dagre, writing absolute positions back
@@ -127,7 +126,7 @@ function layoutWithDagre(
  * collapsed unless opened, so the steady-state node count is bounded. */
 function buildAgentsGraph({
   scheduler,
-  schedRun,
+  schedAgent,
   runs,
   detailsById,
   openRuns,
@@ -136,9 +135,9 @@ function buildAgentsGraph({
   challenges,
 }: {
   scheduler?: SchedulerWithAgents
-  schedRun: RunPublic | null
-  runs: RunPublic[]
-  detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
+  schedAgent: AgentSummary | null
+  runs: AgentSummary[]
+  detailsById: Map<string, { run: AgentSummary; agents: AgentSummary[] }>
   openRuns: Set<string>
   archiveOpen: boolean
   selected: SelectedAgent
@@ -159,17 +158,16 @@ function buildAgentsGraph({
   // Group 1: the scheduler. When a scheduler run exists, this node IS its
   // orchestrator agent (click opens that agent's conversation) and the active
   // scheduler-source runs hang off it. No run → non-clickable "未启用" node.
-  const orchAgent =
-    scheduler?.agents?.find((a) => a.isEntry) ?? scheduler?.agents?.[0] ?? null
+  const orchAgent = scheduler?.agent ?? null
   addNode(SCHED_NODE_ID, "scheduler", {
     kind: "scheduler",
-    runId: schedRun?.id ?? null,
+    runId: schedAgent?.id ?? null,
     agentId: orchAgent?.id ?? null,
-    status: schedRun ? runStatusLabel(schedRun.status) : "未启用",
+    status: schedAgent ? agentStatusLabel(schedAgent.status) : "未启用",
   })
 
-  const active = runs.filter((run) => run.status !== "closed")
-  const closed = runs.filter((run) => run.status === "closed")
+  const active = runs.filter((run) => run.status !== "aborted")
+  const closed = runs.filter((run) => run.status === "aborted")
 
   if (closed.length > 0) {
     addNode(ARCHIVE_NODE_ID, "archive", {
@@ -179,7 +177,7 @@ function buildAgentsGraph({
     })
   }
 
-  const addRun = (run: RunPublic, root: string) => {
+  const addRun = (run: AgentSummary, root: string) => {
     addNode(runNodeId(run.id), "run", {
       kind: "run",
       run,
@@ -202,22 +200,17 @@ function buildAgentsGraph({
         selected: selected?.agentId === agent.id,
       })
     }
+    for (const _agent of agents) {
+      // v19: no parent-agent edges (child agents removed)
+    }
     for (const agent of agents) {
-      if (agent.parentAgentId && dims[agentNodeId(agent.parentAgentId)]) {
-        rawEdges.push({
-          id: `e:spawn:${agent.id}`,
-          source: agentNodeId(agent.parentAgentId),
-          target: agentNodeId(agent.id),
-          type: "smoothstep",
-          style: EDGE_STYLE.spawn,
-        })
-      } else {
+      if (run.status !== "aborted" && dims[runNodeId(run.id)]) {
         rawEdges.push({
           id: `e:run:${run.id}:${agent.id}`,
           source: runNodeId(run.id),
           target: agentNodeId(agent.id),
           type: "smoothstep",
-          style: agent.isEntry ? EDGE_STYLE.entry : EDGE_STYLE.agent,
+          style: EDGE_STYLE.agent,
         })
       }
     }
@@ -226,7 +219,7 @@ function buildAgentsGraph({
   // Four layers: active runs group by challenge; the challenge node is the
   // v17 knowledge base + IM entry (manual runs hang off their challenge too,
   // told apart by the run node's 调度/手动 badge).
-  const activeByChallenge = new Map<string, RunPublic[]>()
+  const activeByChallenge = new Map<string, AgentSummary[]>()
   for (const run of active) {
     if (!run.challengeId) continue
     const list = activeByChallenge.get(run.challengeId) ?? []
@@ -362,7 +355,7 @@ function RunGraphNode({ data }: NodeProps) {
   const { run } = d
   return (
     <GraphNodeShell
-      className={cn("w-56", run.status === "closed" && "opacity-60")}
+      className={cn("w-56", run.status === "aborted" && "opacity-60")}
     >
       <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
         <Server className="size-3.5" />
@@ -376,7 +369,7 @@ function RunGraphNode({ data }: NodeProps) {
         </span>
       </span>
       <Badge size="sm" variant={statusVariant(run.status)}>
-        {runStatusLabel(run.status)}
+        {agentStatusLabel(run.status)}
       </Badge>
       <ChevronDown
         aria-hidden="true"
@@ -406,15 +399,10 @@ function AgentGraphNode({ data }: NodeProps) {
         <Badge size="sm" variant={finish.variant}>
           {finish.label}
         </Badge>
-      ) : agent.isEntry ? (
+      ) : false ? (
         <Badge size="sm" variant="secondary">
           入口
         </Badge>
-      ) : agent.parentAgentId ? (
-        <GitFork
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
       ) : null}
     </GraphNodeShell>
   )
@@ -437,7 +425,7 @@ const GRAPH_NODE_TYPES = {
 function GraphCanvas({
   graph,
   graphKey,
-  schedRun,
+  schedAgent,
   paused,
   pausePending,
   resumePending,
@@ -454,7 +442,7 @@ function GraphCanvas({
 }: {
   graph: { nodes: Node[]; edges: Edge[] }
   graphKey: string
-  schedRun: RunPublic | null
+  schedAgent: AgentSummary | null
   paused: boolean
   pausePending: boolean
   resumePending: boolean
@@ -492,7 +480,8 @@ function GraphCanvas({
       const data = node.data as GraphNodeData
       if (data.kind === "scheduler") {
         // The scheduler node IS the orchestrator agent — open its conversation.
-        if (data.runId && data.agentId) onOpenAgent(data.runId, data.agentId)
+        if (data.agentId && data.agentId)
+          onOpenAgent(data.agentId, data.agentId)
       } else if (data.kind === "challenge") {
         // The challenge node IS the v17 knowledge base — open its IM.
         onOpenChallenge(data.challengeId)
@@ -555,7 +544,7 @@ function GraphCanvas({
         className="flex flex-wrap items-center gap-1.5"
         position="top-right"
       >
-        {schedRun && schedRun.status !== "closed" ? (
+        {schedAgent && schedAgent.status !== "aborted" ? (
           paused ? (
             <Button
               loading={resumePending}
@@ -608,8 +597,8 @@ export function AgentsGraph({
   selected,
 }: {
   eventId: string
-  runs: RunPublic[]
-  detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
+  runs: AgentSummary[]
+  detailsById: Map<string, { run: AgentSummary; agents: AgentSummary[] }>
   scheduler?: SchedulerWithAgents
   /** The event's challenges (for the challenge node labels + grouping). */
   challenges: Challenge[]
@@ -625,12 +614,12 @@ export function AgentsGraph({
   const [openRuns, setOpenRuns] = useState<Set<string>>(() => {
     // Default-expand active runs.
     return new Set(
-      runs.filter((run) => run.status !== "closed").map((run) => run.id)
+      runs.filter((run) => run.status !== "aborted").map((run) => run.id)
     )
   })
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [startOpen, setStartOpen] = useState(false)
-  const schedRun = scheduler?.run ?? null
+  const schedAgent = scheduler?.agent ?? null
   const config = scheduler?.config
   const paused = config?.paused ?? false
 
@@ -642,7 +631,7 @@ export function AgentsGraph({
       queryClient.invalidateQueries({
         queryKey: keys.scheduler.queue(eventId),
       }),
-      queryClient.invalidateQueries({ queryKey: keys.runs.fleet(eventId) }),
+      queryClient.invalidateQueries({ queryKey: keys.agents.fleet(eventId) }),
     ])
 
   // W3.3 lifecycle actions (pause keeps the container warm; close releases it
@@ -675,7 +664,8 @@ export function AgentsGraph({
   const sortedRuns = useMemo(
     () =>
       [...runs].sort((left, right) => {
-        const activeRank = (run: RunPublic) => (run.status === "closed" ? 1 : 0)
+        const activeRank = (run: AgentSummary) =>
+          run.status === "aborted" ? 1 : 0
         return (
           activeRank(left) - activeRank(right) ||
           right.updatedAt.localeCompare(left.updatedAt)
@@ -691,7 +681,7 @@ export function AgentsGraph({
     () =>
       buildAgentsGraph({
         scheduler,
-        schedRun,
+        schedAgent,
         runs: sortedRuns,
         detailsById,
         openRuns,
@@ -701,7 +691,7 @@ export function AgentsGraph({
       }),
     [
       scheduler,
-      schedRun,
+      schedAgent,
       sortedRuns,
       detailsById,
       openRuns,
@@ -729,7 +719,7 @@ export function AgentsGraph({
       return next
     })
     const run = runs.find((r) => r.id === selected.runId)
-    if (run?.status === "closed") setArchiveOpen(true)
+    if (run?.status === "aborted") setArchiveOpen(true)
   }, [selected, runs])
 
   const onToggleRun = useCallback((runId: string) => {
@@ -771,7 +761,7 @@ export function AgentsGraph({
             pausePending={pauseScheduler.isPending}
             paused={paused}
             resumePending={resumeScheduler.isPending}
-            schedRun={schedRun}
+            schedAgent={schedAgent}
             selected={selected}
           />
         </ReactFlowProvider>

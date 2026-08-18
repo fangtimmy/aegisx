@@ -47,7 +47,7 @@ export function SchedulerDmTab({
   const channelKey = snapshot.data?.channelKey ?? null
 
   const messages = useQuery({
-    queryKey: keys.runs.channelMessages(channelKey ?? ""),
+    queryKey: keys.channels.messages(channelKey ?? ""),
     enabled: Boolean(channelKey),
     queryFn: () => channelsApi.listChannelMessages(channelKey!, 0, 100),
     refetchInterval: active ? POLL_INTERVAL_MS : false,

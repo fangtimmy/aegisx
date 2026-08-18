@@ -44,6 +44,7 @@ export type {
   TimingBlock,
   TimingMeta,
   WorkspaceFile,
+  WorkspaceFileEntry,
   WorkspaceInfo,
 } from "@aegisx/shared"
 export {

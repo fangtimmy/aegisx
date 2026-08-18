@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 
-import type { AgentSummary, RunPublic } from "@/api"
+import type { AgentSummary } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardPanel } from "@/components/ui/card"
 import {
@@ -22,34 +22,28 @@ import {
 } from "./event-agents-shared"
 
 /** An agent + the run it belongs to (for cross-run aggregation). */
-type AgentRef = { agent: AgentSummary; run: RunPublic }
+type AgentRef = { agent: AgentSummary; run: AgentSummary }
 
 export function AgentsTab({
-  runs,
-  detailsById,
+  agents,
   scheduler,
   onSelectAgent,
 }: {
-  runs: RunPublic[]
-  detailsById: Map<string, { run: RunPublic; agents: AgentSummary[] }>
+  agents: AgentSummary[]
   scheduler?: SchedulerWithAgents
-  onSelectAgent: (runId: string, agentId: string) => void
+  onSelectAgent: (agentId: string) => void
 }) {
   const [hideFinished, setHideFinished] = useState(false)
   const allAgents: AgentRef[] = useMemo(() => {
     const refs: AgentRef[] = []
-    for (const run of runs) {
-      for (const agent of detailsById.get(run.id)?.agents ?? []) {
-        refs.push({ agent, run })
-      }
+    for (const agent of agents) {
+      refs.push({ agent, run: agent })
     }
-    if (scheduler?.run) {
-      for (const agent of scheduler.agents ?? []) {
-        refs.push({ agent, run: scheduler.run })
-      }
+    if (scheduler?.agent) {
+      refs.push({ agent: scheduler.agent, run: scheduler.agent })
     }
     return refs
-  }, [runs, detailsById, scheduler])
+  }, [agents, scheduler])
 
   const groups = useMemo(() => {
     const map = new Map<string, AgentRef[]>()
@@ -113,7 +107,7 @@ export function AgentsTab({
               <Card>
                 <CardPanel className="p-0">
                   <div className="flex flex-col">
-                    {refs.map(({ agent, run }) => {
+                    {refs.map(({ agent }) => {
                       const finish = agentFinishBadge(agent.status)
                       return (
                         <button
@@ -122,7 +116,7 @@ export function AgentsTab({
                             finish && "opacity-60"
                           )}
                           key={agent.id}
-                          onClick={() => onSelectAgent(run.id, agent.id)}
+                          onClick={() => onSelectAgent(agent.id)}
                           type="button"
                         >
                           <AgentStatusIcon
@@ -134,12 +128,12 @@ export function AgentsTab({
                               {agent.name ?? roleLabel(agent.role)}
                             </span>
                             <span className="block truncate text-xs text-muted-foreground">
-                              {run.scopeType === "event"
+                              {agent.role === "orchestrator"
                                 ? "调度者"
-                                : run.challengeName}
+                                : agent.challengeName}
                             </span>
                           </span>
-                          {agent.isEntry && (
+                          {false && (
                             <Badge size="sm" variant="secondary">
                               入口
                             </Badge>
