@@ -44,6 +44,15 @@ export function createRun(challengeId: string, input: CreateRunInput) {
   )
 }
 
+/** Start a run immediately (POST /api/runs/start, 201) — bypasses the
+ * queue; capacity-full surfaces as an error instead of a pending item. */
+export function startRun(challengeId: string, input: CreateRunInput) {
+  return apiRequest<RunPublic>(
+    "/runs/start",
+    jsonRequest("POST", { challengeId, ...input })
+  )
+}
+
 export function getRun(runId: string) {
   return apiRequest<RunDetail>(`/runs/${runId}`)
 }

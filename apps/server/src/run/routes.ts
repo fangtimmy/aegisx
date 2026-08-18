@@ -76,6 +76,10 @@ const startRunInput = Type.Object(
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
     model: Type.Optional(Type.String({ maxLength: 300 })),
     solver_count: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+    /** Who is starting (web UI sends "manual"; the SDK omits it). */
+    source: Type.Optional(
+      Type.Union([Type.Literal("manual"), Type.Literal("scheduler")])
+    ),
     solvers: Type.Optional(
       Type.Array(
         Type.Object(
@@ -227,7 +231,7 @@ export function registerRunRoutes(
         solverCount: input.solver_count,
         solvers: input.solvers,
         timeoutMs: input.timeoutMs,
-        source: "scheduler",
+        source: input.source ?? "scheduler",
       })
       return c.json(run, 201)
     } catch (error) {

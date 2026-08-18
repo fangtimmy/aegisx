@@ -1,11 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Box, ChevronDown, CircleAlert, ListOrdered, Plus } from "lucide-react"
+import {
+  Box,
+  ChevronDown,
+  CircleAlert,
+  ListOrdered,
+  Plus,
+  Rocket,
+} from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 
 import {
   type Challenge,
   keys,
   type ModelRef,
+  type QueueItem,
+  type RunPublic,
   runsApi,
   settingsApi,
 } from "@/api"
@@ -28,6 +37,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
+import { Label } from "@/components/ui/label"
 import {
   NumberField,
   NumberFieldDecrement,
@@ -35,6 +45,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "@/components/ui/number-field"
+import { Radio, RadioGroup } from "@/components/ui/radio-group"
 import {
   Select,
   SelectItem,
@@ -160,6 +171,7 @@ function CreateRunDialogContent({
   )
   const [timeoutMinutes, setTimeoutMinutes] = useState(60)
   const [challengeId, setChallengeId] = useState(available[0]?.id ?? "")
+  const [mode, setMode] = useState<"start" | "queue">("start")
 
   // Seed the timeout from the global default once settings arrive.
   useEffect(() => {
@@ -176,8 +188,9 @@ function CreateRunDialogContent({
   const advanced = visibleRows.some((row) => row.model || row.prompt.trim())
 
   const mutation = useMutation({
-    mutationFn: () =>
-      runsApi.createRun(challenge?.id ?? challengeId, {
+    mutationFn: (): Promise<QueueItem | RunPublic> => {
+      const id = challenge?.id ?? challengeId
+      const input = {
         timeoutMs: Math.max(1, Math.round(timeoutMinutes)) * 60_000,
         solver_count: solverCount,
         ...(strategy.trim() ? { strategy: strategy.trim() } : {}),
@@ -195,23 +208,28 @@ function CreateRunDialogContent({
           : model
             ? { model }
             : {}),
-      }),
-    onSuccess: (item) => {
-      toast.success("任务已加入队列")
+      }
+      return mode === "start"
+        ? runsApi.startRun(id, input)
+        : runsApi.createRun(id, input)
+    },
+    onSuccess: (result) => {
+      toast.success(mode === "start" ? "任务已启动" : "任务已加入队列")
       void queryClient.invalidateQueries({
-        queryKey: keys.scheduler.queue(item.eventId),
+        queryKey: keys.scheduler.queue(result.eventId),
       })
       void queryClient.invalidateQueries({
-        queryKey: keys.runs.byEvent(item.eventId),
+        queryKey: keys.runs.byEvent(result.eventId),
       })
       void queryClient.invalidateQueries({
-        queryKey: keys.events.detail(item.eventId),
+        queryKey: keys.events.detail(result.eventId),
       })
       void queryClient.invalidateQueries({ queryKey: keys.events.all })
       onClose()
       onCreated?.()
     },
-    onError: (error) => toast.error("入队失败", error.message),
+    onError: (error) =>
+      toast.error(mode === "start" ? "启动失败" : "入队失败", error.message),
   })
 
   const patchRow = (index: number, patch: Partial<SolverRow>) => {
@@ -226,8 +244,8 @@ function CreateRunDialogContent({
         <DialogTitle>启动任务</DialogTitle>
         <DialogDescription>
           {challenge
-            ? `为 ${challenge.name} 启动求解任务，任务将进入队列。`
-            : "选择题目并启动求解任务，任务将进入队列。"}
+            ? `为 ${challenge.name} 启动求解任务，${mode === "start" ? "立即启动" : "任务将进入队列"}。`
+            : `选择题目并启动求解任务，${mode === "start" ? "立即启动" : "任务将进入队列"}。`}
         </DialogDescription>
       </DialogHeader>
       {settings.isPending && (
@@ -267,6 +285,31 @@ function CreateRunDialogContent({
           }}
         >
           <DialogPanel className="grid gap-4">
+            <Field>
+              <FieldLabel>启动方式</FieldLabel>
+              <RadioGroup
+                aria-label="启动方式"
+                className="flex-row flex-wrap gap-4"
+                onValueChange={(value) => {
+                  if (value === "start" || value === "queue") setMode(value)
+                }}
+                value={mode}
+              >
+                <Label className="flex cursor-pointer items-center gap-2">
+                  <Radio value="start" />
+                  直接启动
+                </Label>
+                <Label className="flex cursor-pointer items-center gap-2">
+                  <Radio value="queue" />
+                  加入队列
+                </Label>
+              </RadioGroup>
+              <p className="text-xs text-muted-foreground">
+                {mode === "start"
+                  ? "立即启动，旁路队列；容量满时直接报错，同一题可并行多个 run。"
+                  : "容量满时排队等待，槽位释放后自动启动。"}
+              </p>
+            </Field>
             {!challenge && (
               <Field>
                 <FieldLabel>题目</FieldLabel>
@@ -424,10 +467,13 @@ function CreateRunDialogContent({
               <AlertDescription>
                 agent 在宿主机端以进程内方式运行；启动后会拉起一个 Kali
                 工具箱容器（<code className="font-mono">sleep infinity</code>
-                ），bash 在其中运行，配备完整 CTF
-                工具链。任务进入队列后按全局并发上限（
+                ），bash 在其中运行，配备完整 CTF 工具链。任务在全局并发上限（
                 <code className="font-mono">调度器 · 最大并发任务数</code>
-                ）排队启动。
+                ）内
+                {mode === "start"
+                  ? "立即拉起容器，超出上限会直接失败"
+                  : "排队启动"}
+                。
               </AlertDescription>
             </Alert>
             {mutation.error && (
@@ -442,7 +488,15 @@ function CreateRunDialogContent({
               取消
             </DialogClose>
             <Button loading={mutation.isPending} type="submit">
-              <ListOrdered /> 加入队列
+              {mode === "start" ? (
+                <>
+                  <Rocket /> 直接启动
+                </>
+              ) : (
+                <>
+                  <ListOrdered /> 加入队列
+                </>
+              )}
             </Button>
           </DialogFooter>
         </form>
