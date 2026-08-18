@@ -1,9 +1,9 @@
 # AegisX
 
-AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated run workspaces, live agent conversations, an event task queue (scheduler), and token usage.
+AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated agent workspaces, live agent conversations, an event task queue (scheduler), and token usage.
 
-> **Schema v17（题目级频道聚合）** — `#team`/`#announce` 从 run 级提升为**题目级**（`channels.challenge_id` FK，同题跨 run 共享同一频道与历史；agent 署名带 run 短 id 溯源；新 run/新成员 onboarding 自动注入频道历史；系统通知单帖扇出到同题全部 live run；UI 共享徽章），迁移 `0011_challenge_scope_channels` 将旧 run 级群频道按题合并（消息全局单调序/游标/附件目录保留）。此前 v16（频道化 IM）建立 channels / channel_messages / channel_reads / channel_files 四表与事件作用域调度者 DM；v15 及更早的执行态数据库会被迁移，无 `__drizzle_migrations` 的 v1–v5 库仍被拒绝。
-> Design notes: [docs/im-simplify-v18.md](docs/im-simplify-v18.md)（统一消息层 v18：派生键频道 + urgent 统一投递，现行）、[docs/im-channels.md](docs/im-channels.md)（v16/v17 频道化 IM，已被 v18 取代）、[docs/orchestration-v9-simplify.md](docs/orchestration-v9-simplify.md)（v9 编排模型）。
+> **Schema v19（题中心模型）** — Run 作为一等实体被移除。Event → Challenge → Workspace → Agent 四层；agents 表重建（eventId/challengeId/role/prompt/source/deadlineAt/summary），spawn_queue（append 语义），challenge_flags.agentId + source 'agent'；频道附件改为 shared/ 路径（删 channel_files 表）；调度者容器挂载 /challenges 只读。迁移 0013 为纯破坏性 DDL（旧数据弃置）。
+> Design notes: [docs/model-v19-challenge-centric.md](docs/model-v19-challenge-centric.md)（v19 题中心设计，已实施）、[docs/model-v19-implementation.md](docs/model-v19-implementation.md)（实施计划，已实施）、[docs/im-simplify-v18.md](docs/im-simplify-v18.md)（统一消息层 v18：派生键频道 + urgent 统一投递，已被 v19 的 shared/ 附件机制取代部分）、[docs/im-channels.md](docs/im-channels.md)（v16/v17 频道化 IM）、[docs/orchestration-v9-simplify.md](docs/orchestration-v9-simplify.md)（v9 编排模型）。
 
 ## Requirements
 
@@ -29,7 +29,7 @@ The API stores its SQLite database, attachments, and run workspaces under `data/
 
 The agent loop runs **host-side in-process** via the pi SDK. `bash` and the CTF toolchain execute inside a dedicated Kali container (a long-lived `sleep infinity` tool box, workspace bind-mounted at `/workspace`) over `docker exec`; the file tools (`read`/`edit`/`write`/`grep`/`find`/`ls`) operate on the host workspace, which is shared with the container. Container resources (CPU, memory, PIDs) are configurable.
 
-A challenge run hosts 1..N parallel solvers sharing one container and workspace (each solver has its own model and optional per-solver prompt); an event run hosts a single scheduler that manages the event's task queue.
+A challenge workspace hosts 1..N parallel solver agents sharing one container (each agent has its own model, prompt, and deadline); an event hosts a single orchestrator agent that manages the event's task queue. Each agent works in its own directory (agents/<id8>) within the challenge workspace; shared findings land in shared/ (read-only to agents).
 
 ## Solve container image
 

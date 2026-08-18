@@ -1,6 +1,6 @@
 # v19 模型：题中心（Challenge-centric）— 去 Run 层
 
-状态：**设计已拍板，待实施**（2026-08-18 讨论定稿）
+状态：**已实施**（2026-08-18 讨论定稿，commit 1bd5e24 + 8ee3261）（2026-08-18 讨论定稿）
 前置：[im-simplify-v18.md](im-simplify-v18.md)（派生键频道）、[ux-review-2026-08-18.md](ux-review-2026-08-18.md)（交互层走查，本模型是其第二刀的前提）
 取代：Run 作为一等实体的一切语义（v1–v18 的 `Event → Challenge → Run → Agent → Session`）
 

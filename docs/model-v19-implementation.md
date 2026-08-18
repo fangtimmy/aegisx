@@ -1,6 +1,6 @@
 # v19 实施计划：去 Run 层（题中心模型）
 
-状态：**待实施**。设计依据：[model-v19-challenge-centric.md](model-v19-challenge-centric.md)（先读，本文不重复设计论证，只讲怎么做）。
+状态：**已实施**（commit 1bd5e24 + 8ee3261）。设计依据：[model-v19-challenge-centric.md](model-v19-challenge-centric.md)（先读，本文不重复设计论证，只讲怎么做）。
 用户已拍板：旧数据弃置（不迁移 run 历史）；不设每题 agent 上限；不做 setup.sh；`shared/` 取代频道附件体系（服务端写入、agent 只读）；调度者容器随调度者启停管理；**不做新 UI**，只改现有界面适应新模型。
 
 总原则：不留兼容层、不写迁移逻辑保留 run 历史、每一步可验证、全部改完再统一检查（AGENTS.md 规则）。`apps/web/src/components/ui/**` 只读。
