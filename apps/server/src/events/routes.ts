@@ -71,10 +71,7 @@ type PlatformService = ReturnType<typeof createPlatformService>
 type RunList = {
   listForEvent(eventId: string): RunPublic[]
   usageForEvent(eventId: string): RunUsage | undefined
-  deleteRunsForEvent(
-    eventId: string,
-    scope: "challenge" | "all"
-  ): Promise<void>
+  deleteRunsForEvent(eventId: string, scope: "challenge" | "all"): Promise<void>
 }
 
 export function registerEventRoutes(

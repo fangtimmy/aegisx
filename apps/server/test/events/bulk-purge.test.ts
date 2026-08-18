@@ -1,6 +1,12 @@
 import { Database } from "bun:sqlite"
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -26,7 +32,10 @@ function createTestApp() {
 }
 
 async function createEvent(app: ReturnType<typeof createApp>["app"]) {
-  const response = await app.request("/api/events", json("POST", { name: "Ev" }))
+  const response = await app.request(
+    "/api/events",
+    json("POST", { name: "Ev" })
+  )
   expect(response.status).toBe(201)
   return (await response.json()) as { id: string }
 }
@@ -98,7 +107,9 @@ function insertQueueItem(
 }
 
 function countRows(dataDir: string, sql: string): number {
-  const sqlite = new Database(join(dataDir, "aegisx.sqlite"), { readonly: true })
+  const sqlite = new Database(join(dataDir, "aegisx.sqlite"), {
+    readonly: true,
+  })
   const count = (sqlite.query(sql).get() as { count: number }).count
   sqlite.close()
   return count
@@ -116,8 +127,9 @@ describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () =
     })
     expect(response.status).toBe(409)
     const detail = await app.request(`/api/events/${event.id}`)
-    expect(((await detail.json()) as { challenges: unknown[] }).challenges)
-      .toHaveLength(1)
+    expect(
+      ((await detail.json()) as { challenges: unknown[] }).challenges
+    ).toHaveLength(1)
   })
 
   test("wipes challenges, flags, queue items and challenge runs; keeps event and scheduler run", async () => {
@@ -157,17 +169,16 @@ describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () =
     expect(
       countRows(dataDir, "select count(*) as count from challenge_flags")
     ).toBe(0)
-    expect(countRows(dataDir, "select count(*) as count from attachments")).toBe(
+    expect(
+      countRows(dataDir, "select count(*) as count from attachments")
+    ).toBe(0)
+    // Queue items reference the deleted challenge — cascade sweeps them.
+    expect(countRows(dataDir, "select count(*) as count from run_queue")).toBe(
       0
     )
-    // Queue items reference the deleted challenge — cascade sweeps them.
-    expect(countRows(dataDir, "select count(*) as count from run_queue")).toBe(0)
     // The challenge run is gone (row + disk dir); the scheduler run stays.
     expect(
-      countRows(
-        dataDir,
-        "select count(*) as count from runs where id = 'r-ch'"
-      )
+      countRows(dataDir, "select count(*) as count from runs where id = 'r-ch'")
     ).toBe(0)
     expect(existsSync(join(dataDir, "runs", "r-ch"))).toBe(false)
     expect(
