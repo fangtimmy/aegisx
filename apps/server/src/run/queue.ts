@@ -200,7 +200,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     if (count === 1 && !starvedFired.get(eventId)) {
       starvedFired.set(eventId, true)
       if (stateOf(eventId) === "paused") return
-      deps.onQueueEmergency(eventId, "队列不足：仅剩最后 1 项排队")
+      deps.onQueueEmergency(eventId, "队列不足：仅剩 1 项排队")
     }
   }
 
@@ -214,7 +214,7 @@ export function createQueueService(deps: QueueServiceDeps) {
         .where(eq(challenges.id, item.challengeId))
         .get()?.name ?? item.challengeId
     const brief = error.length > 200 ? `${error.slice(0, 200)}…` : error
-    return `启动失败：${name} — ${brief}`
+    return `启动失败：「${name}」— ${brief}`
   }
 
   /** Next ord value for an event (max + 1). */
@@ -589,7 +589,7 @@ export function createQueueService(deps: QueueServiceDeps) {
    * scheduler can tell its own actions from user intervention. */
   function stateNotice(action: string, source: "manual" | "scheduler"): string {
     return source === "manual"
-      ? `队列已${action}（用户手动控制）`
+      ? `队列已${action}（用户手动）`
       : `队列已${action}`
   }
 

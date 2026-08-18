@@ -102,13 +102,13 @@ export function createStallWatchdog(deps: StallWatchdogDeps) {
     const detail = stalled
       .map(
         (agent) =>
-          `${agent.name ?? agent.slot} idle ${fmtMs(nowMs - Date.parse(agent.updatedAt))}`
+          `${agent.name ?? agent.slot} 已闲置 ${fmtMs(nowMs - Date.parse(agent.updatedAt))}`
       )
       .join("、")
     channels.post({
       channelKey: orchKey(row.eventId),
       author: { type: "system" },
-      body: `agent 停滞：run-${runId.slice(0, 8)} ${detail}`,
+      body: `停滞：run-${runId.slice(0, 8)} — ${detail}`,
       meta: { runId, noticeType: "emergency" },
       urgent: true,
     })

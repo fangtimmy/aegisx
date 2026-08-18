@@ -2,15 +2,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowDown,
   ArrowUp,
+  Bot,
   Hash,
   Paperclip,
   Send,
   Users,
   X,
 } from "lucide-react"
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react"
 
-import { channelsApi, keys, type ChannelMessagePublic } from "@/api"
+import {
+  channelsApi,
+  keys,
+  type ChannelMessagePublic,
+  type ChannelPublic,
+} from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
@@ -21,9 +27,16 @@ import { cn } from "@/lib/utils"
 /** Composer + timeline refresh cadence. */
 const POLL_INTERVAL_MS = 3000
 const PAGE_SIZE = 100
+/** Same-author consecutive messages within this window merge into one
+ * group (Discord-style): only the group head shows avatar + author + time. */
+const GROUP_WINDOW_MS = 5 * 60_000
 
 function timeOf(iso: string): string {
   return new Date(iso).toLocaleTimeString("zh-CN", { hour12: false })
+}
+
+function dayOf(iso: string): string {
+  return new Date(iso).toDateString()
 }
 
 function formatSize(bytes: number): string {
@@ -36,13 +49,7 @@ function formatSize(bytes: number): string {
   return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)}MB`
 }
 
-function authorBadgeVariant(
-  authorType: ChannelMessagePublic["authorType"]
-): "secondary" | "info" | "outline" {
-  if (authorType === "system") return "secondary"
-  if (authorType === "user") return "info"
-  return "outline"
-}
+// --- message rendering (Discord-style grouped rows) -----------------------
 
 /** 📎 attachment chip (metadata only — content downloads on click). */
 function AttachmentChip({
@@ -65,23 +72,78 @@ function AttachmentChip({
   )
 }
 
-export function MessageBubble({ message }: { message: ChannelMessagePublic }) {
+function MessageAvatar({ message }: { message: ChannelMessagePublic }) {
+  if (message.authorType === "system") {
+    return (
+      <span
+        aria-hidden
+        className="absolute top-1 left-4 flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground"
+      >
+        <Bot className="size-4" />
+      </span>
+    )
+  }
+  const tone =
+    message.authorType === "user"
+      ? "bg-primary text-primary-foreground"
+      : "bg-secondary text-secondary-foreground"
+  const initial = (message.authorName.trim()[0] ?? "?").toUpperCase()
   return (
-    <div className="flex flex-col gap-1 px-3 py-2">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Badge size="sm" variant={authorBadgeVariant(message.authorType)}>
-          {message.authorName}
-        </Badge>
-        <span>{timeOf(message.createdAt)}</span>
-        {message.meta.urgent === true && (
-          <Badge size="sm" variant="warning">
-            ⚠ 紧急
+    <span
+      aria-hidden
+      className={cn(
+        "absolute top-1 left-4 flex size-9 items-center justify-center rounded-lg text-sm font-semibold",
+        tone
+      )}
+    >
+      {initial}
+    </span>
+  )
+}
+
+/** One message row: group head carries avatar + author + time (+ ⚠ 紧急);
+ * continuation rows only show the body, with the timestamp on hover. */
+function MessageRow({
+  message,
+  first,
+}: {
+  message: ChannelMessagePublic
+  first: boolean
+}) {
+  return (
+    <div className="group/row relative px-3 py-0.5 pl-16 hover:bg-muted/40">
+      {first ? (
+        <MessageAvatar message={message} />
+      ) : (
+        <span className="top-0.5 left-3 hidden w-9 text-right text-[10px] leading-6 text-muted-foreground group-hover/row:block">
+          {timeOf(message.createdAt)}
+        </span>
+      )}
+      {first && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm leading-6 font-medium">
+            {message.authorName}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {timeOf(message.createdAt)}
+          </span>
+          {message.meta.urgent === true && (
+            <Badge size="sm" variant="warning">
+              ⚠ 紧急
+            </Badge>
+          )}
+        </div>
+      )}
+      <div className="text-sm leading-6 wrap-break-word whitespace-pre-wrap">
+        {!first && message.meta.urgent === true && (
+          <Badge className="mr-1.5" size="sm" variant="warning">
+            ⚠
           </Badge>
         )}
+        {message.body}
       </div>
-      <div className="text-sm whitespace-pre-wrap">{message.body}</div>
       {message.files.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="my-1 flex flex-wrap gap-1.5">
           {message.files.map((file) => (
             <AttachmentChip file={file} key={file.id} />
           ))}
@@ -91,10 +153,94 @@ export function MessageBubble({ message }: { message: ChannelMessagePublic }) {
   )
 }
 
-/** The channel composer: textarea + attachment picker + urgent switch +
- * send. Posts as the user (multipart) — urgent defaults on (a user IM post
- * is rare and intended → immediate delivery); off defers to the next flush
- * tick. */
+function DayDivider({ iso }: { iso: string }) {
+  const label = new Date(iso).toLocaleDateString("zh-CN", {
+    month: "long",
+    day: "numeric",
+  })
+  return (
+    <div className="m-3 flex items-center gap-2">
+      <div className="h-px flex-1 bg-border" />
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  )
+}
+
+type MessageGroup = { dayStart: boolean; messages: ChannelMessagePublic[] }
+
+/** Group consecutive same-author messages (≤5min gap); a day boundary both
+ * breaks the group and marks it for a date divider. */
+function groupMessages(items: ChannelMessagePublic[]): MessageGroup[] {
+  const groups: MessageGroup[] = []
+  let prevDay = ""
+  for (const message of items) {
+    const day = dayOf(message.createdAt)
+    const dayStart = day !== prevDay
+    prevDay = day
+    const last = groups.at(-1)
+    const prev = last?.messages.at(-1)
+    const sameAuthor =
+      prev !== undefined &&
+      prev.authorType === message.authorType &&
+      prev.authorAgentId === message.authorAgentId &&
+      prev.authorName === message.authorName
+    if (
+      !dayStart &&
+      sameAuthor &&
+      new Date(message.createdAt).getTime() -
+        new Date(prev!.createdAt).getTime() <
+        GROUP_WINDOW_MS
+    ) {
+      last!.messages.push(message)
+    } else {
+      groups.push({ dayStart, messages: [message] })
+    }
+  }
+  return groups
+}
+
+/** The grouped message list (shared by the IM view and the scheduler DM
+ * tab). Parents own the scroll container. */
+export function MessageList({
+  messages,
+}: {
+  messages: ChannelMessagePublic[]
+}) {
+  const groups = groupMessages(messages)
+  if (groups.length === 0) {
+    return (
+      <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+        尚无消息。
+      </p>
+    )
+  }
+  return (
+    <div className="pb-2">
+      {groups.map((group) => (
+        <Fragment key={group.messages[0]!.id}>
+          {group.dayStart && <DayDivider iso={group.messages[0]!.createdAt} />}
+          <div className="mt-2">
+            {group.messages.map((message, index) => (
+              <MessageRow
+                first={index === 0}
+                key={message.id}
+                message={message}
+              />
+            ))}
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+// --- composer ---------------------------------------------------------------
+
+/** The channel composer: a single rounded input container holding the
+ * textarea + attachment chips + urgent switch + buttons. Posts as the user
+ * (multipart) — urgent defaults on (a user IM post is rare and intended →
+ * immediate delivery); off defers to the next flush tick. */
 export function ChannelComposer({ channelKey }: { channelKey: string }) {
   const [text, setText] = useState("")
   const [files, setFiles] = useState<File[]>([])
@@ -123,86 +269,97 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
   })
 
   return (
-    <div className="flex shrink-0 flex-col gap-1.5 border-t px-3 py-2">
-      {error && <p className="text-xs text-destructive">{error}</p>}
-      {files.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {files.map((file, index) => (
-            <span
-              className="inline-flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs"
-              key={`${file.name}-${index}`}
-            >
-              <Paperclip className="size-3" aria-hidden />
-              {file.name} · {formatSize(file.size)}
-              <button
-                aria-label={`移除附件 ${file.name}`}
-                onClick={() =>
-                  setFiles((prev) => prev.filter((_, i) => i !== index))
-                }
-                type="button"
+    <div className="shrink-0 px-3 pb-3">
+      {error && <p className="px-1 pb-1 text-xs text-destructive">{error}</p>}
+      <div className="flex flex-col gap-2 rounded-lg border border-input bg-background px-3 py-2 focus-within:border-ring">
+        {files.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {files.map((file, index) => (
+              <span
+                className="inline-flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs"
+                key={`${file.name}-${index}`}
               >
-                <X className="size-3 hover:text-destructive" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex items-end gap-2">
-        <Textarea
-          className="max-h-32 min-h-9 flex-1 resize-none"
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && text.trim()) {
-              event.preventDefault()
-              send.mutate()
-            }
-          }}
-          placeholder="发送消息…（Enter 发送，Shift+Enter 换行）"
-          rows={1}
-          value={text}
-        />
-        <input
-          className="hidden"
-          multiple
-          onChange={(event) =>
-            setFiles([...(event.target.files ?? [])].slice(0, 8))
-          }
-          ref={fileInput}
-          type="file"
-        />
-        <label
-          className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 text-[10px] leading-3 text-muted-foreground"
-          title="紧急消息立即投递；关闭后等待下一次合并投递"
-        >
-          <Switch
-            aria-label="紧急投递"
-            checked={urgent}
-            onCheckedChange={setUrgent}
+                <Paperclip className="size-3" aria-hidden />
+                {file.name} · {formatSize(file.size)}
+                <button
+                  aria-label={`移除附件 ${file.name}`}
+                  onClick={() =>
+                    setFiles((prev) => prev.filter((_, i) => i !== index))
+                  }
+                  type="button"
+                >
+                  <X className="size-3 hover:text-destructive" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex items-end gap-1.5">
+          <Textarea
+            className="max-h-32 flex-1 text-sm [&_textarea]:max-h-32 [&_textarea]:min-h-6 [&_textarea]:px-0 [&_textarea]:py-1 [&_textarea]:text-sm"
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey && text.trim()) {
+                event.preventDefault()
+                send.mutate()
+              }
+            }}
+            placeholder="发送消息…"
+            rows={1}
+            unstyled
+            value={text}
           />
-          紧急
-        </label>
-        <Button
-          aria-label="添加附件"
-          disabled={files.length >= 8}
-          onClick={() => fileInput.current?.click()}
-          size="icon"
-          type="button"
-          variant="ghost"
-        >
-          <Paperclip />
-        </Button>
-        <Button
-          disabled={!text.trim() || send.isPending}
-          onClick={() => send.mutate()}
-          size="sm"
-          type="button"
-        >
-          {send.isPending ? <Spinner /> : <Send />} 发送
-        </Button>
+          <input
+            className="hidden"
+            multiple
+            onChange={(event) =>
+              setFiles([...(event.target.files ?? [])].slice(0, 8))
+            }
+            ref={fileInput}
+            type="file"
+          />
+          <label
+            className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 pb-1 text-[10px] leading-3 text-muted-foreground"
+            title="紧急消息立即投递；关闭后等待下一次合并投递"
+          >
+            <Switch
+              aria-label="紧急投递"
+              checked={urgent}
+              onCheckedChange={setUrgent}
+            />
+            紧急
+          </label>
+          <Button
+            aria-label="添加附件"
+            className="mb-1"
+            disabled={files.length >= 8}
+            onClick={() => fileInput.current?.click()}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <Paperclip />
+          </Button>
+          <Button
+            aria-label="发送"
+            className="mb-1"
+            disabled={!text.trim() || send.isPending}
+            onClick={() => send.mutate()}
+            size="icon-sm"
+            type="button"
+          >
+            {send.isPending ? <Spinner /> : <Send />}
+          </Button>
+        </div>
       </div>
+      <p className="px-1 pt-1 text-[10px] text-muted-foreground">
+        Enter 发送 · Shift+Enter 换行 · 紧急消息立即投递
+      </p>
     </div>
   )
 }
+
+// --- timeline ---------------------------------------------------------------
 
 /**
  * The open channel's timeline. Loads the latest window once, then tails via
@@ -318,7 +475,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
   return (
     <div className="relative min-h-0 flex-1">
       <div
-        className="h-full overflow-y-auto py-2"
+        className="h-full overflow-y-auto pt-1"
         onScroll={onScroll}
         ref={listRef}
         role="log"
@@ -340,14 +497,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
             )}
           </div>
         )}
-        {items.length === 0 && (
-          <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-            尚无消息。
-          </p>
-        )}
-        {items.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
+        <MessageList messages={items} />
       </div>
       {showJump && (
         <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
@@ -364,6 +514,94 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
     </div>
   )
 }
+
+// --- channel rail -----------------------------------------------------------
+
+function RailItem({
+  channel,
+  active,
+  onSelect,
+  unseen,
+}: {
+  channel: ChannelPublic
+  active: boolean
+  onSelect(): void
+  unseen: boolean
+}) {
+  return (
+    <button
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
+        active && "bg-muted font-medium"
+      )}
+      key={channel.key}
+      onClick={onSelect}
+      type="button"
+    >
+      {channel.kind === "dm" ? (
+        <span className="font-mono text-xs text-muted-foreground">DM</span>
+      ) : (
+        <Hash className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
+      <span className="truncate">{channel.label}</span>
+      {channel.sharedRunCount !== null && (
+        <span
+          className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground"
+          title={`同题共享频道 · ${channel.sharedRunCount} 个 live run`}
+        >
+          <Users className="size-2.5" aria-hidden />
+          {channel.sharedRunCount}
+        </span>
+      )}
+      {unseen && (
+        <span
+          aria-label="未读"
+          className="ml-auto size-2 shrink-0 rounded-full bg-primary"
+        />
+      )}
+    </button>
+  )
+}
+
+/** The left rail: 频道 (team/orch) + 私聊 (dm) sections. */
+function ChannelRail({
+  channels,
+  activeKey,
+  onSelect,
+  unseenKeys,
+}: {
+  channels: ChannelPublic[]
+  activeKey: string | null
+  onSelect(key: string): void
+  unseenKeys: Set<string>
+}) {
+  const sections: Array<{ label: string; items: ChannelPublic[] }> = [
+    { label: "频道", items: channels.filter((c) => c.kind !== "dm") },
+    { label: "私聊", items: channels.filter((c) => c.kind === "dm") },
+  ].filter((section) => section.items.length > 0)
+  return (
+    <div className="flex w-44 shrink-0 flex-col gap-2 overflow-y-auto border-r p-2">
+      {sections.map((section) => (
+        <div className="flex flex-col gap-0.5" key={section.label}>
+          <p className="px-2 pt-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            {section.label}
+          </p>
+          {section.items.map((channel) => (
+            <RailItem
+              active={channel.key === activeKey}
+              channel={channel}
+              key={channel.key}
+              onSelect={() => onSelect(channel.key)}
+              unseen={unseenKeys.has(channel.key)}
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// --- the IM view ------------------------------------------------------------
 
 /**
  * The IM view (v18 派生键频道): channel rail + message timeline + composer
@@ -432,60 +670,34 @@ export function ChannelsView({
     )
   }, [activeKeyResolved, activeLastMessageAt])
 
+  const unseenKeys = new Set(
+    list
+      .filter(
+        (channel) =>
+          channel.key !== active?.key &&
+          channel.lastMessageAt !== null &&
+          channel.lastMessageAt !== seenAt[channel.key]
+      )
+      .map((channel) => channel.key)
+  )
+
   return (
     <div className="flex h-full min-h-0 min-w-0">
-      {/* Channel rail */}
-      <div className="flex w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r p-2">
-        {channels.isPending && (
-          <p className="px-2 py-1 text-xs text-muted-foreground">加载中…</p>
-        )}
-        {list.map((channel) => {
-          const unseen =
-            channel.key !== active?.key &&
-            channel.lastMessageAt !== null &&
-            channel.lastMessageAt !== seenAt[channel.key]
-          return (
-            <button
-              className={cn(
-                "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
-                channel.key === active?.key && "bg-muted font-medium"
-              )}
-              key={channel.key}
-              onClick={() => setActiveKey(channel.key)}
-              type="button"
-            >
-              {channel.kind === "dm" ? (
-                <span className="font-mono text-xs text-muted-foreground">
-                  DM
-                </span>
-              ) : (
-                <Hash className="size-3.5 shrink-0 text-muted-foreground" />
-              )}
-              <span className="truncate">{channel.label}</span>
-              {/* v17/v18：题目级共享频道（同题全部 live run 同一频道 + 历史） */}
-              {channel.sharedRunCount !== null && (
-                <span
-                  className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground"
-                  title={`同题共享频道 · ${channel.sharedRunCount} 个 live run`}
-                >
-                  <Users className="size-2.5" aria-hidden />
-                  {channel.sharedRunCount}
-                </span>
-              )}
-              {unseen && (
-                <span
-                  aria-label="未读"
-                  className="ml-auto size-2 shrink-0 rounded-full bg-primary"
-                />
-              )}
-            </button>
-          )
-        })}
-      </div>
+      <ChannelRail
+        activeKey={active?.key ?? null}
+        channels={list}
+        onSelect={setActiveKey}
+        unseenKeys={unseenKeys}
+      />
       {/* Timeline + composer */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-2 border-b px-3 py-1.5 text-sm font-medium">
-          {active?.label ?? "频道"}
+        <div className="flex shrink-0 items-center gap-1.5 border-b px-3 py-2 text-sm font-medium">
+          {active?.kind === "dm" ? (
+            <span className="font-mono text-xs text-muted-foreground">DM</span>
+          ) : (
+            <Hash className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="truncate">{active?.label ?? "频道"}</span>
         </div>
         {active && <ChannelTimeline channelKey={active.key} key={active.key} />}
         {active && <ChannelComposer channelKey={active.key} />}

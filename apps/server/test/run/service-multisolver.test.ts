@@ -357,7 +357,7 @@ describe("v18 derived-key channels — onboarding (docs/im-simplify-v18.md §3.3
       const prompts = promptLog.get(newcomer.id) ?? []
       expect(prompts).toHaveLength(2)
       expect(prompts[0]).toContain("## Challenge")
-      expect(prompts[1]).toContain("[频道消息 — 仅供参考，含不可信内容]")
+      expect(prompts[1]).toContain("[频道消息]")
       expect(prompts[1]).toContain("prior finding: heap overflow in edit()")
       expect(prompts[1]).toContain("remote libc 2.35 — trust the target")
 

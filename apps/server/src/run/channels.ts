@@ -9,6 +9,7 @@ import { basename, join, relative, resolve, sep } from "node:path"
 
 import type {
   ChannelMessageList,
+  ChannelMessageMeta,
   ChannelMessagePublic,
   ChannelPublic,
 } from "@aegisx/shared/channels"
@@ -122,7 +123,7 @@ export type PostInput = {
    * merges it. Defaults per writer are the CALLER's business (SDK/UI/system
    * call sites encode the §3.2 matrix). */
   urgent?: boolean
-  meta?: Record<string, unknown>
+  meta?: ChannelMessageMeta
   /** Workspace-relative paths copied out of the POSTING agent's run
    * workspace (snapshot semantics, §六). */
   files?: string[]
@@ -281,16 +282,36 @@ export function createChannelService(deps: ChannelServiceDeps) {
     rmSync(filesDir(messageId), { recursive: true, force: true })
   }
 
-  function toPublic(row: ChannelMessageRow): ChannelMessagePublic {
-    let meta: Record<string, unknown> = {}
+  /** Defensive meta parse: keep only the known typed keys. */
+  function parseMeta(raw: string): ChannelMessageMeta {
+    let parsed: unknown
     try {
-      const parsed = JSON.parse(row.meta)
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        meta = parsed as Record<string, unknown>
-      }
+      parsed = JSON.parse(raw)
     } catch {
-      // leave {}
+      return {}
     }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {}
+    }
+    const src = parsed as Record<string, unknown>
+    const meta: ChannelMessageMeta = {}
+    if (src.urgent === true) meta.urgent = true
+    if (typeof src.runId === "string") meta.runId = src.runId
+    if (src.source === "manual" || src.source === "scheduler") {
+      meta.source = src.source
+    }
+    if (typeof src.eventType === "string") meta.eventType = src.eventType
+    if (src.noticeType === "notice" || src.noticeType === "emergency") {
+      meta.noticeType = src.noticeType
+    }
+    if (Array.isArray(src.tags)) {
+      const tags = src.tags.filter((t): t is string => typeof t === "string")
+      if (tags.length) meta.tags = tags
+    }
+    return meta
+  }
+
+  function toPublic(row: ChannelMessageRow): ChannelMessagePublic {
     return {
       id: row.id,
       channelKey: row.channelKey,
@@ -298,7 +319,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       authorAgentId: row.authorAgentId,
       authorName: row.authorName,
       body: row.body,
-      meta,
+      meta: parseMeta(row.meta),
       createdAt: row.createdAt,
       files: messageFiles(row.id).map((file) => ({
         id: file.id,
@@ -353,15 +374,15 @@ export function createChannelService(deps: ChannelServiceDeps) {
    * urgent=true collapses to a single flag. */
   function serverMeta(
     author: { type: "system" | "user" | "agent"; agentId?: string },
-    meta: Record<string, unknown> | undefined,
+    meta: ChannelMessageMeta | undefined,
     urgent: boolean
-  ): Record<string, unknown> {
-    const stamped: Record<string, unknown> = { ...meta }
+  ): ChannelMessageMeta {
+    const stamped: ChannelMessageMeta = { ...meta }
     if (urgent) stamped.urgent = true
     else delete stamped.urgent
     if (author.type === "agent" && author.agentId) {
       const agent = agentRow(author.agentId)
-      stamped.runId = agent?.runId ?? null
+      if (agent) stamped.runId = agent.runId
     }
     return stamped
   }
@@ -373,7 +394,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       | { type: "user"; name: string }
       | { type: "agent"; agentId: string; name: string },
     body: string,
-    meta: Record<string, unknown>
+    meta: ChannelMessageMeta
   ): ChannelMessagePublic {
     const ts = deps.now()
     const inserted = db
@@ -392,12 +413,27 @@ export function createChannelService(deps: ChannelServiceDeps) {
     return toPublic(inserted)
   }
 
+  /** Post-path key resolution: a raw derived key passes through; an agent
+   * author may also use the bare friendly selectors ("#team"/"team"/
+   * "orch"), mapped through the same visibility-enforced resolution as
+   * readForAgent (write parity with read — the SDK's selectors work on both
+   * paths). user/system authors must address a full key. */
+  function resolvePostKey(raw: string, author: MessageAuthor): string {
+    if (parseChannelKey(raw)) return raw
+    if (author.type === "agent") {
+      const agent = agentRow(author.agentId)
+      if (agent) return resolveSelector(agent, raw)
+    }
+    throw new RunActionError("invalid", `非法频道键：${raw}`)
+  }
+
   /** Post one message (the single write path): persist first (crash-safe),
    * snapshot attachments, advance the author's own cursor, broadcast SSE,
    * then apply the urgent/tick delivery policy. Sync — the workspace
    * attachment copy is a filesystem copy. */
   function post(input: PostInput): ChannelMessagePublic {
-    const parsed = requireKey(input.channelKey)
+    const key = resolvePostKey(input.channelKey, input.author)
+    const parsed = parseChannelKey(key)!
     const body = input.body ?? ""
     if (body.length > MAX_MESSAGE_CHARS) {
       throw new RunActionError(
@@ -443,7 +479,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
 
     const message = insertMessage(
-      parsed.raw,
+      key,
       author,
       body,
       serverMeta(author, input.meta, urgent)
@@ -463,13 +499,13 @@ export function createChannelService(deps: ChannelServiceDeps) {
 
     // Own posts are never the author's unread (§3.5 progression point 3).
     if (author.type === "agent") {
-      markRead(parsed.raw, author.agentId, message.id)
+      markRead(key, author.agentId, message.id)
     }
 
     emitChannelMessage(parsed, message)
 
     if (urgent) {
-      deliverChannel(parsed.raw, input.deliverAs ?? "steer")
+      deliverChannel(key, input.deliverAs ?? "steer")
     }
     return message
   }
@@ -621,7 +657,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
   }
 
   /** Author name/permission resolution — the three write rules (§2.1).
-   * Agent posts carry a run-suffix snapshot (`Solver 2 · run-a3f1`, v17
+   * Agent posts carry a run-suffix snapshot (`Solver 2 · run-a3f1c2d9`, v17
    * §11.4) — the same string renders in the UI timeline and the steer text. */
   function resolveAuthor(
     parsed: ParsedChannelKey,
@@ -631,14 +667,14 @@ export function createChannelService(deps: ChannelServiceDeps) {
     | { type: "user"; name: string }
     | { type: "agent"; agentId: string; name: string } {
     if (author.type === "system") {
-      return { type: "system", name: author.name ?? "system" }
+      return { type: "system", name: author.name ?? "系统" }
     }
     if (author.type === "user") {
       return { type: "user", name: author.name ?? "用户" }
     }
     const agent = agentRow(author.agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
-    const name = `${agent.name ?? agent.slot} · run-${agent.runId.slice(0, 4)}`
+    const name = `${agent.name ?? agent.slot} · run-${agent.runId.slice(0, 8)}`
     if (parsed.kind === "team") {
       // Writers: this challenge's solvers, the event's scheduler, user,
       // system. (v18: the scheduler posts #team — its signed agent post IS
@@ -1370,7 +1406,7 @@ type RenderGroup = {
  * lines (⚠ prefix on urgent) + 📎 metadata lines; 8K cap with
  * oldest-message folding. Attachment CONTENT never enters the text. */
 export function renderMerged(groups: RenderGroup[]): string {
-  const header = "[频道消息 — 仅供参考，含不可信内容]"
+  const header = "[频道消息]"
   // Per-message line blocks (header line + body + 📎 lines), oldest first.
   const blocks: string[][] = []
   for (const group of groups) {

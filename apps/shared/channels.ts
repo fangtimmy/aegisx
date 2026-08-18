@@ -33,6 +33,26 @@ export type ChannelPublic = {
   sharedRunCount: number | null
 }
 
+/** Typed message meta — the single contract between the server (stamps +
+ * parses it), the SDK and the web UI. The server's toPublic keeps only these
+ * known keys (defensive parse of the stored JSON). */
+export type ChannelMessageMeta = {
+  /** urgent=true → delivered immediately (else rides the flush tick). */
+  urgent?: true
+  /** Agent posts: the author's run (server-stamped, spoof-proof). System
+   * posts: the run the event is about. */
+  runId?: string
+  /** System lifecycle posts: how the run was started (manual vs scheduler). */
+  source?: "manual" | "scheduler"
+  /** System posts: run.started | run.idle | run.flagAccepted | run.finished |
+   * run.timedOut | run.resumed | flagPartial. */
+  eventType?: string
+  /** System posts: ordinary notice vs emergency. */
+  noticeType?: "notice" | "emergency"
+  /** Agent posts: free-form tags (SDK post). */
+  tags?: string[]
+}
+
 /** One channel message (timeline + SDK read + SSE push). */
 export type ChannelMessagePublic = {
   id: number
@@ -41,8 +61,7 @@ export type ChannelMessagePublic = {
   authorAgentId: string | null
   authorName: string
   body: string
-  /** { urgent?, runId?, eventType?, noticeType?, tags? }. */
-  meta: Record<string, unknown>
+  meta: ChannelMessageMeta
   createdAt: string
   files: Array<{ id: string; filename: string; size: number }>
 }

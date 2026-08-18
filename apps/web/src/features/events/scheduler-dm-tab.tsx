@@ -5,7 +5,7 @@ import { channelsApi, keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
-import { ChannelComposer, MessageBubble } from "@/features/runs/channels-view"
+import { ChannelComposer, MessageList } from "@/features/runs/channels-view"
 
 import { POLL_INTERVAL_MS } from "./event-agents-shared"
 
@@ -127,15 +127,13 @@ export function SchedulerDmTab({
             <Spinner aria-hidden /> 加载中…
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto py-2" ref={timelineRef}>
+          <div className="flex-1 overflow-y-auto pt-1" ref={timelineRef}>
             {(messages.data?.items ?? []).length === 0 && (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">
                 尚无消息。
               </p>
             )}
-            {(messages.data?.items ?? []).map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))}
+            <MessageList messages={messages.data?.items ?? []} />
           </div>
         )}
         {channelKey && <ChannelComposer channelKey={channelKey} />}

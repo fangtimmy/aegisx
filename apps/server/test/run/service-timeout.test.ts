@@ -211,7 +211,9 @@ describe("run timeout", () => {
       await wait(150)
 
       const texts = promptLog.get(orch.id) ?? []
-      expect(texts.some((t) => t.includes("timedOut(closed)"))).toBe(true)
+      expect(
+        texts.some((t) => t.includes("超时（容器已终止，run 关闭）"))
+      ).toBe(true)
       // P2 wire: the run exposes its hard deadline.
       expect(challenge.deadlineAt).not.toBeNull()
       await runService.close()

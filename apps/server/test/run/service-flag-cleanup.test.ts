@@ -186,11 +186,17 @@ describe("solved-challenge cleanup (flag hooks)", () => {
       // The scheduler learns via orch messages (v18 §五: events are
       // messages): the flagAccepted run event + the cleanup summary notice.
       const orch = orchRows(db)
-      expect(orch.some((r) => r.body === "flagAccepted")).toBe(true)
+      expect(
+        orch.some(
+          (r) =>
+            r.body ===
+            `run-${submitter.id.slice(0, 8)}「Test Challenge」flag 已接受`
+        )
+      ).toBe(true)
       const cleanup = orch.find((r) => r.body.includes("已完全解出"))
       expect(cleanup).toBeDefined()
-      expect(cleanup!.body).toContain("停止 1 个同题 run")
-      expect(cleanup!.body).toContain("取消 1 个排队项")
+      expect(cleanup!.body).toContain("已停止 1 个同题 run")
+      expect(cleanup!.body).toContain("已取消 1 个排队项")
       // The queue-starved edge (pending 2→1 after the cancel) posted an
       // URGENT orch line.
       const starved = orch.find((r) => r.body.includes("队列不足"))
@@ -278,12 +284,12 @@ describe("solved-challenge cleanup (flag hooks)", () => {
         .from(channelMessages)
         .where(eq(channelMessages.channelKey, teamKey("ch-1")))
         .all()
-        .filter((row) => row.body.includes("[多 flag 进度]"))
+        .filter((row) => row.body.includes("多 flag 进度"))
       expect(partialPosts).toHaveLength(1)
 
       // Nothing steered yet (notice level, rides the tick)…
       const steered = (id: string) =>
-        (promptLog.get(id) ?? []).filter((t) => t.includes("[多 flag 进度]"))
+        (promptLog.get(id) ?? []).filter((t) => t.includes("多 flag 进度"))
       expect(steered(coSolver.id)).toHaveLength(0)
       // …then one tick delivers it to EVERY live solver on the challenge
       // (v18 dropped the submitter skip — one extra message is harmless).

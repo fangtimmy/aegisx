@@ -4,7 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm"
 
 import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
-import { agents, runs } from "../db/schema"
+import { agents, challenges, runs } from "../db/schema"
 import type { EventScopePayload } from "../orchestration/types"
 import { orchKey, type ChannelService } from "./channels"
 import type { RunQueries } from "./queries"
@@ -50,21 +50,24 @@ export function createRunStatus(deps: RunStatusDeps) {
     }
   }
 
-  /** Event display line (the orch message body). */
-  function eventName(p: EventScopePayload): string {
+  /** Event display line (the orch message body): run short id + challenge
+   * name + a human verb — the machine shape lives in meta. */
+  function eventName(p: EventScopePayload, tag: string): string {
     switch (p.type) {
       case "run.started":
-        return p.source === "manual" ? "started(手动)" : "started"
+        return `${tag}已启动${p.source === "manual" ? "（手动）" : ""}`
       case "run.idle":
-        return p.failed ? "idle(failed)" : "idle"
+        return `${tag}已空闲${p.failed ? "（有 solver 失败）" : ""}`
       case "run.flagAccepted":
-        return "flagAccepted"
+        return `${tag}flag 已接受`
       case "run.finished":
-        return "finished"
+        return `${tag}已完成`
       case "run.timedOut":
-        return `timedOut(${p.outcome})`
+        return p.outcome === "closed"
+          ? `${tag}超时（容器已终止，run 关闭）`
+          : `${tag}超时（已中止，run 空闲）`
       case "run.resumed":
-        return "resumed"
+        return `${tag}已恢复`
     }
   }
 
@@ -78,17 +81,23 @@ export function createRunStatus(deps: RunStatusDeps) {
     const run = queries.getRow(runId)
     if (run?.scopeType !== "challenge") return
     if (deps.isSchedulerPaused(run.eventId)) return
+    const challengeName = run.challengeId
+      ? db
+          .select({ name: challenges.name })
+          .from(challenges)
+          .where(eq(challenges.id, run.challengeId))
+          .get()?.name
+      : undefined
+    const tag = `run-${runId.slice(0, 8)}${challengeName ? `「${challengeName}」` : ""}`
+    const source = run.source as "manual" | "scheduler"
     channels.post({
       channelKey: orchKey(run.eventId),
       author: { type: "system" },
-      body: eventName({
-        ...payload,
-        source: run.source as "manual" | "scheduler",
-      }),
+      body: eventName({ ...payload, source }, tag),
       meta: {
         runId,
         eventType: payload.type,
-        source: run.source as "manual" | "scheduler",
+        source,
       },
       urgent: payload.type === "run.timedOut",
     })

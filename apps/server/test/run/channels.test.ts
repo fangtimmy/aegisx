@@ -304,6 +304,52 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     }
   })
 
+  test("agent posts accept the bare selectors with the same visibility as read (§9.1 write parity)", () => {
+    const { close, made } = setup()
+    try {
+      const { channels } = made
+      // "#team" / "team" resolve to the solver's own challenge team.
+      const viaHash = channels.post({
+        channelKey: "#team",
+        author: { type: "agent", agentId: "a1" },
+        body: "angle: heap spray",
+      })
+      expect(viaHash.channelKey).toBe(teamKey("ch-1"))
+      const viaBare = channels.post({
+        channelKey: "team",
+        author: { type: "agent", agentId: "a1" },
+        body: "same",
+      })
+      expect(viaBare.channelKey).toBe(teamKey("ch-1"))
+      // "orch" resolves to the run's event (the ask path).
+      const viaOrch = channels.post({
+        channelKey: "orch",
+        author: { type: "agent", agentId: "a1" },
+        body: "need more time",
+      })
+      expect(viaOrch.channelKey).toBe(orchKey("evt-1"))
+      // The write rules still apply on the resolved key: a foreign solver's
+      // "#team" resolves to ITS OWN challenge — it can never address ch-1.
+      const foreign = channels.post({
+        channelKey: "#team",
+        author: { type: "agent", agentId: "x1" },
+        body: "foreign",
+      })
+      expect(foreign.channelKey).toBe(teamKey("ch-2"))
+      // user/system authors must address a full key.
+      expect(() =>
+        channels.post({
+          channelKey: "#team",
+          author: { type: "user" },
+          body: "x",
+        })
+      ).toThrow(/非法频道键/)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
   test("agent posts carry the run-suffix author snapshot + stamped runId meta (§11.4)", () => {
     const { close, made } = setup()
     try {
@@ -320,7 +366,7 @@ describe("write permissions — the 3 rules (§2.1)", () => {
         author: { type: "system" },
         body: "sys",
       })
-      expect(sys.authorName).toBe("system")
+      expect(sys.authorName).toBe("系统")
       expect(sys.meta.runId).toBeUndefined()
       channels.close()
     } finally {
@@ -485,7 +531,7 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
         urgent: true,
       })
       await settle()
-      expect(sent[0]!.text).toContain("[频道消息 — 仅供参考，含不可信内容]")
+      expect(sent[0]!.text).toContain("[频道消息]")
       expect(sent[0]!.text).toContain("⚠ ")
       channels.close()
     } finally {
@@ -774,7 +820,7 @@ describe("renderMerged", () => {
         ],
       },
     ])
-    expect(text).toContain("[频道消息 — 仅供参考，含不可信内容]")
+    expect(text).toContain("[频道消息]")
     expect(text).toContain("⚠ #team · S1 · run-r1")
     expect(text).toContain("exp 骨架在 exp2.py")
     expect(text).toContain(`📎 exp2.py · ${formatSize(4300)}`)

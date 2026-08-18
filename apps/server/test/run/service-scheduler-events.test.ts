@@ -105,11 +105,22 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       await settle()
 
       // Events ARE messages: started (manual marker) + idle both landed in
-      // orch as system posts, non-urgent.
+      // orch as system posts, non-urgent. Bodies carry run short id +
+      // challenge name (the delivery text is self-contained).
       const rows = orchRows(db)
-      const events = rows.map((r) => [r.body, metaOf(r).eventType])
-      expect(events).toContainEqual(["started(手动)", "run.started"])
-      expect(events).toContainEqual(["idle", "run.idle"])
+      const tag = `run-${challenge.id.slice(0, 8)}「Test Challenge」`
+      expect(
+        rows.some(
+          (r) =>
+            r.body === `${tag}已启动（手动）` &&
+            metaOf(r).eventType === "run.started"
+        )
+      ).toBe(true)
+      expect(
+        rows.some(
+          (r) => r.body === `${tag}已空闲` && metaOf(r).eventType === "run.idle"
+        )
+      ).toBe(true)
       expect(rows.every((r) => metaOf(r).urgent !== true)).toBe(true)
       // No immediate wake: the scheduler saw nothing new.
       expect(promptLog.get(orch.id)?.length ?? 0).toBe(primed)
@@ -120,9 +131,9 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       await settle()
       const texts = promptLog.get(orch.id) ?? []
       expect(texts.length).toBe(primed + 1)
-      expect(texts.at(-1)).toContain("[频道消息 — 仅供参考，含不可信内容]")
-      expect(texts.at(-1)).toContain("started(手动)")
-      expect(texts.at(-1)).toContain("idle")
+      expect(texts.at(-1)).toContain("[频道消息]")
+      expect(texts.at(-1)).toContain("已启动（手动）")
+      expect(texts.at(-1)).toContain("已空闲")
       // A second tick: cursors advanced, nothing new.
       service.channels.runFlushTick()
       await settle()
@@ -179,9 +190,11 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       await settle()
 
       service.notifyFlagAccepted(challenge.id)
+      const tag = `run-${challenge.id.slice(0, 8)}「Test Challenge」`
       expect(
         orchRows(db).some(
-          (r) => r.body === "flagAccepted" && metaOf(r).runId === challenge.id
+          (r) =>
+            r.body === `${tag}flag 已接受` && metaOf(r).runId === challenge.id
         )
       ).toBe(true)
 
@@ -190,7 +203,7 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       expect(
         orchRows(db).some(
           (r) =>
-            r.body === "finished" &&
+            r.body === `${tag}已完成` &&
             metaOf(r).eventType === "run.finished" &&
             metaOf(r).urgent !== true
         )
@@ -267,7 +280,9 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       // scheduler can tell a dead solver from a healthy pause.
       expect(
         orchRows(db).some(
-          (r) => r.body === "idle(failed)" && metaOf(r).eventType === "run.idle"
+          (r) =>
+            r.body.endsWith("「Test Challenge」已空闲（有 solver 失败）") &&
+            metaOf(r).eventType === "run.idle"
         )
       ).toBe(true)
       await service.close()
@@ -329,7 +344,9 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       await wait(80)
       expect(
         orchRows(db).some(
-          (r) => r.body === "resumed" && metaOf(r).eventType === "run.resumed"
+          (r) =>
+            r.body.endsWith("「Test Challenge」已恢复") &&
+            metaOf(r).eventType === "run.resumed"
         )
       ).toBe(true)
       await service.close()
@@ -572,10 +589,10 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
       await settle()
       const texts = promptLog.get(orchId) ?? []
       const catchUp = texts.find(
-        (t) => t.includes("[频道消息") && t.includes("started")
+        (t) => t.includes("[频道消息") && t.includes("已启动")
       )
       expect(catchUp).toBeDefined()
-      expect(catchUp).toContain("idle")
+      expect(catchUp).toContain("已空闲")
       expect(challenge.id).toBeTruthy()
       await service.close()
     } finally {
@@ -678,7 +695,7 @@ describe("run lifecycle events → orch messages (docs/im-simplify-v18.md §五)
         (r) => metaOf(r).eventType === "run.started"
       )
       expect(started).toHaveLength(1)
-      expect(started[0]!.body).toBe("started")
+      expect(started[0]!.body).toMatch(/^run-.{8}「Test Challenge」已启动$/)
       expect(metaOf(started[0]!).source).toBe("scheduler")
       await service.close()
     } finally {

@@ -768,9 +768,9 @@ export function createRunService(options: RunServiceOptions) {
       .all()
       .map((f) => f.flag)
     const text =
-      `[多 flag 进度]「${name}」部分解出${message ? `（${message}）` : ""}。` +
-      `已确认的 flag：${confirmed.join("、") || "（无）"}。` +
-      `请专注解出剩余 flag；已确认的无需重复提交。`
+      `多 flag 进度：「${name}」部分解出${message ? `（${message}）` : ""}。` +
+      `已确认：${confirmed.join("、") || "（无）"}。` +
+      `请专注剩余 flag；已确认的无需重复提交。`
     // Single non-urgent post → the challenge's #team (§五 flagPartial =
     // notice level); the tick fans it out to every live solver on the
     // challenge (v18: no skipAgentIds — the submitter may see its own
@@ -844,13 +844,13 @@ export function createRunService(options: RunServiceOptions) {
       ? queue.cancelPendingForChallenge(row.eventId, row.challengeId)
       : 0
     const parts: string[] = []
-    if (siblings.length > 0) parts.push(`停止 ${siblings.length} 个同题 run`)
-    if (aborted > 0) parts.push(`终止 ${aborted} 个同 run solver`)
-    if (cancelled > 0) parts.push(`取消 ${cancelled} 个排队项`)
+    if (siblings.length > 0) parts.push(`已停止 ${siblings.length} 个同题 run`)
+    if (aborted > 0) parts.push(`已终止 ${aborted} 个同 run solver`)
+    if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
     if (parts.length > 0) {
       postOrchNotice(
         row.eventId,
-        `「${name}」已完全解出（run-${runId.slice(0, 8)}）：${parts.join("、")}`
+        `「${name}」已完全解出（run-${runId.slice(0, 8)}）：${parts.join("；")}`
       )
     }
   }

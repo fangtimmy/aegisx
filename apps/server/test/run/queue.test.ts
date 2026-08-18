@@ -304,7 +304,7 @@ describe("queue per-event state (W2.1)", () => {
       const { svc, notices } = makeQueue(db, async () => "run-x")
       svc.pause("evt-1") // default source: manual (the web UI sends nothing)
       expect(svc.stateOf("evt-1")).toBe("paused")
-      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动控制）"])
+      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
       svc.resume("evt-1", "scheduler")
       expect(svc.stateOf("evt-1")).toBe("running")
       expect(notices[1]).toBe("evt-1: 队列已恢复")
@@ -431,7 +431,7 @@ describe("queue drainer", () => {
       expect(item(db, a.id).status).toBe("failed")
       expect(item(db, a.id).error).toContain("container exploded")
       expect(emergencies).toHaveLength(1)
-      expect(emergencies[0]).toContain("evt-1: 启动失败：Test Challenge")
+      expect(emergencies[0]).toContain("evt-1: 启动失败：「Test Challenge」")
       expect(emergencies[0]).toContain("container exploded")
     } finally {
       close()
@@ -512,7 +512,7 @@ describe("queue drainer", () => {
       svc.pause("evt-1")
       svc.remove(a.id) // 2→1 crossing while paused → silent
       expect(emergencies).toHaveLength(0)
-      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动控制）"])
+      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
       expect(svc.stateOf("evt-1")).toBe("paused")
     } finally {
       close()
@@ -527,12 +527,12 @@ describe("queue drainer", () => {
       svc.pause("evt-1")
       svc.pause("evt-1")
       svc.pause("evt-1", "scheduler")
-      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动控制）"])
+      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
       svc.resume("evt-1")
       svc.resume("evt-1")
       expect(notices).toEqual([
-        "evt-1: 队列已暂停（用户手动控制）",
-        "evt-1: 队列已恢复（用户手动控制）",
+        "evt-1: 队列已暂停（用户手动）",
+        "evt-1: 队列已恢复（用户手动）",
       ])
       expect(svc.stateOf("evt-1")).toBe("running")
     } finally {
