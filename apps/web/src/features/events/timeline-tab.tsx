@@ -15,7 +15,7 @@ import { TIMELINE_ICONS, type TimelineEvent } from "./event-agents-shared"
 
 function buildTimeline(
   challenges: Challenge[],
-  runs: AgentSummary[]
+  agents: AgentSummary[]
 ): TimelineEvent[] {
   const events: TimelineEvent[] = []
   for (const challenge of challenges) {
@@ -34,46 +34,46 @@ function buildTimeline(
         kind: "flag",
         title: "Flag 通过",
         detail: `${challenge.name} · ${flag.flag}`,
-        runId: flag.agentId ?? undefined,
+        agentId: flag.agentId ?? undefined,
       })
     }
   }
-  for (const run of runs) {
+  for (const agent of agents) {
     events.push({
-      time: run.createdAt,
-      id: `run:${run.id}:created`,
-      kind: "run",
-      title: "任务启动",
-      detail: `${run.challengeName} · ${
-        run.source === "scheduler" ? "调度者" : "手动"
+      time: agent.createdAt,
+      id: `agent:${agent.id}:created`,
+      kind: "agent",
+      title: "Agent 启动",
+      detail: `${agent.challengeName} · ${
+        agent.source === "scheduler" ? "调度者" : "手动"
       }`,
-      runId: run.id,
+      agentId: agent.id,
     })
-    if (run.lastTimeoutAt) {
-      // Outcome is not persisted — infer from the run's current state
-      // (a timeout with a still-warm run settled to idle; a closed one
+    if (agent.lastTimeoutAt) {
+      // Outcome is not persisted — infer from the agent's current state
+      // (a timeout with a still-warm agent settled to idle; an aborted one
       // was SIGKILLed).
       events.push({
-        time: run.lastTimeoutAt,
-        id: `run:${run.id}:timeout`,
+        time: agent.lastTimeoutAt,
+        id: `agent:${agent.id}:timeout`,
         kind: "timeout",
-        title: "任务超时",
-        detail: `${run.challengeName} · ${
-          run.status === "aborted" ? "超时未恢复，已强制关闭" : "已恢复"
+        title: "Agent 超时",
+        detail: `${agent.challengeName} · ${
+          agent.status === "aborted" ? "超时未恢复，已强制关闭" : "已恢复"
         }`,
-        runId: run.id,
+        agentId: agent.id,
       })
     }
-    if (run.completedAt) {
+    if (agent.completedAt) {
       events.push({
-        time: run.completedAt,
-        id: `run:${run.id}:closed`,
-        kind: "closed",
-        title: "任务结束",
-        detail: `${run.challengeName}${
-          run.summary ? ` · ${run.summary.slice(0, 48)}` : ""
+        time: agent.completedAt,
+        id: `agent:${agent.id}:completed`,
+        kind: "completed",
+        title: "Agent 结束",
+        detail: `${agent.challengeName}${
+          agent.summary ? ` · ${agent.summary.slice(0, 48)}` : ""
         }`,
-        runId: run.id,
+        agentId: agent.id,
       })
     }
   }
@@ -82,18 +82,18 @@ function buildTimeline(
 
 export function TimelineTab({
   challenges,
-  runs,
-  onSelectRun,
+  agents,
+  onSelectAgent,
 }: {
   challenges: Challenge[]
-  runs: AgentSummary[]
-  /** W7: click a run-linked entry → select the run's entry agent (highlight,
-   * no dialog). */
-  onSelectRun?: (runId: string) => void
+  agents: AgentSummary[]
+  /** W7: click an agent-linked entry → highlight the agent on the graph (no
+   * dialog). */
+  onSelectAgent?: (agentId: string) => void
 }) {
   const events = useMemo(
-    () => buildTimeline(challenges, runs),
-    [challenges, runs]
+    () => buildTimeline(challenges, agents),
+    [challenges, agents]
   )
   if (events.length === 0) {
     return (
@@ -121,9 +121,10 @@ export function TimelineTab({
                     "border-success/30 bg-success/10 text-success",
                   event.kind === "timeout" &&
                     "border-warning/30 bg-warning/10 text-warning",
-                  event.kind === "closed" &&
+                  event.kind === "completed" &&
                     "border-border bg-muted text-muted-foreground",
-                  event.kind === "run" && "border-info/30 bg-info/10 text-info",
+                  event.kind === "agent" &&
+                    "border-info/30 bg-info/10 text-info",
                   event.kind === "challenge" &&
                     "border-border bg-muted text-muted-foreground"
                 )}
@@ -147,12 +148,12 @@ export function TimelineTab({
               </time>
             </span>
           )
-          return event.runId ? (
+          return event.agentId ? (
             <li className="border-b py-2.5 last:border-b-0" key={event.id}>
               <button
                 className="block w-full cursor-pointer rounded-md text-left hover:bg-accent"
-                disabled={!onSelectRun}
-                onClick={() => onSelectRun?.(event.runId!)}
+                disabled={!onSelectAgent}
+                onClick={() => onSelectAgent?.(event.agentId!)}
                 type="button"
               >
                 {row}

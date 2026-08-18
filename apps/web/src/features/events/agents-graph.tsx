@@ -25,12 +25,11 @@ import {
   Pause,
   Play,
   Puzzle,
-  Server,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { KeyboardEvent as ReactKeyboardEvent } from "react"
 
-import type { AgentSummary, Challenge } from "@/api"
+import type { AgentSummary, Challenge, SchedulerInfo } from "@/api"
 import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -41,7 +40,7 @@ import {
   CardPanel,
   CardTitle,
 } from "@/components/ui/card"
-import { agentStatusLabel, statusVariant } from "@/features/runs/agent-overview"
+import { agentStatusLabel } from "@/features/runs/agent-overview"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
@@ -50,27 +49,23 @@ import {
   agentFinishBadge,
   ARCHIVE_NODE_ID,
   EDGE_STYLE,
+  isAgentFinished,
   NODE_DIM,
   roleLabel,
   SCHED_NODE_ID,
-  type SchedulerWithAgents,
 } from "./event-agents-shared"
 import { StartSchedulerDialog } from "./scheduler-config-tab"
 
-const runNodeId = (id: string) => `run:${id}`
 const agentNodeId = (id: string) => `agent:${id}`
 const challengeNodeId = (id: string) => `challenge:${id}`
-/** Run short id — the v17 signing convention (`run-a3f1`). */
-const runShortId = (id: string) => `run-${id.slice(0, 4)}`
-
-type SelectedAgent = { runId: string; agentId: string } | null
+/** Agent short id — the v19 signing convention (`agent-a3f1`). */
+const agentShortId = (id: string) => `agent-${id.slice(0, 4)}`
 
 type GraphNodeData =
   | {
       kind: "scheduler"
-      /** The scheduler run + its orchestrator agent, when active. Null when
-       * no scheduler run exists (placeholder "未启用" node, not clickable). */
-      runId: string | null
+      /** The scheduler's orchestrator agent, when active. Null when no
+       * scheduler agent exists (placeholder "未启用" node, not clickable). */
       agentId: string | null
       status: string
     }
@@ -80,13 +75,12 @@ type GraphNodeData =
       name: string
       category: string | null
       points: number | null
-      activeRunCount: number
+      activeAgentCount: number
     }
   | { kind: "archive"; count: number; open: boolean }
-  | { kind: "run"; run: AgentSummary; active: boolean }
-  | { kind: "agent"; agent: AgentSummary; runId: string; selected: boolean }
+  | { kind: "agent"; agent: AgentSummary; selected: boolean }
 
-/** Lay out nodes top-to-bottom with dagre, writing absolute positions back
+/** Lay out nodes left-to-right with dagre, writing absolute positions back
  * onto each node (React Flow needs explicit positions). */
 function layoutWithDagre(
   nodes: Node[],
@@ -97,7 +91,7 @@ function layoutWithDagre(
   graph.setGraph({
     rankdir: "LR",
     nodesep: 28,
-    ranksep: 64,
+    ranksep: 88,
     marginx: 24,
     marginy: 24,
   })
@@ -118,29 +112,23 @@ function layoutWithDagre(
   })
 }
 
-/** W7.2: the four-layer graph (v17) — 调度者 (scheduler root) → challenge
- * (each challenge with active runs; the v17 knowledge base + IM entry) → run
- * (hangs off its challenge; source badge 调度/手动) → agent. Archived runs
- * collapse into the aggregate node (default closed; expanded shows runs).
- * Active run count is bounded by the container cap (W4), the archive stays
- * collapsed unless opened, so the steady-state node count is bounded. */
+/** The three-layer graph (v19) — 调度者 → challenge → agent. Each challenge
+ * node hosts its live solver attempts; finished agents (completed / aborted /
+ * failed) collapse into the aggregate archive node (default closed; expanded
+ * shows one node per attempt). The live count is bounded by the container
+ * cap (W4) and the archive stays collapsed unless opened, so the
+ * steady-state node count is bounded. */
 function buildAgentsGraph({
   scheduler,
-  schedAgent,
-  runs,
-  detailsById,
-  openRuns,
+  agents,
   archiveOpen,
   selected,
   challenges,
 }: {
-  scheduler?: SchedulerWithAgents
-  schedAgent: AgentSummary | null
-  runs: AgentSummary[]
-  detailsById: Map<string, { run: AgentSummary; agents: AgentSummary[] }>
-  openRuns: Set<string>
+  scheduler?: SchedulerInfo
+  agents: AgentSummary[]
   archiveOpen: boolean
-  selected: SelectedAgent
+  selected: string | null
   challenges: Challenge[]
 }): { nodes: Node[]; edges: Edge[] } {
   const rawNodes: Node[] = []
@@ -148,83 +136,64 @@ function buildAgentsGraph({
   const dims: Record<string, { width: number; height: number }> = {}
   const addNode = (
     id: string,
-    type: "scheduler" | "challenge" | "archive" | "run" | "agent",
+    type: "scheduler" | "challenge" | "archive" | "agent",
     data: GraphNodeData
   ) => {
     rawNodes.push({ id, type, data, position: { x: 0, y: 0 } })
     dims[id] = NODE_DIM[type]
   }
+  const addAgent = (agent: AgentSummary, root: string) => {
+    addNode(agentNodeId(agent.id), "agent", {
+      kind: "agent",
+      agent,
+      selected: selected === agent.id,
+    })
+    rawEdges.push({
+      id: `e:agent:${agent.id}`,
+      source: root,
+      target: agentNodeId(agent.id),
+      type: "smoothstep",
+      style: EDGE_STYLE.agent,
+    })
+  }
 
-  // Group 1: the scheduler. When a scheduler run exists, this node IS its
-  // orchestrator agent (click opens that agent's conversation) and the active
-  // scheduler-source runs hang off it. No run → non-clickable "未启用" node.
+  // Layer 1: the scheduler. When a scheduler agent exists, this node IS the
+  // orchestrator agent (click opens its conversation) and the challenges
+  // hang off it. No agent → non-clickable "未启用" node.
   const orchAgent = scheduler?.agent ?? null
   addNode(SCHED_NODE_ID, "scheduler", {
     kind: "scheduler",
-    runId: schedAgent?.id ?? null,
     agentId: orchAgent?.id ?? null,
-    status: schedAgent ? agentStatusLabel(schedAgent.status) : "未启用",
+    status: orchAgent ? agentStatusLabel(orchAgent.status) : "未启用",
   })
 
-  const active = runs.filter((run) => run.status !== "aborted")
-  const closed = runs.filter((run) => run.status === "aborted")
+  const active = agents.filter((agent) => !isAgentFinished(agent))
+  const finished = agents.filter((agent) => isAgentFinished(agent))
 
-  if (closed.length > 0) {
+  if (finished.length > 0) {
     addNode(ARCHIVE_NODE_ID, "archive", {
       kind: "archive",
-      count: closed.length,
+      count: finished.length,
       open: archiveOpen,
     })
-  }
-
-  const addRun = (run: AgentSummary, root: string) => {
-    addNode(runNodeId(run.id), "run", {
-      kind: "run",
-      run,
-      active: openRuns.has(run.id),
-    })
     rawEdges.push({
-      id: `e:root:run:${run.id}`,
-      source: root,
-      target: runNodeId(run.id),
+      id: `e:archive`,
+      source: SCHED_NODE_ID,
+      target: ARCHIVE_NODE_ID,
       type: "smoothstep",
-      style: EDGE_STYLE.oversee,
+      style: EDGE_STYLE.agent,
     })
-    if (!openRuns.has(run.id)) return
-    const agents = detailsById.get(run.id)?.agents ?? []
-    for (const agent of agents) {
-      addNode(agentNodeId(agent.id), "agent", {
-        kind: "agent",
-        agent,
-        runId: run.id,
-        selected: selected?.agentId === agent.id,
-      })
-    }
-    for (const _agent of agents) {
-      // v19: no parent-agent edges (child agents removed)
-    }
-    for (const agent of agents) {
-      if (run.status !== "aborted" && dims[runNodeId(run.id)]) {
-        rawEdges.push({
-          id: `e:run:${run.id}:${agent.id}`,
-          source: runNodeId(run.id),
-          target: agentNodeId(agent.id),
-          type: "smoothstep",
-          style: EDGE_STYLE.agent,
-        })
-      }
-    }
   }
 
-  // Four layers: active runs group by challenge; the challenge node is the
-  // v17 knowledge base + IM entry (manual runs hang off their challenge too,
-  // told apart by the run node's 调度/手动 badge).
+  // Layer 2: challenges with live agents, in event order (the challenge
+  // node is the knowledge base + IM entry). Layer 3: each live attempt
+  // hangs directly off its challenge.
   const activeByChallenge = new Map<string, AgentSummary[]>()
-  for (const run of active) {
-    if (!run.challengeId) continue
-    const list = activeByChallenge.get(run.challengeId) ?? []
-    list.push(run)
-    activeByChallenge.set(run.challengeId, list)
+  for (const agent of active) {
+    if (!agent.challengeId) continue
+    const list = activeByChallenge.get(agent.challengeId) ?? []
+    list.push(agent)
+    activeByChallenge.set(agent.challengeId, list)
   }
   const challengeById = new Map(challenges.map((ch) => [ch.id, ch]))
   const challengeOrder = challenges.map((ch) => ch.id)
@@ -237,15 +206,15 @@ function buildAgentsGraph({
     return ia - ib
   })
   for (const challengeId of challengeIds) {
-    const runs_ = activeByChallenge.get(challengeId)!
+    const attempts = activeByChallenge.get(challengeId)!
     const meta = challengeById.get(challengeId)
     addNode(challengeNodeId(challengeId), "challenge", {
       kind: "challenge",
       challengeId,
-      name: meta?.name ?? runs_[0].challengeName,
+      name: meta?.name ?? attempts[0].challengeName,
       category: meta?.category ?? null,
       points: meta?.points ?? null,
-      activeRunCount: runs_.length,
+      activeAgentCount: attempts.length,
     })
     rawEdges.push({
       id: `e:sched:challenge:${challengeId}`,
@@ -254,10 +223,13 @@ function buildAgentsGraph({
       type: "smoothstep",
       style: EDGE_STYLE.challenge,
     })
-    for (const run of runs_) addRun(run, challengeNodeId(challengeId))
+    for (const agent of attempts) {
+      addAgent(agent, challengeNodeId(challengeId))
+    }
   }
 
-  if (archiveOpen) for (const run of closed) addRun(run, ARCHIVE_NODE_ID)
+  if (archiveOpen)
+    for (const agent of finished) addAgent(agent, ARCHIVE_NODE_ID)
 
   return { nodes: layoutWithDagre(rawNodes, rawEdges, dims), edges: rawEdges }
 }
@@ -280,8 +252,8 @@ function GraphNodeShell({
       )}
     >
       {/* Invisible handles — React Flow anchors edges on them; we hide the
-          dots for a cleaner look. Every node carries a target (top) and a
-          source (bottom) so edges attach on both sides regardless of role. */}
+          dots for a cleaner look. Every node carries a target (left) and a
+          source (right) so edges attach on both sides regardless of role. */}
       <Handle className="opacity-0!" position={Position.Left} type="target" />
       {children}
       <Handle className="opacity-0!" position={Position.Right} type="source" />
@@ -325,7 +297,7 @@ function ChallengeGraphNode({ data }: NodeProps) {
         </span>
       </span>
       <Badge size="sm" variant="secondary">
-        {d.activeRunCount} run
+        {d.activeAgentCount} agent
       </Badge>
     </GraphNodeShell>
   )
@@ -350,60 +322,30 @@ function ArchiveGraphNode({ data }: NodeProps) {
   )
 }
 
-function RunGraphNode({ data }: NodeProps) {
-  const d = data as Extract<GraphNodeData, { kind: "run" }>
-  const { run } = d
-  return (
-    <GraphNodeShell
-      className={cn("w-56", run.status === "aborted" && "opacity-60")}
-    >
-      <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-        <Server className="size-3.5" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-mono text-xs leading-tight">
-          {runShortId(run.id)}
-        </span>
-        <span className="block truncate text-[11px] leading-tight text-muted-foreground">
-          {run.source === "scheduler" ? "调度" : "手动"}
-        </span>
-      </span>
-      <Badge size="sm" variant={statusVariant(run.status)}>
-        {agentStatusLabel(run.status)}
-      </Badge>
-      <ChevronDown
-        aria-hidden="true"
-        className={cn(
-          "size-3.5 shrink-0 text-muted-foreground transition-transform",
-          !d.active && "-rotate-90"
-        )}
-      />
-    </GraphNodeShell>
-  )
-}
-
 function AgentGraphNode({ data }: NodeProps) {
   const d = data as Extract<GraphNodeData, { kind: "agent" }>
   const { agent } = d
   const finish = agentFinishBadge(agent.status)
   return (
     <GraphNodeShell
-      className={cn("w-48", finish && "opacity-60")}
+      className={cn("w-52", finish && "opacity-60")}
       selected={d.selected}
     >
       <AgentStatusIcon className="[&_svg]:size-3.5" status={agent.status} />
-      <span className="min-w-0 flex-1 truncate text-sm">
-        {agent.name ?? roleLabel(agent.role)}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm leading-tight">
+          {agent.name ?? roleLabel(agent.role)}
+        </span>
+        <span className="block truncate text-[11px] leading-tight text-muted-foreground">
+          {agentShortId(agent.id)} ·{" "}
+          {agent.source === "scheduler" ? "调度" : "手动"}
+        </span>
       </span>
-      {finish ? (
+      {finish && (
         <Badge size="sm" variant={finish.variant}>
           {finish.label}
         </Badge>
-      ) : false ? (
-        <Badge size="sm" variant="secondary">
-          入口
-        </Badge>
-      ) : null}
+      )}
     </GraphNodeShell>
   )
 }
@@ -415,7 +357,6 @@ const GRAPH_NODE_TYPES = {
   scheduler: SchedulerGraphNode,
   challenge: ChallengeGraphNode,
   archive: ArchiveGraphNode,
-  run: RunGraphNode,
   agent: AgentGraphNode,
 } satisfies NodeTypes
 
@@ -433,7 +374,6 @@ function GraphCanvas({
   selected,
   onOpenAgent,
   onOpenChallenge,
-  onToggleRun,
   onToggleArchive,
   onPauseScheduler,
   onResumeScheduler,
@@ -447,10 +387,9 @@ function GraphCanvas({
   pausePending: boolean
   resumePending: boolean
   closePending: boolean
-  selected: SelectedAgent
-  onOpenAgent: (runId: string, agentId: string) => void
+  selected: string | null
+  onOpenAgent: (agentId: string) => void
   onOpenChallenge: (challengeId: string) => void
-  onToggleRun: (runId: string) => void
   onToggleArchive: () => void
   onPauseScheduler: () => void
   onResumeScheduler: () => void
@@ -463,10 +402,10 @@ function GraphCanvas({
   const focusedAgentId = useRef<string | null>(null)
   useEffect(() => {
     if (!selected) return
-    if (focusedAgentId.current === selected.agentId) return
-    const node = graph.nodes.find((n) => n.id === agentNodeId(selected.agentId))
+    if (focusedAgentId.current === selected) return
+    const node = graph.nodes.find((n) => n.id === agentNodeId(selected))
     if (!node) return
-    focusedAgentId.current = selected.agentId
+    focusedAgentId.current = selected
     const dim = NODE_DIM.agent
     void flow.setCenter(
       node.position.x + dim.width / 2,
@@ -480,20 +419,17 @@ function GraphCanvas({
       const data = node.data as GraphNodeData
       if (data.kind === "scheduler") {
         // The scheduler node IS the orchestrator agent — open its conversation.
-        if (data.agentId && data.agentId)
-          onOpenAgent(data.agentId, data.agentId)
+        if (data.agentId) onOpenAgent(data.agentId)
       } else if (data.kind === "challenge") {
-        // The challenge node IS the v17 knowledge base — open its IM.
+        // The challenge node IS the knowledge base — open its IM.
         onOpenChallenge(data.challengeId)
-      } else if (data.kind === "run") {
-        onToggleRun(data.run.id)
       } else if (data.kind === "agent") {
-        onOpenAgent(data.runId, data.agent.id)
+        onOpenAgent(data.agent.id)
       } else if (data.kind === "archive") {
         onToggleArchive()
       }
     },
-    [onOpenAgent, onOpenChallenge, onToggleRun, onToggleArchive]
+    [onOpenAgent, onOpenChallenge, onToggleArchive]
   )
 
   const onNodeClick = useCallback<NodeMouseHandler>(
@@ -539,7 +475,7 @@ function GraphCanvas({
       <Background color="var(--border)" gap={22} size={1} />
       <Controls position="bottom-right" showInteractive={false} />
       {/* W3.3 scheduler lifecycle, state-driven: active+not paused → 暂停 /
-          关闭; paused → 恢复; closed/no run → 启动 (restore semantics). */}
+          关闭; paused → 恢复; closed/no agent → 启动 (restore semantics). */}
       <Panel
         className="flex flex-wrap items-center gap-1.5"
         position="top-right"
@@ -588,8 +524,7 @@ function GraphCanvas({
 
 export function AgentsGraph({
   eventId,
-  runs,
-  detailsById,
+  agents,
   scheduler,
   challenges,
   onOpenAgent,
@@ -597,26 +532,21 @@ export function AgentsGraph({
   selected,
 }: {
   eventId: string
-  runs: AgentSummary[]
-  detailsById: Map<string, { run: AgentSummary; agents: AgentSummary[] }>
-  scheduler?: SchedulerWithAgents
+  /** All solver agents of the event (live + finished). */
+  agents: AgentSummary[]
+  scheduler?: SchedulerInfo
   /** The event's challenges (for the challenge node labels + grouping). */
   challenges: Challenge[]
-  /** W7.1: graph node click → open the agent dialog (the ONLY dialog entry). */
-  onOpenAgent: (runId: string, agentId: string) => void
-  /** Challenge node click → open the challenge-level IM (v17 knowledge base). */
+  /** Graph node click → open the agent dialog (the ONLY dialog entry). */
+  onOpenAgent: (agentId: string) => void
+  /** Challenge node click → open the challenge-level IM (knowledge base). */
   onOpenChallenge: (challengeId: string) => void
   /** W7.2: highlighted agent (from the left panel / timeline / queue); the
-   * graph auto-expands its run + focuses it, but does NOT open a dialog. */
-  selected: SelectedAgent
+   * graph opens the archive when needed + focuses it, but does NOT open a
+   * dialog. */
+  selected: string | null
 }) {
   const queryClient = useQueryClient()
-  const [openRuns, setOpenRuns] = useState<Set<string>>(() => {
-    // Default-expand active runs.
-    return new Set(
-      runs.filter((run) => run.status !== "aborted").map((run) => run.id)
-    )
-  })
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [startOpen, setStartOpen] = useState(false)
   const schedAgent = scheduler?.agent ?? null
@@ -635,7 +565,7 @@ export function AgentsGraph({
     ])
 
   // W3.3 lifecycle actions (pause keeps the container warm; close releases it
-  // — the run stays cold-restorable; start restores memory by default).
+  // — the agent stays cold-restorable; start restores memory by default).
   const pauseScheduler = useMutation({
     mutationFn: () => schedulerApi.pauseScheduler(eventId),
     onSuccess: () => {
@@ -661,44 +591,29 @@ export function AgentsGraph({
     onError: (error) => toast.error("关闭调度者失败", error.message),
   })
 
-  const sortedRuns = useMemo(
+  const sortedAgents = useMemo(
     () =>
-      [...runs].sort((left, right) => {
-        const activeRank = (run: AgentSummary) =>
-          run.status === "aborted" ? 1 : 0
-        return (
-          activeRank(left) - activeRank(right) ||
-          right.updatedAt.localeCompare(left.updatedAt)
-        )
-      }),
-    [runs]
+      [...agents].sort(
+        (left, right) =>
+          Number(isAgentFinished(left)) - Number(isAgentFinished(right)) ||
+          left.createdAt.localeCompare(right.createdAt)
+      ),
+    [agents]
   )
 
   // Build + lay out the graph from the fleet state. Recomputed only when the
-  // underlying data or the expand toggles change; status-only poll updates
+  // underlying data or the archive toggle changes; status-only poll updates
   // with the same node set reuse the cached layout, so nothing jitters.
   const graph = useMemo(
     () =>
       buildAgentsGraph({
         scheduler,
-        schedAgent,
-        runs: sortedRuns,
-        detailsById,
-        openRuns,
+        agents: sortedAgents,
         archiveOpen,
         selected,
         challenges,
       }),
-    [
-      scheduler,
-      schedAgent,
-      sortedRuns,
-      detailsById,
-      openRuns,
-      archiveOpen,
-      selected,
-      challenges,
-    ]
+    [scheduler, sortedAgents, archiveOpen, selected, challenges]
   )
   // Remount React Flow (→ re-fit-view) only when the node SET changes
   // (expand/collapse/spawn). Status-only polls keep the same key, so the
@@ -708,28 +623,14 @@ export function AgentsGraph({
     [graph]
   )
 
-  // W7.2: the selected run is auto-expanded (and the archive opened when the
-  // run is closed) so its agent node is visible for the viewport focus.
+  // W7.2: a selected finished agent opens the archive so its node is
+  // visible for the viewport focus.
   useEffect(() => {
     if (!selected) return
-    setOpenRuns((prev) => {
-      if (prev.has(selected.runId)) return prev
-      const next = new Set(prev)
-      next.add(selected.runId)
-      return next
-    })
-    const run = runs.find((r) => r.id === selected.runId)
-    if (run?.status === "aborted") setArchiveOpen(true)
-  }, [selected, runs])
+    const agent = agents.find((a) => a.id === selected)
+    if (agent && isAgentFinished(agent)) setArchiveOpen(true)
+  }, [selected, agents])
 
-  const onToggleRun = useCallback((runId: string) => {
-    setOpenRuns((prev) => {
-      const next = new Set(prev)
-      if (next.has(runId)) next.delete(runId)
-      else next.add(runId)
-      return next
-    })
-  }, [])
   const onToggleArchive = useCallback(() => {
     setArchiveOpen((prev) => !prev)
   }, [])
@@ -742,7 +643,7 @@ export function AgentsGraph({
             <Network className="size-4" /> Agents Graph
           </span>
         </CardTitle>
-        <CardDescription>调度者 → 任务 → agents</CardDescription>
+        <CardDescription>调度者 → 题目 → agents</CardDescription>
       </CardHeader>
       <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">
         <ReactFlowProvider>
@@ -757,7 +658,6 @@ export function AgentsGraph({
             onResumeScheduler={() => resumeScheduler.mutate()}
             onStartOpen={() => setStartOpen(true)}
             onToggleArchive={onToggleArchive}
-            onToggleRun={onToggleRun}
             pausePending={pauseScheduler.isPending}
             paused={paused}
             resumePending={resumeScheduler.isPending}

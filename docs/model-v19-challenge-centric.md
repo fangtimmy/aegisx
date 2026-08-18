@@ -1,6 +1,6 @@
 # v19 模型：题中心（Challenge-centric）— 去 Run 层
 
-状态：**已实施**（2026-08-18 讨论定稿，commit 1bd5e24 + 8ee3261）（2026-08-18 讨论定稿）
+状态：**已实施**（2026-08-18 讨论定稿，commit 1bd5e24 + 8ee3261）
 前置：[im-simplify-v18.md](im-simplify-v18.md)（派生键频道）、[ux-review-2026-08-18.md](ux-review-2026-08-18.md)（交互层走查，本模型是其第二刀的前提）
 取代：Run 作为一等实体的一切语义（v1–v18 的 `Event → Challenge → Run → Agent → Session`）
 
@@ -117,7 +117,7 @@ Agent 状态机不变（running | idle | completed | aborted | failed），语�
 - fleet 端点：`GET /api/events/:id/fleet` → `{challenges, agentsByChallenge, schedulerAgent, config, status}`（runs + agentsByRun 双层结构消失）。
 - 停滞 watchdog：per-agent（idle settle 后 2min 现查），少一层 run 间接。
 
-## 五、Schema diff（v18 号迁移，破坏性，旧数据弃置）
+## 五、Schema diff（迁移 0013，破坏性，旧数据弃置）
 
 ```
 删除表: runs, channel_files
@@ -129,7 +129,7 @@ Agent 状态机不变（running | idle | completed | aborted | failed），语�
 改列:   session_entries 去 runId（agentId 已有）；challenge_flags.runId → agentId（text 无 FK）
         channel_messages.meta: runId → agentId
 setting: scheduler.maxConcurrentRuns → scheduler.maxConcurrentAgents
-SCHEMA_VERSION: v17 → v18
+SCHEMA_VERSION: v17 → v19（迁移 `drizzle/0013_challenge_centric.sql`）
 ```
 
 不做数据迁移（用户拍板：本地工具，历史弃置）；迁移 0013 为纯破坏性 DDL，附迁移测试。

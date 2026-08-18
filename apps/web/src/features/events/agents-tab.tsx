@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 
 import type { AgentSummary } from "@/api"
+import type { SchedulerInfo } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardPanel } from "@/components/ui/card"
 import {
@@ -18,11 +19,7 @@ import {
   agentFinishBadge,
   isAgentFinished,
   roleLabel,
-  type SchedulerWithAgents,
 } from "./event-agents-shared"
-
-/** An agent + the run it belongs to (for cross-run aggregation). */
-type AgentRef = { agent: AgentSummary; run: AgentSummary }
 
 export function AgentsTab({
   agents,
@@ -30,37 +27,30 @@ export function AgentsTab({
   onSelectAgent,
 }: {
   agents: AgentSummary[]
-  scheduler?: SchedulerWithAgents
+  scheduler?: SchedulerInfo
   onSelectAgent: (agentId: string) => void
 }) {
   const [hideFinished, setHideFinished] = useState(false)
-  const allAgents: AgentRef[] = useMemo(() => {
-    const refs: AgentRef[] = []
-    for (const agent of agents) {
-      refs.push({ agent, run: agent })
-    }
-    if (scheduler?.agent) {
-      refs.push({ agent: scheduler.agent, run: scheduler.agent })
-    }
-    return refs
+  const allAgents: AgentSummary[] = useMemo(() => {
+    if (!scheduler?.agent) return agents
+    return [...agents, scheduler.agent]
   }, [agents, scheduler])
 
   const groups = useMemo(() => {
-    const map = new Map<string, AgentRef[]>()
-    for (const ref of allAgents) {
-      if (hideFinished && isAgentFinished(ref.agent)) continue
-      const role = ref.agent.role || "agent"
+    const map = new Map<string, AgentSummary[]>()
+    for (const agent of allAgents) {
+      if (hideFinished && isAgentFinished(agent)) continue
+      const role = agent.role || "agent"
       const list = map.get(role) ?? []
-      list.push(ref)
+      list.push(agent)
       map.set(role, list)
     }
     // Active agents first, finished ones after; newest first within each.
     for (const list of map.values()) {
       list.sort(
         (left, right) =>
-          Number(isAgentFinished(left.agent)) -
-            Number(isAgentFinished(right.agent)) ||
-          right.agent.updatedAt.localeCompare(left.agent.updatedAt)
+          Number(isAgentFinished(left)) - Number(isAgentFinished(right)) ||
+          right.updatedAt.localeCompare(left.updatedAt)
       )
     }
     return [...map.entries()].sort(([left], [right]) =>
@@ -96,18 +86,18 @@ export function AgentsTab({
             没有活跃 agents。
           </p>
         ) : (
-          groups.map(([role, refs]) => (
+          groups.map(([role, list]) => (
             <section key={role}>
               <div className="flex items-center gap-2 p-1">
                 <h3 className="text-sm font-medium">{roleLabel(role)}</h3>
                 <Badge size="sm" variant="secondary">
-                  {refs.length}
+                  {list.length}
                 </Badge>
               </div>
               <Card>
                 <CardPanel className="p-0">
                   <div className="flex flex-col">
-                    {refs.map(({ agent }) => {
+                    {list.map((agent) => {
                       const finish = agentFinishBadge(agent.status)
                       return (
                         <button
@@ -133,11 +123,6 @@ export function AgentsTab({
                                 : agent.challengeName}
                             </span>
                           </span>
-                          {false && (
-                            <Badge size="sm" variant="secondary">
-                              入口
-                            </Badge>
-                          )}
                           {finish && (
                             <Badge size="sm" variant={finish.variant}>
                               {finish.label}

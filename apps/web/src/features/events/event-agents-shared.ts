@@ -1,7 +1,6 @@
 import { Archive, Flag, Play, Puzzle, Timer } from "lucide-react"
 
-import type { AgentStatus, AgentSummary, SchedulerInfo } from "@/api"
-
+import type { AgentStatus, AgentSummary } from "@/api"
 export const UNCATEGORIZED = "未分类"
 
 /** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
@@ -19,8 +18,9 @@ export function roleLabel(role: string): string {
   return ROLE_LABELS[role] ?? role
 }
 
-/** Terminal agent states — the run may still be active while its agents are
- * done (completed / aborted / failed). */
+/** Terminal agent states — the attempt is over (completed / aborted /
+ * failed); the challenge workspace and container may still be shared by
+ * other live agents. */
 export function isAgentFinished(agent: AgentSummary): boolean {
   return (
     agent.status === "completed" ||
@@ -40,30 +40,27 @@ export function agentFinishBadge(status: AgentStatus): {
   return null
 }
 
-/** Scheduler endpoint payload + its run's agents (fetched in one query). */
-export type SchedulerWithAgents = SchedulerInfo & { agents: AgentSummary[] }
-
 export type TimelineEvent = {
   time: string
   id: string
-  kind: "run" | "timeout" | "closed" | "flag" | "challenge"
+  kind: "agent" | "timeout" | "completed" | "flag" | "challenge"
   title: string
   detail: string
-  runId?: string
+  agentId?: string
 }
 
 export const TIMELINE_ICONS: Record<TimelineEvent["kind"], typeof Play> = {
-  run: Play,
+  agent: Play,
   timeout: Timer,
-  closed: Archive,
+  completed: Archive,
   flag: Flag,
   challenge: Puzzle,
 }
 
 /** The AgentsGraph root node id (the event scheduler / orchestrator). */
 export const SCHED_NODE_ID = "sched"
-/** W7.2 group roots: the archived aggregate (manual runs now hang off their
- * challenge node — the graph is event → challenge → run → agent). */
+/** W7.2 group root: the archived aggregate (finished agents collapse into
+ * it; expanded shows one node per finished attempt). */
 export const ARCHIVE_NODE_ID = "archive"
 
 // Planned node sizes — used both for the dagre layout spacing and (roughly)
@@ -72,33 +69,17 @@ export const NODE_DIM = {
   scheduler: { width: 176, height: 56 },
   challenge: { width: 208, height: 60 },
   archive: { width: 176, height: 56 },
-  run: { width: 224, height: 60 },
-  agent: { width: 192, height: 48 },
+  agent: { width: 192, height: 56 },
 } as const
 
 export const EDGE_STYLE = {
-  // scheduler → challenge: the event's challenge backbone (v17 knowledge
-  // bases), emphasized over the run edges below.
+  // scheduler → challenge: the event's challenge backbone, emphasized over
+  // the agent edges below.
   challenge: {
     stroke: "var(--primary)",
     strokeOpacity: 0.45,
     strokeWidth: 1.5,
   },
-  // challenge → run / archive → run: runs are execution units, kept faint.
-  oversee: {
-    stroke: "var(--muted-foreground)",
-    strokeOpacity: 0.3,
-    strokeWidth: 1.5,
-  },
-  // run → entry agent / scheduler → orchestrator: emphasized.
-  entry: { stroke: "var(--primary)", strokeWidth: 2 },
-  // run → non-entry agent.
+  // challenge → agent / archive → agent: execution attempts, kept faint.
   agent: { stroke: "var(--border)", strokeWidth: 1.5 },
-  // agent → spawn child: dashed.
-  spawn: {
-    stroke: "var(--muted-foreground)",
-    strokeOpacity: 0.5,
-    strokeWidth: 1.5,
-    strokeDasharray: "5 3",
-  },
 } as const

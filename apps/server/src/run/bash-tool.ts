@@ -22,8 +22,9 @@ import { buildSingleFileTar, shellQuote } from "./workspace/backend"
  * timeout/abort from success. All of that lives here.
  *
  * Execution reuses the dockerode-backed `manager.exec` (merged stdout+stderr,
- * demuxed stream, per-call abort + timeout). The container's WorkingDir is
- * /workspace, so we never forward a cwd.
+ * demuxed stream, per-call abort + timeout). Every exec runs in the
+ * agent's own directory (agents/<id8>) within the challenge workspace —
+ * `containerCwd` — while the container WorkingDir stays /workspace.
  */
 
 /** Foreground default. Applied when the agent omits `timeout`. */

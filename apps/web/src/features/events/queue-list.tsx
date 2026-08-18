@@ -54,7 +54,7 @@ export function QueueList({
 }: {
   eventId: string
   items: QueueItem[]
-  onOpenAgent: (runId: string) => void
+  onOpenAgent: (agentId: string) => void
 }) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<QueueItem | null>(null)

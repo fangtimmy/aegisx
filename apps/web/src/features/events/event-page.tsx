@@ -20,10 +20,10 @@ import { useCallback, useMemo, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
 
 import {
-  type AgentSummary,
   type Challenge,
   type QueueItem,
   type QueueState,
+  type SchedulerInfo,
   eventsApi,
   keys,
   agentsApi,
@@ -65,10 +65,7 @@ import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
 import { ChallengeImDialog } from "./challenge-im-dialog"
 import { ChallengesTreeTab } from "./challenges-tree-tab"
-import {
-  POLL_INTERVAL_MS,
-  type SchedulerWithAgents,
-} from "./event-agents-shared"
+import { POLL_INTERVAL_MS } from "./event-agents-shared"
 import { EventSettings } from "./event-settings"
 import {
   ErrorState,
@@ -325,21 +322,15 @@ function EventAgentsPanel({
   // W7.1: two independent states — `selected` highlights on the graph (no
   // dialog; sources: AgentsTab click, TimelineTab entry, QueueList 打开) and
   // `dialog` opens AgentDialog (ONLY from graph node clicks).
-  const [selected, setSelected] = useState<{
-    runId: string
-    agentId: string
-  } | null>(null)
-  const [dialog, setDialog] = useState<{
-    runId: string
-    agentId: string
-  } | null>(null)
-  /** Challenge node click → the challenge-level IM (v17 knowledge base). */
+  const [selected, setSelected] = useState<string | null>(null)
+  const [dialog, setDialog] = useState<string | null>(null)
+  /** Challenge node click → the challenge-level IM (knowledge base). */
   const [challengeIm, setChallengeIm] = useState<string | null>(null)
 
-  // Fleet: the overview's single source of truth (runs + per-run agents +
-  // scheduler run/agents + config/status) — W7.3 merged the old fleet +
-  // scheduler query pair into one endpoint. Always polls: the scheduler can
-  // start/stop runs server-side at any time.
+  // Fleet: the overview's single source of truth (agents by challenge +
+  // scheduler agent + config/status) — W7.3 merged the old fleet + scheduler
+  // query pair into one endpoint. Always polls: the scheduler can start/stop
+  // agents server-side at any time.
   const fleet = useQuery({
     queryKey: keys.agents.fleet(eventId),
     queryFn: () => agentsApi.getFleet(eventId),
@@ -352,37 +343,25 @@ function EventAgentsPanel({
     refetchInterval: POLL_INTERVAL_MS,
   })
 
-  const detailsById = useMemo(() => {
-    const map = new Map<string, { run: AgentSummary; agents: AgentSummary[] }>()
-    for (const ch of fleet.data?.challenges ?? []) {
-      map.set(ch.id, {
-        run: fleet.data?.agentsByChallenge[ch.id]?.[0] ?? ({} as AgentSummary),
-        agents: fleet.data?.agentsByChallenge[ch.id] ?? [],
-      })
-    }
-    return map
-  }, [fleet.data])
-
-  const schedulerData = useMemo<SchedulerWithAgents | undefined>(() => {
+  const agents = useMemo(
+    () => Object.values(fleet.data?.agentsByChallenge ?? {}).flat(),
+    [fleet.data]
+  )
+  const schedulerData = useMemo<SchedulerInfo | undefined>(() => {
     const data = fleet.data
     if (!data) return undefined
     return {
       config: data.config,
       agent: data.schedulerAgent,
       status: data.status,
-      agents: data.schedulerAgent ? [data.schedulerAgent] : [],
     }
   }, [fleet.data])
 
-  const onSelectAgent = useCallback((agentId: string) => {
-    setSelected({ runId: "", agentId })
+  const selectAgent = useCallback((agentId: string) => {
+    setSelected(agentId)
   }, [])
-  const onOpenAgent = useCallback((agentId: string) => {
-    setDialog({ runId: "", agentId })
-  }, [])
-  /** W7.1: TimelineTab / QueueList entries select the agent. */
-  const handleSelectRun = useCallback((agentId: string) => {
-    setSelected({ runId: "", agentId })
+  const openAgent = useCallback((agentId: string) => {
+    setDialog(agentId)
   }, [])
 
   if (fleet.isPending) {
@@ -400,10 +379,6 @@ function EventAgentsPanel({
     return <ErrorState error={fleet.error} retry={() => fleet.refetch()} />
   }
 
-  const runs = useMemo(
-    () => Object.values(fleet.data?.agentsByChallenge ?? {}).flat(),
-    [fleet.data]
-  )
   const imChallenge = challengeIm
     ? (challenges.find((ch) => ch.id === challengeIm) ?? null)
     : null
@@ -430,16 +405,16 @@ function EventAgentsPanel({
             <TabsPanel className="h-full" value="plan">
               <PlanPanel
                 eventId={eventId}
-                onOpenAgent={handleSelectRun}
+                onOpenAgent={selectAgent}
                 queue={queue.data?.items ?? []}
                 state={queue.data?.state ?? "running"}
               />
             </TabsPanel>
             <TabsPanel className="h-full" value="timeline">
               <TimelineTab
+                agents={agents}
                 challenges={challenges}
-                onSelectRun={handleSelectRun}
-                runs={runs}
+                onSelectAgent={selectAgent}
               />
             </TabsPanel>
             <TabsPanel className="h-full" value="challenges">
@@ -447,8 +422,8 @@ function EventAgentsPanel({
             </TabsPanel>
             <TabsPanel className="h-full" value="agents">
               <AgentsTab
-                agents={[...detailsById.values()].flatMap((d) => d.agents)}
-                onSelectAgent={onSelectAgent}
+                agents={agents}
+                onSelectAgent={selectAgent}
                 scheduler={schedulerData}
               />
             </TabsPanel>
@@ -456,17 +431,16 @@ function EventAgentsPanel({
         </Tabs>
       </div>
       <AgentsGraph
+        agents={agents}
         challenges={challenges}
-        detailsById={detailsById}
         eventId={eventId}
-        onOpenAgent={onOpenAgent}
+        onOpenAgent={openAgent}
         onOpenChallenge={setChallengeIm}
-        runs={runs}
         scheduler={schedulerData}
         selected={selected}
       />
       {dialog && (
-        <AgentDialog agentId={dialog.agentId} onClose={() => setDialog(null)} />
+        <AgentDialog agentId={dialog} onClose={() => setDialog(null)} />
       )}
       {imChallenge && (
         <ChallengeImDialog
