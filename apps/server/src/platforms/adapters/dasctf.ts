@@ -1,11 +1,12 @@
 import {
   absentTarget,
   BaseAdapter,
-  nullableNumber,
+  isRecord,
   nullableString,
   type PlatformConfig,
   PlatformError,
   type PlatformRequestError,
+  type RemoteTargetInfo,
   type SubmissionResult,
   type TargetState,
   targetEndpoint,
@@ -41,6 +42,7 @@ type DasctfFile = {
   name?: string
   url?: string
   ext?: string
+  extension?: string
 }
 
 type DasctfEndpoint = {
@@ -60,7 +62,7 @@ type DasctfExercise = {
   hasSolved?: boolean
   score?: string
   difficulty?: string
-  attachment?: { files?: DasctfFile[] }
+  attachment?: unknown
   endpoints?: DasctfEndpoint[]
   isNeedInit?: boolean
   isNeedCheck?: boolean
@@ -157,22 +159,43 @@ export class DasCtfAdapter extends BaseAdapter {
   async getChallenge(remoteId: string) {
     const detail = await this.fetchDetail(remoteId)
     const score = Number(detail.score)
+    const name = String(detail.name ?? "Untitled challenge")
+    const endpoints = detail.endpoints ?? []
+    const targetSupported =
+      endpoints.length > 0 ||
+      detail.isNeedInit === true ||
+      detail.isNeedCheck === true
+    // Live environments only expose ports once provisioned; a target-capable
+    // challenge with no endpoints yet still gets one placeholder so the UI
+    // and prompt advertise the environment.
+    let targets: RemoteTargetInfo[] = []
+    if (endpoints.length > 0) {
+      targets = endpoints.map((endpoint, index) => ({
+        name: `endpoint ${index + 1}`,
+        services: (endpoint.ports ?? []).flatMap((entry) => {
+          const port = splitPortEntry(entry).port
+          return port ? [port] : []
+        }),
+      }))
+    } else if (targetSupported) {
+      targets = [{ name, services: [] }]
+    }
     return {
       id: String(detail.id),
-      name: String(detail.name ?? "Untitled challenge"),
+      name,
       description: String(detail.description ?? ""),
-      category: nullableString(detail.difficulty),
+      // The detail payload exposes no category (only difficulty); the sync
+      // layer backfills from the list summary.
+      category: null,
       points: Number.isFinite(score) ? score : null,
       solved: detail.hasSolved === true,
-      targetSupported:
-        (detail.endpoints?.length ?? 0) > 0 ||
-        detail.isNeedInit === true ||
-        detail.isNeedCheck === true,
-      targetCount: 0,
-      targets: [],
-      attachments: (detail.attachment?.files ?? []).flatMap((file) => {
+      targetSupported,
+      targetCount: targets.length,
+      targets,
+      attachments: attachmentFiles(detail.attachment).flatMap((file) => {
         const url = nullableString(file.url)
         if (!url) return []
+        const ext = nullableString(file.ext) ?? nullableString(file.extension)
         let sameOrigin = false
         try {
           sameOrigin =
@@ -184,8 +207,7 @@ export class DasCtfAdapter extends BaseAdapter {
           {
             id: url,
             filename:
-              nullableString(file.name) ??
-              `attachment${file.ext ? `.${file.ext}` : ""}`,
+              nullableString(file.name) ?? `attachment${ext ? `.${ext}` : ""}`,
             url,
             authenticated: sameOrigin,
           },
@@ -287,34 +309,97 @@ export class DasCtfAdapter extends BaseAdapter {
 }
 
 /**
- * Expand one platform endpoint into host:port addresses. When `isProxy` is
- * set and proxy data exists, prefer `proxyIps` × mapped `proxy` ports;
- * otherwise use `exposeIps` × `ports`. Account credentials ride along as
- * endpoint guidance so the agent sees them next to the address.
+ * Normalize the `attachment` field. Live payloads send `[]` when the
+ * challenge has none and a single file object (name/url/extension) when it
+ * has one; the API doc instead specifies `{files: [{name, url, ext}]}`.
+ */
+function attachmentFiles(attachment: unknown): DasctfFile[] {
+  if (Array.isArray(attachment)) return attachment
+  if (!isRecord(attachment)) return []
+  if (Array.isArray(attachment.files)) return attachment.files
+  return [attachment as DasctfFile]
+}
+
+/** Strip a `proto/` prefix ("http/80") from a port entry. */
+function splitPortEntry(entry: string) {
+  const slash = entry.indexOf("/")
+  if (slash <= 0) return { protocol: null as string | null, port: entry }
+  return {
+    protocol: protocolOf(entry.slice(0, slash)),
+    port: entry.slice(slash + 1),
+  }
+}
+
+/** Only HTTP(S)/WebSocket types get an address prefix; anything else (e.g.
+ * "tcp") stays a bare host:port. */
+function protocolOf(value: string | undefined) {
+  const lower = value?.toLowerCase()
+  return lower === "http" ||
+    lower === "https" ||
+    lower === "ws" ||
+    lower === "wss"
+    ? lower
+    : null
+}
+
+/** Port embedded in a host entry ("1.2.3.4:25457") → "25457". */
+function trailingPort(host: string) {
+  return /^(.*):(\d+)$/.exec(host)?.[2] ?? null
+}
+
+/**
+ * Expand one platform endpoint into connectable addresses. Observed shapes:
+ * `ports` entries may carry a `proto/` prefix ("http/80"), and a running
+ * direct endpoint's `exposeIps` entries already embed the mapped port
+ * ("1.2.3.4:25457") — append the port list only to bare hosts. When
+ * `isProxy` is set and proxy data exists, prefer `proxyIps` × mapped `proxy`
+ * ports. Account credentials ride along as endpoint guidance so the agent
+ * sees them next to the address.
  */
 function endpointAddresses(
   endpoint: DasctfEndpoint,
   index: number
 ): TargetState["endpoints"] {
+  const proxyIps = endpoint.proxyIps ?? []
   const useProxy =
     endpoint.isProxy === true &&
-    (endpoint.proxyIps?.length ?? 0) > 0 &&
+    proxyIps.length > 0 &&
     (endpoint.portMappings?.length ?? 0) > 0
-  const hosts = useProxy ? endpoint.proxyIps! : (endpoint.exposeIps ?? [])
+  const hosts = (useProxy ? proxyIps : (endpoint.exposeIps ?? [])).filter(
+    Boolean
+  )
   const ports = useProxy
-    ? endpoint.portMappings!.map((mapping) => mapping.proxy)
-    : (endpoint.ports ?? [])
+    ? (endpoint.portMappings ?? []).flatMap((mapping) =>
+        mapping.proxy
+          ? [
+              {
+                port: String(mapping.proxy),
+                protocol: protocolOf(mapping.type),
+              },
+            ]
+          : []
+      )
+    : (endpoint.ports ?? []).flatMap((entry) => {
+        const { protocol, port } = splitPortEntry(entry)
+        return port ? [{ port, protocol }] : []
+      })
   const guidance = (endpoint.users ?? [])
     .filter((user) => user.username || user.password)
     .map(
       (user) => `credentials: ${user.username ?? ""} / ${user.password ?? ""}`
     )
-  return hosts.flatMap((host) =>
-    ports
-      .filter((port): port is string => Boolean(port))
-      .map((port) => ({
-        ...targetEndpoint(`endpoint ${index + 1}:${port}`, `${host}:${port}`),
-        ...(guidance.length > 0 ? { guidance } : {}),
-      }))
-  )
+  return hosts.flatMap((host) => {
+    const embedded = trailingPort(host)
+    const effective = embedded
+      ? [{ port: embedded, protocol: ports[0]?.protocol ?? null }]
+      : ports
+    return effective.map(({ port, protocol }) => {
+      const address = embedded ? host : `${host}:${port}`
+      const base = targetEndpoint(
+        `endpoint ${index + 1}:${port}`,
+        protocol ? `${protocol}://${address}` : address
+      )
+      return guidance.length > 0 ? { ...base, guidance } : base
+    })
+  })
 }

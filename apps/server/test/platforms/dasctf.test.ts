@@ -64,15 +64,8 @@ const sampleDetail = {
   hasSolved: false,
   score: "100",
   difficulty: "EASY",
-  attachment: {
-    files: [
-      {
-        name: "attachment.zip",
-        url: "https://pro.dasctf.com/file/1",
-        ext: "zip",
-      },
-    ],
-  },
+  // Live payloads send an empty array when the challenge has no attachment.
+  attachment: [],
   endpoints: [],
   isNeedInit: false,
   isNeedCheck: false,
@@ -167,13 +160,65 @@ describe("dasctf adapter", () => {
     }
   })
 
-  test("getChallenge maps detail fields, attachments and target support", async () => {
-    const fetch = stubFetch([detailRoute(sampleDetail)])
+  test("getChallenge maps single-object attachments and placeholder targets", async () => {
+    // Live shape (observed on pro.dasctf.com): attachment is a single
+    // cross-origin file object keyed by `extension`, and the challenge needs
+    // its environment initialized before endpoints exist.
+    const fetch = stubFetch([
+      detailRoute({
+        ...sampleDetail,
+        isNeedInit: true,
+        attachment: {
+          key: "5747726b67cd4fb3a8389dba4e73b2e1",
+          signature: "0505d1b5450e260dd321f74e949643b4",
+          url: "https://pro-resource.dasctf.com/resource/oss/05102743e9d552980a3b247a070f451b.zip",
+          name: "shopping的附件.zip",
+          extension: "zip",
+        },
+      }),
+    ])
     try {
       const challenge = await new DasCtfAdapter(config).getChallenge("1001")
       expect(challenge.description).toBe("题目描述")
       expect(challenge.points).toBe(100)
-      expect(challenge.category).toBe("EASY")
+      // The detail payload has no category; the sync layer backfills it.
+      expect(challenge.category).toBeNull()
+      expect(challenge.attachments).toEqual([
+        {
+          id: "https://pro-resource.dasctf.com/resource/oss/05102743e9d552980a3b247a070f451b.zip",
+          filename: "shopping的附件.zip",
+          url: "https://pro-resource.dasctf.com/resource/oss/05102743e9d552980a3b247a070f451b.zip",
+          authenticated: false,
+        },
+      ])
+      expect(challenge.targetSupported).toBe(true)
+      expect(challenge.targetCount).toBe(1)
+      expect(challenge.targets).toEqual([{ name: "easy-web", services: [] }])
+    } finally {
+      fetch.restore()
+    }
+  })
+
+  test("getChallenge accepts the documented {files} shape and maps endpoint targets", async () => {
+    const fetch = stubFetch([
+      detailRoute({
+        ...sampleDetail,
+        attachment: {
+          files: [
+            {
+              name: "attachment.zip",
+              url: "https://pro.dasctf.com/file/1",
+              ext: "zip",
+            },
+          ],
+        },
+        endpoints: [
+          { exposeIps: ["192.168.0.24"], ports: ["http/80", "tcp/22"] },
+        ],
+      }),
+    ])
+    try {
+      const challenge = await new DasCtfAdapter(config).getChallenge("1001")
       expect(challenge.attachments).toEqual([
         {
           id: "https://pro.dasctf.com/file/1",
@@ -182,7 +227,10 @@ describe("dasctf adapter", () => {
           authenticated: true,
         },
       ])
-      expect(challenge.targetSupported).toBe(false)
+      expect(challenge.targetCount).toBe(1)
+      expect(challenge.targets).toEqual([
+        { name: "endpoint 1", services: ["80", "22"] },
+      ])
     } finally {
       fetch.restore()
     }
@@ -242,10 +290,41 @@ describe("dasctf adapter", () => {
     }
   })
 
-  test("getTarget maps needInit/needCheck and proxy endpoints with credentials", async () => {
+  test("getTarget maps lifecycle flags, prefixed ports and port-embedded hosts", async () => {
     const fetch = stubFetch([
       detailRoute({ ...sampleDetail, isNeedInit: true }),
       detailRoute({ ...sampleDetail, isNeedCheck: true }),
+      // Live running shape: proxy endpoint, mapping type http.
+      detailRoute({
+        ...sampleDetail,
+        endpoints: [
+          {
+            objectId: "endpoint_07ddbccc72e04b3e985e8e3f92cdbdf2",
+            exposeIps: ["192.168.0.24"],
+            serviceStatus: "UP",
+            status: "running",
+            ports: ["http/80"],
+            users: [],
+            portMappings: [{ type: "http", port: "80", proxy: "25457" }],
+            proxyIps: ["1.14.76.59"],
+            isProxy: true,
+            expireTime: 1_780_000_000_000,
+          },
+        ],
+      }),
+      // Direct endpoint whose host already embeds the mapped port.
+      detailRoute({
+        ...sampleDetail,
+        endpoints: [
+          {
+            exposeIps: ["1.14.76.59:25457"],
+            ports: ["http/80"],
+            portMappings: [{ type: "http", port: "80", proxy: "25457" }],
+            isProxy: false,
+          },
+        ],
+      }),
+      // Documented direct shape: bare hosts × bare ports + credentials.
       detailRoute({
         ...sampleDetail,
         endpoints: [
@@ -253,19 +332,6 @@ describe("dasctf adapter", () => {
             exposeIps: ["10.0.0.10"],
             ports: ["80", "22"],
             users: [{ username: "root", password: "pw" }],
-            portMappings: [{ type: "tcp", port: "80", proxy: "30080" }],
-            proxyIps: ["1.2.3.4"],
-            isProxy: true,
-            expireTime: 1_780_000_000_000,
-          },
-        ],
-      }),
-      detailRoute({
-        ...sampleDetail,
-        endpoints: [
-          {
-            exposeIps: ["10.9.9.9"],
-            ports: ["8080"],
             isProxy: false,
           },
         ],
@@ -283,24 +349,39 @@ describe("dasctf adapter", () => {
         endpoints: [],
         expiresAt: null,
       })
+      // Proxy route: proxyIp × mapped proxy port, protocol from mapping type.
       expect(await adapter.getTarget("1001")).toEqual({
         status: "running",
         endpoints: [
           {
-            name: "endpoint 1:30080",
-            address: "1.2.3.4:30080",
-            protocol: "tcp",
-            guidance: ["credentials: root / pw"],
+            name: "endpoint 1:25457",
+            address: "http://1.14.76.59:25457",
+            protocol: "http",
           },
         ],
         expiresAt: new Date(1_780_000_000_000).toISOString(),
       })
-      // Non-proxy endpoints expand hosts × ports directly.
+      // Host with embedded port: used as-is, protocol from the port entry.
       expect((await adapter.getTarget("1001")).endpoints).toEqual([
         {
-          name: "endpoint 1:8080",
-          address: "10.9.9.9:8080",
+          name: "endpoint 1:25457",
+          address: "http://1.14.76.59:25457",
+          protocol: "http",
+        },
+      ])
+      // Bare hosts × bare ports expand directly.
+      expect((await adapter.getTarget("1001")).endpoints).toEqual([
+        {
+          name: "endpoint 1:80",
+          address: "10.0.0.10:80",
           protocol: "tcp",
+          guidance: ["credentials: root / pw"],
+        },
+        {
+          name: "endpoint 1:22",
+          address: "10.0.0.10:22",
+          protocol: "tcp",
+          guidance: ["credentials: root / pw"],
         },
       ])
     } finally {

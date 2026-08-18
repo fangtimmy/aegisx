@@ -355,7 +355,13 @@ export function createPlatformSync(
           const synced = await syncRemoteChallenge(
             eventId,
             inventory.platform.sourceKey,
-            { ...remote, solved: remote.solved || summary.solved },
+            // The detail payload may lack the category (dasctf exposes it only
+            // on the list endpoint); the summary is the authoritative source.
+            {
+              ...remote,
+              category: remote.category ?? summary.category,
+              solved: remote.solved || summary.solved,
+            },
             inventory.adapter,
             async (progress) => {
               await onEvent?.({ type: "progress", progress })
