@@ -10,7 +10,14 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from aegisx.models import AgentSummary, Run, fmt_ms, from_dict
+from aegisx.models import (
+    AgentSummary,
+    ChannelFile,
+    ChannelMessage,
+    Run,
+    fmt_ms,
+    from_dict,
+)
 
 
 def iso_ago(seconds: int) -> str:
@@ -85,8 +92,10 @@ class TestRunTimeProperties(unittest.TestCase):
     def test_elapsed_ms(self) -> None:
         run = from_dict(Run, run_wire(startedAt=iso_ago(30)))
         assert run is not None
+        elapsed = run.elapsed_ms
+        assert elapsed is not None
         # 30s ± tolerance (the clock moves between construction and assert).
-        self.assertTrue(29_000 <= run.elapsed_ms <= 31_000, run.elapsed_ms)
+        self.assertTrue(29_000 <= elapsed <= 31_000, elapsed)
 
     def test_elapsed_ms_none_before_start(self) -> None:
         run = from_dict(Run, run_wire(startedAt=None))
@@ -96,7 +105,9 @@ class TestRunTimeProperties(unittest.TestCase):
     def test_deadline_remain_ms(self) -> None:
         run = from_dict(Run, run_wire(deadlineAt=iso_ahead(120)))
         assert run is not None
-        self.assertTrue(119_000 <= run.deadline_remain_ms <= 121_000)
+        remain = run.deadline_remain_ms
+        assert remain is not None
+        self.assertTrue(119_000 <= remain <= 121_000)
 
     def test_deadline_remain_ms_none_without_deadline(self) -> None:
         run = from_dict(Run, run_wire(deadlineAt=None))
@@ -113,7 +124,9 @@ class TestRunTimeProperties(unittest.TestCase):
     def test_deadline_remain_ms_negative_when_over(self) -> None:
         run = from_dict(Run, run_wire(deadlineAt=iso_ago(60)))
         assert run is not None
-        self.assertLess(run.deadline_remain_ms, 0)
+        remain = run.deadline_remain_ms
+        assert remain is not None
+        self.assertLess(remain, 0)
 
     def test_overdue(self) -> None:
         over = from_dict(Run, run_wire(deadlineAt=iso_ago(60)))
@@ -157,6 +170,51 @@ class TestAgentIdleAge(unittest.TestCase):
         )
         assert agent is not None
         self.assertTrue(11_000 <= agent.idle_age_ms <= 13_000)
+
+
+def message_wire(**overrides: object) -> dict:
+    base: dict = {
+        "id": 7,
+        "channelKey": "team:ch-1",
+        "authorType": "agent",
+        "authorAgentId": "a-1",
+        "authorName": "solver-1 · run-r1",
+        "body": "exp ready",
+        "meta": {"urgent": True, "runId": "r1"},
+        "createdAt": "2025-01-01T00:00:00.000Z",
+        "files": [
+            {"id": "f-1", "filename": "exp.py", "size": 4300},
+            {"id": "f-2", "filename": "notes.txt", "size": 90},
+        ],
+    }
+    base.update(overrides)
+    return base
+
+
+class TestChannelMessageWire(unittest.TestCase):
+
+    def test_files_built_as_channel_file(self) -> None:
+        message = from_dict(ChannelMessage, message_wire())
+        assert message is not None
+        self.assertEqual(len(message.files), 2)
+        for file in message.files:
+            self.assertIsInstance(file, ChannelFile)
+        self.assertEqual(message.files[0].filename, "exp.py")
+        self.assertEqual(message.files[1].size, 90)
+
+    def test_files_none_stays_empty_list_default(self) -> None:
+        # A missing files key → the dataclass default; an explicit None is
+        # not a list and passes through as-is (server never sends it).
+        message = from_dict(
+            ChannelMessage, message_wire(files=None)
+        )
+        assert message is not None
+        self.assertIsNone(message.files)
+
+    def test_meta_stays_plain_dict(self) -> None:
+        message = from_dict(ChannelMessage, message_wire())
+        assert message is not None
+        self.assertEqual(message.meta["runId"], "r1")
 
 
 if __name__ == "__main__":

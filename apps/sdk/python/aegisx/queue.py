@@ -1,17 +1,39 @@
 """`aegisx.queue` — the event's task queue (the plan)."""
 from __future__ import annotations
 
-from .client import get_client, require_manager, wire_solvers
+from typing import Any
+
+from .client import AegisxError, get_client, require_manager, wire_solvers
 from .models import QueueItem, from_dict
 
+#: Hoisted aliases — the module-level name `list` shadows the builtin for
+#: every later annotation, so annotations must not subscript `list` directly
+#: (same pattern as channels/runs/agents).
+QueueItemList = list[QueueItem]
+StrList = list[str]
+SolverSpecs = list[dict]
 
-def list() -> list[QueueItem]:
+
+def _item(data: Any) -> QueueItem:
+    """from_dict narrowed to non-None (the server always sends the item)."""
+    item = from_dict(QueueItem, data)
+    if item is None:
+        raise AegisxError("bad_response", "malformed queue item payload")
+    return item
+
+
+def list() -> QueueItemList:
     """The event's actionable queue items (pending + running + failed), FIFO.
     The queue content IS the plan."""
     require_manager()
     client = get_client()
     data = client.request("GET", client.event_path("/queue"))
-    return [from_dict(QueueItem, item) for item in data.get("items", [])]
+    items: QueueItemList = []
+    for item in data.get("items", []):
+        built = from_dict(QueueItem, item)
+        if built is not None:
+            items.append(built)
+    return items
 
 
 def enqueue(
@@ -19,7 +41,7 @@ def enqueue(
     strategy: str | None = None,
     model: str | None = None,
     solver_count: int | None = None,
-    solvers: list[dict] | None = None,
+    solvers: SolverSpecs | None = None,
     timeout_ms: int | None = None,
     source: str = "scheduler",
 ) -> QueueItem:
@@ -51,7 +73,7 @@ def enqueue(
     data = get_client().request(
         "POST", f"/api/challenges/{challenge_id}/runs", body=body
     )
-    return from_dict(QueueItem, data)
+    return _item(data)
 
 
 def remove(item_id: str) -> None:
@@ -69,7 +91,7 @@ def clear() -> None:
     client.request("POST", client.event_path("/queue/clear"))
 
 
-def reorder(item_ids: list[str]) -> None:
+def reorder(item_ids: StrList) -> None:
     """Reorder pending queue items by listing their ids front-first.
     Running/failed items keep their place."""
     require_manager()

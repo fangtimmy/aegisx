@@ -69,8 +69,11 @@ def main() -> int:
         c = challenges[0]
         print(f"  first: {c.id} {c.points} {c.name} solved={c.solved_now}")
         one = aegisx.challenges.get(c.id)
-        check("challenges.get", one.id == c.id and one.description)
-        check("challenge fields", one.run_count >= 0 and one.solved_now in (True, False))
+        check("challenges.get", one.id == c.id and bool(one.description))
+        check(
+            "challenge fields",
+            one.run_count >= 0 and one.solved_now in (True, False),
+        )
     else:
         print("  (no challenges — skipping get)")
 

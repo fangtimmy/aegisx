@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 _WORD_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+_LIST_OF_DATACLASS = re.compile(r"list\[(\w+)\]")
 T = TypeVar("T")
 
 
@@ -57,14 +58,43 @@ def _snake(name: str) -> str:
     return _WORD_BOUNDARY.sub("_", name).lower()
 
 
+#: Dataclasses that appear NESTED inside wire payloads — from_dict builds
+#: these recursively via their `list[<name>]` field annotations.
+_NESTED_TYPES: dict[str, type] = {}
+
+
+def _convert_field(annotation: Any, value: Any) -> Any:
+    """Build nested dataclasses for `list[<Dataclass>]` annotations; every
+    other value passes through untouched (plain dicts stay dicts by design)."""
+    match = _LIST_OF_DATACLASS.fullmatch(str(annotation))
+    if match and isinstance(value, list):
+        inner = _NESTED_TYPES.get(match.group(1))
+        if inner is not None:
+            out = []
+            for item in value:
+                built = from_dict(inner, item)
+                if built is not None:
+                    out.append(built)
+            return out
+    return value
+
+
 def from_dict(cls: type[T], payload: dict[str, Any] | None) -> T | None:
-    """Build a dataclass from a wire dict (camelCase → snake_case)."""
+    """Build a dataclass from a wire dict (camelCase → snake_case). Nested
+    `list[<Dataclass>]` fields are built recursively; unknown keys are
+    ignored (server may add fields the SDK doesn't know — a MISSING known
+    field fails loudly, which is drift detection)."""
     if payload is None:
         return None
     fields = getattr(cls, "__dataclass_fields__", {})
-    return cls(
-        **{_snake(k): v for k, v in payload.items() if _snake(k) in fields}
-    )
+    kwargs: dict[str, Any] = {}
+    for key, value in payload.items():
+        name = _snake(key)
+        field = fields.get(name)
+        if field is None:
+            continue
+        kwargs[name] = _convert_field(field.type, value)
+    return cls(**kwargs)
 
 
 @dataclass
@@ -231,7 +261,6 @@ class RunRead:
     agents: list[AgentSummary]
     agent: AgentSummary | None
     messages: list[str]
-    last_assistant: str | None = None
 
 
 @dataclass
@@ -264,6 +293,11 @@ class ChannelFile:
     id: str
     filename: str
     size: int
+
+
+# ChannelMessage.files is the one nested wire list — register AFTER the class
+# exists (from_dict looks _NESTED_TYPES up at call time).
+_NESTED_TYPES["ChannelFile"] = ChannelFile
 
 
 @dataclass
