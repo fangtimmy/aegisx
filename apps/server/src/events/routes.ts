@@ -376,13 +376,6 @@ export function registerEventRoutes(
     if (!challenge) {
       return notFound(c, "Challenge not found")
     }
-    if (challenge.remoteId && platformService.isBoundEvent(challenge.eventId)) {
-      return conflict(
-        c,
-        "platform_managed",
-        "Platform-managed challenges must be synchronized"
-      )
-    }
     const activeRun = db
       .select({ id: runs.id })
       .from(runs)

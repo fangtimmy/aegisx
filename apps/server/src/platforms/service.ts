@@ -332,7 +332,6 @@ export function createPlatformService(
     discoverChallenges: platformSync.discoverChallenges,
     getPublic: publicPlatform,
     ignoreTarget: platformTargets.ignoreTarget,
-    isBoundEvent: (eventId: string) => Boolean(storedPlatform(eventId)),
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
     setRunHooks(hooks: {
