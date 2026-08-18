@@ -12,7 +12,8 @@
     "fmt": "oxfmt package.json .oxfmtrc.json && bun run --filter '@aegisx/*' fmt",
     "test": "bun run --filter '@aegisx/*' test",
     "build": "bun run --filter @aegisx/web build",
-    "db:generate": "bun run --filter @aegisx/server db:generate"
+    "db:generate": "bun run --filter @aegisx/server db:generate",
+    "relay": "bun run --filter @aegisx/server relay"
   },
   "devDependencies": {
     "knip": "^6.32.2",

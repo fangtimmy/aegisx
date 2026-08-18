@@ -35,6 +35,16 @@ A challenge run hosts 1..N parallel solvers sharing one container and workspace 
 
 `containers/solver` defines the Kali-based solver image used as the per-run tool box (main process `sleep infinity`).
 
+## LLM gateway relay
+
+Some competitions hand out fixed-endpoint LLM proxy URLs (e.g. `https://llm-gateway.dasctf.com/llm-gateway/proxy/e/<id>`) that must be used verbatim: any path appended to them 404s, but every provider type appends `/chat/completions` / `/responses` / `/v1/messages`. `bun run relay` starts a local strip-path proxy that forwards every request to such a URL as-is (streaming and SSE included):
+
+```sh
+bun run relay <upstream-url> [port]   # defaults to 8788; one process per upstream
+```
+
+Then point an `openai-compatible` provider at `http://127.0.0.1:<port>/v1` with the upstream's API key, and add models manually (these gateways don't serve `GET /models`, so model discovery fails by design).
+
 ## Checks
 
 ```sh
