@@ -1,3 +1,5 @@
+import { fetchEventSource } from "@microsoft/fetch-event-source"
+
 import { apiRequest, jsonRequest } from "./client"
 import type {
   ModelMetadata,
@@ -72,14 +74,68 @@ export function discoverModels(providerId: string) {
   )
 }
 
-/** One max_tokens=1 probe chat request against the provider's saved config
- * (baseUrl / apiKey / model existence in one round trip). On failure throws
- * with the upstream status + response-body summary carried in the message. */
-export function testProviderModel(providerId: string, modelId: string) {
-  return apiRequest<{ ok: true; latencyMs: number }>(
-    `/providers/${providerId}/test`,
-    jsonRequest("POST", { modelId })
-  )
+/** Test-dialogue stream events (SSE from POST /providers/:id/test). */
+export type ProviderTestUsage = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+export type ProviderTestEvent =
+  | { type: "delta"; text: string }
+  | { type: "done"; usage?: ProviderTestUsage }
+  | { type: "error"; message: string }
+
+function isProviderTestEvent(value: unknown): value is ProviderTestEvent {
+  if (typeof value !== "object" || value === null) return false
+  const event = value as Record<string, unknown>
+  if (event.type === "delta") return typeof event.text === "string"
+  if (event.type === "error") return typeof event.message === "string"
+  return event.type === "done"
+}
+
+/** Streamed test dialogue against the provider's SAVED config — one bare
+ * user message (no system prompt / tools). `onEvent` receives text deltas,
+ * the terminal usage readout, or a mid-stream error; the caller times
+ * TTFT / total duration client-side. Connection-level failures throw (the
+ * upstream status + body summary rides in the message). */
+export async function streamProviderTest(
+  providerId: string,
+  input: { modelId: string; prompt: string },
+  onEvent: (event: ProviderTestEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  await fetchEventSource(`/api/providers/${providerId}/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
+    async onopen(response) {
+      if (response.ok) return
+      let message = `${response.status} ${response.statusText}`
+      try {
+        const body = (await response.json()) as {
+          error?: { message?: string }
+        }
+        if (body.error?.message) message = body.error.message
+      } catch {
+        // keep the HTTP status
+      }
+      throw new Error(message)
+    },
+    onmessage(message) {
+      try {
+        const parsed = JSON.parse(message.data)
+        if (isProviderTestEvent(parsed)) onEvent(parsed)
+      } catch {
+        // ignore malformed frames
+      }
+    },
+    onerror(err) {
+      throw err
+    },
+  })
 }
 
 export function listBuiltinModels(providerId: string) {

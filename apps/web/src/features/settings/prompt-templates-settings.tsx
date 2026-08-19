@@ -152,8 +152,10 @@ export function PromptTemplatesSettings() {
   )
 }
 
-/** One prompt-template row: title + modified marker + an edit button that opens
- * a dialog with the full {@link PromptEditor} (debounced save + reset). */
+/** One prompt-template row: title + modified marker + inline 恢复默认 + an
+ * edit button that opens a dialog with the full {@link PromptEditor}
+ * (debounced save). The reset writes the default body straight through the
+ * save mutation — no dialog round-trip needed. */
 function PromptTemplateRow({
   row,
   templateKey,
@@ -205,7 +207,7 @@ function PromptTemplateRow({
     if (SCHEDULER_DIGEST_KEYS.has(templateKey)) return digestVars
     return promptVars
   }, [templateKey, orchestratorVars, promptVars, deliveryVars, digestVars])
-  const modified = value !== defaultBody
+  const modified = row !== undefined && row.body !== defaultBody
 
   return (
     <div className="flex items-center gap-3 px-3 py-2">
@@ -221,6 +223,18 @@ function PromptTemplateRow({
         </code>
       </div>
       <Dialog onOpenChange={setOpen} open={open}>
+        {modified && (
+          <Button
+            disabled={save.isPending}
+            onClick={() => save.mutate(defaultBody)}
+            size="sm"
+            title="恢复为内置默认模板"
+            type="button"
+            variant="ghost"
+          >
+            <RotateCcw className="size-3.5" /> 恢复默认
+          </Button>
+        )}
         <Button
           onClick={() => setOpen(true)}
           size="sm"
@@ -247,24 +261,10 @@ function PromptTemplateRow({
               value={value}
               variables={vars}
             />
-            <div className="mt-2 flex items-center justify-between">
+            <div className="mt-2">
               <code className="text-[11px] text-muted-foreground">
                 builtin / {templateKey}
               </code>
-              {modified && (
-                <Button
-                  disabled={save.isPending}
-                  onClick={() => {
-                    setValue(defaultBody)
-                    save.mutate(defaultBody)
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  <RotateCcw className="size-3.5" /> 重置为默认
-                </Button>
-              )}
             </div>
           </DialogPanel>
         </DialogPopup>

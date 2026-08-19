@@ -6,6 +6,7 @@ import {
   ChevronRight,
   CircleAlert,
   Clock,
+  Copy,
   FileText,
   Flag,
   FolderOpen,
@@ -27,6 +28,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -57,16 +59,47 @@ import {
   toolStatusLabel,
 } from "@/domain/conversation"
 import { useMarkdownPrefs } from "@/lib/markdown-prefs"
+import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
 
 import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
 
-function formatDuration(durationMs: number) {
+export function formatDuration(durationMs: number) {
   const seconds = durationMs / 1000
   if (seconds < 10) return `${Math.max(0.1, seconds).toFixed(1)}s`
   if (seconds < 60) return `${Math.round(seconds)}s`
   return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+}
+
+function formatClock(value: string | number | undefined) {
+  if (value === undefined) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+function formatTokens(count: number) {
+  if (count < 1000) return String(count)
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
+  return `${(count / 1_000_000).toFixed(1)}M`
+}
+
+function tsMs(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const ms = typeof value === "number" ? value : Date.parse(value)
+  return Number.isFinite(ms) ? ms : undefined
+}
+
+function copyText(value: string) {
+  void navigator.clipboard.writeText(value).then(
+    () => toast.success("已复制"),
+    () => toast.error("复制失败")
+  )
 }
 
 function toolSummary(tool: ToolBlock) {
@@ -372,32 +405,27 @@ function MetaActivity({
   )
 }
 
-/** Hover-visible "回溯到此" button on a committed row. Positioned on the side
- * opposite the message bubble (user rows are right-aligned → left side;
- * agent rows left-aligned → right side). Clicking asks the parent to confirm
- * (the Conversation owns the AlertDialog). */
-function BacktrackButton({
-  onBacktrack,
-  seq,
-  side,
+/** Small ghost icon action for the per-message meta rows (复制 / 回滚). */
+function MetaIconButton({
+  icon: Icon,
+  label,
+  onClick,
 }: {
-  onBacktrack: (seq: number) => void
-  seq: number
-  side: "left" | "right"
+  icon: LucideIcon
+  label: string
+  onClick: () => void
 }) {
   return (
     <Button
-      aria-label="回溯到此"
-      className={cn(
-        "absolute top-1.5 z-10 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground focus-visible:opacity-100",
-        side === "left" ? "left-0" : "right-0"
-      )}
-      onClick={() => onBacktrack(seq)}
+      aria-label={label}
+      className="size-5 text-muted-foreground"
+      onClick={onClick}
       size="icon-xs"
-      title="删除该消息之后的所有消息（回溯）"
+      title={label}
+      type="button"
       variant="ghost"
     >
-      <Undo2 />
+      <Icon />
     </Button>
   )
 }
@@ -405,25 +433,43 @@ function BacktrackButton({
 const ConversationRow = memo(function ConversationRow({
   item,
   onBacktrack,
+  isTurnEnd,
+  turnStartMs,
 }: {
   item: ConversationItem
   /** Flat-backtrack affordance (v12): shown on committed user/agent rows;
    * the seq of the row's opening entry is the truncation target. */
   onBacktrack?: (seq: number) => void
+  /** Turn-scoped meta (user-time anchored): the row closes a turn and the
+   * epoch ms of the user message that started it (null when unknown). */
+  isTurnEnd?: boolean
+  turnStartMs?: number | null
 }) {
   const [prefs] = useMarkdownPrefs()
   if (item.type === "user") {
     return (
-      <article className="group relative flex justify-end py-5">
-        {onBacktrack && item.seq !== undefined && (
-          <BacktrackButton
-            onBacktrack={onBacktrack}
-            seq={item.seq}
-            side="left"
-          />
-        )}
+      <article className="flex flex-col items-end py-5">
         <div className="max-w-[90%] rounded-lg border bg-muted/45 px-4 py-3">
           <MessageBody markdown={prefs.user}>{item.body}</MessageBody>
+        </div>
+        <div className="mt-1 flex items-center gap-0.5 text-xs text-muted-foreground">
+          {formatClock(item.timestamp) && (
+            <span className="mr-1 tabular-nums">
+              {formatClock(item.timestamp)}
+            </span>
+          )}
+          <MetaIconButton
+            icon={Copy}
+            label="复制"
+            onClick={() => copyText(item.body)}
+          />
+          {onBacktrack && item.seq !== undefined && (
+            <MetaIconButton
+              icon={Undo2}
+              label="回滚到此"
+              onClick={() => onBacktrack(item.seq as number)}
+            />
+          )}
         </div>
       </article>
     )
@@ -444,15 +490,13 @@ const ConversationRow = memo(function ConversationRow({
       </article>
     )
   }
+  const turnMs =
+    item.endTs !== undefined && turnStartMs != null
+      ? item.endTs - turnStartMs
+      : undefined
+  const usage = item.usage
   return (
-    <article className="group relative py-4 text-sm leading-6">
-      {onBacktrack && item.seq !== undefined && (
-        <BacktrackButton
-          onBacktrack={onBacktrack}
-          seq={item.seq}
-          side="right"
-        />
-      )}
+    <article className="relative py-4 text-sm leading-6">
       <div className="flex min-w-0 flex-col gap-0">
         {item.blocks.map((block, index) => {
           const previous = item.blocks[index - 1]
@@ -518,6 +562,40 @@ const ConversationRow = memo(function ConversationRow({
           )
         })}
       </div>
+      {isTurnEnd && (
+        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+          {formatClock(item.timestamp) && (
+            <span className="tabular-nums">{formatClock(item.timestamp)}</span>
+          )}
+          {turnMs !== undefined && (
+            <span className="tabular-nums">本轮 {formatDuration(turnMs)}</span>
+          )}
+          {usage && (
+            <span className="font-mono tabular-nums">
+              ↑{formatTokens(usage.input + usage.cacheRead)} ↓
+              {formatTokens(usage.output)}
+              {usage.cost > 0 && ` · $${usage.cost.toFixed(3)}`}
+            </span>
+          )}
+          <MetaIconButton
+            icon={Copy}
+            label="复制"
+            onClick={() =>
+              copyText(
+                item.blocks
+                  .filter(
+                    (
+                      block
+                    ): block is { key: string; type: "text"; body: string } =>
+                      block.type === "text"
+                  )
+                  .map((block) => block.body)
+                  .join("\n\n")
+              )
+            }
+          />
+        </div>
+      )}
     </article>
   )
 })
@@ -665,6 +743,27 @@ export function Timeline({
   const latestItem = items.at(-1)
   const showJumpToLatest = hasOverflow && !atBottom
 
+  // Turn bookkeeping for the per-message meta rows: the epoch ms of the
+  // user message that opened each agent group's turn (null before the first
+  // user message), and which agent groups close a turn (the next item is a
+  // user message / end of list) — only those show time / duration / usage.
+  const turnMeta = useMemo(() => {
+    const startByKey = new Map<string, number | null>()
+    const endKeys = new Set<string>()
+    let lastUserMs: number | null = null
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      if (item.type === "user") {
+        lastUserMs = tsMs(item.timestamp) ?? null
+      } else if (item.type === "agent") {
+        startByKey.set(item.key, lastUserMs)
+        const next = items[index + 1]
+        if (!next || next.type === "user") endKeys.add(item.key)
+      }
+    }
+    return { startByKey, endKeys }
+  }, [items])
+
   const scrollToBottom = (behavior: ScrollBehavior) => {
     const viewport = viewportRef.current
     if (!viewport) return
@@ -776,9 +875,17 @@ export function Timeline({
         )}
       {items.map((item) => (
         <ConversationRow
+          isTurnEnd={
+            item.type === "agent" ? turnMeta.endKeys.has(item.key) : undefined
+          }
           item={item}
           key={item.key}
           onBacktrack={canBacktrack ? onBacktrack : undefined}
+          turnStartMs={
+            item.type === "agent"
+              ? (turnMeta.startByKey.get(item.key) ?? null)
+              : undefined
+          }
         />
       ))}
       {footer}

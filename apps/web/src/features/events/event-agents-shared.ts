@@ -37,29 +37,30 @@ export function agentFinishBadge(status: AgentStatus): {
   return null
 }
 
-/** The AgentsGraph root node id (the event scheduler / orchestrator). */
-export const SCHED_NODE_ID = "sched"
-/** W7.2 group root: the archived aggregate (finished agents collapse into
- * it; expanded shows one node per finished attempt). */
+/** The AgentsGraph active root node id (live agents + live scheduler). */
+export const ACTIVE_NODE_ID = "active"
+/** The AgentsGraph archive root node id (finished agents collapse under it;
+ * expanded shows per-challenge groups, collapsed shows only the root). */
 export const ARCHIVE_NODE_ID = "archive"
 
 // Planned node sizes — used both for the dagre layout spacing and (roughly)
 // matched by the Tailwind widths on each node component.
 export const NODE_DIM = {
+  active: { width: 176, height: 56 },
+  archive: { width: 176, height: 56 },
   scheduler: { width: 176, height: 56 },
   challenge: { width: 208, height: 60 },
-  archive: { width: 176, height: 56 },
   agent: { width: 192, height: 56 },
 } as const
 
 export const EDGE_STYLE = {
-  // scheduler → challenge: the event's challenge backbone, emphasized over
+  // root → challenge/scheduler: the navigation backbone, emphasized over
   // the agent edges below.
   challenge: {
     stroke: "var(--primary)",
     strokeOpacity: 0.45,
     strokeWidth: 1.5,
   },
-  // challenge → agent / archive → agent: execution attempts, kept faint.
+  // challenge/scheduler → agent: execution attempts, kept faint.
   agent: { stroke: "var(--border)", strokeWidth: 1.5 },
 } as const

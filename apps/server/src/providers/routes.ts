@@ -1,6 +1,7 @@
 import { modelAddress, parseModelRef } from "@aegisx/shared"
 import type { ModelOption } from "@aegisx/shared/domain"
 import type { Hono } from "hono"
+import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
 
 import type {
@@ -56,7 +57,10 @@ const modelInput = Type.Object(
 )
 
 const providerTestInput = Type.Object(
-  { modelId: Type.String({ minLength: 1, maxLength: 200 }) },
+  {
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+    prompt: Type.String({ minLength: 1, maxLength: 8_000 }),
+  },
   { additionalProperties: false }
 )
 
@@ -428,10 +432,13 @@ export function registerProviderRoutes(
     }
   })
 
-  /** Test dialogue: one max_tokens=1 chat request against the provider with
-   * the given model — verifies baseUrl / apiKey / model existence in one
-   * round trip. Failures return 502 provider_unavailable with the upstream
-   * status + truncated body in the message (the UI result line). */
+  /** Test dialogue (SSE): one streaming chat request against the provider
+   * with the given model — a bare user message, no system prompt / tools.
+   * Events pushed to the client: {type:"delta",text} per text chunk,
+   * {type:"done",usage?} at the end, {type:"error",message} mid-stream.
+   * Connection-level failures (bad key / unknown model / timeout) return
+   * 502 provider_unavailable with the upstream status + truncated body in
+   * the message before the stream even starts. */
   app.post(
     "/api/providers/:providerId/test",
     validateJson(providerTestInput),
@@ -445,52 +452,105 @@ export function registerProviderRoutes(
       const timeout =
         configStore.getSettings()["runtime.providerDiscoverTimeoutMs"]
       const isAnthropic = provider.type === "anthropic-messages"
+      const isResponses = provider.type === "openai-responses"
       const headers: Record<string, string> = isAnthropic
         ? {
             "anthropic-version": "2023-06-01",
             "x-api-key": provider.apiKey,
           }
         : { Authorization: `Bearer ${provider.apiKey}` }
-      const startedAt = performance.now()
-      try {
-        const response = await fetch(
-          isAnthropic
-            ? `${provider.baseUrl}/v1/messages`
-            : `${provider.baseUrl}/chat/completions`,
-          {
-            method: "POST",
-            headers: { ...headers, "content-type": "application/json" },
-            body: JSON.stringify({
-              model: input.modelId,
-              messages: [{ role: "user", content: "ping" }],
-              max_tokens: 1,
-            }),
-            signal: AbortSignal.timeout(timeout),
-          }
-        )
-        const latencyMs = Math.round(performance.now() - startedAt)
-        if (!response.ok) {
-          const upstreamBody = (await response.text()).slice(0, 200)
-          return jsonError(
-            c,
+      const [url, body] = isAnthropic
+        ? [
+            `${provider.baseUrl}/v1/messages`,
             {
-              code: "provider_unavailable",
-              message: `Provider test failed: ${response.status} ${upstreamBody}`,
+              model: input.modelId,
+              stream: true,
+              max_tokens: 1024,
+              messages: [{ role: "user", content: input.prompt }],
             },
-            502
-          )
-        }
-        return c.json({ ok: true, latencyMs })
+          ]
+        : isResponses
+          ? [
+              `${provider.baseUrl}/responses`,
+              { model: input.modelId, stream: true, input: input.prompt },
+            ]
+          : [
+              `${provider.baseUrl}/chat/completions`,
+              {
+                model: input.modelId,
+                stream: true,
+                stream_options: { include_usage: true },
+                messages: [{ role: "user", content: input.prompt }],
+              },
+            ]
+
+      const controller = new AbortController()
+      const timer = setTimeout(
+        () => controller.abort(new Error("timeout")),
+        timeout
+      )
+      let response: Response
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            ...headers,
+            "content-type": "application/json",
+            accept: "text/event-stream",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
       } catch {
+        clearTimeout(timer)
         return jsonError(
           c,
           {
             code: "provider_unavailable",
-            message: "Provider test failed",
+            message: `Provider test failed (timeout after ${timeout}ms)`,
           },
           502
         )
       }
+      if (!response.ok || !response.body) {
+        const upstreamBody = await response.text().catch(() => "")
+        clearTimeout(timer)
+        return jsonError(
+          c,
+          {
+            code: "provider_unavailable",
+            message: `Provider test failed: ${response.status} ${upstreamBody.slice(0, 200)}`,
+          },
+          502
+        )
+      }
+
+      const api = isAnthropic
+        ? "anthropic"
+        : isResponses
+          ? "responses"
+          : "openai"
+      return streamSSE(c, async (stream) => {
+        stream.onAbort(() => controller.abort())
+        const send = (event: Record<string, unknown>) =>
+          stream.writeSSE({ data: JSON.stringify(event) })
+        try {
+          const usage = await pumpUpstreamSse(response.body!, api, (text) =>
+            send({ type: "delta", text })
+          )
+          await send({ type: "done", ...(usage ? { usage } : {}) })
+        } catch (cause) {
+          await send({
+            type: "error",
+            message:
+              cause instanceof Error && cause.message
+                ? cause.message
+                : "Provider test failed",
+          })
+        } finally {
+          clearTimeout(timer)
+        }
+      })
     }
   )
 }
@@ -507,4 +567,155 @@ function findProviderModel(
     if (model) return { provider, model }
   }
   return { provider: undefined, model: undefined }
+}
+
+type UpstreamApi = "anthropic" | "openai" | "responses"
+
+type TestUsage = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
+}
+
+/** Merge a partial usage readout into the accumulator (later events refine
+ * earlier ones, e.g. anthropic message_delta's final output_tokens). */
+function mergeUsage(
+  usage: TestUsage | undefined,
+  patch: Partial<TestUsage>
+): TestUsage {
+  return {
+    input: patch.input ?? usage?.input ?? 0,
+    output: patch.output ?? usage?.output ?? 0,
+    cacheRead: patch.cacheRead ?? usage?.cacheRead ?? 0,
+    cacheWrite: patch.cacheWrite ?? usage?.cacheWrite ?? 0,
+  }
+}
+
+/** Interpret one upstream SSE `data:` payload for the test proxy — return
+ * the text delta (if any) and the refined usage accumulator. */
+function handleUpstreamEvent(
+  api: UpstreamApi,
+  raw: string,
+  usage: TestUsage | undefined
+): { usage: TestUsage | undefined; delta: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { usage, delta: "" }
+  }
+  if (!parsed || typeof parsed !== "object") return { usage, delta: "" }
+  const event = parsed as Record<string, unknown>
+
+  if (api === "anthropic") {
+    if (event.type === "content_block_delta") {
+      const delta = event.delta as Record<string, unknown> | undefined
+      if (delta?.type === "text_delta" && typeof delta.text === "string") {
+        return { usage, delta: delta.text }
+      }
+    } else if (event.type === "message_start") {
+      const u = (event.message as Record<string, unknown> | undefined)?.usage
+      if (u && typeof u === "object") {
+        const d = u as Record<string, unknown>
+        usage = mergeUsage(usage, {
+          input: num(d.input_tokens),
+          output: num(d.output_tokens),
+          cacheRead: num(d.cache_read_input_tokens),
+          cacheWrite: num(d.cache_creation_input_tokens),
+        })
+      }
+    } else if (event.type === "message_delta") {
+      const u = event.usage as Record<string, unknown> | undefined
+      if (u) usage = mergeUsage(usage, { output: num(u.output_tokens) })
+    }
+    return { usage, delta: "" }
+  }
+
+  if (api === "openai") {
+    const choices = event.choices as Array<Record<string, unknown>> | undefined
+    const delta = choices?.[0]?.delta as Record<string, unknown> | undefined
+    const text =
+      typeof delta?.content === "string" && delta.content ? delta.content : ""
+    const u = event.usage as Record<string, unknown> | undefined
+    if (u) {
+      const details = u.prompt_tokens_details as
+        | Record<string, unknown>
+        | undefined
+      usage = mergeUsage(usage, {
+        input: num(u.prompt_tokens),
+        output: num(u.completion_tokens),
+        cacheRead: num(details?.cached_tokens),
+      })
+    }
+    return { usage, delta: text }
+  }
+
+  if (event.type === "response.output_text.delta") {
+    if (typeof event.delta === "string" && event.delta)
+      return { usage, delta: event.delta }
+  } else if (event.type === "response.completed") {
+    const response = event.response as Record<string, unknown> | undefined
+    const u = response?.usage as Record<string, unknown> | undefined
+    if (u) {
+      const details = u.input_tokens_details as
+        | Record<string, unknown>
+        | undefined
+      usage = mergeUsage(usage, {
+        input: num(u.input_tokens),
+        output: num(u.output_tokens),
+        cacheRead: num(details?.cached_tokens),
+      })
+    }
+  }
+  return { usage, delta: "" }
+}
+
+/** Read an upstream SSE body (text/event-stream), invoking `onDelta` per
+ * text chunk and returning the final token usage when the stream reports
+ * one. Minimal framing: splits events on blank lines, joins multi-line
+ * `data:` fields. */
+async function pumpUpstreamSse(
+  body: ReadableStream<Uint8Array>,
+  api: UpstreamApi,
+  onDelta: (text: string) => Promise<void> | void
+): Promise<TestUsage | undefined> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let usage: TestUsage | undefined
+
+  const drainBlock = async (block: string) => {
+    const data = block
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n")
+      .trim()
+    if (!data || data === "[DONE]") return
+    const result = handleUpstreamEvent(api, data, usage)
+    usage = result.usage
+    if (result.delta) await onDelta(result.delta)
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(
+      /\r\n/g,
+      "\n"
+    )
+    let index: number
+    while ((index = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, index)
+      buffer = buffer.slice(index + 2)
+      await drainBlock(block)
+    }
+  }
+  if (buffer.trim()) await drainBlock(buffer.replace(/\r/g, ""))
+  return usage
 }

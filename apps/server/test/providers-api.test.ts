@@ -92,8 +92,38 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     return typeof input === "string" ? input : input.url
   }
 
+  /** An upstream SSE Response built from raw frames. */
+  function upstreamSse(frames: string[]) {
+    const body = [
+      ...frames.map((frame) => `data: ${frame}\n\n`),
+      "data: [DONE]\n\n",
+    ].join("")
+    return new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })
+  }
+
+  /** Parse the proxied client SSE stream into event objects. */
+  async function readSseEvents(response: Response) {
+    expect(response.headers.get("content-type")).toContain("text/event-stream")
+    const text = await response.text()
+    return text
+      .split("\n\n")
+      .filter(Boolean)
+      .map((block) =>
+        JSON.parse(
+          block
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trim())
+            .join("\n")
+        )
+      ) as Array<Record<string, unknown>>
+  }
+
   async function createTestProvider(
-    type: "openai-compatible" | "anthropic-messages",
+    type: "openai-compatible" | "openai-responses" | "anthropic-messages",
     baseUrl = providerBody.baseUrl
   ) {
     const app = createTestApp()
@@ -106,21 +136,29 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     return { app, id }
   }
 
-  test("openai-compatible posts a max_tokens=1 ping to /chat/completions", async () => {
+  test("openai-compatible streams /chat/completions with usage", async () => {
     const { app, id } = await createTestProvider("openai-compatible")
     const calls: Array<{ url: string; init: RequestInit }> = []
     installFetchMock(async (input, init) => {
       calls.push({ url: requestUrl(input), init: init! })
-      return new Response(JSON.stringify({ id: "cmpl-1" }), { status: 200 })
+      return upstreamSse([
+        '{"choices":[{"delta":{"content":"Hi"}}]}',
+        '{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1}}',
+      ])
     })
     const response = await app.request(
       `/api/providers/${id}/test`,
-      json("POST", { modelId: "gpt-4o" })
+      json("POST", { modelId: "gpt-4o", prompt: "hi" })
     )
     expect(response.status).toBe(200)
-    const body = (await response.json()) as { ok: boolean; latencyMs: number }
-    expect(body.ok).toBe(true)
-    expect(typeof body.latencyMs).toBe("number")
+    const events = await readSseEvents(response)
+    expect(events).toEqual([
+      { type: "delta", text: "Hi" },
+      {
+        type: "done",
+        usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0 },
+      },
+    ])
     expect(calls[0]!.url).toBe("https://api.example.com/v1/chat/completions")
     expect(calls[0]!.init.method).toBe("POST")
     const headers = calls[0]!.init.headers as Record<string, string>
@@ -128,8 +166,40 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     expect(headers["content-type"]).toBe("application/json")
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       model: "gpt-4o",
-      messages: [{ role: "user", content: "ping" }],
-      max_tokens: 1,
+      stream: true,
+      stream_options: { include_usage: true },
+      messages: [{ role: "user", content: "hi" }],
+    })
+  })
+
+  test("openai-responses streams /v1/responses", async () => {
+    const { app, id } = await createTestProvider("openai-responses")
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    installFetchMock(async (input, init) => {
+      calls.push({ url: requestUrl(input), init: init! })
+      return upstreamSse([
+        '{"type":"response.output_text.delta","delta":"Hey"}',
+        '{"type":"response.completed","response":{"usage":{"input_tokens":7,"output_tokens":2}}}',
+      ])
+    })
+    const response = await app.request(
+      `/api/providers/${id}/test`,
+      json("POST", { modelId: "gpt-5", prompt: "hi" })
+    )
+    expect(response.status).toBe(200)
+    const events = await readSseEvents(response)
+    expect(events).toEqual([
+      { type: "delta", text: "Hey" },
+      {
+        type: "done",
+        usage: { input: 7, output: 2, cacheRead: 0, cacheWrite: 0 },
+      },
+    ])
+    expect(calls[0]!.url).toBe("https://api.example.com/v1/responses")
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      model: "gpt-5",
+      stream: true,
+      input: "hi",
     })
   })
 
@@ -141,18 +211,37 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     const calls: Array<{ url: string; init: RequestInit }> = []
     installFetchMock(async (input, init) => {
       calls.push({ url: requestUrl(input), init: init! })
-      return new Response(JSON.stringify({ id: "msg_1" }), { status: 200 })
+      return upstreamSse([
+        '{"type":"message_start","message":{"usage":{"input_tokens":3}}}',
+        '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
+        '{"type":"message_delta","usage":{"output_tokens":2}}',
+        '{"type":"message_stop"}',
+      ])
     })
     const response = await app.request(
       `/api/providers/${id}/test`,
-      json("POST", { modelId: "claude-sonnet-4-5" })
+      json("POST", { modelId: "claude-sonnet-4-5", prompt: "hi" })
     )
     expect(response.status).toBe(200)
+    const events = await readSseEvents(response)
+    expect(events).toEqual([
+      { type: "delta", text: "Hello" },
+      {
+        type: "done",
+        usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0 },
+      },
+    ])
     expect(calls[0]!.url).toBe("https://api.anthropic.com/v1/messages")
     const headers = calls[0]!.init.headers as Record<string, string>
     expect(headers.Authorization).toBeUndefined()
     expect(headers["x-api-key"]).toBe("real-key")
     expect(headers["anthropic-version"]).toBe("2023-06-01")
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+      model: "claude-sonnet-4-5",
+      stream: true,
+      max_tokens: 1024,
+      messages: [{ role: "user", content: "hi" }],
+    })
   })
 
   test("upstream failure surfaces 502 provider_unavailable with the upstream body", async () => {
@@ -165,7 +254,7 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     )
     const response = await app.request(
       `/api/providers/${id}/test`,
-      json("POST", { modelId: "gpt-4o" })
+      json("POST", { modelId: "gpt-4o", prompt: "hi" })
     )
     expect(response.status).toBe(502)
     const body = (await response.json()) as {
@@ -193,22 +282,27 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     )
     const response = await app.request(
       `/api/providers/${id}/test`,
-      json("POST", { modelId: "gpt-4o" })
+      json("POST", { modelId: "gpt-4o", prompt: "hi" })
     )
     expect(response.status).toBe(502)
     const body = (await response.json()) as {
       error: { code: string; message: string }
     }
     expect(body.error.code).toBe("provider_unavailable")
-    expect(body.error.message).toBe("Provider test failed")
+    expect(body.error.message).toContain("timeout")
   })
 
   test("unknown provider or model-less body rejects", async () => {
     const app = createTestApp()
     const response = await app.request(
       "/api/providers/missing/test",
-      json("POST", { modelId: "gpt-4o" })
+      json("POST", { modelId: "gpt-4o", prompt: "hi" })
     )
     expect(response.status).toBe(404)
+    const missingPrompt = await app.request(
+      "/api/providers/missing/test",
+      json("POST", { modelId: "gpt-4o" })
+    )
+    expect(missingPrompt.status).toBe(400)
   })
 })

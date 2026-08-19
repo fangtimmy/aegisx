@@ -1,13 +1,33 @@
 import { LoaderCircle } from "lucide-react"
-import { useCallback, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 
 import type { AgentStatus } from "@/api"
 import type { ConversationStore } from "@/stream/conversation-store"
 
+import { formatDuration } from "./timeline"
+
+/** Epoch ms of the last user message (the "time since your last message"
+ * anchor for the running-turn footer). */
+function lastUserMs(stream: ConversationStore, agentId: string): number | null {
+  const items = stream.get(agentId)
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]
+    if (item.type === "user") {
+      const ms =
+        typeof item.timestamp === "number"
+          ? item.timestamp
+          : Date.parse(item.timestamp as string)
+      return Number.isFinite(ms) ? ms : null
+    }
+  }
+  return null
+}
+
 /**
  * Compact live-activity indicator for an agent. Reflects transient SDK states
  * (compacting / retrying) and, otherwise, whether a tool is mid-execution
- * ("Working…") or the model is simply producing a turn ("Thinking…").
+ * ("Working…") or the model is simply producing a turn ("Thinking…"), plus
+ * the elapsed time since the user's last message.
  */
 export function AgentActivityBadge({
   stream,
@@ -25,9 +45,17 @@ export function AgentActivityBadge({
   const getSignature = useCallback(() => {
     const activity = stream.getActivity(agentId)
     const running = stream.getRunningTool(agentId)
-    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.attempt ?? ""}|${activity?.maxAttempts ?? ""}|${activity?.reason ?? ""}|${running ? 1 : 0}`
+    const anchor = lastUserMs(stream, agentId)
+    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.attempt ?? ""}|${activity?.maxAttempts ?? ""}|${activity?.reason ?? ""}|${running ? 1 : 0}|${anchor ?? ""}`
   }, [stream, agentId, agentStatus])
   useSyncExternalStore(subscribe, getSignature, getSignature)
+
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (agentStatus !== "running") return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [agentStatus])
 
   if (agentStatus !== "running") return null
   const activity = stream.getActivity(agentId)
@@ -42,6 +70,8 @@ export function AgentActivityBadge({
   } else {
     label = stream.getRunningTool(agentId) ? "工作中…" : "思考中…"
   }
+  const anchor = lastUserMs(stream, agentId)
+  const elapsed = anchor !== null ? now - anchor : null
   return (
     <output
       aria-live="polite"
@@ -49,6 +79,11 @@ export function AgentActivityBadge({
     >
       <LoaderCircle aria-hidden="true" className="size-3 animate-spin" />
       {label}
+      {elapsed !== null && (
+        <span className="text-muted-foreground tabular-nums">
+          · {formatDuration(elapsed)}
+        </span>
+      )}
     </output>
   )
 }

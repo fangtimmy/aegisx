@@ -148,6 +148,17 @@ type AgentBlock =
   | { key: string; type: "error"; body: string }
   | ToolBlock
 
+/** Per-turn accumulated usage (summed across the turn's assistant
+ * messages — a tool-loop turn makes several LLM calls). */
+export type AgentTurnUsage = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  /** Total USD across the turn's calls. */
+  cost: number
+}
+
 export type SystemVariant = "compaction" | "branch" | "model" | "thinking"
 
 export type ConversationItem =
@@ -180,6 +191,10 @@ export type ConversationItem =
       /** seq of the entry that opened the agent block group (the assistant
        * message). The backtrack target for the whole response. */
       seq?: number
+      /** Epoch ms of the group's last applied entry — the turn's end clock
+       * (refined as later entries land). */
+      endTs?: number
+      usage?: AgentTurnUsage
     }
 
 function contentText(content: unknown) {
@@ -204,6 +219,35 @@ function resultText(value: unknown) {
 }
 
 type ConversationAgentItem = Extract<ConversationItem, { type: "agent" }>
+
+/** Coerce an entry timestamp (ISO string or epoch ms) to epoch ms. */
+function tsMs(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const ms = typeof value === "number" ? value : Date.parse(value)
+  return Number.isFinite(ms) ? ms : undefined
+}
+
+/** Fold one assistant message's usage into the turn accumulator. */
+function accumulateUsage(target: ConversationAgentItem, usage: unknown): void {
+  if (!isRecord(usage)) return
+  const cost = isRecord(usage.cost) ? usage.cost.total : undefined
+  const add = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : 0
+  const prev = target.usage ?? {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+  }
+  target.usage = {
+    input: prev.input + add(usage.input),
+    output: prev.output + add(usage.output),
+    cacheRead: prev.cacheRead + add(usage.cacheRead),
+    cacheWrite: prev.cacheWrite + add(usage.cacheWrite),
+    cost: prev.cost + add(cost),
+  }
+}
 
 function applyUser(
   entry: SessionMessageEntry,
@@ -299,7 +343,10 @@ function applyToolResult(
   if (terminal) block.terminal = terminal
   if (meta) block.execMs = meta.durationMs
   if (!existing) {
-    currentAgent(entry.timestamp, seq).blocks.push(block)
+    const group = currentAgent(entry.timestamp, seq)
+    group.blocks.push(block)
+    const end = tsMs(entry.timestamp)
+    if (end !== undefined) group.endTs = Math.max(group.endTs ?? 0, end)
     tools.set(id, block)
   }
 }
@@ -318,7 +365,11 @@ function applyAssistant(
   const message = entry.message
   if (message.role !== "assistant") return
   const timestamp = entry.timestamp
-  const blocks = currentAgent(timestamp, seq).blocks
+  const group = currentAgent(timestamp, seq)
+  const end = tsMs(timestamp)
+  if (end !== undefined) group.endTs = Math.max(group.endTs ?? 0, end)
+  accumulateUsage(group, message.usage)
+  const blocks = group.blocks
   const blockPrefix = stableKey
   const blockTiming = new Map<number, TimingBlock>()
   if (meta?.blocks) for (const b of meta.blocks) blockTiming.set(b.index, b)

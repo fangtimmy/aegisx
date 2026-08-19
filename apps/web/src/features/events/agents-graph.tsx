@@ -15,6 +15,7 @@ import {
 
 import "@xyflow/react/dist/style.css"
 import {
+  Activity,
   Archive,
   BrainCircuit,
   ChevronDown,
@@ -40,20 +41,24 @@ import { cn } from "@/lib/utils"
 
 import {
   agentFinishBadge,
+  ACTIVE_NODE_ID,
   ARCHIVE_NODE_ID,
   EDGE_STYLE,
   isAgentFinished,
   NODE_DIM,
   roleLabel,
-  SCHED_NODE_ID,
 } from "./event-agents-shared"
 
 const agentNodeId = (id: string) => `agent:${id}`
 const challengeNodeId = (id: string) => `challenge:${id}`
+const archivedChallengeNodeId = (id: string) => `archive:challenge:${id}`
+const ARCHIVED_SCHED_NODE_ID = "archive:sched"
 /** Agent short id — the v19 signing convention (`agent-a3f1`). */
 const agentShortId = (id: string) => `agent-${id.slice(0, 4)}`
 
 type GraphNodeData =
+  | { kind: "active"; count: number }
+  | { kind: "archive"; count: number; open: boolean }
   | {
       kind: "scheduler"
       /** The scheduler's orchestrator agent, when active. Null when no
@@ -68,9 +73,8 @@ type GraphNodeData =
       name: string
       category: string | null
       points: number | null
-      activeAgentCount: number
+      agentCount: number
     }
-  | { kind: "archive"; count: number; open: boolean }
   | { kind: "agent"; agent: AgentSummary }
 
 /** Lay out nodes left-to-right with dagre, writing absolute positions back
@@ -105,12 +109,14 @@ function layoutWithDagre(
   })
 }
 
-/** The three-layer graph (v19) — 调度者 → challenge → agent. Pure navigation:
- * every node click routes to the tasks page (scheduler → `c=orch`, challenge
- * → `c=<id>`, agent → `c=<id>&a=<id>`); finished agents collapse into the
- * aggregate archive node (expanded shows one node per attempt). The live
- * count is bounded by the container cap and the archive stays collapsed
- * unless opened, so the steady-state node count is bounded. */
+/** The three-layer graph (v19) — {活跃/已归档} → {题目/调度者} → agent.
+ * Pure navigation: every node click routes to the tasks page (scheduler →
+ * `c=orch`, challenge → `c=<id>`, agent → `c=<id>&a=<id>`). Live attempts
+ * hang off their challenge under the 活跃 root; finished agents hang off the
+ * same challenges under the 已归档 root (collapsed by default — the root
+ * carries the aggregate count, expanding shows per-challenge groups). The
+ * live count is bounded by the container cap, so the steady-state node count
+ * stays bounded. */
 function buildAgentsGraph({
   scheduler,
   agents,
@@ -127,98 +133,130 @@ function buildAgentsGraph({
   const dims: Record<string, { width: number; height: number }> = {}
   const addNode = (
     id: string,
-    type: "scheduler" | "challenge" | "archive" | "agent",
+    type: "active" | "archive" | "scheduler" | "challenge" | "agent",
     data: GraphNodeData
   ) => {
     rawNodes.push({ id, type, data, position: { x: 0, y: 0 } })
     dims[id] = NODE_DIM[type]
   }
-  const addAgent = (agent: AgentSummary, root: string) => {
-    addNode(agentNodeId(agent.id), "agent", {
-      kind: "agent",
-      agent,
-    })
-    rawEdges.push({
-      id: `e:agent:${agent.id}`,
-      source: root,
-      target: agentNodeId(agent.id),
-      type: "smoothstep",
-      style: EDGE_STYLE.agent,
-    })
+  const addEdge = (
+    id: string,
+    source: string,
+    target: string,
+    style: Edge["style"]
+  ) => {
+    rawEdges.push({ id, source, target, type: "smoothstep", style })
   }
-
-  // Layer 1: the scheduler. When a scheduler agent exists, this node IS the
-  // orchestrator agent; no agent → the "未启用" placeholder. Either way the
-  // click leads to the scheduler's tasks page (where it is started/controlled).
-  const orchAgent = scheduler?.agent ?? null
-  addNode(SCHED_NODE_ID, "scheduler", {
-    kind: "scheduler",
-    agentId: orchAgent?.id ?? null,
-    status: orchAgent ? agentStatusLabel(orchAgent.status) : "未启用",
-  })
+  const addAgent = (agent: AgentSummary, root: string) => {
+    addNode(agentNodeId(agent.id), "agent", { kind: "agent", agent })
+    addEdge(
+      `e:agent:${agent.id}`,
+      root,
+      agentNodeId(agent.id),
+      EDGE_STYLE.agent
+    )
+  }
+  const addSchedulerNode = (
+    id: string,
+    agent: AgentSummary | null,
+    root: string
+  ) => {
+    addNode(id, "scheduler", {
+      kind: "scheduler",
+      agentId: agent?.id ?? null,
+      status: agent ? agentStatusLabel(agent.status) : "未启用",
+    })
+    addEdge(`e:${id}`, root, id, EDGE_STYLE.challenge)
+  }
 
   const active = agents.filter((agent) => !isAgentFinished(agent))
   const finished = agents.filter((agent) => isAgentFinished(agent))
+  const schedAgent = scheduler?.agent ?? null
+  const schedFinished = schedAgent !== null && isAgentFinished(schedAgent)
 
-  if (finished.length > 0) {
-    addNode(ARCHIVE_NODE_ID, "archive", {
-      kind: "archive",
-      count: finished.length,
-      open: archiveOpen,
-    })
-    rawEdges.push({
-      id: `e:archive`,
-      source: SCHED_NODE_ID,
-      target: ARCHIVE_NODE_ID,
-      type: "smoothstep",
-      style: EDGE_STYLE.agent,
-    })
-  }
-
-  // Layer 2: challenges with live agents, in event order. Layer 3: each live
-  // attempt hangs directly off its challenge.
-  const activeByChallenge = new Map<string, AgentSummary[]>()
-  for (const agent of active) {
-    if (!agent.challengeId) continue
-    const list = activeByChallenge.get(agent.challengeId) ?? []
-    list.push(agent)
-    activeByChallenge.set(agent.challengeId, list)
+  // Layer 2 helpers: challenges with agents, in event order.
+  const groupByChallenge = (list: AgentSummary[]) => {
+    const map = new Map<string, AgentSummary[]>()
+    for (const agent of list) {
+      if (!agent.challengeId) continue
+      const bucket = map.get(agent.challengeId) ?? []
+      bucket.push(agent)
+      map.set(agent.challengeId, bucket)
+    }
+    return map
   }
   const challengeById = new Map(challenges.map((ch) => [ch.id, ch]))
   const challengeOrder = challenges.map((ch) => ch.id)
-  const challengeIds = [...activeByChallenge.keys()].sort((a, b) => {
-    const ia = challengeOrder.indexOf(a)
-    const ib = challengeOrder.indexOf(b)
-    if (ia === -1 && ib === -1) return a.localeCompare(b)
-    if (ia === -1) return 1
-    if (ib === -1) return -1
-    return ia - ib
-  })
-  for (const challengeId of challengeIds) {
-    const attempts = activeByChallenge.get(challengeId)!
+  const challengeIdsOf = (map: Map<string, AgentSummary[]>) =>
+    [...map.keys()].sort((a, b) => {
+      const ia = challengeOrder.indexOf(a)
+      const ib = challengeOrder.indexOf(b)
+      if (ia === -1 && ib === -1) return a.localeCompare(b)
+      if (ia === -1) return 1
+      if (ib === -1) return -1
+      return ia - ib
+    })
+  const addChallengeNode = (
+    id: string,
+    root: string,
+    challengeId: string,
+    attempts: AgentSummary[]
+  ) => {
     const meta = challengeById.get(challengeId)
-    addNode(challengeNodeId(challengeId), "challenge", {
+    addNode(id, "challenge", {
       kind: "challenge",
       challengeId,
       name: meta?.name ?? attempts[0].challengeName,
       category: meta?.category ?? null,
       points: meta?.points ?? null,
-      activeAgentCount: attempts.length,
+      agentCount: attempts.length,
     })
-    rawEdges.push({
-      id: `e:sched:challenge:${challengeId}`,
-      source: SCHED_NODE_ID,
-      target: challengeNodeId(challengeId),
-      type: "smoothstep",
-      style: EDGE_STYLE.challenge,
-    })
-    for (const agent of attempts) {
-      addAgent(agent, challengeNodeId(challengeId))
-    }
+    addEdge(`e:${id}`, root, id, EDGE_STYLE.challenge)
+    for (const agent of attempts) addAgent(agent, id)
   }
 
-  if (archiveOpen)
-    for (const agent of finished) addAgent(agent, ARCHIVE_NODE_ID)
+  // Layer 1: the 活跃 root. Layer 2 under it: the scheduler (live or the
+  // "未启用" placeholder) + challenges with live agents. Layer 3: each live
+  // attempt hangs directly off its challenge.
+  addNode(ACTIVE_NODE_ID, "active", {
+    kind: "active",
+    count: active.length + (schedFinished || !schedAgent ? 0 : 1),
+  })
+  if (!schedFinished) addSchedulerNode("sched", schedAgent, ACTIVE_NODE_ID)
+  const activeByChallenge = groupByChallenge(active)
+  for (const challengeId of challengeIdsOf(activeByChallenge)) {
+    addChallengeNode(
+      challengeNodeId(challengeId),
+      ACTIVE_NODE_ID,
+      challengeId,
+      activeByChallenge.get(challengeId)!
+    )
+  }
+
+  // The 已归档 branch: hidden with zero finished entities; collapsed shows
+  // only the root (aggregate count), expanded re-groups the same challenges
+  // with their finished attempts.
+  const archiveCount = finished.length + (schedFinished ? 1 : 0)
+  if (archiveCount > 0) {
+    addNode(ARCHIVE_NODE_ID, "archive", {
+      kind: "archive",
+      count: archiveCount,
+      open: archiveOpen,
+    })
+    if (archiveOpen) {
+      if (schedFinished)
+        addSchedulerNode(ARCHIVED_SCHED_NODE_ID, schedAgent, ARCHIVE_NODE_ID)
+      const finishedByChallenge = groupByChallenge(finished)
+      for (const challengeId of challengeIdsOf(finishedByChallenge)) {
+        addChallengeNode(
+          archivedChallengeNodeId(challengeId),
+          ARCHIVE_NODE_ID,
+          challengeId,
+          finishedByChallenge.get(challengeId)!
+        )
+      }
+    }
+  }
 
   return { nodes: layoutWithDagre(rawNodes, rawEdges, dims), edges: rawEdges }
 }
@@ -283,7 +321,20 @@ function ChallengeGraphNode({ data }: NodeProps) {
         </span>
       </span>
       <Badge size="sm" variant="secondary">
-        {d.activeAgentCount} agent
+        {d.agentCount} agent
+      </Badge>
+    </GraphNodeShell>
+  )
+}
+
+function ActiveGraphNode({ data }: NodeProps) {
+  const d = data as Extract<GraphNodeData, { kind: "active" }>
+  return (
+    <GraphNodeShell className="w-44">
+      <Activity className="size-4 shrink-0 text-primary" />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">活跃</span>
+      <Badge size="sm" variant="secondary">
+        {d.count} agent
       </Badge>
     </GraphNodeShell>
   )
@@ -337,9 +388,10 @@ function AgentGraphNode({ data }: NodeProps) {
 // because only the graph uses it, and defining it in shared would import the
 // node components back from this module (an ESM cycle).
 const GRAPH_NODE_TYPES = {
+  active: ActiveGraphNode,
+  archive: ArchiveGraphNode,
   scheduler: SchedulerGraphNode,
   challenge: ChallengeGraphNode,
-  archive: ArchiveGraphNode,
   agent: AgentGraphNode,
 } satisfies NodeTypes
 
@@ -449,7 +501,11 @@ export function AgentsGraph({
   const onActivateNode = useCallback(
     (node: Node) => {
       const data = node.data as GraphNodeData
-      if (data.kind === "scheduler") {
+      if (data.kind === "active") {
+        return
+      } else if (data.kind === "archive") {
+        setArchiveOpen((prev) => !prev)
+      } else if (data.kind === "scheduler") {
         void navigate(`/events/${eventId}/tasks?c=orch`)
       } else if (data.kind === "challenge") {
         void navigate(`/events/${eventId}/tasks?c=${data.challengeId}`)
@@ -460,8 +516,6 @@ export function AgentsGraph({
             ? `/events/${eventId}/tasks?c=${agent.challengeId}&a=${agent.id}`
             : `/events/${eventId}/tasks?c=orch`
         )
-      } else if (data.kind === "archive") {
-        setArchiveOpen((prev) => !prev)
       }
     },
     [eventId, navigate]
@@ -475,7 +529,9 @@ export function AgentsGraph({
             <Network className="size-4" /> Agents Graph
           </span>
         </CardTitle>
-        <CardDescription>调度者 → 题目 → agents，点击进入任务</CardDescription>
+        <CardDescription>
+          活跃/已归档 → 题目/调度者 → agents，点击进入任务
+        </CardDescription>
       </CardHeader>
       <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">
         <ReactFlowProvider>

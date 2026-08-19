@@ -12,7 +12,7 @@ import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { HomePage } from "@/features/events/home-page"
 
-const settingsSections = ["general", "models", "settings"] as const
+const settingsSections = ["general", "models", "prompts", "settings"] as const
 const eventTabs = ["agents", "challenges", "tasks", "settings"] as const
 
 const loadEventPage = () =>
@@ -65,19 +65,15 @@ const router = createBrowserRouter([
         path: `/settings/${section}`,
         lazy: loadSettingsPage,
       })),
-      {
-        path: "/settings/prompts",
-        element: <Navigate replace to="/settings/general" />,
-      },
-      {
-        path: "/settings/templates",
-        element: <Navigate replace to="/settings/general" />,
-      },
       { path: "/events/:eventId", lazy: loadEventPage },
       ...eventTabs.map((tab) => ({
         path: `/events/:eventId/${tab}`,
         lazy: loadEventPage,
       })),
+      {
+        path: "/settings/templates",
+        element: <Navigate replace to="/settings/prompts" />,
+      },
     ],
   },
 ])

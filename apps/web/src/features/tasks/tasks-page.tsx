@@ -16,13 +16,35 @@ import { ErrorState } from "@/features/events/event-shared"
 import { TaskDetail, type TaskTab } from "./task-detail"
 import { ORCH, TaskList } from "./task-list"
 
+const TASK_TAB_VALUES: readonly TaskTab[] = [
+  "overview",
+  "conversation",
+  "channels",
+  "files",
+  "config",
+]
+
+const taskTabKey = (eventId: string) => `aegisx:task-tab:${eventId}`
+
+/** Restore the per-event task tab (概览/对话/频道/文件) from localStorage;
+ * config is scheduler-only, so it falls back to conversation for plain
+ * challenges. Default: conversation. */
+function loadTaskTab(eventId: string, c: string | null): TaskTab {
+  const stored = localStorage.getItem(taskTabKey(eventId))
+  if (TASK_TAB_VALUES.includes(stored as TaskTab)) {
+    if (stored === "config" && c !== ORCH) return "conversation"
+    return stored as TaskTab
+  }
+  return "conversation"
+}
+
 export function TasksPage() {
   const { eventId } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const c = searchParams.get("c")
   const a = searchParams.get("a")
   const [tab, setTab] = useState<TaskTab>(() =>
-    a ? "conversation" : "overview"
+    eventId ? loadTaskTab(eventId, c) : "conversation"
   )
 
   const fleet = useQuery({
@@ -89,7 +111,6 @@ export function TasksPage() {
         },
         { replace: true }
       )
-      setTab("conversation")
     },
     [setSearchParams]
   )
@@ -106,16 +127,19 @@ export function TasksPage() {
     )
   }, [setSearchParams])
 
-  // c changed → restart the detail pane on the derived default tab: an
-  // explicit ?a= (graph / queue navigation) opens the conversation directly;
-  // a bare ?c= lands on the overview. selectTask already drops ?a=. The ref
-  // guard keeps ?a=-only changes (agent picks, post-spawn clear) untouched.
+  // Tab persistence + the c-switch rule: keep the current tab across
+  // selections, EXCEPT the scheduler-only config tab when moving to a plain
+  // challenge (its panel does not exist there). The ref guard keeps ?a=-only
+  // changes (agent picks, post-spawn clear) untouched.
+  useEffect(() => {
+    if (eventId) localStorage.setItem(taskTabKey(eventId), tab)
+  }, [eventId, tab])
   const prevC = useRef(c)
   useEffect(() => {
     if (prevC.current === c) return
     prevC.current = c
-    setTab(a ? "conversation" : "overview")
-  }, [c, a])
+    if (c !== ORCH && tab === "config") setTab("conversation")
+  }, [c, tab])
 
   // Selected challenge deleted → clear the selection back to the empty state.
   useEffect(() => {
