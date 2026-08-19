@@ -155,141 +155,136 @@ export function Composer({
   }
 
   return (
-    <>
-      <form
-        className="relative rounded-lg border bg-background shadow-xs focus-within:border-ring"
-        onSubmit={(event) => {
-          event.preventDefault()
-          onSubmit()
-        }}
-        ref={rootRef}
-      >
-        {slashOpen && (
-          <div className="absolute inset-x-0 bottom-full z-20 mb-1.5 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md">
-            {matches.map((command, index) => (
-              <ListRow
-                className="items-center rounded-none px-3 py-1.5 text-xs"
+    <form
+      className="relative rounded-lg border bg-muted/50 shadow-xs focus-within:border-ring focus-within:bg-background"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSubmit()
+      }}
+      ref={rootRef}
+    >
+      {slashOpen && (
+        <div className="absolute inset-x-0 bottom-full z-20 mb-1.5 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md">
+          {matches.map((command, index) => (
+            <ListRow
+              className="items-center rounded-none px-3 py-1.5 text-xs"
+              key={command.command}
+              onClick={() => pickCommand(command.command)}
+              selected={index === slashIndex}
+            >
+              <span className="font-mono">{command.command}</span>
+              <span className="text-muted-foreground">{command.label}</span>
+            </ListRow>
+          ))}
+        </div>
+      )}
+      {/* Label-associated textarea: clicking the composer's blank space
+         natively focuses the input (no container-level mouse handler). */}
+      <label className="block cursor-text" htmlFor="composer-input">
+        <Textarea
+          aria-label="向 agent 发送消息"
+          className="min-w-0 flex-1 [&_textarea]:max-h-64 [&_textarea]:min-h-9 [&_textarea]:overflow-y-auto [&_textarea]:px-3 [&_textarea]:py-2.5 [&_textarea]:text-sm [&_textarea]:leading-6"
+          disabled={busy || locked}
+          id="composer-input"
+          onChange={(e) => {
+            onDraftChange(e.target.value)
+            setSlashDismissed(false)
+          }}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          ref={inputRef}
+          rows={1}
+          unstyled
+          value={draft}
+        />
+      </label>
+      <div className="flex items-center gap-1.5 border-t p-1.5">
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                aria-label="打开命令面板"
+                disabled={busy || locked}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              />
+            }
+          >
+            <SquareSlash />
+          </MenuTrigger>
+          <MenuPopup align="start">
+            {COMPOSER_COMMANDS.filter(
+              (command) => command.command !== "/close" || !closed
+            ).map((command) => (
+              <MenuItem
                 key={command.command}
                 onClick={() => pickCommand(command.command)}
-                selected={index === slashIndex}
               >
                 <span className="font-mono">{command.command}</span>
                 <span className="text-muted-foreground">{command.label}</span>
-              </ListRow>
+              </MenuItem>
             ))}
-          </div>
-        )}
-        {/* Label-associated textarea: clicking the composer's blank space
-         natively focuses the input (no container-level mouse handler). */}
-        <label className="block cursor-text" htmlFor="composer-input">
-          <Textarea
-            aria-label="向 agent 发送消息"
-            className="min-w-0 flex-1 [&_textarea]:max-h-64 [&_textarea]:min-h-9 [&_textarea]:overflow-y-auto [&_textarea]:px-3 [&_textarea]:py-2.5 [&_textarea]:text-sm [&_textarea]:leading-6"
-            disabled={busy || locked}
-            id="composer-input"
-            onChange={(e) => {
-              onDraftChange(e.target.value)
-              setSlashDismissed(false)
-            }}
-            onKeyDown={onKeyDown}
-            placeholder={placeholder}
-            ref={inputRef}
-            rows={1}
-            unstyled
-            value={draft}
-          />
-        </label>
-        <div className="flex items-center gap-1.5 border-t p-1.5">
-          <Menu>
-            <MenuTrigger
-              render={
-                <Button
-                  aria-label="打开命令面板"
-                  disabled={busy || locked}
-                  size="icon-sm"
-                  type="button"
-                  variant="ghost"
-                />
-              }
+          </MenuPopup>
+        </Menu>
+        {modelSlot}
+        {contextSlot}
+        <div className="ml-auto flex items-center gap-2">
+          {running && onStop && (
+            <Button
+              disabled={stopping || locked}
+              loading={stopping}
+              onClick={onStop}
+              title="停止当前轮（容器保留）"
+              type="button"
+              variant="destructive-outline"
             >
-              <SquareSlash />
-            </MenuTrigger>
-            <MenuPopup align="start">
-              {COMPOSER_COMMANDS.filter(
-                (command) => command.command !== "/close" || !closed
-              ).map((command) => (
-                <MenuItem
-                  key={command.command}
-                  onClick={() => pickCommand(command.command)}
+              <Square /> 停止
+            </Button>
+          )}
+          <ButtonGroup>
+            <Button
+              disabled={!draft.trim() || busy || locked}
+              loading={busy}
+              type="submit"
+            >
+              <Send />
+              {running ? (deliverAs === "steer" ? "引导" : "追问") : "发送"}
+            </Button>
+            {running && (
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      aria-label="选择投递方式"
+                      size="icon"
+                      type="button"
+                    />
+                  }
                 >
-                  <span className="font-mono">{command.command}</span>
-                  <span className="text-muted-foreground">{command.label}</span>
-                </MenuItem>
-              ))}
-            </MenuPopup>
-          </Menu>
-          {modelSlot}
-          {contextSlot}
-          <div className="ml-auto flex items-center gap-2">
-            {running && onStop && (
-              <Button
-                disabled={stopping || locked}
-                loading={stopping}
-                onClick={onStop}
-                title="停止当前轮（容器保留）"
-                type="button"
-                variant="destructive-outline"
-              >
-                <Square /> 停止
-              </Button>
-            )}
-            <ButtonGroup>
-              <Button
-                disabled={!draft.trim() || busy || locked}
-                loading={busy}
-                type="submit"
-              >
-                <Send />
-                {running ? (deliverAs === "steer" ? "引导" : "追问") : "发送"}
-              </Button>
-              {running && (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        aria-label="选择投递方式"
-                        size="icon"
-                        type="button"
-                      />
-                    }
+                  <ChevronDown />
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <MenuRadioGroup
+                    onValueChange={(value) => {
+                      if (value === "steer" || value === "followUp")
+                        onDeliverAsChange(value)
+                    }}
+                    value={deliverAs}
                   >
-                    <ChevronDown />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    <MenuRadioGroup
-                      onValueChange={(value) => {
-                        if (value === "steer" || value === "followUp")
-                          onDeliverAsChange(value)
-                      }}
-                      value={deliverAs}
-                    >
-                      <MenuRadioItem value="steer">
-                        引导（打断当前轮）
-                      </MenuRadioItem>
-                      <MenuRadioItem value="followUp">
-                        追问（下一轮投递）
-                      </MenuRadioItem>
-                    </MenuRadioGroup>
-                  </MenuPopup>
-                </Menu>
-              )}
-            </ButtonGroup>
-          </div>
+                    <MenuRadioItem value="steer">
+                      引导（打断当前轮）
+                    </MenuRadioItem>
+                    <MenuRadioItem value="followUp">
+                      追问（下一轮投递）
+                    </MenuRadioItem>
+                  </MenuRadioGroup>
+                </MenuPopup>
+              </Menu>
+            )}
+          </ButtonGroup>
         </div>
-      </form>
-      <p className="px-1 pt-1 text-[11px] text-muted-foreground">
-        Enter 发送 · Shift+Enter 换行
-      </p>
-    </>
+      </div>
+    </form>
   )
 }

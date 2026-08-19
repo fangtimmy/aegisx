@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useSearchParams } from "react-router"
 
 import { agentsApi, eventsApi, keys, schedulerApi, type Challenge } from "@/api"
+import { Card, CardFrame, CardPanel } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { POLL_INTERVAL_MS } from "@/features/events/event-agents-shared"
 import { ErrorState } from "@/features/events/event-shared"
@@ -154,16 +155,9 @@ export function TasksPage({ active }: { active: boolean }) {
   if (!eventId) return null
   if (fleet.isPending || detail.isPending) {
     return (
-      <div className="grid h-full min-h-0 grid-cols-[17.5rem_minmax(0,1fr)] gap-4">
-        <div className="flex min-h-0 flex-col gap-2">
-          <Skeleton className="h-8 shrink-0" />
-          <div className="flex flex-col gap-1 pr-1">
-            {[0, 1, 2, 3, 4].map((row) => (
-              <Skeleton className="h-10" key={row} />
-            ))}
-          </div>
-        </div>
-        <Skeleton className="min-h-0 rounded-xl" />
+      <div className="grid h-full min-h-0 grid-cols-[20rem_minmax(0,1fr)] gap-4">
+        <Skeleton className="min-h-0 rounded-2xl" />
+        <Skeleton className="min-h-0 rounded-2xl" />
       </div>
     )
   }
@@ -175,29 +169,41 @@ export function TasksPage({ active }: { active: boolean }) {
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[17.5rem_minmax(0,1fr)] gap-4">
-      <TaskList
-        challengeById={challengeById}
-        fleet={fleet.data}
-        onSelect={selectTask}
-        pendingByChallenge={pendingByChallenge}
-        selected={c}
-      />
+    <div className="grid h-full min-h-0 grid-cols-[20rem_minmax(0,1fr)] gap-4">
+      <CardFrame className="min-h-0">
+        <Card className="min-h-0 flex-1">
+          <CardPanel className="flex min-h-0 flex-col p-3">
+            <TaskList
+              challengeById={challengeById}
+              fleet={fleet.data}
+              onSelect={selectTask}
+              pendingByChallenge={pendingByChallenge}
+              selected={c}
+            />
+          </CardPanel>
+        </Card>
+      </CardFrame>
       {c ? (
-        <TaskDetail
-          challenge={c === ORCH ? undefined : challengeById.get(c)}
-          eventId={eventId}
-          fleet={fleet.data}
-          queue={{
-            items: queue.data?.items ?? [],
-            state: queue.data?.state ?? "running",
-          }}
-          onClearAgent={clearAgent}
-          onSelectAgent={selectAgent}
-          selection={{ a, c }}
-          tab={tab}
-          onTabChange={setTab}
-        />
+        <CardFrame className="min-h-0 min-w-0">
+          <Card className="min-h-0 min-w-0 flex-1">
+            <CardPanel className="flex min-h-0 flex-col p-0">
+              <TaskDetail
+                challenge={c === ORCH ? undefined : challengeById.get(c)}
+                eventId={eventId}
+                fleet={fleet.data}
+                queue={{
+                  items: queue.data?.items ?? [],
+                  state: queue.data?.state ?? "running",
+                }}
+                onClearAgent={clearAgent}
+                onSelectAgent={selectAgent}
+                selection={{ a, c }}
+                tab={tab}
+                onTabChange={setTab}
+              />
+            </CardPanel>
+          </Card>
+        </CardFrame>
       ) : null}
     </div>
   )

@@ -66,7 +66,7 @@ export function TaskDetail({
       value={tab}
     >
       <TabsList
-        className="w-auto shrink-0 justify-start border-b"
+        className="w-auto shrink-0 justify-start border-b px-3"
         variant="underline"
       >
         <TabsTab className="gap-2" value="overview">
