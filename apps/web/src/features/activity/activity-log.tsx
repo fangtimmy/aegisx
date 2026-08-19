@@ -9,7 +9,7 @@ import {
   Timer,
   type LucideIcon,
 } from "lucide-react"
-import { useState } from "react"
+import { Fragment, useEffect, useState } from "react"
 import { useNavigate } from "react-router"
 
 import { activityApi, keys } from "@/api"
@@ -20,8 +20,38 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
-/** Panel-open-only poll cadence — the log needs no background freshness. */
+/** Open-panel poll cadence; closed panels poll slower to keep the unread
+ * count fresh without hammering the server. */
 const POLL_INTERVAL_MS = 15_000
+const CLOSED_POLL_MS = 60_000
+
+const SEEN_KEY = "aegisx:activity-seen"
+
+function readSeenMs(): number {
+  const value = Number(localStorage.getItem(SEEN_KEY))
+  return Number.isFinite(value) ? value : 0
+}
+
+function dayLabel(iso: string): string {
+  const date = new Date(iso)
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+  if (date.toDateString() === today.toDateString()) return "今天"
+  if (date.toDateString() === yesterday.toDateString()) return "昨天"
+  return date.toLocaleDateString("zh-CN", { month: "long", day: "numeric" })
+}
+
+function DayHeader({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+      <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        {label}
+      </span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  )
+}
 
 const KIND_META: Record<
   ActivityItem["kind"],
@@ -137,23 +167,54 @@ function ActivityRow({
 }
 
 /** Global activity log: header bell-style popover listing the derived feed
- * (flag / spawn / end / timeout / queue-failure), click-through to tasks. */
+ * (flag / spawn / end / timeout / queue-failure), click-through to tasks.
+ * Polls in the background so the trigger shows an unread count (items newer
+ * than the persisted last-seen timestamp). */
 export function ActivityLogButton() {
   const [open, setOpen] = useState(false)
+  const [seenMs, setSeenMs] = useState(readSeenMs)
   const navigate = useNavigate()
   const feed = useQuery({
-    enabled: open,
     queryKey: keys.activity.all,
     queryFn: () => activityApi.getActivity(),
-    refetchInterval: POLL_INTERVAL_MS,
+    refetchInterval: open ? POLL_INTERVAL_MS : CLOSED_POLL_MS,
   })
+
+  const items = feed.data?.items ?? []
+  const newestMs = items.reduce(
+    (max, item) => Math.max(max, new Date(item.time).getTime()),
+    0
+  )
+  const unreadCount = items.filter(
+    (item) => new Date(item.time).getTime() > seenMs
+  ).length
+
+  // While open, everything visible counts as seen.
+  useEffect(() => {
+    if (open && newestMs > 0) {
+      setSeenMs(newestMs)
+      localStorage.setItem(SEEN_KEY, String(newestMs))
+    }
+  }, [open, newestMs])
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger
-        render={<Button aria-label="活动日志" size="icon" variant="ghost" />}
+        render={
+          <Button
+            aria-label="活动日志"
+            className="relative"
+            size="icon"
+            variant="ghost"
+          />
+        }
       >
         <ScrollText />
+        {unreadCount > 0 && (
+          <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] leading-none font-medium text-primary-foreground tabular-nums">
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
       </PopoverTrigger>
       <PopoverPopup align="end" className="w-96 p-0">
         <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -167,7 +228,7 @@ export function ActivityLogButton() {
         <ScrollArea className="max-h-[70svh]" scrollFade>
           {feed.isPending && (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              正在加载…
+              正在加载活动…
             </p>
           )}
           {feed.error && (
@@ -180,15 +241,20 @@ export function ActivityLogButton() {
               暂无活动。
             </p>
           )}
-          {feed.data?.items.map((item) => (
-            <ActivityRow
-              item={item}
-              key={item.id}
-              onSelect={(selected) => {
-                setOpen(false)
-                void navigate(targetFor(selected))
-              }}
-            />
+          {items.map((item, index) => (
+            <Fragment key={item.id}>
+              {(index === 0 ||
+                dayLabel(item.time) !== dayLabel(items[index - 1]!.time)) && (
+                <DayHeader label={dayLabel(item.time)} />
+              )}
+              <ActivityRow
+                item={item}
+                onSelect={(selected) => {
+                  setOpen(false)
+                  void navigate(targetFor(selected))
+                }}
+              />
+            </Fragment>
           ))}
         </ScrollArea>
       </PopoverPopup>

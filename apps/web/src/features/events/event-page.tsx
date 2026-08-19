@@ -311,7 +311,7 @@ export function EventPage() {
           orientation="vertical"
           value={tab}
         >
-          <aside className="sticky top-[4.5rem] flex h-[calc(100svh-5.5rem)] w-40 shrink-0 flex-col self-start border-r pr-3">
+          <aside className="sticky top-[4.5rem] flex h-[calc(100svh-5.5rem)] w-48 shrink-0 flex-col self-start border-r pr-3">
             <TabsList className="w-full items-stretch" variant="underline">
               <TabsTab className="justify-start gap-2" value="overview">
                 <LayoutPanelTop /> 概览
@@ -346,7 +346,7 @@ export function EventPage() {
               />
             </TabsPanel>
             <TabsPanel className="h-[calc(100svh-5.5rem)]" value="tasks">
-              <TasksPage />
+              <TasksPage active={tab === "tasks"} />
             </TabsPanel>
             <TabsPanel className="h-[calc(100svh-5.5rem)]" value="agents">
               <EventAgentsPanel
@@ -357,9 +357,7 @@ export function EventPage() {
             <TabsPanel value="challenges">
               <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <h1 className="truncate text-2xl font-semibold">
-                    {eventQuery.data.event.name}
-                  </h1>
+                  <h1 className="truncate text-2xl font-semibold">题目</h1>
                   <Badge variant="secondary">
                     {activeFilterCount > 0
                       ? `${filteredChallenges.length} / ${eventQuery.data.challenges.length}`

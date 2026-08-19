@@ -282,7 +282,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
   return (
     <div className="shrink-0 px-3 pb-3">
       {error && <p className="px-1 pb-1 text-xs text-destructive">{error}</p>}
-      <div className="flex flex-col gap-2 rounded-lg border border-input bg-background px-3 py-2 focus-within:border-ring">
+      <div className="flex flex-col gap-2 rounded-lg border bg-background px-3 py-2 shadow-xs focus-within:border-ring">
         {files.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {files.map((file, index) => (
@@ -331,7 +331,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
             type="file"
           />
           <div
-            className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 pb-1 text-[10px] leading-3 text-muted-foreground"
+            className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 pb-1 text-[11px] leading-tight text-muted-foreground"
             title="紧急消息立即投递；关闭后等待下一次合并投递"
           >
             <Switch
@@ -364,7 +364,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
           </Button>
         </div>
       </div>
-      <p className="px-1 pt-1 text-[10px] text-muted-foreground">
+      <p className="px-1 pt-1 text-[11px] text-muted-foreground">
         Enter 发送 · Shift+Enter 换行 · 紧急消息立即投递
       </p>
     </div>
@@ -501,7 +501,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
   if (tail.isPending) {
     return (
       <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Spinner aria-hidden /> 加载中…
+        <Spinner aria-hidden /> 正在加载消息…
       </div>
     )
   }
@@ -577,7 +577,7 @@ function RailItem({
       <span className="truncate">{channel.label}</span>
       {channel.liveAgentCount !== null && (
         <span
-          className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground"
+          className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[11px] leading-4 text-muted-foreground"
           title={`同题共享频道 · ${channel.liveAgentCount} 个 live agent`}
         >
           <Users className="size-2.5" aria-hidden />
@@ -611,10 +611,10 @@ function ChannelRail({
     { label: "私聊", items: channels.filter((c) => c.kind === "dm") },
   ].filter((section) => section.items.length > 0)
   return (
-    <div className="flex w-44 shrink-0 flex-col gap-2 overflow-y-auto border-r p-2">
+    <div className="flex w-48 shrink-0 flex-col gap-2 overflow-y-auto border-r p-2">
       {sections.map((section) => (
         <div className="flex flex-col gap-0.5" key={section.label}>
-          <p className="px-2 pt-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+          <p className="px-2 pt-1 pb-0.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
             {section.label}
           </p>
           {section.items.map((channel) => (

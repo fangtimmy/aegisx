@@ -93,7 +93,7 @@ export function ConversationPane({
     <div
       className={cn(
         "grid h-full min-h-0",
-        isScheduler ? "grid-cols-1" : "grid-cols-[12.5rem_minmax(0,1fr)]"
+        isScheduler ? "grid-cols-1" : "grid-cols-[12rem_minmax(0,1fr)]"
       )}
     >
       {!isScheduler && (

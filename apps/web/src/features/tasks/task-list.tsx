@@ -250,7 +250,7 @@ export function TaskList({
 
 function GroupHeader({ label, count }: { label: string; count: number }) {
   return (
-    <div className="flex items-center gap-1.5 border-t px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground uppercase first:border-t-0">
+    <div className="flex items-center gap-1.5 border-t px-2 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase first:border-t-0">
       {label}
       <Badge size="sm" variant="secondary">
         {count}

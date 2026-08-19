@@ -375,7 +375,7 @@ export function Conversation(props: ConversationProps) {
             >
               会话 {index + 1}
               {session.messageCount > 0 && (
-                <span className="font-mono text-[10px] text-muted-foreground">
+                <span className="font-mono text-[11px] text-muted-foreground">
                   {session.messageCount}
                 </span>
               )}

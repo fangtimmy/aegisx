@@ -3,13 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useSearchParams } from "react-router"
 
 import { agentsApi, eventsApi, keys, schedulerApi, type Challenge } from "@/api"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty"
-import { Spinner } from "@/components/ui/spinner"
+import { Skeleton } from "@/components/ui/skeleton"
 import { POLL_INTERVAL_MS } from "@/features/events/event-agents-shared"
 import { ErrorState } from "@/features/events/event-shared"
 
@@ -38,7 +32,7 @@ function loadTaskTab(eventId: string, c: string | null): TaskTab {
   return "conversation"
 }
 
-export function TasksPage() {
+export function TasksPage({ active }: { active: boolean }) {
   const { eventId } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const c = searchParams.get("c")
@@ -141,7 +135,8 @@ export function TasksPage() {
     if (c !== ORCH && tab === "config") setTab("conversation")
   }, [c, tab])
 
-  // Selected challenge deleted → clear the selection back to the empty state.
+  // Selected challenge deleted → clear the selection; the default below then
+  // re-selects the scheduler.
   useEffect(() => {
     if (!c || c === ORCH || !fleet.data) return
     if (!fleet.data.challenges.some((challenge) => challenge.id === c)) {
@@ -149,13 +144,27 @@ export function TasksPage() {
     }
   }, [c, fleet.data, setSearchParams])
 
+  // No selection → default to the scheduler overview so the workbench always
+  // shows real content instead of an empty placeholder. Gated on the tab
+  // being active (panels stay mounted when hidden).
+  useEffect(() => {
+    if (active && !c && fleet.data) selectTask(ORCH)
+  }, [active, c, fleet.data, selectTask])
+
   if (!eventId) return null
   if (fleet.isPending || detail.isPending) {
     return (
-      <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-        <Spinner aria-hidden="true" />
-        正在加载任务…
-      </output>
+      <div className="grid h-full min-h-0 grid-cols-[17.5rem_minmax(0,1fr)] gap-4">
+        <div className="flex min-h-0 flex-col gap-2">
+          <Skeleton className="h-8 shrink-0" />
+          <div className="flex flex-col gap-1 pr-1">
+            {[0, 1, 2, 3, 4].map((row) => (
+              <Skeleton className="h-10" key={row} />
+            ))}
+          </div>
+        </div>
+        <Skeleton className="min-h-0 rounded-xl" />
+      </div>
     )
   }
   if (fleet.error) {
@@ -189,18 +198,7 @@ export function TasksPage() {
           tab={tab}
           onTabChange={setTab}
         />
-      ) : (
-        <div className="flex min-h-0 items-center justify-center rounded-lg border border-dashed">
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>从左侧选择一项</EmptyTitle>
-              <EmptyDescription>
-                选择一个题目或调度者，在此查看概览、对话、频道与文件。
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </div>
-      )}
+      ) : null}
     </div>
   )
 }

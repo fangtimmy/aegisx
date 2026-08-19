@@ -121,7 +121,7 @@ export function SettingsScreen() {
       orientation="vertical"
       value={section}
     >
-      <div className="w-48 shrink-0 border-s">
+      <div className="w-48 shrink-0 border-r pr-3">
         <TabsList className="w-full items-stretch" variant="underline">
           <TabsTab value="general">
             <SlidersHorizontal aria-hidden="true" /> 常规
@@ -174,7 +174,7 @@ export function SettingsScreen() {
                     onCreated={(id) => {
                       setSelectedId(id)
                       void queryClient.invalidateQueries({
-                        queryKey: ["providers"],
+                        queryKey: keys.providers.all,
                       })
                     }}
                   />

@@ -44,7 +44,7 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
-import { Spinner } from "@/components/ui/spinner"
+import { Skeleton } from "@/components/ui/skeleton"
 
 import { ErrorState } from "./event-shared"
 
@@ -144,12 +144,18 @@ function EventCard({ event }: { event: EventSummary }) {
     : "本地"
 
   return (
-    <CardFrame className="h-full min-w-0" render={<article />}>
+    <CardFrame
+      className="group h-full min-w-0 transition-colors hover:border-foreground/25"
+      render={<article />}
+    >
       <Card className="flex-1">
         <CardPanel className="flex min-h-32 flex-col justify-center gap-4">
           <div className="flex min-w-0 items-start justify-between gap-3">
             <h2 className="min-w-0 truncate text-base leading-5 font-semibold">
-              <Link className="hover:underline" to={`/events/${event.id}`}>
+              <Link
+                className="after:absolute after:inset-0 hover:underline"
+                to={`/events/${event.id}`}
+              >
                 {event.name}
               </Link>
             </h2>
@@ -204,7 +210,11 @@ function EventCard({ event }: { event: EventSummary }) {
             </span>
           )}
         </div>
-        <Button render={<Link to={`/events/${event.id}`} />} variant="ghost">
+        <Button
+          className="relative"
+          render={<Link to={`/events/${event.id}`} />}
+          variant="ghost"
+        >
           打开 <ArrowRight />
         </Button>
       </CardFrameFooter>
@@ -231,10 +241,22 @@ export function HomePage() {
       </div>
 
       {events.isPending && (
-        <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-          <Spinner aria-hidden="true" />
-          正在加载赛事…
-        </output>
+        <div className="grid grid-cols-3 gap-4">
+          {[0, 1, 2].map((index) => (
+            <CardFrame key={index}>
+              <Card>
+                <CardPanel className="flex min-h-32 flex-col justify-center gap-4">
+                  <Skeleton className="h-5 w-1/2" />
+                  <Skeleton className="h-9 w-2/3" />
+                </CardPanel>
+              </Card>
+              <CardFrameFooter className="flex min-h-16 items-center justify-between">
+                <Skeleton className="h-3.5 w-36" />
+                <Skeleton className="h-8 w-16 rounded-md" />
+              </CardFrameFooter>
+            </CardFrame>
+          ))}
+        </div>
       )}
       {events.error && (
         <ErrorState error={events.error} retry={() => events.refetch()} />

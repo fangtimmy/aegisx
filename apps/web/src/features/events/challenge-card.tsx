@@ -239,7 +239,10 @@ export function ChallengeCard({
   onUploadError: (message: string | null) => void
 }) {
   return (
-    <CardFrame className="h-full min-w-0" render={<article />}>
+    <CardFrame
+      className="h-full min-w-0 transition-colors hover:border-foreground/25"
+      render={<article />}
+    >
       <Card className="min-h-0 flex-1">
         <CardHeader className="grid-rows-[auto] gap-0 p-4 pb-1">
           <div className="min-w-0">

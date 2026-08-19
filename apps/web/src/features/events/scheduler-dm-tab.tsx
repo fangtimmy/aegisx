@@ -161,7 +161,7 @@ export function SchedulerDmTab({
           </p>
         ) : messages.isPending ? (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Spinner aria-hidden /> 加载中…
+            <Spinner aria-hidden /> 正在加载消息…
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto pt-1" ref={timelineRef}>
