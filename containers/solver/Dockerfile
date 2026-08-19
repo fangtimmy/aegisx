@@ -52,12 +52,20 @@ ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so
 # in the container), so this must happen at build time.
 RUN setcap -r /usr/lib/nmap/nmap /usr/bin/fping 2>/dev/null || true
 
-COPY solver-cache.py /usr/local/bin/solver-cache.py
-COPY ENVIRONMENT.md /opt/solver/ENVIRONMENT.md
+# Build context = repo root: docker buildx build -f containers/solver/Dockerfile -t aegisx/solver:kali .
+COPY containers/solver/solver-cache.py /usr/local/bin/solver-cache.py
+COPY containers/solver/ENVIRONMENT.md /opt/solver/ENVIRONMENT.md
 
+# === AegisX Agent SDK ===
+# The in-image SDK is the production path (PYTHONPATH preset; the agent
+# runtime injects AEGISX_EVENT_ID / AEGISX_API_URL / per-exec identity).
+# Host-side dev override: set AEGISX_SDK_PATH on the server to bind-mount a
+# live source tree over /opt/aegisx-sdk.
+COPY apps/sdk/python /opt/aegisx-sdk
 ENV KNOWLEDGES_DIR=/opt/solver/knowledges \
     TOOLS_DIR=/opt/solver/tools \
-    VENV_BIN=/opt/venv/bin/python
+    VENV_BIN=/opt/venv/bin/python \
+    PYTHONPATH=/opt/aegisx-sdk
 
 # === Knowledge Base ===
 RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked \

@@ -11,6 +11,7 @@
     "check": "oxfmt --check package.json .oxfmtrc.json && (knip || true) && bun run --filter '@aegisx/*' check",
     "fmt": "oxfmt package.json .oxfmtrc.json && bun run --filter '@aegisx/*' fmt",
     "test": "bun run --filter '@aegisx/*' test",
+    "test:sdk": "bun run --filter @aegisx/server test:sdk",
     "build": "bun run --filter @aegisx/web build",
     "db:generate": "bun run --filter @aegisx/server db:generate",
     "relay": "bun run --filter @aegisx/server relay"

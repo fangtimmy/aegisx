@@ -220,15 +220,17 @@ class AgentSummary:
 class AgentRead:
     """Composed agent detail: the agent summary + its recent message lines
     (rendered `[role] text` — see agents.read). `messages` is filled by
-    `agents.read`; absent on a bare `agents.get`."""
+    `agents.read`; absent on a bare `agents.get`. `usage`/`workspace` are
+    omitted by the server when there is nothing to report (no session,
+    unresolved workspace)."""
 
     agent: AgentSummary
     tools: list[str]
     tool_definitions: list[dict[str, Any]]
     system_prompt: str
     session_file: str | None
-    usage: dict[str, Any] | None
-    workspace: dict[str, Any] | None
+    usage: dict[str, Any] | None = None
+    workspace: dict[str, Any] | None = None
     messages: list[str] | None = None
 
 

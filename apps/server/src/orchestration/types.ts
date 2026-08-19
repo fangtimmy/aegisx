@@ -105,6 +105,8 @@ export type EventScopePayload =
       type: "agent.finished"
       agentId: string
       source?: "manual" | "scheduler"
+      /** Who drove the finish (user vs the scheduler's SDK call). */
+      actor?: "user" | "scheduler"
     }
   | {
       type: "agent.timedOut"

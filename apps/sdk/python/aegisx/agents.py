@@ -1,7 +1,8 @@
-"""`aegisx.agents` — agent-level addressing (v19)."""
+"""`aegisx.agents` — agent-level addressing (v19). Scheduler-only management
+face: a solver calling these gets `forbidden` from the server."""
 from __future__ import annotations
 
-from .client import AegisxError, get_client, require_manager
+from .client import AegisxError, get_client
 from .models import AgentSummary, ChannelMessage, AgentRead, from_dict
 
 #: Hoisted above `def list` — the module-level name shadows the builtin for
@@ -9,15 +10,21 @@ from .models import AgentSummary, ChannelMessage, AgentRead, from_dict
 AgentSummaries = list[AgentSummary]
 
 
+def _summary(data) -> AgentSummary:
+    summary = from_dict(AgentSummary, data)
+    if summary is None:
+        raise AegisxError("bad_response", "malformed agent payload")
+    return summary
+
+
 def list(
     challenge_id: str | None = None,
     status: str | None = None,
 ) -> AgentSummaries:
-    """Agents of the event, optionally scoped to one challenge / status.
-    Use to pick an agent id for `aegisx.agents.read` / `aegisx.agents.message`.
-    The scheduler agent (role=orchestrator, challenge_id=None) is included
-    when no challenge filter is set."""
-    require_manager()
+    """The event's SOLVER agents, optionally scoped to one challenge /
+    status. Use to pick an agent id for `aegisx.agents.read` /
+    `aegisx.agents.message`. The scheduler agent itself is NOT included —
+    it is `aegisx.snapshot().scheduler_agent`."""
     client = get_client()
     path = client.event_path("/fleet")
     data = client.request("GET", path)
@@ -37,7 +44,6 @@ def list(
 def get(agent_id: str) -> AgentRead:
     """Full agent detail (model snapshot, tools, usage, workspace info) — the
     pre-action assessment view."""
-    require_manager()
     data = get_client().request("GET", f"/api/agents/{agent_id}")
     read = from_dict(AgentRead, data)
     if read is None:
@@ -58,7 +64,6 @@ def message(
     memory — only that agent wakes). urgent=False merges into the next
     delivery tick. `deliver_as` steers ("steer") into or queues ("followUp")
     after a streaming turn."""
-    require_manager()
     body: dict = {"text": text, "urgent": bool(urgent)}
     if deliver_as:
         body["deliverAs"] = deliver_as
@@ -73,14 +78,11 @@ def message(
 
 def read(agent_id: str, last_n: int | None = None) -> AgentRead:
     """The agent detail + its recent message lines (rendered `[role] text`).
-    Pass `last_n` to cap the tail."""
-    require_manager()
-    query: dict = {}
-    if last_n is not None:
-        query["limit"] = last_n
+    Pass `last_n` to cap the tail (applied client-side — keep it small to
+    respect the output budget)."""
     client = get_client()
     detail = client.request("GET", f"/api/agents/{agent_id}")
-    msgs = client.request("GET", f"/api/agents/{agent_id}/messages", query=query)
+    msgs = client.request("GET", f"/api/agents/{agent_id}/messages")
     read = from_dict(AgentRead, detail)
     if read is None:
         raise AegisxError("bad_response", "malformed agent payload")
@@ -90,15 +92,18 @@ def read(agent_id: str, last_n: int | None = None) -> AgentRead:
         message = entry.get("message", {}) if isinstance(entry, dict) else {}
         role = message.get("role", "") if isinstance(message, dict) else ""
         content = message.get("content") if isinstance(message, dict) else None
-        text = ""
-        if isinstance(content, list):
+        # NB: `list` is shadowed by this module's agents.list() — the content
+        # check below must not reference it (isinstance(x, list) would raise).
+        if isinstance(content, str):
+            text = content
+        elif content is None:
+            text = ""
+        else:
             text = " ".join(
                 str(b.get("text", "")) for b in content if isinstance(b, dict)
             )
-        elif isinstance(content, str):
-            text = content
         lines.append(f"[{role}] {text}" if role else text)
-    read.messages = lines
+    read.messages = lines[-last_n:] if last_n is not None else lines
     return read
 
 
@@ -106,43 +111,51 @@ def stop(agent_id: str) -> AgentSummary:
     """Abort the named agent's current turn (it settles to idle; the shared
     challenge container stays warm). Use before re-directing a stuck or
     off-track agent."""
-    require_manager()
     data = get_client().request(
         "POST", f"/api/agents/{agent_id}/stop", body={}
     )
-    summary = from_dict(AgentSummary, data)
-    if summary is None:
-        raise AegisxError("bad_response", "malformed agent payload")
-    return summary
+    return _summary(data)
 
 
 def close(agent_id: str) -> AgentSummary:
     """Terminal close (aborted): files + session survive; a message reopens
     on demand. Use for agents you are done with so they stop occupying the
     agent cap."""
-    require_manager()
     data = get_client().request(
         "POST", f"/api/agents/{agent_id}/close", body={}
     )
-    summary = from_dict(AgentSummary, data)
-    if summary is None:
-        raise AegisxError("bad_response", "malformed agent payload")
-    return summary
+    return _summary(data)
+
+
+def finish(agent_id: str, summary: str = "") -> AgentSummary:
+    """Force-finish an agent: terminal completed + summary — the sanctioned
+    terminal transition for an agent that has delivered its result. Idempotent
+    on an already-completed agent; rejected (invalid_state) on a closed one."""
+    data = get_client().request(
+        "POST", f"/api/agents/{agent_id}/finish", body={"summary": summary}
+    )
+    return _summary(data)
+
+
+def compact(agent_id: str) -> AgentSummary:
+    """Manually compact an agent's context (frees tokens on a long-lived
+    agent). Rejected (invalid_state) without a live idle session — send the
+    agent a message first if it is terminal."""
+    data = get_client().request(
+        "POST", f"/api/agents/{agent_id}/compact", body={}
+    )
+    return _summary(data)
 
 
 def set_timeout(agent_id: str, timeout_ms: int) -> AgentSummary:
     """Set / extend / shorten the agent's hard deadline. Usable on a terminal
     agent (pre-sets the deadline for the next reopen)."""
-    require_manager()
     data = get_client().request(
         "POST",
         f"/api/agents/{agent_id}/timeout",
         body={"timeoutMs": timeout_ms},
     )
-    summary = from_dict(AgentSummary, data)
-    if summary is None:
-        raise AegisxError("bad_response", "malformed agent payload")
-    return summary
+    return _summary(data)
 
 
 def start(
@@ -150,15 +163,13 @@ def start(
     prompt: str | None = None,
     model: str | None = None,
     timeout_ms: int | None = None,
-    source: str = "scheduler",
 ) -> AgentSummary:
     """ESCAPE HATCH: spawn an agent on the challenge IMMEDIATELY (bypasses the
     queue — the fence cap rejects with code "capacity" when full). Prefer
     `aegisx.queue.enqueue` for ordinary planning. The agent's `prompt` is its
     strategy (appended as a Strategy section; `prompt_mode="override"` is the
     server-side field, not exposed here)."""
-    require_manager()
-    body: dict = {"source": source}
+    body: dict = {}
     if prompt:
         body["prompt"] = prompt
     if model:
@@ -168,7 +179,4 @@ def start(
     data = get_client().request(
         "POST", f"/api/challenges/{challenge_id}/agents", body=body
     )
-    summary = from_dict(AgentSummary, data)
-    if summary is None:
-        raise AegisxError("bad_response", "malformed agent payload")
-    return summary
+    return _summary(data)

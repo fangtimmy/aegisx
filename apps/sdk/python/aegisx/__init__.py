@@ -1,9 +1,11 @@
-"""AegisX scheduler SDK — programmatic management API for the event-scope
-orchestrator.
+"""AegisX agent SDK — programmatic access for the event scheduler (and the
+channels face for solvers).
 
 The scheduler runs inside a container with this package on PYTHONPATH and
-`AEGISX_EVENT_ID` (+ `AEGISX_API_URL` when the host is not reachable via the
-default) injected. Zero third-party dependencies — pure stdlib urllib.
+`AEGISX_EVENT_ID` + `AEGISX_API_URL` injected; per-exec env carries
+`AEGISX_AGENT_ID` + `AEGISX_TOKEN` (the server derives your identity and
+role from the token — everything outside your role's surface is rejected
+with `.code == "forbidden"`). Zero third-party dependencies — pure stdlib.
 
 Typical script (run via bash heredoc — one script per decision, not one call
 per line):
@@ -20,7 +22,8 @@ per line):
 
 Error handling: every failure raises `aegisx.AegisxError` with `.code`
 mirroring the server's error code (e.g. "capacity" → back off and adjust the
-plan; "not_found" → re-read state). Never parse error text.
+plan; "not_found" → re-read state; "forbidden" → outside your surface). Never
+parse error text.
 
 Rules:
 - Keep printed output small (bash truncates at ~64KB): print summaries, write
@@ -30,6 +33,7 @@ Rules:
 - Every delivery to you ends with a [调度快照] block (delivery-time fleet
   snapshot: caps, queue, per-challenge agents) — decide from it when it
   suffices; call `snapshot()` only when you need finer detail.
+- Full usage guide: /opt/aegisx-sdk/GUIDE.md.
 """
 from __future__ import annotations
 
@@ -107,10 +111,14 @@ def snapshot() -> Snapshot:
     agent + scheduler status/config. Call this before deciding, to minimize
     round trips."""
     client = get_client()
+    # Challenges come from the event endpoint (full publicChallenge records —
+    # the fleet view's challenge list is the web overview's 3-field digest
+    # and too thin to build Challenge from).
+    event_data = client.request("GET", client.event_path(""))
     fleet = client.request("GET", client.event_path("/fleet"))
     queue_data = client.request("GET", client.event_path("/queue"))
     return Snapshot(
-        challenges=_items(Challenge, fleet.get("challenges", [])),
+        challenges=_items(Challenge, event_data.get("challenges", [])),
         agents_by_challenge={
             challenge_id: _items(AgentSummary, agent_list)
             for challenge_id, agent_list in fleet.get(

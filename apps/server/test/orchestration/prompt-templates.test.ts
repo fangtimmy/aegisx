@@ -58,12 +58,13 @@ describe("W1 prompt fixes", () => {
       DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       samplePromptContext
     )
-    // The channel layer is rendered for every solver agent; attachments are
-    // shared/ paths (no fetch), and finish_run ends only the agent's own task.
+    // The channel layer is rendered for every solver agent; API specifics
+    // live in the in-image GUIDE.md (the prompt keeps the behavioral rules).
     expect(main).toContain("## Channels（团队频道）")
     expect(main).not.toContain("## Co-solvers")
-    expect(main).toContain('aegisx.channels.post("#team"')
-    expect(main).toContain("附件即 shared/ 路径")
+    expect(main).toContain("/opt/aegisx-sdk/GUIDE.md")
+    expect(main).toContain("aegisx.ask")
+    expect(main).toContain("urgent=True")
     expect(main).toContain("ends YOUR task")
   })
 

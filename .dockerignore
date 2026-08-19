@@ -1,0 +1,13 @@
+# Keep the solver image's build context (repo root) minimal — only what the
+# Dockerfile COPYs plus the source tree tools need.
+.data
+data
+**/node_modules
+**/.venv
+**/__pycache__
+**/dist
+**/.git
+apps/sdk/python/.venv
+apps/sdk/python/__pycache__
+apps/sdk/python/smoke.py
+apps/sdk/python/test_models.py

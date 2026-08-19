@@ -6,6 +6,7 @@ import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
 import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
+import { agentAuth } from "./infrastructure/agent-auth"
 import { createConfigStore } from "./infrastructure/config-store"
 import { createStorage } from "./infrastructure/storage"
 import { registerPlatformRoutes } from "./platforms/routes"
@@ -65,6 +66,11 @@ export function createApp(options: { dataDir: string }) {
   const app = new Hono()
   const catalog = createCatalogReader(db, platformService)
 
+  // Agent identity gate: Bearer-token requests resolve to an agent principal
+  // and are confined to the agent API surface; tokenless requests (user/UI)
+  // pass through untouched.
+  app.use("*", agentAuth(db))
+
   app.onError((error, c) => {
     console.error("Request failed", {
       method: c.req.method,
@@ -119,6 +125,7 @@ export function createApp(options: { dataDir: string }) {
 
   return {
     app,
+    db,
     close: async () => {
       await agentService.close()
       sqlite.close()

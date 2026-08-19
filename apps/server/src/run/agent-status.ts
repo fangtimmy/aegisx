@@ -56,7 +56,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       case "agent.flagAccepted":
         return `${tag}flag 已接受`
       case "agent.finished":
-        return `${tag}已完成`
+        return `${tag}已完成${p.actor === "scheduler" ? "（调度者）" : ""}`
       case "agent.timedOut":
         return p.outcome === "aborted"
           ? `${tag}超时（已强制终止）`
@@ -91,6 +91,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
         agentId,
         eventType: payload.type,
         source,
+        ...("actor" in payload ? { actor: payload.actor } : {}),
       },
       urgent: payload.type === "agent.timedOut",
     })
@@ -130,6 +131,9 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       status: "completed" | "aborted" | "failed"
       summary?: string
       event?: "agent.finished"
+      /** Who drove the transition (user vs scheduler) — the finish event's
+       * origin label. */
+      actor?: "user" | "scheduler"
     }
   ): void {
     const ts = now()
@@ -144,7 +148,13 @@ export function createAgentStatus(deps: AgentStatusDeps) {
     const row = queries.getAgentRow(agentId)
     deps.queue()?.markDone(row?.queueItemId, agentId)
     deps.queue()?.scheduleDrain()
-    if (opts.event) emitAgentEvent(agentId, { type: opts.event, agentId })
+    if (opts.event) {
+      emitAgentEvent(agentId, {
+        type: opts.event,
+        agentId,
+        ...(opts.actor ? { actor: opts.actor } : {}),
+      })
+    }
   }
 
   return {

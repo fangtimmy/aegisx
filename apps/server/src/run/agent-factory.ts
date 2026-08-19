@@ -23,6 +23,7 @@ import {
   queueState,
   spawnQueue,
 } from "../db/schema"
+import { newAgentToken } from "../infrastructure/agent-auth"
 import {
   loadTemplateMap,
   renderTemplate,
@@ -68,66 +69,69 @@ import {
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
-/** Host path to the Python SDK package (mount source). Overridable via
- * AEGISX_SDK_PATH; default = repo apps/sdk/python relative to this file.
- * Absent when the path does not exist (the mount is then skipped). */
-function sdkHostPath(): string | undefined {
-  const candidate =
-    process.env.AEGISX_SDK_PATH ??
-    resolve(import.meta.dir, "../../../../apps/sdk/python")
-  return existsSync(candidate) ? candidate : undefined
+/** Container env shared by scheduler and solver containers: the SDK ships
+ * INSIDE the image (/opt/aegisx-sdk, PYTHONPATH preset); a host bind mount is
+ * a dev-only override enabled by AEGISX_SDK_PATH (missing path there is a
+ * hard error — it was explicitly requested). AEGISX_API_URL pointing at the
+ * host loopback is normalized to host.docker.internal (a 127.0.0.1 value
+ * leaks from host-side env and would address the container itself). */
+function containerApiUrl(): string {
+  const raw = process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"
+  return raw
+    .replace("://127.0.0.1", "://host.docker.internal")
+    .replace("://localhost", "://host.docker.internal")
 }
 
-/** Scheduler container extras: the read-only SDK mount (→ /opt/aegisx-sdk),
- * the read-only challenge-workspaces mount (→
+function sdkDevMount(): { extraBinds: string[]; env: string[] } | undefined {
+  const devPath = process.env.AEGISX_SDK_PATH
+  if (!devPath) return undefined
+  if (!existsSync(devPath)) {
+    throw new Error(`AEGISX_SDK_PATH does not exist: ${devPath}`)
+  }
+  return {
+    extraBinds: [`${devPath}:/opt/aegisx-sdk:ro`],
+    env: ["PYTHONPATH=/opt/aegisx-sdk"],
+  }
+}
+
+/** Scheduler container extras: the read-only challenge-workspaces mount (→
  * /challenges/<cid>/workspace — the scheduler reads solver WRITEUP.md /
- * solve.sh / shared/ artifacts directly, live progress included), + the env
- * vars (PYTHONPATH / AEGISX_EVENT_ID / AEGISX_API_URL / AEGISX_ROLE). */
+ * solve.sh / shared/ artifacts directly, live progress included) + the env
+ * vars (AEGISX_EVENT_ID / AEGISX_API_URL). */
 function schedulerSdkContainerOpts(
   eventId: string,
   dataDir: string
-): { extraBinds: string[]; env: string[] } | undefined {
-  const path = sdkHostPath()
-  if (!path) {
-    console.warn("aegisx SDK not found on host — skipping scheduler SDK mount")
-    return undefined
-  }
+): { extraBinds: string[]; env: string[] } {
+  const dev = sdkDevMount()
   return {
     extraBinds: [
-      `${path}:/opt/aegisx-sdk:ro`,
       `${resolve(dataDir, "events", eventId, "challenges")}:/challenges:ro`,
+      ...(dev?.extraBinds ?? []),
     ],
     env: [
       `AEGISX_EVENT_ID=${eventId}`,
-      `AEGISX_API_URL=${process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"}`,
-      "PYTHONPATH=/opt/aegisx-sdk",
-      "AEGISX_ROLE=scheduler",
+      `AEGISX_API_URL=${containerApiUrl()}`,
+      ...(dev?.env ?? []),
     ],
   }
 }
 
-/** Solver container extras: the SAME read-only SDK mount as the scheduler
- * (solvers post/read/ask via `aegisx.channels`), the same event/API env —
- * but AEGISX_ROLE=solver (the SDK's client-side management gate) and NO
- * /challenges mount (a solver reaches its own challenge workspace at
- * /workspace — other challenges are not its business). Per-agent identity
- * (AEGISX_AGENT_ID) rides the per-exec env of the bash tool: one
- * challenge's N agents share this container. */
-function solverSdkContainerOpts(
-  eventId: string
-): { extraBinds: string[]; env: string[] } | undefined {
-  const path = sdkHostPath()
-  if (!path) {
-    console.warn("aegisx SDK not found on host — skipping solver SDK mount")
-    return undefined
-  }
+/** Solver container extras: the same env — but NO /challenges mount (a
+ * solver reaches its own challenge workspace at /workspace — other
+ * challenges are not its business). Per-agent identity (AEGISX_AGENT_ID +
+ * AEGISX_TOKEN) rides the per-exec env of the bash tool: one challenge's N
+ * agents share this container. */
+function solverSdkContainerOpts(eventId: string): {
+  extraBinds: string[]
+  env: string[]
+} {
+  const dev = sdkDevMount()
   return {
-    extraBinds: [`${path}:/opt/aegisx-sdk:ro`],
+    extraBinds: [...(dev?.extraBinds ?? [])],
     env: [
       `AEGISX_EVENT_ID=${eventId}`,
-      `AEGISX_API_URL=${process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"}`,
-      "PYTHONPATH=/opt/aegisx-sdk",
-      "AEGISX_ROLE=solver",
+      `AEGISX_API_URL=${containerApiUrl()}`,
+      ...(dev?.env ?? []),
     ],
   }
 }
@@ -547,6 +551,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     }
 
     const agentId = crypto.randomUUID()
+    const agentToken = newAgentToken()
     const isSolver = input.role === "solver"
     const name = isSolver ? `agent-${agentId.slice(0, 8)}` : "Scheduler"
 
@@ -663,6 +668,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       db.insert(agents)
         .values({
           id: agentId,
+          token: agentToken,
           eventId: input.eventId,
           challengeId: input.challengeId,
           role: input.role,
@@ -793,8 +799,9 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         extraToolNames: snapshotTools,
         // Per-agent identity for the container-side `aegisx` SDK: one
         // challenge's N agents share a container, so identity cannot be
-        // container-wide env — it rides the per-exec env of the bash tool.
-        execEnv: [`AEGISX_AGENT_ID=${agentId}`],
+        // container-wide env — the agent id + its bearer token ride the
+        // per-exec env of the bash tool.
+        execEnv: [`AEGISX_AGENT_ID=${agentId}`, `AEGISX_TOKEN=${row.token}`],
         ...(row.sessionFile
           ? {
               resumeFrom: {

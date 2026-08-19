@@ -4,6 +4,7 @@ import { Type } from "typebox"
 
 import type { Database } from "../db"
 import { challenges, events } from "../db/schema"
+import { principalOf } from "../infrastructure/agent-auth"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { WorkspaceFileError } from "../infrastructure/workspace-files"
@@ -12,12 +13,6 @@ import { platformActionHttpError } from "../platforms/errors"
 import { runActionError as runError } from "./errors"
 import type { AgentService } from "./service"
 import { streamAgent, streamChannel } from "./sse"
-
-/** Agent identity header for SDK channel calls (docs/im-channels.md §四):
- * the per-exec env AEGISX_AGENT_ID rides this header; the server resolves the
- * posting/reading agent from it. No token — the accepted curl boundary from
- * scheduler-python-sdk.md §四 applies. */
-const AGENT_ID_HEADER = "x-aegisx-agent-id"
 
 /** Enqueue a spawn item (POST /api/events/:eventId/queue): body carries the
  * challenge + spawn params. Models resolve at launch; the prompt shapes the
@@ -33,18 +28,13 @@ const enqueueInput = Type.Object(
     ),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
     model: Type.Optional(Type.String({ maxLength: 300 })),
-    /** Who is enqueueing — the Python SDK sends "scheduler" (its default;
-     * the SDK is the scheduler's face), the web UI omits it (→ manual). */
-    source: Type.Optional(
-      Type.Union([Type.Literal("manual"), Type.Literal("scheduler")])
-    ),
   },
   { additionalProperties: false }
 )
 
 /** Direct spawn (POST /api/challenges/:challengeId/agents): bypasses the
  * queue; the fence cap rejects with 429 capacity. The SDK's
- * `agents.start` escape hatch sends source=scheduler. */
+ * `agents.start` escape hatch. */
 const spawnInput = Type.Object(
   {
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
@@ -53,9 +43,6 @@ const spawnInput = Type.Object(
     ),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
     model: Type.Optional(Type.String({ maxLength: 300 })),
-    source: Type.Optional(
-      Type.Union([Type.Literal("manual"), Type.Literal("scheduler")])
-    ),
   },
   { additionalProperties: false }
 )
@@ -156,7 +143,7 @@ export function registerRunRoutes(
           model: input.model,
           promptMode: input.promptMode,
           timeoutMs: input.timeoutMs,
-          source: input.source ?? "manual",
+          source: principalOf(c) ? "scheduler" : "manual",
         })
         await queue.drainOnce()
         return c.json(
@@ -195,7 +182,7 @@ export function registerRunRoutes(
           ...(input.timeoutMs !== undefined
             ? { timeoutMs: input.timeoutMs }
             : {}),
-          source: input.source ?? "manual",
+          source: principalOf(c) ? "scheduler" : "manual",
         })
         return c.json(agent, 201)
       } catch (error) {
@@ -358,7 +345,11 @@ export function registerRunRoutes(
       try {
         const summary = c.req.valid("json").summary?.trim() ?? ""
         return c.json(
-          await agentService.finishAgent(c.req.param("agentId"), summary)
+          await agentService.finishAgent(
+            c.req.param("agentId"),
+            summary,
+            principalOf(c) ? "scheduler" : "user"
+          )
         )
       } catch (error) {
         return runError(c, error)
@@ -531,9 +522,18 @@ export function registerRunRoutes(
     }
   })
 
-  /** SDK channels.list: the agent's visible channels + unread counts. */
+  /** SDK channels.list: the agent's visible channels + unread counts. With
+   * an agent principal the path id must be the caller's own. */
   app.get("/api/agents/:agentId/channels", (c) => {
     try {
+      const principal = principalOf(c)
+      if (principal && principal.id !== c.req.param("agentId")) {
+        return badRequest(
+          c,
+          "invalid",
+          "Agent channels are addressable only by the caller's own id"
+        )
+      }
       return c.json({
         items: agentService.channels.agentChannels(c.req.param("agentId")),
       })
@@ -542,8 +542,8 @@ export function registerRunRoutes(
     }
   })
 
-  /** Channel timeline (paginated by the global message-id cursor). With the
-   * agent identity header this is the SDK read path: visibility-enforced and
+  /** Channel timeline (paginated by the global message-id cursor). With an
+   * agent principal this is the SDK read path: visibility-enforced and
    * pull-is-read (the cursor advances unless markRead=0). `channelKey` is a
    * derived key (`team:<cid>` / `dm:<aid>` / `orch:<eid>`) — ':' is a legal
    * path character. */
@@ -557,11 +557,11 @@ export function registerRunRoutes(
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10)
     const limit = Number.isFinite(limitRaw) ? limitRaw : 50
     const markRead = c.req.query("markRead") !== "0"
-    const agentId = c.req.header(AGENT_ID_HEADER) ?? ""
+    const principal = principalOf(c)
     try {
-      if (agentId) {
+      if (principal) {
         return c.json(
-          agentService.channels.readForAgent(agentId, channelKey, {
+          agentService.channels.readForAgent(principal.id, channelKey, {
             after,
             limit,
             markRead,
@@ -580,11 +580,11 @@ export function registerRunRoutes(
     }
   })
 
-  /** Post a channel message. Two faces on one route (§9.1):
-   *  - JSON + agent identity header → the SDK path (files = paths relative
-   *    to the agent's own directory, server-side resolve check + copy into
-   *    the challenge workspace's shared/; `urgent` explicit, SDK defaults
-   *    false per §3.2).
+  /** Post a channel message. Two faces on one route:
+   *  - JSON + agent principal (bearer token) → the SDK path (files = paths
+   *    relative to the agent's own directory, server-side resolve check +
+   *    copy into the challenge workspace's shared/; `urgent` explicit, SDK
+   *    defaults false).
    *  - multipart/form-data (text + files[] + urgent) → the UI user post
    *    (file blobs land in shared/upload-<ts>/; urgent defaults TRUE — a
    *    user IM post is intended). */
@@ -616,13 +616,13 @@ export function registerRunRoutes(
         })
         return c.json(message, 201)
       }
-      // JSON path — requires the agent identity header.
-      const agentId = c.req.header(AGENT_ID_HEADER) ?? ""
-      if (!agentId) {
+      // JSON path — requires an agent principal.
+      const principal = principalOf(c)
+      if (!principal) {
         return badRequest(
           c,
           "invalid",
-          "JSON posts require the agent identity header (or use multipart)"
+          "JSON posts require an agent token (or use multipart)"
         )
       }
       const input = (await c.req.json()) as {
@@ -651,7 +651,7 @@ export function registerRunRoutes(
       const deliverAs = input.deliverAs === "followUp" ? "followUp" : "steer"
       const message = agentService.channels.post({
         channelKey,
-        author: { type: "agent", agentId },
+        author: { type: "agent", agentId: principal.id },
         body: input.text,
         urgent: input.urgent === true,
         deliverAs,

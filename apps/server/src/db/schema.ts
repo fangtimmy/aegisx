@@ -130,6 +130,9 @@ export const agents = sqliteTable(
   "agents",
   {
     id: text("id").primaryKey(),
+    /** Opaque credential injected per-exec as AEGISX_TOKEN; the server derives
+     * the agent principal from it (docs/sdk-refactor.md W1). */
+    token: text("token").notNull().default(""),
     /** Redundant event anchor (accelerates fleet/usage/flush queries). */
     eventId: text("event_id")
       .notNull()

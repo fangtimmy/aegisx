@@ -5,6 +5,7 @@
     "check": "oxlint --type-check . && oxfmt --check .",
     "fmt": "oxlint --fix --type-check . && oxfmt .",
     "test": "bun test --max-concurrency 1",
+    "test:sdk": "bun run scripts/sdk-contract.ts",
     "db:generate": "drizzle-kit generate",
     "relay": "bun run scripts/relay.ts"
   },

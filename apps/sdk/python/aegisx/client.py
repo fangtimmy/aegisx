@@ -3,6 +3,12 @@
 The module-wide default client reads `AEGISX_API_URL` (default
 `http://host.docker.internal:3000`) and `AEGISX_EVENT_ID` from the
 environment at import; override per-process with :func:`aegisx.configure`.
+
+Identity: the per-exec env `AEGISX_TOKEN` (injected next to
+`AEGISX_AGENT_ID` by the bash tool) rides every request as a Bearer header —
+the server derives who and what role you are from it. There is no
+client-side role gating: the server's 403 `forbidden` (an `AegisxError` with
+`.code == "forbidden"`) is the single boundary.
 """
 from __future__ import annotations
 
@@ -19,35 +25,21 @@ DEFAULT_API_URL = os.environ.get(
 
 
 def agent_id() -> str:
-    """The calling agent's id (per-exec env AEGISX_AGENT_ID — see
-    docs/im-channels.md §四) or an empty string."""
+    """The calling agent's id (per-exec env AEGISX_AGENT_ID) or an empty
+    string. Used to address your own agent face (channels.list); the server
+    verifies it against the token."""
     return os.environ.get("AEGISX_AGENT_ID", "")
 
 
-def role() -> str:
-    """The container's AEGISX_ROLE ("solver" on challenge containers,
-    "scheduler" on the event container, "" on old setups)."""
-    return os.environ.get("AEGISX_ROLE", "")
-
-
-def require_manager() -> None:
-    """Client-side role gate for the management namespaces: AEGISX_ROLE=solver
-    containers raise AegisxError("forbidden") instead of issuing the call.
-    Guards accidental misuse — deliberate bypass (bash + curl straight at the
-    API) remains the accepted boundary (scheduler-python-sdk.md §四/§六)."""
-    if role() == "solver":
-        raise AegisxError(
-            "forbidden",
-            "management namespaces are scheduler-only (AEGISX_ROLE=solver); "
-            "use aegisx.channels / aegisx.ask instead",
-        )
-
-
 class AegisxError(Exception):
-    """API error. `code` mirrors the server's error code (capacity,
-    not_found, invalid_state, launch_failed, ...) so scripts can branch on it
-    (e.g. retry with backoff on capacity); `status` is the HTTP status;
-    `message` is the server's message, or a client-side failure description."""
+    """API error. `code` mirrors the server's error code so scripts can
+    branch on it; `status` is the HTTP status; `message` is the server's
+    message, or a client-side failure description.
+
+    Common codes: forbidden (outside your role's API surface), unauthorized
+    (bad token), not_found, invalid_state (e.g. compaction without a live
+    session), capacity (back off and adjust the plan), network_error,
+    bad_response."""
 
     def __init__(self, code: str, message: str, status: int | None = None):
         suffix = f" (HTTP {status})" if status is not None else ""
@@ -81,9 +73,9 @@ class Client:
         req = urllib.request.Request(url, data=data, method=method)
         if data is not None:
             req.add_header("Content-Type", "application/json")
-        caller = agent_id()
-        if caller:
-            req.add_header("X-Aegisx-Agent-Id", caller)
+        token = os.environ.get("AEGISX_TOKEN", "")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
         for key, value in (headers or {}).items():
             req.add_header(key, value)
         try:

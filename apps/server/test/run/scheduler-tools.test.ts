@@ -152,9 +152,10 @@ describe("scheduler service behaviors (SDK backend)", () => {
     }
   })
 
-  test("scheduler container gets SDK + /challenges mounts; solver gets SDK-only (no /challenges)", async () => {
+  test("containers default to the image SDK: event env, no bind mount, no ROLE", async () => {
     const { db, dir, close } = setupDb()
     try {
+      delete process.env.AEGISX_SDK_PATH
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       // Seed a terminal orchestrator agent so the first wake builds its
@@ -185,8 +186,9 @@ describe("scheduler service behaviors (SDK backend)", () => {
         extraBinds?: string[]
         env?: string[]
       }>
-      // The scheduler container: read-only SDK mount + read-only challenge
-      // workspaces (so it reads WRITEUP.md / solve.sh directly) + event env.
+      // The scheduler container: the read-only challenge-workspaces mount
+      // (WRITEUP.md / solve.sh live reads) + event env. The SDK itself ships
+      // in the image — no bind mount, no PYTHONPATH override.
       expect(
         schedOpts.extraBinds?.some(
           (b) =>
@@ -196,24 +198,61 @@ describe("scheduler service behaviors (SDK backend)", () => {
       ).toBe(true)
       expect(
         schedOpts.extraBinds?.some((b) => b.includes("/opt/aegisx-sdk:ro"))
-      ).toBe(true)
+      ).toBe(false)
       expect(schedOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
-      expect(schedOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
-      expect(schedOpts.env).toContain("AEGISX_ROLE=scheduler")
-      // The solver container (channels era): the same read-only SDK mount +
-      // event/API env with AEGISX_ROLE=solver, but NO /challenges mount
-      // (a solver reaches its OWN challenge at /workspace, never others).
-      expect(
-        solverOpts.extraBinds?.some((b) => b.includes("/opt/aegisx-sdk:ro"))
-      ).toBe(true)
+      expect(schedOpts.env?.some((e) => e.startsWith("PYTHONPATH="))).toBe(
+        false
+      )
+      expect(schedOpts.env).toContain(
+        "AEGISX_API_URL=http://host.docker.internal:3000"
+      )
+      // The solver container: same event env, NO /challenges mount (a solver
+      // reaches its OWN challenge at /workspace, never others).
       expect(
         solverOpts.extraBinds?.some((b) => b.includes("/challenges:ro"))
       ).toBe(false)
       expect(solverOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
-      expect(solverOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
-      expect(solverOpts.env).toContain("AEGISX_ROLE=solver")
       await service.close()
     } finally {
+      close()
+    }
+  })
+
+  test("AEGISX_SDK_PATH bind-mounts the SDK over /opt/aegisx-sdk (dev override)", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      process.env.AEGISX_SDK_PATH = dir
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      seedAgent(db, {
+        id: "orch-1",
+        eventId: "evt-1",
+        challengeId: null,
+        role: "orchestrator",
+        status: "completed",
+        sessionFile: "sess-orch-1",
+        model: `${TEST_MODEL_REF}:off`,
+        systemPrompt: "sp",
+        name: "Scheduler",
+        createdAt: now(),
+        updatedAt: now(),
+      })
+
+      const { service, created } = makeService(db, dir, { hang: false })
+      await service.sendMessage("orch-1", { text: "wake" })
+      await settle()
+
+      const [schedOpts] = created as Array<{
+        extraBinds?: string[]
+        env?: string[]
+      }>
+      expect(
+        schedOpts.extraBinds?.some((b) => b === `${dir}:/opt/aegisx-sdk:ro`)
+      ).toBe(true)
+      expect(schedOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
+      await service.close()
+    } finally {
+      delete process.env.AEGISX_SDK_PATH
       close()
     }
   })

@@ -29,6 +29,7 @@ import {
   workspaceDownload,
 } from "../infrastructure/workspace-files"
 import { DEFAULT_SCHEDULER_DIGEST_TEMPLATE } from "../orchestration/prompt-defaults"
+import { refreshSdkGuideSections } from "../orchestration/prompt-refresh-sdk-guide"
 import { refreshBuiltinTemplateSections } from "../orchestration/prompt-refresh-v19"
 import {
   loadTemplateMap,
@@ -124,10 +125,11 @@ export function createAgentService(options: AgentServiceOptions) {
   const bus: LiveBus = createLiveBus()
 
   // Seed the four built-in prompt templates (idempotent) so the service is
-  // self-sufficient — any agent spawned here renders. Then apply the one-time
-  // v19 section refresh (user-edited sections keep their edits).
+  // self-sufficient — any agent spawned here renders. Then apply the
+  // one-time section refreshes (user-edited sections keep their edits).
   seedBuiltinTemplates(db)
   refreshBuiltinTemplateSections(db)
+  refreshSdkGuideSections(db)
   // Idempotent guard: plugin-owned template rows (a pre-v9 concept) must
   // never come back — re-delete any who got re-seeded.
   db.run(`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
@@ -401,10 +403,12 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Force-finish (HTTP /finish): the sanctioned terminal transition with a
-   * summary. Idempotent on an already-completed agent. */
+   * summary. Idempotent on an already-completed agent. `actor` labels who
+   * called it (user vs the event's scheduler) on the finished event. */
   async function finishAgent(
     agentId: string,
-    summary: string
+    summary: string,
+    actor: "user" | "scheduler" = "user"
   ): Promise<AgentSummary> {
     const agent = requireAgent(agentId)
     if (agent.status === "completed") return agent
@@ -427,6 +431,7 @@ export function createAgentService(options: AgentServiceOptions) {
         status: "completed",
         summary,
         event: "agent.finished",
+        actor,
       })
       bus.forget([agentId])
     })

@@ -5,6 +5,7 @@ import { Type } from "typebox"
 
 import type { Database } from "../db"
 import { events } from "../db/schema"
+import { principalOf } from "../infrastructure/agent-auth"
 import { notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { EmptyInputSchema } from "../lib/schemas"
@@ -54,17 +55,6 @@ const schedulerStartInput = Type.Object(
 )
 
 const emptyInput = EmptyInputSchema
-
-/** Queue state-flip body (pause/resume): `source` marks who flipped it — the
- * web UI sends nothing (→ manual), an SDK script may declare "scheduler". */
-const queueStateInput = Type.Object(
-  {
-    source: Type.Optional(
-      Type.Union([Type.Literal("manual"), Type.Literal("scheduler")])
-    ),
-  },
-  { additionalProperties: false }
-)
 
 export function registerSchedulerRoutes(
   app: Hono,
@@ -130,7 +120,7 @@ export function registerSchedulerRoutes(
 
   app.post(
     "/api/events/:eventId/queue/pause",
-    validateJson(queueStateInput),
+    validateJson(emptyInput),
     (c) => {
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
@@ -138,21 +128,21 @@ export function registerSchedulerRoutes(
       // Blocks future launches only — running runs keep going (pause ≠ kill).
       agentService
         .queue()
-        .pause(eventId, c.req.valid("json").source ?? "manual")
+        .pause(eventId, principalOf(c) ? "scheduler" : "manual")
       return c.json({ state: "paused" })
     }
   )
 
   app.post(
     "/api/events/:eventId/queue/resume",
-    validateJson(queueStateInput),
+    validateJson(emptyInput),
     (c) => {
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       agentService
         .queue()
-        .resume(eventId, c.req.valid("json").source ?? "manual")
+        .resume(eventId, principalOf(c) ? "scheduler" : "manual")
       agentService.queue().scheduleDrain()
       return c.json({ state: "running" })
     }

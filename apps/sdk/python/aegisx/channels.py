@@ -5,9 +5,9 @@ shared by every agent on the challenge), `dm:<agentId>` (scheduler/user/
 system → one agent), `orch:<eventId>` (solver asks + system events → the
 scheduler). The first message makes a channel exist.
 
-The caller's identity comes from the per-exec env `AEGISX_AGENT_ID`
-(injected by the bash tool), so the server resolves "my channels" without
-any token.
+Your identity comes from the per-exec env (AEGISX_AGENT_ID for addressing,
+AEGISX_TOKEN as the Bearer credential) — the server resolves "my channels"
+from the token, never from a self-reported header.
 
 Solver face:
     aegisx.channels.list()                          # my channels + unread
@@ -130,13 +130,10 @@ def ask(
 
 
 def announce(challenge_id: str, text: str) -> ChannelMessage:
-    """Scheduler-only: broadcast to the challenge's #team (one shared team
-channel per challenge — every live agent on the challenge receives it on
-the next delivery tick; non-urgent FYI by design). Use for FYI guidance;
-use `aegisx.agents.message` for directives targeting one agent."""
-    from .client import require_manager
-
-    require_manager()
+    """Broadcast to the challenge's #team (one shared team channel per
+    challenge — every live agent on the challenge receives it on the next
+    delivery tick; non-urgent FYI by design). Use for FYI guidance; use
+    `aegisx.agents.message` for directives targeting one agent."""
     team = f"team:{challenge_id}"
     data = get_client().request(
         "POST",

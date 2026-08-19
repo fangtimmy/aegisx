@@ -130,7 +130,7 @@ describe("v19 multi-spawn on one challenge", () => {
         .get()!
       expect(row.systemPrompt).toContain("## Channels（团队频道）")
       expect(row.systemPrompt).not.toContain("## Co-solvers")
-      expect(row.systemPrompt).toContain('aegisx.channels.post("#team"')
+      expect(row.systemPrompt).toContain("/opt/aegisx-sdk/GUIDE.md")
     } finally {
       close()
     }
