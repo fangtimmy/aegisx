@@ -181,7 +181,7 @@
 ## 批次 P4：收尾
 
 - README：模型描述段（Event→Challenge→Workspace→Agent）、schema v18 说明、`bun run relay` 等不动部分保留。
-- `docs/model-v19-challenge-centric.md` 状态改「已实施」+ 填实施批次 commit；`ux-review-2026-08-18.md` 追注（痛点 3 部分由 v19 消解）。
+- `docs/model-v19-challenge-centric.md` 状态改「已实施」+ 填实施批次 commit；2026-08-18 交互走查追注（文档已删，见 git 历史）。
 - 手工冒烟清单（dev 起服后）：
   1. 建赛事 → 手动建题 + 传附件 → spawn（直接）→ 对话流 SSE 正常、bash cwd=agents/&lt;id8&gt;、附件在 /workspace/attachments。
   2. 入队 spawn → drain 拉起；并发上限触发 capacity 错误文案。

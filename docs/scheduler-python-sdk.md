@@ -1,7 +1,7 @@
 # 调度者程序化工具面：四个基础工具 + aegisx Python SDK
 
 状态：**已实施**（P1–P3 代码与单测完成；宿主 smoke + 容器验证全绿；P3 的「真实赛事端到端调度循环」待首次实赛验证）
-前置：[orchestration-v9-simplify.md](orchestration-v9-simplify.md)（v9 编排模型；本方案取代其 §7.2 的调度者工具面）
+前置：orchestration-v9-simplify（v9 编排模型；已删，见 git 历史。本方案取代其 §7.2 的调度者工具面）。端点表为 v9 时代写法，与 v19 API 有出入，规格以 `sdks/python/` 代码为准。
 
 ---
 

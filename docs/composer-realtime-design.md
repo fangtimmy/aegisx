@@ -1,7 +1,7 @@
 # Composer 与实时性整改（批次 A/B/C）
 
 状态：**已实施**（批次 A/B/C 全部落地，验证见「验证」节）。
-来源：ux-review-2026-08-18 问题 2/4/5 中 v19 后仍然成立的部分（N+1 fleet、概览 getFleet、
+来源：2026-08-18 交互层走查（文档已删，见 git 历史）问题 2/4/5 中 v19 后仍然成立的部分（N+1 fleet、概览 getFleet、
 spawn 表单瘦身已随 v19/tasks-tab 落地，不再重复）。relay 内置已砍（不做）。
 决策记录：steer/followUp 队列**只开既有 SteerQueue 组件**，不做时间线 pending 气泡；
 发送反馈 = HTTP mutation 自身的 loading 态。
