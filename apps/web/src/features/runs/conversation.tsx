@@ -25,21 +25,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardFrame,
-  CardFrameFooter,
-  CardFrameHeader,
-  CardPanel,
-} from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
 
 import { AgentActivityBadge } from "./agent-activity-badge"
-import { ContextStatStrip } from "./context-stat"
-import { MessageInput } from "./message-input"
+import { Composer } from "./composer"
+import { ContextRing } from "./context-stat"
 import { ModelRefPicker } from "./model-switcher"
 import { SteerQueue } from "./steer-queue"
 import { Timeline } from "./timeline"
@@ -136,6 +129,15 @@ export function Conversation(props: ConversationProps) {
   const running = status === "running"
   const closed = status === "closed"
   const locked = closed && !props.closedReopenable
+
+  // Drafts survive agent switches and reloads: restore on agent change,
+  // persist on every edit (send success clears it via setDraft("")).
+  useEffect(() => {
+    setDraft(localStorage.getItem(`composer-draft:${agentId}`) ?? "")
+  }, [agentId])
+  useEffect(() => {
+    localStorage.setItem(`composer-draft:${agentId}`, draft)
+  }, [agentId, draft])
 
   // The steer/followUp picker is only meaningful mid-turn; once the turn
   // settles (idle/closed) the next send starts a fresh turn, so drop a stale
@@ -238,9 +240,9 @@ export function Conversation(props: ConversationProps) {
     onError: (error) => toast.error("压缩失败", error.message),
   })
 
-  // Composer-driven agent controls: stop (send→stop swap, Esc-equivalent)
-  // and close (/close command). Both are silent host callbacks; toasts live
-  // here so the header stays identity-only.
+  // Composer-driven agent controls: stop (toolbar button) and close
+  // (/close command). Both are silent host callbacks; toasts live here so
+  // the header stays identity-only.
   const stop = useMutation({
     mutationFn: () => {
       if (!props.stopAgent) throw new Error("停止功能不可用")
@@ -400,6 +402,17 @@ export function Conversation(props: ConversationProps) {
             agent={detail}
             agentId={agentId}
             canBacktrack={Boolean(sessionOps) && !running}
+            footer={
+              running ? (
+                <div className="flex items-center gap-1.5 py-3 text-info">
+                  <AgentActivityBadge
+                    agentId={agentId}
+                    agentStatus={agent.status}
+                    stream={store}
+                  />
+                </div>
+              ) : undefined
+            }
             key={agentId}
             onBacktrack={setBacktrackTarget}
             stream={store}
@@ -418,54 +431,37 @@ export function Conversation(props: ConversationProps) {
         </div>
       )}
       <div className="shrink-0 px-3 pb-3">
-        <CardFrame className="mx-auto max-w-3xl">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
           {showSteerQueue && (
-            <CardFrameHeader className="px-3 py-2">
-              <SteerQueue
-                setQueue={setQueue}
-                stream={store}
-                agentId={agentId}
-              />
-            </CardFrameHeader>
+            <SteerQueue setQueue={setQueue} stream={store} agentId={agentId} />
           )}
-          <Card>
-            <CardPanel className="p-2">
-              <MessageInput
-                busy={send.isPending}
-                closed={closed}
-                closedReopenable={props.closedReopenable}
-                deliverAs={deliverAs}
-                draft={draft}
-                onDeliverAsChange={setDeliverAs}
-                onDraftChange={setDraft}
-                onStop={props.stopAgent ? () => stop.mutate() : undefined}
-                onSubmit={onSubmit}
-                running={running}
-                stopping={stop.isPending}
+          <Composer
+            busy={send.isPending}
+            closed={closed}
+            closedReopenable={props.closedReopenable}
+            contextSlot={<ContextRing agentId={agentId} stream={store} />}
+            deliverAs={deliverAs}
+            draft={draft}
+            modelSlot={
+              <ModelRefPicker
+                disabled={locked}
+                onChange={(ref) => {
+                  if (!ref) return
+                  setModelDraft(ref)
+                  switchModel.mutate(ref)
+                }}
+                size="sm"
+                value={modelDraft ?? agent.model ?? null}
               />
-            </CardPanel>
-          </Card>
-          <CardFrameFooter className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-xs">
-            <ModelRefPicker
-              disabled={locked}
-              onChange={(ref) => {
-                if (!ref) return
-                setModelDraft(ref)
-                switchModel.mutate(ref)
-              }}
-              size="sm"
-              value={modelDraft ?? agent.model ?? null}
-            />
-            {running && (
-              <AgentActivityBadge
-                agentId={agentId}
-                agentStatus={agent.status}
-                stream={store}
-              />
-            )}
-            <ContextStatStrip agentId={agentId} stream={store} />
-          </CardFrameFooter>
-        </CardFrame>
+            }
+            onDeliverAsChange={setDeliverAs}
+            onDraftChange={setDraft}
+            onStop={props.stopAgent ? () => stop.mutate() : undefined}
+            onSubmit={onSubmit}
+            running={running}
+            stopping={stop.isPending}
+          />
+        </div>
       </div>
       <AlertDialog
         onOpenChange={(open) => {

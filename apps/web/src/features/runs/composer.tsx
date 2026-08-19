@@ -1,11 +1,17 @@
-import { Plus, Send, Square } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { ChevronDown, Send, Square, SquareSlash } from "lucide-react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/group"
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "@/components/ui/menu"
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuTrigger,
+} from "@/components/ui/menu"
 import { Textarea } from "@/components/ui/textarea"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { cn } from "@/lib/utils"
 
 /** Composer command panel entry (slash-command style): clicking inserts the
@@ -34,7 +40,10 @@ function slashQuery(draft: string, closed: boolean): string | null {
   return first
 }
 
-export function MessageInput({
+const interactiveSelector =
+  'button, a, input, textarea, select, [role="menuitem"], [data-slot="menu-popup"]'
+
+export function Composer({
   draft,
   deliverAs,
   busy,
@@ -42,6 +51,8 @@ export function MessageInput({
   closedReopenable,
   running,
   stopping,
+  modelSlot,
+  contextSlot,
   onDraftChange,
   onDeliverAsChange,
   onStop,
@@ -54,16 +65,14 @@ export function MessageInput({
   closedReopenable: boolean
   running: boolean
   stopping: boolean
+  modelSlot: ReactNode
+  contextSlot: ReactNode
   onDraftChange: (value: string) => void
   onDeliverAsChange: (value: "steer" | "followUp") => void
   onStop?: () => void
   onSubmit: () => void
 }) {
   const locked = closed && !closedReopenable
-  // While the agent is running and the composer is empty, the send button
-  // becomes a stop button (Esc-equivalent: the turn is aborted, the container
-  // stays warm). Typing any text reverts it to send.
-  const showStop = running && !draft.trim() && !busy && Boolean(onStop)
   const placeholder = locked
     ? "已关闭，请重新启动以开始"
     : closed
@@ -71,6 +80,7 @@ export function MessageInput({
       : running
         ? "引导或追问 agent…"
         : "向 agent 发送消息…"
+  const rootRef = useRef<HTMLFormElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
@@ -89,6 +99,23 @@ export function MessageInput({
   useEffect(() => {
     setSlashIndex(0)
   }, [query])
+
+  // Focus on entry and at turn end (running → idle) so the next prompt can
+  // be typed immediately; skipped while locked (textarea is disabled).
+  useEffect(() => {
+    if (!running && !locked) inputRef.current?.focus()
+  }, [running, locked])
+
+  // Outside-click closes the slash popup.
+  useEffect(() => {
+    if (!slashOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node))
+        setSlashDismissed(true)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    return () => document.removeEventListener("pointerdown", onPointerDown)
+  }, [slashOpen])
 
   const pickCommand = (command: string) => {
     onDraftChange(command)
@@ -130,18 +157,28 @@ export function MessageInput({
     }
   }
 
-  // Single-select toggle group: ignore un-pressing the active segment.
-  const onDeliverAsGroup = (group: readonly string[]) => {
-    const next = group.at(-1)
-    if (next === "steer" || next === "followUp") onDeliverAsChange(next)
-  }
-
   return (
-    <div className="flex w-full flex-col gap-2">
+    <form
+      className="relative rounded-lg border bg-background shadow-xs"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSubmit()
+      }}
+      onMouseDown={(event) => {
+        // Clicking the container's blank space focuses the textarea instead
+        // of blurring the composer.
+        if (event.target instanceof Element) {
+          if (event.target.closest(interactiveSelector)) return
+          event.preventDefault()
+          inputRef.current?.focus()
+        }
+      }}
+      ref={rootRef}
+    >
       {slashOpen && (
         <div
           aria-label="命令补全"
-          className="flex flex-col overflow-hidden rounded-md border bg-popover shadow-md"
+          className="absolute inset-x-0 bottom-full z-20 mb-1.5 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md"
           role="listbox"
         >
           {matches.map((command, index) => (
@@ -162,26 +199,35 @@ export function MessageInput({
           ))}
         </div>
       )}
-      <form
-        className="flex w-full items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          onSubmit()
+      <Textarea
+        aria-label="向 agent 发送消息"
+        className="min-w-0 flex-1 [&_textarea]:max-h-64 [&_textarea]:min-h-9 [&_textarea]:overflow-y-auto [&_textarea]:px-3 [&_textarea]:py-2.5 [&_textarea]:text-sm [&_textarea]:leading-6"
+        disabled={busy || locked}
+        onChange={(e) => {
+          onDraftChange(e.target.value)
+          setSlashDismissed(false)
         }}
-      >
+        onKeyDown={onKeyDown}
+        placeholder={placeholder}
+        ref={inputRef}
+        rows={1}
+        unstyled
+        value={draft}
+      />
+      <div className="flex items-center gap-1.5 border-t p-1.5">
         <Menu>
           <MenuTrigger
             render={
               <Button
                 aria-label="打开命令面板"
                 disabled={busy || locked}
-                size="icon"
+                size="icon-sm"
                 type="button"
                 variant="ghost"
               />
             }
           >
-            <Plus />
+            <SquareSlash />
           </MenuTrigger>
           <MenuPopup align="start">
             {COMPOSER_COMMANDS.filter(
@@ -197,58 +243,64 @@ export function MessageInput({
             ))}
           </MenuPopup>
         </Menu>
-        <Textarea
-          aria-label="向 agent 发送消息"
-          className="max-h-40 min-w-0 flex-1 text-sm [&_textarea]:max-h-40 [&_textarea]:min-h-9 [&_textarea]:resize-none [&_textarea]:px-0 [&_textarea]:py-1.5 [&_textarea]:text-sm [&_textarea]:leading-6"
-          disabled={busy || locked}
-          onChange={(e) => {
-            onDraftChange(e.target.value)
-            setSlashDismissed(false)
-          }}
-          onKeyDown={onKeyDown}
-          placeholder={placeholder}
-          ref={inputRef}
-          rows={1}
-          unstyled
-          value={draft}
-        />
-        {running && (
-          <ToggleGroup
-            onValueChange={onDeliverAsGroup}
-            value={[deliverAs]}
-            variant="outline"
-          >
-            <ToggleGroupItem value="steer">引导</ToggleGroupItem>
-            <ToggleGroupItem value="followUp">追问</ToggleGroupItem>
-          </ToggleGroup>
-        )}
-        <ButtonGroup>
-          {showStop ? (
+        {modelSlot}
+        {contextSlot}
+        <div className="ml-auto flex items-center gap-2">
+          {running && onStop && (
             <Button
-              aria-label="停止当前轮"
               disabled={stopping || locked}
               loading={stopping}
               onClick={onStop}
-              size="icon"
               title="停止当前轮（容器保留）"
               type="button"
               variant="destructive-outline"
             >
-              <Square />
+              <Square /> 停止
             </Button>
-          ) : (
+          )}
+          <ButtonGroup>
             <Button
-              aria-label="发送消息"
               disabled={!draft.trim() || busy || locked}
               loading={busy}
-              size="icon"
               type="submit"
             >
               <Send />
+              {running ? (deliverAs === "steer" ? "引导" : "追问") : "发送"}
             </Button>
-          )}
-        </ButtonGroup>
-      </form>
-    </div>
+            {running && (
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      aria-label="选择投递方式"
+                      size="icon"
+                      type="button"
+                    />
+                  }
+                >
+                  <ChevronDown />
+                </MenuTrigger>
+                <MenuPopup align="end">
+                  <MenuRadioGroup
+                    onValueChange={(value) => {
+                      if (value === "steer" || value === "followUp")
+                        onDeliverAsChange(value)
+                    }}
+                    value={deliverAs}
+                  >
+                    <MenuRadioItem value="steer">
+                      引导（打断当前轮）
+                    </MenuRadioItem>
+                    <MenuRadioItem value="followUp">
+                      追问（下一轮投递）
+                    </MenuRadioItem>
+                  </MenuRadioGroup>
+                </MenuPopup>
+              </Menu>
+            )}
+          </ButtonGroup>
+        </div>
+      </div>
+    </form>
   )
 }

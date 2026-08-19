@@ -77,63 +77,71 @@ export function SteerQueue({
   }
 
   return (
-    <ul className="flex flex-col gap-1">
-      {rows.map((row) => {
-        const editing = edit?.role === row.role && edit?.index === row.index
-        return (
-          <li
-            className="flex items-center gap-1.5"
-            key={`${row.role}:${row.index}`}
-          >
-            <span
-              className={cn(
-                "shrink-0 rounded px-1.5 py-0.5 text-xs font-medium",
-                row.role === "steering"
-                  ? "bg-info/15 text-info"
-                  : "bg-secondary text-secondary-foreground"
-              )}
+    <div className="rounded-lg border bg-popover/40 p-2 shadow-xs">
+      <p className="mb-1 px-1 text-xs font-medium text-muted-foreground">
+        队列
+      </p>
+      <ul className="flex flex-col gap-0.5">
+        {rows.map((row, index) => {
+          const editing = edit?.role === row.role && edit?.index === row.index
+          return (
+            <li
+              className="flex items-center gap-1.5"
+              key={`${row.role}:${row.index}`}
             >
-              {row.role === "steering" ? "引导" : "追问"}
-            </span>
-            {editing ? (
-              <input
-                className="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 font-mono text-xs"
-                onBlur={(e) => replace(row.role, row.index, e.target.value)}
-                onChange={(e) => setEdit({ ...row, text: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    replace(row.role, row.index, edit.text)
-                  } else if (e.key === "Escape") {
-                    e.preventDefault()
-                    setEdit(null)
-                  }
-                }}
-                ref={(el) => el?.focus()}
-                value={edit?.text ?? ""}
-              />
-            ) : (
-              <button
-                className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-xs text-muted-foreground hover:bg-secondary"
-                onClick={() => setEdit(row)}
-                title="点击编辑"
-                type="button"
+              <span className="w-4 shrink-0 text-right font-mono text-xs text-muted-foreground">
+                {index + 1}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 rounded px-1.5 py-0.5 text-xs font-medium",
+                  row.role === "steering"
+                    ? "bg-info/15 text-info"
+                    : "bg-secondary text-secondary-foreground"
+                )}
               >
-                {row.text}
-              </button>
-            )}
-            <Button
-              aria-label="从队列移除"
-              onClick={() => remove(row.role, row.index)}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-            >
-              <X />
-            </Button>
-          </li>
-        )
-      })}
-    </ul>
+                {row.role === "steering" ? "引导" : "追问"}
+              </span>
+              {editing ? (
+                <input
+                  className="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 font-mono text-xs"
+                  onBlur={(e) => replace(row.role, row.index, e.target.value)}
+                  onChange={(e) => setEdit({ ...row, text: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      replace(row.role, row.index, edit.text)
+                    } else if (e.key === "Escape") {
+                      e.preventDefault()
+                      setEdit(null)
+                    }
+                  }}
+                  ref={(el) => el?.focus()}
+                  value={edit?.text ?? ""}
+                />
+              ) : (
+                <button
+                  className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-xs text-muted-foreground hover:bg-secondary"
+                  onClick={() => setEdit(row)}
+                  title="点击编辑"
+                  type="button"
+                >
+                  {row.text}
+                </button>
+              )}
+              <Button
+                aria-label="从队列移除"
+                onClick={() => remove(row.role, row.index)}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <X />
+              </Button>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }

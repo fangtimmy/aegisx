@@ -629,6 +629,7 @@ export function Timeline({
   agent,
   canBacktrack = false,
   onBacktrack,
+  footer,
 }: {
   agentId: string
   stream: ConversationStore
@@ -636,6 +637,9 @@ export function Timeline({
   /** Show the flat-backtrack affordance on committed rows (v12). */
   canBacktrack?: boolean
   onBacktrack?: (seq: number) => void
+  /** Tail content rendered after the last message, inside the scrollable
+   * timeline (e.g. the live working-status indicator). */
+  footer?: ReactNode
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -774,6 +778,7 @@ export function Timeline({
           onBacktrack={canBacktrack ? onBacktrack : undefined}
         />
       ))}
+      {footer}
       <div aria-live="polite" className="sr-only">
         {items.length > 0 ? "agent 活动已更新" : ""}
       </div>
