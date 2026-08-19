@@ -31,6 +31,10 @@ export type AgentToolContext = {
   /** Whether the agent's challenge already recorded an accepted flag
    * (finish_run guard — challenge-level in v19). */
   hasAcceptedFlag(): boolean
+  /** Whether this agent is the last live (running/idle) agent on its
+   * challenge — finish_run's stop-target guard: while teammates are live
+   * the shared target stays up for them. */
+  isLastLiveAgent(): boolean
   /** Whether finish_run already warned THIS agent about a missing flag. */
   finishFlagWarned(): boolean
   markFinishFlagWarned(): void
@@ -60,7 +64,7 @@ export function createMainTools(ctx: AgentToolContext, tools: string[]) {
         name: "finish_run",
         label: "Finish task",
         description:
-          "Declare YOUR OWN task complete and stop further work — this ends your agent only; sibling agents on the challenge keep running. Call only once your solution is backed by reproducible evidence; when a remote target exists and you are the last one working, stop it first. If no flag has been accepted on this challenge yet, the tool warns once — submit the flag first when you solved it.",
+          "Declare YOUR OWN task complete and stop further work — this ends your agent only; sibling agents on the challenge keep running. Call only once your solution is backed by reproducible evidence. If a remote target is still active and you are the last live agent on this challenge, stop it first (stop_target); while teammates are live it keeps running for them. If no flag has been accepted on this challenge yet, the tool warns once — submit the flag first when you solved it.",
         parameters: Type.Object({
           summary: Type.String({
             description:
@@ -72,9 +76,9 @@ export function createMainTools(ctx: AgentToolContext, tools: string[]) {
         execute: async (_id, params) => {
           if (has("stop_target")) {
             const target = await ctx.targetAction("get")
-            if (isActiveTarget(target)) {
+            if (isActiveTarget(target) && ctx.isLastLiveAgent()) {
               throw new Error(
-                "Stop the remote target before finishing your task"
+                "Stop the remote target before finishing your task — you are the last live agent on this challenge"
               )
             }
           }

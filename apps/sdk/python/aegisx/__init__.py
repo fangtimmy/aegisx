@@ -26,7 +26,7 @@ Rules:
 - Keep printed output small (bash truncates at ~64KB): print summaries, write
   bulk to files.
 - Do one composite operation per script; persist reusable helpers in
-  /workspace/scheduler_lib.py and `import scheduler_lib`.
+  scheduler_lib.py in your working directory and `import scheduler_lib`.
 """
 from __future__ import annotations
 

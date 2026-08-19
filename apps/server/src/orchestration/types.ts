@@ -46,6 +46,9 @@ export type PromptContext = {
     description: string
     category: string | null
     points: number | null
+    /** Whether the challenge is bound to an integrated remote platform
+     * (flag verification semantics: remote judge vs local accept). */
+    integrated?: boolean
     attachments: PromptAttachment[]
     attachmentPaths: string[]
   }

@@ -19,7 +19,6 @@ import type { PromptContext } from "../orchestration/types"
 import {
   type ChallengeRemote,
   isPlatformIntegrated,
-  isTargetCapable,
 } from "../platforms/challenge-state"
 import { RunStartError } from "./errors"
 import { agentId8 } from "./workspace-resolver"
@@ -41,8 +40,9 @@ export type SolverPromptInputs = {
  * workspace block describes the derived path tree: the agent's own directory
  * (`agents/<id8>` — its bash cwd + host file-tool root), the server-written
  * read-only `shared/` area, the one-shot `attachments/` materialization, and
- * the sibling agent directories. `capabilities` are derived from the agent's
- * own tool list (filled by the factory when rendering the system prompt).
+ * the sibling agent directories. `capabilities` are NOT set here — the
+ * factory injects the tool-list-derived values for every render (single
+ * source of truth).
  */
 export function buildSolverPromptContext(
   inputs: SolverPromptInputs,
@@ -68,7 +68,6 @@ export function buildSolverPromptContext(
     .from(eventPlatforms)
     .where(eq(eventPlatforms.eventId, event.id))
     .get()
-  const targetSupported = isTargetCapable(remote)
   const platformIntegrated = isPlatformIntegrated(remote)
   return {
     event: {
@@ -83,6 +82,7 @@ export function buildSolverPromptContext(
       description: challenge.description,
       category: challenge.category,
       points: challenge.points,
+      integrated: platformIntegrated,
       attachments: challengeAttachments,
       attachmentPaths: challengeAttachments.map(({ path }) => path),
     },
@@ -102,20 +102,15 @@ export function buildSolverPromptContext(
       memoryMb: environment.memoryMb,
       pidsLimit: environment.pidsLimit,
     },
-    capabilities: {
-      canFinish: true,
-      canSubmitFlag: platformIntegrated,
-      canManageTarget: targetSupported,
-    },
   }
 }
 
 /**
  * Build the {@link PromptContext} for the scheduler (orchestrator) agent. No
  * `challenge`/`workspace` block — the scheduler works at its workspace root
- * and manages the event, not one challenge. No `capabilities` (the
- * scheduler's abilities come from its tool list — empty after the SDK
- * convergence).
+ * and manages the event, not one challenge. No `capabilities` — the
+ * scheduler's abilities come from its tool list (empty after the SDK
+ * convergence), injected by the factory like every other agent.
  */
 export function buildSchedulerPromptContext(
   inputs: {
@@ -146,11 +141,6 @@ export function buildSchedulerPromptContext(
       id: model.modelId,
     },
     // The scheduler does not solve challenges — no flag/target context.
-    capabilities: {
-      canFinish: false,
-      canSubmitFlag: false,
-      canManageTarget: false,
-    },
     instruction,
   }
 }

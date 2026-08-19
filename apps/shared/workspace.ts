@@ -102,6 +102,9 @@ export type PromptTemplateContext = {
     description: string
     category: string | null
     points: number | null
+    /** Bound to an integrated remote platform (verifies flags remotely)?
+     * Absent/false → submitted flags are accepted locally. */
+    integrated?: boolean
     attachments: PromptAttachment[]
     attachmentPaths: string[]
   }

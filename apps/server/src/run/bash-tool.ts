@@ -176,11 +176,18 @@ async function writeOverflow(
   return `${overflowDirAbs}/${name}`
 }
 
-const BASH_DESCRIPTION = `Run a shell command inside the Kali container (stdout and stderr are merged into one output).
+function bashDescription(containerCwd: string): string {
+  // Solver agents run from their own derived directory (agents/<id8>);
+  // the scheduler runs from the workspace root (no write restriction note).
+  const solverNote = /\/agents\/[^/]+$/.test(containerCwd)
+    ? `- Write only inside your own directory: the workspace root, \`shared/\`, \`attachments/\`, and sibling agents' directories are read-only for you.
+`
+    : ""
+  return `Run a shell command inside the Kali container (stdout and stderr are merged into one output).
 
 ## Working directory & paths
-- The shell starts in the workspace (/workspace), where your file tools also operate — reference files as workspace-relative or /workspace/<path>. Do NOT prefix commands with \`cd /workspace\`.
-- The full CTF toolchain is on PATH: python3 (venv with pwntools/angr/impacket/pycryptodome/...), nmap, gdb/pwndbg, ghidra-analyze, fd, rg, ...
+- The shell starts in your working directory (\`${containerCwd}\`) — the same directory the write/edit file tools operate on. Reference files as paths relative to it or as absolute paths; do not prefix commands with \`cd\`.
+${solverNote}- The full CTF toolchain is on PATH: python3 (venv with pwntools/angr/impacket/pycryptodome/...), nmap, gdb/pwndbg, ghidra-analyze, fd, rg, ...
 - Search and file discovery happen here: \`rg\` for content search, \`fd\` for finding files, \`ls\` for listing.
 
 ## Output
@@ -194,7 +201,7 @@ const BASH_DESCRIPTION = `Run a shell command inside the Kali container (stdout 
 - Fire independent probes as parallel bash calls when they do not depend on each other.
 
 ## Python scripts
-For multi-step logic (especially the scheduler's \`aegisx\` management SDK), write ONE script with a heredoc instead of chaining \`python3 -c\` one-liners (quote hell):
+For multi-step logic (especially the \`aegisx\` management SDK), write ONE script with a heredoc instead of chaining \`python3 -c\` one-liners (quote hell):
 
     python3 - <<'PY'
     import aegisx
@@ -202,7 +209,8 @@ For multi-step logic (especially the scheduler's \`aegisx\` management SDK), wri
     ...
     PY
 
-Single quotes around PY stop shell interpolation of $/backticks. The scheduler container has PYTHONPATH preset so \`import aegisx\` just works. A script failure prints a traceback — read it, fix the script, re-run (do not switch to a different mechanism).`
+Single quotes around PY stop shell interpolation of $/backticks. The container has PYTHONPATH preset so \`import aegisx\` just works. A script failure prints a traceback — read it, fix the script, re-run (do not switch to a different mechanism).`
+}
 
 export function createBashTool(
   /** Container-internal working directory for every exec (the agent's own
@@ -224,7 +232,7 @@ export function createBashTool(
   return defineTool({
     name: "bash",
     label: "bash",
-    description: BASH_DESCRIPTION,
+    description: bashDescription(containerCwd),
     executionMode: "parallel",
     parameters: Type.Object({
       command: Type.String({ description: "Shell command to execute." }),

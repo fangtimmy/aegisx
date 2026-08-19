@@ -2,10 +2,10 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 import type { FlatSettings, ModelRef } from "@aegisx/shared"
-import { get } from "@aegisx/shared"
+import { get, isActiveAgentStatus } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { Api, Model } from "@earendil-works/pi-ai"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq, inArray, ne } from "drizzle-orm"
 
 import { createAgentHost } from "../agents/host"
 import type {
@@ -27,7 +27,7 @@ import {
   loadTemplateMap,
   renderTemplate,
 } from "../orchestration/prompt-templates"
-import { deriveCapabilities } from "../orchestration/types"
+import { type Capabilities, deriveCapabilities } from "../orchestration/types"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 import { generateModelsJson } from "../providers/models-json"
@@ -432,6 +432,20 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
             )
             .get()
         ),
+      /** finish_run's stop-target guard: true when no other running/idle
+       * agent shares this challenge — the shared target is then this
+       * agent's to stop; otherwise teammates keep it. */
+      isLastLiveAgent: () => {
+        if (!row.challengeId) return true
+        const siblings = db
+          .select({ status: agents.status })
+          .from(agents)
+          .where(
+            and(eq(agents.challengeId, row.challengeId), ne(agents.id, row.id))
+          )
+          .all()
+        return !siblings.some((sibling) => isActiveAgentStatus(sibling.status))
+      },
       finishFlagWarned: () => finishFlagWarned.has(row.id),
       markFinishFlagWarned: () => {
         finishFlagWarned.add(row.id)
@@ -443,16 +457,19 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
 
   /** Render the solver's first-turn prompt. `override` mode returns the raw
    * prompt verbatim; otherwise the `initial` template renders with the
-   * spawn prompt as the Strategy section. */
+   * spawn prompt as the Strategy section. `capabilities` are the same
+   * tool-list-derived values the system prompt rendered with. */
   function solverInitialPrompt(
     templateMap: Map<string, string>,
     promptContext: ReturnType<typeof buildSolverPromptContext>,
+    capabilities: Capabilities,
     spawnPrompt: string | undefined,
     promptMode: "strategy" | "override" | undefined
   ): string {
     if (promptMode === "override" && spawnPrompt) return spawnPrompt
     return renderTemplate(templateMap, "initial", {
       ...promptContext,
+      capabilities,
       ...(spawnPrompt ? { strategy: spawnPrompt } : {}),
     })
   }
@@ -593,6 +610,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       initialPrompt = solverInitialPrompt(
         templateMap,
         promptContext,
+        capabilities,
         input.prompt,
         input.promptMode
       )

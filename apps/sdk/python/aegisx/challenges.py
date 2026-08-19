@@ -11,7 +11,7 @@ ChallengeList = list[Challenge]
 
 
 def list() -> ChallengeList:
-    """All challenges in the event (points, category, solved state, run
+    """All challenges in the event (points, category, solved state, agent
     activity). Use to pick what to work on; read full detail with
     `aegisx.challenges.get(id)`."""
     client = get_client()
@@ -26,8 +26,8 @@ def list() -> ChallengeList:
 
 def get(challenge_id: str) -> Challenge:
     """Full detail for one challenge: description, attachments, remote target
-    connectivity (ports/services), solved state, and run history. Read this
-    before starting a challenge you do not know."""
+    connectivity (ports/services), solved state, and attempt history. Read
+    this before starting a challenge you do not know."""
     data = get_client().request("GET", f"/api/challenges/{challenge_id}")
     challenge = from_dict(Challenge, data)
     if challenge is None:

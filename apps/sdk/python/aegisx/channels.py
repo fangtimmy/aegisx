@@ -1,8 +1,8 @@
-"""`aegisx.channels` — the derived-key message layer (docs/im-simplify-v18.md).
+"""`aegisx.channels` — the derived-key message layer.
 
 Channels are DERIVED KEYS, not directory rows: `team:<challengeId>` (#team,
-shared by every run on the challenge), `dm:<agentId>` (scheduler/user/system
-→ one solver), `orch:<eventId>` (solver asks + system events → the
+shared by every agent on the challenge), `dm:<agentId>` (scheduler/user/
+system → one agent), `orch:<eventId>` (solver asks + system events → the
 scheduler). The first message makes a channel exist.
 
 The caller's identity comes from the per-exec env `AEGISX_AGENT_ID`
@@ -14,15 +14,17 @@ Solver face:
     aegisx.channels.read("#team")                   # pull = read (cursor moves)
     aegisx.channels.post("#team", text, files=["exp2.py"], urgent=False)
     aegisx.ask("target expires in 3min — extend or drop?", urgent=True)
-    aegisx.channels.fetch(file_id)                  # materialize an attachment
 
 Delivery: urgent=True posts deliver immediately (wake the readers); False
 posts merge into one delivery every ~5 minutes.
 
-Attachment semantics: `files` are workspace-relative paths, snapshot-copied
-at post time (later workspace edits never mutate a sent attachment). `fetch`
-writes into /workspace/inbox/<filename>; steer texts only ever show 📎
-filename/size metadata — fetch to see content.
+Attachment semantics: `files` are paths relative to your working directory;
+at post time the server copies the bytes into the challenge workspace's
+`shared/from-<id8>/` tree (a snapshot — later edits never mutate a sent
+attachment). Readers open the path directly from their container (solvers:
+/workspace/shared/...; the scheduler: /challenges/<cid>/workspace/shared/...
+read-only mount). Message 📎 lines carry the shared-relative path — there is
+no fetch step.
 """
 from __future__ import annotations
 

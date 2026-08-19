@@ -138,6 +138,7 @@ export const samplePromptContext: PromptTemplateContext = {
     description: "Recover the flag from the provided application.",
     category: "web",
     points: 300,
+    integrated: true,
     attachments: [
       { name: "challenge.zip", path: "challenge.zip", size: 12_345 },
     ],

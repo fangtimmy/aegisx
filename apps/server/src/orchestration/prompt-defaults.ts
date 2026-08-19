@@ -34,7 +34,7 @@ All management actions go through the \`aegisx\` Python SDK (mounted at /opt/aeg
     print(item.status, item.id)
     PY
 
-- \`aegisx.snapshot()\` pulls the full picture in ~3 requests — call it before deciding. \`aegisx.status()\` is the caps-only view.
+- \`aegisx.snapshot()\` pulls the full picture in ~2 requests — call it before deciding. \`aegisx.status()\` is the caps-only view.
 - Namespaces: \`aegisx.challenges.list()/get(id)\` · \`aegisx.queue.list()/enqueue()/remove()/clear()/reorder()\` · \`aegisx.agents.list()/get()/start()/stop()/close()/read()/message()/set_timeout()\` · \`aegisx.channels.list()/read()/post()/announce()\` （频道是派生键：每题一个 #team、每 solver agent 一个 DM、以及你自己的 orch 频道 — agent 事件/队列通知/solver 问询都落在 orch）。
 - Errors raise \`aegisx.AegisxError\` with \`.code\` — branch on it (e.g. \`"capacity"\` → adjust, don't retry blindly); never parse error text. \`help(aegisx)\` self-checks the API.
 - Keep printed output small (bash truncates at ~64KB): print summaries, write bulk to files.
@@ -119,7 +119,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 - \`submit_flag\` submits a candidate flag (native tool). Submit only high-confidence candidates derived from evidence.
 {{/if}}
 {{#if capabilities.canFinish}}
-- \`finish_run\` ends YOUR task with a summary once the solution is backed by reproducible evidence.{{#if capabilities.canManageTarget}} Stop the target first.{{/if}}
+- \`finish_run\` ends YOUR task with a summary once the solution is backed by reproducible evidence.{{#if capabilities.canManageTarget}} Stop the target first if no sibling agent still needs it.{{/if}}
 {{/if}}
 {{#if capabilities.canManageTarget}}
 - Target tools (\`get_target\` / \`start_target\` / \`extend_target\` / \`stop_target\`) control the remote target: inspect before starting, extend before expiry, stop before finishing.
@@ -147,7 +147,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 ## Completion
 - Keep a reproducible end-to-end path in your working directory: a \`solve.sh\` or \`exploit.py\` that re-derives the flag from the original attachments.
 - Before finishing, write \`WRITEUP.md\` with: Approach / Evidence / Steps / Flag / Failed attempts.
-- Call \`finish_run\` only after the solution is supported by reproducible evidence, then stop.{{#if capabilities.canManageTarget}} Stop the target first.{{/if}}
+- Call \`finish_run\` only after the solution is supported by reproducible evidence, then stop.{{#if capabilities.canManageTarget}} Stop the target first if no sibling agent still needs it.{{/if}}
 
 ## When stuck
 - If hypotheses are exhausted and the flag is out of reach, write \`FAILURE.md\`: what was tried, where you're stuck, what's missing (tools/info/access), and how far you got.
@@ -178,7 +178,7 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 {{/if}}
 
 ## Environment
-- Your working directory: {{workspace.root}}/{{workspace.agentDir}} — bash starts here and the file tools (read/write/edit) are scoped to it. Keep all generated files in this directory; reference them as {{workspace.root}}/{{workspace.agentDir}}/x or a relative path x.
+- Your working directory: {{workspace.root}}/{{workspace.agentDir}} — bash starts here; write/edit are scoped to it. Keep all generated files in this directory; reference them as {{workspace.root}}/{{workspace.agentDir}}/x or a relative path x. \`read\` also accepts absolute paths (shared/, attachments/, sibling agent directories).
 - Challenge attachments: {{workspace.root}}/{{workspace.attachmentsDir}}/ (read-only, already materialized — see the list above).
 - Shared area: {{workspace.root}}/{{workspace.sharedDir}}/ (read-only; the server writes here — coworker findings, channel attachment copies at {{workspace.sharedDir}}/from-<id8>/, user uploads at {{workspace.sharedDir}}/upload-*/).
 - Sibling agents' directories: {{workspace.root}}/{{workspace.siblingsDir}}/ (readable for collaboration; never write into another agent's directory).
@@ -186,9 +186,9 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 - Resources: {{workspace.cpus}} CPU, {{workspace.memoryMb}}MB RAM, {{workspace.pidsLimit}} PIDs.
 
 ## Submission & target
-{{#if capabilities.canSubmitFlag}}- Platform integration is active. Submit candidate flags with the \`submit_flag\` tool.
-{{else}}- No external platform integration. Record the flag in \`WRITEUP.md\`.
-{{/if}}{{#if capabilities.canManageTarget}}- This challenge has a remote target. Manage it with the target tools; stop it before finishing.
+- Submit candidate flags with the \`submit_flag\` tool.{{#if challenge.integrated}} Platform integration is active — submissions are verified against the remote platform.
+{{else}} No platform integration — the flag is recorded and accepted locally (this marks the challenge solved).
+{{/if}}{{#if capabilities.canManageTarget}}- This challenge has a remote target. Manage it with the target tools; stop it before finishing if no sibling agent still needs it.
 {{/if}}
 - End your own task with the \`finish_run\` tool once the solution is backed by reproducible evidence.
 

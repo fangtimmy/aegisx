@@ -17,6 +17,7 @@ function mockCtx(overrides: Partial<AgentToolContext> = {}): AgentToolContext {
     }),
     requestFinish: () => {},
     hasAcceptedFlag: () => true,
+    isLastLiveAgent: () => true,
     finishFlagWarned: () => false,
     markFinishFlagWarned: () => {},
     ...overrides,
@@ -92,7 +93,7 @@ describe("createMainTools", () => {
     expect(byName.stop_target.executionMode).toBe("sequential")
   })
 
-  test("finish_run requires the target to be stopped", async () => {
+  test("finish_run requires the target to be stopped (last live agent)", async () => {
     const tools = createMainTools(
       mockCtx({
         targetAction: async () => ({
@@ -107,6 +108,28 @@ describe("createMainTools", () => {
     await expect(invoke(finish, { summary: "s" })).rejects.toThrow(
       /Stop the remote target/
     )
+  })
+
+  test("finish_run leaves a live target running for teammates", async () => {
+    let finished = 0
+    const tools = createMainTools(
+      mockCtx({
+        isLastLiveAgent: () => false,
+        targetAction: async () => ({
+          status: "running",
+          endpoints: [],
+          expiresAt: null,
+        }),
+        requestFinish: () => {
+          finished += 1
+        },
+      }),
+      ["finish_run", "get_target", "stop_target"]
+    )
+    const finish = findTool(tools, "finish_run")
+    const result = await invoke(finish, { summary: "s" })
+    expect(finished).toBe(1)
+    expect(result.terminate).toBe(true)
   })
 
   test("finish_run requests finish + terminates when gates pass", async () => {

@@ -1,4 +1,4 @@
-export const READ_DESCRIPTION = `Read a file from the run workspace (or /opt/solver/** in containers).
+export const READ_DESCRIPTION = `Read a file from the agent workspace (or /opt/solver/** in containers).
 
 Usage:
 - Prefer this over bash cat/head for text files — output is bounded and line-numbered.
@@ -17,7 +17,7 @@ export const WRITE_DESCRIPTION = `Create or overwrite a text file in the agent w
 Usage:
 - Prefer edit for small changes to existing files. Use write for new files or full rewrites.
 - Overwrites the target if it already exists.
-- Keep generated artifacts under the run workspace.`
+- Keep generated artifacts under the agent workspace.`
 
 export const EDIT_DESCRIPTION = `Performs string replacement in a file (exact match first, then fuzzy).
 
