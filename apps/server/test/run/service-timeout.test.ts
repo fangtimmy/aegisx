@@ -9,6 +9,7 @@ import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
   makeProvider,
+  seedAgent,
   seedChallenge,
   seedEvent,
   setupDb,
@@ -103,6 +104,9 @@ describe("agent timeout", () => {
 
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.lastTimeoutAt).toBeTruthy()
+      // One-shot: the fire consumed the deadline (later turns/reopen stay
+      // unbounded instead of re-arming a stale one).
+      expect(row.deadlineAt).toBeNull()
       expect(row.status).toBe("idle")
       // Warm: the shared container is NEVER killed by a timeout.
       expect(killed).toEqual([])
@@ -124,10 +128,69 @@ describe("agent timeout", () => {
 
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.lastTimeoutAt).toBeTruthy()
+      expect(row.deadlineAt).toBeNull()
       expect(row.status).toBe("aborted")
       // v19 red line: the agent is terminal, but the challenge's shared
       // container survives (only the idle sweep may reclaim it).
       expect(killed).toEqual([])
+      await agentService.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a stale (past) deadlineAt is never armed on reopen — the new turn is not insta-aborted", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = makeProvider()
+      const { manager } = stubContainerManager()
+      let aborts = 0
+      const agentService = createAgentService({
+        db,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: {
+          submitFlag: async () => undefined,
+          targetAction: async () => ({
+            status: "running",
+            endpoints: [],
+            expiresAt: null,
+          }),
+        } as never,
+        configStore: stubConfigStore([provider]),
+        getSettings: flatSettingsWithDefaultModel,
+        timeoutGraceMs: 40,
+        // The reopened session's prompt resolves — the DM's turn settles idle
+        // unless a stale deadline fires at delay 0 and aborts it.
+        createHost: mock(async () => {
+          const stub = stubHostAgentSession("sess-reopen")
+          const session = stub.session as unknown as {
+            abort: () => Promise<void>
+          }
+          session.abort = async () => {
+            aborts++
+          }
+          return stub
+        }),
+      })
+      // Crash/boot leftover: an idle agent whose deadline passed while the
+      // process was down (the fire never consumed it).
+      const agentId = seedAgent(db, {
+        id: "ag-stale",
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        deadlineAt: new Date(Date.now() - 60_000).toISOString(),
+      })
+
+      await agentService.sendMessage(agentId, { text: "hello" })
+      await wait(150)
+
+      expect(aborts).toBe(0)
+      const row = db.select().from(agents).where(eq(agents.id, agentId)).get()!
+      expect(row.lastTimeoutAt).toBeNull()
+      expect(row.status).toBe("idle")
       await agentService.close()
     } finally {
       close()

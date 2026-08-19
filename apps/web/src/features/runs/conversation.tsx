@@ -90,6 +90,10 @@ export type ConversationProps = {
    * the session bar, and the timeline backtrack affordance render only when
    * present. */
   sessionOps?: SessionOps
+  /** Live `agent.updated` pushes from the SSE stream — lets the host sync
+   * external caches (e.g. the detail query) instantly instead of waiting
+   * for the next poll. */
+  onAgentUpdated?: (agent: AgentSummary) => void
 }
 
 /** Per-agent session + backtrack ops (v12). */
@@ -113,6 +117,7 @@ export function Conversation(props: ConversationProps) {
     setQueue,
     compactAgent: compactAgentFn,
     sessionOps,
+    onAgentUpdated,
   } = props
 
   const storeRef = useRef<ConversationStore | null>(null)
@@ -175,6 +180,17 @@ export function Conversation(props: ConversationProps) {
     canEditQueue &&
     queuedMessages !== null &&
     (queuedMessages.steering.length > 0 || queuedMessages.followUp.length > 0)
+
+  // Live agent pushes (SSE agent.updated) forwarded to the host so external
+  // caches update instantly (the store notifies every listener on each
+  // agent-scoped event; filter to this agent's row).
+  useEffect(() => {
+    if (!onAgentUpdated) return
+    return store.subscribe(agentId, () => {
+      const next = store.getAgents().find((a) => a.id === agentId)
+      if (next) onAgentUpdated(next)
+    })
+  }, [store, agentId, onAgentUpdated])
 
   const loadMessages = useCallback(async () => {
     try {

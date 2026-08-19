@@ -22,7 +22,9 @@ export type AgentDeadlines = ReturnType<typeof createAgentDeadlines>
  * never to the shared container). At expiry the agent's turn is aborted; a
  * clean settle within the grace lands idle (warm), else the session is
  * force-disposed and the agent goes aborted. The outcome is reported to the
- * event's scheduler (`agent.timedOut`). */
+ * event's scheduler (`agent.timedOut`). The deadline is ONE-SHOT: the fire
+ * consumes it (deadlineAt → null), so the agent's later turns are unbounded
+ * and a reopen never re-arms a stale deadline. */
 export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
   const { lifecycle, updateAgent, now, emitAgentEvent } = deps
   const timeoutTimers = new Map<
@@ -41,14 +43,19 @@ export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
     return Boolean(lifecycle.get(agentId)?.session.isStreaming)
   }
 
-  /** Arm an agent's hard-deadline timer. Idempotent. */
+  /** Arm an agent's hard-deadline timer. Idempotent. A deadline already in
+   * the past (crash/boot leftovers) is never armed — it would fire at delay
+   * 0 and insta-abort the fresh turn the reopen just started. */
   function armAgentTimers(agentId: string, deadlineAt: string | null): void {
     clearAgentTimers(agentId)
     if (!deadlineAt) return
-    const delay = Math.max(new Date(deadlineAt).getTime() - Date.now(), 0)
+    const delay = new Date(deadlineAt).getTime() - Date.now()
+    if (delay <= 0) return
     const entry: { deadline?: NodeJS.Timeout; grace?: NodeJS.Timeout } = {}
     entry.deadline = setTimeout(() => {
-      updateAgent(agentId, { lastTimeoutAt: now() })
+      // One-shot: consume the deadline so warm reuse / reopen stays unbounded
+      // instead of silently re-arming a stale one.
+      updateAgent(agentId, { lastTimeoutAt: now(), deadlineAt: null })
       void lifecycle.abort(agentId).catch(() => undefined)
       entry.grace = setTimeout(() => {
         // Still streaming after grace → force-dispose the session →

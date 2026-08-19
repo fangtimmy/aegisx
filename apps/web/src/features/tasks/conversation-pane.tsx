@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   agentsApi,
   keys,
+  type AgentDetail,
   type AgentSummary,
   type Challenge,
   type ModelRef,
@@ -312,6 +313,17 @@ function AgentConversation({
     () => agentsApi.stopAgent(agentId).then(() => invalidateAgent()),
     [invalidateAgent, agentId]
   )
+  // SSE agent.updated → detail cache: the composer's send/stop swap and the
+  // status strip follow the stream instantly instead of the next poll.
+  const onAgentUpdated = useCallback(
+    (next: AgentSummary) => {
+      queryClient.setQueryData<AgentDetail>(
+        keys.agents.detail(agentId),
+        (prev) => (prev ? { ...prev, agent: next } : prev)
+      )
+    },
+    [queryClient, agentId]
+  )
   const closeAgent = useCallback(
     () => agentsApi.closeAgent(agentId).then(() => invalidateAgent()),
     [invalidateAgent, agentId]
@@ -354,6 +366,7 @@ function AgentConversation({
       compactAgent={compactAgent}
       detail={detail.data ?? undefined}
       loadMessages={loadMessages}
+      onAgentUpdated={onAgentUpdated}
       sendMessage={sendMessage}
       sessionOps={sessionOps}
       setQueue={setQueue}
