@@ -5,6 +5,14 @@ import { challengesApi, keys } from "@/api"
 import { ApiError } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardFrame,
+  CardFrameAction,
+  CardFrameHeader,
+  CardFrameTitle,
+  CardPanel,
+} from "@/components/ui/card"
 import { formatTime } from "@/lib/format"
 import { toast } from "@/lib/toast"
 
@@ -50,77 +58,102 @@ export function TargetPanel({ challengeId }: { challengeId: string }) {
           ? "不可用"
           : (value?.status ?? "加载中")
 
+  const hasBody =
+    Boolean(value && value.endpoints.length > 0) ||
+    Boolean(value?.expiresAt) ||
+    Boolean(target.error || action.error)
+
   return (
-    <section className="border-t pt-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="mr-auto text-sm font-medium">题目目标</h3>
-        <Badge variant={value?.status === "running" ? "success" : "secondary"}>
-          {statusLabel}
-        </Badge>
-        <Button
-          aria-label="刷新目标"
-          loading={target.isFetching}
-          onClick={() => target.refetch()}
-          size="icon-sm"
-          type="button"
-          variant="ghost"
-        >
-          <RefreshCw />
-        </Button>
-        {value?.status === "absent" && (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>
+          <span className="flex items-center gap-2">
+            题目目标
+            <Badge
+              size="sm"
+              variant={value?.status === "running" ? "success" : "secondary"}
+            >
+              {statusLabel}
+            </Badge>
+          </span>
+        </CardFrameTitle>
+        <CardFrameAction className="flex items-center gap-2">
           <Button
-            loading={action.isPending}
-            onClick={() => action.mutate("start")}
+            aria-label="刷新目标"
+            loading={target.isFetching}
+            onClick={() => target.refetch()}
+            size="icon-sm"
             type="button"
-            variant="outline"
+            variant="ghost"
           >
-            <Play /> 启动
+            <RefreshCw />
           </Button>
-        )}
-        {value?.status === "running" && (
-          <>
+          {value?.status === "absent" && (
             <Button
-              loading={action.isPending && action.variables === "extend"}
-              onClick={() => action.mutate("extend")}
+              loading={action.isPending}
+              onClick={() => action.mutate("start")}
+              size="sm"
               type="button"
               variant="outline"
             >
-              <Clock3 /> 延长
+              <Play /> 启动
             </Button>
-            <Button
-              loading={action.isPending && action.variables === "stop"}
-              onClick={() => action.mutate("stop")}
-              type="button"
-              variant="destructive-outline"
-            >
-              <Square /> 停止
-            </Button>
-          </>
-        )}
-      </div>
-      {value && value.endpoints.length > 0 && (
-        <div className="mt-3 grid gap-2">
-          {value.endpoints.map((endpoint) => (
-            <div
-              className="flex min-w-0 items-center justify-between gap-3 text-sm"
-              key={`${endpoint.name}:${endpoint.address}`}
-            >
-              <span className="text-muted-foreground">{endpoint.name}</span>
-              <code className="truncate text-xs">{endpoint.address}</code>
-            </div>
-          ))}
-        </div>
+          )}
+          {value?.status === "running" && (
+            <>
+              <Button
+                loading={action.isPending && action.variables === "extend"}
+                onClick={() => action.mutate("extend")}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Clock3 /> 延长
+              </Button>
+              <Button
+                loading={action.isPending && action.variables === "stop"}
+                onClick={() => action.mutate("stop")}
+                size="sm"
+                type="button"
+                variant="destructive-outline"
+              >
+                <Square /> 停止
+              </Button>
+            </>
+          )}
+        </CardFrameAction>
+      </CardFrameHeader>
+      {hasBody && (
+        <Card>
+          <CardPanel className="flex flex-col gap-3">
+            {value && value.endpoints.length > 0 && (
+              <div className="grid gap-2">
+                {value.endpoints.map((endpoint) => (
+                  <div
+                    className="flex min-w-0 items-center justify-between gap-3 text-sm"
+                    key={`${endpoint.name}:${endpoint.address}`}
+                  >
+                    <span className="text-muted-foreground">
+                      {endpoint.name}
+                    </span>
+                    <code className="truncate text-xs">{endpoint.address}</code>
+                  </div>
+                ))}
+              </div>
+            )}
+            {value?.expiresAt && (
+              <p className="text-xs text-muted-foreground">
+                过期时间 {formatTime(value.expiresAt)}
+              </p>
+            )}
+            {(target.error || action.error) && (
+              <p className="text-xs text-destructive">
+                {(target.error ?? action.error)?.message}
+              </p>
+            )}
+          </CardPanel>
+        </Card>
       )}
-      {value?.expiresAt && (
-        <p className="mt-2 text-xs text-muted-foreground">
-          过期时间 {formatTime(value.expiresAt)}
-        </p>
-      )}
-      {(target.error || action.error) && (
-        <p className="mt-2 text-xs text-destructive">
-          {(target.error ?? action.error)?.message}
-        </p>
-      )}
-    </section>
+    </CardFrame>
   )
 }

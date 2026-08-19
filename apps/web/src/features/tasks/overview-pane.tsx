@@ -23,7 +23,15 @@ import { ListRow } from "@/components/list-row"
 import { Markdown } from "@/components/markdown"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardPanel } from "@/components/ui/card"
+import {
+  Card,
+  CardFrame,
+  CardFrameAction,
+  CardFrameDescription,
+  CardFrameHeader,
+  CardFrameTitle,
+  CardPanel,
+} from "@/components/ui/card"
 import {
   Collapsible,
   CollapsiblePanel,
@@ -180,7 +188,7 @@ function ChallengeOverview({
               题目描述
             </CollapsibleTrigger>
             <CollapsiblePanel>
-              <div className="rounded-lg border p-3 text-sm">
+              <div className="rounded-lg bg-muted/40 p-3 text-sm">
                 <Markdown>{challenge.description}</Markdown>
               </div>
             </CollapsiblePanel>
@@ -223,30 +231,40 @@ function Roster({
     [agents]
   )
   return (
-    <section className="border-t pt-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="mr-auto text-sm font-medium">Agent 花名册</h3>
-        <Badge size="sm" variant="secondary">
-          {ordered.length}
-        </Badge>
-      </div>
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>
+          <span className="flex items-center gap-2">
+            Agent 花名册
+            <Badge size="sm" variant="secondary">
+              {ordered.length}
+            </Badge>
+          </span>
+        </CardFrameTitle>
+      </CardFrameHeader>
       {ordered.length === 0 ? (
-        <p className="mt-3 text-sm text-muted-foreground">
-          本题尚无尝试。在「对话」标签页发起第一次尝试。
-        </p>
+        <Card>
+          <CardPanel className="text-sm text-muted-foreground">
+            本题尚无尝试。在「对话」标签页发起第一次尝试。
+          </CardPanel>
+        </Card>
       ) : (
-        <div className="mt-3 divide-y overflow-hidden rounded-lg border">
-          {ordered.map((agent, index) => (
-            <RosterRow
-              agent={agent}
-              index={index}
-              key={agent.id}
-              onSelect={onSelectAgent}
-            />
-          ))}
-        </div>
+        <Card>
+          <CardPanel className="p-0">
+            <div className="divide-y">
+              {ordered.map((agent, index) => (
+                <RosterRow
+                  agent={agent}
+                  index={index}
+                  key={agent.id}
+                  onSelect={onSelectAgent}
+                />
+              ))}
+            </div>
+          </CardPanel>
+        </Card>
       )}
-    </section>
+    </CardFrame>
   )
 }
 
@@ -362,46 +380,51 @@ function SchedulerOverview({
           eventId={eventId}
         />
 
-        <section className="rounded-lg border p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="mr-auto text-sm font-medium">计划队列</h3>
-            <Badge size="sm" variant="secondary">
-              {visibleQueue.length}
-            </Badge>
-            <Badge
-              size="sm"
-              variant={queue.state === "paused" ? "warning" : "success"}
-            >
-              {queue.state === "paused" ? "已暂停" : "运行中"}
-            </Badge>
-            {queue.state === "paused" ? (
-              <Button
-                loading={resumeQueue.isPending}
-                onClick={() => resumeQueue.mutate()}
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>
+              <span className="flex items-center gap-2">
+                计划队列
+                <Badge size="sm" variant="secondary">
+                  {visibleQueue.length}
+                </Badge>
+              </span>
+            </CardFrameTitle>
+            <CardFrameDescription>
+              调度者规划或手动入队后，任务将按序启动。
+            </CardFrameDescription>
+            <CardFrameAction className="flex items-center gap-2">
+              <Badge
                 size="sm"
-                type="button"
-                variant="outline"
+                variant={queue.state === "paused" ? "warning" : "success"}
               >
-                <Play /> 恢复
-              </Button>
-            ) : (
-              <Button
-                loading={pauseQueue.isPending}
-                onClick={() => pauseQueue.mutate()}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <Pause /> 暂停
-              </Button>
-            )}
-          </div>
-          {visibleQueue.length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">
-              队列为空。调度者规划或手动入队后，任务将按序启动。
-            </p>
-          ) : (
-            <Card className="mt-3">
+                {queue.state === "paused" ? "已暂停" : "运行中"}
+              </Badge>
+              {queue.state === "paused" ? (
+                <Button
+                  loading={resumeQueue.isPending}
+                  onClick={() => resumeQueue.mutate()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <Play /> 恢复
+                </Button>
+              ) : (
+                <Button
+                  loading={pauseQueue.isPending}
+                  onClick={() => pauseQueue.mutate()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <Pause /> 暂停
+                </Button>
+              )}
+            </CardFrameAction>
+          </CardFrameHeader>
+          {visibleQueue.length > 0 && (
+            <Card>
               <CardPanel className="p-0">
                 <QueueList
                   eventId={eventId}
@@ -411,64 +434,84 @@ function SchedulerOverview({
               </CardPanel>
             </Card>
           )}
-        </section>
+        </CardFrame>
 
-        <section className="rounded-lg border p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="mr-auto text-sm font-medium">配置摘要</h3>
-            <Button
-              onClick={onOpenConfig}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <SlidersHorizontal /> 配置
-            </Button>
-          </div>
-          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs text-muted-foreground">模型</dt>
-              <dd className="mt-0.5 font-mono text-xs break-all">
-                {schedulerAgent?.model ?? config.modelId ?? "全局默认"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">并发靶机上限</dt>
-              <dd className="mt-0.5 font-mono text-xs">
-                {config.maxConcurrentTargets}
-              </dd>
-            </div>
-            <div className="sm:col-span-2">
-              <dt className="text-xs text-muted-foreground">指令</dt>
-              <dd className="mt-0.5 line-clamp-4 text-xs whitespace-pre-wrap">
-                {instructionExcerpt}
-              </dd>
-            </div>
-          </dl>
-        </section>
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>配置摘要</CardFrameTitle>
+            <CardFrameAction>
+              <Button
+                onClick={onOpenConfig}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <SlidersHorizontal /> 配置
+              </Button>
+            </CardFrameAction>
+          </CardFrameHeader>
+          <Card>
+            <CardPanel>
+              <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs text-muted-foreground">模型</dt>
+                  <dd className="mt-0.5 font-mono text-xs break-all">
+                    {schedulerAgent?.model ?? config.modelId ?? "全局默认"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-muted-foreground">
+                    并发靶机上限
+                  </dt>
+                  <dd className="mt-0.5 font-mono text-xs">
+                    {config.maxConcurrentTargets}
+                  </dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-xs text-muted-foreground">指令</dt>
+                  <dd className="mt-0.5 line-clamp-4 text-xs whitespace-pre-wrap">
+                    {instructionExcerpt}
+                  </dd>
+                </div>
+              </dl>
+            </CardPanel>
+          </Card>
+        </CardFrame>
 
-        <section className="rounded-lg border p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="mr-auto text-sm font-medium">调度收件箱</h3>
-            {inbox.data ? (
-              <>
-                {inbox.data.unreadCount > 0 ? (
-                  <Badge variant="info">未读 {inbox.data.unreadCount}</Badge>
-                ) : (
-                  <Badge variant="secondary">无未读</Badge>
-                )}
-                {inbox.data.deliveryPaused && (
-                  <Badge variant="warning">投递已暂停</Badge>
-                )}
-              </>
-            ) : (
-              <Badge variant="secondary">加载中…</Badge>
-            )}
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            求解者的提问与调度事件汇总在「频道」标签页。
-          </p>
-        </section>
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>调度收件箱</CardFrameTitle>
+            <CardFrameAction className="flex items-center gap-2">
+              {inbox.data ? (
+                <>
+                  {inbox.data.unreadCount > 0 ? (
+                    <Badge size="sm" variant="info">
+                      未读 {inbox.data.unreadCount}
+                    </Badge>
+                  ) : (
+                    <Badge size="sm" variant="secondary">
+                      无未读
+                    </Badge>
+                  )}
+                  {inbox.data.deliveryPaused && (
+                    <Badge size="sm" variant="warning">
+                      投递已暂停
+                    </Badge>
+                  )}
+                </>
+              ) : (
+                <Badge size="sm" variant="secondary">
+                  加载中…
+                </Badge>
+              )}
+            </CardFrameAction>
+          </CardFrameHeader>
+          <Card>
+            <CardPanel className="text-xs text-muted-foreground">
+              求解者的提问与调度事件汇总在「频道」标签页。
+            </CardPanel>
+          </Card>
+        </CardFrame>
       </div>
     </ScrollArea>
   )

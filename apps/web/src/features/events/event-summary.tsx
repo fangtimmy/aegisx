@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { BrainCircuit, ListOrdered, Network, Play } from "lucide-react"
+import { BrainCircuit, Crosshair, ListOrdered, Network } from "lucide-react"
 import { type ReactNode } from "react"
 
 import {
@@ -16,10 +16,11 @@ import {
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
-  CardDescription,
-  CardHeader,
+  CardFrame,
+  CardFrameDescription,
+  CardFrameHeader,
+  CardFrameTitle,
   CardPanel,
-  CardTitle,
 } from "@/components/ui/card"
 import {
   Progress,
@@ -146,154 +147,171 @@ function SummaryTab({
         activeAgents.push(agent)
     }
   }
+  const activeChallengeCount = Object.values(agentsByChallenge).filter((list) =>
+    list.some((agent) => agent.status === "running" || agent.status === "idle")
+  ).length
 
   return (
     <ScrollArea className="h-full pr-1" scrollFade>
       <div className="flex flex-col gap-4 p-1">
-        <Card>
-          <CardHeader>
-            <CardTitle>解题进度</CardTitle>
-            <CardDescription>
-              {solved} / {total} 已解决
-            </CardDescription>
-          </CardHeader>
-          <CardPanel className="pt-0">
-            <Progress value={solvedPercent}>
-              <ProgressTrack className="h-2 bg-secondary">
-                <ProgressIndicator className="bg-success" />
-              </ProgressTrack>
-            </Progress>
-          </CardPanel>
-        </Card>
-
-        <div className="grid grid-cols-2 gap-3">
-          <StatCard
-            icon={<Play className="size-4" />}
-            label="活跃任务"
-            value={String(activeAgents.length)}
-          />
-          <StatCard
-            icon={<ListOrdered className="size-4" />}
-            label="排队中"
-            value={String(pendingQueue.length)}
-          />
-          <StatCard
-            icon={<BrainCircuit className="size-4" />}
-            label="活跃 Agents"
-            value={String(activeAgents.length)}
-          />
-          <StatCard
-            icon={<Network className="size-4" />}
-            label="调度者"
-            value={
-              schedulerAgent
-                ? agentStatusLabel(schedulerAgent.status)
-                : "未启用"
-            }
-          />
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>用量汇总</CardTitle>
-            <CardDescription>
-              赛事内全部运行（含调度者）的 token 与费用
-            </CardDescription>
-          </CardHeader>
-          <CardPanel>
-            {usage ? (
-              <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
-                <div>
-                  <dt className="text-xs text-muted-foreground">总 token</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.totalTokens)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">费用</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatCost(usage.cost)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">轮次</dt>
-                  <dd className="mt-0.5 font-mono text-xs">{usage.turns}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">输入</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.input)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">输出</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.output)}
-                    {usage.reasoning > 0 && (
-                      <span className="text-muted-foreground">
-                        {" "}
-                        （{formatTokens(usage.reasoning)} 推理）
-                      </span>
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">缓存</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {formatTokens(usage.cacheRead)} 读 /{" "}
-                    {formatTokens(usage.cacheWrite)} 写
-                  </dd>
-                </div>
-              </dl>
-            ) : (
-              <p className="text-sm text-muted-foreground">暂无用量数据。</p>
-            )}
-          </CardPanel>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>活跃 Agents</CardTitle>
-          </CardHeader>
-          <CardPanel className="p-0">
-            {activeAgents.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-                暂无活跃 agent。
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>解题进度</CardFrameTitle>
+            <CardFrameDescription>已解决 {solvedPercent}%</CardFrameDescription>
+          </CardFrameHeader>
+          <Card>
+            <CardPanel className="flex flex-col gap-3">
+              <p className="flex items-baseline gap-1.5">
+                <span className="text-3xl font-semibold tabular-nums">
+                  {solved}
+                </span>
+                <span className="text-lg text-muted-foreground tabular-nums">
+                  / {total}
+                </span>
               </p>
-            ) : (
-              <div className="flex flex-col">
-                {activeAgents.map((agent) => (
-                  <div
-                    className="flex min-w-0 items-center gap-2.5 border-b px-4 py-2.5 last:border-b-0"
-                    key={agent.id}
-                  >
-                    <AgentStatusIcon
-                      className="[&_svg]:size-4"
-                      status={agent.status}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">
-                        {agent.name ?? roleLabel(agent.role)}
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {agent.challengeName || "调度者"}
-                      </span>
-                    </span>
-                    <Badge size="sm" variant="secondary">
-                      {roleLabel(agent.role)}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            )}
+              <Progress value={solvedPercent}>
+                <ProgressTrack className="h-2 bg-secondary">
+                  <ProgressIndicator className="bg-success" />
+                </ProgressTrack>
+              </Progress>
+            </CardPanel>
+          </Card>
+        </CardFrame>
+
+        <Card>
+          <CardPanel className="grid grid-cols-4 divide-x p-0">
+            <StatCell
+              icon={<Crosshair className="size-4" />}
+              label="活跃任务"
+              value={String(activeChallengeCount)}
+            />
+            <StatCell
+              icon={<BrainCircuit className="size-4" />}
+              label="活跃 Agents"
+              value={String(activeAgents.length)}
+            />
+            <StatCell
+              icon={<ListOrdered className="size-4" />}
+              label="排队中"
+              value={String(pendingQueue.length)}
+            />
+            <StatCell
+              icon={<Network className="size-4" />}
+              label="调度者"
+              value={
+                schedulerAgent
+                  ? agentStatusLabel(schedulerAgent.status)
+                  : "未启用"
+              }
+            />
           </CardPanel>
         </Card>
+
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>用量汇总</CardFrameTitle>
+            <CardFrameDescription>
+              赛事内全部运行（含调度者）的 token 与费用
+            </CardFrameDescription>
+          </CardFrameHeader>
+          <Card>
+            <CardPanel>
+              {usage ? (
+                <dl className="grid grid-cols-3 gap-x-8 gap-y-3 text-sm">
+                  <div>
+                    <dt className="text-xs text-muted-foreground">总 token</dt>
+                    <dd className="mt-0.5 font-mono text-xs">
+                      {formatTokens(usage.totalTokens)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">费用</dt>
+                    <dd className="mt-0.5 font-mono text-xs">
+                      {formatCost(usage.cost)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">轮次</dt>
+                    <dd className="mt-0.5 font-mono text-xs">{usage.turns}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">输入</dt>
+                    <dd className="mt-0.5 font-mono text-xs">
+                      {formatTokens(usage.input)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">输出</dt>
+                    <dd className="mt-0.5 font-mono text-xs">
+                      {formatTokens(usage.output)}
+                      {usage.reasoning > 0 && (
+                        <span className="text-muted-foreground">
+                          {" "}
+                          （{formatTokens(usage.reasoning)} 推理）
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">缓存</dt>
+                    <dd className="mt-0.5 font-mono text-xs">
+                      {formatTokens(usage.cacheRead)} 读 /{" "}
+                      {formatTokens(usage.cacheWrite)} 写
+                    </dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="text-sm text-muted-foreground">暂无用量数据。</p>
+              )}
+            </CardPanel>
+          </Card>
+        </CardFrame>
+
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>活跃 Agents</CardFrameTitle>
+          </CardFrameHeader>
+          <Card>
+            <CardPanel className="p-0">
+              {activeAgents.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+                  暂无活跃 agent。
+                </p>
+              ) : (
+                <div className="flex flex-col">
+                  {activeAgents.map((agent) => (
+                    <div
+                      className="flex min-w-0 items-center gap-2.5 border-b px-4 py-2.5 last:border-b-0"
+                      key={agent.id}
+                    >
+                      <AgentStatusIcon
+                        className="[&_svg]:size-4"
+                        status={agent.status}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">
+                          {agent.name ?? roleLabel(agent.role)}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {agent.challengeName || "调度者"}
+                        </span>
+                      </span>
+                      <Badge size="sm" variant="secondary">
+                        {roleLabel(agent.role)}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardPanel>
+          </Card>
+        </CardFrame>
       </div>
     </ScrollArea>
   )
 }
 
-function StatCard({
+function StatCell({
   icon,
   label,
   value,
@@ -303,14 +321,12 @@ function StatCard({
   value: string
 }) {
   return (
-    <Card>
-      <CardPanel className="gap-1">
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          {icon}
-          {label}
-        </span>
-        <span className="text-xl font-semibold">{value}</span>
-      </CardPanel>
-    </Card>
+    <div className="flex flex-col gap-1 px-6 py-4">
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        {icon}
+        {label}
+      </span>
+      <span className="text-xl font-semibold">{value}</span>
+    </div>
   )
 }

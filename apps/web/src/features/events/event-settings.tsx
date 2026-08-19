@@ -20,6 +20,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardFrame,
+  CardFrameDescription,
+  CardFrameHeader,
+  CardFrameTitle,
+  CardPanel,
+} from "@/components/ui/card"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -102,141 +110,154 @@ export function EventSettings({ event }: { event: EventSummary }) {
   })
 
   return (
-    <div className="max-w-3xl">
-      <header className="mb-6">
+    <div className="flex flex-col gap-4">
+      <header>
         <h1 className="text-2xl font-semibold">赛事设置</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           管理本赛事及其平台连接。
         </p>
       </header>
 
-      <section className="border-t py-6" aria-labelledby="event-general">
-        <h2 className="text-base font-medium" id="event-general">
-          常规
-        </h2>
-        <form
-          className="mt-4 flex max-w-xl items-end gap-3"
-          onSubmit={nameForm.handleSubmit((values) =>
-            updateName.mutate({ name: values.name.trim() })
-          )}
-        >
-          <Field className="min-w-0 flex-1">
-            <FieldLabel htmlFor="event-name">名称</FieldLabel>
-            <Controller
-              control={nameForm.control}
-              name="name"
-              render={({ field }) => (
-                <Input
-                  id="event-name"
-                  onBlur={field.onBlur}
-                  onChange={field.onChange}
-                  required
-                  type="text"
-                  value={field.value}
-                />
+      <CardFrame>
+        <CardFrameHeader>
+          <CardFrameTitle>常规</CardFrameTitle>
+        </CardFrameHeader>
+        <Card>
+          <CardPanel>
+            <form
+              className="flex max-w-xl items-end gap-3"
+              onSubmit={nameForm.handleSubmit((values) =>
+                updateName.mutate({ name: values.name.trim() })
               )}
-              rules={{ required: true }}
-            />
-          </Field>
-          <Button loading={updateName.isPending} type="submit">
-            保存
-          </Button>
-        </form>
-        {updateName.error && (
-          <Alert className="mt-3 max-w-xl" variant="error">
-            <TriangleAlert />
-            <AlertDescription>{updateName.error.message}</AlertDescription>
-          </Alert>
-        )}
-      </section>
-
-      <section className="border-t py-6" aria-labelledby="event-prompt-hint">
-        <h2 className="text-base font-medium" id="event-prompt-hint">
-          提示词指令
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          追加到本赛事每个 agent 提示词末尾的额外指令——flag
-          格式、约定、常见陷阱。
-        </p>
-        <form
-          className="mt-4 max-w-xl"
-          onSubmit={promptForm.handleSubmit((values) =>
-            updatePrompt.mutate({ promptHint: values.promptHint.trim() })
-          )}
-        >
-          <Field>
-            <Controller
-              control={promptForm.control}
-              name="promptHint"
-              render={({ field }) => (
-                <Textarea
-                  id="event-prompt-hint"
-                  onBlur={field.onBlur}
-                  onChange={field.onChange}
-                  placeholder="例如：flag 格式为 moectf{...}。仅提交匹配该格式的 flag。"
-                  rows={6}
-                  value={field.value}
+            >
+              <Field className="min-w-0 flex-1">
+                <FieldLabel htmlFor="event-name">名称</FieldLabel>
+                <Controller
+                  control={nameForm.control}
+                  name="name"
+                  render={({ field }) => (
+                    <Input
+                      id="event-name"
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      required
+                      type="text"
+                      value={field.value}
+                    />
+                  )}
+                  rules={{ required: true }}
                 />
+              </Field>
+              <Button loading={updateName.isPending} type="submit">
+                保存
+              </Button>
+            </form>
+            {updateName.error && (
+              <Alert className="mt-3 max-w-xl" variant="error">
+                <TriangleAlert />
+                <AlertDescription>{updateName.error.message}</AlertDescription>
+              </Alert>
+            )}
+          </CardPanel>
+        </Card>
+      </CardFrame>
+
+      <CardFrame>
+        <CardFrameHeader>
+          <CardFrameTitle>提示词指令</CardFrameTitle>
+          <CardFrameDescription>
+            追加到本赛事每个 agent 提示词末尾的额外指令——flag
+            格式、约定、常见陷阱。
+          </CardFrameDescription>
+        </CardFrameHeader>
+        <Card>
+          <CardPanel>
+            <form
+              className="max-w-xl"
+              onSubmit={promptForm.handleSubmit((values) =>
+                updatePrompt.mutate({ promptHint: values.promptHint.trim() })
               )}
+            >
+              <Field>
+                <Controller
+                  control={promptForm.control}
+                  name="promptHint"
+                  render={({ field }) => (
+                    <Textarea
+                      id="event-prompt-hint"
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      placeholder="例如：flag 格式为 moectf{...}。仅提交匹配该格式的 flag。"
+                      rows={6}
+                      value={field.value}
+                    />
+                  )}
+                />
+              </Field>
+              <Button
+                className="mt-3"
+                loading={updatePrompt.isPending}
+                type="submit"
+              >
+                保存指令
+              </Button>
+            </form>
+            {updatePrompt.error && (
+              <Alert className="mt-3 max-w-xl" variant="error">
+                <TriangleAlert />
+                <AlertDescription>
+                  {updatePrompt.error.message}
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardPanel>
+        </Card>
+      </CardFrame>
+
+      <CardFrame>
+        <CardFrameHeader>
+          <CardFrameTitle>CTF 平台</CardFrameTitle>
+          <CardFrameDescription>
+            连接本赛事以导入题目、附件和目标。
+          </CardFrameDescription>
+        </CardFrameHeader>
+        <Card>
+          <CardPanel>
+            <PlatformBinding event={event} />
+          </CardPanel>
+        </Card>
+      </CardFrame>
+
+      <CardFrame>
+        <CardFrameHeader>
+          <CardFrameTitle className="text-destructive">危险区域</CardFrameTitle>
+        </CardFrameHeader>
+        <Card>
+          <CardPanel className="space-y-8">
+            <DangerAction
+              buttonLabel="清空题目"
+              description="永久删除全部题目、附件及题目级运行记录。"
+              dialogTitle={`清空 ${event.name} 的全部题目？`}
+              mutation={purgeChallenges}
+              onConfirm={() => purgeChallenges.mutate()}
             />
-          </Field>
-          <Button
-            className="mt-3"
-            loading={updatePrompt.isPending}
-            type="submit"
-          >
-            保存指令
-          </Button>
-        </form>
-        {updatePrompt.error && (
-          <Alert className="mt-3 max-w-xl" variant="error">
-            <TriangleAlert />
-            <AlertDescription>{updatePrompt.error.message}</AlertDescription>
-          </Alert>
-        )}
-      </section>
-
-      <section className="border-t py-6" aria-labelledby="event-platform">
-        <h2 className="text-base font-medium" id="event-platform">
-          CTF 平台
-        </h2>
-        <p className="mt-1 mb-4 text-sm text-muted-foreground">
-          连接本赛事以导入题目、附件和目标。
-        </p>
-        <PlatformBinding event={event} />
-      </section>
-
-      <section className="border-t py-6" aria-labelledby="event-danger">
-        <h2
-          className="text-base font-medium text-destructive"
-          id="event-danger"
-        >
-          危险区域
-        </h2>
-        <div className="mt-4 max-w-xl space-y-8">
-          <DangerAction
-            buttonLabel="清空题目"
-            description="永久删除全部题目、附件及题目级运行记录。"
-            dialogTitle={`清空 ${event.name} 的全部题目？`}
-            mutation={purgeChallenges}
-            onConfirm={() => purgeChallenges.mutate()}
-          />
-          <DangerAction
-            buttonLabel="清空运行历史"
-            description="永久删除全部运行记录及其容器、工作区与会话数据；题目与 flag 历史保留。运行中的 agent 将被强制中止。"
-            dialogTitle={`清空 ${event.name} 的运行历史？`}
-            mutation={purgeRuns}
-            onConfirm={() => purgeRuns.mutate()}
-          />
-          <DangerAction
-            buttonLabel="删除赛事"
-            description="永久删除本赛事及其题目、附件和任务历史。"
-            dialogTitle={`删除 ${event.name}？`}
-            mutation={remove}
-            onConfirm={() => remove.mutate()}
-          />
-        </div>
-      </section>
+            <DangerAction
+              buttonLabel="清空运行历史"
+              description="永久删除全部运行记录及其容器、工作区与会话数据；题目与 flag 历史保留。运行中的 agent 将被强制中止。"
+              dialogTitle={`清空 ${event.name} 的运行历史？`}
+              mutation={purgeRuns}
+              onConfirm={() => purgeRuns.mutate()}
+            />
+            <DangerAction
+              buttonLabel="删除赛事"
+              description="永久删除本赛事及其题目、附件和任务历史。"
+              dialogTitle={`删除 ${event.name}？`}
+              mutation={remove}
+              onConfirm={() => remove.mutate()}
+            />
+          </CardPanel>
+        </Card>
+      </CardFrame>
     </div>
   )
 }

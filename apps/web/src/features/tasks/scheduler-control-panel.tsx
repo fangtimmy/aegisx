@@ -6,6 +6,14 @@ import { keys, schedulerApi, type AgentSummary } from "@/api"
 import type { FleetInfo } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardFrame,
+  CardFrameAction,
+  CardFrameHeader,
+  CardFrameTitle,
+  CardPanel,
+} from "@/components/ui/card"
 import { StartSchedulerDialog } from "@/features/events/scheduler-config-tab"
 import { shortModel } from "@/features/tasks/task-list"
 import { toast } from "@/lib/toast"
@@ -76,61 +84,71 @@ export function SchedulerControlPanel({
       : ("success" as const)
 
   return (
-    <section className="rounded-lg border p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="mr-auto text-sm font-medium">调度者控制</h3>
-        <Badge variant={statusVariant}>{statusLabel}</Badge>
-        {agent && (
-          <span className="text-xs text-muted-foreground">
-            {shortModel(agent.model)}
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>
+          <span className="flex items-center gap-2">
+            调度者控制
+            <Badge size="sm" variant={statusVariant}>
+              {statusLabel}
+            </Badge>
+            {agent && (
+              <code className="text-xs text-muted-foreground">
+                {shortModel(agent.model)}
+              </code>
+            )}
           </span>
-        )}
-        {active &&
-          (paused ? (
+        </CardFrameTitle>
+        <CardFrameAction className="flex items-center gap-2">
+          {active &&
+            (paused ? (
+              <Button
+                loading={resume.isPending}
+                onClick={() => resume.mutate()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Play /> 恢复
+              </Button>
+            ) : (
+              <Button
+                loading={pause.isPending}
+                onClick={() => pause.mutate()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Pause /> 暂停
+              </Button>
+            ))}
+          {active && (
             <Button
-              loading={resume.isPending}
-              onClick={() => resume.mutate()}
+              loading={close.isPending}
+              onClick={() => close.mutate()}
               size="sm"
               type="button"
-              variant="outline"
+              variant="destructive-outline"
             >
-              <Play /> 恢复
+              <Square /> 关闭
             </Button>
-          ) : (
-            <Button
-              loading={pause.isPending}
-              onClick={() => pause.mutate()}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <Pause /> 暂停
+          )}
+          {!active && (
+            <Button onClick={() => setStartOpen(true)} size="sm" type="button">
+              <Play /> 启动
             </Button>
-          ))}
-        {active && (
-          <Button
-            loading={close.isPending}
-            onClick={() => close.mutate()}
-            size="sm"
-            type="button"
-            variant="destructive-outline"
-          >
-            <Square /> 关闭
-          </Button>
-        )}
-        {!active && (
-          <Button onClick={() => setStartOpen(true)} size="sm" type="button">
-            <Play /> 启动
-          </Button>
-        )}
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {active
-          ? paused
-            ? "已暂停：不再调度新任务，容器保持温热。"
-            : "运行中：自动规划题目并发起尝试。"
-          : "未启动。启动后自动排程（默认冷恢复保留历史记忆）。"}
-      </p>
+          )}
+        </CardFrameAction>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel className="text-xs text-muted-foreground">
+          {active
+            ? paused
+              ? "已暂停：不再调度新任务，容器保持温热。"
+              : "运行中：自动规划题目并发起尝试。"
+            : "未启动。启动后自动排程（默认冷恢复保留历史记忆）。"}
+        </CardPanel>
+      </Card>
       {startOpen && (
         <StartSchedulerDialog
           config={config}
@@ -139,6 +157,6 @@ export function SchedulerControlPanel({
           onStarted={invalidate}
         />
       )}
-    </section>
+    </CardFrame>
   )
 }

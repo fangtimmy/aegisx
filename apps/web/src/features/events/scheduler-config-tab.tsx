@@ -6,6 +6,16 @@ import { keys, schedulerApi, type SchedulerInfo } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
+  Card,
+  CardFrame,
+  CardFrameAction,
+  CardFrameDescription,
+  CardFrameFooter,
+  CardFrameHeader,
+  CardFrameTitle,
+  CardPanel,
+} from "@/components/ui/card"
+import {
   Dialog,
   DialogDescription,
   DialogHeader,
@@ -76,29 +86,43 @@ export function SchedulerConfigTab({ eventId }: { eventId: string }) {
   return (
     <ScrollArea className="h-full" scrollFade>
       <form
-        className="flex flex-col gap-5 px-6 py-4"
+        className="px-6 py-4"
         onSubmit={(event) => {
           event.preventDefault()
           save.mutate()
         }}
       >
-        <SchedulerStateBadge
-          agent={scheduler.data?.agent ?? null}
-          paused={config.paused}
-        />
-        <SchedulerConfigFields
-          instruction={instruction}
-          maxTargets={maxTargets}
-          modelId={modelId}
-          onInstructionChange={setInstruction}
-          onMaxTargetsChange={setMaxTargets}
-          onModelChange={setModelId}
-        />
-        <div className="flex justify-end">
-          <Button loading={save.isPending} type="submit">
-            保存配置
-          </Button>
-        </div>
+        <CardFrame>
+          <CardFrameHeader>
+            <CardFrameTitle>调度配置</CardFrameTitle>
+            <CardFrameDescription>
+              调度者的默认模型、常驻指令与并发上限；保存后持久化，启动时生效。
+            </CardFrameDescription>
+            <CardFrameAction>
+              <SchedulerStateBadge
+                agent={scheduler.data?.agent ?? null}
+                paused={config.paused}
+              />
+            </CardFrameAction>
+          </CardFrameHeader>
+          <Card>
+            <CardPanel className="flex flex-col gap-5">
+              <SchedulerConfigFields
+                instruction={instruction}
+                maxTargets={maxTargets}
+                modelId={modelId}
+                onInstructionChange={setInstruction}
+                onMaxTargetsChange={setMaxTargets}
+                onModelChange={setModelId}
+              />
+            </CardPanel>
+          </Card>
+          <CardFrameFooter className="flex items-center justify-end">
+            <Button loading={save.isPending} type="submit">
+              保存配置
+            </Button>
+          </CardFrameFooter>
+        </CardFrame>
       </form>
     </ScrollArea>
   )
