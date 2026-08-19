@@ -91,6 +91,10 @@ function pathForTab(eventId: string, tab: EventTab) {
 const FULLWIDTH_KEY = "aegisx:event-fullwidth"
 const UNCATEGORIZED = "未分类"
 
+/** Stable empty fallback so `eventQuery.data?.challenges ?? []` keeps one
+   reference between renders (the filter useMemos' deps stay stable). */
+const NO_CHALLENGES: Challenge[] = []
+
 const LOCAL_STATUS_OPTIONS: Array<{
   value: LocalChallengeStatus
   label: string
@@ -219,13 +223,10 @@ function EventAgentsPanel({
 
   if (fleet.isPending) {
     return (
-      <div
-        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-        role="status"
-      >
+      <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
         <Spinner aria-hidden="true" />
         正在加载 Agents…
-      </div>
+      </output>
     )
   }
   if (fleet.error) {
@@ -261,7 +262,7 @@ export function EventPage() {
     queryKey: keys.events.detail(eventId ?? ""),
     queryFn: () => eventsApi.getEvent(eventId ?? ""),
   })
-  const challenges = eventQuery.data?.challenges ?? []
+  const challenges = eventQuery.data?.challenges ?? NO_CHALLENGES
   const categoryOptions = useMemo(
     () =>
       [
@@ -290,13 +291,10 @@ export function EventPage() {
   return (
     <AppLayout eventName={eventQuery.data?.event.name} fullWidth={fullWidth}>
       {eventQuery.isPending && (
-        <div
-          className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-          role="status"
-        >
+        <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
           <Spinner aria-hidden="true" />
           正在加载赛事…
-        </div>
+        </output>
       )}
       {eventQuery.error && (
         <ErrorState
@@ -331,14 +329,14 @@ export function EventPage() {
                 <Settings /> 设置
               </TabsTab>
             </TabsList>
-            <button
-              className="mt-auto flex h-9 w-full shrink-0 cursor-pointer items-center justify-start gap-1.5 rounded-md border border-transparent px-[calc(--spacing(2.5)-1px)] text-left text-sm text-muted-foreground transition-colors hover:bg-accent [&_svg]:pointer-events-none [&_svg]:-mx-0.5 [&_svg]:size-4 [&_svg]:shrink-0"
+            <Button
+              className="mt-auto w-full shrink-0 justify-start gap-1.5 px-[calc(--spacing(2.5)-1px)] text-muted-foreground"
               onClick={toggleFullWidth}
-              type="button"
+              variant="ghost"
             >
               {fullWidth ? <Minimize2 /> : <Maximize2 />}
               {fullWidth ? "标准宽度" : "全宽"}
-            </button>
+            </Button>
           </aside>
           <div className="min-w-0 flex-1">
             <TabsPanel className="h-[calc(100svh-5.5rem)]" value="overview">

@@ -86,6 +86,12 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     globalThis.fetch = impl as unknown as typeof fetch
   }
 
+  /** URL string of a fetch input (URL / string / Request). */
+  function requestUrl(input: RequestInfo | URL): string {
+    if (input instanceof URL) return input.href
+    return typeof input === "string" ? input : input.url
+  }
+
   async function createTestProvider(
     type: "openai-compatible" | "anthropic-messages",
     baseUrl = providerBody.baseUrl
@@ -104,7 +110,7 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     const { app, id } = await createTestProvider("openai-compatible")
     const calls: Array<{ url: string; init: RequestInit }> = []
     installFetchMock(async (input, init) => {
-      calls.push({ url: String(input), init: init! })
+      calls.push({ url: requestUrl(input), init: init! })
       return new Response(JSON.stringify({ id: "cmpl-1" }), { status: 200 })
     })
     const response = await app.request(
@@ -120,7 +126,7 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     const headers = calls[0]!.init.headers as Record<string, string>
     expect(headers.Authorization).toBe("Bearer real-key")
     expect(headers["content-type"]).toBe("application/json")
-    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
       model: "gpt-4o",
       messages: [{ role: "user", content: "ping" }],
       max_tokens: 1,
@@ -134,7 +140,7 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
     )
     const calls: Array<{ url: string; init: RequestInit }> = []
     installFetchMock(async (input, init) => {
-      calls.push({ url: String(input), init: init! })
+      calls.push({ url: requestUrl(input), init: init! })
       return new Response(JSON.stringify({ id: "msg_1" }), { status: 200 })
     })
     const response = await app.request(

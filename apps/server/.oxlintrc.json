@@ -4,5 +4,13 @@
   "ignorePatterns": ["drizzle/**"],
   "options": {
     "typeAware": true
-  }
+  },
+  "overrides": [
+    {
+      "files": ["test/**"],
+      "rules": {
+        "typescript/await-thenable": "off"
+      }
+    }
+  ]
 }

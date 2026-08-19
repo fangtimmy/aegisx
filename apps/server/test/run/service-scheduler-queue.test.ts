@@ -3,16 +3,9 @@ import { describe, expect, mock, test } from "bun:test"
 import { defaultSettings } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
-import {
-  agents,
-  challengeRemote,
-  queueState,
-  spawnQueue,
-} from "../../src/db/schema"
-import { orchKey } from "../../src/run/channels"
+import { agents, queueState, spawnQueue } from "../../src/db/schema"
 import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
   makeProvider,
   seedAgent,
   seedChallenge,
@@ -21,7 +14,6 @@ import {
   stubConfigStore,
   stubContainerManager,
   stubHostAgentSession,
-  now,
 } from "../helpers"
 
 type Db = ReturnType<typeof setupDb>["db"]

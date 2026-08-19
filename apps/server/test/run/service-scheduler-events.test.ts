@@ -104,7 +104,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const promptLog = new Map<string, string[]>()
       service = makeService(db, dir, promptLog)
 
-      const sched = await service.startScheduler("evt-1")
+      await service.startScheduler("evt-1")
       await settle()
       const orch = orchestratorOf(db)
       const primed = promptLog.get(orch.id)?.length ?? 0
@@ -281,7 +281,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const promptLog = new Map<string, string[]>()
       service = makeService(db, dir, promptLog)
 
-      const sched = await service.startScheduler("evt-1")
+      await service.startScheduler("evt-1")
       await settle()
       const orch = orchestratorOf(db)
       const primed = promptLog.get(orch.id)?.length ?? 0
@@ -327,7 +327,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const promptLog = new Map<string, string[]>()
       service = makeService(db, dir, promptLog)
 
-      const sched = await service.startScheduler("evt-1")
+      await service.startScheduler("evt-1")
       await settle()
       const orch = orchestratorOf(db)
       const primed = promptLog.get(orch.id)?.length ?? 0

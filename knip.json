@@ -1,8 +1,17 @@
 {
+  "$schema": "./node_modules/knip/schema.json",
+  "ignoreDependencies": ["react-day-picker"],
+  "ignoreBinaries": ["wait"],
   "workspaces": {
-    ".": { "entry": ["apps/server/src/index.ts", "apps/web/src/main.tsx"] },
-    "apps/server": { "entry": ["src/index.ts"], "project": ["src/**/*.ts", "test/**/*.ts"] },
-    "apps/web": { "entry": ["src/main.tsx", "src/App.tsx"], "project": ["src/**/*.{ts,tsx}"] },
-    "apps/shared": { "entry": ["index.ts"], "project": ["*.ts"] }
+    "apps/server": {
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "apps/web": {
+      "project": ["src/**/*.{ts,tsx}"],
+      "ignore": ["src/components/ui/**"]
+    },
+    "apps/shared": {
+      "project": ["*.ts"]
+    }
   }
 }

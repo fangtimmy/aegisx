@@ -19,8 +19,11 @@ export type AgentStatusDeps = {
   isSchedulerPaused(eventId: string): boolean
   /** Agent turn settled idle/failed: arms the stall watchdog (solver only). */
   onAgentSettled(agentId: string): void
-  now(): string
-  updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
+  now: () => string
+  updateAgent: (
+    agentId: string,
+    patch: Partial<typeof agents.$inferInsert>
+  ) => void
   /** Late-bound queue (agent terminal → item done + re-drain). */
   queue(): QueueService | undefined
 }

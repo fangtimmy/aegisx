@@ -15,11 +15,6 @@ export function getChallengeChannels(challengeId: string) {
   )
 }
 
-/** SDK channels.list: the agent's visible channels + unread counts. */
-export function getAgentChannels(agentId: string) {
-  return apiRequest<{ items: ChannelPublic[] }>(`/agents/${agentId}/channels`)
-}
-
 /** Channel timeline. Forward: `after` is the global message-id cursor — 0
  * returns the latest window. Backward: `before` pages history older than a
  * message id. `channelKey` is a derived key (`team:<cid>` / `dm:<aid>` /

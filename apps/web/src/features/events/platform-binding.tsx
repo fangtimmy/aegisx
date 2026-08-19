@@ -26,7 +26,7 @@ export function PlatformBinding({ event }: { event: EventSummary }) {
   const testConnection = useMutation({
     mutationFn: () => platformsApi.testBoundPlatform(event.id),
     onSuccess: () => {
-      refreshEvent(queryClient, event.id)
+      void refreshEvent(queryClient, event.id)
       toast.success("平台连接正常")
     },
     onError: (error) => toast.error("平台连接失败", error.message),

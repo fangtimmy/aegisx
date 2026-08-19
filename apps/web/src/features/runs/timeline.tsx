@@ -90,11 +90,13 @@ function formatToolCell(value: unknown) {
   const formatted =
     typeof value === "string"
       ? value
-      : value === null
+      : value === null || value === undefined
         ? "null"
         : typeof value === "object"
           ? (JSON.stringify(value, null, 2) ?? "undefined")
-          : String(value)
+          : typeof value === "number" || typeof value === "boolean"
+            ? String(value)
+            : ""
   return formatted.length > 64_000
     ? `${formatted.slice(0, 64_000)}\n\n[输出预览已截断]`
     : formatted
@@ -384,18 +386,19 @@ function BacktrackButton({
   side: "left" | "right"
 }) {
   return (
-    <button
+    <Button
       aria-label="回溯到此"
       className={cn(
-        "absolute top-1.5 z-10 rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground focus-visible:opacity-100",
+        "absolute top-1.5 z-10 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-secondary hover:text-foreground focus-visible:opacity-100",
         side === "left" ? "left-0" : "right-0"
       )}
       onClick={() => onBacktrack(seq)}
+      size="icon-xs"
       title="删除该消息之后的所有消息（回溯）"
-      type="button"
+      variant="ghost"
     >
-      <Undo2 className="size-3.5" />
-    </button>
+      <Undo2 />
+    </Button>
   )
 }
 

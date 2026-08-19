@@ -12,19 +12,11 @@ import { join } from "node:path"
  * challengeId / `orch:<eventId>`; the container name embeds a short slice.
  */
 
-export const ORCH_KEY_PREFIX = "orch:"
+const ORCH_KEY_PREFIX = "orch:"
 
 /** The scheduler workspace key (the registry/LiveBus-neutral identity). */
 export function orchestratorKey(eventId: string): string {
   return `${ORCH_KEY_PREFIX}${eventId}`
-}
-
-export function isOrchestratorKey(key: string): boolean {
-  return key.startsWith(ORCH_KEY_PREFIX)
-}
-
-export function eventIdOfOrchestratorKey(key: string): string {
-  return key.slice(ORCH_KEY_PREFIX.length)
 }
 
 /** Host root of a challenge's workspace tree
@@ -58,12 +50,6 @@ export function runtimeDir(root: string): string {
 /** The agent's 8-char identity slice (dir names, labels, container ids). */
 export function agentId8(agentId: string): string {
   return agentId.slice(0, 8)
-}
-
-/** Host path of one agent's own workspace directory
- * (<root>/workspace/agents/<id8>). */
-export function agentDir(root: string, agentId: string): string {
-  return join(workspaceDir(root), "agents", agentId8(agentId))
 }
 
 /** Container-internal path of one agent's directory

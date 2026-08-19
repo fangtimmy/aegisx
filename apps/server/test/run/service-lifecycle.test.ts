@@ -22,13 +22,11 @@ import {
  * true while a turn is notionally in flight (so the service observes a running
  * → idle transition through the agent status). */
 function stubHostFlipping(sessionId = "sess-1") {
-  let streaming = false
   const session = {
     isStreaming: false,
     thinkingLevel: "off",
     modelRuntime: {},
     prompt: async () => {
-      streaming = true
       session.isStreaming = true
       await Promise.resolve()
       session.isStreaming = false

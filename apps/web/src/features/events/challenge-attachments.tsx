@@ -42,8 +42,12 @@ export function AttachmentRow({
       </div>
       <IconTooltip label={`下载 ${attachment.originalName}`}>
         <Button
-          aria-label={`下载 ${attachment.originalName}`}
-          render={<a href={attachment.downloadUrl} />}
+          render={
+            <a
+              aria-label={`下载 ${attachment.originalName}`}
+              href={attachment.downloadUrl}
+            />
+          }
           size="icon-sm"
           variant="ghost"
         >

@@ -30,12 +30,6 @@ export function toFlagPublic(
   }
 }
 
-/** v19 agent label: the row's name (spawn stamps `agent-<id8>` on solvers,
- * "Scheduler" on the orchestrator) with a defensive fallback. */
-export function agentLabel(row: AgentRow): string {
-  return row.name ?? `agent-${row.id.slice(0, 8)}`
-}
-
 export function toAgentSummary(
   row: AgentRow,
   challengeName = ""

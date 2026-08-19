@@ -39,16 +39,16 @@ function load(): MarkdownPrefs {
 let prefs = load()
 const listeners = new Set<() => void>()
 
-export function subscribeMarkdownPrefs(listener: () => void) {
+function subscribeMarkdownPrefs(listener: () => void) {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
 
-export function getMarkdownPrefs(): MarkdownPrefs {
+function getMarkdownPrefs(): MarkdownPrefs {
   return prefs
 }
 
-export function setMarkdownPrefs(next: Partial<MarkdownPrefs>) {
+function setMarkdownPrefs(next: Partial<MarkdownPrefs>) {
   prefs = { ...prefs, ...next }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs))
   for (const listener of listeners) listener()

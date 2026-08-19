@@ -46,7 +46,7 @@ export function fenceSnapshot(
 /** Count live solver agents (running + idle, challengeId set). Idle keeps a
  * warm session and its target may still run on the platform, so it consumes
  * a concurrency slot until terminal. The scheduler agent never counts. */
-export function liveSolverAgentCount(db: Database): number {
+function liveSolverAgentCount(db: Database): number {
   const row = db
     .select({ n: sql<number>`count(*)` })
     .from(agents)

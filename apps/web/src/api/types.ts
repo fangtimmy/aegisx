@@ -41,12 +41,10 @@ export type {
   SolveState,
   SwitchModelInput,
   TargetState,
-  ThinkingLevel,
   TimingBlock,
   TimingMeta,
   WorkspaceFile,
   WorkspaceFileEntry,
-  WorkspaceInfo,
 } from "@aegisx/shared"
 export {
   isSessionEntry,

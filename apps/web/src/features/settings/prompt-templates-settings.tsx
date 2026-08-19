@@ -83,13 +83,10 @@ export function PromptTemplatesSettings() {
     return (
       <CardFrame className="min-w-0">
         <CardPanel>
-          <div
-            className="flex items-center gap-2 text-sm text-muted-foreground"
-            role="status"
-          >
+          <output className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner aria-hidden="true" />
             正在加载提示词模板…
-          </div>
+          </output>
         </CardPanel>
       </CardFrame>
     )

@@ -120,14 +120,15 @@ export function SteerQueue({
                   value={edit?.text ?? ""}
                 />
               ) : (
-                <button
-                  className="min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-xs text-muted-foreground hover:bg-secondary"
+                <Button
+                  className="min-w-0 flex-1 justify-start truncate px-2 font-mono text-xs text-muted-foreground hover:bg-secondary"
                   onClick={() => setEdit(row)}
+                  size="sm"
                   title="点击编辑"
-                  type="button"
+                  variant="ghost"
                 >
                   {row.text}
-                </button>
+                </Button>
               )}
               <Button
                 aria-label="从队列移除"

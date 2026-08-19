@@ -51,14 +51,14 @@ export function useProviderEditor(provider: ProviderConnection) {
       setDiscovered(null)
       setSelected([])
       setAddOpen(false)
-      queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
   const modelMutation = useMutation({
     mutationFn: ({ modelId, body }: { modelId: string; body: object }) =>
       providersApi.updateProviderModel(modelId, body),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: keys.providers.all }),
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all }),
   })
   const editModel = useMutation({
     mutationFn: ({
@@ -72,7 +72,7 @@ export function useProviderEditor(provider: ProviderConnection) {
     }) => providersApi.updateProviderModel(id, { label, metadata }),
     onSuccess: () => {
       setEditingModel(null)
-      queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
   const builtins = useQuery({
@@ -88,14 +88,14 @@ export function useProviderEditor(provider: ProviderConnection) {
       }),
     onSuccess: () => {
       setImportModel(null)
-      queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
   const removeModel = useMutation({
     mutationFn: (id: string) => providersApi.deleteProviderModel(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: keys.providers.all })
-      queryClient.invalidateQueries({ queryKey: keys.settings.all })
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.settings.all })
     },
   })
   const builtinProfiles = builtins.data?.items ?? []

@@ -66,13 +66,10 @@ export function SchedulerConfigTab({ eventId }: { eventId: string }) {
 
   if (scheduler.isPending || !config) {
     return (
-      <div
-        className="flex items-center gap-2 px-6 py-8 text-sm text-muted-foreground"
-        role="status"
-      >
+      <output className="flex items-center gap-2 px-6 py-8 text-sm text-muted-foreground">
         <Spinner aria-hidden="true" />
         正在加载配置…
-      </div>
+      </output>
     )
   }
 

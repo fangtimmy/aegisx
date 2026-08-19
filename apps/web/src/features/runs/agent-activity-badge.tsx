@@ -43,13 +43,12 @@ export function AgentActivityBadge({
     label = stream.getRunningTool(agentId) ? "工作中…" : "思考中…"
   }
   return (
-    <span
+    <output
       aria-live="polite"
       className="inline-flex items-center gap-1.5 text-xs text-info"
-      role="status"
     >
       <LoaderCircle aria-hidden="true" className="size-3 animate-spin" />
       {label}
-    </span>
+    </output>
   )
 }

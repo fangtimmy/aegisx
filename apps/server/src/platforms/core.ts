@@ -7,10 +7,15 @@ import type {
 import { isActiveTarget } from "@aegisx/shared/domain"
 
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
-import { isRecord, nullableNumber, nullableString } from "../lib/guards"
+import {
+  isRecord,
+  jsonText,
+  nullableNumber,
+  nullableString,
+} from "../lib/guards"
 
 export type { PlatformType, RemoteEvent, RemoteTargetInfo, TargetState }
-export { isActiveTarget, isRecord, nullableNumber, nullableString }
+export { isActiveTarget, isRecord, jsonText, nullableNumber, nullableString }
 
 export type PlatformConfig = {
   type: PlatformType
@@ -191,7 +196,7 @@ export class PlatformHttp {
             body.detail ??
             (isRecord(body.error) ? body.error.message : body.error)
           if (extracted !== undefined && extracted !== null) {
-            message = String(extracted)
+            message = jsonText(extracted)
           }
           if (typeof body.code === "string") code = body.code
         } catch {
@@ -310,7 +315,7 @@ export function targetDefinitions(value: unknown): RemoteTargetInfo[] {
     const services = Array.isArray(rawServices)
       ? rawServices.map((service) => {
           if (!isRecord(service)) return String(service)
-          return String(
+          return jsonText(
             service.port_name ??
               service.name ??
               service.port ??
@@ -320,7 +325,7 @@ export function targetDefinitions(value: unknown): RemoteTargetInfo[] {
         })
       : []
     return {
-      name: String(
+      name: jsonText(
         item.container_name ??
           item.name ??
           item.image ??

@@ -13,10 +13,10 @@ import type { AgentQueries } from "./queries"
 export type SchedulerAdminDeps = {
   db: Database
   queries: AgentQueries
-  getSettings(): FlatSettings
-  now(): string
+  getSettings: () => FlatSettings
+  now: () => string
   /** Enabled provider connections (the unresolvable-ref error's list). */
-  providers(): ProviderConnection[]
+  providers: () => ProviderConnection[]
   /** Model-ref resolution (the unresolvable-ref check). */
   modelResolver: ModelResolver
 }

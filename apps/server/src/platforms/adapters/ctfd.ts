@@ -1,6 +1,7 @@
 import {
   BaseAdapter,
   type JsonRecord,
+  jsonText,
   nullableNumber,
   nullableString,
   type PlatformConfig,
@@ -46,7 +47,9 @@ export class CtfdAdapter extends BaseAdapter {
       items.push(
         ...(body.data ?? []).map((challenge) => ({
           id: String(challenge.id),
-          name: String(challenge.name ?? `Challenge ${challenge.id}`),
+          name: jsonText(
+            challenge.name ?? `Challenge ${jsonText(challenge.id)}`
+          ),
           category: nullableString(challenge.category),
           points: nullableNumber(challenge.value),
           solved: challenge.solved_by_me === true,
@@ -69,8 +72,8 @@ export class CtfdAdapter extends BaseAdapter {
     const files = Array.isArray(value.files) ? value.files : []
     return {
       id: String(value.id),
-      name: String(value.name ?? "Untitled challenge"),
-      description: String(value.description ?? ""),
+      name: jsonText(value.name ?? "Untitled challenge"),
+      description: jsonText(value.description ?? ""),
       category: nullableString(value.category),
       points: nullableNumber(value.value),
       solved: value.solved_by_me === true,

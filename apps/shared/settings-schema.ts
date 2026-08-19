@@ -360,7 +360,7 @@ export function get<K extends SettingKey>(
   return settingDef(key).default as FlatSettings[K]
 }
 
-function coerceValue(def: SettingDef, raw: unknown): unknown | undefined {
+function coerceValue(def: SettingDef, raw: unknown): unknown {
   if (raw === undefined) return undefined
   switch (def.type) {
     case "boolean":

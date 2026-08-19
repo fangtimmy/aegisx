@@ -18,6 +18,7 @@ import {
   type ChannelMessagePublic,
   type ChannelPublic,
 } from "@/api"
+import { ListRow } from "@/components/list-row"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
@@ -32,6 +33,10 @@ import { appendChannelMessage, mergeChannelMessages } from "./channel-tail"
  * SSE loss, not the primary delivery path (that is the channel stream). */
 export const RECONCILE_INTERVAL_MS = 60_000
 const PAGE_SIZE = 100
+
+/** Stable empty fallback so `channels.data?.items ?? []` keeps one reference
+   between polls (useMemo/useEffect deps stay stable). */
+const NO_CHANNELS: ChannelPublic[] = []
 /** Same-author consecutive messages within this window merge into one
  * group (Discord-style): only the group head shows avatar + author + time. */
 const GROUP_WINDOW_MS = 5 * 60_000
@@ -289,12 +294,13 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
                 {file.name} · {formatSize(file.size)}
                 <button
                   aria-label={`移除附件 ${file.name}`}
+                  className="-me-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-[inherit] p-0 text-muted-foreground transition-colors outline-none hover:text-destructive focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   onClick={() =>
                     setFiles((prev) => prev.filter((_, i) => i !== index))
                   }
                   type="button"
                 >
-                  <X className="size-3 hover:text-destructive" />
+                  <X aria-hidden className="size-3" />
                 </button>
               </span>
             ))}
@@ -324,7 +330,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
             ref={fileInput}
             type="file"
           />
-          <label
+          <div
             className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 pb-1 text-[10px] leading-3 text-muted-foreground"
             title="紧急消息立即投递；关闭后等待下一次合并投递"
           >
@@ -334,7 +340,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
               onCheckedChange={setUrgent}
             />
             紧急
-          </label>
+          </div>
           <Button
             aria-label="添加附件"
             className="mb-1"
@@ -553,18 +559,15 @@ function RailItem({
 }: {
   channel: ChannelPublic
   active: boolean
-  onSelect(): void
+  onSelect: () => void
   unseen: boolean
 }) {
   return (
-    <button
-      className={cn(
-        "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
-        active && "bg-muted font-medium"
-      )}
+    <ListRow
+      className="items-center gap-1.5 hover:bg-muted data-selected:bg-muted data-selected:font-medium"
       key={channel.key}
       onClick={onSelect}
-      type="button"
+      selected={active}
     >
       {channel.kind === "dm" ? (
         <span className="font-mono text-xs text-muted-foreground">DM</span>
@@ -587,7 +590,7 @@ function RailItem({
           className="ml-auto size-2 shrink-0 rounded-full bg-primary"
         />
       )}
-    </button>
+    </ListRow>
   )
 }
 
@@ -600,7 +603,7 @@ function ChannelRail({
 }: {
   channels: ChannelPublic[]
   activeKey: string | null
-  onSelect(key: string): void
+  onSelect: (key: string) => void
   unseenKeys: Set<string>
 }) {
   const sections: Array<{ label: string; items: ChannelPublic[] }> = [
@@ -655,7 +658,7 @@ export function ChannelsView({ challengeId }: { challengeId?: string }) {
     refetchInterval: RECONCILE_INTERVAL_MS,
   })
 
-  const list = channels.data?.items ?? []
+  const list = channels.data?.items ?? NO_CHANNELS
   const active = list.find((channel) => channel.key === activeKey) ?? list[0]
 
   // Baseline unseen channels on first load (0 unread at mount).

@@ -26,8 +26,8 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Toggle } from "@/components/ui/toggle"
 import { toast } from "@/lib/toast"
-import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
 
 import { AgentActivityBadge } from "./agent-activity-badge"
@@ -358,22 +358,20 @@ export function Conversation(props: ConversationProps) {
       {sessions && sessions.length > 0 && sessionOps && (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b px-6 py-1.5">
           {sessions.map((session, index) => (
-            <button
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
-                session.isActive && "bg-secondary font-medium text-foreground"
-              )}
+            <Toggle
+              className="gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground data-pressed:bg-secondary data-pressed:font-medium data-pressed:text-foreground"
               disabled={running || activate.isPending}
               key={session.id}
-              onClick={() => {
+              onPressedChange={() => {
                 if (!session.isActive) activate.mutate(session.id)
               }}
+              pressed={session.isActive}
+              size="sm"
               title={
                 session.isActive
                   ? "当前会话"
                   : `切换到该会话（${session.messageCount} 条消息）`
               }
-              type="button"
             >
               会话 {index + 1}
               {session.messageCount > 0 && (
@@ -381,7 +379,7 @@ export function Conversation(props: ConversationProps) {
                   {session.messageCount}
                 </span>
               )}
-            </button>
+            </Toggle>
           ))}
           <Button
             aria-label="新建会话"

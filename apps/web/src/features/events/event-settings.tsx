@@ -80,7 +80,7 @@ export function EventSettings({ event }: { event: EventSummary }) {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: keys.events.all })
       toast.success("赛事已删除")
-      navigate("/")
+      void navigate("/")
     },
     onError: (error) => toast.error("删除赛事失败", error.message),
   })

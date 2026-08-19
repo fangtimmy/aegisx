@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { useLocation, useNavigate } from "react-router"
 
 import { keys, providersApi, settingsApi } from "@/api"
+import { ListRow } from "@/components/list-row"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,7 +27,6 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { toast } from "@/lib/toast"
-import { cn } from "@/lib/utils"
 
 import { GeneralSettings } from "./general-settings"
 import { ProviderDetail } from "./provider-detail"
@@ -72,7 +72,7 @@ export function SettingsScreen() {
     mutationFn: (id: string) => providersApi.deleteProvider(id),
     onSuccess: () => {
       setSelectedId(null)
-      queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
     onError: (error) => toast.error("删除供应商失败", error.message),
   })
@@ -86,13 +86,10 @@ export function SettingsScreen() {
 
   if (providers.isPending || settings.isPending) {
     return (
-      <div
-        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-        role="status"
-      >
+      <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
         <Spinner aria-hidden="true" />
         正在加载设置…
-      </div>
+      </output>
     )
   }
   if (providers.error || settings.error) {
@@ -162,7 +159,9 @@ export function SettingsScreen() {
                   <ProviderDialog
                     onCreated={(id) => {
                       setSelectedId(id)
-                      queryClient.invalidateQueries({ queryKey: ["providers"] })
+                      void queryClient.invalidateQueries({
+                        queryKey: ["providers"],
+                      })
                     }}
                   />
                 </CardFrameAction>
@@ -171,16 +170,14 @@ export function SettingsScreen() {
                 <CardPanel className="p-2">
                   <nav aria-label="供应商连接">
                     {items.map((provider) => (
-                      <div
-                        className={cn(
-                          "mb-1 flex items-center rounded-lg focus-within:bg-accent/50 hover:bg-accent/50",
-                          selectedId === provider.id &&
-                            "bg-secondary focus-within:bg-secondary hover:bg-secondary"
-                        )}
+                      <ListRow
+                        className="mb-1 items-center gap-0 rounded-lg p-0 focus-within:bg-accent/50 hover:bg-accent/50 data-selected:bg-secondary focus-within:data-selected:bg-secondary hover:data-selected:bg-secondary"
                         key={provider.id}
+                        render={<div />}
+                        selected={selectedId === provider.id}
                       >
                         <Button
-                          className="h-auto min-w-0 flex-1 justify-start bg-transparent px-3 py-2 text-left hover:bg-transparent data-pressed:bg-transparent"
+                          className="h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left hover:bg-transparent data-pressed:bg-transparent"
                           aria-pressed={selectedId === provider.id}
                           onClick={() => {
                             setSelectedId(provider.id)
@@ -221,7 +218,7 @@ export function SettingsScreen() {
                             })
                           }
                         />
-                      </div>
+                      </ListRow>
                     ))}
                   </nav>
                   {toggleProvider.error && (

@@ -97,13 +97,10 @@ export function EventSummary({
 
   if (fleet.isPending || scheduler.isPending) {
     return (
-      <div
-        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-        role="status"
-      >
+      <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
         <Spinner aria-hidden="true" />
         正在加载概览…
-      </div>
+      </output>
     )
   }
   if (fleet.error) {

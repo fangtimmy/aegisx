@@ -1,8 +1,4 @@
-import type {
-  ActivityItem,
-  ActivitySnapshot,
-  ActivityKind,
-} from "@aegisx/shared"
+import type { ActivityItem, ActivitySnapshot } from "@aegisx/shared"
 import { desc, eq, isNotNull } from "drizzle-orm"
 import type { Hono } from "hono"
 

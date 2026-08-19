@@ -232,8 +232,9 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
   useEffect(() => {
+    const pending = timers.current
     return () => {
-      for (const timer of timers.current.values()) clearTimeout(timer)
+      for (const timer of pending.values()) clearTimeout(timer)
     }
   }, [])
 

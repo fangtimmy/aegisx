@@ -1,8 +1,11 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
   AgentDetail,
+  AgentSessionSummary,
   AgentSummary,
   FleetInfo,
+  MessageList,
+  QueueItem,
   SwitchModelInput,
 } from "./types"
 
@@ -34,7 +37,7 @@ export function spawnAgent(challengeId: string, input: SpawnAgentInput = {}) {
 /** Enqueue a spawn item (POST /api/events/:id/queue returns the queue item,
  * 202 — the drainer launches it when a fence slot is free). */
 export function enqueueSpawn(eventId: string, input: EnqueueSpawnInput) {
-  return apiRequest<import("./types").QueueItem>(
+  return apiRequest<QueueItem>(
     `/events/${eventId}/queue`,
     jsonRequest("POST", input)
   )
@@ -50,9 +53,7 @@ export function listMessages(agentId: string, after = 0, sessionId?: string) {
   if (after > 0) params.set("after", String(after))
   if (sessionId) params.set("sessionId", sessionId)
   const query = params.toString() ? `?${params.toString()}` : ""
-  return apiRequest<import("./types").MessageList>(
-    `/agents/${agentId}/messages${query}`
-  )
+  return apiRequest<MessageList>(`/agents/${agentId}/messages${query}`)
 }
 
 /** Per-agent message (see SpawnAgentInput note on reopen semantics). */
@@ -85,22 +86,6 @@ export function closeAgent(agentId: string) {
   )
 }
 
-/** Force-finish (completed + summary). Idempotent on an already-completed
- * agent; rejects an aborted/failed agent. */
-export function finishAgent(agentId: string, summary: string) {
-  return apiRequest<AgentSummary>(
-    `/agents/${agentId}/finish`,
-    jsonRequest("POST", { summary })
-  )
-}
-
-export function setAgentTimeout(agentId: string, timeoutMs: number) {
-  return apiRequest<AgentSummary>(
-    `/agents/${agentId}/timeout`,
-    jsonRequest("POST", { timeoutMs })
-  )
-}
-
 /** Manually compact an agent's context (POST /api/agents/:agentId/compact).
  * Requires an active, idle session; the server rejects a running turn. */
 export function compactAgent(agentId: string) {
@@ -118,26 +103,12 @@ export function setAgentQueue(
   return apiRequest<void>(`/agents/${agentId}/queue`, jsonRequest("PUT", input))
 }
 
-/** Submit a flag for the agent's challenge (POST /api/agents/:id/flag). */
-export function submitAgentFlag(agentId: string, flag: string) {
-  return apiRequest<{ result: unknown }>(
-    `/agents/${agentId}/flag`,
-    jsonRequest("POST", { flag })
-  )
-}
-
-/** Delete an agent (aborts its live session; the challenge workspace
- * persists). */
-export function deleteAgent(agentId: string) {
-  return apiRequest<void>(`/agents/${agentId}`, { method: "DELETE" })
-}
-
 // --- multi-session + flat backtrack (v12) ---------------------------------
 
 /** List the agent's sessions (oldest first) with message counts + active
  * flag. Exactly one session is active (the conversation being shown). */
 export function listSessions(agentId: string) {
-  return apiRequest<{ items: import("./types").AgentSessionSummary[] }>(
+  return apiRequest<{ items: AgentSessionSummary[] }>(
     `/agents/${agentId}/sessions`
   )
 }

@@ -170,11 +170,11 @@ export type AgentFactoryDeps = {
   containerManager: ContainerManager
   containerLifecycle: ContainerLifecycle
   platformService: PlatformService
-  providers(): ProviderConnection[]
+  providers: () => ProviderConnection[]
   /** Monotonic config-store version (bumped on every providers/settings
    * mutation). Used to detect whether a workspace's cached ModelRuntime
    * is stale before resolving a model. */
-  configVersion(): number
+  configVersion: () => number
   modelResolver: ModelResolver
   queries: AgentQueries
   bus: LiveBus
@@ -185,16 +185,19 @@ export type AgentFactoryDeps = {
   /** Agents finish_run already warned about a missing flag (once each). */
   finishFlagWarned: Set<string>
   lifecycle: SessionLifecycle
-  withFence<T>(op: () => T | Promise<T>): Promise<T>
-  getSettings(): FlatSettings
-  now(): string
-  updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
+  withFence: <T>(op: () => T | Promise<T>) => Promise<T>
+  getSettings: () => FlatSettings
+  now: () => string
+  updateAgent: (
+    agentId: string,
+    patch: Partial<typeof agents.$inferInsert>
+  ) => void
   status: AgentStatus
   /** Late-bound deadline timers (settle/timeout wiring). */
   deadlines(): AgentDeadlines
   /** Late-bound queue (boot recovery resets running items). */
-  queue(): QueueService | undefined
-  agentSettings(): AgentLoopSettings
+  queue: () => QueueService | undefined
+  agentSettings: () => AgentLoopSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost: typeof createAgentHost
   /** Read the event's scheduler policy (scheduler-admin). */

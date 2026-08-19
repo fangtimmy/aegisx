@@ -81,14 +81,6 @@ export type PromptContext = {
 
 // --- scheduler wake-up events (v19: agent-scoped) --------------------------
 
-export type EventScopeEvent =
-  | "agent.started"
-  | "agent.idle"
-  | "agent.flagAccepted"
-  | "agent.finished"
-  | "agent.timedOut"
-  | "agent.reopened"
-
 export type EventScopePayload =
   | {
       type: "agent.started"

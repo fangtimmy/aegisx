@@ -81,18 +81,12 @@ export function createApp(options: { dataDir: string }) {
     c.json({ name: "AegisX", status: "ok", version: SCHEMA_VERSION })
   )
 
-  // syncModels is a v2 artifact (pi-ai registry). Kept as a no-op: model
-  // runtime sync is lazy — a live run's ModelRuntime is refreshed on demand
-  // when a model switch targets a provider/model added after the run started
-  // (service.refreshRunModelRuntime). Provider/settings writes only persist
-  // config here.
-  const noopSync = () => {}
+  // Model runtime sync is lazy: a live run's ModelRuntime refreshes on
+  // demand when a model switch targets a provider/model added after the run
+  // started (agent-factory's ensureWorkspaceRuntimeFresh). Provider/settings
+  // writes only persist config here.
   registerProviderRoutes(app, { configStore })
-  registerSettingsRoutes(app, {
-    db,
-    configStore,
-    syncModels: noopSync,
-  })
+  registerSettingsRoutes(app, { db, configStore })
   registerPlatformRoutes(app, platformService)
   registerEventRoutes(app, {
     db,

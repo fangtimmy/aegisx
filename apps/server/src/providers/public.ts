@@ -21,9 +21,7 @@ function mapProviderModel(
   }
 }
 
-export function mapProviderConnection(
-  provider: ProviderData
-): ProviderConnection {
+function mapProviderConnection(provider: ProviderData): ProviderConnection {
   return {
     id: provider.id,
     label: provider.label,

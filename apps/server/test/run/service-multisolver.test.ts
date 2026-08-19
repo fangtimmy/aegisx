@@ -6,7 +6,6 @@ import { agents, channelMessages, channelReads } from "../../src/db/schema"
 import { teamKey } from "../../src/run/channels"
 import { createAgentService } from "../../src/run/service"
 import {
-  flatSettings,
   flatSettingsWithDefaultModel,
   makeProvider,
   seedAgent,

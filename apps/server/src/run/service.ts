@@ -71,8 +71,6 @@ import {
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
-export type { SpawnAgentInput } from "./agent-factory"
-
 export type AgentServiceOptions = {
   db: Database
   dataDir: string

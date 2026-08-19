@@ -321,7 +321,7 @@ export function createConfigStore(dataDir: string) {
     getProviders(): ProviderData[] {
       return data.providers
     },
-    updateSettings(patch: Partial<FlatSettings> | unknown): FlatSettings {
+    updateSettings(patch: unknown): FlatSettings {
       data = {
         ...data,
         settings: patchSettings(data.settings, patch),

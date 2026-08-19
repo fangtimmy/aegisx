@@ -50,7 +50,7 @@ export function createStorage(dataDir: string) {
           throw new StorageLimitError(maxBytes)
         }
         hash.update(value)
-        writer.write(value)
+        void writer.write(value)
       }
       await writer.end()
       renameSync(temporaryPath, finalPath)
@@ -89,10 +89,14 @@ export function createStorage(dataDir: string) {
 }
 
 export function isSafeFilename(filename: string) {
-  const hasForbiddenCharacter = [...filename].some((character) => {
+  let hasForbiddenCharacter = false
+  for (const character of filename) {
     const code = character.charCodeAt(0)
-    return code < 32 || code === 127 || character === "/" || character === "\\"
-  })
+    if (code < 32 || code === 127 || character === "/" || character === "\\") {
+      hasForbiddenCharacter = true
+      break
+    }
+  }
   return (
     filename.length > 0 &&
     filename.length <= 255 &&

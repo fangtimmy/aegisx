@@ -1,6 +1,7 @@
 import { ChevronDown, Send, Square, SquareSlash } from "lucide-react"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 
+import { ListRow } from "@/components/list-row"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/group"
 import {
@@ -12,7 +13,6 @@ import {
   MenuTrigger,
 } from "@/components/ui/menu"
 import { Textarea } from "@/components/ui/textarea"
-import { cn } from "@/lib/utils"
 
 /** Composer command panel entry (slash-command style): clicking inserts the
  * command text into the composer; Conversation dispatches it on submit. */
@@ -39,9 +39,6 @@ function slashQuery(draft: string, closed: boolean): string | null {
   if (commands.some((command) => command.command === first)) return null
   return first
 }
-
-const interactiveSelector =
-  'button, a, input, textarea, select, [role="menuitem"], [data-slot="menu-popup"]'
 
 export function Composer({
   draft,
@@ -164,56 +161,43 @@ export function Composer({
         event.preventDefault()
         onSubmit()
       }}
-      onMouseDown={(event) => {
-        // Clicking the container's blank space focuses the textarea instead
-        // of blurring the composer.
-        if (event.target instanceof Element) {
-          if (event.target.closest(interactiveSelector)) return
-          event.preventDefault()
-          inputRef.current?.focus()
-        }
-      }}
       ref={rootRef}
     >
       {slashOpen && (
-        <div
-          aria-label="命令补全"
-          className="absolute inset-x-0 bottom-full z-20 mb-1.5 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md"
-          role="listbox"
-        >
+        <div className="absolute inset-x-0 bottom-full z-20 mb-1.5 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md">
           {matches.map((command, index) => (
-            <button
-              aria-selected={index === slashIndex}
-              className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
-                index === slashIndex && "bg-accent"
-              )}
+            <ListRow
+              className="items-center rounded-none px-3 py-1.5 text-xs"
               key={command.command}
               onClick={() => pickCommand(command.command)}
-              role="option"
-              type="button"
+              selected={index === slashIndex}
             >
               <span className="font-mono">{command.command}</span>
               <span className="text-muted-foreground">{command.label}</span>
-            </button>
+            </ListRow>
           ))}
         </div>
       )}
-      <Textarea
-        aria-label="向 agent 发送消息"
-        className="min-w-0 flex-1 [&_textarea]:max-h-64 [&_textarea]:min-h-9 [&_textarea]:overflow-y-auto [&_textarea]:px-3 [&_textarea]:py-2.5 [&_textarea]:text-sm [&_textarea]:leading-6"
-        disabled={busy || locked}
-        onChange={(e) => {
-          onDraftChange(e.target.value)
-          setSlashDismissed(false)
-        }}
-        onKeyDown={onKeyDown}
-        placeholder={placeholder}
-        ref={inputRef}
-        rows={1}
-        unstyled
-        value={draft}
-      />
+      {/* Label-associated textarea: clicking the composer's blank space
+         natively focuses the input (no container-level mouse handler). */}
+      <label className="block cursor-text" htmlFor="composer-input">
+        <Textarea
+          aria-label="向 agent 发送消息"
+          className="min-w-0 flex-1 [&_textarea]:max-h-64 [&_textarea]:min-h-9 [&_textarea]:overflow-y-auto [&_textarea]:px-3 [&_textarea]:py-2.5 [&_textarea]:text-sm [&_textarea]:leading-6"
+          disabled={busy || locked}
+          id="composer-input"
+          onChange={(e) => {
+            onDraftChange(e.target.value)
+            setSlashDismissed(false)
+          }}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          ref={inputRef}
+          rows={1}
+          unstyled
+          value={draft}
+        />
+      </label>
       <div className="flex items-center gap-1.5 border-t p-1.5">
         <Menu>
           <MenuTrigger

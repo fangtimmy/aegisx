@@ -26,7 +26,11 @@ export const Markdown = memo(function Markdown({
     <div className={cn("md min-w-0", className)}>
       <ReactMarkdown
         components={{
-          a: (props) => <a {...props} rel="noreferrer" target="_blank" />,
+          a: ({ children, ...props }) => (
+            <a {...props} rel="noreferrer" target="_blank">
+              {children}
+            </a>
+          ),
         }}
         remarkPlugins={remarkPlugins}
       >

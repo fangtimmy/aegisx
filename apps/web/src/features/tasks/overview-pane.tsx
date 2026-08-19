@@ -19,6 +19,7 @@ import {
   type QueueItem,
   type QueueState,
 } from "@/api"
+import { ListRow } from "@/components/list-row"
 import { Markdown } from "@/components/markdown"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -264,13 +265,9 @@ function RosterRow({
       ? formatRemaining(agent.deadlineAt, Date.now())
       : null
   return (
-    <button
-      className={cn(
-        "flex w-full items-start gap-3 px-3 py-2 text-left transition-colors hover:bg-accent",
-        terminal && "opacity-60"
-      )}
+    <ListRow
+      className={cn("gap-3 rounded-none px-3 py-2", terminal && "opacity-60")}
       onClick={() => onSelect(agent.id)}
-      type="button"
     >
       <span className="mt-0.5 shrink-0 text-xs text-muted-foreground tabular-nums">
         #{index + 1}
@@ -299,7 +296,7 @@ function RosterRow({
           <div>{agent.completedAt ? formatTime(agent.completedAt) : "—"}</div>
         ) : null}
       </div>
-    </button>
+    </ListRow>
   )
 }
 

@@ -3,6 +3,7 @@ import {
   BaseAdapter,
   isRecord,
   type JsonRecord,
+  jsonText,
   nullableNumber,
   nullableString,
   type PlatformConfig,
@@ -36,7 +37,7 @@ export class A1CtfAdapter extends BaseAdapter {
     const body = await this.http.json<{ data?: JsonRecord[] }>("/api/game/list")
     return (body.data ?? []).map((game) => ({
       id: String(game.game_id),
-      name: String(game.name ?? `Game ${game.game_id}`),
+      name: jsonText(game.name ?? `Game ${jsonText(game.game_id)}`),
     }))
   }
 
@@ -53,7 +54,7 @@ export class A1CtfAdapter extends BaseAdapter {
       const id = String(challenge.challenge_id)
       return {
         id,
-        name: String(
+        name: jsonText(
           challenge.challenge_name ?? challenge.name ?? `Challenge ${id}`
         ),
         category: nullableString(challenge.category),
@@ -72,7 +73,7 @@ export class A1CtfAdapter extends BaseAdapter {
       ? value.attachments.filter(isRecord)
       : []
     const targets = targetDefinitions(value.containers)
-    const containerType = String(value.container_type ?? "")
+    const containerType = jsonText(value.container_type ?? "")
     const hasTarget =
       targets.length > 0 ||
       !["", "NO_CONTAINER", "NoContainer"].includes(containerType)
@@ -81,8 +82,8 @@ export class A1CtfAdapter extends BaseAdapter {
     }
     return {
       id: String(value.challenge_id),
-      name: String(value.challenge_name ?? "Untitled challenge"),
-      description: String(value.description ?? ""),
+      name: jsonText(value.challenge_name ?? "Untitled challenge"),
+      description: jsonText(value.description ?? ""),
       category: nullableString(value.category),
       points: nullableNumber(value.cur_score),
       solved: false,
@@ -90,7 +91,7 @@ export class A1CtfAdapter extends BaseAdapter {
       targetCount: targets.length,
       targets,
       attachments: attachments.flatMap((attachment) => {
-        const type = String(attachment.attach_type ?? "")
+        const type = jsonText(attachment.attach_type ?? "")
         const hash = nullableString(attachment.attach_hash)
         const remoteUrl = nullableString(attachment.attach_url)
         const url =
@@ -101,7 +102,7 @@ export class A1CtfAdapter extends BaseAdapter {
         return [
           {
             id: `${type}:${hash ?? url}`,
-            filename: String(attachment.attach_name ?? "attachment"),
+            filename: jsonText(attachment.attach_name ?? "attachment"),
             url,
             authenticated:
               type !== "REMOTEFILE" ||
@@ -200,7 +201,9 @@ export class A1CtfAdapter extends BaseAdapter {
               return []
             return [
               targetEndpoint(
-                String(port.port_name ?? container.container_name ?? "service"),
+                jsonText(
+                  port.port_name ?? container.container_name ?? "service"
+                ),
                 `${port.ip}:${port.port}`
               ),
             ]

@@ -17,6 +17,12 @@ type Route = {
   status?: number
 }
 
+/** URL string of a fetch input (URL / string / Request). */
+function requestUrlOf(input: URL | RequestInfo): string {
+  if (input instanceof URL) return input.href
+  return typeof input === "string" ? input : input.url
+}
+
 /** Stub globalThis.fetch with URL-matched JSON routes; record every call.
  * Routes are consumed in order: each request removes the first matching
  * route, so sequential calls to the same URL get distinct responses. */
@@ -25,7 +31,7 @@ function stubFetch(routes: Route[]) {
   const queue = [...routes]
   const calls: { url: string; init: RequestInit | undefined }[] = []
   globalThis.fetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
-    const url = input instanceof URL ? input.toString() : String(input)
+    const url = requestUrlOf(input)
     calls.push({ url, init })
     const index = queue.findIndex((r) =>
       typeof r.match === "string" ? url.includes(r.match) : r.match.test(url)

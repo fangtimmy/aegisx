@@ -203,13 +203,10 @@ function SpawnAgentDialogContent({
       </DialogHeader>
       {settings.isPending && (
         <DialogPanel>
-          <div
-            className="flex items-center gap-2 text-sm text-muted-foreground"
-            role="status"
-          >
+          <output className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner aria-hidden="true" />
             正在加载配置…
-          </div>
+          </output>
         </DialogPanel>
       )}
       {settings.error && (

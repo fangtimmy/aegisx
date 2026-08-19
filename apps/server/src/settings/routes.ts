@@ -82,12 +82,9 @@ export function registerSettingsRoutes(
   options: {
     db: ReturnType<typeof createDatabase>["db"]
     configStore: ConfigStore
-    syncModels(): void
   }
 ) {
   const { db, configStore } = options
-  // Reference through the options object (not destructured) so `this` survives.
-  const syncModels = () => options.syncModels()
   const previewPrompt = (
     kind: "mainSystemPrompt" | "initialPrompt" | "orchestratorSystemPrompt",
     template: string
@@ -344,7 +341,6 @@ export function registerSettingsRoutes(
       // use time against the imported providers; importing cannot cheaply
       // rebuild the aegisx-* provider keys.
       configStore.replaceAll(settings, newProviders)
-      syncModels()
       return c.json({
         version: 1,
         settings: configStore.getSettings(),

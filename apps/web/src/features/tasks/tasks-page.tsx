@@ -128,13 +128,10 @@ export function TasksPage() {
   if (!eventId) return null
   if (fleet.isPending || detail.isPending) {
     return (
-      <div
-        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-        role="status"
-      >
+      <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
         <Spinner aria-hidden="true" />
         正在加载任务…
-      </div>
+      </output>
     )
   }
   if (fleet.error) {

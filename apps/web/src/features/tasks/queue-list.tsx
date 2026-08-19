@@ -10,6 +10,7 @@ import {
 import { useState } from "react"
 
 import { keys, type QueueItem, schedulerApi } from "@/api"
+import { ListRow } from "@/components/list-row"
 import {
   AlertDialog,
   AlertDialogClose,
@@ -103,12 +104,11 @@ export function QueueList({
             className="group flex min-w-0 items-center gap-2 border-b px-3 py-2 last:border-b-0"
             key={item.id}
           >
-            <button
-              className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+            <ListRow
+              className="w-auto min-w-0 flex-1 items-center gap-2.5 rounded-none p-0"
               onClick={() => {
                 if (item.agentId) onOpenAgent(item.agentId)
               }}
-              type="button"
             >
               <span className="shrink-0 font-mono text-xs text-muted-foreground">
                 #{item.ord}
@@ -137,7 +137,7 @@ export function QueueList({
                   排队中
                 </Badge>
               )}
-            </button>
+            </ListRow>
             {editable ? (
               <span className="flex shrink-0 items-center gap-0.5">
                 <Button
@@ -260,13 +260,14 @@ function ClearQueueButton({
       onOpenChange={(open) => !open && setConfirming(false)}
       open={confirming}
     >
-      <button
-        className="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
+      <Button
+        className="px-1 text-xs text-muted-foreground hover:text-destructive"
         onClick={() => setConfirming(true)}
-        type="button"
+        size="xs"
+        variant="link"
       >
         清空排队
-      </button>
+      </Button>
       <AlertDialogPopup>
         <AlertDialogHeader>
           <AlertDialogTitle>清空排队任务？</AlertDialogTitle>

@@ -107,14 +107,13 @@ function DirectoryEntry({
       </CollapsibleTrigger>
       <CollapsiblePanel>
         {directory.isPending && (
-          <div
+          <output
             className="flex items-center gap-2 py-1 text-xs text-muted-foreground"
-            role="status"
             style={{ paddingLeft: `${depth * 16 + 40}px` }}
           >
             <Spinner aria-hidden="true" />
             正在加载目录…
-          </div>
+          </output>
         )}
         {directory.error && (
           <p
@@ -219,13 +218,10 @@ export function FilesWorkspace({
         <h3 className="mb-2 text-sm font-medium">{rootLabel}</h3>
         <ScrollArea className="flex-1" scrollFade>
           {root.isPending && (
-            <div
-              className="flex items-center gap-2 text-xs text-muted-foreground"
-              role="status"
-            >
+            <output className="flex items-center gap-2 text-xs text-muted-foreground">
               <Spinner aria-hidden="true" />
               正在加载文件…
-            </div>
+            </output>
           )}
           {root.error && (
             <p className="text-xs text-destructive-foreground" role="alert">
@@ -274,8 +270,13 @@ export function FilesWorkspace({
           </div>
           {selectedPath && (
             <Button
-              aria-label={`下载 ${selectedPath}`}
-              render={<a download href={files.downloadUrl(selectedPath)} />}
+              render={
+                <a
+                  aria-label={`下载 ${selectedPath}`}
+                  download
+                  href={files.downloadUrl(selectedPath)}
+                />
+              }
               variant="outline"
             >
               <Download /> 下载
@@ -293,13 +294,10 @@ export function FilesWorkspace({
           </Empty>
         )}
         {selected.isPending && selectedPath && (
-          <div
-            className="flex items-center gap-2 text-sm text-muted-foreground"
-            role="status"
-          >
+          <output className="flex items-center gap-2 text-sm text-muted-foreground">
             <Spinner aria-hidden="true" />
             正在加载预览…
-          </div>
+          </output>
         )}
         {selected.error && (
           <Alert variant="error">

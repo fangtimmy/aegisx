@@ -2,6 +2,7 @@ import { Database as SqliteDatabase } from "bun:sqlite"
 import {
   copyFileSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   unlinkSync,
@@ -140,7 +141,23 @@ function backupDatabase(
   console.warn(
     `Migrating database (${pending} pending); backup → ${basename(dst)}`
   )
+  pruneBackups(dataDir)
   return dst
+}
+
+/** Keep only the newest N migration backups (stamp names sort
+ * chronologically). Best-effort. */
+export function pruneBackups(dataDir: string, keep = 3): void {
+  const names = readdirSync(dataDir)
+    .filter((name) => name.startsWith("aegisx.sqlite.bak-"))
+    .sort()
+  for (const name of names.slice(0, Math.max(0, names.length - keep))) {
+    try {
+      unlinkSync(join(dataDir, name))
+    } catch {
+      // best-effort
+    }
+  }
 }
 
 export function createDatabase(dataDir: string) {

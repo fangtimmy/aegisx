@@ -3,6 +3,7 @@ import { Check, TriangleAlert } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
 import type { AgentSummary, Challenge, FleetInfo } from "@/api"
+import { ListRow } from "@/components/list-row"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -182,13 +183,10 @@ export function TaskList({
       />
       <ScrollArea className="min-h-0 flex-1" scrollFade>
         <div className="flex flex-col gap-1 pr-1">
-          <button
-            className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent",
-              selected === ORCH && "bg-accent"
-            )}
+          <ListRow
+            className="items-center"
             onClick={() => onSelect(ORCH)}
-            type="button"
+            selected={selected === ORCH}
           >
             <span
               aria-hidden
@@ -217,7 +215,7 @@ export function TaskList({
             >
               {schedLabel}
             </span>
-          </button>
+          </ListRow>
 
           <GroupHeader count={active.length} label="活跃" />
           {active.map((row) => (
@@ -289,13 +287,10 @@ function TaskRowView({
       : null
 
   return (
-    <button
-      className={cn(
-        "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent",
-        isSelected && "bg-accent"
-      )}
+    <ListRow
+      className="flex-col items-stretch gap-0.5"
       onClick={() => onSelect(row.id)}
-      type="button"
+      selected={isSelected}
     >
       <span className="flex min-w-0 items-center gap-2">
         <span
@@ -338,6 +333,6 @@ function TaskRowView({
           </span>
         )}
       </span>
-    </button>
+    </ListRow>
   )
 }

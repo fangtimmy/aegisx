@@ -13,6 +13,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router"
 
 import { activityApi, keys } from "@/api"
+import { ListRow } from "@/components/list-row"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverPopup, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -106,10 +107,9 @@ function ActivityRow({
   const meta = KIND_META[item.kind]
   const Icon = meta.icon
   return (
-    <button
-      className="flex w-full items-start gap-2.5 border-b px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-accent"
+    <ListRow
+      className="gap-2.5 rounded-none border-b px-3 py-2.5 last:border-b-0"
       onClick={() => onSelect(item)}
-      type="button"
     >
       <span
         aria-hidden
@@ -132,7 +132,7 @@ function ActivityRow({
       >
         {formatTime(item.time)}
       </time>
-    </button>
+    </ListRow>
   )
 }
 

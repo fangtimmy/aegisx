@@ -157,6 +157,9 @@ export function ProviderModels({
                         name="modelId"
                         render={({ field }) => (
                           <Input
+                            // Dialog-managed focus: the input is the
+                            // dialog's purpose, autoFocus is intentional.
+                            // oxlint-disable-next-line jsx-a11y/no-autofocus
                             autoFocus
                             id="provider-model-id"
                             onBlur={field.onBlur}

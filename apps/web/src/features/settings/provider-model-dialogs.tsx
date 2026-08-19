@@ -122,6 +122,9 @@ export function EditModelDialog({
                 name="label"
                 render={({ field }) => (
                   <Input
+                    // Dialog-managed focus: the input is the dialog's
+                    // purpose, autoFocus is intentional.
+                    // oxlint-disable-next-line jsx-a11y/no-autofocus
                     autoFocus
                     id="editing-provider-model-label"
                     onBlur={field.onBlur}

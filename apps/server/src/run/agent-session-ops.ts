@@ -20,8 +20,6 @@ export type AgentSessionOpsDeps = {
   now(): string
 }
 
-type AgentSessionOps = ReturnType<typeof createAgentSessionOps>
-
 /** Multi-session + flat backtrack (v12) operations. Sessions are per-agent
  * conversation threads: exactly one is active (agents.sessionFile), /new
  * creates a fresh one, activate switches the pointer (old sessions stay in

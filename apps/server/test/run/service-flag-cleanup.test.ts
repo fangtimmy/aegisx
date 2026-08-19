@@ -117,7 +117,6 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       const targetCalls: string[] = []
       const made = makeService(db, dir, { targetCalls })
       service = made.service
-      const { abortLog } = made
 
       await service.startScheduler("evt-1")
       await settle()

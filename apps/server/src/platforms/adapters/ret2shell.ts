@@ -4,6 +4,7 @@ import {
   challengeCategory,
   isRecord,
   type JsonRecord,
+  jsonText,
   nullableNumber,
   nullableString,
   type PlatformConfig,
@@ -47,7 +48,7 @@ export class Ret2ShellAdapter extends BaseAdapter {
       items.push(
         ...body[0].map((game) => ({
           id: String(game.id),
-          name: String(game.name ?? `Game ${game.id}`),
+          name: jsonText(game.name ?? `Game ${jsonText(game.id)}`),
         }))
       )
       if (items.length >= body[1] || body[0].length === 0) return items
@@ -63,7 +64,9 @@ export class Ret2ShellAdapter extends BaseAdapter {
       items.push(
         ...body[0].map((challenge) => ({
           id: String(challenge.id),
-          name: String(challenge.name ?? `Challenge ${challenge.id}`),
+          name: jsonText(
+            challenge.name ?? `Challenge ${jsonText(challenge.id)}`
+          ),
           category: challengeCategory(challenge),
           points: nullableNumber(challenge.score),
           solved: challenge.solved === true,
@@ -84,8 +87,8 @@ export class Ret2ShellAdapter extends BaseAdapter {
     const targets = targetDefinitions(environment?.images)
     return {
       id: String(value.id),
-      name: String(value.name ?? "Untitled challenge"),
-      description: String(value.content ?? ""),
+      name: jsonText(value.name ?? "Untitled challenge"),
+      description: jsonText(value.content ?? ""),
       category: challengeCategory(value),
       points: nullableNumber(value.score),
       solved: solve.solved === true,
@@ -136,17 +139,17 @@ export class Ret2ShellAdapter extends BaseAdapter {
       { signal }
     )
     const value = values.find(
-      (instance) => String(instance.challenge_id) === remoteId
+      (instance) => jsonText(instance.challenge_id) === remoteId
     )
     if (!value) return absentTarget()
-    const state = String(value.state ?? "Unknown")
+    const state = jsonText(value.state ?? "Unknown")
     const exposed = Array.isArray(value.exposed_ports)
       ? value.exposed_ports.flatMap((endpoint) => {
           if (!isRecord(endpoint) || typeof endpoint.address !== "string")
             return []
           return [
             targetEndpoint(
-              String(endpoint.name ?? "service"),
+              jsonText(endpoint.name ?? "service"),
               endpoint.address
             ),
           ]
@@ -218,7 +221,7 @@ function wsrxEndpoints(value: JsonRecord, baseUrl: string) {
 }
 
 function ret2Submission(value: JsonRecord): SubmissionResult {
-  const id = value.id === undefined ? undefined : String(value.id)
+  const id = value.id === undefined ? undefined : jsonText(value.id)
   if (value.solved === null || value.solved === undefined) {
     return { status: "pending", remoteId: id }
   }

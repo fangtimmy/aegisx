@@ -9,7 +9,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { defaultSettings } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/domain"
 
 import type { HostAgentSession } from "../src/agents/host-session"
 import { createDatabase, type Database } from "../src/db"
@@ -19,7 +18,6 @@ import type {
   ProviderData,
 } from "../src/infrastructure/config-store"
 import { builtinModelProfile } from "../src/providers/builtin-models"
-import { mapProviderConnection } from "../src/providers/public"
 import type { ContainerManager } from "../src/run/container/container-manager"
 
 /** Fresh on-disk SQLite on a temp dir. FKs left on (tests seed real graphs). */
@@ -147,11 +145,6 @@ export function makeModel(
     metadataSource: "pi:openai/gpt-4o-mini",
     ...overrides,
   }
-}
-
-/** ProviderData → ProviderConnection (the shape runService.create receives). */
-export function toConnection(provider: ProviderData): ProviderConnection {
-  return mapProviderConnection(provider)
 }
 
 /** ConfigStore stub exposing only what the services read (getProviders). */

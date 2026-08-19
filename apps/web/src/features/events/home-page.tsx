@@ -231,13 +231,10 @@ export function HomePage() {
       </div>
 
       {events.isPending && (
-        <div
-          className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-          role="status"
-        >
+        <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
           <Spinner aria-hidden="true" />
           正在加载赛事…
-        </div>
+        </output>
       )}
       {events.error && (
         <ErrorState error={events.error} retry={() => events.refetch()} />

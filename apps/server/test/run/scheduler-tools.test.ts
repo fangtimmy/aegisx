@@ -60,7 +60,7 @@ function makeService(
         const sdk = stub.session as unknown as {
           prompt: (text: string) => Promise<void>
         }
-        sdk.prompt = async (text: string) => {
+        sdk.prompt = async () => {
           if (hang) await new Promise(() => {})
         }
         return stub

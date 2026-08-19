@@ -7,11 +7,14 @@ const TIMEOUT_GRACE_MS = 30_000
 
 export type AgentDeadlinesDeps = {
   lifecycle: SessionLifecycle
-  updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
-  now(): string
+  updateAgent: (
+    agentId: string,
+    patch: Partial<typeof agents.$inferInsert>
+  ) => void
+  now: () => string
   /** Still streaming after grace → force terminal (aborted). */
   forceTerminal(agentId: string): void
-  emitAgentEvent(agentId: string, payload: EventScopePayload): void
+  emitAgentEvent: (agentId: string, payload: EventScopePayload) => void
   /** Test seam: grace between deadline-abort and a forced dispose. */
   timeoutGraceMs?: number
 }

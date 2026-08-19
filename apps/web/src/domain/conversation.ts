@@ -17,7 +17,8 @@ export function text(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2)
   } catch {
-    return String(value)
+    // unserializable (circular) — nothing sensible to render
+    return ""
   }
 }
 

@@ -594,9 +594,12 @@ export function registerRunRoutes(
     try {
       if (contentType === "multipart/form-data") {
         const form = await c.req.formData()
-        const text = String(form.get("text") ?? "").trim()
+        const textEntry = form.get("text")
+        const text = (typeof textEntry === "string" ? textEntry : "").trim()
         if (!text) return badRequest(c, "invalid", "text is required")
-        const urgent = String(form.get("urgent") ?? "") !== "false"
+        const urgentEntry = form.get("urgent")
+        const urgent =
+          (typeof urgentEntry === "string" ? urgentEntry : "") !== "false"
         const uploads = [...form.getAll("files")].filter(
           (entry): entry is File => entry instanceof File
         )

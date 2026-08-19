@@ -10,6 +10,7 @@ import {
   type Challenge,
   type ModelRef,
 } from "@/api"
+import { ListRow } from "@/components/list-row"
 import {
   Empty,
   EmptyContent,
@@ -215,14 +216,10 @@ function AgentListRow({
 }) {
   const terminal = !isLive(agent)
   return (
-    <button
-      className={cn(
-        "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent",
-        isSelected && "bg-accent",
-        terminal && "opacity-55"
-      )}
+    <ListRow
+      className={cn(terminal && "opacity-55")}
       onClick={() => onSelect(agent.id)}
-      type="button"
+      selected={isSelected}
     >
       <AgentStatusIcon className="mt-0.5" status={agent.status} />
       <span className="min-w-0 flex-1">
@@ -233,7 +230,7 @@ function AgentListRow({
           {formatAgo(agent.updatedAt, nowMs)}
         </span>
       </span>
-    </button>
+    </ListRow>
   )
 }
 
@@ -335,13 +332,10 @@ function AgentConversation({
 
   if (detail.isPending) {
     return (
-      <div
-        className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
-        role="status"
-      >
+      <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
         <Spinner aria-hidden="true" />
         正在加载对话…
-      </div>
+      </output>
     )
   }
   if (detail.error || !agent) {
