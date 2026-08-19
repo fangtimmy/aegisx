@@ -1,3 +1,4 @@
+export * as activityApi from "./activity"
 export * as challengesApi from "./challenges"
 export * as channelsApi from "./channels"
 export * as agentsApi from "./agents"

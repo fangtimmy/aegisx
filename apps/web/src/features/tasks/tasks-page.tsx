@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useSearchParams } from "react-router"
 
 import { agentsApi, eventsApi, keys, schedulerApi, type Challenge } from "@/api"
@@ -21,7 +21,9 @@ export function TasksPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const c = searchParams.get("c")
   const a = searchParams.get("a")
-  const [tab, setTab] = useState<TaskTab>("overview")
+  const [tab, setTab] = useState<TaskTab>(() =>
+    a ? "conversation" : "overview"
+  )
 
   const fleet = useQuery({
     enabled: Boolean(eventId),
@@ -104,11 +106,16 @@ export function TasksPage() {
     )
   }, [setSearchParams])
 
-  // c changed → the detail pane restarts on the overview tab (a is cleared
-  // by the click handlers; deriving here would also cover hand-edited URLs).
+  // c changed → restart the detail pane on the derived default tab: an
+  // explicit ?a= (graph / queue navigation) opens the conversation directly;
+  // a bare ?c= lands on the overview. selectTask already drops ?a=. The ref
+  // guard keeps ?a=-only changes (agent picks, post-spawn clear) untouched.
+  const prevC = useRef(c)
   useEffect(() => {
-    setTab("overview")
-  }, [c])
+    if (prevC.current === c) return
+    prevC.current = c
+    setTab(a ? "conversation" : "overview")
+  }, [c, a])
 
   // Selected challenge deleted → clear the selection back to the empty state.
   useEffect(() => {
@@ -151,6 +158,10 @@ export function TasksPage() {
           challenge={c === ORCH ? undefined : challengeById.get(c)}
           eventId={eventId}
           fleet={fleet.data}
+          queue={{
+            items: queue.data?.items ?? [],
+            state: queue.data?.state ?? "running",
+          }}
           onClearAgent={clearAgent}
           onSelectAgent={selectAgent}
           selection={{ a, c }}

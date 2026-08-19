@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ChevronRight,
   ListOrdered,
+  Pause,
+  Play,
   Plus,
   SlidersHorizontal,
 } from "lucide-react"
@@ -14,21 +16,18 @@ import {
   type AgentSummary,
   type Challenge,
   type FleetInfo,
+  type QueueItem,
+  type QueueState,
 } from "@/api"
 import { Markdown } from "@/components/markdown"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardPanel } from "@/components/ui/card"
 import {
   Collapsible,
   CollapsiblePanel,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { POLL_INTERVAL_MS } from "@/features/events/event-agents-shared"
 import { overallSolved } from "@/features/events/event-shared"
@@ -39,16 +38,18 @@ import { formatTime } from "@/lib/format"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 
+import { QueueList } from "./queue-list"
 import { SchedulerControlPanel } from "./scheduler-control-panel"
 import { formatRemaining, shortModel } from "./task-list"
 
 /** Overview tab: the challenge variant (header/flags/target/roster/actions)
- * or the scheduler variant (control panel + config summary + inbox). */
+ * or the scheduler variant (control panel + plan queue + config + inbox). */
 export function OverviewPane({
   eventId,
   challenge,
   lite,
   agents,
+  queue,
   schedulerAgent,
   config,
   onSelectAgent,
@@ -59,6 +60,8 @@ export function OverviewPane({
   lite?: FleetInfo["challenges"][number]
   /** The challenge's agents (empty for the scheduler variant). */
   agents: AgentSummary[]
+  /** The event's queue snapshot (scheduler variant's plan section). */
+  queue: { items: QueueItem[]; state: QueueState }
   schedulerAgent: AgentSummary | null
   config: FleetInfo["config"]
   onSelectAgent: (agentId: string) => void
@@ -69,7 +72,9 @@ export function OverviewPane({
       <SchedulerOverview
         config={config}
         eventId={eventId}
+        onSelectAgent={onSelectAgent}
         onOpenConfig={onOpenConfig}
+        queue={queue}
         schedulerAgent={schedulerAgent}
       />
     )
@@ -298,26 +303,58 @@ function RosterRow({
   )
 }
 
+/** Invalidate the queue + fleet caches after a queue state flip. */
+function invalidateQueue(
+  queryClient: ReturnType<typeof useQueryClient>,
+  eventId: string
+) {
+  void queryClient.invalidateQueries({
+    queryKey: keys.scheduler.queue(eventId),
+  })
+  void queryClient.invalidateQueries({ queryKey: keys.agents.fleet(eventId) })
+}
+
 function SchedulerOverview({
   eventId,
   schedulerAgent,
   config,
+  queue,
+  onSelectAgent,
   onOpenConfig,
 }: {
   eventId: string
   schedulerAgent: AgentSummary | null
   config: FleetInfo["config"]
+  queue: { items: QueueItem[]; state: QueueState }
+  onSelectAgent: (agentId: string) => void
   onOpenConfig: () => void
 }) {
+  const queryClient = useQueryClient()
   const inbox = useQuery({
     queryKey: keys.scheduler.inbox(eventId),
     queryFn: () => schedulerApi.getInbox(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
-  const active =
-    schedulerAgent !== null &&
-    (schedulerAgent.status === "running" || schedulerAgent.status === "idle")
+  const pauseQueue = useMutation({
+    mutationFn: () => schedulerApi.pauseQueue(eventId),
+    onSuccess: () => {
+      toast.success("队列已暂停")
+      invalidateQueue(queryClient, eventId)
+    },
+    onError: (error) => toast.error("暂停队列失败", error.message),
+  })
+  const resumeQueue = useMutation({
+    mutationFn: () => schedulerApi.resumeQueue(eventId),
+    onSuccess: () => {
+      toast.success("队列已恢复")
+      invalidateQueue(queryClient, eventId)
+    },
+    onError: (error) => toast.error("恢复队列失败", error.message),
+  })
   const instructionExcerpt = config.instruction.trim() || "（默认指令）"
+  const visibleQueue = queue.items.filter((item) =>
+    ["pending", "running", "failed"].includes(item.status)
+  )
 
   return (
     <ScrollArea className="h-full" scrollFade>
@@ -327,6 +364,57 @@ function SchedulerOverview({
           config={config}
           eventId={eventId}
         />
+
+        <section className="rounded-lg border p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="mr-auto text-sm font-medium">计划队列</h3>
+            <Badge size="sm" variant="secondary">
+              {visibleQueue.length}
+            </Badge>
+            <Badge
+              size="sm"
+              variant={queue.state === "paused" ? "warning" : "success"}
+            >
+              {queue.state === "paused" ? "已暂停" : "运行中"}
+            </Badge>
+            {queue.state === "paused" ? (
+              <Button
+                loading={resumeQueue.isPending}
+                onClick={() => resumeQueue.mutate()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Play /> 恢复
+              </Button>
+            ) : (
+              <Button
+                loading={pauseQueue.isPending}
+                onClick={() => pauseQueue.mutate()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Pause /> 暂停
+              </Button>
+            )}
+          </div>
+          {visibleQueue.length === 0 ? (
+            <p className="mt-2 text-sm text-muted-foreground">
+              队列为空。调度者规划或手动入队后，任务将按序启动。
+            </p>
+          ) : (
+            <Card className="mt-3">
+              <CardPanel className="p-0">
+                <QueueList
+                  eventId={eventId}
+                  items={visibleQueue}
+                  onOpenAgent={onSelectAgent}
+                />
+              </CardPanel>
+            </Card>
+          )}
+        </section>
 
         <section className="rounded-lg border p-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -384,17 +472,6 @@ function SchedulerOverview({
             求解者的提问与调度事件汇总在「频道」标签页。
           </p>
         </section>
-
-        {!active && (
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>调度者未启动</EmptyTitle>
-              <EmptyDescription>
-                启动后它将自动规划题目、发起尝试并处理求解者的提问。
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        )}
       </div>
     </ScrollArea>
   )

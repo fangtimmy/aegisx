@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Clock3, Play, RefreshCw, Square } from "lucide-react"
 
 import { challengesApi, keys } from "@/api"
+import { ApiError } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { formatTime } from "@/lib/format"
@@ -36,12 +37,18 @@ export function TargetPanel({ challengeId }: { challengeId: string }) {
     onError: (error) => toast.error("目标操作失败", error.message),
   })
   const value = target.data
+  // Unbound challenges have no remote target at all — the panel would sit
+  // on "加载中" forever; hide it instead.
+  if (target.error instanceof ApiError && target.error.code === "not_bound")
+    return null
   const statusLabel =
     value?.status === "running"
       ? "运行中"
       : value?.status === "absent"
         ? "未启动"
-        : (value?.status ?? "加载中")
+        : target.error
+          ? "不可用"
+          : (value?.status ?? "加载中")
 
   return (
     <section className="border-t pt-4">

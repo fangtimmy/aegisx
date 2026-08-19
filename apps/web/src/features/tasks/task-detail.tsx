@@ -6,7 +6,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react"
 
-import type { Challenge, FleetInfo } from "@/api"
+import type { Challenge, FleetInfo, QueueItem, QueueState } from "@/api"
 import { challengesApi, keys } from "@/api"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { SchedulerConfigTab } from "@/features/events/scheduler-config-tab"
@@ -31,6 +31,7 @@ export type TaskTab =
 export function TaskDetail({
   eventId,
   fleet,
+  queue,
   challenge,
   selection,
   tab,
@@ -40,6 +41,8 @@ export function TaskDetail({
 }: {
   eventId: string
   fleet: FleetInfo
+  /** The event's queue snapshot (scheduler-overview plan section). */
+  queue: { items: QueueItem[]; state: QueueState }
   /** Event-detail metadata for the selected challenge (may briefly lag
    * behind the fleet poll; the fleet lite row covers name/category). */
   challenge?: Challenge
@@ -91,6 +94,7 @@ export function TaskDetail({
           config={fleet.config}
           eventId={eventId}
           lite={lite}
+          queue={queue}
           schedulerAgent={fleet.schedulerAgent}
           onOpenConfig={() => onTabChange("config")}
           onSelectAgent={onSelectAgent}

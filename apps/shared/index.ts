@@ -1,3 +1,4 @@
+export * from "./activity"
 export * from "./agent"
 export * from "./channels"
 export * from "./domain"

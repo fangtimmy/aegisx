@@ -1,14 +1,11 @@
 import dagre from "@dagrejs/dagre"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Background,
   Controls,
   Handle,
-  Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
-  useReactFlow,
   type Edge,
   type Node,
   type NodeMouseHandler,
@@ -22,17 +19,14 @@ import {
   BrainCircuit,
   ChevronDown,
   Network,
-  Pause,
-  Play,
   Puzzle,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import type { KeyboardEvent as ReactKeyboardEvent } from "react"
+import { useNavigate } from "react-router"
 
 import type { AgentSummary, Challenge, SchedulerInfo } from "@/api"
-import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   Card,
   CardDescription,
@@ -42,7 +36,6 @@ import {
 } from "@/components/ui/card"
 import { agentStatusLabel } from "@/features/runs/agent-overview"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
-import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 
 import {
@@ -54,7 +47,6 @@ import {
   roleLabel,
   SCHED_NODE_ID,
 } from "./event-agents-shared"
-import { StartSchedulerDialog } from "./scheduler-config-tab"
 
 const agentNodeId = (id: string) => `agent:${id}`
 const challengeNodeId = (id: string) => `challenge:${id}`
@@ -65,7 +57,8 @@ type GraphNodeData =
   | {
       kind: "scheduler"
       /** The scheduler's orchestrator agent, when active. Null when no
-       * scheduler agent exists (placeholder "未启用" node, not clickable). */
+       * scheduler agent exists (placeholder "未启用" node; click still leads
+       * to the tasks page where the scheduler is started). */
       agentId: string | null
       status: string
     }
@@ -78,7 +71,7 @@ type GraphNodeData =
       activeAgentCount: number
     }
   | { kind: "archive"; count: number; open: boolean }
-  | { kind: "agent"; agent: AgentSummary; selected: boolean }
+  | { kind: "agent"; agent: AgentSummary }
 
 /** Lay out nodes left-to-right with dagre, writing absolute positions back
  * onto each node (React Flow needs explicit positions). */
@@ -112,23 +105,21 @@ function layoutWithDagre(
   })
 }
 
-/** The three-layer graph (v19) — 调度者 → challenge → agent. Each challenge
- * node hosts its live solver attempts; finished agents (completed / aborted /
- * failed) collapse into the aggregate archive node (default closed; expanded
- * shows one node per attempt). The live count is bounded by the container
- * cap (W4) and the archive stays collapsed unless opened, so the
- * steady-state node count is bounded. */
+/** The three-layer graph (v19) — 调度者 → challenge → agent. Pure navigation:
+ * every node click routes to the tasks page (scheduler → `c=orch`, challenge
+ * → `c=<id>`, agent → `c=<id>&a=<id>`); finished agents collapse into the
+ * aggregate archive node (expanded shows one node per attempt). The live
+ * count is bounded by the container cap and the archive stays collapsed
+ * unless opened, so the steady-state node count is bounded. */
 function buildAgentsGraph({
   scheduler,
   agents,
   archiveOpen,
-  selected,
   challenges,
 }: {
   scheduler?: SchedulerInfo
   agents: AgentSummary[]
   archiveOpen: boolean
-  selected: string | null
   challenges: Challenge[]
 }): { nodes: Node[]; edges: Edge[] } {
   const rawNodes: Node[] = []
@@ -146,7 +137,6 @@ function buildAgentsGraph({
     addNode(agentNodeId(agent.id), "agent", {
       kind: "agent",
       agent,
-      selected: selected === agent.id,
     })
     rawEdges.push({
       id: `e:agent:${agent.id}`,
@@ -158,8 +148,8 @@ function buildAgentsGraph({
   }
 
   // Layer 1: the scheduler. When a scheduler agent exists, this node IS the
-  // orchestrator agent (click opens its conversation) and the challenges
-  // hang off it. No agent → non-clickable "未启用" node.
+  // orchestrator agent; no agent → the "未启用" placeholder. Either way the
+  // click leads to the scheduler's tasks page (where it is started/controlled).
   const orchAgent = scheduler?.agent ?? null
   addNode(SCHED_NODE_ID, "scheduler", {
     kind: "scheduler",
@@ -185,9 +175,8 @@ function buildAgentsGraph({
     })
   }
 
-  // Layer 2: challenges with live agents, in event order (the challenge
-  // node is the knowledge base + IM entry). Layer 3: each live attempt
-  // hangs directly off its challenge.
+  // Layer 2: challenges with live agents, in event order. Layer 3: each live
+  // attempt hangs directly off its challenge.
   const activeByChallenge = new Map<string, AgentSummary[]>()
   for (const agent of active) {
     if (!agent.challengeId) continue
@@ -237,17 +226,14 @@ function buildAgentsGraph({
 function GraphNodeShell({
   children,
   className,
-  selected = false,
 }: {
   children: React.ReactNode
   className?: string
-  selected?: boolean
 }) {
   return (
     <div
       className={cn(
         "relative flex cursor-pointer items-center gap-2 rounded-lg border bg-popover px-3 py-2 text-popover-foreground shadow-xs/5 transition-colors hover:border-foreground/35",
-        selected && "ring-2 ring-primary",
         className
       )}
     >
@@ -327,10 +313,7 @@ function AgentGraphNode({ data }: NodeProps) {
   const { agent } = d
   const finish = agentFinishBadge(agent.status)
   return (
-    <GraphNodeShell
-      className={cn("w-52", finish && "opacity-60")}
-      selected={d.selected}
-    >
+    <GraphNodeShell className={cn("w-52", finish && "opacity-60")}>
       <AgentStatusIcon className="[&_svg]:size-3.5" status={agent.status} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm leading-tight">
@@ -360,81 +343,19 @@ const GRAPH_NODE_TYPES = {
   agent: AgentGraphNode,
 } satisfies NodeTypes
 
-/** The ReactFlow canvas (inside the provider so useReactFlow can focus the
- * selected node). Split out from AgentsGraph because useReactFlow needs the
- * provider above it. */
+/** The ReactFlow canvas. Split out from AgentsGraph for provider nesting. */
 function GraphCanvas({
   graph,
   graphKey,
-  schedAgent,
-  paused,
-  pausePending,
-  resumePending,
-  closePending,
-  selected,
-  onOpenAgent,
-  onOpenChallenge,
-  onToggleArchive,
-  onPauseScheduler,
-  onResumeScheduler,
-  onCloseScheduler,
-  onStartOpen,
+  onActivateNode,
 }: {
   graph: { nodes: Node[]; edges: Edge[] }
   graphKey: string
-  schedAgent: AgentSummary | null
-  paused: boolean
-  pausePending: boolean
-  resumePending: boolean
-  closePending: boolean
-  selected: string | null
-  onOpenAgent: (agentId: string) => void
-  onOpenChallenge: (challengeId: string) => void
-  onToggleArchive: () => void
-  onPauseScheduler: () => void
-  onResumeScheduler: () => void
-  onCloseScheduler: () => void
-  onStartOpen: () => void
+  onActivateNode: (node: Node) => void
 }) {
-  const flow = useReactFlow()
-  /** W7.2 viewport focus: center the selected agent once per selection (not on
-   * every poll — polls change graph.nodes identity). */
-  const focusedAgentId = useRef<string | null>(null)
-  useEffect(() => {
-    if (!selected) return
-    if (focusedAgentId.current === selected) return
-    const node = graph.nodes.find((n) => n.id === agentNodeId(selected))
-    if (!node) return
-    focusedAgentId.current = selected
-    const dim = NODE_DIM.agent
-    void flow.setCenter(
-      node.position.x + dim.width / 2,
-      node.position.y + dim.height / 2,
-      { zoom: 1, duration: 300 }
-    )
-  }, [selected, graph, flow])
-
-  const activateNode = useCallback(
-    (node: Node) => {
-      const data = node.data as GraphNodeData
-      if (data.kind === "scheduler") {
-        // The scheduler node IS the orchestrator agent — open its conversation.
-        if (data.agentId) onOpenAgent(data.agentId)
-      } else if (data.kind === "challenge") {
-        // The challenge node IS the knowledge base — open its IM.
-        onOpenChallenge(data.challengeId)
-      } else if (data.kind === "agent") {
-        onOpenAgent(data.agent.id)
-      } else if (data.kind === "archive") {
-        onToggleArchive()
-      }
-    },
-    [onOpenAgent, onOpenChallenge, onToggleArchive]
-  )
-
   const onNodeClick = useCallback<NodeMouseHandler>(
-    (_, node) => activateNode(node),
-    [activateNode]
+    (_, node) => onActivateNode(node),
+    [onActivateNode]
   )
 
   // Enter/Space on a focused node runs the same activation as a click — RF's
@@ -448,9 +369,9 @@ function GraphCanvas({
       const node = id ? graph.nodes.find((n) => n.id === id) : undefined
       if (!node) return
       event.preventDefault()
-      activateNode(node)
+      onActivateNode(node)
     },
-    [activateNode, graph.nodes]
+    [onActivateNode, graph.nodes]
   )
 
   return (
@@ -474,50 +395,6 @@ function GraphCanvas({
     >
       <Background color="var(--border)" gap={22} size={1} />
       <Controls position="bottom-right" showInteractive={false} />
-      {/* W3.3 scheduler lifecycle, state-driven: active+not paused → 暂停 /
-          关闭; paused → 恢复; closed/no agent → 启动 (restore semantics). */}
-      <Panel
-        className="flex flex-wrap items-center gap-1.5"
-        position="top-right"
-      >
-        {schedAgent && schedAgent.status !== "aborted" ? (
-          paused ? (
-            <Button
-              loading={resumePending}
-              onClick={onResumeScheduler}
-              size="sm"
-              type="button"
-            >
-              <Play /> 恢复
-            </Button>
-          ) : (
-            <>
-              <Button
-                loading={pausePending}
-                onClick={onPauseScheduler}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <Pause /> 暂停
-              </Button>
-              <Button
-                loading={closePending}
-                onClick={onCloseScheduler}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <Archive /> 关闭
-              </Button>
-            </>
-          )
-        ) : (
-          <Button onClick={onStartOpen} size="sm" type="button">
-            <Play /> 启动调度者
-          </Button>
-        )}
-      </Panel>
     </ReactFlow>
   )
 }
@@ -527,9 +404,6 @@ export function AgentsGraph({
   agents,
   scheduler,
   challenges,
-  onOpenAgent,
-  onOpenChallenge,
-  selected,
 }: {
   eventId: string
   /** All solver agents of the event (live + finished). */
@@ -537,59 +411,9 @@ export function AgentsGraph({
   scheduler?: SchedulerInfo
   /** The event's challenges (for the challenge node labels + grouping). */
   challenges: Challenge[]
-  /** Graph node click → open the agent dialog (the ONLY dialog entry). */
-  onOpenAgent: (agentId: string) => void
-  /** Challenge node click → open the challenge-level IM (knowledge base). */
-  onOpenChallenge: (challengeId: string) => void
-  /** W7.2: highlighted agent (from the left panel / timeline / queue); the
-   * graph opens the archive when needed + focuses it, but does NOT open a
-   * dialog. */
-  selected: string | null
 }) {
-  const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [archiveOpen, setArchiveOpen] = useState(false)
-  const [startOpen, setStartOpen] = useState(false)
-  const schedAgent = scheduler?.agent ?? null
-  const config = scheduler?.config
-  const paused = config?.paused ?? false
-
-  const invalidateScheduler = () =>
-    Promise.all([
-      queryClient.invalidateQueries({
-        queryKey: keys.scheduler.detail(eventId),
-      }),
-      queryClient.invalidateQueries({
-        queryKey: keys.scheduler.queue(eventId),
-      }),
-      queryClient.invalidateQueries({ queryKey: keys.agents.fleet(eventId) }),
-    ])
-
-  // W3.3 lifecycle actions (pause keeps the container warm; close releases it
-  // — the agent stays cold-restorable; start restores memory by default).
-  const pauseScheduler = useMutation({
-    mutationFn: () => schedulerApi.pauseScheduler(eventId),
-    onSuccess: () => {
-      toast.success("调度者已暂停")
-      void invalidateScheduler()
-    },
-    onError: (error) => toast.error("暂停调度者失败", error.message),
-  })
-  const resumeScheduler = useMutation({
-    mutationFn: () => schedulerApi.resumeScheduler(eventId),
-    onSuccess: () => {
-      toast.success("调度者已恢复")
-      void invalidateScheduler()
-    },
-    onError: (error) => toast.error("恢复调度者失败", error.message),
-  })
-  const closeScheduler = useMutation({
-    mutationFn: () => schedulerApi.closeScheduler(eventId),
-    onSuccess: () => {
-      toast.success("调度者已关闭")
-      void invalidateScheduler()
-    },
-    onError: (error) => toast.error("关闭调度者失败", error.message),
-  })
 
   const sortedAgents = useMemo(
     () =>
@@ -610,10 +434,9 @@ export function AgentsGraph({
         scheduler,
         agents: sortedAgents,
         archiveOpen,
-        selected,
         challenges,
       }),
-    [scheduler, sortedAgents, archiveOpen, selected, challenges]
+    [scheduler, sortedAgents, archiveOpen, challenges]
   )
   // Remount React Flow (→ re-fit-view) only when the node SET changes
   // (expand/collapse/spawn). Status-only polls keep the same key, so the
@@ -623,17 +446,26 @@ export function AgentsGraph({
     [graph]
   )
 
-  // W7.2: a selected finished agent opens the archive so its node is
-  // visible for the viewport focus.
-  useEffect(() => {
-    if (!selected) return
-    const agent = agents.find((a) => a.id === selected)
-    if (agent && isAgentFinished(agent)) setArchiveOpen(true)
-  }, [selected, agents])
-
-  const onToggleArchive = useCallback(() => {
-    setArchiveOpen((prev) => !prev)
-  }, [])
+  const onActivateNode = useCallback(
+    (node: Node) => {
+      const data = node.data as GraphNodeData
+      if (data.kind === "scheduler") {
+        void navigate(`/events/${eventId}/tasks?c=orch`)
+      } else if (data.kind === "challenge") {
+        void navigate(`/events/${eventId}/tasks?c=${data.challengeId}`)
+      } else if (data.kind === "agent") {
+        const agent = data.agent
+        void navigate(
+          agent.challengeId
+            ? `/events/${eventId}/tasks?c=${agent.challengeId}&a=${agent.id}`
+            : `/events/${eventId}/tasks?c=orch`
+        )
+      } else if (data.kind === "archive") {
+        setArchiveOpen((prev) => !prev)
+      }
+    },
+    [eventId, navigate]
+  )
 
   return (
     <Card className="flex h-full min-h-0 flex-col">
@@ -643,37 +475,17 @@ export function AgentsGraph({
             <Network className="size-4" /> Agents Graph
           </span>
         </CardTitle>
-        <CardDescription>调度者 → 题目 → agents</CardDescription>
+        <CardDescription>调度者 → 题目 → agents，点击进入任务</CardDescription>
       </CardHeader>
       <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">
         <ReactFlowProvider>
           <GraphCanvas
-            closePending={closeScheduler.isPending}
             graph={graph}
             graphKey={graphKey}
-            onCloseScheduler={() => closeScheduler.mutate()}
-            onOpenAgent={onOpenAgent}
-            onOpenChallenge={onOpenChallenge}
-            onPauseScheduler={() => pauseScheduler.mutate()}
-            onResumeScheduler={() => resumeScheduler.mutate()}
-            onStartOpen={() => setStartOpen(true)}
-            onToggleArchive={onToggleArchive}
-            pausePending={pauseScheduler.isPending}
-            paused={paused}
-            resumePending={resumeScheduler.isPending}
-            schedAgent={schedAgent}
-            selected={selected}
+            onActivateNode={onActivateNode}
           />
         </ReactFlowProvider>
       </CardPanel>
-      {startOpen && (
-        <StartSchedulerDialog
-          config={config}
-          eventId={eventId}
-          onClose={() => setStartOpen(false)}
-          onStarted={invalidateScheduler}
-        />
-      )}
     </Card>
   )
 }

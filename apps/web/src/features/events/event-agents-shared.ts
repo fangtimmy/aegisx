@@ -1,7 +1,4 @@
-import { Archive, Flag, Play, Puzzle, Timer } from "lucide-react"
-
 import type { AgentStatus, AgentSummary } from "@/api"
-export const UNCATEGORIZED = "未分类"
 
 /** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
    so the fleet/queue/usage must refresh regardless of locally-known state. */
@@ -38,23 +35,6 @@ export function agentFinishBadge(status: AgentStatus): {
   if (status === "failed") return { label: "已失败", variant: "destructive" }
   if (status === "aborted") return { label: "已中断", variant: "warning" }
   return null
-}
-
-export type TimelineEvent = {
-  time: string
-  id: string
-  kind: "agent" | "timeout" | "completed" | "flag" | "challenge"
-  title: string
-  detail: string
-  agentId?: string
-}
-
-export const TIMELINE_ICONS: Record<TimelineEvent["kind"], typeof Play> = {
-  agent: Play,
-  timeout: Timer,
-  completed: Archive,
-  flag: Flag,
-  challenge: Puzzle,
 }
 
 /** The AgentsGraph root node id (the event scheduler / orchestrator). */

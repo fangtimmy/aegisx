@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
+import { ActivityLogButton } from "@/features/activity/activity-log"
 
 export function IconTooltip({
   label,
@@ -53,16 +54,19 @@ export function ProductHeader({ eventName }: { eventName?: string }) {
             </>
           )}
         </div>
-        <IconTooltip label="设置">
-          <Button
-            aria-label="设置"
-            render={<Link to="/settings" />}
-            size="icon"
-            variant="ghost"
-          >
-            <Settings />
-          </Button>
-        </IconTooltip>
+        <div className="flex items-center gap-1">
+          <ActivityLogButton />
+          <IconTooltip label="设置">
+            <Button
+              aria-label="设置"
+              render={<Link to="/settings" />}
+              size="icon"
+              variant="ghost"
+            >
+              <Settings />
+            </Button>
+          </IconTooltip>
+        </div>
       </div>
     </header>
   )

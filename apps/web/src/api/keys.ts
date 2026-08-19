@@ -1,4 +1,7 @@
 export const keys = {
+  activity: {
+    all: ["activity"] as const,
+  },
   events: {
     all: ["events"] as const,
     detail: (id: string) => ["events", id] as const,

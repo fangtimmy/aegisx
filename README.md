@@ -3,7 +3,7 @@
 AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated agent workspaces, live agent conversations, an event task queue (scheduler), and token usage.
 
 > **Schema v19（题中心模型）** — Run 作为一等实体被移除。Event → Challenge → Workspace → Agent 四层；agents 表重建（eventId/challengeId/role/prompt/source/deadlineAt/summary），spawn_queue（append 语义），challenge_flags.agentId + source 'agent'；频道附件改为 shared/ 路径（删 channel_files 表）；调度者容器挂载 /challenges 只读。迁移 0013 为纯破坏性 DDL（旧数据弃置）。
-> Design notes: [docs/model-v19-challenge-centric.md](docs/model-v19-challenge-centric.md)（v19 题中心设计，已实施）、[docs/model-v19-implementation.md](docs/model-v19-implementation.md)（实施计划，已实施）、[docs/tasks-tab-design.md](docs/tasks-tab-design.md)（任务 Tab：题中心作战视图，已实施）、[docs/composer-realtime-design.md](docs/composer-realtime-design.md)（SteerQueue/多行输入/频道 SSE/provider 测试，已实施）、[docs/scheduler-python-sdk.md](docs/scheduler-python-sdk.md)（调度者 SDK 工具面，端点表为 v9 时代、规格以代码为准）。更早的设计史（v9 编排 / v16-18 频道 IM / v18 统一消息层）见 git 历史。
+> Design notes: [docs/model-v19-challenge-centric.md](docs/model-v19-challenge-centric.md)（v19 题中心设计，已实施）、[docs/model-v19-implementation.md](docs/model-v19-implementation.md)（实施计划，已实施）、[docs/tasks-tab-design.md](docs/tasks-tab-design.md)（任务 Tab：题中心作战视图，已实施）、[docs/composer-realtime-design.md](docs/composer-realtime-design.md)（SteerQueue/多行输入/频道 SSE/provider 测试，已实施）、[docs/agents-graph-and-activity-log.md](docs/agents-graph-and-activity-log.md)（Agents tab 纯 Graph 化 + 全局活动日志，已实施）、[docs/scheduler-python-sdk.md](docs/scheduler-python-sdk.md)（调度者 SDK 工具面，端点表为 v9 时代、规格以代码为准）。更早的设计史（v9 编排 / v16-18 频道 IM / v18 统一消息层）见 git 历史。
 
 ## Requirements
 

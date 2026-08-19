@@ -1,6 +1,7 @@
 import { get } from "@aegisx/shared"
 import { Hono } from "hono"
 
+import { registerActivityRoutes } from "./activity/routes"
 import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
 import { createCatalogReader } from "./events/catalog"
@@ -118,6 +119,7 @@ export function createApp(options: { dataDir: string }) {
     agentService,
   })
   registerSchedulerRoutes(app, { db, agentService })
+  registerActivityRoutes(app, { db })
 
   app.get("/api/platform/status", (c) => c.json({ available: true }))
 
