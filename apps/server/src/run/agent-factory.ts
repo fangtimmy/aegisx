@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 import type { FlatSettings, ModelRef } from "@aegisx/shared"
@@ -30,6 +30,7 @@ import {
 import { deriveCapabilities } from "../orchestration/types"
 import { getChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
+import { generateModelsJson } from "../providers/models-json"
 import type { AgentStatus } from "./agent-status"
 import type { ChannelService } from "./channels"
 import type { ContainerLifecycle } from "./container-lifecycle"
@@ -140,6 +141,10 @@ export type WorkspaceContext = {
   containerName: string
   containerWorkspace: string
   modelRuntime: RunModelRuntime
+  /** `configStore.configVersion` at the last ModelRuntime refresh — 0 at
+   * build time. prepare/switch compare against the current version to
+   * decide whether the cached runtime needs refreshing. */
+  lastRefreshVersion: number
 }
 
 export type SpawnAgentInput = {
@@ -166,6 +171,10 @@ export type AgentFactoryDeps = {
   containerLifecycle: ContainerLifecycle
   platformService: PlatformService
   providers(): ProviderConnection[]
+  /** Monotonic config-store version (bumped on every providers/settings
+   * mutation). Used to detect whether a workspace's cached ModelRuntime
+   * is stale before resolving a model. */
+  configVersion(): number
   modelResolver: ModelResolver
   queries: AgentQueries
   bus: LiveBus
@@ -215,6 +224,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     containerLifecycle,
     platformService,
     providers,
+    configVersion,
     modelResolver,
     queries,
     bus,
@@ -250,6 +260,9 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
 
   const contexts = new Map<string, WorkspaceContext>()
   const building = new Map<string, Promise<WorkspaceContext>>()
+  /** In-flight ModelRuntime refreshes per workspace (coalesce concurrent
+   * callers onto the pending refresh). */
+  const runtimeRefreshes = new Map<string, Promise<void>>()
 
   function workspaceKeyOf(row: {
     eventId: string
@@ -291,6 +304,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           : orchestratorContainerName(row.eventId),
         containerWorkspace,
         modelRuntime,
+        lastRefreshVersion: configVersion(),
       }
       contexts.set(key, ctx)
       return ctx
@@ -311,6 +325,42 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     })
     building.set(key, promise)
     return promise
+  }
+
+  /** Regenerate models.json from the current providers and hot-reload the
+   * workspace's ModelRuntime. Single-flighted per workspace. No-op (after
+   * coalescing) when the workspace has no context yet. */
+  function refreshWorkspaceRuntime(workspaceKey: string): Promise<void> {
+    const existing = runtimeRefreshes.get(workspaceKey)
+    if (existing) return existing
+    const pending = (async () => {
+      const ctx = contexts.get(workspaceKey)
+      if (!ctx) return
+      const runtimeDir = join(ctx.rootDir, "runtime")
+      mkdirSync(runtimeDir, { recursive: true })
+      writeFileSync(
+        join(runtimeDir, "models.json"),
+        `${JSON.stringify(generateModelsJson(providers()), null, 2)}\n`
+      )
+      await ctx.modelRuntime.refresh({ allowNetwork: false })
+      ctx.lastRefreshVersion = configVersion()
+    })().finally(() => {
+      runtimeRefreshes.delete(workspaceKey)
+    })
+    runtimeRefreshes.set(workspaceKey, pending)
+    return pending
+  }
+
+  /** Refresh the workspace's ModelRuntime only when the config-store version
+   * advanced since its last refresh. Called at prepare/switch boundaries so a
+   * cached runtime picks up provider/apiKey/metadata edits without a server
+   * restart. */
+  function ensureWorkspaceRuntimeFresh(workspaceKey: string): Promise<void> {
+    const ctx = contexts.get(workspaceKey)
+    if (ctx && ctx.lastRefreshVersion >= configVersion()) {
+      return Promise.resolve()
+    }
+    return refreshWorkspaceRuntime(workspaceKey)
   }
 
   /** Get-or-create the workspace's container (registry + isRunning check
@@ -674,6 +724,11 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     const ctx = await ensureWorkspaceContext(row)
     await ensureContainerFor(row, ctx)
 
+    // Pick up provider/apiKey/metadata edits since the runtime was last
+    // built/refreshed before resolving the snapshot model (covers reopen +
+    // spawn-on-existing-workspace drift).
+    await ensureWorkspaceRuntimeFresh(ctx.key)
+
     // Resolve this agent's model from its own snapshot ref (survives
     // switches). Cold-restore reuses the snapshot verbatim — no re-render.
     const agentTarget = modelResolver.resolveModelTarget(row.model)
@@ -821,6 +876,8 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     contexts,
     ensureWorkspaceContext,
     ensureContainerFor,
+    refreshWorkspaceRuntime,
+    ensureWorkspaceRuntimeFresh,
     workspaceKeyOf,
     rootDirOf,
   }

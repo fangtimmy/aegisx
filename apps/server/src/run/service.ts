@@ -1,5 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { rmSync } from "node:fs"
 
 import type {
   AgentDetail,
@@ -36,7 +35,6 @@ import {
   isTargetCapable,
 } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
-import { generateModelsJson } from "../providers/models-json"
 import { getProviderConnections } from "../providers/public"
 import { createAgentFactory, type AgentFactory } from "./agent-factory"
 import { createAgentSessionOps } from "./agent-session-ops"
@@ -323,32 +321,6 @@ export function createAgentService(options: AgentServiceOptions) {
 
   // --- agent facade (routes-facing) -----------------------------------------
 
-  /** Lazy model-runtime sync per workspace: regenerate models.json from the
-   * current providers and hot-reload the workspace's ModelRuntime, making
-   * providers/models added while live visible to model switches.
-   * Single-flighted per workspace; agents keep their own model snapshot
-   * until explicitly switched. */
-  const runtimeRefreshes = new Map<string, Promise<void>>()
-  function refreshWorkspaceModelRuntime(workspaceKey: string): Promise<void> {
-    const existing = runtimeRefreshes.get(workspaceKey)
-    if (existing) return existing
-    const pending = (async () => {
-      const ctx = factory.contexts.get(workspaceKey)
-      if (!ctx) return
-      const runtimeDir = join(ctx.rootDir, "runtime")
-      mkdirSync(runtimeDir, { recursive: true })
-      writeFileSync(
-        join(runtimeDir, "models.json"),
-        `${JSON.stringify(generateModelsJson(providers()), null, 2)}\n`
-      )
-      await ctx.modelRuntime.refresh({ allowNetwork: false })
-    })().finally(() => {
-      runtimeRefreshes.delete(workspaceKey)
-    })
-    runtimeRefreshes.set(workspaceKey, pending)
-    return pending
-  }
-
   /** Spawn one solver agent (the direct path — fence full → capacity
    * error). The queue's drainer calls the factory directly. */
   async function spawn(input: {
@@ -468,6 +440,14 @@ export function createAgentService(options: AgentServiceOptions) {
         )
       }
       const agentRow = queries.getAgentRow(agentId)
+      // Proactively refresh the workspace's ModelRuntime when the config
+      // changed since it was last refreshed, so the resolved target carries
+      // the current provider/apiKey/metadata — not a frozen snapshot. (This
+      // also makes models added while live resolvable, so there is no longer
+      // a miss-then-retry fallback.)
+      await factory.ensureWorkspaceRuntimeFresh(
+        factory.workspaceKeyOf(agentRow ?? { eventId: "", challengeId: null })
+      )
       let result: Awaited<ReturnType<typeof applyModelSwitch>>
       try {
         result = await applyModelSwitch(
@@ -476,29 +456,11 @@ export function createAgentService(options: AgentServiceOptions) {
           input.model,
           agentRow?.model ?? null
         )
-      } catch {
-        // The target may be a provider/model added while live — missing
-        // from this workspace's ModelRuntime snapshot. Lazy-refresh the
-        // runtime once and retry; a genuine resolution failure (bad ref,
-        // disabled/unconfigured model) fails the retry with the same error.
-        await refreshWorkspaceModelRuntime(
-          factory.workspaceKeyOf(agentRow ?? { eventId: "", challengeId: null })
-        ).catch(() => undefined)
-        try {
-          result = await applyModelSwitch(
-            session,
-            providers(),
-            input.model,
-            agentRow?.model ?? null
-          )
-        } catch (retryError) {
-          throw new RunActionError(
-            "invalid_state",
-            retryError instanceof Error
-              ? retryError.message
-              : String(retryError)
-          )
-        }
+      } catch (error) {
+        throw new RunActionError(
+          "invalid_state",
+          error instanceof Error ? error.message : String(error)
+        )
       }
       const { target } = result
       // Persist the ACTUAL (SDK-clamped) thinking level so the agent
@@ -966,6 +928,7 @@ export function createAgentService(options: AgentServiceOptions) {
     containerLifecycle,
     platformService,
     providers,
+    configVersion: () => configStore.configVersion,
     modelResolver,
     queries,
     bus,

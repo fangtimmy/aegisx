@@ -135,6 +135,20 @@ export function ModelRefPicker({
   }
   for (const m of items) optionItems[m.address] = m.label
 
+  // Live-switch context (!allowEmpty): the currently-running model is a
+  // snapshot — show it as a DISABLED "当前使用" entry so the user can switch
+  // OUT to a fresh model but never no-op back to the same address (which
+  // would skip setModel and fail to pick up provider/apiKey edits). The
+  // available list excludes the current address so any selected switch is a
+  // real change. Config scenarios (allowEmpty) keep the old dangling-only
+  // behavior.
+  const live = !allowEmpty
+  const currentLabel = selectedModel
+    ? selectedModel.label
+    : parsed?.kind === "model"
+      ? parsed.modelId
+      : selectedAddress
+
   return (
     <span className={cn("flex items-center gap-1.5", className)}>
       <Select
@@ -148,7 +162,16 @@ export function ModelRefPicker({
         </SelectTrigger>
         <SelectPopup>
           {allowEmpty && <SelectItem value="">{emptyLabel}</SelectItem>}
-          {dangling && selectedAddress && (
+          {live && selectedAddress && (
+            <SelectGroup key="current">
+              <SelectGroupLabel>当前使用</SelectGroupLabel>
+              <SelectItem disabled value={selectedAddress}>
+                {currentLabel}
+                {!selectedModel && "（不可用）"}
+              </SelectItem>
+            </SelectGroup>
+          )}
+          {!live && dangling && selectedAddress && (
             <SelectGroup key="current">
               <SelectGroupLabel>当前使用</SelectGroupLabel>
               <SelectItem value={selectedAddress}>
@@ -157,16 +180,21 @@ export function ModelRefPicker({
               </SelectItem>
             </SelectGroup>
           )}
-          {grouped.map(([providerLabel, list]) => (
-            <SelectGroup key={providerLabel}>
-              <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
-              {list.map((m) => (
-                <SelectItem key={m.address} value={m.address}>
-                  {m.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ))}
+          {grouped.map(([providerLabel, list]) => {
+            const visible = live
+              ? list.filter((m) => m.address !== selectedAddress)
+              : list
+            return (
+              <SelectGroup key={providerLabel}>
+                <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
+                {visible.map((m) => (
+                  <SelectItem key={m.address} value={m.address}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )
+          })}
         </SelectPopup>
       </Select>
       {showEffort && (

@@ -295,6 +295,11 @@ export function createConfigStore(dataDir: string) {
   }
 
   let data: ConfigData = load()
+  // In-memory generation counter for config writes. Bumped on every mutation
+  // so run-lifecycle code can detect drift between a workspace's cached
+  // ModelRuntime snapshot and the current provider/settings config (e.g.
+  // apiKey edits) and lazily refresh before resolving a model.
+  let configVersion = 0
 
   return {
     get(): ConfigData {
@@ -306,6 +311,13 @@ export function createConfigStore(dataDir: string) {
     getUpdatedAt(): string {
       return data.updatedAt
     },
+    /** Monotonic counter bumped on every settings/providers mutation
+     * (in-memory; resets on restart). Consumers compare against a cached
+     * snapshot to decide whether a workspace's ModelRuntime needs
+     * refreshing. */
+    get configVersion(): number {
+      return configVersion
+    },
     getProviders(): ProviderData[] {
       return data.providers
     },
@@ -315,11 +327,13 @@ export function createConfigStore(dataDir: string) {
         settings: patchSettings(data.settings, patch),
         updatedAt: now(),
       }
+      configVersion++
       save(data)
       return data.settings
     },
     updateProviders(providers: ProviderData[]): void {
       data = { ...data, providers, updatedAt: now() }
+      configVersion++
       save(data)
     },
     replaceAll(settings: FlatSettings, providers: ProviderData[]): void {
@@ -329,6 +343,7 @@ export function createConfigStore(dataDir: string) {
         providers,
         updatedAt: now(),
       }
+      configVersion++
       save(data)
     },
     exportDocument() {
