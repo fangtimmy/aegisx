@@ -211,14 +211,14 @@ describe("queue CRUD", () => {
         challengeId: "ch-a",
         source: "scheduler",
         prompt: "spawn strategy text",
-        model: "openai/gpt-4o-mini",
+        model: "aegisx-prov-1/gpt-4o-mini",
         promptMode: "override",
         timeoutMs: 3_600_000,
       })
       expect(item.prompt).toBe("spawn strategy text")
       expect(item.params).toEqual({
         prompt: "spawn strategy text",
-        model: "openai/gpt-4o-mini",
+        model: "aegisx-prov-1/gpt-4o-mini",
         promptMode: "override",
       })
       expect(item.timeoutMs).toBe(3_600_000)

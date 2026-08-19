@@ -18,6 +18,7 @@ import type {
   ConfigStore,
   ProviderData,
 } from "../src/infrastructure/config-store"
+import { builtinModelProfile } from "../src/providers/builtin-models"
 import { mapProviderConnection } from "../src/providers/public"
 import type { ContainerManager } from "../src/run/container/container-manager"
 
@@ -115,8 +116,9 @@ export function seedAgent(
   return id
 }
 
-/** Minimal custom (non-piBinding) provider with one enabled model. metadata
- * "{}" parses to defaults via parseModelMetadata. */
+/** Minimal provider with one enabled model. metadata carries the real
+ * pi-builtin gpt-4o-mini profile so ModelRuntime.getModel resolves offline
+ * (custom models.json entries are registered without a catalog fetch). */
 export function makeProvider(
   overrides: Partial<ProviderData> = {}
 ): ProviderData {
@@ -124,22 +126,25 @@ export function makeProvider(
     id: "prov-1",
     label: "Test Provider",
     type: "openai-compatible",
-    baseUrl: "",
+    baseUrl: "https://api.test.invalid/v1",
     apiKey: "test-key",
     enabled: true,
-    models: [
-      {
-        id: "model-1",
-        modelId: "gpt-4o-mini",
-        label: "Test Model",
-        enabled: true,
-        metadata: "{}",
-        // Bind to a real pi builtin so ModelRuntime.getModel resolves offline
-        // (custom-provider keys aren't registered without a catalog entry).
-        piProviderId: "openai",
-        piModelId: "gpt-4o-mini",
-      },
-    ],
+    models: [makeModel()],
+    ...overrides,
+  }
+}
+
+export function makeModel(
+  overrides: Partial<ProviderData["models"][number]> = {}
+): ProviderData["models"][number] {
+  const profile = builtinModelProfile("openai", "gpt-4o-mini")
+  return {
+    id: "model-1",
+    modelId: "gpt-4o-mini",
+    label: "Test Model",
+    enabled: true,
+    metadata: JSON.stringify(profile?.metadata ?? {}),
+    metadataSource: "pi:openai/gpt-4o-mini",
     ...overrides,
   }
 }
@@ -159,17 +164,17 @@ export function stubConfigStore(providers: ProviderData[]): ConfigStore {
 
 export const flatSettings = () => defaultSettings()
 
-/** Canonical model ref for the {@link makeProvider} test provider (pi-bound
- * openai/gpt-4o-mini). Used as the default-model ref and per-slot overrides
- * so the service's slot-model resolution succeeds in tests. */
-export const TEST_MODEL_REF = "openai/gpt-4o-mini"
+/** Canonical model ref for the {@link makeProvider} test provider
+ * (`aegisx-prov-1/gpt-4o-mini`). Used as the default-model ref and per-slot
+ * overrides so the service's slot-model resolution succeeds in tests. */
+export const TEST_MODEL_REF = "aegisx-prov-1/gpt-4o-mini"
 
 /** flatSettings with the default model set to the test provider's model, so
  * runService.create() can resolve slot models without an explicit override. */
 export function flatSettingsWithDefaultModel(
   ref: string = `${TEST_MODEL_REF}:off`
 ) {
-  return { ...defaultSettings(), "agent.defaultModelId": ref }
+  return { ...defaultSettings(), "agent.defaultModelRef": ref }
 }
 
 /** Records create/kill/remove calls; all methods are no-ops that succeed. */

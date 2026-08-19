@@ -24,6 +24,7 @@ export type {
   LiveEvent,
   MessageList,
   MessageListItem,
+  ModelOption,
   ModelRef,
   ModelMetadata,
   PiModelProfile,

@@ -20,13 +20,11 @@ export function useProviderEditor(provider: ProviderConnection) {
   const [selected, setSelected] = useState<string[]>([])
   const [addOpen, setAddOpen] = useState(false)
   const [editingModel, setEditingModel] = useState<ProviderModel | null>(null)
-  const [editingBinding, setEditingBinding] =
-    useState<ProviderModel["piBinding"]>(null)
   const [metadataError, setMetadataError] = useState<string | null>(null)
-  const [bindingModel, setBindingModel] = useState<ProviderModel | null>(null)
+  const [importModel, setImportModel] = useState<ProviderModel | null>(null)
+  const [importSearch, setImportSearch] = useState("")
   const [selectedBuiltinModel, setSelectedBuiltinModel] =
     useState<PiModelProfile | null>(null)
-  const [builtinSearch, setBuiltinSearch] = useState("")
   const save = useMutation({
     mutationFn: (input: ProviderUpdate) =>
       providersApi.updateProvider(provider.id, input),
@@ -67,22 +65,31 @@ export function useProviderEditor(provider: ProviderConnection) {
       id,
       label,
       metadata,
-      binding,
     }: {
       id: string
       label: string
       metadata: ProviderModel["metadata"]
-      binding: ProviderModel["piBinding"]
-    }) => providersApi.updateProviderModel(id, { label, metadata, binding }),
+    }) => providersApi.updateProviderModel(id, { label, metadata }),
     onSuccess: () => {
       setEditingModel(null)
       queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
   const builtins = useQuery({
-    enabled: Boolean(bindingModel),
+    enabled: Boolean(importModel),
     queryKey: ["providers", provider.id, "builtins"],
     queryFn: () => providersApi.listBuiltinModels(provider.id),
+  })
+  const importMetadata = useMutation({
+    mutationFn: ({ id, profile }: { id: string; profile: PiModelProfile }) =>
+      providersApi.importProviderModelMetadata(id, {
+        providerId: profile.providerId,
+        modelId: profile.modelId,
+      }),
+    onSuccess: () => {
+      setImportModel(null)
+      queryClient.invalidateQueries({ queryKey: keys.providers.all })
+    },
   })
   const removeModel = useMutation({
     mutationFn: (id: string) => providersApi.deleteProviderModel(id),
@@ -95,19 +102,19 @@ export function useProviderEditor(provider: ProviderConnection) {
   const selectedProfile = selectedBuiltinModel
 
   useEffect(() => {
-    if (!bindingModel) return
-    setBuiltinSearch(bindingModel.modelId)
+    if (!importModel) return
+    setImportSearch(importModel.modelId)
     setSelectedBuiltinModel(null)
-  }, [bindingModel])
+  }, [importModel])
 
   useEffect(() => {
-    if (!bindingModel || !builtins.data) return
-    const query = bindingModel.modelId.toLowerCase()
+    if (!importModel || !builtins.data) return
+    const query = importModel.modelId.toLowerCase()
     const exact = builtins.data.items.find(
       (model) => model.modelId.toLowerCase() === query
     )
     setSelectedBuiltinModel(exact ?? null)
-  }, [bindingModel, builtins.data])
+  }, [importModel, builtins.data])
 
   return {
     showKey,
@@ -120,22 +127,21 @@ export function useProviderEditor(provider: ProviderConnection) {
     setAddOpen,
     editingModel,
     setEditingModel,
-    editingBinding,
-    setEditingBinding,
     metadataError,
     setMetadataError,
-    bindingModel,
-    setBindingModel,
+    importModel,
+    setImportModel,
+    importSearch,
+    setImportSearch,
     selectedBuiltinModel,
     setSelectedBuiltinModel,
-    builtinSearch,
-    setBuiltinSearch,
     save,
     discover,
     addModels,
     modelMutation,
     editModel,
     builtins,
+    importMetadata,
     removeModel,
     builtinProfiles,
     selectedProfile,

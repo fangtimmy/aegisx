@@ -12,14 +12,17 @@ import {
   defaultSettings,
   type FlatSettings,
   migrateLegacySettings,
+  migrateSettingKeys,
   type ProviderType,
   parseSettings,
   patchSettings,
 } from "@aegisx/shared"
+import { modelAddress } from "@aegisx/shared"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 
 import { ProviderTypeSchema } from "../lib/schemas"
+import { builtinModelProfile } from "../providers/builtin-models"
 
 export type { FlatSettings }
 
@@ -29,8 +32,7 @@ export type ProviderModelData = {
   label: string
   enabled: boolean
   metadata: string
-  piProviderId: string | null
-  piModelId: string | null
+  metadataSource: string | null
 }
 
 export type ProviderData = {
@@ -59,8 +61,7 @@ const ProviderModelSchema = Type.Object(
     label: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
     metadata: Type.Optional(Type.String()),
-    piProviderId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-    piModelId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    metadataSource: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   },
   { additionalProperties: true }
 )
@@ -79,6 +80,9 @@ const ProviderSchema = Type.Object(
 )
 
 function defaultProviders(): ProviderData[] {
+  // Seed Anthropic with the real claude-sonnet-4-5 metadata copied from pi's
+  // builtin catalog (provenance recorded so the settings UI can re-sync).
+  const profile = builtinModelProfile("anthropic", "claude-sonnet-4-5")
   return [
     {
       id: "default-provider",
@@ -91,11 +95,10 @@ function defaultProviders(): ProviderData[] {
         {
           id: "default-model",
           modelId: "claude-sonnet-4-5",
-          label: "Claude Sonnet 4.5",
+          label: profile?.name ?? "Claude Sonnet 4.5",
           enabled: true,
-          metadata: "{}",
-          piProviderId: null,
-          piModelId: null,
+          metadata: JSON.stringify(profile?.metadata ?? {}),
+          metadataSource: profile ? "pi:anthropic/claude-sonnet-4-5" : null,
         },
       ],
     },
@@ -114,15 +117,28 @@ function defaultConfig(): ConfigData {
 
 function normalizeModel(raw: unknown): ProviderModelData | undefined {
   if (!Value.Check(ProviderModelSchema, raw)) return undefined
+  const legacy = raw as Record<string, unknown>
+  // Pre-provenance docs stored a pi builtin binding (piProviderId/piModelId)
+  // that locked metadata to the catalog entry. Migrate it to metadataSource
+  // provenance — the metadata itself was already kept in sync with the
+  // binding, so nothing else to carry over.
+  const piProviderId =
+    typeof legacy.piProviderId === "string" ? legacy.piProviderId : null
+  const piModelId =
+    typeof legacy.piModelId === "string" ? legacy.piModelId : null
+  const metadataSource =
+    piProviderId && piModelId
+      ? `pi:${piProviderId}/${piModelId}`
+      : typeof legacy.metadataSource === "string"
+        ? legacy.metadataSource
+        : null
   return {
     id: raw.id,
     modelId: typeof raw.modelId === "string" ? raw.modelId : "",
     label: typeof raw.label === "string" ? raw.label : "",
     enabled: raw.enabled !== false,
     metadata: typeof raw.metadata === "string" ? raw.metadata : "{}",
-    piProviderId:
-      typeof raw.piProviderId === "string" ? raw.piProviderId : null,
-    piModelId: typeof raw.piModelId === "string" ? raw.piModelId : null,
+    metadataSource,
   }
 }
 
@@ -156,12 +172,39 @@ function isCurrentDocument(raw: unknown): raw is {
   version: 1
   settings: unknown
   providers: unknown
-  aliases?: unknown
   updatedAt?: unknown
 } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
   const doc = raw as Record<string, unknown>
   return doc.version === CONFIG_DOCUMENT_VERSION
+}
+
+/** Rewrite a default-model ref that still points at a pre-provenance pi-bound
+ * address (e.g. "anthropic/claude-sonnet-4-5:high") to the owning provider's
+ * canonical aegisx-* address, via the metadataSource provenance left by the
+ * binding migration. Pure; returns the input verbatim when nothing matches. */
+function rewriteLegacyModelRefs(
+  raw: unknown,
+  providers: ProviderData[]
+): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw
+  const source = raw as Record<string, unknown>
+  const ref = source["agent.defaultModelRef"]
+  if (typeof ref !== "string" || !ref) return raw
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      const origin = model.metadataSource
+      if (!origin?.startsWith("pi:")) continue
+      const legacy = origin.slice(3)
+      if (ref === legacy || ref.startsWith(`${legacy}:`)) {
+        return {
+          ...source,
+          "agent.defaultModelRef": `${modelAddress(provider, model)}${ref.slice(legacy.length)}`,
+        }
+      }
+    }
+  }
+  return raw
 }
 
 export function createConfigStore(dataDir: string) {
@@ -201,10 +244,13 @@ export function createConfigStore(dataDir: string) {
 
       // Current flat document
       if (isCurrentDocument(raw)) {
+        const providers = normalizeProviders(doc.providers)
         return {
           version: CONFIG_DOCUMENT_VERSION,
-          settings: parseSettings(doc.settings),
-          providers: normalizeProviders(doc.providers),
+          settings: parseSettings(
+            rewriteLegacyModelRefs(migrateSettingKeys(doc.settings), providers)
+          ),
+          providers,
           updatedAt:
             typeof doc.updatedAt === "string" && doc.updatedAt
               ? doc.updatedAt
@@ -214,10 +260,16 @@ export function createConfigStore(dataDir: string) {
 
       // Legacy unversioned { settings, providers } — migrate in place
       if (doc.settings !== undefined && Array.isArray(doc.providers)) {
+        const providers = normalizeProviders(doc.providers)
         const migrated: ConfigData = {
           version: CONFIG_DOCUMENT_VERSION,
-          settings: migrateLegacySettings(doc.settings),
-          providers: normalizeProviders(doc.providers),
+          settings: parseSettings(
+            rewriteLegacyModelRefs(
+              migrateLegacySettings(doc.settings),
+              providers
+            )
+          ),
+          providers,
           updatedAt: now(),
         }
         save(migrated)

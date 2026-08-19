@@ -140,7 +140,7 @@ export const agents = sqliteTable(
     }),
     role: text("role").notNull(),
     name: text("name"),
-    /** Canonical model ref string (`<providerKey>/<modelId>:<effort>` | alias).
+    /** Canonical model ref string (`aegisx-<providerId>/<modelId>:<effort>`).
      * Per-agent snapshot — spawn writes it once; cold-restore reuses it
      * verbatim (model switches survive). */
     model: text("model").notNull(),
@@ -388,7 +388,7 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
     .primaryKey()
     .references(() => events.id, { onDelete: "cascade" }),
   /** Per-event scheduler model override (canonical model ref string
-   * `<providerKey>/<modelId>:<effort>` | alias); null = fall back to the
+   * `aegisx-<providerId>/<modelId>:<effort>`); null = fall back to the
    * global default model. */
   modelId: text("model_id"),
   /** Natural-language steering ("hit crypto first, leave pwn for last"). */

@@ -87,7 +87,7 @@ export function createApp(options: { dataDir: string }) {
   // (service.refreshRunModelRuntime). Provider/settings writes only persist
   // config here.
   const noopSync = () => {}
-  registerProviderRoutes(app, { configStore, syncModels: noopSync })
+  registerProviderRoutes(app, { configStore })
   registerSettingsRoutes(app, {
     db,
     configStore,

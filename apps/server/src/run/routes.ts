@@ -71,7 +71,7 @@ const finishInput = Type.Object(
 )
 
 /** Model-switch body: a canonical model ref string
- * (`<providerKey>/<modelId>:<effort>` or `alias:<id>`). */
+ * (`<providerKey>/<modelId>:<effort>`). */
 const switchModelInput = Type.Object(
   { model: Type.String({ minLength: 1, maxLength: 300 }) },
   { additionalProperties: false }

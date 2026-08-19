@@ -16,13 +16,8 @@ function mapProviderModel(
     label: model.label,
     enabled: model.enabled,
     metadata,
-    piBinding:
-      model.piProviderId && model.piModelId
-        ? { providerId: model.piProviderId, modelId: model.piModelId }
-        : null,
+    metadataSource: model.metadataSource,
     thinkingLevels: supportedThinkingLevels(metadata),
-    createdAt: "",
-    updatedAt: "",
   }
 }
 
@@ -36,8 +31,6 @@ export function mapProviderConnection(
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     enabled: provider.enabled,
-    createdAt: "",
-    updatedAt: "",
     models: provider.models.map((model) =>
       mapProviderModel(model, provider.id)
     ),

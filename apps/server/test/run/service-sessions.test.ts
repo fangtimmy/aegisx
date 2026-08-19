@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents, sessionEntries, sessions } from "../../src/db/schema"
+import { builtinModelProfile } from "../../src/providers/builtin-models"
 import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
@@ -59,9 +60,10 @@ function createModel(id: string) {
     modelId: "gpt-4o-mini",
     label: "Test Model",
     enabled: true,
-    metadata: "{}",
-    piProviderId: "openai",
-    piModelId: "gpt-4o-mini",
+    metadata: JSON.stringify(
+      builtinModelProfile("openai", "gpt-4o-mini")?.metadata ?? {}
+    ),
+    metadataSource: "pi:openai/gpt-4o-mini",
   }
 }
 

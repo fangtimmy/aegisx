@@ -61,7 +61,7 @@ function seedAgent(
       challengeId: role === "solver" ? "ch-1" : null,
       role,
       name: `agent-${id.slice(0, 8)}`,
-      model: "openai/gpt-4o-mini:off",
+      model: "aegisx-prov-1/gpt-4o-mini:off",
       systemPrompt: "sp",
       tools: "[]",
       status: "idle",

@@ -54,7 +54,7 @@ export type SettingDef =
 // concurrency, retry, tool-output, and per-tool-timeout settings belonged to
 // the deleted v2 in-process agent loop and had no effect here.
 export type FlatSettings = {
-  "agent.defaultModelId": string | null
+  "agent.defaultModelRef": string | null
   "agent.compactionEnabled": boolean
   "agent.retryEnabled": boolean
   "agent.retryMaxRetries": number
@@ -78,7 +78,7 @@ const IMAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/
 
 export const SETTINGS_DEFS: SettingDef[] = [
   {
-    key: "agent.defaultModelId",
+    key: "agent.defaultModelRef",
     type: "nullstring",
     default: null,
     group: "智能体",
@@ -293,11 +293,28 @@ export function modifiedSettingKeys(settings: FlatSettings): SettingKey[] {
   return SETTING_KEYS.filter((key) => isSettingModified(settings, key))
 }
 
+/** Rename retired flat setting keys in a raw settings object. Applied when
+ * loading version-1 config docs written before a key rename (the rename drops
+ * out of parseSettings otherwise, which only keeps known keys). Pure. */
+export function migrateSettingKeys(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw
+  const source = raw as Record<string, unknown>
+  if (
+    "agent.defaultModelId" in source &&
+    !("agent.defaultModelRef" in source)
+  ) {
+    const { "agent.defaultModelId": value, ...rest } = source
+    return { ...rest, "agent.defaultModelRef": value }
+  }
+  return raw
+}
+
 /** Map pre-flat / unversioned config.json settings into flat keys. */
 export function migrateLegacySettings(raw: unknown): FlatSettings {
+  const source0 = migrateSettingKeys(raw)
   const source =
-    raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
+    source0 && typeof source0 === "object" && !Array.isArray(source0)
+      ? (source0 as Record<string, unknown>)
       : {}
 
   // Already flat (has at least one known flat key)
@@ -307,7 +324,7 @@ export function migrateLegacySettings(raw: unknown): FlatSettings {
 
   const flat: Record<string, unknown> = {}
   const map: Record<string, SettingKey> = {
-    defaultModelId: "agent.defaultModelId",
+    defaultModelId: "agent.defaultModelRef",
     maxAttachmentMb: "runtime.maxAttachmentMb",
     platformRequestTimeoutMs: "runtime.platformRequestTimeoutMs",
     providerDiscoverTimeoutMs: "runtime.providerDiscoverTimeoutMs",

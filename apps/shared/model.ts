@@ -3,20 +3,13 @@ import { isThinkingLevel, type ThinkingLevel } from "./live-event"
 
 /**
  * Model reference — the single canonical way to point at "one model + one
- * reasoning effort" across the whole system (config, run-creation inputs, DB
- * snapshots, model-switch API, UI pickers). Replaces the former
- * `{ provider, modelId, thinking }` object and the mixed UUID/label refs.
+ * reasoning effort" across the whole system (settings, run-creation inputs, DB
+ * snapshots, model-switch API, UI pickers).
  *
- * Two forms:
- *  - concrete: `"<providerKey>/<modelId>:<effort>"`, e.g.
- *    `"openai/gpt-4o:high"` (a pi-bound model) or
- *    `"aegisx-<providerId>/<modelId>:medium"` (a fully custom provider).
- *    `<providerKey>/<modelId>` is exactly what pi addresses the model with
- *    (see {@link modelProviderKey} / {@link piModelIdOf}), so a concrete ref is
- *    stable across provider/model *label* renames.
- *  - alias: `"alias:<id>"` — a named pointer to an ordered model list + a
- *    reasoning level (resolved to the first currently-available model). The
- *    effort comes from the alias, not the string.
+ * `"<providerKey>/<modelId>:<effort>"` — the providerKey is always
+ * `aegisx-<providerId>` (see {@link modelProviderKey}), so a ref is stable
+ * across provider/model *label* renames and metadata re-imports, and it is
+ * exactly the address pi addresses the model with inside a run.
  */
 export type ModelRef = string
 
@@ -24,28 +17,16 @@ export type ModelRef = string
  * the helpers generic over the full {@link ProviderConnection}/{@link ProviderModel}
  * types and their storage shapes alike. */
 type ProviderLike = Pick<ProviderConnection, "id">
-type ModelLike = Pick<ProviderModel, "modelId" | "piBinding">
+type ModelLike = Pick<ProviderModel, "modelId">
 
-/** pi provider key for a configured model: the bound pi provider id when the
- * model reuses a pi built-in, otherwise `aegisx-<providerId>` for a fully
- * custom provider. Mirrors the server's `resolvePiModelRef`/`piProviderKey*`
- * so refs formatted anywhere address the same model pi does. */
-export function modelProviderKey(
-  provider: ProviderLike,
-  model: ModelLike
-): string {
-  return model.piBinding?.providerId ?? `aegisx-${provider.id}`
-}
-
-/** pi model id for a configured model: the bound pi model id when set,
- * otherwise the model's own `modelId`. */
-export function piModelIdOf(model: ModelLike): string {
-  return model.piBinding?.modelId ?? model.modelId
+/** pi provider key for a configured provider: `aegisx-<providerId>`. */
+export function modelProviderKey(provider: ProviderLike): string {
+  return `aegisx-${provider.id}`
 }
 
 /** `"<providerKey>/<modelId>"` address (no effort suffix). */
 export function modelAddress(provider: ProviderLike, model: ModelLike): string {
-  return `${modelProviderKey(provider, model)}/${piModelIdOf(model)}`
+  return `${modelProviderKey(provider)}/${model.modelId}`
 }
 
 /** Format a concrete model ref string from a provider/model pair + effort. */
@@ -65,9 +46,9 @@ export type ParsedModelRef = {
 }
 
 /** Parse a model ref string. Returns null for a malformed/unrecognized string.
- * Alias refs are detected first (`alias:<id>`); otherwise the address is split
- * on the first `/` and the effort on the last `:` (only when the suffix is a
- * known thinking level — model ids never collide with the level names). */
+ * The address is split on the first `/` and the effort on the last `:` (only
+ * when the suffix is a known thinking level — model ids never collide with
+ * the level names). */
 export function parseModelRef(
   ref: string | null | undefined
 ): ParsedModelRef | null {
@@ -106,13 +87,11 @@ export type ResolvedModelTarget<M = ProviderModel> = {
 
 /**
  * Resolve a model ref to a concrete (provider, model, effort) triple against
- * the currently-configured providers + aliases. Concrete refs match by pi
- * provider key + model id (so they survive label renames); alias refs resolve
- * to the first currently-available model in the alias and carry the alias's
- * reasoning level. Returns null when the ref is empty, malformed, or every
- * referenced model is unavailable.
+ * the currently-configured providers. Returns null when the ref is empty,
+ * malformed, or the referenced model is unavailable (provider disabled /
+ * missing apiKey / model disabled).
  *
- * Pure (shared) — takes only the public provider/alias shapes, so both server
+ * Pure (shared) — takes only the public provider shapes, so both server
  * (run create / cold-restore / model-switch) and tests can use it. The caller
  * turns the resolved provider+model into an SDK model via its ModelRuntime.
  */
@@ -131,8 +110,8 @@ export function resolveModelRef<M extends ProviderModel>(
     for (const model of provider.models) {
       if (!model.enabled) continue
       if (
-        modelProviderKey(provider, model) === parsed.providerKey &&
-        piModelIdOf(model) === parsed.modelId
+        modelAddress(provider, model) ===
+        `${parsed.providerKey}/${parsed.modelId}`
       ) {
         return { provider, model: model as M, thinkingLevel: parsed.effort }
       }

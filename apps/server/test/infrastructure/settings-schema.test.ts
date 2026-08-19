@@ -28,12 +28,14 @@ describe("settings schema", () => {
   test("parseSettings accepts valid values and drops legacy prompt keys", () => {
     const parsed = parseSettings({
       "runtime.maxAttachmentMb": 1024,
-      "agent.defaultModelId": "m1",
+      "agent.defaultModelRef": "aegisx-prov-1/gpt-4o-mini:off",
       "container.cpus": 1.5,
       "prompts.mainSystem": "",
     })
     expect(parsed["runtime.maxAttachmentMb"]).toBe(1024)
-    expect(parsed["agent.defaultModelId"]).toBe("m1")
+    expect(parsed["agent.defaultModelRef"]).toBe(
+      "aegisx-prov-1/gpt-4o-mini:off"
+    )
     expect(parsed["container.cpus"]).toBe(1.5)
     // prompts.* left FlatSettings in v8 (templates live in prompt_templates).
     expect(Object.hasOwn(parsed, "prompts.mainSystem")).toBe(false)
@@ -61,7 +63,7 @@ describe("settings schema", () => {
       // table); the legacy extractor carries them into the DB at boot instead.
       mainSystemPromptTemplate: "custom main",
     })
-    expect(migrated["agent.defaultModelId"]).toBe("m1")
+    expect(migrated["agent.defaultModelRef"]).toBe("m1")
     expect(migrated["runtime.maxAttachmentMb"]).toBe(256)
     expect(migrated["container.image"]).toBe("aegisx/solver:kali")
     // removed v2 settings are absent from the flat shape

@@ -175,7 +175,7 @@ describe("agent lifecycle (v19)", () => {
         id: "a-1",
         eventId: "evt-1",
         challengeId: "ch-1",
-        model: "openai/gpt-4o-mini:off",
+        model: "aegisx-prov-1/gpt-4o-mini:off",
         systemPrompt: "EDITED-SNAPSHOT-PROMPT",
         tools: JSON.stringify(["finish_run", "submit_flag"]),
         status: "completed",

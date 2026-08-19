@@ -14,7 +14,7 @@ import { RunActionError } from "./errors"
  * agent row (the concrete ref) plus the display fields that feed the
  * per-agent prompt context's `model` variable. */
 export type SlotModel = {
-  /** Canonical model ref string (`<providerKey>/<modelId>:<effort>` | alias). */
+  /** Canonical model ref string (`aegisx-<providerId>/<modelId>:<effort>`). */
   ref: ModelRef
   thinkingLevel: ThinkingLevel
   /** Display: provider label, model label, pi model id (prompt `model` var). */
@@ -36,22 +36,21 @@ export type ModelResolver = ReturnType<typeof createModelResolver>
  * and (potentially) the routes share one implementation. All functions are
  * pure reads over the deps; nothing here touches the DB or the lifecycle. */
 export function createModelResolver(deps: ModelResolverDeps) {
-  /** The global default model ref string (setting `agent.defaultModelId`), or
-   * null when unset. May be a concrete `<key>/<id>:<effort>` or `alias:<id>`. */
+  /** The global default model ref string (setting `agent.defaultModelRef`), or
+   * null when unset. */
   function defaultModelRef(): ModelRef | null {
-    const ref = get(deps.getSettings(), "agent.defaultModelId")
+    const ref = get(deps.getSettings(), "agent.defaultModelRef")
     return typeof ref === "string" && ref.length > 0 ? ref : null
   }
 
   /** Resolve a model ref to a concrete enabled provider+model+effort, or null
-   * when it is empty / malformed / every referenced model is unavailable. */
+   * when it is empty / malformed / the referenced model is unavailable. */
   function resolveModelTarget(ref: ModelRef | null | undefined) {
     return resolveModelRef(ref, deps.providers())
   }
 
-  /** Resolve a model ref to a CONCRETE {@link SlotModel} snapshot (aliases
-   * resolved to the first available model so per-agent rows do not follow later
-   * alias edits). Throws when nothing resolves. */
+  /** Resolve a model ref to a CONCRETE {@link SlotModel} snapshot. Throws
+   * when nothing resolves. */
   function resolveSlotModelFromRef(
     ref: ModelRef | null | undefined
   ): SlotModel {

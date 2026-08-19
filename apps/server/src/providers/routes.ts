@@ -1,4 +1,5 @@
-import { parseModelRef } from "@aegisx/shared"
+import { modelAddress, parseModelRef } from "@aegisx/shared"
+import type { ModelOption } from "@aegisx/shared/domain"
 import type { Hono } from "hono"
 import { Type } from "typebox"
 
@@ -22,6 +23,7 @@ import {
   parseModelMetadata,
   supportedThinkingLevels,
 } from "./builtin-models"
+import { getProviderConnections } from "./public"
 
 const providerType = Type.Union([
   Type.Literal("openai-compatible"),
@@ -53,14 +55,6 @@ const modelInput = Type.Object(
   { additionalProperties: false }
 )
 
-const bindingInput = Type.Object(
-  {
-    providerId: Type.String({ minLength: 1, maxLength: 200 }),
-    modelId: Type.String({ minLength: 1, maxLength: 200 }),
-  },
-  { additionalProperties: false }
-)
-
 const providerTestInput = Type.Object(
   { modelId: Type.String({ minLength: 1, maxLength: 200 }) },
   { additionalProperties: false }
@@ -72,10 +66,17 @@ const modelUpdateInput = Type.Partial(
       label: Type.String({ minLength: 1, maxLength: 200 }),
       enabled: Type.Boolean(),
       metadata: Type.Unknown(),
-      binding: Type.Union([bindingInput, Type.Null()]),
     },
     { additionalProperties: false }
   ),
+  { additionalProperties: false }
+)
+
+const importInput = Type.Object(
+  {
+    providerId: Type.String({ minLength: 1, maxLength: 200 }),
+    modelId: Type.String({ minLength: 1, maxLength: 200 }),
+  },
   { additionalProperties: false }
 )
 
@@ -103,13 +104,8 @@ function publicModel(model: ProviderModelData) {
     label: model.label,
     enabled: model.enabled,
     metadata: parsedMetadata,
-    piBinding:
-      model.piProviderId && model.piModelId
-        ? { providerId: model.piProviderId, modelId: model.piModelId }
-        : null,
+    metadataSource: model.metadataSource,
     thinkingLevels: supportedThinkingLevels(parsedMetadata),
-    createdAt: "",
-    updatedAt: "",
   }
 }
 
@@ -121,8 +117,6 @@ function publicProvider(provider: ProviderData) {
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     enabled: provider.enabled,
-    createdAt: "",
-    updatedAt: "",
     models: provider.models.map((m) => ({
       ...publicModel(m),
       providerId: provider.id,
@@ -132,20 +126,34 @@ function publicProvider(provider: ProviderData) {
 
 export function registerProviderRoutes(
   app: Hono,
-  options: {
-    configStore: ConfigStore
-    syncModels(): void
-  }
+  options: { configStore: ConfigStore }
 ) {
   const { configStore } = options
-  // Reference through the options object (not destructured) so `this` survives.
-  const syncModels = () => options.syncModels()
 
   app.get("/api/providers", (c) =>
     c.json({
       items: configStore.getProviders().map(publicProvider),
     })
   )
+
+  // Flat model list for ref selectors: one entry per currently-selectable
+  // model (enabled provider + apiKey × enabled model), address precomputed.
+  app.get("/api/models", (c) => {
+    const items: ModelOption[] = []
+    for (const provider of getProviderConnections(configStore)) {
+      if (!provider.enabled || !provider.apiKey) continue
+      for (const model of provider.models) {
+        if (!model.enabled) continue
+        items.push({
+          address: modelAddress(provider, model),
+          label: model.label,
+          providerLabel: provider.label,
+          thinkingLevels: model.thinkingLevels,
+        })
+      }
+    }
+    return c.json({ items })
+  })
 
   app.get("/api/providers/:providerId/models/builtins", (c) => {
     const provider = findProvider(
@@ -187,7 +195,6 @@ export function registerProviderRoutes(
       const providers = cloneProviders(configStore)
       providers.push(provider)
       configStore.updateProviders(providers)
-      syncModels()
       return c.json(publicProvider(provider), 201)
     } catch {
       return badRequest(c, "invalid_base_url", "Invalid provider endpoint")
@@ -222,7 +229,6 @@ export function registerProviderRoutes(
           return badRequest(c, "invalid_provider", "Provider name is required")
         }
         configStore.updateProviders(providers)
-        syncModels()
         return c.json(publicProvider(existing))
       } catch {
         return badRequest(c, "invalid_base_url", "Invalid provider endpoint")
@@ -236,23 +242,20 @@ export function registerProviderRoutes(
     if (idx === -1) return notFound(c, "Provider not found")
     const provider = providers[idx]
     const settings = configStore.getSettings()
-    const defaultModelRef = settings["agent.defaultModelId"]
+    const defaultModelRef = settings["agent.defaultModelRef"]
     const parsedDefault = parseModelRef(defaultModelRef)
     if (
       parsedDefault?.kind === "model" &&
-      provider.models.some((m) => {
-        const addr = piAddressOf(provider, m)
-        return (
-          addr.providerKey === parsedDefault.providerKey &&
-          addr.modelId === parsedDefault.modelId
-        )
-      })
+      provider.models.some(
+        (m) =>
+          modelAddress(provider, m) ===
+          `${parsedDefault.providerKey}/${parsedDefault.modelId}`
+      )
     ) {
-      configStore.updateSettings({ "agent.defaultModelId": null })
+      configStore.updateSettings({ "agent.defaultModelRef": null })
     }
     providers.splice(idx, 1)
     configStore.updateProviders(providers)
-    syncModels()
     return c.body(null, 204)
   })
 
@@ -285,12 +288,10 @@ export function registerProviderRoutes(
           metadata: JSON.stringify(
             normalizeModelMetadata(input.metadata ?? {})
           ),
-          piProviderId: null,
-          piModelId: null,
+          metadataSource: null,
         }
         provider.models.push(model)
         configStore.updateProviders(providers)
-        syncModels()
         return c.json({ ...publicModel(model), providerId: provider.id }, 201)
       } catch (error) {
         return badRequest(
@@ -321,32 +322,14 @@ export function registerProviderRoutes(
           }
         }
         if (input.enabled !== undefined) model.enabled = input.enabled
-
-        // A pi model binding, when set, locks metadata to its builtin profile.
-        const profile =
-          input.binding &&
-          builtinModelProfile(input.binding.providerId, input.binding.modelId)
-        if (input.binding && !profile) {
-          return badRequest(
-            c,
-            "invalid_pi_model",
-            "Pi model binding is unavailable"
-          )
-        }
-        if (profile) {
-          model.metadata = JSON.stringify(profile.metadata)
-        } else if (input.metadata !== undefined) {
+        if (input.metadata !== undefined) {
           model.metadata = JSON.stringify(
             normalizeModelMetadata(input.metadata)
           )
+          // A hand-written metadata edit takes ownership of the metadata.
+          model.metadataSource = null
         }
-        if (input.binding !== undefined) {
-          model.piProviderId = profile ? profile.providerId : null
-          model.piModelId = profile ? profile.modelId : null
-        }
-
         configStore.updateProviders(providers)
-        syncModels()
         return c.json({ ...publicModel(model), providerId: provider.id })
       } catch (error) {
         return badRequest(
@@ -358,9 +341,11 @@ export function registerProviderRoutes(
     }
   )
 
+  // Copy a pi builtin profile's metadata onto the model (one-shot import —
+  // the copy is editable afterwards; repeating the call re-syncs it).
   app.post(
-    "/api/provider-models/:modelId/binding",
-    validateJson(bindingInput),
+    "/api/provider-models/:modelId/import",
+    validateJson(importInput),
     (c) => {
       const providers = cloneProviders(configStore)
       const { provider, model } = findProviderModel(
@@ -368,37 +353,17 @@ export function registerProviderRoutes(
         c.req.param("modelId")
       )
       if (!provider || !model) return notFound(c, "Model not found")
-      const binding = c.req.valid("json")
-      const profile = builtinModelProfile(binding.providerId, binding.modelId)
+      const input = c.req.valid("json")
+      const profile = builtinModelProfile(input.providerId, input.modelId)
       if (!profile) {
-        return badRequest(
-          c,
-          "invalid_pi_model",
-          "Pi model binding is unavailable"
-        )
+        return badRequest(c, "invalid_pi_model", "Pi model is unavailable")
       }
       model.metadata = JSON.stringify(profile.metadata)
-      model.piProviderId = profile.providerId
-      model.piModelId = profile.modelId
+      model.metadataSource = `pi:${profile.providerId}/${profile.modelId}`
       configStore.updateProviders(providers)
-      syncModels()
       return c.json({ ...publicModel(model), providerId: provider.id })
     }
   )
-
-  app.delete("/api/provider-models/:modelId/binding", (c) => {
-    const providers = cloneProviders(configStore)
-    const { provider, model } = findProviderModel(
-      providers,
-      c.req.param("modelId")
-    )
-    if (!provider || !model) return notFound(c, "Model not found")
-    model.piProviderId = null
-    model.piModelId = null
-    configStore.updateProviders(providers)
-    syncModels()
-    return c.json({ ...publicModel(model), providerId: provider.id })
-  })
 
   app.delete("/api/provider-models/:modelId", (c) => {
     const providers = cloneProviders(configStore)
@@ -408,19 +373,16 @@ export function registerProviderRoutes(
     )
     if (!provider || !model) return notFound(c, "Model not found")
     const settings = configStore.getSettings()
-    const parsedDefault = parseModelRef(settings["agent.defaultModelId"])
-    if (parsedDefault?.kind === "model") {
-      const addr = piAddressOf(provider, model)
-      if (
-        addr.providerKey === parsedDefault.providerKey &&
-        addr.modelId === parsedDefault.modelId
-      ) {
-        configStore.updateSettings({ "agent.defaultModelId": null })
-      }
+    const parsedDefault = parseModelRef(settings["agent.defaultModelRef"])
+    if (
+      parsedDefault?.kind === "model" &&
+      modelAddress(provider, model) ===
+        `${parsedDefault.providerKey}/${parsedDefault.modelId}`
+    ) {
+      configStore.updateSettings({ "agent.defaultModelRef": null })
     }
     provider.models = provider.models.filter((m) => m.id !== model.id)
     configStore.updateProviders(providers)
-    syncModels()
     return c.body(null, 204)
   })
 
@@ -531,22 +493,6 @@ export function registerProviderRoutes(
       }
     }
   )
-}
-
-/** Pi (providerKey, modelId) for a stored provider/model — mirrors
- * resolvePiModelRef over the storage shape (piProviderId/piModelId columns).
- * The default-model setting stores a canonical ref string; clearing it on
- * provider/model deletion compares against this address. */
-function piAddressOf(
-  provider: ProviderData,
-  model: ProviderModelData
-): { providerKey: string; modelId: string } {
-  return model.piProviderId
-    ? {
-        providerKey: model.piProviderId,
-        modelId: model.piModelId ?? model.modelId,
-      }
-    : { providerKey: `aegisx-${provider.id}`, modelId: model.modelId }
 }
 
 function findProviderModel(

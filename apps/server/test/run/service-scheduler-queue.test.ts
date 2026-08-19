@@ -27,10 +27,10 @@ import {
 type Db = ReturnType<typeof setupDb>["db"]
 
 /** flatSettings with a default model ref so spawn / startScheduler can resolve
- * a provider+model (the test provider is pi-bound openai/*). */
+ * a provider+model (the test provider's model is aegisx-prov-1/gpt-4o-mini). */
 const settingsWithModel = () => ({
   ...defaultSettings(),
-  "agent.defaultModelId": "openai/gpt-4o-mini:off",
+  "agent.defaultModelRef": "aegisx-prov-1/gpt-4o-mini:off",
 })
 
 function makeService(
@@ -118,7 +118,7 @@ describe("v19 spawn-spec passthrough (params → drainer → spawn)", () => {
         challengeId: "ch-a",
         source: "scheduler",
         prompt: "shared strategy text",
-        model: "openai/gpt-4o-mini:high",
+        model: "aegisx-prov-1/gpt-4o-mini:high",
       })
       await queue.drainOnce()
 
@@ -132,7 +132,7 @@ describe("v19 spawn-spec passthrough (params → drainer → spawn)", () => {
         .get()!
       expect(solver.queueItemId).toBe(item.id)
       // The explicit model ref won.
-      expect(solver.model).toBe("openai/gpt-4o-mini:high")
+      expect(solver.model).toBe("aegisx-prov-1/gpt-4o-mini:high")
       // Strategy rendering: the prompt lands as a Strategy section.
       const prime = promptLog.get(solver.id)?.[0] ?? ""
       expect(prime).toContain("shared strategy text")
@@ -351,7 +351,7 @@ describe("scheduler queue integration (v19)", () => {
         role: "orchestrator",
         status: "idle",
         name: "Scheduler",
-        model: "openai/gpt-4o-mini:off",
+        model: "aegisx-prov-1/gpt-4o-mini:off",
       })
       const provider = makeProvider() // normal key; the launch fails in createHost
       const { manager } = stubContainerManager()

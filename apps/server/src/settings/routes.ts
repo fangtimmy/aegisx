@@ -33,7 +33,6 @@ import {
   samplePromptContext,
 } from "../orchestration/prompt-templates"
 import {
-  builtinModelProfile,
   normalizeModelMetadata,
   parseModelMetadata,
 } from "../providers/builtin-models"
@@ -111,10 +110,7 @@ export function registerSettingsRoutes(
     label: model.label,
     enabled: model.enabled,
     metadata: parseModelMetadata(model.metadata),
-    piBinding:
-      model.piProviderId && model.piModelId
-        ? { providerId: model.piProviderId, modelId: model.piModelId }
-        : null,
+    metadataSource: model.metadataSource,
   })
 
   const transferProviders = () =>
@@ -200,20 +196,20 @@ export function registerSettingsRoutes(
       )
     }
     const patch = body as Record<string, unknown>
-    if ("agent.defaultModelId" in patch) {
-      const modelId = patch["agent.defaultModelId"]
-      if (modelId !== null && modelId !== undefined) {
-        if (typeof modelId !== "string" || modelId.length === 0) {
+    if ("agent.defaultModelRef" in patch) {
+      const modelRef = patch["agent.defaultModelRef"]
+      if (modelRef !== null && modelRef !== undefined) {
+        if (typeof modelRef !== "string" || modelRef.length === 0) {
           return badRequest(
             c,
             "invalid_settings",
-            "Default model id is invalid"
+            "Default model ref is invalid"
           )
         }
-        // The default model is a canonical ref string (`<key>/<id>:<effort>`);
+        // The default model is a canonical ref string (`aegisx-<pid>/<id>:<effort>`);
         // it must resolve to an enabled provider+model.
         const target = resolveModelRef(
-          modelId,
+          modelRef,
           getProviderConnections(configStore)
         )
         if (!target) {
@@ -314,27 +310,10 @@ export function registerSettingsRoutes(
             throw new Error("Duplicate model ID for provider")
           }
           providerModelIds.add(providerModelKey)
-          const piBinding =
-            model.piBinding &&
-            typeof model.piBinding === "object" &&
-            !Array.isArray(model.piBinding)
-              ? (model.piBinding as Record<string, unknown>)
+          const metadataSource =
+            typeof model.metadataSource === "string"
+              ? model.metadataSource
               : null
-          const piProviderId =
-            piBinding && typeof piBinding.providerId === "string"
-              ? piBinding.providerId
-              : null
-          const piModelId =
-            piBinding && typeof piBinding.modelId === "string"
-              ? piBinding.modelId
-              : null
-          if (
-            piProviderId &&
-            piModelId &&
-            !builtinModelProfile(piProviderId, piModelId)
-          ) {
-            throw new Error("Pi model binding is unavailable")
-          }
           models.push({
             id: model.id,
             modelId: model.modelId.trim(),
@@ -348,8 +327,7 @@ export function registerSettingsRoutes(
                 }
               )
             ),
-            piProviderId,
-            piModelId,
+            metadataSource,
           })
         }
         newProviders.push({
@@ -364,7 +342,7 @@ export function registerSettingsRoutes(
       }
       // Concrete default-model refs (`<key>/<id>:<effort>`) are validated at
       // use time against the imported providers; importing cannot cheaply
-      // rebuild the pi provider keys.
+      // rebuild the aegisx-* provider keys.
       configStore.replaceAll(settings, newProviders)
       syncModels()
       return c.json({

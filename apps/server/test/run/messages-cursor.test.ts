@@ -81,7 +81,7 @@ function seedAgentWithSession(
       challengeId: "ch-1",
       role: "solver",
       name: id,
-      model: "openai/gpt-4o-mini:off",
+      model: "aegisx-prov-1/gpt-4o-mini:off",
       systemPrompt: "sp",
       tools: "[]",
       status: "idle",

@@ -54,7 +54,7 @@ describe("agentService.spawn", () => {
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()
       expect(row).toBeDefined()
       expect(row?.challengeId).toBe("ch-1")
-      expect(row?.model).toBe("openai/gpt-4o-mini:off")
+      expect(row?.model).toBe("aegisx-prov-1/gpt-4o-mini:off")
       expect(row?.role).toBe("solver")
       expect(row?.status).toBe("running")
       expect(row?.systemPrompt).toBeTruthy()

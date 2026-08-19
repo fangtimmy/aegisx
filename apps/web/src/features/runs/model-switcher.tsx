@@ -1,5 +1,4 @@
 import { parseModelRef, type ModelRef } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import { useQuery } from "@tanstack/react-query"
 import { useMemo } from "react"
@@ -28,66 +27,11 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
 
 const THINKING_LEVELS = Object.keys(thinkingLevelLabels) as ThinkingLevel[]
 
-type AvailableModel = {
-  /** ProviderModel.id (UUID). */
-  id: string
-  /** Underlying pi model id (matches the ref's modelId segment). */
-  modelId: string
-  label: string
-  providerLabel: string
-  /** Canonical pi address (`<providerKey>/<modelId>`) — the ref's model segment. */
-  address: string
-  thinkingLevels: ThinkingLevel[]
-}
-
-export type { AvailableModel }
-
-/** Enabled provider models flattened to {@link AvailableModel} (with the pi
- * address needed to build canonical refs), grouped-ready. Shared by every
- * model ref selector. */
-function useAvailableModels() {
-  const providers = useQuery({
-    queryKey: keys.providers.all,
-    queryFn: () => providersApi.listProviders(),
-  })
-  return useMemo<AvailableModel[]>(() => {
-    const items = providers.data?.items ?? []
-    const out: AvailableModel[] = []
-    for (const provider of items) {
-      if (!provider.enabled || !provider.apiKey) continue
-      for (const model of provider.models) {
-        if (!model.enabled) continue
-        out.push({
-          id: model.id,
-          modelId: model.modelId,
-          label: model.label,
-          providerLabel: provider.label,
-          address: modelAddress(provider, model),
-          thinkingLevels: model.thinkingLevels,
-        })
-      }
-    }
-    return out
-  }, [providers.data])
-}
-
-/** `providerKey/modelId` for a configured provider+model (mirrors the shared
- * modelAddress helper without importing the generic form). */
-function modelAddress(
-  provider: ProviderConnection,
-  model: {
-    modelId: string
-    piBinding: { providerId: string; modelId: string } | null
-  }
-): string {
-  const providerKey = model.piBinding?.providerId ?? `aegisx-${provider.id}`
-  const piModelId = model.piBinding?.modelId ?? model.modelId
-  return `${providerKey}/${piModelId}`
-}
-
 /** Models grouped by provider label (for grouped selects). */
-function groupByProvider(models: AvailableModel[]) {
-  const map = new Map<string, AvailableModel[]>()
+function groupByProvider(
+  models: Awaited<ReturnType<typeof providersApi.listModels>>["items"]
+) {
+  const map = new Map<string, typeof models>()
   for (const m of models) {
     const bucket = map.get(m.providerLabel) ?? []
     bucket.push(m)
@@ -135,8 +79,12 @@ export function ModelRefPicker({
   /** Label for the empty (null) option (only rendered when allowEmpty). */
   emptyLabel?: string
 }) {
-  const models = useAvailableModels()
-  const grouped = useMemo(() => groupByProvider(models), [models])
+  const models = useQuery({
+    queryKey: keys.models.all,
+    queryFn: () => providersApi.listModels(),
+  })
+  const items = useMemo(() => models.data?.items ?? [], [models.data])
+  const grouped = useMemo(() => groupByProvider(items), [items])
 
   // Parse the current ref into a select value (concrete address, or "" =
   // default) + an effort level.
@@ -150,10 +98,10 @@ export function ModelRefPicker({
   // provider/model was disabled or deleted while the agent kept its snapshot).
   // Keep it visible so the picker reflects what the agent actually runs.
   const dangling =
-    !!selectedAddress && !models.some((m) => m.address === selectedAddress)
+    !!selectedAddress && !items.some((m) => m.address === selectedAddress)
   const selectedModel = useMemo(
-    () => models.find((m) => m.address === selectedAddress) ?? null,
-    [selectedAddress, models]
+    () => items.find((m) => m.address === selectedAddress) ?? null,
+    [selectedAddress, items]
   )
   const supportedThinking = selectedModel?.thinkingLevels ?? THINKING_LEVELS
 
@@ -167,7 +115,7 @@ export function ModelRefPicker({
       return
     }
     // key is a concrete address → keep the current effort if supported.
-    const m = models.find((x) => x.address === key)
+    const m = items.find((x) => x.address === key)
     const levels = m?.thinkingLevels ?? ["off"]
     const next = levels.includes(effort) ? effort : (levels[0] ?? "off")
     onChange(`${key}:${next}`)
@@ -179,19 +127,19 @@ export function ModelRefPicker({
   const sm = size === "sm"
   const triggerClass = sm ? "h-8 min-w-[12rem] text-xs" : "h-9 min-w-[14rem]"
 
-  const items: Record<string, string> = {}
-  if (allowEmpty) items[""] = emptyLabel
+  const optionItems: Record<string, string> = {}
+  if (allowEmpty) optionItems[""] = emptyLabel
   if (dangling && selectedAddress) {
-    items[selectedAddress] =
-      `${parsed?.kind === "model" ? parsed.modelId : selectedAddress}（当前）`
+    optionItems[selectedAddress] =
+      parsed?.kind === "model" ? parsed.modelId : selectedAddress
   }
-  for (const m of models) items[m.address] = m.label
+  for (const m of items) optionItems[m.address] = m.label
 
   return (
     <span className={cn("flex items-center gap-1.5", className)}>
       <Select
         disabled={disabled}
-        items={items}
+        items={optionItems}
         onValueChange={applyModel}
         value={modelValue}
       >

@@ -117,10 +117,11 @@ export type ProviderModel = {
   label: string
   enabled: boolean
   metadata: ModelMetadata
-  piBinding: { providerId: string; modelId: string } | null
+  /** Metadata provenance, e.g. `"pi:anthropic/claude-sonnet-4-5"` when the
+   * metadata was copied from pi's builtin catalog (re-importing refreshes
+   * it). Null = hand-written. */
+  metadataSource: string | null
   thinkingLevels: ThinkingLevel[]
-  createdAt: string
-  updatedAt: string
 }
 
 export type ProviderConnection = {
@@ -130,9 +131,17 @@ export type ProviderConnection = {
   baseUrl: string
   apiKey: string
   enabled: boolean
-  createdAt: string
-  updatedAt: string
   models: ProviderModel[]
+}
+
+/** GET /api/models item — one currently-selectable model (enabled provider ×
+ * enabled model), with the canonical address ref selectors key on. */
+export type ModelOption = {
+  /** Canonical address (`aegisx-<providerId>/<modelId>`, no effort). */
+  address: string
+  label: string
+  providerLabel: string
+  thinkingLevels: ThinkingLevel[]
 }
 export type EventInput = {
   name: string

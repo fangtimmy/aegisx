@@ -1,4 +1,4 @@
-import { CircleAlert, Link2, Unlink } from "lucide-react"
+import { CircleAlert, Download } from "lucide-react"
 import { Controller, type useForm } from "react-hook-form"
 
 import type { PiModelProfile, ProviderModel } from "@/api"
@@ -53,14 +53,11 @@ export function EditModelDialog({
 }) {
   const {
     editModel,
-    editingBinding,
     editingModel,
     metadataError,
-    setBindingModel,
-    setEditingBinding,
     setEditingModel,
+    setImportModel,
     setMetadataError,
-    setSelectedBuiltinModel,
   } = editor
 
   return (
@@ -70,7 +67,6 @@ export function EditModelDialog({
           setEditingModel(null)
           editForm.reset({ label: "", metadata: "{}" })
           setMetadataError(null)
-          setEditingBinding(null)
         }
       }}
       open={editingModel !== null}
@@ -103,7 +99,6 @@ export function EditModelDialog({
               id: editingModel.id,
               label: values.label.trim(),
               metadata,
-              binding: editingBinding,
             })
           })}
         >
@@ -144,37 +139,21 @@ export function EditModelDialog({
                   <FieldLabel htmlFor="editing-provider-model-metadata">
                     元数据 JSON
                   </FieldLabel>
-                  {editingBinding && (
+                  {editingModel?.metadataSource && (
                     <p className="truncate font-mono text-xs text-muted-foreground">
-                      已绑定到 {editingBinding.providerId} /{" "}
-                      {editingBinding.modelId}
+                      导入自 {editingModel.metadataSource}
                     </p>
                   )}
                 </div>
                 <div className="flex shrink-0 gap-2">
                   <Button
-                    onClick={() => {
-                      setBindingModel(editingModel ?? null)
-                      setSelectedBuiltinModel(null)
-                    }}
+                    onClick={() => setImportModel(editingModel ?? null)}
                     size="sm"
                     type="button"
                     variant="outline"
                   >
-                    <Link2 /> {editingBinding ? "更改" : "绑定"}
+                    <Download /> 从 Pi 目录导入
                   </Button>
-                  {editingBinding && (
-                    <Button
-                      aria-label="解绑 Pi 模型"
-                      onClick={() => setEditingBinding(null)}
-                      size="icon-sm"
-                      title="解绑 Pi 模型"
-                      type="button"
-                      variant="outline"
-                    >
-                      <Unlink />
-                    </Button>
-                  )}
                 </div>
               </div>
               <Controller
@@ -183,7 +162,6 @@ export function EditModelDialog({
                 render={({ field }) => (
                   <Textarea
                     className="font-mono text-xs"
-                    disabled={Boolean(editingBinding)}
                     id="editing-provider-model-metadata"
                     onChange={(event) => {
                       field.onChange(event.target.value)
@@ -223,38 +201,36 @@ export function EditModelDialog({
   )
 }
 
-export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
+export function ImportPiModelDialog({ editor }: { editor: ProviderEditor }) {
   const {
-    bindingModel,
+    importModel,
     builtinProfiles,
-    builtinSearch,
+    importSearch,
     builtins,
     selectedBuiltinModel,
     selectedProfile,
-    setBindingModel,
-    setBuiltinSearch,
-    setEditingBinding,
+    setImportModel,
+    setImportSearch,
     setSelectedBuiltinModel,
+    importMetadata,
   } = editor
 
   return (
     <Dialog
       onOpenChange={(open) => {
         if (!open) {
-          setBindingModel(null)
-          setSelectedBuiltinModel(null)
-          setBuiltinSearch("")
+          setImportModel(null)
+          setImportSearch("")
         }
       }}
-      open={bindingModel !== null}
+      open={importModel !== null}
     >
       <DialogPopup className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>绑定 Pi 内置模型</DialogTitle>
+          <DialogTitle>从 Pi 目录导入元数据</DialogTitle>
           <DialogDescription>
-            将一个 Pi profile 应用到 <code>{bindingModel?.modelId}</code>
-            。这会替换其元数据，但保留已配置的模型 ID。任何内置 profile
-            都可绑定，与协议无关。
+            将一个 Pi profile 的元数据拷贝到 <code>{importModel?.modelId}</code>
+            。拷贝后仍可自由编辑；重复导入会重新同步。
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="grid gap-4">
@@ -269,7 +245,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
             </Alert>
           ) : (
             <Field>
-              <FieldLabel htmlFor="pi-model-binding">Pi 模型</FieldLabel>
+              <FieldLabel htmlFor="pi-model-import">Pi 模型</FieldLabel>
               <Combobox<PiModelProfile>
                 filter={(item, query) => {
                   const q = query.trim().toLowerCase()
@@ -280,7 +256,7 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
                     item.providerId.toLowerCase().includes(q)
                   )
                 }}
-                inputValue={builtinSearch}
+                inputValue={importSearch}
                 isItemEqualToValue={(item, value) =>
                   item.providerId === value.providerId &&
                   item.modelId === value.modelId
@@ -292,12 +268,12 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
                   `${model.providerId}/${model.modelId}`
                 }
                 items={builtinProfiles}
-                onInputValueChange={setBuiltinSearch}
+                onInputValueChange={setImportSearch}
                 onValueChange={setSelectedBuiltinModel}
                 value={selectedBuiltinModel}
               >
                 <ComboboxInput
-                  id="pi-model-binding"
+                  id="pi-model-import"
                   placeholder="按模型 ID、名称或供应商搜索"
                 />
                 <ComboboxPopup>
@@ -321,25 +297,33 @@ export function BindPiModelDialog({ editor }: { editor: ProviderEditor }) {
               </Combobox>
             </Field>
           )}
+          {importMetadata.error && (
+            <Alert variant="error">
+              <CircleAlert />
+              <AlertDescription>
+                {importMetadata.error.message}
+              </AlertDescription>
+            </Alert>
+          )}
         </DialogPanel>
         <DialogFooter>
           <DialogClose render={<Button type="button" variant="ghost" />}>
             取消
           </DialogClose>
           <Button
-            disabled={!bindingModel || !selectedProfile}
+            disabled={!importModel || !selectedProfile}
+            loading={importMetadata.isPending}
             onClick={() => {
-              if (bindingModel && selectedProfile) {
-                setEditingBinding({
-                  providerId: selectedProfile.providerId,
-                  modelId: selectedProfile.modelId,
+              if (importModel && selectedProfile) {
+                importMetadata.mutate({
+                  id: importModel.id,
+                  profile: selectedProfile,
                 })
-                setBindingModel(null)
               }
             }}
             type="button"
           >
-            <Link2 /> 绑定模型
+            <Download /> 导入元数据
           </Button>
         </DialogFooter>
       </DialogPopup>

@@ -1,6 +1,7 @@
 import { apiRequest, jsonRequest } from "./client"
 import type {
   ModelMetadata,
+  ModelOption,
   PiModelProfile,
   ProviderConnection,
   ProviderModel,
@@ -34,11 +35,16 @@ export type PatchModelInput = Partial<{
   label: string
   enabled: boolean
   metadata: Partial<ModelMetadata> | ModelMetadata
-  binding: { providerId: string; modelId: string } | null
 }>
 
 export function listProviders() {
   return apiRequest<{ items: ProviderConnection[] }>("/providers")
+}
+
+/** Flat selectable-model list (enabled provider × enabled model), with the
+ * canonical address ref selectors key on. */
+export function listModels() {
+  return apiRequest<{ items: ModelOption[] }>("/models")
 }
 
 export function createProvider(input: CreateProviderInput) {
@@ -96,6 +102,18 @@ export function updateProviderModel(id: string, input: PatchModelInput) {
   return apiRequest<ProviderModel>(
     `/provider-models/${id}`,
     jsonRequest("PATCH", input)
+  )
+}
+
+/** Copy a pi builtin profile's metadata onto the model (one-shot import —
+ * the copy is editable afterwards; repeating re-syncs it). */
+export function importProviderModelMetadata(
+  id: string,
+  profile: { providerId: string; modelId: string }
+) {
+  return apiRequest<ProviderModel>(
+    `/provider-models/${id}/import`,
+    jsonRequest("POST", profile)
   )
 }
 

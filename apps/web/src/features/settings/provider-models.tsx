@@ -1,8 +1,8 @@
 import {
   Brain,
   CircleAlert,
+  Download,
   Image,
-  Link2,
   Pencil,
   Plus,
   RefreshCw,
@@ -55,7 +55,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 
 import {
-  BindPiModelDialog,
+  ImportPiModelDialog,
   DiscoverModelsDialog,
   EditModelDialog,
 } from "./provider-model-dialogs"
@@ -77,7 +77,6 @@ export function ProviderModels({
     modelMutation,
     removeModel,
     setAddOpen,
-    setEditingBinding,
     setEditingModel,
     setMetadataError,
   } = editor
@@ -97,7 +96,6 @@ export function ProviderModels({
       label: model.label,
       metadata: JSON.stringify(model.metadata, null, 2),
     })
-    setEditingBinding(model.piBinding)
     setMetadataError(null)
   }
 
@@ -247,9 +245,13 @@ export function ProviderModels({
                           {model.label}
                         </span>
                         <Badge variant="secondary">{model.modelId}</Badge>
-                        {model.piBinding && (
-                          <Badge variant="secondary">
-                            <Link2 />
+                        {model.metadataSource && (
+                          <Badge
+                            size="sm"
+                            title={`元数据导入自 ${model.metadataSource}`}
+                            variant="secondary"
+                          >
+                            <Download aria-hidden="true" />
                           </Badge>
                         )}
                       </div>
@@ -359,7 +361,7 @@ export function ProviderModels({
         </Card>
       </CardFrame>
       <EditModelDialog editForm={editForm} editor={editor} />
-      <BindPiModelDialog editor={editor} />
+      <ImportPiModelDialog editor={editor} />
       <DiscoverModelsDialog editor={editor} />
     </>
   )

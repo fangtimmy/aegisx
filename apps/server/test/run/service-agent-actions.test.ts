@@ -3,9 +3,11 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents } from "../../src/db/schema"
+import { builtinModelProfile } from "../../src/providers/builtin-models"
 import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
+  makeModel,
   makeProvider,
   seedChallenge,
   seedEvent,
@@ -17,34 +19,24 @@ import {
 } from "../helpers"
 
 /** Two-model provider so a per-agent switch to a *different* model is real
- * (both piBound so the live runtime resolves them offline). */
+ * (both carry real pi-builtin metadata so the live runtime resolves them
+ * offline). */
 function twoModelProvider() {
   return makeProvider({
     models: [
-      {
-        id: "model-1",
-        modelId: "gpt-4o-mini",
-        label: "Test Model",
-        enabled: true,
-        metadata: "{}",
-        piProviderId: "openai",
-        piModelId: "gpt-4o-mini",
-      },
-      {
+      makeModel(),
+      makeModel({
         id: "model-2",
         modelId: "gpt-4o",
         label: "Bigger Model",
-        enabled: true,
-        metadata: "{}",
-        piProviderId: "openai",
-        piModelId: "gpt-4o",
-      },
+        metadataSource: "pi:openai/gpt-4o",
+      }),
     ],
   })
 }
 
-const MODEL_1_REF = `${TEST_MODEL_REF}:off` // openai/gpt-4o-mini:off
-const MODEL_2_REF = "openai/gpt-4o:high" // openai/gpt-4o:high
+const MODEL_1_REF = `${TEST_MODEL_REF}:off`
+const MODEL_2_REF = "aegisx-prov-1/gpt-4o:high"
 
 /** Records host-session calls: which agents were prepared (createHost) and
  * which were aborted, and wires the real model runtime into the stub session
@@ -231,9 +223,10 @@ describe("per-agent actions (v19)", () => {
             modelId: "new-model",
             label: "New Model",
             enabled: true,
-            metadata: "{}",
-            piProviderId: null,
-            piModelId: null,
+            metadata: JSON.stringify(
+              builtinModelProfile("openai", "gpt-4o-mini")?.metadata ?? {}
+            ),
+            metadataSource: null,
           },
         ],
       })
@@ -297,7 +290,7 @@ describe("per-agent actions (v19)", () => {
       const agent = await spawnAgent(service)
       await service.switchAgentModel(agent.id, { model: MODEL_2_REF })
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
-      expect(row.model).toBe("openai/gpt-4o:medium")
+      expect(row.model).toBe("aegisx-prov-1/gpt-4o:medium")
       await service.close()
     } finally {
       close()
@@ -317,7 +310,9 @@ describe("per-agent actions (v19)", () => {
         service.switchAgentModel(agent.id, { model: "garbage" })
       ).rejects.toThrow("Invalid model ref")
       await expect(
-        service.switchAgentModel(agent.id, { model: "openai/no-such:off" })
+        service.switchAgentModel(agent.id, {
+          model: "aegisx-prov-1/no-such:off",
+        })
       ).rejects.toThrow("is unavailable")
       // alias refs no longer exist — they parse as an invalid ref.
       await expect(

@@ -32,7 +32,7 @@ export type AgentSummary = {
   challengeName: string
   role: "solver" | "orchestrator"
   name: string | null
-  /** Canonical model ref snapshot (`<providerKey>/<modelId>:<effort>` | alias),
+  /** Canonical model ref snapshot (`<providerKey>/<modelId>:<effort>`),
    * persisted on the agent row at spawn/switch time. */
   model: string | null
   status: AgentStatus

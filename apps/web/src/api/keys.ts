@@ -34,7 +34,9 @@ export const keys = {
   },
   providers: {
     all: ["providers"] as const,
-    piModels: ["providers", "pi-models"] as const,
+  },
+  models: {
+    all: ["models"] as const,
   },
   settings: {
     all: ["settings"] as const,
