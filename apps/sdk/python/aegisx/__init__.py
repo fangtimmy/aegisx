@@ -27,6 +27,9 @@ Rules:
   bulk to files.
 - Do one composite operation per script; persist reusable helpers in
   scheduler_lib.py in your working directory and `import scheduler_lib`.
+- Every delivery to you ends with a [调度快照] block (delivery-time fleet
+  snapshot: caps, queue, per-challenge agents) — decide from it when it
+  suffices; call `snapshot()` only when you need finer detail.
 """
 from __future__ import annotations
 

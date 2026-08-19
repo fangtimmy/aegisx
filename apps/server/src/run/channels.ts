@@ -13,7 +13,19 @@ import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm"
 import type { SessionLifecycle } from "../agents/lifecycle"
 import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
-import { agents, challenges, channelMessages, channelReads } from "../db/schema"
+import {
+  agents,
+  challenges,
+  channelMessages,
+  channelReads,
+  promptTemplates,
+} from "../db/schema"
+import { DEFAULT_CHANNEL_DELIVERY_TEMPLATE } from "../orchestration/prompt-defaults"
+import {
+  BUILTIN_PLUGIN,
+  type DeliveryRenderContext,
+  renderTemplateBody,
+} from "../orchestration/prompt-templates"
 import { RunActionError } from "./errors"
 
 /**
@@ -134,6 +146,10 @@ export type ChannelServiceDeps = {
   now(): string
   /** Host root of a challenge's workspace tree (attachment copy target). */
   challengeWorkspaceRoot(eventId: string, challengeId: string): string
+  /** Renders the fleet snapshot appended to every scheduler (orch)
+   * delivery; return "" to skip. Wired by the run service (owns the
+   * fleet/scheduler domain); absent in tests. */
+  renderSchedulerDigest?(eventId: string): string
   /** Test seam: flush tick interval. */
   flushIntervalMs?: number
 }
@@ -814,7 +830,8 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
     if (snapshots.length === 0) return
 
-    const text = renderMerged(
+    const text = renderDelivery(
+      deliveryTemplateBody(db),
       snapshots.map(({ label, messages }) => ({
         label,
         messages: messages.map((row) => ({
@@ -824,16 +841,43 @@ export function createChannelService(deps: ChannelServiceDeps) {
           urgent: isUrgent(row),
           files: parseMeta(row.meta).files ?? [],
         })),
-      }))
+      })),
+      MAX_DELIVER_CHARS
     )
+    // Scheduler deliveries carry the fleet snapshot (the digest renders
+    // against delivery-time state — usually enough to decide without a
+    // snapshot() round trip). Solvers never get one.
+    const digest =
+      agent.role === "orchestrator"
+        ? (deps.renderSchedulerDigest?.(agent.eventId) ?? "")
+        : ""
+    const withDigest = digest ? `${text}\n\n${digest}` : text
     for (const { key, maxId } of snapshots) {
       markRead(key, readerKey, maxId)
     }
-    await deps.lifecycle().send(agentId, text, opts.deliverAs ?? "steer")
+    await deps.lifecycle().send(agentId, withDigest, opts.deliverAs ?? "steer")
   }
 
   function isActive(agent: typeof agents.$inferSelect): boolean {
     return agent.status === "running" || agent.status === "idle"
+  }
+
+  /** The channelDelivery template body for this delivery: the builtin row
+   * when present (user-editable, takes effect on the next delivery), else
+   * the built-in default (covers unseeded DBs). Per-delivery read — a few
+   * local SQLite rows, no cache to invalidate. */
+  function deliveryTemplateBody(db: Database): string {
+    const row = db
+      .select({ body: promptTemplates.body })
+      .from(promptTemplates)
+      .where(
+        and(
+          eq(promptTemplates.plugin, BUILTIN_PLUGIN),
+          eq(promptTemplates.key, "channelDelivery")
+        )
+      )
+      .get()
+    return row?.body ?? DEFAULT_CHANNEL_DELIVERY_TEMPLATE
   }
 
   function isUrgent(row: ChannelMessageRow): boolean {
@@ -1317,49 +1361,60 @@ type RenderGroup = {
   }>
 }
 
-/** Render the merged delivery text: untrusted banner + per-message header
- * lines (⚠ prefix on urgent) + 📎 lines carrying the shared-relative path;
- * 8K cap with oldest-message folding. Attachment CONTENT never enters the
- * text — readers open the shared path directly. */
-export function renderMerged(groups: RenderGroup[]): string {
-  const header = "[频道消息]"
-  // Per-message line blocks (header line + body + 📎 lines), oldest first.
-  const blocks: string[][] = []
-  for (const group of groups) {
-    for (const message of group.messages) {
-      const mark = message.urgent ? "⚠ " : ""
-      const lines = [
-        `${mark}${group.label} · ${message.authorName} · ${timeOf(message.createdAt)}`,
-        message.body.trim() || "(空)",
-      ]
-      for (const file of message.files) {
-        lines.push(
-          `📎 ${file.filename} · ${formatSize(file.size)} · ${file.path}`
-        )
-      }
-      blocks.push(lines)
-    }
-  }
-  const render = (kept: string[][]) =>
-    [header, ...kept.flatMap((lines) => lines)].join("\n")
-  if (render(blocks).length <= MAX_DELIVER_CHARS) return render(blocks)
+/** Render the merged delivery text via the channelDelivery template:
+ * per-message header lines (⚠ prefix on urgent) + 📎 lines carrying the
+ * shared-relative path; 8K cap with oldest-message folding. The folding
+ * math stays in code (per-message size measured through the SAME template,
+ * so a custom template folds accurately). Attachment CONTENT never enters
+ * the text — readers open the shared path directly. */
+export function renderDelivery(
+  body: string,
+  groups: RenderGroup[],
+  maxChars: number
+): string {
+  const ctx = (
+    messages: DeliveryRenderContext["messages"],
+    dropped: number
+  ): DeliveryRenderContext => ({ dropped, messages })
+  const messages: DeliveryRenderContext["messages"] = groups.flatMap((group) =>
+    group.messages.map((message) => ({
+      urgent: message.urgent,
+      label: group.label,
+      authorName: message.authorName,
+      time: timeOf(message.createdAt),
+      body: message.body.trim() || "(空)",
+      files: message.files.map((file) => ({
+        filename: file.filename,
+        size: formatSize(file.size),
+        path: file.path,
+      })),
+    }))
+  )
+  const render = (c: DeliveryRenderContext) => renderTemplateBody(body, c)
+  const plain = render(ctx(messages, 0))
+  if (plain.length <= maxChars) return plain
   // Over budget: keep the NEWEST messages that fit; fold the dropped count.
-  const budget = MAX_DELIVER_CHARS - header.length - 120
+  // Fixed prefix (header lines) measured through the same template so a
+  // custom template budgets against its own prefix.
+  const prefixLen = render(ctx([], 0)).length
+  const budget = maxChars - prefixLen - 120
   let used = 0
-  let start = blocks.length
-  for (let i = blocks.length - 1; i >= 0; i -= 1) {
-    const size = blocks[i]!.join("\n").length + 1
+  let start = messages.length
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const size = render(ctx([messages[i]!], 0)).length - prefixLen
     if (used + size > budget) break
     used += size
     start = i
   }
-  const dropped = start
-  const kept = blocks.slice(start)
-  return dropped > 0
-    ? [
-        header,
-        `另有 ${dropped} 条较早消息，可 aegisx.channels.read 补读`,
-        ...kept.flatMap((lines) => lines),
-      ].join("\n")
-    : render(kept)
+  return render(ctx(messages.slice(start), start))
+}
+
+/** Default-template render (the pure/exported face — same output the
+ * service produces with unedited builtin rows). */
+export function renderMerged(groups: RenderGroup[]): string {
+  return renderDelivery(
+    DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
+    groups,
+    MAX_DELIVER_CHARS
+  )
 }

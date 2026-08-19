@@ -139,8 +139,12 @@ export type SettingsResponse = {
       initial: string
       orchestratorSystem: string
       schedulerInitial: string
+      channelDelivery: string
+      schedulerDigest: string
     }
     promptVariables: string[]
     orchestratorPromptVariables: string[]
+    deliveryPromptVariables: string[]
+    schedulerDigestVariables: string[]
   }
 }

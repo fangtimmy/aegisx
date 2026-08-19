@@ -30,7 +30,7 @@ import { toast } from "@/lib/toast"
 
 import { PromptEditor, type PromptPreviewKind } from "./prompt-editor"
 
-/** The four builtin template keys (v9: the plugin namespace is gone).
+/** The builtin template keys (v9: the plugin namespace is gone).
  * Unknown keys returned by the server fall back to the raw key. */
 const TEMPLATE_META: Record<string, { title: string; description: string }> = {
   mainSystem: {
@@ -50,6 +50,16 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
     title: "调度者初始提示词",
     description: "调度者 run 启动时的首轮引导消息。",
   },
+  channelDelivery: {
+    title: "频道投递格式",
+    description:
+      "频道消息合并投递给 agent 时的文本格式：块头、每消息行、附件行与溢出折行。",
+  },
+  schedulerDigest: {
+    title: "调度快照",
+    description:
+      "追加到调度者每次投递尾部的 fleet 状态摘要（槽位、队列、每题 agent 概况）。",
+  },
 }
 
 /** Preview kinds the server has a sample context for; schedulerInitial has
@@ -58,6 +68,8 @@ const BUILTIN_PREVIEW_KIND: Record<string, PromptPreviewKind> = {
   mainSystem: "mainSystemPrompt",
   initial: "initialPrompt",
   orchestratorSystem: "orchestratorSystemPrompt",
+  channelDelivery: "channelDeliveryPrompt",
+  schedulerDigest: "schedulerDigestPrompt",
 }
 
 /** Templates rendered against the orchestrator (event) context. */
@@ -65,6 +77,11 @@ const ORCHESTRATOR_CONTEXT_KEYS = new Set([
   "orchestratorSystem",
   "schedulerInitial",
 ])
+
+/** Templates rendered against the delivery/digest contexts (their own
+ * variable lists from the settings meta). */
+const CHANNEL_DELIVERY_KEYS = new Set(["channelDelivery"])
+const SCHEDULER_DIGEST_KEYS = new Set(["schedulerDigest"])
 
 /** Settings-page prompt-templates panel (v9: flat four builtin keys — no
  * plugin grouping). Each row opens an editor dialog with debounced save +
@@ -122,6 +139,8 @@ export function PromptTemplatesSettings() {
                 key={key}
                 orchestratorVars={variables.orchestratorPromptVariables}
                 promptVars={variables.promptVariables}
+                deliveryVars={variables.deliveryPromptVariables}
+                digestVars={variables.schedulerDigestVariables}
                 row={rows.find((r) => r.plugin === "builtin" && r.key === key)}
                 templateKey={key}
               />
@@ -141,12 +160,16 @@ function PromptTemplateRow({
   defaultBody,
   promptVars,
   orchestratorVars,
+  deliveryVars,
+  digestVars,
 }: {
   row: PromptTemplateRow | undefined
   templateKey: string
   defaultBody: string
   promptVars: string[]
   orchestratorVars: string[]
+  deliveryVars: string[]
+  digestVars: string[]
 }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -176,13 +199,12 @@ function PromptTemplateRow({
     onError: (error) => toast.error("保存提示词模板失败", error.message),
   })
 
-  const vars = useMemo(
-    () =>
-      ORCHESTRATOR_CONTEXT_KEYS.has(templateKey)
-        ? orchestratorVars
-        : promptVars,
-    [templateKey, orchestratorVars, promptVars]
-  )
+  const vars = useMemo(() => {
+    if (ORCHESTRATOR_CONTEXT_KEYS.has(templateKey)) return orchestratorVars
+    if (CHANNEL_DELIVERY_KEYS.has(templateKey)) return deliveryVars
+    if (SCHEDULER_DIGEST_KEYS.has(templateKey)) return digestVars
+    return promptVars
+  }, [templateKey, orchestratorVars, promptVars, deliveryVars, digestVars])
   const modified = value !== defaultBody
 
   return (

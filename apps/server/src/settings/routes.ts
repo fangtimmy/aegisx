@@ -18,16 +18,22 @@ import { badRequest, notFound } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
 import {
+  DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
   DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "../orchestration/prompt-defaults"
 import {
+  DELIVERY_TEMPLATE_VARIABLES,
   ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES,
   PROMPT_TEMPLATE_VARIABLES,
+  SCHEDULER_DIGEST_TEMPLATE_VARIABLES,
+  previewChannelDelivery,
   previewInitialPrompt,
   previewOrchestratorSystemPrompt,
+  previewSchedulerDigest,
   previewSystemPrompt,
   sampleOrchestratorPromptContext,
   samplePromptContext,
@@ -44,6 +50,8 @@ const promptPreviewInput = Type.Object(
       Type.Literal("mainSystemPrompt"),
       Type.Literal("initialPrompt"),
       Type.Literal("orchestratorSystemPrompt"),
+      Type.Literal("channelDeliveryPrompt"),
+      Type.Literal("schedulerDigestPrompt"),
     ]),
     template: Type.String({ maxLength: 100_000 }),
   },
@@ -70,9 +78,13 @@ function settingsResponse(configStore: ConfigStore) {
         initial: DEFAULT_INITIAL_PROMPT_TEMPLATE,
         orchestratorSystem: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
         schedulerInitial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
+        channelDelivery: DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
+        schedulerDigest: DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
       },
       promptVariables: [...PROMPT_TEMPLATE_VARIABLES],
       orchestratorPromptVariables: [...ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES],
+      deliveryPromptVariables: [...DELIVERY_TEMPLATE_VARIABLES],
+      schedulerDigestVariables: [...SCHEDULER_DIGEST_TEMPLATE_VARIABLES],
     },
   }
 }
@@ -86,7 +98,12 @@ export function registerSettingsRoutes(
 ) {
   const { db, configStore } = options
   const previewPrompt = (
-    kind: "mainSystemPrompt" | "initialPrompt" | "orchestratorSystemPrompt",
+    kind:
+      | "mainSystemPrompt"
+      | "initialPrompt"
+      | "orchestratorSystemPrompt"
+      | "channelDeliveryPrompt"
+      | "schedulerDigestPrompt",
     template: string
   ) => {
     if (kind === "mainSystemPrompt") {
@@ -97,6 +114,12 @@ export function registerSettingsRoutes(
         template,
         sampleOrchestratorPromptContext
       )
+    }
+    if (kind === "channelDeliveryPrompt") {
+      return previewChannelDelivery(template)
+    }
+    if (kind === "schedulerDigestPrompt") {
+      return previewSchedulerDigest(template)
     }
     return previewInitialPrompt(template, samplePromptContext)
   }

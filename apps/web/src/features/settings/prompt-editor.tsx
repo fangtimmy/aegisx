@@ -21,6 +21,8 @@ export type PromptPreviewKind =
   | "mainSystemPrompt"
   | "initialPrompt"
   | "orchestratorSystemPrompt"
+  | "channelDeliveryPrompt"
+  | "schedulerDigestPrompt"
 
 /** Prompt template editor: {{variable}} insertion, live preview (only kinds
  * with a server-side sample context) and a monospace textarea. Controlled;

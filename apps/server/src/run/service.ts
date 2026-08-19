@@ -28,8 +28,13 @@ import {
   readWorkspacePath,
   workspaceDownload,
 } from "../infrastructure/workspace-files"
+import { DEFAULT_SCHEDULER_DIGEST_TEMPLATE } from "../orchestration/prompt-defaults"
 import { refreshBuiltinTemplateSections } from "../orchestration/prompt-refresh-v19"
-import { seedBuiltinTemplates } from "../orchestration/prompt-templates"
+import {
+  loadTemplateMap,
+  renderTemplateBody,
+  seedBuiltinTemplates,
+} from "../orchestration/prompt-templates"
 import {
   getChallengeRemote,
   isTargetCapable,
@@ -192,6 +197,22 @@ export function createAgentService(options: AgentServiceOptions) {
     lifecycle: () => lifecycle,
     now,
     challengeWorkspaceRoot,
+    // Fleet digest appended to scheduler deliveries: rendered per delivery
+    // against the current DB state (advisory — a render failure just skips
+    // the digest, delivery itself must not fail).
+    renderSchedulerDigest: (eventId) => {
+      try {
+        const body =
+          loadTemplateMap(db).get("schedulerDigest") ??
+          DEFAULT_SCHEDULER_DIGEST_TEMPLATE
+        return renderTemplateBody(
+          body,
+          schedulerAdmin.getDigestContext(eventId)
+        )
+      } catch {
+        return ""
+      }
+    },
     ...(options.flushIntervalMs !== undefined
       ? { flushIntervalMs: options.flushIntervalMs }
       : {}),

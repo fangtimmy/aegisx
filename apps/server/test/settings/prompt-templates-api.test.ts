@@ -38,9 +38,11 @@ describe("prompt template store API", () => {
       .map((item) => item.key)
       .sort()
     expect(builtinKeys).toEqual([
+      "channelDelivery",
       "initial",
       "mainSystem",
       "orchestratorSystem",
+      "schedulerDigest",
       "schedulerInitial",
     ])
   })

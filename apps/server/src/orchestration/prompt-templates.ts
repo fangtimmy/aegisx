@@ -5,22 +5,26 @@ import Handlebars from "handlebars"
 import type { Database } from "../db"
 import { promptTemplates } from "../db/schema"
 import {
+  DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
   DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
 } from "./prompt-defaults"
 
 /** Namespace id for the built-in template rows. */
 export const BUILTIN_PLUGIN = "builtin"
 
-/** The four built-in template keys + their default bodies. Seeded into
+/** The built-in template keys + their default bodies. Seeded into
  * prompt_templates (plugin='builtin') at app boot. */
 export const BUILTIN_DEFAULTS: Record<string, string> = {
   mainSystem: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   initial: DEFAULT_INITIAL_PROMPT_TEMPLATE,
   orchestratorSystem: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
   schedulerInitial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
+  channelDelivery: DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
+  schedulerDigest: DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
 }
 
 /**
@@ -310,6 +314,147 @@ export function previewInitialPrompt(
     renderSystemPrompt(
       template,
       markPreviewValues(context) as PromptTemplateContext
+    )
+  )
+}
+
+// --- delivery templates (channelDelivery / schedulerDigest) -----------------
+
+/** Context for the channelDelivery template: the merged delivery block
+ * pushed into an agent's turn. */
+export type DeliveryRenderContext = {
+  dropped: number
+  messages: Array<{
+    urgent: boolean
+    label: string
+    authorName: string
+    /** Pre-formatted HH:MM. */
+    time: string
+    /** Pre-trimmed body (empty → "(空)"). */
+    body: string
+    files: Array<{ filename: string; size: string; path: string }>
+  }>
+}
+
+export const DELIVERY_TEMPLATE_VARIABLES = [
+  "dropped",
+  "messages",
+  "messages[].urgent",
+  "messages[].label",
+  "messages[].authorName",
+  "messages[].time",
+  "messages[].body",
+  "messages[].files",
+  "messages[].files[].filename",
+  "messages[].files[].size",
+  "messages[].files[].path",
+] as const
+
+export const sampleDeliveryContext: DeliveryRenderContext = {
+  dropped: 0,
+  messages: [
+    {
+      urgent: false,
+      label: "#team",
+      authorName: "agent-a3f1c2d9",
+      time: "14:32",
+      body: "SQL 注入点已确认：/api/search 的 id 参数，可首注。",
+      files: [],
+    },
+    {
+      urgent: true,
+      label: "#orch",
+      authorName: "Scheduler",
+      time: "14:35",
+      body: "target expires in 3min — extend or drop?",
+      files: [
+        {
+          filename: "exp2.py",
+          size: "1.2KB",
+          path: "shared/from-a3f1c2d9/exp2.py",
+        },
+      ],
+    },
+  ],
+}
+
+export function previewChannelDelivery(template: string) {
+  return previewSegments(
+    renderTemplateBody(template, markPreviewValues(sampleDeliveryContext))
+  )
+}
+
+/** Context for the schedulerDigest template: the fleet snapshot appended to
+ * every scheduler (orch) delivery. */
+export type SchedulerDigestContext = {
+  agents: { live: number; max: number }
+  targets: { used: number; max: number }
+  queue: { pending: number; running: number; paused: boolean }
+  challenges: Array<{
+    name: string
+    points: number | null
+    /** Pre-derived: 已解 / 部分 / 未解. */
+    solvedLabel: string
+    live: number
+    running: number
+    pending: number
+  }>
+}
+
+export const SCHEDULER_DIGEST_TEMPLATE_VARIABLES = [
+  "agents.live",
+  "agents.max",
+  "targets.used",
+  "targets.max",
+  "queue.pending",
+  "queue.running",
+  "queue.paused",
+  "challenges",
+  "challenges[].name",
+  "challenges[].points",
+  "challenges[].solvedLabel",
+  "challenges[].live",
+  "challenges[].running",
+  "challenges[].pending",
+] as const
+
+export const sampleSchedulerDigestContext: SchedulerDigestContext = {
+  agents: { live: 3, max: 8 },
+  targets: { used: 1, max: 2 },
+  queue: { pending: 2, running: 1, paused: false },
+  challenges: [
+    {
+      name: "web1",
+      points: 300,
+      solvedLabel: "未解",
+      live: 2,
+      running: 1,
+      pending: 1,
+    },
+    {
+      name: "pwn2",
+      points: 500,
+      solvedLabel: "部分",
+      live: 1,
+      running: 0,
+      pending: 1,
+    },
+    {
+      name: "crypto1",
+      points: 200,
+      solvedLabel: "已解",
+      live: 0,
+      running: 0,
+      pending: 0,
+    },
+  ],
+}
+
+export function previewSchedulerDigest(template: string) {
+  return previewSegments(
+    renderTemplateBody(
+      template,
+      markPreviewValues(sampleSchedulerDigestContext)
     )
   )
 }

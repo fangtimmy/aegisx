@@ -88,7 +88,7 @@ agent-a3f1c2d9「web1」已空闲
 ⚠ #orch · Solver · agent-a3f1c2d9 · 14:35
 target expires in 3min — extend or drop?
 
-- The messages ARE the event ledger (no separate digest) — assess CURRENT state yourself with \`aegisx.snapshot()\` / \`aegisx.agents.read\`, then act. Be decisive and concise. Do not poll — events come to you.
+- The messages ARE the event ledger (no separate digest) — every scheduler delivery also ends with a [调度快照] block (delivery-time fleet snapshot: caps, queue, per-challenge agents). Decide directly from it when it suffices; for anything finer assess CURRENT state yourself with \`aegisx.snapshot()\` / \`aegisx.agents.read\`, then act. Be decisive and concise. Do not poll — events come to you.
 - Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user-controlled flips are marked 用户手动). While the queue is paused, pending items never launch — resume it or spawn agents directly.
 - Solved-challenge cleanup is automatic: on a FULL solve, the challenge's other live agents are stopped and its pending queue items cancelled — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead.
 - NEVER run long polling/wait loops (sleep cycles, poll scripts): a long script BLOCKS urgent deliveries until it returns, and polling burns tokens.
@@ -212,3 +212,26 @@ Build your plan now with the Python SDK — run one bash heredoc script (\`pytho
 {{else}}
 Wait for agent events (an agent went idle, a flag was accepted, an agent timed out) and act on each wake-up: assess with \`aegisx.snapshot()\` / \`aegisx.agents.read\`, act via the SDK.
 {{/if}}`
+
+/** The merged channel delivery block (the text pushed into an agent's
+ * turn). Variables: `dropped` (folded older-message count, 0 = none),
+ * `messages` (each with `urgent`, `label`, `authorName`, `time`, `body`,
+ * `files` of `{filename, size, path}`). Renders the DEFAULT byte format;
+ * the budget folding itself stays in code. */
+export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[频道消息]
+{{#if dropped}}另有 {{dropped}} 条较早消息，可 aegisx.channels.read 补读
+{{/if}}{{#each messages}}{{#if urgent}}⚠ {{/if}}{{label}} · {{authorName}} · {{time}}
+{{body}}
+{{#each files}}📎 {{filename}} · {{size}} · {{path}}
+{{/each}}{{/each}}`
+
+/** The fleet snapshot appended to every scheduler delivery (orch only).
+ * Self-describing: the head states it is a delivery-time snapshot, the
+ * tail points to `aegisx.snapshot()` for detail — no system-prompt
+ * cooperation required. Variables: `agents.live/max`, `targets.used/max`,
+ * `queue.pending/running/paused`, `challenges[]` with `name, points,
+ * solvedLabel, live, running, pending`. */
+export const DEFAULT_SCHEDULER_DIGEST_TEMPLATE = `[调度快照]（投递时状态，非实时）
+Agent 槽位：{{agents.live}}/{{agents.max}} · 靶机槽：{{targets.used}}/{{targets.max}} · 队列：{{queue.pending}} 待发 / {{queue.running}} 运行{{#if queue.paused}}（已暂停）{{/if}}
+{{#each challenges}}- {{name}}{{#if points}} · {{points}}pt{{/if}} · {{solvedLabel}} · {{live}} live（{{running}} running）{{#if pending}} · 队列 {{pending}}{{/if}}
+{{/each}}需要更细的状态再 aegisx.snapshot()。`

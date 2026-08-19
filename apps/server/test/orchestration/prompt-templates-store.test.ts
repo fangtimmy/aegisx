@@ -13,7 +13,7 @@ import {
 import { setupDb } from "../helpers"
 
 describe("prompt_templates store (builtin-only)", () => {
-  test("seedBuiltinTemplates inserts the 4 builtin rows", () => {
+  test("seedBuiltinTemplates inserts the builtin rows", () => {
     const { db, close } = setupDb()
     try {
       seedBuiltinTemplates(db)
@@ -21,9 +21,11 @@ describe("prompt_templates store (builtin-only)", () => {
       const keys = rows.map((r) => r.key).sort()
       expect(keys).toEqual(
         [
+          "channelDelivery",
           "initial",
           "mainSystem",
           "orchestratorSystem",
+          "schedulerDigest",
           "schedulerInitial",
         ].sort()
       )

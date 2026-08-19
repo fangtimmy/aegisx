@@ -33,7 +33,13 @@ function setupDbLite() {
 /** Recorded lifecycle: one entry per lifecycle.send (agentId, text). */
 type SentEntry = { agentId: string; text: string }
 
-function makeService(db: Db, dir: Dir) {
+function makeService(
+  db: Db,
+  dir: Dir,
+  deps: {
+    renderSchedulerDigest?: (eventId: string) => string
+  } = {}
+) {
   const sent: SentEntry[] = []
   const channels: ChannelService = createChannelService({
     db,
@@ -50,6 +56,9 @@ function makeService(db: Db, dir: Dir) {
     now: () => new Date().toISOString(),
     challengeWorkspaceRoot: (eventId, challengeId) =>
       join(dir, "events", eventId, "challenges", challengeId, "workspace"),
+    ...(deps.renderSchedulerDigest
+      ? { renderSchedulerDigest: deps.renderSchedulerDigest }
+      : {}),
   })
   return { channels, sent }
 }
@@ -425,6 +434,50 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       expect(
         channels.agentChannels("a2").find((c) => c.kind === "team")!.unread
       ).toBe(1)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("scheduler deliveries append the fleet digest; solver deliveries never do", async () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, "a1", { status: "running" })
+      seedScheduler(db, "s1")
+      const { channels, sent } = makeService(db, dir, {
+        renderSchedulerDigest: (eventId) =>
+          `[调度快照] mock digest for ${eventId}`,
+      })
+
+      // Solver urgent post → scheduler delivery carries the digest.
+      channels.post({
+        channelKey: orchKey("evt-1"),
+        author: { type: "agent", agentId: "a1" },
+        body: "ask",
+        urgent: true,
+      })
+      await settle()
+      expect(sent.map((s) => s.agentId)).toEqual(["s1"])
+      expect(sent[0]!.text).toContain("ask")
+      expect(sent[0]!.text).toContain("[调度快照] mock digest for evt-1")
+      // The digest is separated from the merged block.
+      expect(sent[0]!.text).toContain("\n\n[调度快照]")
+
+      // Solver-facing delivery: no digest.
+      sent.length = 0
+      channels.post({
+        channelKey: teamKey("ch-1"),
+        author: { type: "user" },
+        body: "team note",
+        urgent: true,
+      })
+      await settle()
+      expect(sent.map((s) => s.agentId)).toEqual(["a1"])
+      expect(sent[0]!.text).toContain("team note")
+      expect(sent[0]!.text).not.toContain("调度快照")
       channels.close()
     } finally {
       close()
@@ -818,6 +871,95 @@ describe("renderMerged", () => {
     expect(text).toContain("条较早消息，可 aegisx.channels.read 补读")
     expect(text).toContain("msg-29") // newest kept
     expect(text).not.toContain("msg-0") // oldest folded
+  })
+
+  // The template-driven renderer must reproduce the legacy (pre-template)
+  // format byte-for-byte with the default builtin body — the folding math
+  // included. This locks the channelDelivery default against regressions.
+  test("default template renders byte-identical to the legacy renderer", () => {
+    const legacy = (
+      groups: Parameters<typeof renderMerged>[0],
+      maxChars = 8_000
+    ): string => {
+      const header = "[频道消息]"
+      const timeOfLegacy = (iso: string) => {
+        const date = new Date(iso)
+        return `${String(date.getHours()).padStart(2, "0")}:${String(
+          date.getMinutes()
+        ).padStart(2, "0")}`
+      }
+      const blocks: string[][] = []
+      for (const group of groups) {
+        for (const message of group.messages) {
+          const mark = message.urgent ? "⚠ " : ""
+          const lines = [
+            `${mark}${group.label} · ${message.authorName} · ${timeOfLegacy(message.createdAt)}`,
+            message.body.trim() || "(空)",
+          ]
+          for (const file of message.files) {
+            lines.push(
+              `📎 ${file.filename} · ${formatSize(file.size)} · ${file.path}`
+            )
+          }
+          blocks.push(lines)
+        }
+      }
+      const render = (kept: string[][]) =>
+        [header, ...kept.flatMap((lines) => lines)].join("\n")
+      if (render(blocks).length <= maxChars) return render(blocks)
+      const budget = maxChars - header.length - 120
+      let used = 0
+      let start = blocks.length
+      for (let i = blocks.length - 1; i >= 0; i -= 1) {
+        const size = blocks[i]!.join("\n").length + 1
+        if (used + size > budget) break
+        used += size
+        start = i
+      }
+      const dropped = start
+      const kept = blocks.slice(start)
+      return dropped > 0
+        ? [
+            header,
+            `另有 ${dropped} 条较早消息，可 aegisx.channels.read 补读`,
+            ...kept.flatMap((lines) => lines),
+          ].join("\n")
+        : render(kept)
+    }
+
+    const group = (n: number, pad = 0) => ({
+      label: "#team",
+      messages: Array.from({ length: n }, (_, i) => ({
+        authorName: `agent-${i}`,
+        createdAt: new Date(2025, 0, 1, 12, i % 60).toISOString(),
+        body: i % 3 === 0 ? "" : `body-${i} ${"x".repeat(pad)}`,
+        urgent: i % 2 === 0,
+        files:
+          i % 4 === 0
+            ? [
+                {
+                  filename: `f${i}.py`,
+                  size: 4300 * (i + 1),
+                  path: `shared/from-a${i}/f${i}.py`,
+                },
+              ]
+            : [],
+      })),
+    })
+    const matrix = [
+      { label: "#team", messages: [] },
+      group(1),
+      group(12),
+      group(12, 900), // exercises the overflow path
+      group(60, 400), // deep overflow
+    ]
+    for (const groups of matrix) {
+      expect(renderMerged([groups])).toBe(legacy([groups]))
+    }
+    // Multi-group interleaving (team + dm faces in one delivery).
+    expect(
+      renderMerged([group(3), { label: "#orch", messages: group(2).messages }])
+    ).toBe(legacy([group(3), { label: "#orch", messages: group(2).messages }]))
   })
 })
 

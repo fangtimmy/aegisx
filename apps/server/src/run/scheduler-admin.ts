@@ -5,7 +5,16 @@ import type { SchedulerStatusSnapshot } from "@aegisx/shared/scheduler"
 import { and, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
-import { agents, challenges, schedulerConfig } from "../db/schema"
+import {
+  agents,
+  challengeFlags,
+  challengeRemote,
+  challenges,
+  queueState,
+  schedulerConfig,
+  spawnQueue,
+} from "../db/schema"
+import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
 import { fenceSnapshot } from "./fence"
 import type { ModelResolver } from "./model-resolver"
 import type { AgentQueries } from "./queries"
@@ -116,7 +125,128 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return { ...snap, activeAgents }
   }
 
-  /** The event's scheduler agent, if any. */
+  /** Fleet digest context for scheduler deliveries (schedulerDigest
+   * template): caps, queue, and one line per challenge with live agents /
+   * pending items. Advisory snapshot rendered at delivery time — derive,
+   * don't cache. */
+  function getDigestContext(eventId: string): SchedulerDigestContext {
+    const snap = fenceSnapshot(db, getSettings(), eventId)
+
+    const liveByChallenge = new Map<string, { live: number; running: number }>()
+    for (const row of db
+      .select({ challengeId: agents.challengeId, status: agents.status })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.eventId, eventId),
+          inArray(agents.status, ["running", "idle"])
+        )
+      )
+      .all()) {
+      if (!row.challengeId) continue
+      const entry = liveByChallenge.get(row.challengeId) ?? {
+        live: 0,
+        running: 0,
+      }
+      entry.live += 1
+      if (row.status === "running") entry.running += 1
+      liveByChallenge.set(row.challengeId, entry)
+    }
+
+    const pendingByChallenge = new Map<string, number>()
+    let queueRunning = 0
+    for (const row of db
+      .select({
+        challengeId: spawnQueue.challengeId,
+        status: spawnQueue.status,
+      })
+      .from(spawnQueue)
+      .where(eq(spawnQueue.eventId, eventId))
+      .all()) {
+      if (row.status === "running") queueRunning += 1
+      if (row.status !== "pending") continue
+      pendingByChallenge.set(
+        row.challengeId,
+        (pendingByChallenge.get(row.challengeId) ?? 0) + 1
+      )
+    }
+
+    const acceptedByChallenge = new Map<string, number>()
+    for (const row of db
+      .select({ challengeId: challengeFlags.challengeId })
+      .from(challengeFlags)
+      .where(eq(challengeFlags.status, "accepted"))
+      .all()) {
+      acceptedByChallenge.set(
+        row.challengeId,
+        (acceptedByChallenge.get(row.challengeId) ?? 0) + 1
+      )
+    }
+
+    const rows = db
+      .select({
+        id: challenges.id,
+        name: challenges.name,
+        points: challenges.points,
+        manualSolveState: challenges.manualSolveState,
+        remoteSolved: challengeRemote.solved,
+      })
+      .from(challenges)
+      .leftJoin(challengeRemote, eq(challengeRemote.challengeId, challenges.id))
+      .where(eq(challenges.eventId, eventId))
+      .all()
+
+    const digestChallenges = rows.flatMap((row) => {
+      const live = liveByChallenge.get(row.id)
+      const pending = pendingByChallenge.get(row.id) ?? 0
+      if (!live && pending === 0) return []
+      const manual = row.manualSolveState as "solved" | "partial" | "unsolved"
+      const solvedLabel =
+        manual !== "unsolved"
+          ? manual === "solved"
+            ? "已解"
+            : "部分"
+          : row.remoteSolved || (acceptedByChallenge.get(row.id) ?? 0) > 0
+            ? "已解"
+            : "未解"
+      return [
+        {
+          name: row.name,
+          points: row.points,
+          solvedLabel,
+          live: live?.live ?? 0,
+          running: live?.running ?? 0,
+          pending,
+        },
+      ]
+    })
+
+    const paused =
+      db
+        .select({ status: queueState.status })
+        .from(queueState)
+        .where(eq(queueState.eventId, eventId))
+        .get()?.status === "paused"
+
+    return {
+      agents: { live: snap.liveAgentCount, max: snap.maxConcurrentAgents },
+      targets: {
+        used: snap.activeTargetChallenges.length,
+        max: snap.maxConcurrentTargets,
+      },
+      queue: {
+        pending: [...pendingByChallenge.values()].reduce(
+          (sum, count) => sum + count,
+          0
+        ),
+        running: queueRunning,
+        paused,
+      },
+      challenges: digestChallenges,
+    }
+  }
+
+  /** The scheduler agent row, if any. */
   function getSchedulerAgent(eventId: string): AgentSummary | undefined {
     const row = queries.schedulerAgentRow(eventId)
     return row ? queries.getAgent(row.id) : undefined
@@ -239,6 +369,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     assertModelsResolvable,
     setAgentTimeout,
     getStatusSnapshot,
+    getDigestContext,
     getSchedulerAgent,
     getSchedulerConfig,
     upsertSchedulerConfig,
