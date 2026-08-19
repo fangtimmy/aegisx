@@ -15,6 +15,12 @@ import {
 } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Radio, RadioGroup } from "@/components/ui/radio-group"
+import { Switch } from "@/components/ui/switch"
+import {
+  useMarkdownPrefs,
+  type MarkdownArea,
+  type MarkdownPrefs,
+} from "@/lib/markdown-prefs"
 
 import { PromptTemplatesSettings } from "./prompt-templates-settings"
 
@@ -128,6 +134,50 @@ function ThemeSelector({
         </Label>
       ))}
     </RadioGroup>
+  )
+}
+
+const markdownAreas: {
+  key: MarkdownArea
+  label: string
+  description: string
+}[] = [
+  {
+    key: "assistant",
+    label: "Assistant 输出",
+    description: "agent 的正文回复",
+  },
+  { key: "user", label: "用户消息", description: "你发送的消息" },
+  { key: "thinking", label: "推理内容", description: "reasoning 块" },
+  {
+    key: "system",
+    label: "系统消息",
+    description: "系统提示词、压缩摘要等",
+  },
+]
+
+function MarkdownSettings() {
+  const [prefs, setPrefs] = useMarkdownPrefs()
+  return (
+    <div className="grid gap-4">
+      {markdownAreas.map((area) => (
+        <div className="flex items-center justify-between gap-4" key={area.key}>
+          <Label className="grid items-start gap-0.5">
+            <span>{area.label}</span>
+            <span className="text-xs font-normal text-muted-foreground">
+              {area.description}
+            </span>
+          </Label>
+          <Switch
+            aria-label={area.label}
+            checked={prefs[area.key]}
+            onCheckedChange={(checked) =>
+              setPrefs({ [area.key]: checked } as Partial<MarkdownPrefs>)
+            }
+          />
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -270,6 +320,19 @@ export function GeneralSettings() {
         <Card>
           <CardPanel>
             <ThemeSelector setTheme={setTheme} theme={theme} />
+          </CardPanel>
+        </Card>
+      </CardFrame>
+      <CardFrame>
+        <CardFrameHeader>
+          <CardFrameTitle>消息渲染</CardFrameTitle>
+          <CardFrameDescription>
+            控制时间线中各类内容是否渲染 Markdown，关闭后按纯文本显示。
+          </CardFrameDescription>
+        </CardFrameHeader>
+        <Card>
+          <CardPanel>
+            <MarkdownSettings />
           </CardPanel>
         </Card>
       </CardFrame>

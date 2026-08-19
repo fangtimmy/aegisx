@@ -1,36 +1,60 @@
-import { cjk } from "@streamdown/cjk"
-import { math } from "@streamdown/math"
-import { mermaid } from "@streamdown/mermaid"
 import { memo } from "react"
-import { Streamdown } from "streamdown"
+import ReactMarkdown from "react-markdown"
+import remarkCjkFriendly from "remark-cjk-friendly"
+import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
 
-const plugins = { mermaid, math, cjk } as const
-
 const MAX_MARKDOWN_CHARS = 100_000
+
+const remarkPlugins = [remarkGfm, remarkCjkFriendly]
+
+function truncate(text: string) {
+  return text.length > MAX_MARKDOWN_CHARS
+    ? `${text.slice(0, MAX_MARKDOWN_CHARS)}\n\n[消息预览已截断]`
+    : text
+}
 
 export const Markdown = memo(function Markdown({
   children,
   className,
-  isAnimating = false,
 }: {
   children: string
   className?: string
-  isAnimating?: boolean
 }) {
-  const content =
-    children.length > MAX_MARKDOWN_CHARS
-      ? `${children.slice(0, MAX_MARKDOWN_CHARS)}\n\n[消息预览已截断]`
-      : children
-
   return (
-    <Streamdown
-      className={cn("streamdown-md min-w-0", className)}
-      isAnimating={isAnimating}
-      plugins={plugins}
-    >
-      {content}
-    </Streamdown>
+    <div className={cn("md min-w-0", className)}>
+      <ReactMarkdown
+        components={{
+          a: (props) => <a {...props} rel="noreferrer" target="_blank" />,
+        }}
+        remarkPlugins={remarkPlugins}
+      >
+        {truncate(children)}
+      </ReactMarkdown>
+    </div>
   )
+})
+
+/** Message body honoring the per-area markdown preference: rendered
+ * markdown, or plain pre-wrapped text when disabled. */
+export const MessageBody = memo(function MessageBody({
+  children,
+  className,
+  markdown,
+}: {
+  children: string
+  className?: string
+  markdown: boolean
+}) {
+  if (!markdown) {
+    return (
+      <div
+        className={cn("min-w-0 wrap-break-word whitespace-pre-wrap", className)}
+      >
+        {truncate(children)}
+      </div>
+    )
+  }
+  return <Markdown className={className}>{children}</Markdown>
 })

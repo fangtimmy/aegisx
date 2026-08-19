@@ -1,12 +1,4 @@
 @import "tailwindcss";
-@import "streamdown/styles.css";
-
-/* Streamdown + plugins: scan package class names for Tailwind (v4) */
-@source "../node_modules/streamdown/dist/*.js";
-@source "../node_modules/@streamdown/code/dist/*.js";
-@source "../node_modules/@streamdown/mermaid/dist/*.js";
-@source "../node_modules/@streamdown/math/dist/*.js";
-@source "../node_modules/@streamdown/cjk/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -174,22 +166,104 @@
   }
 }
 
-[data-streamdown="code-block"] {
-  background-color: var(--background);
-  gap: var(--spacing);
+/* Markdown message bodies: minimal typography, no chrome. */
+.md > :first-child {
+  margin-top: 0;
 }
-
-[data-streamdown="code-block-actions"] {
-  opacity: 0;
+.md > :last-child {
+  margin-bottom: 0;
 }
-
-[data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"] {
-  opacity: 1;
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 1.25em 0 0.5em;
 }
-
-[data-streamdown="code-block-body"] {
+.md h1 {
+  font-size: 1.25em;
+}
+.md h2 {
+  font-size: 1.125em;
+}
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  font-size: 1em;
+}
+.md p,
+.md ul,
+.md ol,
+.md blockquote,
+.md table,
+.md pre,
+.md hr {
+  margin: 0.6em 0;
+}
+.md ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.md ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.md li {
+  margin: 0.25em 0;
+}
+.md li > p {
+  margin: 0.25em 0;
+}
+.md blockquote {
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  padding-left: 0.75em;
+}
+.md a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.md code {
+  background: var(--secondary);
+  border-radius: calc(var(--radius) - 6px);
+  font-size: 0.875em;
+  padding: 0.1em 0.35em;
+}
+.md pre {
+  overflow-x: auto;
+}
+.md pre code {
+  background: transparent;
+  border-radius: 0;
+  font-size: inherit;
+  padding: 0;
+}
+.md table {
+  border-collapse: collapse;
+  max-width: 100%;
+  width: max-content;
+}
+.md th,
+.md td {
+  border: 1px solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  font-weight: 600;
+}
+.md hr {
   border: none;
-  padding: calc(var(--spacing) * 2);
+  border-top: 1px solid var(--border);
+}
+.md img {
+  max-width: 100%;
 }
 
 /* React Flow: map its theme variables onto ours so the graph + controls adapt

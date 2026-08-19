@@ -35,7 +35,7 @@ import {
 import { createPortal } from "react-dom"
 
 import type { AgentDetail } from "@/api"
-import { Markdown } from "@/components/markdown"
+import { MessageBody } from "@/components/markdown"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -56,6 +56,7 @@ import {
   type ToolBlock,
   toolStatusLabel,
 } from "@/domain/conversation"
+import { useMarkdownPrefs } from "@/lib/markdown-prefs"
 import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
 
@@ -407,6 +408,7 @@ const ConversationRow = memo(function ConversationRow({
    * the seq of the row's opening entry is the truncation target. */
   onBacktrack?: (seq: number) => void
 }) {
+  const [prefs] = useMarkdownPrefs()
   if (item.type === "user") {
     return (
       <article className="group relative flex justify-end py-5">
@@ -418,7 +420,7 @@ const ConversationRow = memo(function ConversationRow({
           />
         )}
         <div className="max-w-[90%] rounded-lg border bg-muted/45 px-4 py-3">
-          <Markdown>{item.body}</Markdown>
+          <MessageBody markdown={prefs.user}>{item.body}</MessageBody>
         </div>
       </article>
     )
@@ -426,7 +428,7 @@ const ConversationRow = memo(function ConversationRow({
   if (item.type === "system") {
     const body = item.body?.trim() ? (
       <ScrollArea className="h-auto max-h-96" scrollFade scrollbarGutter>
-        <Markdown>{item.body}</Markdown>
+        <MessageBody markdown={prefs.system}>{item.body}</MessageBody>
       </ScrollArea>
     ) : undefined
     return (
@@ -461,7 +463,9 @@ const ConversationRow = memo(function ConversationRow({
                 className={cn("min-w-0", separated && "mt-3")}
                 key={block.key}
               >
-                <Markdown isAnimating>{block.body}</Markdown>
+                <MessageBody markdown={prefs.assistant}>
+                  {block.body}
+                </MessageBody>
               </div>
             )
           }
@@ -483,7 +487,9 @@ const ConversationRow = memo(function ConversationRow({
                 </CollapsibleTrigger>
                 <CollapsiblePanel>
                   <div className="mt-1 ml-5 min-w-0 pb-2 text-muted-foreground">
-                    <Markdown>{block.body}</Markdown>
+                    <MessageBody markdown={prefs.thinking}>
+                      {block.body}
+                    </MessageBody>
                   </div>
                 </CollapsiblePanel>
               </Collapsible>
