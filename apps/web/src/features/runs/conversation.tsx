@@ -76,7 +76,7 @@ export type ConversationProps = {
   /** Switch the agent's live model. */
   switchModel: (ref: ModelRef) => Promise<unknown>
   /** Replace the agent's steer/followUp queue. */
-  setQueue?: (
+  setQueue: (
     agentId: string,
     body: { steering: string[]; followUp: string[] }
   ) => Promise<unknown>
@@ -173,7 +173,6 @@ export function Conversation(props: ConversationProps) {
   const showSteerQueue =
     running &&
     canEditQueue &&
-    setQueue !== undefined &&
     queuedMessages !== null &&
     (queuedMessages.steering.length > 0 || queuedMessages.followUp.length > 0)
 
@@ -404,7 +403,7 @@ export function Conversation(props: ConversationProps) {
       )}
       <div className="shrink-0 px-3 pb-3">
         <CardFrame className="mx-auto max-w-3xl">
-          {showSteerQueue && setQueue && (
+          {showSteerQueue && (
             <CardFrameHeader className="px-3 py-2">
               <SteerQueue
                 setQueue={setQueue}

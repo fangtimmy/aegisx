@@ -61,6 +61,11 @@ const bindingInput = Type.Object(
   { additionalProperties: false }
 )
 
+const providerTestInput = Type.Object(
+  { modelId: Type.String({ minLength: 1, maxLength: 200 }) },
+  { additionalProperties: false }
+)
+
 const modelUpdateInput = Type.Partial(
   Type.Object(
     {
@@ -460,6 +465,72 @@ export function registerProviderRoutes(
       )
     }
   })
+
+  /** Test dialogue: one max_tokens=1 chat request against the provider with
+   * the given model — verifies baseUrl / apiKey / model existence in one
+   * round trip. Failures return 502 provider_unavailable with the upstream
+   * status + truncated body in the message (the UI result line). */
+  app.post(
+    "/api/providers/:providerId/test",
+    validateJson(providerTestInput),
+    async (c) => {
+      const provider = findProvider(
+        configStore.getProviders(),
+        c.req.param("providerId")
+      )
+      if (!provider) return notFound(c, "Provider not found")
+      const input = c.req.valid("json")
+      const timeout =
+        configStore.getSettings()["runtime.providerDiscoverTimeoutMs"]
+      const isAnthropic = provider.type === "anthropic-messages"
+      const headers: Record<string, string> = isAnthropic
+        ? {
+            "anthropic-version": "2023-06-01",
+            "x-api-key": provider.apiKey,
+          }
+        : { Authorization: `Bearer ${provider.apiKey}` }
+      const startedAt = performance.now()
+      try {
+        const response = await fetch(
+          isAnthropic
+            ? `${provider.baseUrl}/v1/messages`
+            : `${provider.baseUrl}/chat/completions`,
+          {
+            method: "POST",
+            headers: { ...headers, "content-type": "application/json" },
+            body: JSON.stringify({
+              model: input.modelId,
+              messages: [{ role: "user", content: "ping" }],
+              max_tokens: 1,
+            }),
+            signal: AbortSignal.timeout(timeout),
+          }
+        )
+        const latencyMs = Math.round(performance.now() - startedAt)
+        if (!response.ok) {
+          const upstreamBody = (await response.text()).slice(0, 200)
+          return jsonError(
+            c,
+            {
+              code: "provider_unavailable",
+              message: `Provider test failed: ${response.status} ${upstreamBody}`,
+            },
+            502
+          )
+        }
+        return c.json({ ok: true, latencyMs })
+      } catch {
+        return jsonError(
+          c,
+          {
+            code: "provider_unavailable",
+            message: "Provider test failed",
+          },
+          502
+        )
+      }
+    }
+  )
 }
 
 /** Pi (providerKey, modelId) for a stored provider/model — mirrors

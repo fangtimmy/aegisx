@@ -77,6 +77,11 @@ export function AgentDialog({
     () => agentsApi.listMessages(agentId).then((list) => list.items),
     [agentId]
   )
+  const setQueue = useCallback(
+    (id: string, body: { steering: string[]; followUp: string[] }) =>
+      agentsApi.setAgentQueue(id, body),
+    []
+  )
 
   const invalidateAgent = useCallback(
     () =>
@@ -243,15 +248,16 @@ export function AgentDialog({
             >
               <Conversation
                 agent={agent}
-                detail={detail.data ?? undefined}
-                canEditQueue={false}
+                canEditQueue
                 closedReopenable
                 closeAgent={closeAgent}
                 compactAgent={compactAgent}
+                detail={detail.data ?? undefined}
                 key={agentId}
                 loadMessages={loadMessages}
                 sendMessage={sendMessage}
                 sessionOps={sessionOps}
+                setQueue={setQueue}
                 status={
                   agent.status === "running"
                     ? "running"

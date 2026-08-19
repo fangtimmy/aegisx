@@ -1251,6 +1251,9 @@ export function createChannelService(deps: ChannelServiceDeps) {
     dmKey,
     orchKey,
     parseChannelKey,
+    // bus fan-out keys of a parsed channel (dm → agentId, orch → eventId,
+    // team → eventId + challengeId)
+    emitChannelsOf,
     // write paths
     post,
     postWithUpload,

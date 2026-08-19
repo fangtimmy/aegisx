@@ -11,7 +11,7 @@ import { EmptyInputSchema } from "../lib/schemas"
 import { platformActionHttpError } from "../platforms/errors"
 import { runActionError as runError } from "./errors"
 import type { AgentService } from "./service"
-import { streamAgent } from "./sse"
+import { streamAgent, streamChannel } from "./sse"
 
 /** Agent identity header for SDK channel calls (docs/im-channels.md §四):
  * the per-exec env AEGISX_AGENT_ID rides this header; the server resolves the
@@ -503,6 +503,18 @@ export function registerRunRoutes(
   })
 
   // --- unified message layer (docs/im-channels.md §9.1) ---------------------
+
+  /** Channel message SSE (IM view): initial latest-window snapshot, then live
+   * `channel.message` pushes for the derived key. No agent identity — the UI
+   * timeline view, not the SDK read path. ':' in the key is a legal path
+   * character. */
+  app.get("/api/channels/:channelKey/stream", (c) => {
+    const channelKey = c.req.param("channelKey")
+    if (!agentService.channels.parseChannelKey(channelKey)) {
+      return badRequest(c, "invalid", `非法频道键：${channelKey}`)
+    }
+    return streamChannel(c, agentService, channelKey)
+  })
 
   /** The challenge's channel tree: #team + one DM per agent of the
    * challenge (derived keys — the tree exists as long as the agent rows

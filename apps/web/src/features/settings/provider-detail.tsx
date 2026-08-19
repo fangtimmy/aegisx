@@ -1,7 +1,9 @@
+import { useMutation } from "@tanstack/react-query"
 import { CircleAlert, Eye, EyeOff, Trash2 } from "lucide-react"
+import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 
-import type { ProviderConnection } from "@/api"
+import { providersApi, type ProviderConnection } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -31,7 +33,15 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group"
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
 
 import { providerTypeLabels } from "./provider-config"
 import { ProviderTypeField } from "./provider-dialog"
@@ -43,6 +53,71 @@ type ProviderFormValues = {
   type: ProviderConnection["type"]
   baseUrl: string
   apiKey: string
+}
+
+type TestResult =
+  | { ok: true; latencyMs: number }
+  | { ok: false; message: string }
+
+/** Model dropdown + 「测试对话」button + result line — one max_tokens=1 probe
+ * against the SAVED provider config (unsaved form edits do not apply). */
+function ProviderTestPanel({ provider }: { provider: ProviderConnection }) {
+  const [modelId, setModelId] = useState(provider.models[0]?.modelId ?? "")
+  const [result, setResult] = useState<TestResult | null>(null)
+  const test = useMutation({
+    mutationFn: () => providersApi.testProviderModel(provider.id, modelId),
+    onSuccess: (outcome) => setResult(outcome),
+    onError: (error: Error) => setResult({ ok: false, message: error.message }),
+  })
+  const models = Object.fromEntries(
+    provider.models.map((model) => [model.modelId, model.label])
+  )
+  return (
+    <div className="col-span-2 flex flex-wrap items-center gap-2 border-t pt-4">
+      <Select
+        disabled={provider.models.length === 0}
+        items={models}
+        onValueChange={(value) => value && setModelId(value)}
+        value={modelId}
+      >
+        <SelectTrigger className="h-8 w-56" size="sm">
+          <SelectValue placeholder="选择模型" />
+        </SelectTrigger>
+        <SelectPopup>
+          {provider.models.map((model) => (
+            <SelectItem key={model.modelId} value={model.modelId}>
+              {model.label}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+      <Button
+        disabled={!modelId}
+        loading={test.isPending}
+        onClick={() => test.mutate()}
+        size="sm"
+        title={
+          provider.models.length === 0
+            ? "先添加模型后再测试"
+            : "发送一次 max_tokens=1 对话验证整条链路"
+        }
+        type="button"
+        variant="outline"
+      >
+        测试对话
+      </Button>
+      {result && (
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate font-mono text-xs",
+            result.ok ? "text-muted-foreground" : "text-destructive"
+          )}
+        >
+          {result.ok ? `✓ ${result.latencyMs}ms` : `✗ ${result.message}`}
+        </span>
+      )}
+    </div>
+  )
 }
 
 export function ProviderDetail({
@@ -202,6 +277,7 @@ export function ProviderDetail({
                 <AlertDescription>{deleteError.message}</AlertDescription>
               </Alert>
             )}
+            <ProviderTestPanel provider={provider} />
           </CardPanel>
           <CardFooter className="flex-wrap gap-2">
             <Button loading={save.isPending} type="submit">

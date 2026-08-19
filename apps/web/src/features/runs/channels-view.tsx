@@ -14,6 +14,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
   channelsApi,
   keys,
+  type ChannelMessageList,
   type ChannelMessagePublic,
   type ChannelPublic,
 } from "@/api"
@@ -23,9 +24,13 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { parseLiveEvent } from "@/stream/parse-event"
 
-/** Composer + timeline refresh cadence. */
-const POLL_INTERVAL_MS = 3000
+import { appendChannelMessage, mergeChannelMessages } from "./channel-tail"
+
+/** Timeline / rail reconciliation cadence — a 60s backstop against silent
+ * SSE loss, not the primary delivery path (that is the channel stream). */
+export const RECONCILE_INTERVAL_MS = 60_000
 const PAGE_SIZE = 100
 /** Same-author consecutive messages within this window merge into one
  * group (Discord-style): only the group head shows avatar + author + time. */
@@ -380,6 +385,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
   const anchor = useRef<{ height: number; top: number } | null>(null)
   const newestId = useRef(0)
   const gotFirstPage = useRef(false)
+  const queryClient = useQueryClient()
 
   // gcTime 0: leaving a channel drops its cached tail, so re-entering starts
   // from the full latest window (after=0) instead of a partial tail response.
@@ -387,22 +393,43 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
     queryKey: keys.channels.messages(channelKey),
     queryFn: () =>
       channelsApi.listChannelMessages(channelKey, newestId.current, PAGE_SIZE),
-    refetchInterval: POLL_INTERVAL_MS,
+    refetchInterval: RECONCILE_INTERVAL_MS,
     gcTime: 0,
   })
+
+  // Live channel pushes (SSE): append into the tail cache and advance the
+  // after cursor so the reconciliation poll never re-fetches what the stream
+  // delivered. EventSource reconnects natively; the server's snapshot replay
+  // de-duplicates through mergeChannelMessages.
+  useEffect(() => {
+    const source = new EventSource(`/api/channels/${channelKey}/stream`)
+    source.onmessage = (message) => {
+      let payload: unknown
+      try {
+        payload = JSON.parse(message.data)
+      } catch {
+        return
+      }
+      const event = parseLiveEvent(payload)
+      if (event?.type !== "channel.message") return
+      const live = event.message as ChannelMessagePublic
+      queryClient.setQueryData<ChannelMessageList>(
+        keys.channels.messages(channelKey),
+        (prev) => appendChannelMessage(prev, live)
+      )
+      newestId.current = Math.max(newestId.current, live.id)
+    }
+    return () => source.close()
+  }, [channelKey, queryClient])
 
   useEffect(() => {
     const data = tail.data
     if (!data) return
-    const first = !gotFirstPage.current
     gotFirstPage.current = true
-    setItems((prev) => {
-      if (first) return data.items
-      const seen = new Set(prev.map((message) => message.id))
-      const fresh = data.items.filter((message) => !seen.has(message.id))
-      return fresh.length > 0 ? [...prev, ...fresh] : prev
-    })
-    if (first) setHasOlder(data.hasMore)
+    // Sticky: channels are append-only, so a hasMore from any window stays
+    // true (the SSE snapshot replay may land before the wider HTTP window).
+    setHasOlder((prev) => prev || data.hasMore)
+    setItems((prev) => mergeChannelMessages(prev, data.items))
   }, [tail.data])
 
   useEffect(() => {
@@ -625,7 +652,7 @@ export function ChannelsView({ challengeId }: { challengeId?: string }) {
       : ["channels", "none"],
     enabled: Boolean(challengeId),
     queryFn: () => channelsApi.getChallengeChannels(challengeId!),
-    refetchInterval: POLL_INTERVAL_MS,
+    refetchInterval: RECONCILE_INTERVAL_MS,
   })
 
   const list = channels.data?.items ?? []

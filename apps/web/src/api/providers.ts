@@ -66,6 +66,16 @@ export function discoverModels(providerId: string) {
   )
 }
 
+/** One max_tokens=1 probe chat request against the provider's saved config
+ * (baseUrl / apiKey / model existence in one round trip). On failure throws
+ * with the upstream status + response-body summary carried in the message. */
+export function testProviderModel(providerId: string, modelId: string) {
+  return apiRequest<{ ok: true; latencyMs: number }>(
+    `/providers/${providerId}/test`,
+    jsonRequest("POST", { modelId })
+  )
+}
+
 export function listBuiltinModels(providerId: string) {
   return apiRequest<{ items: PiModelProfile[] }>(
     `/providers/${providerId}/models/builtins`

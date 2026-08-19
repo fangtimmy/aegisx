@@ -1,11 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 
-import { channelsApi, keys, schedulerApi } from "@/api"
+import {
+  channelsApi,
+  keys,
+  schedulerApi,
+  type ChannelMessageList,
+  type ChannelMessagePublic,
+} from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
-import { ChannelComposer, MessageList } from "@/features/runs/channels-view"
+import { appendChannelMessage } from "@/features/runs/channel-tail"
+import {
+  ChannelComposer,
+  MessageList,
+  RECONCILE_INTERVAL_MS,
+} from "@/features/runs/channels-view"
+import { parseLiveEvent } from "@/stream/parse-event"
 
 import { POLL_INTERVAL_MS } from "./event-agents-shared"
 
@@ -50,15 +62,40 @@ export function SchedulerDmTab({
     queryKey: keys.channels.messages(channelKey ?? ""),
     enabled: Boolean(channelKey),
     queryFn: () => channelsApi.listChannelMessages(channelKey!, 0, 100),
-    refetchInterval: active ? POLL_INTERVAL_MS : false,
+    // SSE carries live pushes; the poll is a 60s reconciliation backstop.
+    refetchInterval: active ? RECONCILE_INTERVAL_MS : false,
   })
+
+  // Live channel pushes for the orch key — same append path as the IM view,
+  // but only while the tab is visible.
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    if (!active || !channelKey) return
+    const source = new EventSource(`/api/channels/${channelKey}/stream`)
+    source.onmessage = (message) => {
+      let payload: unknown
+      try {
+        payload = JSON.parse(message.data)
+      } catch {
+        return
+      }
+      const event = parseLiveEvent(payload)
+      if (event?.type !== "channel.message") return
+      const live = event.message as ChannelMessagePublic
+      queryClient.setQueryData<ChannelMessageList>(
+        keys.channels.messages(channelKey),
+        (prev) => appendChannelMessage(prev, live)
+      )
+    }
+    return () => source.close()
+  }, [active, channelKey, queryClient])
+
   const timelineRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const node = timelineRef.current
     if (node) node.scrollTop = node.scrollHeight
   }, [messages.data])
 
-  const queryClient = useQueryClient()
   const holdToggle = useMutation({
     mutationFn: (paused: boolean) =>
       paused

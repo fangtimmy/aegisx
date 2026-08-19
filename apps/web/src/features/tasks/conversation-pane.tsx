@@ -277,6 +277,11 @@ function AgentConversation({
     () => agentsApi.listMessages(agentId).then((list) => list.items),
     [agentId]
   )
+  const setQueue = useCallback(
+    (id: string, body: { steering: string[]; followUp: string[] }) =>
+      agentsApi.setAgentQueue(id, body),
+    []
+  )
   const invalidateAgent = useCallback(
     () =>
       Promise.all([
@@ -343,7 +348,7 @@ function AgentConversation({
   return (
     <Conversation
       agent={agent}
-      canEditQueue={false}
+      canEditQueue
       closedReopenable
       closeAgent={closeAgent}
       compactAgent={compactAgent}
@@ -351,6 +356,7 @@ function AgentConversation({
       loadMessages={loadMessages}
       sendMessage={sendMessage}
       sessionOps={sessionOps}
+      setQueue={setQueue}
       status={
         agent.status === "running"
           ? "running"
