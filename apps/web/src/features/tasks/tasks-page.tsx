@@ -16,19 +16,23 @@ const TASK_TAB_VALUES: readonly TaskTab[] = [
   "conversation",
   "channels",
   "files",
-  "config",
+  "queue",
 ]
+
+/** Tabs that only exist on the scheduler variant. */
+const SCHEDULER_TABS: readonly TaskTab[] = ["queue"]
 
 const taskTabKey = (eventId: string) => `aegisx:task-tab:${eventId}`
 
-/** Restore the per-event task tab (概览/对话/频道/文件) from localStorage;
- * config is scheduler-only, so it falls back to conversation for plain
- * challenges. Default: conversation. */
+/** Restore the per-event task tab (概览/对话/频道/文件/队列) from
+ * localStorage; queue is scheduler-only, so it falls back to conversation
+ * for plain challenges. Default: conversation. */
 function loadTaskTab(eventId: string, c: string | null): TaskTab {
   const stored = localStorage.getItem(taskTabKey(eventId))
   if (TASK_TAB_VALUES.includes(stored as TaskTab)) {
-    if (stored === "config" && c !== ORCH) return "conversation"
-    return stored as TaskTab
+    const tab = stored as TaskTab
+    if (SCHEDULER_TABS.includes(tab) && c !== ORCH) return "conversation"
+    return tab
   }
   return "conversation"
 }
@@ -123,9 +127,9 @@ export function TasksPage({ active }: { active: boolean }) {
   }, [setSearchParams])
 
   // Tab persistence + the c-switch rule: keep the current tab across
-  // selections, EXCEPT the scheduler-only config tab when moving to a plain
-  // challenge (its panel does not exist there). The ref guard keeps ?a=-only
-  // changes (agent picks, post-spawn clear) untouched.
+  // selections, EXCEPT scheduler-only tabs (queue/config) when moving to a
+  // plain challenge (their panels do not exist there). The ref guard keeps
+  // ?a=-only changes (agent picks, post-spawn clear) untouched.
   useEffect(() => {
     if (eventId) localStorage.setItem(taskTabKey(eventId), tab)
   }, [eventId, tab])
@@ -133,7 +137,7 @@ export function TasksPage({ active }: { active: boolean }) {
   useEffect(() => {
     if (prevC.current === c) return
     prevC.current = c
-    if (c !== ORCH && tab === "config") setTab("conversation")
+    if (c !== ORCH && SCHEDULER_TABS.includes(tab)) setTab("conversation")
   }, [c, tab])
 
   // Selected challenge deleted → clear the selection; the default below then

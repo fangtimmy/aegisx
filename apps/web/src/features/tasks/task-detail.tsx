@@ -1,21 +1,21 @@
 import {
   Files,
   LayoutPanelTop,
+  ListOrdered,
   MessageSquare,
   MessagesSquare,
-  SlidersHorizontal,
 } from "lucide-react"
 
 import type { Challenge, FleetInfo, QueueItem, QueueState } from "@/api"
 import { challengesApi, keys } from "@/api"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { SchedulerConfigTab } from "@/features/events/scheduler-config-tab"
 import { SchedulerDmTab } from "@/features/events/scheduler-dm-tab"
 import { ChannelsView } from "@/features/runs/channels-view"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
 
 import { ConversationPane } from "./conversation-pane"
 import { OverviewPane } from "./overview-pane"
+import { SchedulerQueueTab } from "./scheduler-queue-tab"
 import { ORCH } from "./task-list"
 
 export type TaskTab =
@@ -23,7 +23,7 @@ export type TaskTab =
   | "conversation"
   | "channels"
   | "files"
-  | "config"
+  | "queue"
 
 /** The right pane: one tab container per selection. The tab set switches
  * with the variant (challenge vs scheduler); the tab state itself lives in
@@ -41,7 +41,7 @@ export function TaskDetail({
 }: {
   eventId: string
   fleet: FleetInfo
-  /** The event's queue snapshot (scheduler-overview plan section). */
+  /** The event's queue snapshot (scheduler-only queue tab). */
   queue: { items: QueueItem[]; state: QueueState }
   /** Event-detail metadata for the selected challenge (may briefly lag
    * behind the fleet poll; the fleet lite row covers name/category). */
@@ -82,8 +82,8 @@ export function TaskDetail({
           <Files /> 文件
         </TabsTab>
         {isScheduler && (
-          <TabsTab className="gap-2" value="config">
-            <SlidersHorizontal /> 配置
+          <TabsTab className="gap-2" value="queue">
+            <ListOrdered /> 队列
           </TabsTab>
         )}
       </TabsList>
@@ -94,9 +94,7 @@ export function TaskDetail({
           config={fleet.config}
           eventId={eventId}
           lite={lite}
-          queue={queue}
           schedulerAgent={fleet.schedulerAgent}
-          onOpenConfig={() => onTabChange("config")}
           onSelectAgent={onSelectAgent}
         />
       </TabsPanel>
@@ -140,8 +138,12 @@ export function TaskDetail({
         )}
       </TabsPanel>
       {isScheduler && (
-        <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="config">
-          <SchedulerConfigTab eventId={eventId} />
+        <TabsPanel className="min-h-0 flex-1 overflow-hidden" value="queue">
+          <SchedulerQueueTab
+            eventId={eventId}
+            onOpenAgent={onSelectAgent}
+            queue={queue}
+          />
         </TabsPanel>
       )}
     </Tabs>

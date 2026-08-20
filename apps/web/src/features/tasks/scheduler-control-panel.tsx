@@ -14,7 +14,7 @@ import {
   CardFrameTitle,
   CardPanel,
 } from "@/components/ui/card"
-import { StartSchedulerDialog } from "@/features/events/scheduler-config-tab"
+import { StartSchedulerDialog } from "@/features/events/start-scheduler-dialog"
 import { shortModel } from "@/features/tasks/task-list"
 import { toast } from "@/lib/toast"
 

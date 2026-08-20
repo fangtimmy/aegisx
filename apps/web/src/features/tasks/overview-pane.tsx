@@ -1,12 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import {
-  ChevronRight,
-  ListOrdered,
-  Pause,
-  Play,
-  Plus,
-  SlidersHorizontal,
-} from "lucide-react"
+import { ChevronRight, ListOrdered, Plus } from "lucide-react"
 import { useMemo } from "react"
 
 import {
@@ -16,8 +9,6 @@ import {
   type AgentSummary,
   type Challenge,
   type FleetInfo,
-  type QueueItem,
-  type QueueState,
 } from "@/api"
 import { ListRow } from "@/components/list-row"
 import { Markdown } from "@/components/markdown"
@@ -27,7 +18,6 @@ import {
   Card,
   CardFrame,
   CardFrameAction,
-  CardFrameDescription,
   CardFrameHeader,
   CardFrameTitle,
   CardPanel,
@@ -47,43 +37,35 @@ import { formatTime } from "@/lib/format"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 
-import { QueueList } from "./queue-list"
 import { SchedulerControlPanel } from "./scheduler-control-panel"
 import { formatRemaining, shortModel } from "./task-list"
 
 /** Overview tab: the challenge variant (header/flags/target/roster/actions)
- * or the scheduler variant (control panel + plan queue + config + inbox). */
+ * or the scheduler variant (control panel + inbox; the plan queue lives in
+ * its own tab and the policy in the event settings). */
 export function OverviewPane({
   eventId,
   challenge,
   lite,
   agents,
-  queue,
   schedulerAgent,
   config,
   onSelectAgent,
-  onOpenConfig,
 }: {
   eventId: string
   challenge?: Challenge
   lite?: FleetInfo["challenges"][number]
   /** The challenge's agents (empty for the scheduler variant). */
   agents: AgentSummary[]
-  /** The event's queue snapshot (scheduler variant's plan section). */
-  queue: { items: QueueItem[]; state: QueueState }
   schedulerAgent: AgentSummary | null
   config: FleetInfo["config"]
   onSelectAgent: (agentId: string) => void
-  onOpenConfig: () => void
 }) {
   if (!challenge && !lite) {
     return (
       <SchedulerOverview
         config={config}
         eventId={eventId}
-        onSelectAgent={onSelectAgent}
-        onOpenConfig={onOpenConfig}
-        queue={queue}
         schedulerAgent={schedulerAgent}
       />
     )
@@ -318,58 +300,20 @@ function RosterRow({
   )
 }
 
-/** Invalidate the queue + fleet caches after a queue state flip. */
-function invalidateQueue(
-  queryClient: ReturnType<typeof useQueryClient>,
-  eventId: string
-) {
-  void queryClient.invalidateQueries({
-    queryKey: keys.scheduler.queue(eventId),
-  })
-  void queryClient.invalidateQueries({ queryKey: keys.agents.fleet(eventId) })
-}
-
 function SchedulerOverview({
   eventId,
   schedulerAgent,
   config,
-  queue,
-  onSelectAgent,
-  onOpenConfig,
 }: {
   eventId: string
   schedulerAgent: AgentSummary | null
   config: FleetInfo["config"]
-  queue: { items: QueueItem[]; state: QueueState }
-  onSelectAgent: (agentId: string) => void
-  onOpenConfig: () => void
 }) {
-  const queryClient = useQueryClient()
   const inbox = useQuery({
     queryKey: keys.scheduler.inbox(eventId),
     queryFn: () => schedulerApi.getInbox(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
-  const pauseQueue = useMutation({
-    mutationFn: () => schedulerApi.pauseQueue(eventId),
-    onSuccess: () => {
-      toast.success("队列已暂停")
-      invalidateQueue(queryClient, eventId)
-    },
-    onError: (error) => toast.error("暂停队列失败", error.message),
-  })
-  const resumeQueue = useMutation({
-    mutationFn: () => schedulerApi.resumeQueue(eventId),
-    onSuccess: () => {
-      toast.success("队列已恢复")
-      invalidateQueue(queryClient, eventId)
-    },
-    onError: (error) => toast.error("恢复队列失败", error.message),
-  })
-  const instructionExcerpt = config.instruction.trim() || "（默认指令）"
-  const visibleQueue = queue.items.filter((item) =>
-    ["pending", "running", "failed"].includes(item.status)
-  )
 
   return (
     <ScrollArea className="h-full" scrollFade>
@@ -379,104 +323,6 @@ function SchedulerOverview({
           config={config}
           eventId={eventId}
         />
-
-        <CardFrame>
-          <CardFrameHeader>
-            <CardFrameTitle>
-              <span className="flex items-center gap-2">
-                计划队列
-                <Badge size="sm" variant="secondary">
-                  {visibleQueue.length}
-                </Badge>
-              </span>
-            </CardFrameTitle>
-            <CardFrameDescription>
-              调度者规划或手动入队后，任务将按序启动。
-            </CardFrameDescription>
-            <CardFrameAction className="flex items-center gap-2">
-              <Badge
-                size="sm"
-                variant={queue.state === "paused" ? "warning" : "success"}
-              >
-                {queue.state === "paused" ? "已暂停" : "运行中"}
-              </Badge>
-              {queue.state === "paused" ? (
-                <Button
-                  loading={resumeQueue.isPending}
-                  onClick={() => resumeQueue.mutate()}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <Play /> 恢复
-                </Button>
-              ) : (
-                <Button
-                  loading={pauseQueue.isPending}
-                  onClick={() => pauseQueue.mutate()}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <Pause /> 暂停
-                </Button>
-              )}
-            </CardFrameAction>
-          </CardFrameHeader>
-          {visibleQueue.length > 0 && (
-            <Card>
-              <CardPanel className="p-0">
-                <QueueList
-                  eventId={eventId}
-                  items={visibleQueue}
-                  onOpenAgent={onSelectAgent}
-                />
-              </CardPanel>
-            </Card>
-          )}
-        </CardFrame>
-
-        <CardFrame>
-          <CardFrameHeader>
-            <CardFrameTitle>配置摘要</CardFrameTitle>
-            <CardFrameAction>
-              <Button
-                onClick={onOpenConfig}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                <SlidersHorizontal /> 配置
-              </Button>
-            </CardFrameAction>
-          </CardFrameHeader>
-          <Card>
-            <CardPanel>
-              <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="text-xs text-muted-foreground">模型</dt>
-                  <dd className="mt-0.5 font-mono text-xs break-all">
-                    {schedulerAgent?.model ?? config.modelId ?? "全局默认"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">
-                    并发靶机上限
-                  </dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {config.maxConcurrentTargets}
-                  </dd>
-                </div>
-                <div className="sm:col-span-2">
-                  <dt className="text-xs text-muted-foreground">指令</dt>
-                  <dd className="mt-0.5 line-clamp-4 text-xs whitespace-pre-wrap">
-                    {instructionExcerpt}
-                  </dd>
-                </div>
-              </dl>
-            </CardPanel>
-          </Card>
-        </CardFrame>
 
         <CardFrame>
           <CardFrameHeader>

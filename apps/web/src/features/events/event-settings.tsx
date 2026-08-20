@@ -1,13 +1,20 @@
 import {
   type UseMutationResult,
   useMutation,
+  useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
 import { Trash2, TriangleAlert } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
 
-import { type EventSummary, eventsApi, keys } from "@/api"
+import {
+  type EventSummary,
+  eventsApi,
+  keys,
+  schedulerApi,
+  type SchedulerInfo,
+} from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -30,6 +37,14 @@ import {
 } from "@/components/ui/card"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field"
+import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
 
@@ -214,6 +229,8 @@ export function EventSettings({ event }: { event: EventSummary }) {
         </Card>
       </CardFrame>
 
+      <SchedulerPolicyCard eventId={event.id} />
+
       <CardFrame>
         <CardFrameHeader>
           <CardFrameTitle>CTF 平台</CardFrameTitle>
@@ -259,6 +276,136 @@ export function EventSettings({ event }: { event: EventSummary }) {
         </Card>
       </CardFrame>
     </div>
+  )
+}
+
+/** 调度策略 card: the scheduler's per-event policy — instruction (snapshotted
+ * at scheduler start) + concurrent-target cap (live, read by the spawn fence).
+ * The model choice lives in the start dialog. */
+function SchedulerPolicyCard({ eventId }: { eventId: string }) {
+  const scheduler = useQuery({
+    queryKey: keys.scheduler.detail(eventId),
+    queryFn: () => schedulerApi.getScheduler(eventId),
+  })
+
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>调度策略</CardFrameTitle>
+        <CardFrameDescription>
+          本赛事的调度者策略；指令在下次启动时生效，并发上限实时生效。
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel>
+          {scheduler.data?.config ? (
+            <SchedulerPolicyForm
+              config={scheduler.data.config}
+              eventId={eventId}
+            />
+          ) : (
+            <output className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner aria-hidden="true" /> 正在加载调度策略…
+            </output>
+          )}
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+function SchedulerPolicyForm({
+  eventId,
+  config,
+}: {
+  eventId: string
+  config: SchedulerInfo["config"]
+}) {
+  const queryClient = useQueryClient()
+  const form = useForm<{ instruction: string; maxTargets: number }>({
+    defaultValues: {
+      instruction: config.instruction,
+      maxTargets: config.maxConcurrentTargets,
+    },
+  })
+  const save = useMutation({
+    mutationFn: (input: { instruction: string; maxTargets: number }) =>
+      schedulerApi.updateSchedulerConfig(eventId, {
+        instruction: input.instruction.trim(),
+        maxConcurrentTargets: Math.max(1, Math.round(input.maxTargets)),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: keys.scheduler.detail(eventId),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: keys.agents.fleet(eventId),
+      })
+      toast.success("调度策略已保存")
+    },
+    onError: (error) => toast.error("保存调度策略失败", error.message),
+  })
+
+  return (
+    <form
+      className="max-w-xl"
+      onSubmit={form.handleSubmit((values) => save.mutate(values))}
+    >
+      <Field>
+        <FieldLabel>调度者指令</FieldLabel>
+        <FieldDescription>
+          追加到调度者系统提示词末尾的常驻策略（优先方向、节奏偏好）；下次启动时生效。
+        </FieldDescription>
+        <Controller
+          control={form.control}
+          name="instruction"
+          render={({ field }) => (
+            <Textarea
+              id="sched-policy-instruction"
+              onBlur={field.onBlur}
+              onChange={field.onChange}
+              rows={6}
+              value={field.value}
+            />
+          )}
+        />
+      </Field>
+      <Field className="mt-4">
+        <FieldLabel htmlFor="sched-policy-targets">并发靶机上限</FieldLabel>
+        <FieldDescription>
+          本赛事同时进攻的不同题目数上限，实时生效；同一题的多个尝试共享一个槽位。
+        </FieldDescription>
+        <Controller
+          control={form.control}
+          name="maxTargets"
+          render={({ field }) => (
+            <NumberField
+              id="sched-policy-targets"
+              min={1}
+              onValueChange={(value) => {
+                if (typeof value === "number") field.onChange(value)
+              }}
+              value={field.value}
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement />
+                <NumberFieldInput />
+                <NumberFieldIncrement />
+              </NumberFieldGroup>
+            </NumberField>
+          )}
+        />
+      </Field>
+      <Button className="mt-3" loading={save.isPending} type="submit">
+        保存策略
+      </Button>
+      {save.error && (
+        <Alert className="mt-3 max-w-xl" variant="error">
+          <TriangleAlert />
+          <AlertDescription>{save.error.message}</AlertDescription>
+        </Alert>
+      )}
+    </form>
   )
 }
 

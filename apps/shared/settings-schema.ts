@@ -1,6 +1,6 @@
 export type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
 
-export type SettingGroup = "智能体" | "运行时" | "容器" | "调度器"
+export type SettingGroup = "智能体" | "运行时" | "容器"
 
 type BaseDef = {
   key: SettingKey
@@ -125,10 +125,10 @@ export const SETTINGS_DEFS: SettingDef[] = [
     default: 4,
     minimum: 1,
     maximum: 32,
-    group: "调度器",
+    group: "运行时",
     title: "最大并发 agent 数",
     description:
-      "同时存活的解题 agent 上限（运行中 + 空闲保温）。由调度器强制限制。",
+      "同时存活的解题 agent 上限（运行中 + 空闲保温）；所有赛事共享，含手动启动的尝试，容量满时拒绝新启动。",
     widget: "number",
     order: 10,
   },
@@ -138,10 +138,10 @@ export const SETTINGS_DEFS: SettingDef[] = [
     default: 3_600_000,
     minimum: 60_000,
     maximum: 86_400_000,
-    group: "调度器",
+    group: "运行时",
     title: "默认任务超时（毫秒）",
     description:
-      "每个任务的硬性截止时间。过半时提醒编排器，到点则中止当前轮次并转为空闲。",
+      "每个任务的硬性截止时间。过半时提醒调度者，到点则中止当前轮次并转为空闲。作为默认值，入队/启动时可逐项覆盖。",
     widget: "number",
     order: 20,
   },
