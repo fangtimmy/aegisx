@@ -11,7 +11,7 @@ import {
 } from "lucide-react"
 import { Controller, useForm } from "react-hook-form"
 
-import type { ProviderConnection, ProviderModel } from "@/api"
+import type { ProviderConnection } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -73,31 +73,14 @@ export function ProviderModels({
     addModels,
     addOpen,
     discover,
-    editModel,
     modelMutation,
+    openEditModel,
     removeModel,
     setAddOpen,
-    setEditingModel,
-    setMetadataError,
   } = editor
   const addForm = useForm<{ modelId: string; label: string }>({
     defaultValues: { modelId: "", label: "" },
   })
-  const editForm = useForm<{
-    label: string
-    metadata: string
-  }>({
-    defaultValues: { label: "", metadata: "{}" },
-  })
-  const openEdit = (model: ProviderModel) => {
-    editModel.reset()
-    setEditingModel(model)
-    editForm.reset({
-      label: model.label,
-      metadata: JSON.stringify(model.metadata, null, 2),
-    })
-    setMetadataError(null)
-  }
 
   return (
     <>
@@ -290,7 +273,7 @@ export function ProviderModels({
                     </div>
                     <Button
                       aria-label={`编辑 ${model.label}`}
-                      onClick={() => openEdit(model)}
+                      onClick={() => openEditModel(model)}
                       size="icon"
                       title="编辑模型"
                       type="button"
@@ -363,7 +346,7 @@ export function ProviderModels({
           </CardPanel>
         </Card>
       </CardFrame>
-      <EditModelDialog editForm={editForm} editor={editor} />
+      <EditModelDialog editor={editor} />
       <ImportPiModelDialog editor={editor} />
       <DiscoverModelsDialog editor={editor} />
     </>

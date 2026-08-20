@@ -1,8 +1,9 @@
-import { CircleAlert, Download } from "lucide-react"
-import { Controller, type useForm } from "react-hook-form"
+import { Brain, CircleAlert, Download, Image, Type } from "lucide-react"
+import { Controller } from "react-hook-form"
 
 import type { PiModelProfile, ProviderModel } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { CheckboxGroup } from "@/components/ui/checkbox-group"
@@ -37,21 +38,120 @@ import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 
+import {
+  formatContext,
+  formatPrice,
+  formatPriceCompact,
+  supportedLevelsOf,
+} from "./provider-model-format"
 import type { ProviderEditor } from "./use-provider-editor"
 
-type EditForm = {
-  label: string
-  metadata: string
+/** Compact one-line metadata facts (context / reasoning / vision / price) —
+ * shown in catalog list items so same-id models across pi providers can be
+ * told apart before importing. Mirrors the badge language of the model list. */
+function ProfileBadges({ metadata }: { metadata: ProviderModel["metadata"] }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      <Badge size="sm" variant="secondary">
+        {formatContext(metadata.contextWindow)}
+      </Badge>
+      {metadata.reasoning && (
+        <Badge size="sm" variant="secondary">
+          <Brain aria-hidden="true" />
+        </Badge>
+      )}
+      <Badge size="sm" variant="secondary">
+        {metadata.input.map((input) =>
+          input === "image" ? (
+            <Image aria-hidden="true" className="mx-px" key={input} />
+          ) : (
+            <Type aria-hidden="true" className="mx-px" key={input} />
+          )
+        )}
+      </Badge>
+      {metadata.costKnown && (
+        <Badge size="sm" variant="secondary">
+          {formatPriceCompact(metadata)}
+        </Badge>
+      )}
+    </div>
+  )
 }
 
-export function EditModelDialog({
-  editor,
-  editForm,
+/** Rendered view of a metadata JSON — shared by the edit dialog (live-parsed
+ * from the textarea, so edits preview before saving) and the import dialog
+ * (the profile about to be copied), making a wrong pick visible before it
+ * happens. */
+function MetadataPreview({
+  metadata,
 }: {
-  editor: ProviderEditor
-  editForm: ReturnType<typeof useForm<EditForm>>
+  metadata: ProviderModel["metadata"]
 }) {
+  const tiers = metadata.cost.tiers ?? []
+  return (
+    <div className="rounded-lg border p-3">
+      <ProfileBadges metadata={metadata} />
+      <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">上下文窗口</dt>
+        <dd>{formatContext(metadata.contextWindow)}</dd>
+        <dt className="text-muted-foreground">最大输出</dt>
+        <dd>{formatContext(metadata.maxTokens)}</dd>
+        <dt className="text-muted-foreground">输入模态</dt>
+        <dd>{metadata.input.join("、")}</dd>
+        <dt className="text-muted-foreground">推理档位</dt>
+        <dd>{supportedLevelsOf(metadata).join(" / ")}</dd>
+        {metadata.costKnown ? (
+          <>
+            <dt className="text-muted-foreground">输入 / 输出</dt>
+            <dd>
+              {formatPrice(metadata)}（每百万 tokens
+              {tiers.length > 0 && `，另有 ${tiers.length} 档分级计价`}）
+            </dd>
+            <dt className="text-muted-foreground">缓存读 / 写</dt>
+            <dd>
+              ${metadata.cost.cacheRead} / ${metadata.cost.cacheWrite}（每百万
+              tokens）
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt className="text-muted-foreground">价格</dt>
+            <dd>未知</dd>
+          </>
+        )}
+      </dl>
+    </div>
+  )
+}
+
+/** Parse the edit form's metadata textarea into a previewable metadata
+ * object, defaulting omitted fields (mirrors the server's normalize closely
+ * enough for preview). Null = not a JSON object. */
+function parseDraftMetadata(value: string): ProviderModel["metadata"] | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null
+  }
+  const draft = parsed as Partial<ProviderModel["metadata"]>
+  return {
+    reasoning: draft.reasoning ?? false,
+    thinkingLevelMap: draft.thinkingLevelMap ?? {},
+    input: draft.input?.length ? draft.input : ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, ...draft.cost },
+    costKnown: draft.costKnown ?? false,
+    contextWindow: draft.contextWindow ?? 0,
+    maxTokens: draft.maxTokens ?? 0,
+  }
+}
+
+export function EditModelDialog({ editor }: { editor: ProviderEditor }) {
   const {
+    editForm,
     editModel,
     editingModel,
     metadataError,
@@ -59,6 +159,7 @@ export function EditModelDialog({
     setImportModel,
     setMetadataError,
   } = editor
+  const draft = parseDraftMetadata(editForm.watch("metadata"))
 
   return (
     <Dialog
@@ -71,7 +172,7 @@ export function EditModelDialog({
       }}
       open={editingModel !== null}
     >
-      <DialogPopup className="sm:max-w-sm">
+      <DialogPopup className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>编辑模型</DialogTitle>
           <DialogDescription>模型 ID 在添加后无法更改。</DialogDescription>
@@ -136,6 +237,13 @@ export function EditModelDialog({
                 rules={{ required: true }}
               />
             </Field>
+            {draft ? (
+              <MetadataPreview metadata={draft} />
+            ) : (
+              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+                元数据 JSON 无效（不是 JSON 对象）时无法预览。
+              </p>
+            )}
             <Field>
               <div className="flex w-full min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -170,7 +278,7 @@ export function EditModelDialog({
                       field.onChange(event.target.value)
                       setMetadataError(null)
                     }}
-                    rows={14}
+                    rows={10}
                     value={field.value}
                   />
                 )}
@@ -228,7 +336,7 @@ export function ImportPiModelDialog({ editor }: { editor: ProviderEditor }) {
       }}
       open={importModel !== null}
     >
-      <DialogPopup className="sm:max-w-lg">
+      <DialogPopup className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>从 Pi 目录导入元数据</DialogTitle>
           <DialogDescription>
@@ -291,6 +399,9 @@ export function ImportPiModelDialog({ editor }: { editor: ProviderEditor }) {
                           <span className="block truncate font-mono text-xs text-muted-foreground">
                             {model.providerId}/{model.modelId}
                           </span>
+                          <div className="mt-1">
+                            <ProfileBadges metadata={model.metadata} />
+                          </div>
                         </ComboboxItem>
                       )}
                     </ComboboxCollection>
@@ -300,6 +411,29 @@ export function ImportPiModelDialog({ editor }: { editor: ProviderEditor }) {
               </Combobox>
             </Field>
           )}
+          {builtins.data &&
+            (selectedProfile ? (
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate text-sm font-medium">
+                    {selectedProfile.name}
+                  </span>
+                  <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                    {selectedProfile.providerId}/{selectedProfile.modelId}
+                  </span>
+                </div>
+                <div className="mt-2">
+                  <MetadataPreview metadata={selectedProfile.metadata} />
+                </div>
+                <pre className="mt-2 max-h-56 overflow-auto rounded-lg border p-3 font-mono text-xs text-muted-foreground">
+                  {JSON.stringify(selectedProfile.metadata, null, 2)}
+                </pre>
+              </div>
+            ) : (
+              <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+                选择模型后将在此预览其完整元数据。
+              </p>
+            ))}
           {importMetadata.error && (
             <Alert variant="error">
               <CircleAlert />

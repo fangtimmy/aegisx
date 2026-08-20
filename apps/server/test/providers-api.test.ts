@@ -69,6 +69,42 @@ describe("provider API (model-runtime hygiene)", () => {
   })
 })
 
+describe("pi builtin catalog endpoint", () => {
+  test("GET /api/providers/:id/models/builtins carries metadata for selection-time preview", async () => {
+    const app = createTestApp()
+    const created = await app.request(
+      "/api/providers",
+      json("POST", providerBody)
+    )
+    expect(created.status).toBe(201)
+    const { id } = (await created.json()) as { id: string }
+    const response = await app.request(`/api/providers/${id}/models/builtins`)
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      items: Array<{
+        providerId: string
+        modelId: string
+        name: string
+        metadata: {
+          contextWindow: number
+          maxTokens: number
+          reasoning: boolean
+          costKnown: boolean
+          input: string[]
+        }
+      }>
+    }
+    expect(body.items.length).toBeGreaterThan(100)
+    for (const item of body.items) {
+      expect(item.metadata.contextWindow).toBeGreaterThan(0)
+      expect(item.metadata.maxTokens).toBeGreaterThan(0)
+      expect(typeof item.metadata.reasoning).toBe("boolean")
+      expect(item.metadata.input.length).toBeGreaterThan(0)
+    }
+    expect(body.items.some((item) => item.metadata.costKnown)).toBe(true)
+  })
+})
+
 describe("provider test dialogue (POST /api/providers/:id/test)", () => {
   const realFetch = globalThis.fetch
   afterEach(() => {

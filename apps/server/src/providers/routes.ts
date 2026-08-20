@@ -170,6 +170,7 @@ export function registerProviderRoutes(
         providerId: model.providerId,
         modelId: model.modelId,
         name: model.name,
+        metadata: model.metadata,
       })),
     })
   })

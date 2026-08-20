@@ -84,6 +84,7 @@ export type PiModelProfile = {
   providerId: string
   modelId: string
   name: string
+  metadata: ModelMetadata
 }
 
 export type ModelMetadata = {

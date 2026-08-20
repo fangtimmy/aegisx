@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
+import { useForm } from "react-hook-form"
 
 import {
   keys,
@@ -13,6 +14,11 @@ import type { ProviderInput } from "./provider-config"
 
 type ProviderUpdate = Omit<ProviderInput, "apiKey"> & { apiKey?: string }
 
+export type EditForm = {
+  label: string
+  metadata: string
+}
+
 export function useProviderEditor(provider: ProviderConnection) {
   const queryClient = useQueryClient()
   const [showKey, setShowKey] = useState(false)
@@ -25,6 +31,9 @@ export function useProviderEditor(provider: ProviderConnection) {
   const [importSearch, setImportSearch] = useState("")
   const [selectedBuiltinModel, setSelectedBuiltinModel] =
     useState<PiModelProfile | null>(null)
+  const editForm = useForm<EditForm>({
+    defaultValues: { label: "", metadata: "{}" },
+  })
   const save = useMutation({
     mutationFn: (input: ProviderUpdate) =>
       providersApi.updateProvider(provider.id, input),
@@ -75,6 +84,19 @@ export function useProviderEditor(provider: ProviderConnection) {
       void queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
+  /** Open the edit dialog on a model: snapshot its current values into the
+   * form. The same reset runs after a metadata import so the textarea always
+   * mirrors server state (a stale form would write the old JSON back on
+   * save, silently dropping the import). */
+  const openEditModel = (model: ProviderModel) => {
+    editModel.reset()
+    setEditingModel(model)
+    editForm.reset({
+      label: model.label,
+      metadata: JSON.stringify(model.metadata, null, 2),
+    })
+    setMetadataError(null)
+  }
   const builtins = useQuery({
     enabled: Boolean(importModel),
     queryKey: ["providers", provider.id, "builtins"],
@@ -86,8 +108,15 @@ export function useProviderEditor(provider: ProviderConnection) {
         providerId: profile.providerId,
         modelId: profile.modelId,
       }),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       setImportModel(null)
+      // The import dialog sits on top of the edit dialog; feed the imported
+      // metadata back into the still-open edit form (see openEditModel).
+      setEditingModel(updated)
+      editForm.reset({
+        label: updated.label,
+        metadata: JSON.stringify(updated.metadata, null, 2),
+      })
       void queryClient.invalidateQueries({ queryKey: keys.providers.all })
     },
   })
@@ -135,6 +164,8 @@ export function useProviderEditor(provider: ProviderConnection) {
     setImportSearch,
     selectedBuiltinModel,
     setSelectedBuiltinModel,
+    editForm,
+    openEditModel,
     save,
     discover,
     addModels,
