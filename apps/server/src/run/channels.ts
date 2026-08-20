@@ -859,6 +859,13 @@ export function createChannelService(deps: ChannelServiceDeps) {
         ? (deps.renderSchedulerDigest?.(agent.eventId) ?? "")
         : ""
     const withDigest = digest ? `${text}\n\n${digest}` : text
+    // Send-time liveness re-check (race guard): the entry check may have
+    // raced a concurrent close — a broadcast must never land on (and so
+    // reopen) a terminal agent; only a DM cold-wake may. Re-read, markRead,
+    // and send form one synchronous block, so no close can interleave between
+    // the check and the send landing.
+    const agentNow = agentRow(agentId)
+    if (!agentNow || (!isActive(agentNow) && !coldWake)) return
     for (const { key, maxId } of snapshots) {
       markRead(key, readerKey, maxId)
     }

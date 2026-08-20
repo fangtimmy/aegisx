@@ -211,8 +211,17 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      // Two accepted flags already recorded for the challenge.
+      // Two accepted flags already recorded for the challenge (the spawn
+      // gate must be off for agents to still run on it).
       const ts = new Date().toISOString()
+      db.insert(schedulerConfig)
+        .values({
+          eventId: "evt-1",
+          blockSpawnOnSolved: false,
+          createdAt: ts,
+          updatedAt: ts,
+        })
+        .run()
       for (const flag of ["flag{one}", "flag{two}"]) {
         db.insert(challengeFlags)
           .values({
@@ -320,6 +329,7 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
           eventId: "evt-1",
           stopSiblingsOnSolve: false,
           stopTargetOnSolve: false,
+          blockSpawnOnSolved: false,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         })
@@ -441,6 +451,140 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       expect(
         db.select().from(agents).where(eq(agents.id, sibling.id)).get()!.status
       ).toBe("aborted")
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+})
+
+describe("acceptance outcome tiers (repeat / extra)", () => {
+  test("repeat: a duplicate of an accepted value fires only the submitter event — no notice, no stops, no cancel", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const targetCalls: string[] = []
+      const made = makeService(db, dir, { targetCalls })
+      service = made.service
+      const submitter = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      const queue = service.queue()
+      const pending = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        source: "scheduler",
+        prompt: "work",
+      })
+      queue.cancelDrain()
+
+      service.notifyFlagAccepted("ch-1", submitter.id, "repeat")
+      await new Promise((resolve) => setTimeout(resolve, 80))
+
+      // The submitter's agent.flagAccepted event still lands (attribution).
+      expect(
+        orchRows(db).some((r) => r.body === `${tagOf(submitter.id)}flag 已接受`)
+      ).toBe(true)
+      // But nothing else: no full-solve notice, no stop, no cancel.
+      expect(
+        db
+          .select()
+          .from(channelMessages)
+          .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+          .all()
+      ).toHaveLength(0)
+      expect(
+        db.select().from(agents).where(eq(agents.id, submitter.id)).get()!
+          .status
+      ).not.toBe("aborted")
+      expect(
+        db.select().from(spawnQueue).where(eq(spawnQueue.id, pending.id)).get()!
+          .status
+      ).toBe("pending")
+      expect(targetCalls).toHaveLength(0)
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("extra: a new flag value on a solved challenge posts ONE light notice; siblings survive, queue and target untouched", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      // The challenge is already solved (an accepted flag exists); the
+      // reproduction switch lets agents still run on it.
+      db.insert(challengeFlags)
+        .values({
+          id: "f-1",
+          challengeId: "ch-1",
+          flag: "flag{first}",
+          status: "accepted",
+          source: "agent",
+          agentId: null,
+          remoteId: null,
+          message: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .run()
+      db.insert(schedulerConfig)
+        .values({
+          eventId: "evt-1",
+          blockSpawnOnSolved: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .run()
+      const targetCalls: string[] = []
+      const made = makeService(db, dir, { targetCalls })
+      service = made.service
+      const finder = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      const sibling = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      stageRunning(db, sibling.id)
+      const queue = service.queue()
+      const pending = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        source: "scheduler",
+        prompt: "work",
+      })
+      queue.cancelDrain()
+
+      service.notifyFlagAccepted("ch-1", finder.id, "extra")
+      await new Promise((resolve) => setTimeout(resolve, 80))
+
+      const team = db
+        .select()
+        .from(channelMessages)
+        .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+        .all()
+      expect(team).toHaveLength(1)
+      expect(team[0]!.body).toContain("再解出一个 flag")
+      expect(team[0]!.body).toContain("agent-" + finder.id.slice(0, 8))
+      // No cleanup round: the sibling survives, the pending item stays, the
+      // target is not stopped (it all ran at the FIRST acceptance).
+      expect(
+        db.select().from(agents).where(eq(agents.id, sibling.id)).get()!.status
+      ).not.toBe("aborted")
+      expect(
+        db.select().from(spawnQueue).where(eq(spawnQueue.id, pending.id)).get()!
+          .status
+      ).toBe("pending")
+      expect(targetCalls).toHaveLength(0)
     } finally {
       await service?.close().catch(() => undefined)
       close()

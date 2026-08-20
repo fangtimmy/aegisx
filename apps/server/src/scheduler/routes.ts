@@ -40,6 +40,7 @@ const schedulerConfigInput = Type.Object(
       Type.Union([Type.Literal("eager"), Type.Literal("drained")])
     ),
     urgentTeamMessages: Type.Optional(Type.Boolean()),
+    blockSpawnOnSolved: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false }
 )

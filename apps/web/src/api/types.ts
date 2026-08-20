@@ -100,6 +100,8 @@ export type SchedulerInfo = {
     stopTargetOnSolve: boolean
     nextTaskPolicy: "eager" | "drained"
     urgentTeamMessages: boolean
+    /** A fully-solved challenge rejects new spawns while true. */
+    blockSpawnOnSolved: boolean
   }
   agent: AgentSummary | null
   status: {

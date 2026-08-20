@@ -42,8 +42,20 @@ All management actions go through the \`aegisx\` Python SDK (in-image at /opt/ae
       "- `aegisx.agents.read(agent_id, limit?)` assesses an agent before steering or closing it.",
     ],
     [
+      '- A cap rejection (`AegisxError.code == "capacity"` from `agents.start`, or a queued item that stays pending) is a reason to adjust the plan, not to retry blindly.',
+      "- A cap rejection (`AegisxError.code == \"capacity\"` from `agents.start`, or a queued item that stays pending) is a reason to adjust the plan, not to retry blindly.\n- While the event's 已解题禁止新 agent setting is on (default), spawning on a fully-solved challenge is rejected — do NOT re-attack a solved challenge. Reproduction/writeup agents on a solved challenge are the user's call (the setting), not yours.",
+    ],
+    [
+      "- Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user-controlled flips are marked 用户手动). While the queue is paused, pending items never launch — resume it or spawn agents directly.",
+      "- Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user flips are marked 用户手动, your own are unmarked). Stand-down is yours to call: when your plan is complete and nothing more should launch, `aegisx.queue.pause()` — launches stop and the starved nag goes quiet; `aegisx.queue.resume()` before enqueueing the next batch (while paused, pending items never launch — an `agents.start` escape hatch still works).",
+    ],
+    [
       "- Solved-challenge cleanup is automatic: on a FULL solve, the challenge's other live agents are stopped and its pending queue items cancelled — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead.",
       "- Solved-challenge cleanup is automatic and follows the event's 调度设置 (通知 #team / 停止同题 agent / 停靶机 / 下一题启动时机)。With the defaults, on a FULL solve the challenge's other live agents are stopped and its pending queue items cancelled — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings; under `drained` (`aegisx.status()` → next_task_policy) the next target launches only after this challenge's agents ALL finish, so pending items waiting while a solved challenge wraps up is expected. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead.",
+    ],
+    [
+      "- Solved-challenge cleanup is automatic and follows the event's 调度设置 (通知 #team / 停止同题 agent / 停靶机 / 下一题启动时机)。With the defaults, on a FULL solve the challenge's other live agents are stopped and its pending queue items cancelled — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings; under `drained` (`aegisx.status()` → next_task_policy) the next target launches only after this challenge's agents ALL finish, so pending items waiting while a solved challenge wraps up is expected. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead.",
+      "- Solved-challenge cleanup is automatic and follows the event's 调度设置 (通知 #team / 停止同题 agent / 停靶机 / 下一题启动时机)。With the defaults, on a FULL solve the challenge's other live agents are stopped and its pending queue items cancelled — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings; under `drained` (`aegisx.status()` → next_task_policy) the next target launches only after this challenge's agents ALL finish, so pending items waiting while a solved challenge wraps up is expected. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead. Repeat submissions of an accepted flag and extra flag values on a solved challenge are recorded quietly — no second cleanup round fires.",
     ],
   ],
   mainSystem: [

@@ -25,6 +25,7 @@ export function updateSchedulerConfig(
     stopTargetOnSolve?: boolean
     nextTaskPolicy?: "eager" | "drained"
     urgentTeamMessages?: boolean
+    blockSpawnOnSolved?: boolean
   }
 ) {
   return apiRequest<SchedulerInfo>(

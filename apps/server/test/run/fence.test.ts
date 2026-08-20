@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm"
 
 import {
   agents,
+  challengeFlags,
   challengeRemote,
   challenges,
   schedulerConfig,
@@ -328,6 +329,59 @@ describe("spawn fence", () => {
       expect(fenceSnapshot(db, settings, "evt-1").nextTaskPolicy).toBe(
         "drained"
       )
+    } finally {
+      close()
+    }
+  })
+
+  test("solved-challenge gate: an accepted flag or remote solve rejects spawn; the policy switch re-opens it", () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-flag", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-remote", eventId: "evt-1" })
+      // ch-flag: an accepted flag row marks it fully solved (no remote row —
+      // the gate is independent of target capability).
+      db.insert(challengeFlags)
+        .values({
+          id: "f-1",
+          challengeId: "ch-flag",
+          flag: "flag{x}",
+          status: "accepted",
+          source: "agent",
+          agentId: null,
+          remoteId: null,
+          message: null,
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .run()
+      // ch-remote: the platform-side solve verdict.
+      seedTarget(db, "ch-remote", { solved: true })
+      for (const challengeId of ["ch-flag", "ch-remote"]) {
+        const decision = checkSpawnFence(
+          db,
+          flatSettings(),
+          candidate("evt-1", challengeId)
+        )
+        expect(decision.ok).toBe(false)
+        if (!decision.ok) expect(decision.code).toBe("challenge_solved")
+      }
+      // The reproduction switch turns the gate off for the whole event.
+      db.insert(schedulerConfig)
+        .values({
+          eventId: "evt-1",
+          blockSpawnOnSolved: false,
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .run()
+      for (const challengeId of ["ch-flag", "ch-remote"]) {
+        expect(
+          checkSpawnFence(db, flatSettings(), candidate("evt-1", challengeId))
+            .ok
+        ).toBe(true)
+      }
     } finally {
       close()
     }

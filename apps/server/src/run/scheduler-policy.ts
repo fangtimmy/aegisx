@@ -12,12 +12,13 @@ export type SchedulerPolicy = {
   stopTargetOnSolve: boolean
   nextTaskPolicy: NextTaskPolicy
   urgentTeamMessages: boolean
+  blockSpawnOnSolved: boolean
 }
 
 /** The event's orchestration policy with defaults coalesced (a missing
  * scheduler_config row behaves like the defaults). Shared read side for the
  * flag hooks (service.ts), the spawn fence (fence.ts), and the channel
- * delivery path (channels.ts) — the single place these five knobs resolve. */
+ * delivery path (channels.ts) — the single place these knobs resolve. */
 export function schedulerPolicyFor(
   db: Database,
   eventId: string
@@ -29,6 +30,7 @@ export function schedulerPolicyFor(
       stopTargetOnSolve: schedulerConfig.stopTargetOnSolve,
       nextTaskPolicy: schedulerConfig.nextTaskPolicy,
       urgentTeamMessages: schedulerConfig.urgentTeamMessages,
+      blockSpawnOnSolved: schedulerConfig.blockSpawnOnSolved,
     })
     .from(schedulerConfig)
     .where(eq(schedulerConfig.eventId, eventId))
@@ -39,5 +41,6 @@ export function schedulerPolicyFor(
     stopTargetOnSolve: row?.stopTargetOnSolve ?? true,
     nextTaskPolicy: row?.nextTaskPolicy === "drained" ? "drained" : "eager",
     urgentTeamMessages: row?.urgentTeamMessages ?? true,
+    blockSpawnOnSolved: row?.blockSpawnOnSolved ?? true,
   }
 }

@@ -40,6 +40,7 @@ import {
   getChallengeRemote,
   isTargetCapable,
 } from "../platforms/challenge-state"
+import type { FlagAcceptOutcome } from "../platforms/flags"
 import type { createPlatformService } from "../platforms/service"
 import { getProviderConnections } from "../providers/public"
 import { createAgentFactory, type AgentFactory } from "./agent-factory"
@@ -723,14 +724,16 @@ export function createAgentService(options: AgentServiceOptions) {
 
   // --- flag hooks -------------------------------------------------------------
 
-  /** Platform-side hook: a flag was accepted — notify the event's scheduler
-   * (agent.flagAccepted), post a #team notice (policy-gated), then run the
-   * full-solve cleanup under the event's policy (stop siblings / cancel the
-   * challenge's pending queue items / stop the target when orphaned).
-   * Idempotent. */
+  /** Platform-side hook: a flag was accepted. Tiered by outcome — "first"
+   * (the challenge's initial solve): notify the scheduler
+   * (agent.flagAccepted), post a #team notice (policy-gated), run the
+   * full-solve cleanup under the event's policy; "extra" (a new flag value
+   * on an already-solved challenge): light #team notice only; "repeat" (a
+   * duplicate of an accepted value): submitter event only. */
   function notifyFlagAccepted(
     challengeId: string,
-    submitterAgentId?: string
+    submitterAgentId?: string,
+    outcome: FlagAcceptOutcome = "first"
   ): void {
     if (submitterAgentId) {
       status.emitAgentEvent(submitterAgentId, {
@@ -738,6 +741,7 @@ export function createAgentService(options: AgentServiceOptions) {
         agentId: submitterAgentId,
       })
     }
+    if (outcome === "repeat") return
     const eventId = db
       .select({ eventId: challenges.eventId })
       .from(challenges)
@@ -745,10 +749,56 @@ export function createAgentService(options: AgentServiceOptions) {
       .get()?.eventId
     if (!eventId) return
     const policy = schedulerPolicyFor(db, eventId)
+    if (outcome === "extra") {
+      if (policy.notifyTeamOnFlag) {
+        postExtraFlagNotice(challengeId, submitterAgentId)
+      }
+      return
+    }
     if (policy.notifyTeamOnFlag) {
       postFullSolveTeamNotice(challengeId, submitterAgentId, policy)
     }
     stopOthersOnSolved(challengeId, submitterAgentId, policy)
+  }
+
+  /** Light #team notice for an extra flag value on a solved challenge:
+   * recorded provenance, no cleanup round (the solve orchestration already
+   * ran at the first acceptance). */
+  function postExtraFlagNotice(
+    challengeId: string,
+    submitterAgentId: string | undefined
+  ): void {
+    const name =
+      db
+        .select({ name: challenges.name })
+        .from(challenges)
+        .where(eq(challenges.id, challengeId))
+        .get()?.name ?? challengeId
+    const flag = latestAcceptedFlag(challengeId)
+    const by = submitterAgentId
+      ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
+      : ""
+    channels.post({
+      channelKey: teamKey(challengeId),
+      author: { type: "system" },
+      body: `「${name}」再解出一个 flag${flag ? `：${flag}` : ""}${by}。`,
+      meta: { eventType: "flagAccepted" },
+    })
+  }
+
+  /** The challenge's most recently updated accepted flag, if any. */
+  function latestAcceptedFlag(challengeId: string): string | undefined {
+    return db
+      .select({ flag: challengeFlags.flag })
+      .from(challengeFlags)
+      .where(
+        and(
+          eq(challengeFlags.challengeId, challengeId),
+          eq(challengeFlags.status, "accepted")
+        )
+      )
+      .orderBy(desc(challengeFlags.updatedAt))
+      .get()?.flag
   }
 
   /** Full-solve #team notice (policy notifyTeamOnFlag). Urgency follows the
@@ -765,17 +815,7 @@ export function createAgentService(options: AgentServiceOptions) {
         .from(challenges)
         .where(eq(challenges.id, challengeId))
         .get()?.name ?? challengeId
-    const flag = db
-      .select({ flag: challengeFlags.flag })
-      .from(challengeFlags)
-      .where(
-        and(
-          eq(challengeFlags.challengeId, challengeId),
-          eq(challengeFlags.status, "accepted")
-        )
-      )
-      .orderBy(desc(challengeFlags.updatedAt))
-      .get()?.flag
+    const flag = latestAcceptedFlag(challengeId)
     const by = submitterAgentId
       ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
       : ""

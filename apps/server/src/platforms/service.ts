@@ -25,7 +25,7 @@ import type {
   PlatformType,
 } from "./core"
 import { PlatformActionError, platformError } from "./errors"
-import { createPlatformFlags } from "./flags"
+import { type FlagAcceptOutcome, createPlatformFlags } from "./flags"
 import { createPlatformSync } from "./sync"
 import { createPlatformTargets } from "./targets"
 
@@ -55,7 +55,11 @@ export function createPlatformService(
   configStore: ConfigStore
 ) {
   let onAgentFlagAccepted:
-    | ((challengeId: string, agentId?: string) => void)
+    | ((
+        challengeId: string,
+        agentId?: string,
+        outcome?: FlagAcceptOutcome
+      ) => void)
     | undefined
   let onAgentFlagPartial:
     | ((challengeId: string, message: string | null, agentId?: string) => void)
@@ -334,7 +338,11 @@ export function createPlatformService(
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
     setAgentHooks(hooks: {
-      onAgentFlagAccepted?(challengeId: string, agentId?: string): void
+      onAgentFlagAccepted?(
+        challengeId: string,
+        agentId?: string,
+        outcome?: FlagAcceptOutcome
+      ): void
       onAgentFlagPartial?(
         challengeId: string,
         message: string | null,
@@ -343,8 +351,8 @@ export function createPlatformService(
     }) {
       // Bound via a closure: the hook is a method on the caller's object, so
       // storing it detached would lose `this` (oxlint unbound-method).
-      onAgentFlagAccepted = (challengeId, agentId) =>
-        hooks.onAgentFlagAccepted?.(challengeId, agentId)
+      onAgentFlagAccepted = (challengeId, agentId, outcome) =>
+        hooks.onAgentFlagAccepted?.(challengeId, agentId, outcome)
       onAgentFlagPartial = (challengeId, message, agentId) =>
         hooks.onAgentFlagPartial?.(challengeId, message, agentId)
     },

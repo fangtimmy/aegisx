@@ -330,6 +330,7 @@ type PolicyFormValues = {
   stopTargetOnSolve: boolean
   nextTaskPolicy: "eager" | "drained"
   urgentTeamMessages: boolean
+  blockSpawnOnSolved: boolean
 }
 
 function SchedulerPolicyForm({
@@ -349,6 +350,7 @@ function SchedulerPolicyForm({
       stopTargetOnSolve: config.stopTargetOnSolve,
       nextTaskPolicy: config.nextTaskPolicy,
       urgentTeamMessages: config.urgentTeamMessages,
+      blockSpawnOnSolved: config.blockSpawnOnSolved,
     },
   })
   const save = useMutation({
@@ -361,6 +363,7 @@ function SchedulerPolicyForm({
         stopTargetOnSolve: input.stopTargetOnSolve,
         nextTaskPolicy: input.nextTaskPolicy,
         urgentTeamMessages: input.urgentTeamMessages,
+        blockSpawnOnSolved: input.blockSpawnOnSolved,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -500,6 +503,18 @@ function SchedulerPolicyForm({
             <PolicySwitch
               description="所有 #team 消息立即投递给队友（不等 5 分钟合并）；协作更即时，代价是回合被更频繁注入。"
               label="#team 消息全部按紧急投递"
+              onChange={field.onChange}
+              value={field.value}
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="blockSpawnOnSolved"
+          render={({ field }) => (
+            <PolicySwitch
+              description="题目完全解出后，拒绝为它启动新 agent（排队项自动取消）。需要解出后复盘/复现（重打一遍）时临时关闭。"
+              label="已解题禁止新 agent"
               onChange={field.onChange}
               value={field.value}
             />

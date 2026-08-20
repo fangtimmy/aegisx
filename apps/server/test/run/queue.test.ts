@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { queueState, spawnQueue } from "../../src/db/schema"
+import { queueState, spawnQueue, challengeFlags } from "../../src/db/schema"
 import { RunActionError } from "../../src/run/errors"
 import { createQueueService, parseSpawnQueueParams } from "../../src/run/queue"
 import {
@@ -391,6 +391,46 @@ describe("queue drainer", () => {
       expect(item(db, a.id).status).toBe("running")
       expect(item(db, a.id).agentId).toBe("run-1")
       expect(item(db, b.id).status).toBe("running")
+    } finally {
+      close()
+    }
+  })
+
+  test("a pending item on a solved challenge is cancelled (not launched); later items still drain", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-solved", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-open", eventId: "evt-1" })
+      db.insert(challengeFlags)
+        .values({
+          id: "f-1",
+          challengeId: "ch-solved",
+          flag: "flag{x}",
+          status: "accepted",
+          source: "agent",
+          agentId: null,
+          remoteId: null,
+          message: null,
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .run()
+      let n = 0
+      const { svc, launches, emergencies } = makeQueue(
+        db,
+        async () => `run-${++n}`
+      )
+      svc.cancelDrain()
+      const stale = enqueue(svc, "evt-1", "ch-solved", 1)
+      const open = enqueue(svc, "evt-1", "ch-open", 2)
+      await svc.drainOnce()
+      // Silent cancel — no launch, no failure, no emergency line (the
+      // full-solve notice already went out).
+      expect(launches).toEqual([open.id])
+      expect(item(db, stale.id).status).toBe("cancelled")
+      expect(item(db, open.id).status).toBe("running")
+      expect(emergencies).toHaveLength(0)
     } finally {
       close()
     }

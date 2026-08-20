@@ -333,6 +333,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     stopTargetOnSolve?: boolean
     nextTaskPolicy?: NextTaskPolicy
     urgentTeamMessages?: boolean
+    blockSpawnOnSolved?: boolean
   }) {
     const ts = now()
     const existing = db
@@ -360,6 +361,8 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         update.nextTaskPolicy = patch.nextTaskPolicy
       if (patch.urgentTeamMessages !== undefined)
         update.urgentTeamMessages = patch.urgentTeamMessages
+      if (patch.blockSpawnOnSolved !== undefined)
+        update.blockSpawnOnSolved = patch.blockSpawnOnSolved
       db.update(schedulerConfig)
         .set(update)
         .where(eq(schedulerConfig.eventId, patch.eventId))
@@ -376,6 +379,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
           stopTargetOnSolve: patch.stopTargetOnSolve ?? true,
           nextTaskPolicy: patch.nextTaskPolicy ?? "eager",
           urgentTeamMessages: patch.urgentTeamMessages ?? true,
+          blockSpawnOnSolved: patch.blockSpawnOnSolved ?? true,
           createdAt: ts,
           updatedAt: ts,
         })

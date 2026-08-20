@@ -125,7 +125,14 @@ function flagRows(db: ReturnType<typeof setupDb>["db"]) {
 describe("platform flags → async judge + concurrent submissions", () => {
   function makeFlags(
     db: Database,
-    adapter: Partial<CtfPlatformAdapter>
+    adapter: Partial<CtfPlatformAdapter>,
+    hooks: {
+      onAgentFlagAccepted?: (
+        challengeId: string,
+        agentId?: string,
+        outcome?: string
+      ) => void
+    } = {}
   ): ReturnType<typeof createPlatformFlags> {
     return createPlatformFlags(
       db,
@@ -136,9 +143,46 @@ describe("platform flags → async judge + concurrent submissions", () => {
           .where(eq(eventPlatforms.eventId, "evt-1"))
           .get() as never,
       () => adapter as CtfPlatformAdapter,
-      {}
+      hooks
     )
   }
+
+  test("acceptance outcomes: first solve, extra value on solved, repeat of accepted", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, { id: "a-1", challengeId: "ch-1" })
+      seedAgent(db, { id: "a-2", challengeId: "ch-1" })
+      integratedFixture(db)
+      const outcomes: Array<[string | undefined, string | undefined]> = []
+      const flags = makeFlags(
+        db,
+        {
+          submitFlag: async (_rid, value) => ({
+            status: "accepted",
+            remoteId: `sub-${value}`,
+          }),
+        },
+        {
+          onAgentFlagAccepted: (_challengeId, agentId, outcome) =>
+            outcomes.push([agentId, outcome]),
+        }
+      )
+
+      await flags.submitFlag("ch-1", "a-1", "flag{one}")
+      await flags.submitFlag("ch-1", "a-2", "flag{two}")
+      await flags.submitFlag("ch-1", "a-2", "flag{one}")
+
+      expect(outcomes).toEqual([
+        ["a-1", "first"],
+        ["a-2", "extra"],
+        ["a-2", "repeat"],
+      ])
+    } finally {
+      close()
+    }
+  })
 
   test("pending → polled accepted persists one row without UNIQUE crash", async () => {
     const { db, close } = setupDb()

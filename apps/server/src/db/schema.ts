@@ -420,6 +420,10 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
   urgentTeamMessages: integer("urgent_team_messages", { mode: "boolean" })
     .notNull()
     .default(true),
+  /** A fully-solved challenge rejects new spawns while true. */
+  blockSpawnOnSolved: integer("block_spawn_on_solved", { mode: "boolean" })
+    .notNull()
+    .default(true),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 })

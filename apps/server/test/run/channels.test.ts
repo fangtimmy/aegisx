@@ -1348,3 +1348,58 @@ describe("explicit cleanup (§八)", () => {
     }
   })
 })
+
+describe("terminal agents and urgent delivery (kill-undo guard)", () => {
+  test("an urgent #team broadcast never reaches a terminal agent; an urgent DM cold-wakes it", async () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, "a1", { status: "aborted" })
+      seedAgent(db, "a2", { status: "running" })
+      const { channels, sent } = makeService(db, dir)
+
+      // Urgent broadcast: only the live reader receives it. The aborted
+      // agent stays dead (a delivery must never reopen what a close killed).
+      channels.post({
+        channelKey: teamKey("ch-1"),
+        author: { type: "user" },
+        body: "storm notice",
+        urgent: true,
+      })
+      expect(sent.map((s) => s.agentId)).toEqual(["a2"])
+
+      // Targeted urgent DM: the ONE sanctioned wake path for a terminal
+      // agent (the scheduler intervening on a wrongly-stopped agent).
+      channels.post({
+        channelKey: dmKey("a1"),
+        author: { type: "user" },
+        body: "wake up",
+        urgent: true,
+      })
+      expect(sent.map((s) => s.agentId)).toEqual(["a2", "a1"])
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a NON-urgent DM to a terminal agent stays stored (no cold wake)", async () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, "a1", { status: "completed" })
+      const { channels, sent } = makeService(db, dir)
+      channels.post({
+        channelKey: dmKey("a1"),
+        author: { type: "user" },
+        body: "later",
+      })
+      expect(sent).toHaveLength(0)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+})

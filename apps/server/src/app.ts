@@ -47,9 +47,9 @@ export function createApp(options: { dataDir: string }) {
   // stops the challenge's other live agents; a multi-flag partial steers
   // them (partial carries the platform's progress message).
   platformService.setAgentHooks({
-    onAgentFlagAccepted: (challengeId, agentId) => {
+    onAgentFlagAccepted: (challengeId, agentId, outcome) => {
       if (agentId) agentService.refresh(agentId)
-      agentService.notifyFlagAccepted(challengeId, agentId)
+      agentService.notifyFlagAccepted(challengeId, agentId, outcome)
     },
     onAgentFlagPartial: (challengeId, message, agentId) => {
       if (agentId) agentService.refresh(agentId)

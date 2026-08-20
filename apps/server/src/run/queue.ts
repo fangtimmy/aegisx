@@ -375,6 +375,15 @@ export function createQueueService(deps: QueueServiceDeps) {
     if (row) checkStarved(row.eventId)
   }
 
+  /** Cancel one item — stale work (the challenge is solved; the full-solve
+   * notice already went out), dropped silently rather than recorded failed. */
+  function markCancelled(itemId: string): void {
+    db.update(spawnQueue)
+      .set({ status: "cancelled", updatedAt: now() })
+      .where(eq(spawnQueue.id, itemId))
+      .run()
+  }
+
   /**
    * Transition an agent's queue item to done, guarded by `(id, agentId,
    * running)`. Called from the agent's terminal settle; a no-op for agents
@@ -446,6 +455,11 @@ export function createQueueService(deps: QueueServiceDeps) {
         if (!decision.ok) {
           // Global cap is saturated for the whole pass; nothing else launches.
           if (decision.code === "global_capacity") return
+          // Stale work for a solved challenge: drop it, try the rest.
+          if (decision.code === "challenge_solved") {
+            markCancelled(item.id)
+            continue
+          }
           // Per-event target cap: only this item is blocked; try the rest.
           continue
         }

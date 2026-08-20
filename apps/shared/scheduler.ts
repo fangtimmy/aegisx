@@ -16,6 +16,10 @@ export type SchedulerPolicyConfig = {
   stopTargetOnSolve: boolean
   nextTaskPolicy: NextTaskPolicy
   urgentTeamMessages: boolean
+  /** A fully-solved challenge rejects new spawns (queue items cancel,
+   * direct starts fail) while on; off = reproduction/writeup agents may
+   * re-attack a solved challenge. */
+  blockSpawnOnSolved: boolean
 }
 
 /** Fence + active-agent snapshot returned by get_status (the scheduler status

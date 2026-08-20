@@ -10,11 +10,16 @@ import {
   challenges,
   schedulerConfig,
 } from "../db/schema"
+import { fullySolved } from "../platforms/challenge-state"
 import { schedulerPolicyFor } from "./scheduler-policy"
 
 export type FenceDecision =
   | { ok: true }
-  | { ok: false; code: "global_capacity" | "target_slots"; message: string }
+  | {
+      ok: false
+      code: "global_capacity" | "target_slots" | "challenge_solved"
+      message: string
+    }
 
 /** Default per-event target cap when no scheduler_config row exists. */
 const DEFAULT_MAX_CONCURRENT_TARGETS = 1
@@ -144,28 +149,13 @@ function occupiesTargetSlot(
       available: challengeRemote.available,
       targetSupported: challengeRemote.targetSupported,
       targetIgnored: challengeRemote.targetIgnored,
-      solved: challengeRemote.solved,
-      manualSolveState: challenges.manualSolveState,
     })
     .from(challengeRemote)
-    .innerJoin(challenges, eq(challenges.id, challengeRemote.challengeId))
     .where(eq(challengeRemote.challengeId, challengeId))
     .get()
   if (!row) return false
   if (!row.available || !row.targetSupported || row.targetIgnored) return false
-  if (row.solved) return false
-  if (row.manualSolveState !== "unsolved") return false
-  const accepted = db
-    .select({ id: challengeFlags.id })
-    .from(challengeFlags)
-    .where(
-      and(
-        eq(challengeFlags.challengeId, challengeId),
-        eq(challengeFlags.status, "accepted")
-      )
-    )
-    .get()
-  return !accepted
+  return !fullySolved(db, challengeId)
 }
 
 /**
@@ -188,6 +178,19 @@ export function checkSpawnFence(
   settings: FlatSettings,
   candidate: { eventId: string; challengeId: string }
 ): FenceDecision {
+  const policy = schedulerPolicyFor(db, candidate.eventId)
+  // Solved-challenge gate: a fully-solved challenge is finished work — new
+  // spawns on it are rejected (queue items are cancelled by the drainer)
+  // unless the event explicitly re-opens it (reproduction / writeup agents).
+  if (policy.blockSpawnOnSolved && fullySolved(db, candidate.challengeId)) {
+    return {
+      ok: false,
+      code: "challenge_solved",
+      message:
+        "Challenge is already fully solved — spawning on it is blocked by this event's policy.",
+    }
+  }
+
   const cap = maxConcurrentAgentsSetting(settings)
   const live = liveSolverAgentCount(db)
   if (live + 1 > cap) {
@@ -199,8 +202,7 @@ export function checkSpawnFence(
   }
 
   const challengeId = candidate.challengeId
-  const drained =
-    schedulerPolicyFor(db, candidate.eventId).nextTaskPolicy === "drained"
+  const drained = policy.nextTaskPolicy === "drained"
   if (occupiesTargetSlot(db, challengeId, drained)) {
     const maxTargets = maxConcurrentTargetsFor(db, candidate.eventId)
     const active = activeTargetSlots(db, candidate.eventId, drained)
