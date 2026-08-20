@@ -44,7 +44,15 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "@/components/ui/number-field"
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
 
@@ -314,6 +322,16 @@ function SchedulerPolicyCard({ eventId }: { eventId: string }) {
   )
 }
 
+type PolicyFormValues = {
+  instruction: string
+  maxTargets: number
+  notifyTeamOnFlag: boolean
+  stopSiblingsOnSolve: boolean
+  stopTargetOnSolve: boolean
+  nextTaskPolicy: "eager" | "drained"
+  urgentTeamMessages: boolean
+}
+
 function SchedulerPolicyForm({
   eventId,
   config,
@@ -322,17 +340,27 @@ function SchedulerPolicyForm({
   config: SchedulerInfo["config"]
 }) {
   const queryClient = useQueryClient()
-  const form = useForm<{ instruction: string; maxTargets: number }>({
+  const form = useForm<PolicyFormValues>({
     defaultValues: {
       instruction: config.instruction,
       maxTargets: config.maxConcurrentTargets,
+      notifyTeamOnFlag: config.notifyTeamOnFlag,
+      stopSiblingsOnSolve: config.stopSiblingsOnSolve,
+      stopTargetOnSolve: config.stopTargetOnSolve,
+      nextTaskPolicy: config.nextTaskPolicy,
+      urgentTeamMessages: config.urgentTeamMessages,
     },
   })
   const save = useMutation({
-    mutationFn: (input: { instruction: string; maxTargets: number }) =>
+    mutationFn: (input: PolicyFormValues) =>
       schedulerApi.updateSchedulerConfig(eventId, {
         instruction: input.instruction.trim(),
         maxConcurrentTargets: Math.max(1, Math.round(input.maxTargets)),
+        notifyTeamOnFlag: input.notifyTeamOnFlag,
+        stopSiblingsOnSolve: input.stopSiblingsOnSolve,
+        stopTargetOnSolve: input.stopTargetOnSolve,
+        nextTaskPolicy: input.nextTaskPolicy,
+        urgentTeamMessages: input.urgentTeamMessages,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({
@@ -396,6 +424,88 @@ function SchedulerPolicyForm({
           )}
         />
       </Field>
+      <div className="mt-5 space-y-4 border-t pt-5">
+        <Controller
+          control={form.control}
+          name="nextTaskPolicy"
+          render={({ field }) => (
+            <Field>
+              <FieldLabel>下一题启动时机</FieldLabel>
+              <FieldDescription>
+                eager：本题解出即让出靶机槽，下一题立刻启动（上题 agent
+                并存收尾）；drained：本题全部 agent
+                结束后才启动下一题，严格串行。
+              </FieldDescription>
+              <Select
+                items={{
+                  eager: "立即（解出即启下一题）",
+                  drained: "等待（本题全部结束后）",
+                }}
+                onValueChange={(value) => field.onChange(value)}
+                value={field.value}
+              >
+                <SelectTrigger className="w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="eager">立即（解出即启下一题）</SelectItem>
+                  <SelectItem value="drained">
+                    等待（本题全部结束后）
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            </Field>
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="notifyTeamOnFlag"
+          render={({ field }) => (
+            <PolicySwitch
+              description="flag 被平台接受后，系统在 #team 发布题名、flag 与解出者；关闭时不发（agent 自行发帖）。"
+              label="flag 接受后通知 #team"
+              onChange={field.onChange}
+              value={field.value}
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="stopSiblingsOnSolve"
+          render={({ field }) => (
+            <PolicySwitch
+              description="完全解出后立即终止同题其他 agent（提交者保留写 writeup）；关闭时队友会收到收尾通知并自然结束。"
+              label="完全解出后停止同题 agent"
+              onChange={field.onChange}
+              value={field.value}
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="stopTargetOnSolve"
+          render={({ field }) => (
+            <PolicySwitch
+              description="完全解出后立即停止平台靶机实例；关闭时靶机保留给同题 agent 验证（注意平台资源占用）。"
+              label="完全解出后停靶机"
+              onChange={field.onChange}
+              value={field.value}
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="urgentTeamMessages"
+          render={({ field }) => (
+            <PolicySwitch
+              description="所有 #team 消息立即投递给队友（不等 5 分钟合并）；协作更即时，代价是回合被更频繁注入。"
+              label="#team 消息全部按紧急投递"
+              onChange={field.onChange}
+              value={field.value}
+            />
+          )}
+        />
+      </div>
       <Button className="mt-3" loading={save.isPending} type="submit">
         保存策略
       </Button>
@@ -406,6 +516,29 @@ function SchedulerPolicyForm({
         </Alert>
       )}
     </form>
+  )
+}
+
+/** Label + description with the switch right-aligned on the label row. */
+function PolicySwitch({
+  label,
+  description,
+  value,
+  onChange,
+}: {
+  label: string
+  description: string
+  value: boolean
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <Field>
+      <div className="flex items-center justify-between gap-4">
+        <FieldLabel className="font-normal">{label}</FieldLabel>
+        <Switch checked={value} onCheckedChange={(c) => onChange(c === true)} />
+      </div>
+      <FieldDescription>{description}</FieldDescription>
+    </Field>
   )
 }
 

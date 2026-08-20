@@ -1,4 +1,5 @@
 import { get, type FlatSettings } from "@aegisx/shared"
+import type { NextTaskPolicy } from "@aegisx/shared/scheduler"
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -9,6 +10,7 @@ import {
   challenges,
   schedulerConfig,
 } from "../db/schema"
+import { schedulerPolicyFor } from "./scheduler-policy"
 
 export type FenceDecision =
   | { ok: true }
@@ -33,13 +35,18 @@ export function fenceSnapshot(
   maxConcurrentAgents: number
   liveAgentCount: number
   maxConcurrentTargets: number
+  nextTaskPolicy: NextTaskPolicy
   activeTargetChallenges: string[]
 } {
+  const policy = schedulerPolicyFor(db, eventId)
   return {
     maxConcurrentAgents: maxConcurrentAgentsSetting(settings),
     liveAgentCount: liveSolverAgentCount(db),
     maxConcurrentTargets: maxConcurrentTargetsFor(db, eventId),
-    activeTargetChallenges: [...activeTargetSlots(db, eventId)],
+    nextTaskPolicy: policy.nextTaskPolicy,
+    activeTargetChallenges: [
+      ...activeTargetSlots(db, eventId, policy.nextTaskPolicy === "drained"),
+    ],
   }
 }
 
@@ -60,10 +67,17 @@ function liveSolverAgentCount(db: Database): number {
   return row?.n ?? 0
 }
 
-/** Distinct target-capable AND unsolved challenges with a LIVE agent in this
- * event. Solved challenges free their slot; the same challenge attacked by
- * several agents shares one slot (DISTINCT). */
-function activeTargetSlots(db: Database, eventId: string): Set<string> {
+/** Distinct target-capable challenges with a LIVE agent in this event,
+ * under the event's next-task policy. 'eager' (default): a solved challenge
+ * frees its slot at flag acceptance, so solved/flagged challenges are
+ * excluded. 'drained': a solved challenge HOLDS its slot until its last
+ * agent goes terminal (strict serialization). The same challenge attacked
+ * by several agents shares one slot (DISTINCT). */
+function activeTargetSlots(
+  db: Database,
+  eventId: string,
+  drained: boolean
+): Set<string> {
   const rows = db
     .select({ challengeId: agents.challengeId })
     .from(agents)
@@ -76,10 +90,14 @@ function activeTargetSlots(db: Database, eventId: string): Set<string> {
         eq(challengeRemote.available, true),
         eq(challengeRemote.targetSupported, true),
         eq(challengeRemote.targetIgnored, false),
-        eq(challengeRemote.solved, false),
-        eq(challenges.manualSolveState, "unsolved"),
-        // No accepted flag → still unsolved.
-        sql`NOT EXISTS (SELECT 1 FROM ${challengeFlags} WHERE ${challengeFlags.challengeId} = ${challenges.id} AND ${challengeFlags.status} = 'accepted')`
+        ...(drained
+          ? []
+          : [
+              eq(challengeRemote.solved, false),
+              eq(challenges.manualSolveState, "unsolved"),
+              // No accepted flag → still unsolved.
+              sql`NOT EXISTS (SELECT 1 FROM ${challengeFlags} WHERE ${challengeFlags.challengeId} = ${challenges.id} AND ${challengeFlags.status} = 'accepted')`,
+            ])
       )
     )
     .all()
@@ -98,8 +116,29 @@ function maxConcurrentTargetsFor(db: Database, eventId: string): number {
   return row?.max ?? DEFAULT_MAX_CONCURRENT_TARGETS
 }
 
-/** Whether a challenge would occupy a target slot: target-capable AND unsolved. */
-function occupiesTargetSlot(db: Database, challengeId: string): boolean {
+/** Whether a challenge would occupy a target slot: target-capable, and
+ * still fighting for it under the policy ('eager': a solved challenge never
+ * occupies; 'drained': any target-capable challenge with a live agent
+ * does). */
+function occupiesTargetSlot(
+  db: Database,
+  challengeId: string,
+  drained: boolean
+): boolean {
+  if (drained) {
+    const row = db
+      .select({
+        available: challengeRemote.available,
+        targetSupported: challengeRemote.targetSupported,
+        targetIgnored: challengeRemote.targetIgnored,
+      })
+      .from(challengeRemote)
+      .where(eq(challengeRemote.challengeId, challengeId))
+      .get()
+    return Boolean(
+      row?.available && row?.targetSupported && !row?.targetIgnored
+    )
+  }
   const row = db
     .select({
       available: challengeRemote.available,
@@ -160,9 +199,11 @@ export function checkSpawnFence(
   }
 
   const challengeId = candidate.challengeId
-  if (occupiesTargetSlot(db, challengeId)) {
+  const drained =
+    schedulerPolicyFor(db, candidate.eventId).nextTaskPolicy === "drained"
+  if (occupiesTargetSlot(db, challengeId, drained)) {
     const maxTargets = maxConcurrentTargetsFor(db, candidate.eventId)
-    const active = activeTargetSlots(db, candidate.eventId)
+    const active = activeTargetSlots(db, candidate.eventId, drained)
     // The candidate's agent row does not exist yet, so it is never in the
     // active set unless another agent is already attacking the same
     // challenge (shared slot).

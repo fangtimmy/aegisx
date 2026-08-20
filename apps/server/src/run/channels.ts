@@ -27,6 +27,7 @@ import {
   renderTemplateBody,
 } from "../orchestration/prompt-templates"
 import { RunActionError } from "./errors"
+import { schedulerPolicyFor } from "./scheduler-policy"
 
 /**
  * Derived-key channel core (docs/model-v19-challenge-centric.md §三). A
@@ -484,7 +485,13 @@ export function createChannelService(deps: ChannelServiceDeps) {
         `消息超过 ${MAX_MESSAGE_CHARS} 字符上限（当前 ${body.length}）`
       )
     }
-    const urgent = input.urgent === true
+    // Team-channel urgency upgrade: the event's urgent-team policy makes
+    // every #team post deliver immediately (meta ⚠ included) — findings reach
+    // siblings now instead of at the next flush tick.
+    const urgent =
+      input.urgent === true ||
+      (parsed.kind === "team" &&
+        schedulerPolicyFor(db, eventOfKey(parsed)).urgentTeamMessages)
     // Author resolution + write permission (the 3 rules).
     const author = resolveAuthor(parsed, input.author)
 

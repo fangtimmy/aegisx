@@ -6,7 +6,12 @@ import { eq } from "drizzle-orm"
 
 import { createLiveBus } from "../../src/agents/live"
 import { createDatabase } from "../../src/db"
-import { agents, channelMessages, channelReads } from "../../src/db/schema"
+import {
+  agents,
+  channelMessages,
+  channelReads,
+  schedulerConfig,
+} from "../../src/db/schema"
 import {
   FLUSH_INTERVAL_MS,
   SCHEDULER_READ_KEY,
@@ -28,6 +33,20 @@ function setupDbLite() {
   const dir = `/tmp/aegisx-channels-${crypto.randomUUID()}`
   const { db, releaseLock } = createDatabase(dir)
   return { db, dir, close: () => releaseLock() }
+}
+
+/** The urgent-team policy defaults ON (every #team post delivers
+ * immediately). Tests of the generic flush-tick / cursor mechanics pin it
+ * OFF so non-urgent really rides the tick. */
+function disableUrgentTeam(db: Db, eventId = "evt-1") {
+  db.insert(schedulerConfig)
+    .values({
+      eventId,
+      urgentTeamMessages: false,
+      createdAt: now(),
+      updatedAt: now(),
+    })
+    .run()
 }
 
 /** Recorded lifecycle: one entry per lifecycle.send (agentId, text). */
@@ -524,13 +543,14 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
     }
   })
 
-  test("non-urgent posts never deliver immediately — they ride the flush tick", async () => {
+  test("non-urgent posts never deliver immediately — they ride the flush tick (urgent-team policy off)", async () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
       seedAgent(db, "a1", { status: "running" })
       seedAgent(db, "a2", { status: "running" })
+      disableUrgentTeam(db)
       const { channels, sent } = makeService(db, dir)
 
       channels.post({
@@ -539,7 +559,32 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
         body: "fyi finding",
       })
       await settle()
-      expect(sent).toHaveLength(0) // default (non-urgent) = wait for the tick
+      expect(sent).toHaveLength(0) // policy off = wait for the tick
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("urgent-team policy ON upgrades a non-urgent #team post to immediate delivery (the default)", async () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, "a1", { status: "running" })
+      seedAgent(db, "a2", { status: "running" })
+      // No scheduler_config row → policy defaults ON.
+      const { channels, sent } = makeService(db, dir)
+
+      const posted = channels.post({
+        channelKey: teamKey("ch-1"),
+        author: { type: "agent", agentId: "a1" },
+        body: "fyi finding",
+      })
+      await settle()
+      // Immediate delivery to the sibling (own post excluded) + urgent meta.
+      expect(sent.map((s) => s.agentId)).toEqual(["a2"])
+      expect(posted.meta.urgent).toBe(true)
       channels.close()
     } finally {
       close()
@@ -581,6 +626,7 @@ describe("flush tick (§3.4)", () => {
       seedAgent(db, "b1", { status: "idle" })
       seedAgent(db, "c1", { status: "completed" })
       seedScheduler(db, "s1")
+      disableUrgentTeam(db)
       const { channels, sent } = makeService(db, dir)
 
       channels.post({
@@ -698,6 +744,7 @@ describe("read cursors — three progression points (§3.5)", () => {
       seedChallenge(db, { id: "ch-1" })
       seedAgent(db, "a1", { status: "running" })
       seedAgent(db, "a2", { status: "running" })
+      disableUrgentTeam(db)
       const { channels, sent } = makeService(db, dir)
 
       // 1. Self-post: author cursor lands on the message id.

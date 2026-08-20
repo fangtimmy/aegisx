@@ -10,6 +10,7 @@ import {
 } from "../../src/db/schema"
 import {
   checkSpawnFence,
+  fenceSnapshot,
   maxConcurrentAgentsSetting,
 } from "../../src/run/fence"
 import {
@@ -265,6 +266,68 @@ describe("spawn fence", () => {
       expect(
         checkSpawnFence(db, flatSettings(), candidate("evt-1", "ch-c")).ok
       ).toBe(false)
+    } finally {
+      close()
+    }
+  })
+
+  test("drained: a solved challenge with a live agent holds its slot until its agents finish", () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      seedTarget(db, "ch-a", { solved: true })
+      seedTarget(db, "ch-b")
+      db.insert(schedulerConfig)
+        .values({
+          eventId: "evt-1",
+          nextTaskPolicy: "drained",
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .run()
+      seedAgent(db, { id: "ra", challengeId: "ch-a", status: "idle" })
+      // ch-a solved but its agent is still wrapping up → slot held → ch-b
+      // cannot launch (the eager default admits it in this exact setup).
+      const decision = checkSpawnFence(
+        db,
+        flatSettings(),
+        candidate("evt-1", "ch-b")
+      )
+      expect(decision.ok).toBe(false)
+      if (!decision.ok) expect(decision.code).toBe("target_slots")
+      // Last agent terminal → slot released → ch-b admitted.
+      db.update(agents)
+        .set({ status: "completed" })
+        .where(eq(agents.id, "ra"))
+        .run()
+      expect(
+        checkSpawnFence(db, flatSettings(), candidate("evt-1", "ch-b")).ok
+      ).toBe(true)
+    } finally {
+      close()
+    }
+  })
+
+  test("fenceSnapshot reports the event's nextTaskPolicy", () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      const settings = flatSettings()
+      expect(fenceSnapshot(db, settings, "evt-1").nextTaskPolicy).toBe("eager")
+      db.insert(schedulerConfig)
+        .values({
+          eventId: "evt-1",
+          nextTaskPolicy: "drained",
+          createdAt: now(),
+          updatedAt: now(),
+        })
+        .run()
+      expect(fenceSnapshot(db, settings, "evt-1").nextTaskPolicy).toBe(
+        "drained"
+      )
     } finally {
       close()
     }

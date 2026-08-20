@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, TypeVar
 
@@ -292,13 +292,17 @@ class ChannelMessage:
 @dataclass
 class SchedulerStatus:
     """Concurrency / target-slot usage snapshot for the event (v19). The
-    scheduler agent never counts toward the live-agent cap."""
+    scheduler agent never counts toward the live-agent cap.
+    `next_task_policy`: 'eager' = a solved challenge frees its target slot at
+    flag acceptance (the next queue item launches immediately); 'drained' =
+    it holds the slot until its last agent goes terminal."""
 
     max_concurrent_agents: int
     live_agent_count: int
     max_concurrent_targets: int
-    active_target_challenges: list[str]
-    active_agents: list[dict[str, Any]]
+    next_task_policy: str = "eager"
+    active_target_challenges: list[str] = field(default_factory=list)
+    active_agents: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

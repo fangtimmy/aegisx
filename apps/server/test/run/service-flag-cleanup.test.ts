@@ -6,6 +6,7 @@ import {
   agents,
   challengeFlags,
   channelMessages,
+  schedulerConfig,
   spawnQueue,
 } from "../../src/db/schema"
 import { orchKey, teamKey } from "../../src/run/channels"
@@ -253,7 +254,8 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       )
       await settle()
 
-      // ONE non-urgent system post in the challenge's #team.
+      // ONE system post in the challenge's #team (urgent-team policy default
+      // ON → it delivers IMMEDIATELY to every live agent on the challenge)…
       const partialPosts = db
         .select()
         .from(channelMessages)
@@ -262,18 +264,18 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
         .filter((row) => row.body.includes("多 flag 进度"))
       expect(partialPosts).toHaveLength(1)
 
-      // Nothing steered yet (notice level, rides the tick)…
       const steered = (id: string) =>
         (promptLog.get(id) ?? []).filter((t) => t.includes("多 flag 进度"))
-      expect(steered(coSolver.id)).toHaveLength(0)
-      // …then one tick delivers it to EVERY live agent on the challenge.
-      service.channels.runFlushTick()
       await wait(60)
       expect(steered(coSolver.id)).toHaveLength(1)
       expect(steered(sibling.id)).toHaveLength(1)
       expect(steered(submitter.id)).toHaveLength(1)
       expect(steered(coSolver.id)[0]).toContain("flag{one}")
       expect(steered(coSolver.id)[0]).toContain("flag 2/3 已确认")
+      // …and the tick does not re-deliver (cursors advanced).
+      service.channels.runFlushTick()
+      await wait(60)
+      expect(steered(coSolver.id)).toHaveLength(1)
       // Nothing was torn down — the challenge is not fully solved.
       expect(
         db.select().from(agents).where(eq(agents.id, submitter.id)).get()!
@@ -286,6 +288,159 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       const orchNotice = orchRows(db).find((r) => r.body.includes("部分解出"))
       expect(orchNotice).toBeDefined()
       expect(JSON.parse(orchNotice!.meta).urgent).toBeUndefined()
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("policy stop-siblings/stop-target off: teammates survive with a wrap-up #team notice, the target stays; queue items still cancel", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      db.insert(require("../../src/db/schema").challengeRemote)
+        .values({
+          challengeId: "ch-1",
+          eventId: "evt-1",
+          sourceKey: "src",
+          remoteId: "r-1",
+          available: true,
+          solved: false,
+          targetSupported: true,
+          targetIgnored: false,
+          targetCount: 1,
+          targetInfo: "[]",
+          syncedAt: new Date().toISOString(),
+        })
+        .run()
+      db.insert(schedulerConfig)
+        .values({
+          eventId: "evt-1",
+          stopSiblingsOnSolve: false,
+          stopTargetOnSolve: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .run()
+      // The accepted flag the #team notice quotes.
+      const ts = new Date().toISOString()
+      db.insert(challengeFlags)
+        .values({
+          id: crypto.randomUUID(),
+          challengeId: "ch-1",
+          flag: "flag{keep}",
+          status: "accepted",
+          source: "agent",
+          createdAt: ts,
+          updatedAt: ts,
+        })
+        .run()
+      const targetCalls: string[] = []
+      const made = makeService(db, dir, { targetCalls })
+      service = made.service
+
+      await service.startScheduler("evt-1")
+      await settle()
+      const submitter = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      const sibling = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      await settle()
+      stageRunning(db, sibling.id)
+      const queue = service.queue()
+      const stale = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        source: "scheduler",
+        prompt: "stale",
+      })
+      queue.cancelDrain()
+
+      service.notifyFlagAccepted("ch-1", submitter.id)
+      await wait(80)
+      await settle()
+
+      // Teammates survive; the target is NOT stopped.
+      expect(
+        db.select().from(agents).where(eq(agents.id, sibling.id)).get()!.status
+      ).not.toBe("aborted")
+      expect(targetCalls).not.toContain("stop")
+      // Pending items on the solved challenge still cancel.
+      expect(
+        db.select().from(spawnQueue).where(eq(spawnQueue.id, stale.id)).get()!
+          .status
+      ).toBe("cancelled")
+      // The #team notice quotes the flag and tells survivors to wrap up.
+      const notice = db
+        .select()
+        .from(channelMessages)
+        .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+        .all()
+        .find((r) => r.body.includes("已完全解出"))
+      expect(notice).toBeDefined()
+      expect(notice!.body).toContain("flag{keep}")
+      expect(notice!.body).toContain("finish_run")
+      // The orch summary no longer claims stopped agents.
+      const cleanup = orchRows(db).find((r) => r.body.includes("已完全解出"))
+      expect(cleanup).toBeDefined()
+      expect(cleanup!.body).not.toContain("已停止")
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("policy notify off: no #team posts on acceptance; the cleanup still runs", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      db.insert(schedulerConfig)
+        .values({
+          eventId: "evt-1",
+          notifyTeamOnFlag: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .run()
+      const made = makeService(db, dir)
+      service = made.service
+
+      await service.startScheduler("evt-1")
+      await settle()
+      const submitter = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      const sibling = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      await settle()
+      stageRunning(db, sibling.id)
+
+      service.notifyFlagAccepted("ch-1", submitter.id)
+      await wait(80)
+      await settle()
+
+      expect(
+        db
+          .select()
+          .from(channelMessages)
+          .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+          .all()
+      ).toHaveLength(0)
+      // Default stop-siblings still applies.
+      expect(
+        db.select().from(agents).where(eq(agents.id, sibling.id)).get()!.status
+      ).toBe("aborted")
     } finally {
       await service?.close().catch(() => undefined)
       close()

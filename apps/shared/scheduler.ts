@@ -3,12 +3,28 @@
 
 import type { AgentSummary } from "./agent"
 
+/** Next-task launch timing: 'eager' = a solved challenge frees its target
+ * slot at flag acceptance (the next queue item launches immediately);
+ * 'drained' = it holds the slot until its last agent goes terminal. */
+export type NextTaskPolicy = "eager" | "drained"
+
+/** Per-event orchestration policy (scheduler_config columns, camelCase wire
+ * shape). Defaults live in the DB schema + run/scheduler-policy.ts. */
+export type SchedulerPolicyConfig = {
+  notifyTeamOnFlag: boolean
+  stopSiblingsOnSolve: boolean
+  stopTargetOnSolve: boolean
+  nextTaskPolicy: NextTaskPolicy
+  urgentTeamMessages: boolean
+}
+
 /** Fence + active-agent snapshot returned by get_status (the scheduler status
  * block of GET /api/events/:id/scheduler and /fleet). */
 export type SchedulerStatusSnapshot = {
   maxConcurrentAgents: number
   liveAgentCount: number
   maxConcurrentTargets: number
+  nextTaskPolicy: NextTaskPolicy
   activeTargetChallenges: string[]
   activeAgents: Array<{
     id: string
@@ -49,6 +65,6 @@ export type FleetInfo = {
     maxConcurrentTargets: number
     /** W3: scheduler disabled (agent-lifecycle events gated). */
     paused: boolean
-  }
+  } & SchedulerPolicyConfig
   status: SchedulerStatusSnapshot
 }

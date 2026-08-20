@@ -33,6 +33,13 @@ const schedulerConfigInput = Type.Object(
     ),
     instruction: Type.Optional(Type.String({ maxLength: 20_000 })),
     maxConcurrentTargets: Type.Optional(Type.Integer({ minimum: 1 })),
+    notifyTeamOnFlag: Type.Optional(Type.Boolean()),
+    stopSiblingsOnSolve: Type.Optional(Type.Boolean()),
+    stopTargetOnSolve: Type.Optional(Type.Boolean()),
+    nextTaskPolicy: Type.Optional(
+      Type.Union([Type.Literal("eager"), Type.Literal("drained")])
+    ),
+    urgentTeamMessages: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false }
 )

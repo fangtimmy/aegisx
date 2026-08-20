@@ -402,6 +402,24 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
    * warm). The flag is writable even with no scheduler agent — presets the
    * next start. */
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+  /** Flag-acceptance orchestration policy (read side coalesces in
+   * run/scheduler-policy.ts; DB defaults double as the insert fallback for
+   * legacy create paths). */
+  notifyTeamOnFlag: integer("notify_team_on_flag", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  stopSiblingsOnSolve: integer("stop_siblings_on_solve", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  stopTargetOnSolve: integer("stop_target_on_solve", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  /** 'eager' = a solved challenge frees its target slot at flag acceptance;
+   * 'drained' = it holds the slot until its last agent goes terminal. */
+  nextTaskPolicy: text("next_task_policy").notNull().default("eager"),
+  urgentTeamMessages: integer("urgent_team_messages", { mode: "boolean" })
+    .notNull()
+    .default(true),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 })

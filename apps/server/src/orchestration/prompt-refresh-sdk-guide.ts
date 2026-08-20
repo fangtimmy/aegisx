@@ -41,6 +41,10 @@ All management actions go through the \`aegisx\` Python SDK (in-image at /opt/ae
       "- `aegisx.agents.read(agent_id, last_n?)` assesses an agent before steering or closing it.",
       "- `aegisx.agents.read(agent_id, limit?)` assesses an agent before steering or closing it.",
     ],
+    [
+      "- Solved-challenge cleanup is automatic: on a FULL solve, the challenge's other live agents are stopped and its pending queue items cancelled — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead.",
+      "- Solved-challenge cleanup is automatic and follows the event's 调度设置 (通知 #team / 停止同题 agent / 停靶机 / 下一题启动时机)。With the defaults, on a FULL solve the challenge's other live agents are stopped and its pending queue items cancelled — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings; under `drained` (`aegisx.status()` → next_task_policy) the next target launches only after this challenge's agents ALL finish, so pending items waiting while a solved challenge wraps up is expected. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead.",
+    ],
   ],
   mainSystem: [
     [

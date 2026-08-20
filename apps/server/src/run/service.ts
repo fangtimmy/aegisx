@@ -10,7 +10,7 @@ import type {
 } from "@aegisx/shared"
 import { formatModelRef, get } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
-import { and, eq, inArray, ne } from "drizzle-orm"
+import { and, desc, eq, inArray, ne } from "drizzle-orm"
 
 import { applyModelSwitch } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
@@ -67,6 +67,7 @@ import {
   type QueueService,
 } from "./queue"
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
+import { type SchedulerPolicy, schedulerPolicyFor } from "./scheduler-policy"
 import { createStallWatchdog, type StallWatchdog } from "./stall-watchdog"
 import {
   challengeRoot,
@@ -723,10 +724,10 @@ export function createAgentService(options: AgentServiceOptions) {
   // --- flag hooks -------------------------------------------------------------
 
   /** Platform-side hook: a flag was accepted — notify the event's scheduler
-   * (agent.flagAccepted) and stop the challenge's other live agents
-   * (同题已完全解出 — the submitter finishes its write-up via finish_run),
-   * cancel the challenge's pending queue items, stop the target when
-   * orphaned. Idempotent. */
+   * (agent.flagAccepted), post a #team notice (policy-gated), then run the
+   * full-solve cleanup under the event's policy (stop siblings / cancel the
+   * challenge's pending queue items / stop the target when orphaned).
+   * Idempotent. */
   function notifyFlagAccepted(
     challengeId: string,
     submitterAgentId?: string
@@ -737,12 +738,62 @@ export function createAgentService(options: AgentServiceOptions) {
         agentId: submitterAgentId,
       })
     }
-    stopOthersOnSolved(challengeId, submitterAgentId)
+    const eventId = db
+      .select({ eventId: challenges.eventId })
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()?.eventId
+    if (!eventId) return
+    const policy = schedulerPolicyFor(db, eventId)
+    if (policy.notifyTeamOnFlag) {
+      postFullSolveTeamNotice(challengeId, submitterAgentId, policy)
+    }
+    stopOthersOnSolved(challengeId, submitterAgentId, policy)
+  }
+
+  /** Full-solve #team notice (policy notifyTeamOnFlag). Urgency follows the
+   * urgent-team policy via the channels post path (no explicit urgent here);
+   * when siblings survive (stop off) the body tells them to wrap up. */
+  function postFullSolveTeamNotice(
+    challengeId: string,
+    submitterAgentId: string | undefined,
+    policy: SchedulerPolicy
+  ): void {
+    const name =
+      db
+        .select({ name: challenges.name })
+        .from(challenges)
+        .where(eq(challenges.id, challengeId))
+        .get()?.name ?? challengeId
+    const flag = db
+      .select({ flag: challengeFlags.flag })
+      .from(challengeFlags)
+      .where(
+        and(
+          eq(challengeFlags.challengeId, challengeId),
+          eq(challengeFlags.status, "accepted")
+        )
+      )
+      .orderBy(desc(challengeFlags.updatedAt))
+      .get()?.flag
+    const by = submitterAgentId
+      ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
+      : ""
+    const tail = policy.stopSiblingsOnSolve
+      ? ""
+      : " 本题无需继续攻击，请整理 writeup 并尽快 finish_run 收尾。"
+    channels.post({
+      channelKey: teamKey(challengeId),
+      author: { type: "system" },
+      body: `「${name}」已完全解出${flag ? `：${flag}` : ""}${by}，平台已接受。${tail}`,
+      meta: { eventType: "flagAccepted" },
+    })
   }
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
    * (TSecBench partial — the challenge is NOT fully solved). ONE non-urgent
-   * system post into the challenge's #team + a non-urgent orch notice. */
+   * system post into the challenge's #team (policy-gated) + a non-urgent
+   * orch notice. */
   function notifyFlagPartial(
     challengeId: string,
     message: string | null,
@@ -774,12 +825,14 @@ export function createAgentService(options: AgentServiceOptions) {
       .from(challenges)
       .where(eq(challenges.id, challengeId))
       .get()?.eventId
-    channels.post({
-      channelKey: teamKey(challengeId),
-      author: { type: "system" },
-      body: text,
-      meta: { eventType: "flagPartial" },
-    })
+    if (eventId && schedulerPolicyFor(db, eventId).notifyTeamOnFlag) {
+      channels.post({
+        channelKey: teamKey(challengeId),
+        author: { type: "system" },
+        body: text,
+        meta: { eventType: "flagPartial" },
+      })
+    }
     if (eventId) {
       postOrchNotice(
         eventId,
@@ -800,10 +853,13 @@ export function createAgentService(options: AgentServiceOptions) {
     })
   }
 
-  /** Full-solve cleanup (see notifyFlagAccepted). */
+  /** Full-solve cleanup (see notifyFlagAccepted), shaped by the event's
+   * policy: siblings stopped / target stopped are each skippable; the
+   * challenge's pending queue items are always cancelled. */
   function stopOthersOnSolved(
     challengeId: string,
-    submitterAgentId?: string
+    submitterAgentId: string | undefined,
+    policy: SchedulerPolicy
   ): void {
     const eventId = db
       .select({ eventId: challenges.eventId })
@@ -819,17 +875,19 @@ export function createAgentService(options: AgentServiceOptions) {
         .get()?.name ?? challengeId
     // Other live agents on the challenge: terminal close (aborted). The
     // submitter keeps its session to finish the write-up via finish_run.
-    const siblings = db
-      .select({ id: agents.id })
-      .from(agents)
-      .where(
-        and(
-          eq(agents.challengeId, challengeId),
-          inArray(agents.status, ["running", "idle"]),
-          submitterAgentId ? ne(agents.id, submitterAgentId) : undefined
-        )
-      )
-      .all()
+    const siblings = policy.stopSiblingsOnSolve
+      ? db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(
+            and(
+              eq(agents.challengeId, challengeId),
+              inArray(agents.status, ["running", "idle"]),
+              submitterAgentId ? ne(agents.id, submitterAgentId) : undefined
+            )
+          )
+          .all()
+      : []
     for (const sibling of siblings) {
       void closeAgent(sibling.id).catch(() => undefined)
     }
@@ -838,7 +896,10 @@ export function createAgentService(options: AgentServiceOptions) {
       : 0
     // Orphaned platform target: the challenge is fully solved — its target
     // is no longer needed (the submitter finishes its write-up without it).
-    if (isTargetCapable(getChallengeRemote(db, challengeId))) {
+    if (
+      policy.stopTargetOnSolve &&
+      isTargetCapable(getChallengeRemote(db, challengeId))
+    ) {
       void platformService
         .targetAction(challengeId, "stop")
         .catch(() => undefined)

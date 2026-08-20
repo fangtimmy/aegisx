@@ -18,6 +18,11 @@ import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
 import { fenceSnapshot } from "./fence"
 import type { ModelResolver } from "./model-resolver"
 import type { AgentQueries } from "./queries"
+import {
+  type NextTaskPolicy,
+  type SchedulerPolicy,
+  schedulerPolicyFor,
+} from "./scheduler-policy"
 
 export type SchedulerAdminDeps = {
   db: Database
@@ -253,14 +258,15 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   }
 
   /** Read the event's scheduler policy (defaults if unset). `paused` gates
-   * the event's agent-lifecycle events (W3). */
+   * the event's agent-lifecycle events (W3). The five policy knobs resolve
+   * via schedulerPolicyFor (single source of defaults). */
   function getSchedulerConfig(eventId: string): {
     eventId: string
     modelId: string | null
     instruction: string
     maxConcurrentTargets: number
     paused: boolean
-  } {
+  } & SchedulerPolicy {
     const row = db
       .select()
       .from(schedulerConfig)
@@ -272,6 +278,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       instruction: row?.instruction ?? "",
       maxConcurrentTargets: row?.maxConcurrentTargets ?? 1,
       paused: row?.paused ?? false,
+      ...schedulerPolicyFor(db, eventId),
     }
   }
 
@@ -321,6 +328,11 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     modelId?: string | null
     instruction?: string
     maxConcurrentTargets?: number
+    notifyTeamOnFlag?: boolean
+    stopSiblingsOnSolve?: boolean
+    stopTargetOnSolve?: boolean
+    nextTaskPolicy?: NextTaskPolicy
+    urgentTeamMessages?: boolean
   }) {
     const ts = now()
     const existing = db
@@ -338,6 +350,16 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       if (patch.maxConcurrentTargets !== undefined) {
         update.maxConcurrentTargets = patch.maxConcurrentTargets
       }
+      if (patch.notifyTeamOnFlag !== undefined)
+        update.notifyTeamOnFlag = patch.notifyTeamOnFlag
+      if (patch.stopSiblingsOnSolve !== undefined)
+        update.stopSiblingsOnSolve = patch.stopSiblingsOnSolve
+      if (patch.stopTargetOnSolve !== undefined)
+        update.stopTargetOnSolve = patch.stopTargetOnSolve
+      if (patch.nextTaskPolicy !== undefined)
+        update.nextTaskPolicy = patch.nextTaskPolicy
+      if (patch.urgentTeamMessages !== undefined)
+        update.urgentTeamMessages = patch.urgentTeamMessages
       db.update(schedulerConfig)
         .set(update)
         .where(eq(schedulerConfig.eventId, patch.eventId))
@@ -349,6 +371,11 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
           modelId: patch.modelId ?? null,
           instruction: patch.instruction ?? "",
           maxConcurrentTargets: patch.maxConcurrentTargets ?? 1,
+          notifyTeamOnFlag: patch.notifyTeamOnFlag ?? true,
+          stopSiblingsOnSolve: patch.stopSiblingsOnSolve ?? true,
+          stopTargetOnSolve: patch.stopTargetOnSolve ?? true,
+          nextTaskPolicy: patch.nextTaskPolicy ?? "eager",
+          urgentTeamMessages: patch.urgentTeamMessages ?? true,
           createdAt: ts,
           updatedAt: ts,
         })

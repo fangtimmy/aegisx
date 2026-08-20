@@ -95,12 +95,18 @@ export type SchedulerInfo = {
     maxConcurrentTargets: number
     /** W3: scheduler disabled (agent-lifecycle events gated). */
     paused: boolean
+    notifyTeamOnFlag: boolean
+    stopSiblingsOnSolve: boolean
+    stopTargetOnSolve: boolean
+    nextTaskPolicy: "eager" | "drained"
+    urgentTeamMessages: boolean
   }
   agent: AgentSummary | null
   status: {
     maxConcurrentAgents: number
     liveAgentCount: number
     maxConcurrentTargets: number
+    nextTaskPolicy: "eager" | "drained"
     activeTargetChallenges: string[]
     activeAgents: Array<{
       id: string

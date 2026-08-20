@@ -11,15 +11,20 @@ export function getScheduler(eventId: string) {
   return apiRequest<SchedulerInfo>(`/events/${eventId}/scheduler`)
 }
 
-/** PATCH the event-level scheduler config (model / instruction / target cap).
- * Affects the scheduler agent at next start; the live model can also be
- * switched per-agent on a running scheduler. */
+/** PATCH the event-level scheduler config (model / instruction / target cap /
+ * orchestration policy). Model + instruction affect the scheduler agent at
+ * next start; policy toggles apply live. */
 export function updateSchedulerConfig(
   eventId: string,
   patch: {
     modelId?: string | null
     instruction?: string
     maxConcurrentTargets?: number
+    notifyTeamOnFlag?: boolean
+    stopSiblingsOnSolve?: boolean
+    stopTargetOnSolve?: boolean
+    nextTaskPolicy?: "eager" | "drained"
+    urgentTeamMessages?: boolean
   }
 ) {
   return apiRequest<SchedulerInfo>(
