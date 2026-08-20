@@ -282,7 +282,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
   return (
     <div className="shrink-0 px-3 pb-3">
       {error && <p className="px-1 pb-1 text-xs text-destructive">{error}</p>}
-      <div className="flex flex-col gap-2 rounded-lg border bg-muted/50 px-3 py-2 shadow-xs focus-within:border-ring focus-within:bg-background">
+      <div className="flex flex-col gap-2 rounded-lg border bg-muted/50 px-3 py-2 shadow-xs">
         {files.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {files.map((file, index) => (

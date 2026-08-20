@@ -156,7 +156,7 @@ export function Composer({
 
   return (
     <form
-      className="relative rounded-lg border bg-muted/50 shadow-xs focus-within:border-ring focus-within:bg-background"
+      className="relative rounded-lg border bg-muted/50 shadow-xs"
       onSubmit={(event) => {
         event.preventDefault()
         onSubmit()
@@ -198,7 +198,7 @@ export function Composer({
           value={draft}
         />
       </label>
-      <div className="flex items-center gap-1.5 border-t p-1.5">
+      <div className="flex items-center gap-1.5 p-1.5">
         <Menu>
           <MenuTrigger
             render={
