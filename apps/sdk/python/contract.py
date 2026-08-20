@@ -84,10 +84,10 @@ detail = aegisx.agents.get(SOLVER_ID)
 assert detail.agent["id"] == SOLVER_ID
 ok("agents get")
 
-read = aegisx.agents.read(SOLVER_ID, last_n=2)
+read = aegisx.agents.read(SOLVER_ID, limit=2)
 # The P1 regression guard: the tail cap is honored client-side.
-assert len(read.messages or []) <= 2, "agents.read: last_n ignored"
-ok("agents read last_n tail cap")
+assert len(read.messages or []) <= 2, "agents.read: limit ignored"
+ok("agents read limit tail cap")
 
 # Queue lifecycle on a paused queue: enqueue stays pending (no real spawn).
 assert aegisx.queue.state() == "running"

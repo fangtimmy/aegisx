@@ -289,19 +289,31 @@ export function createPlatformFlags(
       result: SubmissionResult,
       status: ChallengeFlag["status"]
     ) => {
+      // Re-lookup every write: the row may exist from an earlier persist in
+      // this call (async judge: pending → polled verdict) or from a sibling
+      // agent racing the same flag. A terminal verdict is never downgraded.
+      const row = lookup(challengeId, value) ?? existing
+      if (
+        row &&
+        (row.status === "accepted" || row.status === "rejected") &&
+        status !== "accepted" &&
+        status !== "rejected"
+      ) {
+        return
+      }
       const now = new Date().toISOString()
       const patch = {
         status,
         source: "agent" as const,
         agentId,
-        remoteId: result.remoteId ?? existing?.remoteId ?? null,
+        remoteId: result.remoteId ?? row?.remoteId ?? null,
         message: result.message ?? null,
         updatedAt: now,
       }
-      if (existing) {
+      if (row) {
         db.update(challengeFlags)
           .set(patch)
-          .where(eq(challengeFlags.id, existing.id))
+          .where(eq(challengeFlags.id, row.id))
           .run()
       } else {
         db.insert(challengeFlags)

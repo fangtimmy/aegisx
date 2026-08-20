@@ -76,9 +76,9 @@ def message(
     return message
 
 
-def read(agent_id: str, last_n: int | None = None) -> AgentRead:
+def read(agent_id: str, limit: int | None = None) -> AgentRead:
     """The agent detail + its recent message lines (rendered `[role] text`).
-    Pass `last_n` to cap the tail (applied client-side — keep it small to
+    Pass `limit` to cap the tail (applied client-side — keep it small to
     respect the output budget)."""
     client = get_client()
     detail = client.request("GET", f"/api/agents/{agent_id}")
@@ -103,7 +103,7 @@ def read(agent_id: str, last_n: int | None = None) -> AgentRead:
                 str(b.get("text", "")) for b in content if isinstance(b, dict)
             )
         lines.append(f"[{role}] {text}" if role else text)
-    read.messages = lines[-last_n:] if last_n is not None else lines
+    read.messages = lines[-limit:] if limit is not None else lines
     return read
 
 

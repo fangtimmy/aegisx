@@ -27,7 +27,29 @@ One composite operation per script, via bash heredoc (`python3 - <<'PY'` …
             print(c.id, c.points, c.name, c.agent_status_counts)
 
 Output budget: bash truncates at ~64KB — print summaries, write bulk data to
-files. `agents.read(agent_id, last_n=N)` caps the tail; use it.
+files. `agents.read(agent_id, limit=N)` caps the tail; use it.
+
+## Channels quick start (copy verbatim)
+
+    python3 - <<'PY'
+    import aegisx
+    for m in aegisx.channels.read("#team"):
+        print(m.created_at, m.author_name, m.body[:200])
+    aegisx.channels.post("#team", "angle/finding/dead end ...", urgent=False)
+    PY
+
+Exact signatures (`read` returns messages ASCENDING by id; pull = read, the
+cursor advances):
+
+    aegisx.channels.read(channel, after=None, limit=50, mark_read=True) -> list[ChannelMessage]
+    aegisx.channels.post(channel, text, tags=None, files=None, urgent=False) -> ChannelMessage
+    aegisx.channels.list() -> list[Channel]        # .key .kind .unread .live_agent_count
+    aegisx.ask(text, urgent=False, files=None)     # solver -> scheduler (orch)
+
+`channel` is `"#team"` / `"orch"` / a raw key from `list()`. A
+`ChannelMessage` has `.id .channel_key .author_type .author_agent_id
+.author_name .body .meta .created_at .files` — print `.author_name` and
+`.body`, not `.sender`/`.from` (those do not exist).
 
 ## Namespace reference
 
@@ -37,7 +59,7 @@ files. `agents.read(agent_id, last_n=N)` caps the tail; use it.
     aegisx.queue.list() / .state() / .enqueue(challenge_id, prompt=..., model=..., timeout_ms=...)
     aegisx.queue.pause() / .resume() / .remove(id) / .clear() / .reorder(ids)
     aegisx.agents.list(challenge_id=..., status=...)   # solvers only (scheduler: snapshot().scheduler_agent)
-    aegisx.agents.get(id) / .read(id, last_n=N)
+    aegisx.agents.get(id) / .read(id, limit=N)
     aegisx.agents.message(id, text, urgent=True)       # directive into the agent's DM
     aegisx.agents.start(challenge_id, prompt=...)      # ESCAPE HATCH: spawn immediately, bypasses the queue
     aegisx.agents.stop(id) / .close(id) / .finish(id, summary) / .compact(id) / .set_timeout(id, ms)
@@ -53,7 +75,7 @@ events). `channels.list()` returns your visible keys with unread counts.
 
 1. Every delivery ends with a [调度快照] block (delivery-time fleet state).
    Decide from it when it suffices.
-2. Finer detail: `snapshot()` first; `agents.read(id, last_n=…)` for one
+2. Finer detail: `snapshot()` first; `agents.read(id, limit=…)` for one
    agent's recent lines; `challenges.get(id)` before committing to an
    unknown challenge.
 3. Plan = the queue: `queue.enqueue(challenge_id, prompt=...)` per task; the

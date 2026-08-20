@@ -82,7 +82,7 @@ function seed(db: Database): void {
       })
       .run()
   }
-  // Three renderable entries so agents.read(last_n=2) can prove the tail cap.
+  // Three renderable entries so agents.read(limit=2) can prove the tail cap.
   db.insert(sessions)
     .values({
       id: "sess-contract",

@@ -1,4 +1,4 @@
-import { copyFileSync } from "node:fs"
+import { copyFileSync, mkdirSync } from "node:fs"
 import { basename, extname, join } from "node:path"
 
 import type {
@@ -180,13 +180,14 @@ export function copyAttachments(
   challengeId: string,
   workspacePath: string
 ): PromptAttachment[] {
-  return attachmentFiles(db, challengeId).map(
-    ({ storageKey, ...attachment }) => {
-      copyFileSync(
-        join(dataDir, "attachments", ...storageKey.split("/")),
-        join(workspacePath, "attachments", attachment.path)
-      )
-      return attachment
-    }
-  )
+  const files = attachmentFiles(db, challengeId)
+  if (files.length === 0) return []
+  mkdirSync(join(workspacePath, "attachments"), { recursive: true })
+  return files.map(({ storageKey, ...attachment }) => {
+    copyFileSync(
+      join(dataDir, "attachments", ...storageKey.split("/")),
+      join(workspacePath, "attachments", attachment.path)
+    )
+    return attachment
+  })
 }
