@@ -1,4 +1,5 @@
 .opencode/
+.zcode/
 data/
 node_modules/
 dist/
