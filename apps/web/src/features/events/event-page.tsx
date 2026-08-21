@@ -595,7 +595,7 @@ export function EventPage() {
                             </Badge>
                           </div>
                         )}
-                        <div className="@container grid grid-cols-3 items-stretch gap-4 min-[1200px]:grid-cols-4 min-[1700px]:grid-cols-5">
+                        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] items-stretch gap-4">
                           {challengeGroup.items.map((challenge) => (
                             <ChallengeCard
                               challenge={challenge}

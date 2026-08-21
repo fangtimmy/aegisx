@@ -241,7 +241,7 @@ export function HomePage() {
       </div>
 
       {events.isPending && (
-        <div className="@container grid grid-cols-3 gap-4 min-[1200px]:grid-cols-4 min-[1700px]:grid-cols-5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
           {[0, 1, 2].map((index) => (
             <CardFrame key={index}>
               <Card>
@@ -273,7 +273,7 @@ export function HomePage() {
         </Empty>
       )}
       {events.data && events.data.items.length > 0 && (
-        <div className="@container grid grid-cols-3 gap-4 min-[1200px]:grid-cols-4 min-[1700px]:grid-cols-5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
           {events.data.items.map((event) => (
             <EventCard event={event} key={event.id} />
           ))}
