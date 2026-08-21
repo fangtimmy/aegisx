@@ -55,7 +55,7 @@ const PROMPT_MODE_LABELS = {
 type SpawnAgentDialogProps = {
   challenges?: Challenge[]
   challenge?: Pick<Challenge, "id" | "name">
-  eventId?: string
+  eventId: string
   trigger?: ReactNode
   triggerClassName?: string
   triggerLabel?: string
@@ -125,7 +125,7 @@ function SpawnAgentDialogContent({
 }: {
   challenges?: Challenge[]
   challenge?: Pick<Challenge, "id" | "name">
-  eventId?: string
+  eventId: string
   onSpawned?: () => void
   onClose: () => void
 }) {
@@ -164,10 +164,9 @@ function SpawnAgentDialogContent({
           : {}),
         ...(model ? { model } : {}),
       }
-      // Queue mode needs the eventId (POST /api/events/:id/queue).
       return mode === "start"
         ? agentsApi.spawnAgent(id, input)
-        : agentsApi.enqueueSpawn(eventId ?? "", { challengeId: id, ...input })
+        : agentsApi.enqueueSpawn(eventId, { challengeId: id, ...input })
     },
     onSuccess: (result) => {
       toast.success(mode === "start" ? "agent 已启动" : "已加入队列")

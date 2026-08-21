@@ -1,3 +1,4 @@
+import { LIVE_AGENT_STATUSES } from "@aegisx/shared"
 import { and, inArray, isNotNull } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -149,7 +150,7 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
         .where(
           and(
             isNotNull(agents.challengeId),
-            inArray(agents.status, ["running", "idle"])
+            inArray(agents.status, LIVE_AGENT_STATUSES)
           )
         )
         .all()

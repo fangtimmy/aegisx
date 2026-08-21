@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 
-import { get, type AgentUsage } from "@aegisx/shared"
+import { get, LIVE_AGENT_STATUSES, type AgentUsage } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
@@ -194,7 +194,7 @@ export function registerEventRoutes(
       .where(
         and(
           eq(agents.eventId, eventId),
-          inArray(agents.status, ["running", "idle"])
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )
       .get()
@@ -256,7 +256,7 @@ export function registerEventRoutes(
       .where(
         and(
           eq(challenges.eventId, eventId),
-          inArray(agents.status, ["running", "idle"])
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )
       .get()
@@ -438,7 +438,7 @@ export function registerEventRoutes(
       .where(
         and(
           eq(agents.challengeId, challenge.id),
-          inArray(agents.status, ["running", "idle"])
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )
       .get()

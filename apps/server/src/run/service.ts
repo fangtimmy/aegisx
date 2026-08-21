@@ -8,7 +8,12 @@ import type {
   WorkspaceFile,
   WorkspaceInfo,
 } from "@aegisx/shared"
-import { formatModelRef, get } from "@aegisx/shared"
+import {
+  formatModelRef,
+  get,
+  isActiveAgentStatus,
+  LIVE_AGENT_STATUSES,
+} from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import { and, desc, eq, inArray, ne } from "drizzle-orm"
 
@@ -555,7 +560,7 @@ export function createAgentService(options: AgentServiceOptions) {
       updateAgent
     )
     const row = queries.getAgentRow(agentId)
-    if (row && (row.status === "running" || row.status === "idle")) {
+    if (row && isActiveAgentStatus(row.status)) {
       deadlines.armAgentTimers(agentId, row.deadlineAt)
     }
     status.emitAgent(agentId)
@@ -603,7 +608,7 @@ export function createAgentService(options: AgentServiceOptions) {
         .where(
           and(
             eq(agents.role, "orchestrator"),
-            inArray(agents.status, ["running", "idle"])
+            inArray(agents.status, LIVE_AGENT_STATUSES)
           )
         )
         .get()
@@ -615,7 +620,7 @@ export function createAgentService(options: AgentServiceOptions) {
       .where(
         and(
           eq(agents.challengeId, challengeId),
-          inArray(agents.status, ["running", "idle"])
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )
       .all().length
@@ -922,7 +927,7 @@ export function createAgentService(options: AgentServiceOptions) {
           .where(
             and(
               eq(agents.challengeId, challengeId),
-              inArray(agents.status, ["running", "idle"]),
+              inArray(agents.status, LIVE_AGENT_STATUSES),
               submitterAgentId ? ne(agents.id, submitterAgentId) : undefined
             )
           )
@@ -974,10 +979,7 @@ export function createAgentService(options: AgentServiceOptions) {
   ): Promise<AgentSummary> {
     const config = schedulerAdmin.getSchedulerConfig(eventId)
     const existing = schedulerAdmin.getSchedulerAgent(eventId)
-    if (
-      existing &&
-      (existing.status === "running" || existing.status === "idle")
-    ) {
+    if (existing && isActiveAgentStatus(existing.status)) {
       if (config.paused) {
         await resumeScheduler(eventId)
         return requireAgent(existing.id)
@@ -1013,7 +1015,7 @@ export function createAgentService(options: AgentServiceOptions) {
   async function pauseScheduler(eventId: string): Promise<AgentSummary | null> {
     schedulerAdmin.setSchedulerPaused(eventId, true)
     const sched = schedulerAdmin.getSchedulerAgent(eventId)
-    if (sched && (sched.status === "running" || sched.status === "idle")) {
+    if (sched && isActiveAgentStatus(sched.status)) {
       await stopAgent(sched.id)
       return requireAgent(sched.id)
     }
@@ -1028,7 +1030,7 @@ export function createAgentService(options: AgentServiceOptions) {
   ): Promise<AgentSummary | null> {
     schedulerAdmin.setSchedulerPaused(eventId, false)
     const sched = schedulerAdmin.getSchedulerAgent(eventId)
-    if (sched && (sched.status === "running" || sched.status === "idle")) {
+    if (sched && isActiveAgentStatus(sched.status)) {
       await sendMessage(sched.id, { text: SCHEDULER_RESUME_MESSAGE })
       return requireAgent(sched.id)
     }

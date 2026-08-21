@@ -1,10 +1,6 @@
-import {
-  type UseMutationResult,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Trash2, TriangleAlert } from "lucide-react"
+import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
 
@@ -56,6 +52,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/lib/toast"
 
+import { ErrorState } from "./event-shared"
 import { PlatformBinding } from "./platform-binding"
 
 export function EventSettings({ event }: { event: EventSummary }) {
@@ -263,21 +260,18 @@ export function EventSettings({ event }: { event: EventSummary }) {
               buttonLabel="清空题目"
               description="永久删除全部题目、附件及题目级运行记录。"
               dialogTitle={`清空 ${event.name} 的全部题目？`}
-              mutation={purgeChallenges}
               onConfirm={() => purgeChallenges.mutate()}
             />
             <DangerAction
               buttonLabel="清空运行历史"
               description="永久删除全部运行记录及其容器、工作区与会话数据；题目与 flag 历史保留。运行中的 agent 将被强制中止。"
               dialogTitle={`清空 ${event.name} 的运行历史？`}
-              mutation={purgeRuns}
               onConfirm={() => purgeRuns.mutate()}
             />
             <DangerAction
               buttonLabel="删除赛事"
               description="永久删除本赛事及其题目、附件和任务历史。"
               dialogTitle={`删除 ${event.name}？`}
-              mutation={remove}
               onConfirm={() => remove.mutate()}
             />
           </CardPanel>
@@ -306,7 +300,12 @@ function SchedulerPolicyCard({ eventId }: { eventId: string }) {
       </CardFrameHeader>
       <Card>
         <CardPanel>
-          {scheduler.data?.config ? (
+          {scheduler.error ? (
+            <ErrorState
+              error={scheduler.error}
+              retry={() => void scheduler.refetch()}
+            />
+          ) : scheduler.data?.config ? (
             <SchedulerPolicyForm
               config={scheduler.data.config}
               eventId={eventId}
@@ -561,20 +560,19 @@ function DangerAction({
   buttonLabel,
   description,
   dialogTitle,
-  mutation,
   onConfirm,
 }: {
   buttonLabel: string
   description: string
   dialogTitle: string
-  mutation: UseMutationResult<unknown, Error, void, unknown>
   onConfirm: () => void
 }) {
+  const [open, setOpen] = useState(false)
   return (
     <Field>
       <FieldLabel>{buttonLabel}</FieldLabel>
       <FieldDescription>{description}</FieldDescription>
-      <AlertDialog>
+      <AlertDialog onOpenChange={setOpen} open={open}>
         <AlertDialogTrigger
           render={
             <Button
@@ -592,20 +590,16 @@ function DangerAction({
             <AlertDialogDescription>
               此操作无法撤销。必须先停止所有活跃任务。
             </AlertDialogDescription>
-            {mutation.error && (
-              <Alert variant="error">
-                <TriangleAlert />
-                <AlertDescription>{mutation.error.message}</AlertDescription>
-              </Alert>
-            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button type="button" variant="ghost" />}>
               取消
             </AlertDialogClose>
             <Button
-              loading={mutation.isPending}
-              onClick={onConfirm}
+              onClick={() => {
+                onConfirm()
+                setOpen(false)
+              }}
               type="button"
               variant="destructive"
             >

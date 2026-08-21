@@ -8,7 +8,7 @@
     "dev": "bun run dev:server & bun run dev:web & wait",
     "dev:server": "bun run --filter @aegisx/server dev",
     "dev:web": "bun run --filter @aegisx/web dev",
-    "check": "oxfmt --check package.json .oxfmtrc.json && (knip || true) && bun run --filter '@aegisx/*' check",
+    "check": "oxfmt --check package.json .oxfmtrc.json && knip && bun run --filter '@aegisx/*' check",
     "fmt": "oxfmt package.json .oxfmtrc.json && bun run --filter '@aegisx/*' fmt",
     "test": "bun run --filter '@aegisx/*' test",
     "test:sdk": "bun run --filter @aegisx/server test:sdk",

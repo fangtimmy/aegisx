@@ -272,6 +272,7 @@ export function ChallengeCard({
             <IconTooltip label={`为 ${challenge.name} 启动任务`}>
               <SpawnAgentDialog
                 challenge={challenge}
+                eventId={eventId}
                 trigger={<Play />}
                 triggerSize="icon-sm"
                 triggerVariant="ghost"

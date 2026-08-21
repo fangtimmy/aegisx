@@ -1,4 +1,4 @@
-import { type EventPlatform, get } from "@aegisx/shared"
+import { type EventPlatform, get, LIVE_AGENT_STATUSES } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -248,7 +248,7 @@ export function createPlatformService(
       .where(
         and(
           eq(challenges.eventId, eventId),
-          inArray(agents.status, ["running"])
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )
       .get()

@@ -150,7 +150,7 @@ type AgentBlock =
 
 /** Per-turn accumulated usage (summed across the turn's assistant
  * messages — a tool-loop turn makes several LLM calls). */
-export type AgentTurnUsage = {
+type AgentTurnUsage = {
   input: number
   output: number
   cacheRead: number

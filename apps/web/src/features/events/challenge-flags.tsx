@@ -4,6 +4,16 @@ import { useState } from "react"
 
 import { type Challenge, type ChallengeFlag, challengesApi, keys } from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { toast } from "@/lib/toast"
@@ -66,6 +76,8 @@ export function FlagsSection({
         <Input
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
+            // IME composition: Enter commits the composition, never records.
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return
             if (event.key === "Enter") {
               event.preventDefault()
               submit()
@@ -89,9 +101,6 @@ export function FlagsSection({
         <ul className="mt-3 border-y">
           {challenge.flags.map((flag) => (
             <FlagRow
-              deleting={
-                deleteFlag.isPending && deleteFlag.variables === flag.id
-              }
               flag={flag}
               key={flag.id}
               onDelete={() => deleteFlag.mutate(flag.id)}
@@ -109,13 +118,12 @@ export function FlagsSection({
 
 function FlagRow({
   flag,
-  deleting = false,
   onDelete,
 }: {
   flag: ChallengeFlag
-  deleting?: boolean
   onDelete: () => void
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false)
   return (
     <li className="flex min-w-0 items-center gap-3 border-t py-3 first:border-t-0">
       <Flag className="size-4 shrink-0 text-muted-foreground" />
@@ -131,16 +139,47 @@ function FlagRow({
         </p>
       </div>
       <IconTooltip label="删除 flag">
-        <Button
-          aria-label="删除 flag"
-          loading={deleting}
-          onClick={onDelete}
-          size="icon-sm"
-          type="button"
-          variant="ghost"
-        >
-          <Trash2 />
-        </Button>
+        <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
+          <AlertDialogTrigger
+            render={
+              <Button
+                aria-label="删除 flag"
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              />
+            }
+          >
+            <Trash2 />
+          </AlertDialogTrigger>
+          <AlertDialogPopup>
+            <AlertDialogHeader>
+              <AlertDialogTitle>删除该 flag？</AlertDialogTitle>
+              <AlertDialogDescription>
+                <span className="font-mono break-all">{flag.flag}</span>
+                <br />
+                删除后无法恢复。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogClose
+                render={<Button type="button" variant="ghost" />}
+              >
+                取消
+              </AlertDialogClose>
+              <Button
+                onClick={() => {
+                  onDelete()
+                  setConfirmOpen(false)
+                }}
+                type="button"
+                variant="destructive"
+              >
+                删除
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogPopup>
+        </AlertDialog>
       </IconTooltip>
     </li>
   )

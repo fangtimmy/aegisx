@@ -350,7 +350,7 @@ export const DELIVERY_TEMPLATE_VARIABLES = [
   "messages[].files[].path",
 ] as const
 
-export const sampleDeliveryContext: DeliveryRenderContext = {
+const sampleDeliveryContext: DeliveryRenderContext = {
   dropped: 0,
   messages: [
     {
@@ -418,7 +418,7 @@ export const SCHEDULER_DIGEST_TEMPLATE_VARIABLES = [
   "challenges[].pending",
 ] as const
 
-export const sampleSchedulerDigestContext: SchedulerDigestContext = {
+const sampleSchedulerDigestContext: SchedulerDigestContext = {
   agents: { live: 3, max: 8 },
   targets: { used: 1, max: 2 },
   queue: { pending: 2, running: 1, paused: false },

@@ -143,6 +143,7 @@ function ChallengeOverview({
           <span className="ml-auto flex gap-2">
             <SpawnAgentDialog
               challenge={spawnTarget}
+              eventId={eventId}
               trigger={
                 <>
                   <Plus /> 新尝试
@@ -328,7 +329,11 @@ function SchedulerOverview({
           <CardFrameHeader>
             <CardFrameTitle>调度收件箱</CardFrameTitle>
             <CardFrameAction className="flex items-center gap-2">
-              {inbox.data ? (
+              {inbox.error ? (
+                <Badge size="sm" variant="secondary">
+                  收件箱加载失败
+                </Badge>
+              ) : inbox.data ? (
                 <>
                   {inbox.data.unreadCount > 0 ? (
                     <Badge size="sm" variant="info">

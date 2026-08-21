@@ -1,5 +1,9 @@
 import type { AgentSummary } from "@aegisx/shared"
-import { modelAddress, type FlatSettings } from "@aegisx/shared"
+import {
+  LIVE_AGENT_STATUSES,
+  modelAddress,
+  type FlatSettings,
+} from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { SchedulerStatusSnapshot } from "@aegisx/shared/scheduler"
 import { and, eq, inArray } from "drizzle-orm"
@@ -102,7 +106,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         status: agents.status,
       })
       .from(agents)
-      .where(inArray(agents.status, ["running", "idle"]))
+      .where(inArray(agents.status, LIVE_AGENT_STATUSES))
       .all()
     // One prefetch for all challenge names instead of a SELECT per agent.
     const challengeIds = [
@@ -144,7 +148,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       .where(
         and(
           eq(agents.eventId, eventId),
-          inArray(agents.status, ["running", "idle"])
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )
       .all()) {

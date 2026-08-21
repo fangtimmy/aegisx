@@ -311,6 +311,8 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
             className="max-h-32 flex-1 text-sm [&_textarea]:max-h-32 [&_textarea]:min-h-6 [&_textarea]:px-0 [&_textarea]:py-1 [&_textarea]:text-sm"
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
+              // IME composition: Enter commits the composition, never sends.
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return
               if (event.key === "Enter" && !event.shiftKey && text.trim()) {
                 event.preventDefault()
                 send.mutate()

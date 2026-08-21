@@ -1,6 +1,7 @@
 import { copyFileSync, mkdirSync, statSync, writeFileSync } from "node:fs"
 import { basename, join, relative, resolve, sep } from "node:path"
 
+import { isActiveAgentStatus, LIVE_AGENT_STATUSES } from "@aegisx/shared"
 import type {
   ChannelFileMeta,
   ChannelMessageList,
@@ -873,7 +874,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
   }
 
   function isActive(agent: typeof agents.$inferSelect): boolean {
-    return agent.status === "running" || agent.status === "idle"
+    return isActiveAgentStatus(agent.status)
   }
 
   /** The channelDelivery template body for this delivery: the builtin row
@@ -902,11 +903,25 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
   }
 
+  /** Fire-and-forget delivery wrapper. Delivery is a trunk path (flag
+   * notices / teammate messages) — a failure is logged, never swallowed. */
+  function deliverAsync(
+    agentId: string,
+    opts: { coldWake?: boolean; deliverAs?: "steer" | "followUp" } = {}
+  ): void {
+    void deliverAgentAwaited(agentId, opts).catch((error) => {
+      console.error("channel delivery failed", {
+        agentId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
+
   /** Fire-and-forget delivery (onboarding sweep after spawn — a fresh
    * agent's cursor is 0, one deliver sweeps the challenge's whole #team
    * history into its first turn's tail). */
   function deliver(agentId: string): void {
-    void deliverAgentAwaited(agentId).catch(() => undefined)
+    deliverAsync(agentId)
   }
 
   /** Urgent-post delivery trigger:
@@ -929,25 +944,23 @@ export function createChannelService(deps: ChannelServiceDeps) {
         .where(
           and(
             eq(agents.challengeId, parsed.id),
-            inArray(agents.status, ["running", "idle"])
+            inArray(agents.status, LIVE_AGENT_STATUSES)
           )
         )
         .all()
       for (const { id } of liveAgents) {
-        void deliverAgentAwaited(id, { deliverAs }).catch(() => undefined)
+        deliverAsync(id, { deliverAs })
       }
       return
     }
     if (parsed.kind === "dm") {
-      void deliverAgentAwaited(parsed.id, { coldWake: true, deliverAs }).catch(
-        () => undefined
-      )
+      deliverAsync(parsed.id, { coldWake: true, deliverAs })
       return
     }
     // orch: only a live scheduler receives pushes.
     const orch = schedulerAgentRow(parsed.id)
     if (orch && isActive(orch)) {
-      void deliverAgentAwaited(orch.id, { deliverAs }).catch(() => undefined)
+      deliverAsync(orch.id, { deliverAs })
     }
   }
 
@@ -980,11 +993,11 @@ export function createChannelService(deps: ChannelServiceDeps) {
       const live = db
         .select({ id: agents.id, eventId: agents.eventId })
         .from(agents)
-        .where(inArray(agents.status, ["running", "idle"]))
+        .where(inArray(agents.status, LIVE_AGENT_STATUSES))
         .all()
       for (const row of live) {
         if (isDeliveryPaused(row.eventId)) continue
-        void deliverAgentAwaited(row.id).catch(() => undefined)
+        deliverAsync(row.id)
       }
     } catch (error) {
       console.error("channel flush tick failed", {
@@ -1120,7 +1133,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .where(
         and(
           eq(agents.challengeId, challengeId),
-          inArray(agents.status, ["running", "idle"])
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )
       .get()
@@ -1381,7 +1394,7 @@ type RenderGroup = {
  * math stays in code (per-message size measured through the SAME template,
  * so a custom template folds accurately). Attachment CONTENT never enters
  * the text — readers open the shared path directly. */
-export function renderDelivery(
+function renderDelivery(
   body: string,
   groups: RenderGroup[],
   maxChars: number

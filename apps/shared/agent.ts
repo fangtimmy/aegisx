@@ -79,8 +79,10 @@ export type AgentStatus =
 
 /** An agent holds live resources (a session; the challenge workspace's
  * container is shared and lazily managed). */
+export const LIVE_AGENT_STATUSES: AgentStatus[] = ["running", "idle"]
+
 export function isActiveAgentStatus(status: string): boolean {
-  return status === "running" || status === "idle"
+  return LIVE_AGENT_STATUSES.includes(status as AgentStatus)
 }
 
 import type {

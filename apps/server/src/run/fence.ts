@@ -1,4 +1,4 @@
-import { get, type FlatSettings } from "@aegisx/shared"
+import { get, LIVE_AGENT_STATUSES, type FlatSettings } from "@aegisx/shared"
 import type { NextTaskPolicy } from "@aegisx/shared/scheduler"
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm"
 
@@ -65,7 +65,7 @@ function liveSolverAgentCount(db: Database): number {
     .where(
       and(
         isNotNull(agents.challengeId),
-        inArray(agents.status, ["running", "idle"])
+        inArray(agents.status, LIVE_AGENT_STATUSES)
       )
     )
     .get()
@@ -91,7 +91,7 @@ function activeTargetSlots(
     .where(
       and(
         eq(agents.eventId, eventId),
-        inArray(agents.status, ["running", "idle"]),
+        inArray(agents.status, LIVE_AGENT_STATUSES),
         eq(challengeRemote.available, true),
         eq(challengeRemote.targetSupported, true),
         eq(challengeRemote.targetIgnored, false),

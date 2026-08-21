@@ -37,6 +37,7 @@ import {
   NumberFieldInput,
 } from "@/components/ui/number-field"
 import { Textarea } from "@/components/ui/textarea"
+import { toast } from "@/lib/toast"
 
 import { AttachmentRow, PendingFileRow } from "./challenge-attachments"
 import { FlagsSection } from "./challenge-flags"
@@ -128,6 +129,7 @@ function ChallengeDialogContent({
   onClose: () => void
 }) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [targetConfirmOpen, setTargetConfirmOpen] = useState(false)
   const uploadInput = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const removeAttachment = useMutation({
@@ -140,6 +142,7 @@ function ChallengeDialogContent({
     mutationFn: () => challengesApi.ignoreTarget(challenge?.id ?? ""),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: keys.events.detail(eventId) }),
+    onError: (error) => toast.error("移除目标失败", error.message),
   })
   const form = useForm<ChallengeFormValues>({
     defaultValues: {
@@ -248,12 +251,10 @@ function ChallengeDialogContent({
                   <Textarea
                     onBlur={field.onBlur}
                     onChange={field.onChange}
-                    required
                     rows={6}
                     value={field.value}
                   />
                 )}
-                rules={{ required: true }}
               />
             </Field>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
@@ -386,7 +387,10 @@ function ChallengeDialogContent({
                     导入的目标无法编辑。移除该目标后，后续任务将停用平台目标工具。
                   </p>
                 </div>
-                <AlertDialog>
+                <AlertDialog
+                  onOpenChange={setTargetConfirmOpen}
+                  open={targetConfirmOpen}
+                >
                   <AlertDialogTrigger
                     render={
                       <Button type="button" variant="destructive-outline" />
@@ -408,8 +412,10 @@ function ChallengeDialogContent({
                         取消
                       </AlertDialogClose>
                       <Button
-                        loading={removeTarget.isPending}
-                        onClick={() => removeTarget.mutate()}
+                        onClick={() => {
+                          removeTarget.mutate()
+                          setTargetConfirmOpen(false)
+                        }}
                         type="button"
                         variant="destructive"
                       >

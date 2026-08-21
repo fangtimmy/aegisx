@@ -1,0 +1,216 @@
+# AegisX 代码包袱与技术债审计报告（2026-08-20）
+
+> **2026-08-21 修复记录**：P0-2、P0-3、P1-5 已修复；P1-4 部分修复（knip 门禁与未用导出已处理，两个测试 lint 豁免经验证为必要，保留——web 的 tests/ 不在 type-aware lint 的 tsconfig 工程内，server 的 await-thenable 豁免对应 `await expect().rejects` 惯用法 22 处误报）。各节内有标记。
+
+审计方式：纯静态分析。工具：oxlint（type-aware）、oxfmt、knip、jscpd（token≥50）、madge、bun outdated、git churn 统计，外加人工通读热点文件。未启动服务器、未执行测试。
+
+范围：`apps/server/src`、`apps/web/src`（排除只读的 `components/ui/**`）、`apps/shared`、`apps/sdk/python`、根配置与仓库卫生。合计约 4.9 万行 TS/TSX、295 个源文件。
+
+## 总体结论
+
+代码库的**基础纪律极好**：type-aware lint 七插件 0 错误、全库几乎零 `any`、零 `@ts-ignore`、零 TODO/FIXME 欠账、格式统一、重复率仅 1.10%、依赖全部新鲜、死代码清理果断（v19 重构整批删除旧 run 体系）。此前 f119605「P1-P4 清理」已经还过一轮债。
+
+真正的问题集中在四个结构性主题，全部与**迭代速度**相关（最近 20 天 181 次提交，日均 9 次）：
+
+1. **契约类型双轨制**——shared 包是声明的 canonical 来源，但 web 对更新最快的调度/队列域手工镜像了一份，且已出现类型降级和第四处重复声明。
+2. **「live agent」谓词散落**——同一业务判定在 15+ 处字面重写，无共享常量，且已出现一处疑似不一致（可能是真 bug）。
+3. **核心路径静默吞错**——20 处 `.catch(() => undefined)`，其中含调度排水、消息投递两条主干。
+4. **巨型工厂闭包三件套**——三个 700~1200 行的 mega-factory 同时占据体量榜和 churn 榜前列。
+
+---
+
+## P0 — 高优先级
+
+### P0-1 契约类型双轨制：web 手工镜像 shared 的 canonical 类型
+
+`apps/shared` 的存在意义是承载前后端契约（`shared/scheduler.ts` 开头自述 "Canonical definition — the server's scheduler-admin + routes and the web UI both import from here"）。实际上 web 只对老域（agent/channel/settings）走了 shared，对**churn 最快的调度/队列域**绕开 shared 手工维护镜像：
+
+| 契约 | canonical 位置 | 手工镜像位置 | 问题 |
+|---|---|---|---|
+| 队列项 | `shared/queue.ts` `QueueItemPublic` | `web/src/api/types.ts:62` `QueueItem`（注释自述 "mirrors the server's QueueItemPublic"） | `params` 在 shared 里是 `SpawnQueueParams`，镜像里降级为 `Record<string, unknown>`——既重复又丢失类型 |
+| fleet/scheduler 快照 | `shared/scheduler.ts` `FleetInfo`/`SchedulerStatusSnapshot` | `web/src/api/types.ts:88-130` `SchedulerInfo`/`FleetInfo` 手写一遍 | 9 个策略字段的形状靠人肉同步 |
+| 调度策略 patch | `shared/scheduler.ts` `SchedulerPolicyConfig` | `web/src/api/scheduler.ts:20-33` `updateSchedulerConfig` 的 patch 参数逐字段第三次声明 | 未用 `Partial<SchedulerPolicyConfig & {...}>` |
+
+策略字段的完整声明链：`db/schema.ts`（列）→ `run/scheduler-policy.ts`（默认值）→ `shared/scheduler.ts`（canonical）→ `web/api/types.ts`（镜像）→ `web/api/scheduler.ts`（patch），**同一组 9 个字段在 4 个 TS 位置重写**。最近三次 feature 提交（9a45a22 五开关、26dc6ac 策略入设置、677dcfa 收队协议）每次都要全链路手改，churn 榜第 7 名正是 `api/types.ts`（41 次改动）。
+
+**建议**：删掉 `api/types.ts` 的镜像段，改 re-export `QueueItemPublic as QueueItem`、shared 的 `SchedulerInfo`（需在 shared 补一个 `SchedulerInfo` 完整形状），patch 类型改 `Partial`。一次性小时级工作量，之后新策略开关只动 schema + shared 两处。
+
+### P0-2 「live agent」谓词字面散落 15+ 处，且存在一处疑似不一致
+
+> **状态：已修复（2026-08-21）**。`shared/agent.ts` 新增 `LIVE_AGENT_STATUSES = ["running", "idle"]`，`isActiveAgentStatus` 由常量派生；server 全部字面量（`inArray` 12 处、`=== ||` 6 处、channels 局部 `isActive`）改为引用常量/谓词。`detach()` 确认为 bug 并修复：idle 的 agent 仍在存活、可继续对话，其平台目标被解绑抽走与全库语义矛盾，现在 idle 同样阻止解绑。
+
+`inArray(agents.status, ["running", "idle"])` 作为「agent 存活」判定在 7 个文件、15+ 处逐字重写（`fence.ts:68,94`、`channels.ts:932,983,1123`、`service.ts:606,618,925`、`events/routes.ts:197,259,441`、`scheduler-admin.ts:105,147`、`container-lifecycle.ts:152`），另外还有 `row.status === "running" || row.status === "idle"` 的判空写法（`service.ts:558,979,1016`）。**全库没有 `LIVE_STATUSES` 常量或 `isLiveAgent()` 谓词**。
+
+后果已经显现：`platforms/service.ts:251` 的 `detach()` 只查 `["running"]`——idle（回合间）的 agent 不阻止解绑平台，而 detach 会把该赛事全部远程题目标记 `available: false` 并删绑定；idle 的 agent 仍在存活、可继续对话，其平台目标被抽走。错误文案写的是 "Stop active agents before removing the platform binding"，与全库其余判定语义矛盾。**疑似真 bug，需要确认是否故意**。
+
+**建议**：在 db 层或 domain 层定义 `LIVE_AGENT_STATUSES = ["running", "idle"] as const` 并替换全部字面量；对 `detach()` 单独决策：若 idle 也应阻止，即修复了一个 bug。
+
+### P0-3 核心路径静默吞错：20 处 `.catch(() => undefined)` 无任何日志
+
+> **状态：已修复（2026-08-21）**。主干两处补日志：`queue.ts` 的 drainOnce catch 输出 `spawn queue drain failed`；`channels.ts` 新增 `deliverAsync` 包装器统一 5 个 fire-and-forget 投递点，失败输出 `channel delivery failed`（含 agentId）。清理类吞错按建议保持现状。
+
+清单（server）：
+
+- `run/queue.ts:433` — `void drainOnce().catch(() => undefined)`。**调度排水主干**：若 `drainOnce` 整体抛错（如 `pendingItems()` DB 错误），本次排水无声消失，队首任务不启动、无任何日志，只能等下一个触发器。
+- `run/channels.ts:909,937,942,950,987` — `deliverAgentAwaited` 的 5 个 fire-and-forget 调用点。**消息投递主干**：投递失败即丢一轮通知（ scheduler 收不到 flag 通知/队友消息），无日志。
+- `run/deadlines.ts:62`、`run/container-lifecycle.ts:121-133`、`agents/lifecycle.ts:141`、`service.ts` 8 处 abort/dispose —— 这些属于 best-effort 清理，吞错语义上说得通，但同样零观测。
+
+区分两类：清理类吞错可以接受；**drainOnce / deliverAgentAwaited 是业务主干，吞错 = 功能静默失效**。`app.ts:60` 的 `recoverOnBoot` 至少 console.error 了，说明项目有这个习惯，只是没有贯彻到调度/投递。
+
+**建议**：主干路径的 catch 统一改为 `.catch((e) => console.error("drain failed", ...))` 级别（本地单机，console 足够，不必引日志框架）；清理类保持现状。
+
+---
+
+## P1 — 中优先级
+
+### P1-1 巨型工厂闭包三件套（体量榜 + churn 榜双料冠军）
+
+| 文件 | 行数 | 工厂函数 | 闭包跨度 |
+|---|---|---|---|
+| `run/channels.ts` | 1434 | `createChannelService` | 160→1350，约 **1190 行** |
+| `run/service.ts` | 1230 | `createAgentService` | 111→~1160，约 **1130 行**，内含 45+ 内部函数 |
+| `run/agent-factory.ts` | 951 | `createAgentFactory` | 226→914，约 688 行；其中 `spawnAgent` 单函数 486→658（172 行） |
+
+churn 榜：`service.ts` 全库第一（80 次改动）、`channels.ts` 同属高频。日均 9 次提交下，两个千行闭包是持续的合并冲突面和导航负担。DI-by-closure 的可测试性收益真实存在，但 45 个函数共享一个闭包已经不是「一个职责」。
+
+**建议**：不必推翻模式，按职责切分文件即可——`channels.ts` 可按 post/投递/flush/附件四段拆为同包多文件，闭包变量改显式传参或保留一个小 context 对象；`service.ts` 的 flag 通知族（`notifyFlagAccepted`/`postExtraFlagNotice`/`postFullSolveTeamNotice`/`notifyFlagPartial`，733-898 行）是天然的第一刀。
+
+### P1-2 `service.ts` 终态善后逻辑三连拷贝
+
+`closeAgent`（380-407）、`finishAgent`（410-441）、`deleteAgent`（675-）的 `withLock` 内部善后体逐行重复：abort → dispose → `lifecycle.delete` → `deadlines.clearAgentTimers` → `pendingFinish.delete` → `finishFlagWarned.delete` → `terminalizeAgent` → `bus.forget`。jscpd 确认 384↔417（18 行）、390↔679（11 行）两组克隆。三处的差异只有终态 status 与附加字段。抽一个 `settleAgent(agentId, outcome)` 私有函数即可收敛，改动风险低（有 service-lifecycle 测试覆盖）。
+
+### P1-3 `providers/routes.ts` 宽 try/catch 错误归因混淆
+
+`providers/routes.ts:204-206、238-240` 等多处：整个业务体包进 try，任何异常统一翻译为 `"Invalid provider endpoint"`（invalid_base_url）。`configStore.updateProviders` 抛出的非 URL 错误（乃至未来的逻辑 bug）都会被伪装成用户输入错误，排查时误导。**建议**：只把 `normalizeHttpBaseUrl` 包进 try，或让它抛带类型的错误由外层精确分支。同文件 722 行/12 路由，业务规则（删 provider 时清理 defaultModelRef 等）混在 HTTP 层，是 server 侧最「胖」的路由文件。
+
+### P1-4 check 门禁被弱化的三处
+
+> **状态：部分修复（2026-08-21）**。根 `check` 已去掉 `(knip || true)`，knip 现在是硬门禁；3 个未用导出已降为模块内私有（另清理 knip 新报的 `AgentTurnUsage`）。两个测试豁免经实测保留：移除 web 的 `tests/**` 会暴露 20 个 tsconfig 工程覆盖不到的配置性错误（tests/ 无路径别名与 bun 类型）；移除 server 的 await-thenable 豁免会产生 22 个 `await expect(...).rejects.toThrow()` 惯用法误报。
+
+- 根 `package.json` 的 `check`：`(knip || true)`——knip 永远不会让 check 失败。当前 knip 报的 3 个未用导出（`renderDelivery`、`sampleDeliveryContext`、`sampleSchedulerDigestContext`）因此在日常流程里不可见，属于永久性盲区。
+- `apps/web/.oxlintrc.json` 的 `ignorePatterns` 含 `tests/**`——web 测试代码完全不 lint。
+- `apps/server/.oxlintrc.json` 对 `test/**` 关闭 `typescript/await-thenable`——测试里可以不 await Promise 而不被发现。
+
+**建议**：knip 要么修复要么删掉 `|| true`；两个测试豁免若无实际误报案例则移除。
+
+### P1-5 版本声明漂移：shared 声明 0.83.0，实际解析 0.84.2
+
+> **状态：已修复（2026-08-21）**。shared 声明改为 0.84.2，lockfile 已刷新。
+
+`apps/shared/package.json` 声明 `@earendil-works/pi-coding-agent@0.83.0`，根 overrides 强制 0.84.2（提交 a8c5e0d 升级时漏改了 shared 的声明）。`bun pm ls` 证实实际安装 0.84.2。声明与解析不一致，overrides 掩盖了漂移。顺手改为 `0.84.2` 对齐 server/web。
+
+### P1-6 循环依赖与文档化 workaround
+
+- madge 报唯一环：`shared/agent.ts` ↔ `shared/live-event.ts`。类型层互相引用目前无害，但每次给 LiveEvent 加携带 Agent 的新变体都会加深它。建议 `live-event.ts` 里对 agent 的引用改为泛型参数或从 `agent.ts` 单向引。
+- `db/schema.ts:168-173`：`agents.queueItemId` 有意省略 FK 声明以规避 TS7022 循环类型推断（注释已说明，反向 FK 声明在 spawn_queue 侧）。文档化良好，仅记录在案。
+
+---
+
+## P2 — 低优先级
+
+### P2-1 仓库卫生
+
+| 项 | 位置 | 说明 |
+|---|---|---|
+| 孤儿目录 | `pai-only/` | 5.8MB 已构建的 pi 包产物，bun.lock 与全部源码零引用，纯遗留，可删 |
+| 遗留空文件 | `data/aegisx.db` | 0 字节，8 月 16 日创建，现行 DB 是 `aegisx.sqlite`（drizzle.config 指向后者） |
+| `.DS_Store` | 仓库根 | 已 gitignore，仅本地清理 |
+| `data/aegisx.sqlite.bak-*` ×3 | data/ | 迁移备份保留 3 份是 `pruneBackups(keep=3)` 的设计行为，非债 |
+
+### P2-2 重复代码明细（jscpd，token≥50，全库 45 处克隆 / 1.10%）
+
+整体极低，值得处理的只有：
+
+- `src/db/migration-0011/0012/0013.test.ts` — 三个迁移测试共享约 90 行 harness（建库/种子/断言流程）逐文件复制。抽 `migration-test-harness.ts` helper。
+- `platforms/adapters/a1ctf.ts:233` ↔ `ret2shell.ts:179`（18 行）——两个适配器各自实现了相同的解析逻辑，可提取共享 helper；加上即将新增的适配器，这里是复制蔓延的起点。
+- `orchestration/prompt-refresh-sdk-guide.ts:114` ↔ `prompt-refresh-v19.ts:256`（27 行）——提示词文本双写，改一处漏一处会直接造成 scheduler 提示词与文档漂移。
+- `run/service.ts` 内部三处（见 P1-2）、`run/routes.ts` 内部 5 处小克隆（路由样板，可不处理）。
+- web `features/` 内零散 9-17 行克隆（对话框表单、状态徽章布局），量小且跨组件，提取反而增加耦合，建议容忍。
+
+### P2-3 `ConversationStore` 的单连接 vs 多 agent 状态张力
+
+`web/src/stream/conversation-store.ts` 的全部状态按 `agentId` 键控（多 agent 设计），但 SSE 连接是单例 `this.source`（103 行），`connect()` 先 `this.close()` 再连新流（389 行）。当前用法（同时只看一个 agent 的流）下正确，但任何未来组件尝试并行订阅两个 agent 的流就会互踢。文件本身实现质量很高（stable/tail 记忆化 + rAF 批量通知 + 断线重连态清理），仅此一处设计预留不足，建议在 `connect` 的 JSDoc 里写明单流约束，或把 source 移出 store 由调用方持有。
+
+### P2-4 knip 盲区：server `scripts/` 不在 project globs
+
+`knip.json` 的 server workspace project 是 `["src/**/*.ts", "test/**/*.ts"]`，`scripts/relay.ts`、`scripts/sdk-contract.ts` 不参与死代码分析。若某脚本停用，knip 不会报。加入 `"scripts/**/*.ts"` 即可。
+
+### P2-5 knip 已报未清理项
+
+> **状态：已修复（2026-08-21）**。随 P1-4 一并处理：三个导出降为模块内私有（均只在本文件使用）。
+
+`run/channels.ts:1384` `renderDelivery`、`orchestration/prompt-templates.ts:353,421` 两个 sample context 导出无引用（被 `|| true` 吞掉所以从未被处理）。确认后删除。
+
+### P2-6 其他记录在案
+
+- `app.ts:60` `recoverOnBoot` 失败只打日志、服务照常起。本地单兵工具下合理（数据还在，可修后重启），仅记录：崩溃恢复失败时 UI 无任何信号。
+- `db/index.ts:241-243` 每次启动无条件 `rmSync` 清理 v19 遗留目录，非迁移分支也执行。成本可忽略，但语义上属于「一次性迁移逻辑常驻启动路径」。
+- 根 `dev` 脚本 `bun run dev:server & bun run dev:web & wait`：Ctrl-C 信号传递在 zsh 下有时残留子进程，属已知 shell 便利脚本的通病，不强求处理。
+- `docs/` 全部为设计/实施历史文档（含对已删文件的引用，属有意存档）。缺一份**活的**架构概览（模块图 + 数据流），新人/未来的自己定位 `channels/service/queue/fence` 关系只能读代码。
+
+---
+
+## 健康面（值得保持的做法）
+
+- **工具链配置是认真的**：type-aware oxlint + 7 插件（含 tailwindcss 类名校验全家桶）、oxfmt、knip、jscpd 可复跑；server 133 文件、web 92 文件全部 0 错误。
+- **类型纪律**：全库（除只读 UI 库）零 `any`、零 `@ts-ignore`、零 lint 抑制注释（仅 2 处合理的 `jsx-a11y/no-autofocus`）。drizzle 的 `$inferSelect` 派生用得干净。
+- **`db/index.ts` 是全库质量标杆**：fresh/recognized/preBaseline/newerThanBinary 四态分类、迁移前 WAL checkpoint 备份、失败自动回滚快照、单实例文件锁、备份裁剪，每一步有测试。
+- **测试广度**：server 50+ 测试文件覆盖 service/queue/channels/fence/scheduler/迁移/SDK 契约（真起临时服务跑 Python 契约），关键路径有防护网，这让 P1-1/P1-2 的重构建议可行。
+- **死代码清理纪律**：v19 一次性删除 runs 表全家桶与 5 个 web 大组件，不留兼容层，符合项目「不维护向后兼容」原则。
+- **依赖健康**：bun outdated 全绿（最旧落后一个 minor），无废弃包，运行时依赖面很小（server 12 个直接依赖）。
+- **`conversation-store.ts` / `collectSink`（container-manager）** 等核心模块的边界处理（断线、输出限流）显示出对失败模式的预判。
+
+---
+
+## 量化附录
+
+### 体量 Top 10（排除 `components/ui/**`）
+
+| 文件 | 行数 |
+|---|---|
+| `server/src/run/channels.ts` | 1434 |
+| `server/src/run/service.ts` | 1230 |
+| `server/src/run/agent-factory.ts` | 951 |
+| `web/src/features/runs/timeline.tsx` | 897 |
+| `web/src/features/runs/channels-view.tsx` | 723 |
+| `server/src/providers/routes.ts` | 722 |
+| `server/src/run/routes.ts` | 678 |
+| `web/src/features/events/event-settings.tsx` | 619 |
+| `web/src/features/events/event-page.tsx` | 613 |
+| `server/src/events/routes.ts` | 570 |
+
+### churn Top 10（全历史，剔除已删文件与 docs）
+
+| 文件 | 改动次数 |
+|---|---|
+| `server/src/run/service.ts` | 80 |
+| `server/src/app.ts` | 60 |
+| `server/src/db/schema.ts` | 52 |
+| `server/src/run/routes.ts` | 47 |
+| `server/src/drizzle/meta/_journal.json` | 48 |
+| `web/src/features/runs/timeline.tsx` | 47 |
+| `web/src/api/types.ts` | 41 |
+| `web/src/features/events/event-page.tsx` | 34 |
+| `server/src/settings/routes.ts` | 33 |
+| `server/src/run/queries.ts` | 33 |
+
+提交速度：全历史 323 次，2026-08-01 至今 181 次（日均 ~9）。
+
+### 工具基线
+
+- oxlint（type-aware）：server 0 错 / web 0 错 / shared 0 错
+- oxfmt --check：通过
+- knip：3 未用导出 + 2 未声明 bin（oxlint/oxfmt，devDep 在根、命令在各包，误报性质）
+- jscpd（token≥50）：45 克隆 / 538 行 / 1.10%
+- madge：1 个循环依赖（shared/agent ↔ shared/live-event）
+- bun outdated：仅 minor 落后（oxfmt/oxlint/lucide-react 等）
+
+## 建议行动顺序
+
+1. **确认 `platforms/service.ts:251` 的 `["running"]` 是否为 bug**（5 分钟决策，若是则 P0-2 修复顺带完成一半）
+2. P0-1 契约类型并轨（小时级，消除 churn 最痛的一条链）
+3. P0-3 给 drainOnce / deliverAgentAwaited 的 catch 加日志（半小时）
+4. P1-2 抽 `settleAgent`（小时级，测试已覆盖）
+5. P1-4 去掉 `(knip || true)` 并清理 3 个未用导出；P1-5 改 shared 版本声明（分钟级）
+6. P1-1 巨型工厂拆分（按上述「第一刀」逐步推进，不必一次性）
+7. P2 项随手处理：删 `pai-only/`、`data/aegisx.db`，迁移测试抽 harness，knip 加 scripts globs

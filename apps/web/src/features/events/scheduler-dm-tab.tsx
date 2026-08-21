@@ -17,6 +17,7 @@ import {
   MessageList,
   RECONCILE_INTERVAL_MS,
 } from "@/features/runs/channels-view"
+import { toast } from "@/lib/toast"
 import { parseLiveEvent } from "@/stream/parse-event"
 
 import { POLL_INTERVAL_MS } from "./event-agents-shared"
@@ -106,6 +107,7 @@ export function SchedulerDmTab({
         queryKey: keys.scheduler.inbox(eventId),
       })
     },
+    onError: (error) => toast.error("切换投递暂停失败", error.message),
   })
 
   const snap = snapshot.data

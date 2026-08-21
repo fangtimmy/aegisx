@@ -108,6 +108,8 @@ export function SteerQueue({
                   onBlur={(e) => replace(row.role, row.index, e.target.value)}
                   onChange={(e) => setEdit({ ...row, text: e.target.value })}
                   onKeyDown={(e) => {
+                    // IME composition: Enter commits, never saves the edit.
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return
                     if (e.key === "Enter") {
                       e.preventDefault()
                       replace(row.role, row.index, edit.text)

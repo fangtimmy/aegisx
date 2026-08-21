@@ -136,6 +136,7 @@ export function ConversationPane({
           <div className="shrink-0 border-t p-2">
             <SpawnAgentDialog
               challenge={challenge}
+              eventId={eventId}
               onSpawned={handleSpawned}
               trigger={
                 <>
@@ -172,6 +173,7 @@ export function ConversationPane({
             <EmptyContent>
               <SpawnAgentDialog
                 challenge={challenge}
+                eventId={eventId}
                 onSpawned={handleSpawned}
                 trigger={
                   <>

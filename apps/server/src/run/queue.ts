@@ -430,7 +430,11 @@ export function createQueueService(deps: QueueServiceDeps) {
     if (drainTimer) return
     drainTimer = setTimeout(() => {
       drainTimer = null
-      void drainOnce().catch(() => undefined)
+      void drainOnce().catch((error) => {
+        console.error("spawn queue drain failed", {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
     }, DRAIN_DEBOUNCE_MS)
   }
 
