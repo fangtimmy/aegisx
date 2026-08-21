@@ -1,6 +1,8 @@
 # 前端全面检查报告（2026-08-20）
 
-> **2026-08-21 修复记录**：P0-1、P0-2、P0-3、P1-1、P1-8、P1-9 已修复，各节内有标记。
+> **2026-08-21 修复记录（第一轮）**：P0-1、P0-2、P0-3、P1-1、P1-8、P1-9 已修复，各节内有标记。
+>
+> **2026-08-21 修复记录（第二轮）**：P1-2 ~ P1-7 与 P2 全部 11 项已修复，各节内有标记。至此本报告所有事项闭环。
 
 基于对 `apps/web/src` 全量源码的静态走查（不含只读的 `components/ui/**` coss 组件库，业务代码约 18.6k 行），辅以项目自带检查工具。未启动服务器与浏览器，所有结论来自代码本身。
 
@@ -72,9 +74,13 @@
 
 ### P1-2 调度者 DM 时间线强制贴底、无分页
 
+> **状态：已修复（2026-08-21）**。`ChannelTimeline` 从 channels-view 导出（新增 `active` prop 门控轮询与 SSE，隐藏 tab 停流），SchedulerDmTab 改为直接复用它——获得 follow-latest + 前插锚定 + 回最新按钮 + 「加载更早」分页；同时给 ChannelTimeline 补了 `tail.error` 的错误 + 重试分支。
+
 `scheduler-dm-tab.tsx:93-97`：`messages.data` 每次变化（SSE 每条新消息都会 `setQueryData`）都执行 `scrollTop = scrollHeight`。用户上翻阅读历史时会被新消息不断拽回底部。`ChannelsView.ChannelTimeline`（`channels-view.tsx:469-496`）已实现完整的 follow-latest + 前插锚定 + 回最新按钮，DM tab 没有复用。另外 DM tab 只取最新 100 条（`listChannelMessages(channelKey, 0, 100)`），没有「加载更早」入口，更早的调度历史在 UI 上不可达。
 
 ### P1-3 同一 AgentStatus 的颜色语义跨视图冲突
+
+> **状态：已修复（2026-08-21）**。以 `statusVariant` 为唯一权威：任务列表圆点 running 改蓝（`bg-info`）、live 非运行改绿（`bg-success`）；调度者状态词汇收敛到新 helper `schedulerStatusLabel`（未启动 > 已暂停 > agentStatusLabel），任务列表、概览 StatCell、调度者控制面板三处共用，颜色同步对齐（running=info、idle=success、暂停=warning）。
 
 - `task-list.tsx:278-282`：任务列表圆点 **running=绿**（`bg-success`）、live 非运行=黄；
 - `agent-overview.tsx:3-7` `statusVariant`：徽章体系 **running=蓝**（info）、**idle=绿**（success）。
@@ -85,21 +91,25 @@
 
 ### P1-4 `aborted` 状态术语三处两种叫法
 
+> **状态：已修复（2026-08-21）**。收敛为「已中断」：`agentStatusLabel`（agent-overview，作为唯一标签表）改输出「已中断/已失败」，`agent-status-icon` 删除本地副本改导入共享标签，`agentFinishBadge` 改用 `agentStatusLabel` 取值。
+
 `agent-overview.tsx:13`「已关闭」 vs `event-agents-shared.ts:36`「已中断」 vs `activity-log.tsx:90`「已中断」。同一终止状态在花名册/图表/活动日志里名称不同。
 
 ### P1-5 附件上传失败 Alert 不可关闭
+
+> **状态：已修复（2026-08-21）**。Alert 增加 `data-slot="alert-action"` 的关闭按钮（置空 `uploadError`）。
 
 `event-page.tsx:539-545`：`uploadError` 警告条没有 dismiss 动作，只能被「下一次成功且无失败附件的保存」清除（`challenge-dialog.tsx:191-195`）。失败信息应当可手动关闭或随路由离开清除。
 
 ### P1-6 AgentConversation 把网络错误显示为「Agent 不存在」
 
+> **状态：已修复（2026-08-21）**。按 `ApiError.code === "not_found"` 分支：404 仍显示「Agent 不存在」；其余错误显示「对话加载失败」+ 具体错误 + 重试按钮（`detail.refetch()`）。
+
 `conversation-pane.tsx:341-352`：`detail.error || !agent` 统一渲染「Agent 不存在…请刷新后重试」，但既没有刷新按钮也没有区分传输错误与 404。断网时所有对话都会变成「Agent 不存在」。
 
-### P1-7 频道消息的附件不可下载、消息不可复制、无搜索
+### P1-7 频道消息的附件不可下载
 
-- `channels-view.tsx:67-84` `AttachmentChip` 只展示文件名 + `title` 显示服务器路径，没有下载链接（对比题目附件有下载，`challenge-attachments.tsx:43-56`；工作区文件有下载，`files-workspace.tsx:271-284`）。agent 发回的产物（exp、脚本、截图名）在频道里看得见拿不到。
-- 频道消息与对话时间线均无按住复制以外的复制 affordance，也无消息内搜索。长比赛里回找一条 flag/结论只能肉眼翻页。
-- flag 列表（`challenge-flags.tsx:110-147`）同样没有一键复制——这是 CTF 工具里复制频率最高的值。
+> **状态：已修复（2026-08-21）**。服务端新增 `GET /api/channels/:channelKey/files/download?message=<id>&path=<p>`（按消息 meta 里记录的 path 反解所属题目工作区，不做自由路径读取），`AttachmentChip` 改为下载链接（含下载图标）；flag 列表每行增加一键复制按钮（toast 反馈）。预览 Dialog 未做——下载已满足「拿得到」，工作区文件页已有预览能力。
 
 ### P1-8 flag 删除无确认，与附件删除不一致
 
@@ -117,17 +127,30 @@
 
 ## P2 · 打磨项（11 项）
 
-1. **Composer 不自动增高**：`composer.tsx:184-199`、`channels-view.tsx:310-323` 都是 `rows={1}` + min/max-h 固定行高，多行草稿在一行高度内滚动，与主流 IM 体验不符。另外 `frontend-polish.md` P1 声称已加的「agent composer 底部快捷键提示行」在当前代码中不存在（全库无 kbd/快捷键提示），属文档漂移——Enter/Shift+Enter、`/` 命令、投递方式切换都没有任何可发现性。
-2. **主题快捷键 `d` 无修饰键且不可发现**：`theme-provider.tsx:141-179`，任意非输入元素聚焦时按 `d` 即切换明暗主题。用户会在不知情时误触（例如看完对话框按 d 关闭前先触发切换），且设置页外观区也未提及此快捷键。建议加修饰键（⌘/Ctrl+D）或至少在设置页标注。
+> **状态：全部已修复（2026-08-21）**，各条目内附实现说明。
+
+1. **Composer 不自动增高**：`composer.tsx:184-199`、`channels-view.tsx:310-323` 都是 `rows={1}` + min/max-h 固定行高，多行草稿在一行高度内滚动，与主流 IM 体验不符。
+   > 已修复：新增 `lib/utils.ts#autoSizeTextarea`（height=auto → scrollHeight，CSS min/max-h 仍兜底），两处 composer 在值变化时调用。
+2. **主题快捷键 `d` 无修饰键且不可发现**：`theme-provider.tsx:141-179`，任意非输入元素聚焦时按 `d` 即切换明暗主题。用户会在不知情时误触（例如看完对话框按 d 关闭前先触发切换），且设置页外观区也未提及此快捷键。去掉这个快捷键。
+   > 已修复：整个 keydown effect 与 `isEditableTarget` 助手移除，主题只经设置页切换。
 3. **卡片网格固定 3 列**：`home-page.tsx:244,276`、`event-page.tsx:585`。全宽模式（用户已打开 fullWidth 开关）或超宽屏下赛事卡/题目卡被拉得过宽；可按断点给 4/5 列档位。仅桌面 ≥1024 是明确约束，但宽度上限没有约束。
+   > 已修复：两处网格加 `@container` + 容器查询断点 `min-[1200px]:grid-cols-4`、`min-[1700px]:grid-cols-5`（按实际内容宽分档，全宽/超宽屏生效，标准宽度下保持 3 列）。
 4. **favicon 缺失**：`index.html` 无 `<link rel="icon">`，`public/vite.svg` 未被引用，浏览器标签页显示默认图标。
+   > 已修复：新增 `public/favicon.svg`（深色圆角底 + 盾牌 + 绿勾，明暗标签栏均可读）并在 `index.html` 引用；删除未用的 `vite.svg`。
 5. **设置页第四个 tab 叫「设置」**：`settings-screen.tsx:45-50`「设置 → 设置」导航语义含混（该 tab 实为 schema 驱动的运行参数表单），建议改名如「运行参数」。
+   > 已修复：tab 与卡片标题均改为「运行参数」（路由路径 `/settings/settings` 不变）。
 6. **小字号 + 贴线对比度**：`index.css:63-67`（浅色 muted-foreground ≈ neutral-500 与白的混合，对比度约 4.5:1 贴线）叠加大批 `text-[10px]/[11px]`（频道时间戳、分组头、计数 chip）。可把 muted-foreground 调深一档，或对 10-11px 文本改用 foreground/80。
+   > 已修复：浅色 `--muted-foreground` 改为纯 `neutral-600`（白底约 7:1）；暗色原本即朝白混合，未动。
 7. **ModelRefPicker 空态无引导**：`model-switcher.tsx:161` 无可用模型时只显示「选择模型」placeholder，不提示去设置页添加供应商。新用户首次打开启动对话框会困惑。
+   > 已修复：下拉弹层内无可用模型时显示「无可用模型 + 前往 设置 → 模型供应商 添加并启用一个供应商」。
 8. **Timeline aria-live 播报过频**：`timeline.tsx:892-894` 每次 items 变化（流式 delta 合帧后）都播报「agent 活动已更新」，读屏用户在流式输出期间会被刷屏。建议仅在状态转折（开始/结束）播报。
+   > 已修复：Timeline 新增 `running` prop（Conversation 传入），仅在新用户消息出现（「新回合开始」）与 running→false（「回合结束」）时播报。
 9. **面包屑截断无提示**：`product-header.tsx:52` 赛事名 truncate 但无 title，长赛事名无法查看全称。
+   > 已修复：截断 span 补 `title={eventName}`。
 10. **无组件级 ErrorBoundary**：只有路由级 `RouteError`（`App.tsx:28-53`）。时间线/图表任何一个渲染异常会击穿整个路由到错误页，丢失用户上下文（对话草稿虽有 localStorage 保全）。对 timeline、agents-graph 两个复杂渲染区值得各加一层。
+    > 已修复：新增 `components/error-boundary.tsx`（类组件，就地显示「渲染出错」+ 重试），包裹 Conversation 内的 Timeline（按 agentId 重置）与 AgentsGraph。
 11. **频道未读只有点无计数**：`channels-view.tsx:584-589` 未读显示为小圆点，离开页面再回来无法区分 1 条新消息还是 50 条。活动日志已有计数 badge 先例（`activity-log.tsx:213-217`）。
+    > 已修复：rail 项未读改为计数 badge（99+ 截断，样式对齐活动日志）；ChannelsView 在非活跃频道 `lastMessageAt` 越过基线时拉取一次最新窗口计数（`at` 水位保证每次变化只拉一次，SSE 打开频道即时清零）。
 
 ---
 

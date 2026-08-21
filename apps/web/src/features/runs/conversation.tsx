@@ -15,6 +15,7 @@ import type {
   MessageListItem,
   ModelRef,
 } from "@/api"
+import { ErrorBoundary } from "@/components/error-boundary"
 import {
   AlertDialog,
   AlertDialogClose,
@@ -396,25 +397,27 @@ export function Conversation(props: ConversationProps) {
       )}
       <div className="min-h-0 flex-1">
         <ScrollArea className="relative h-full" scrollFade>
-          <Timeline
-            agent={detail}
-            agentId={agentId}
-            canBacktrack={Boolean(sessionOps) && !running}
-            footer={
-              running ? (
-                <div className="flex items-center gap-1.5 py-3 text-info">
-                  <AgentActivityBadge
-                    agentId={agentId}
-                    agentStatus={agent.status}
-                    stream={store}
-                  />
-                </div>
-              ) : undefined
-            }
-            key={agentId}
-            onBacktrack={setBacktrackTarget}
-            stream={store}
-          />
+          <ErrorBoundary key={agentId}>
+            <Timeline
+              agent={detail}
+              agentId={agentId}
+              canBacktrack={Boolean(sessionOps) && !running}
+              footer={
+                running ? (
+                  <div className="flex items-center gap-1.5 py-3 text-info">
+                    <AgentActivityBadge
+                      agentId={agentId}
+                      agentStatus={agent.status}
+                      stream={store}
+                    />
+                  </div>
+                ) : undefined
+              }
+              onBacktrack={setBacktrackTarget}
+              running={running}
+              stream={store}
+            />
+          </ErrorBoundary>
         </ScrollArea>
       </div>
       {loadError && (

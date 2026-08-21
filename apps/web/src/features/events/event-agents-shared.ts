@@ -1,4 +1,7 @@
+import { isActiveAgentStatus } from "@aegisx/shared"
+
 import type { AgentStatus, AgentSummary } from "@/api"
+import { agentStatusLabel } from "@/features/runs/agent-overview"
 
 /** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
    so the fleet/queue/usage must refresh regardless of locally-known state. */
@@ -31,10 +34,25 @@ export function agentFinishBadge(status: AgentStatus): {
   label: string
   variant: "success" | "destructive" | "warning"
 } | null {
-  if (status === "completed") return { label: "已完成", variant: "success" }
-  if (status === "failed") return { label: "已失败", variant: "destructive" }
-  if (status === "aborted") return { label: "已中断", variant: "warning" }
+  if (status === "completed")
+    return { label: agentStatusLabel(status), variant: "success" }
+  if (status === "failed")
+    return { label: agentStatusLabel(status), variant: "destructive" }
+  if (status === "aborted")
+    return { label: agentStatusLabel(status), variant: "warning" }
   return null
+}
+
+/** The scheduler's lifecycle label (task list, overview stat, control panel
+ * share it): 未启动 > 已暂停 > the agent status vocabulary. */
+export function schedulerStatusLabel(
+  agent: AgentSummary | null,
+  paused: boolean
+): string {
+  const active = agent !== null && isActiveAgentStatus(agent.status)
+  if (!active) return "未启动"
+  if (paused) return "已暂停"
+  return agentStatusLabel(agent.status)
 }
 
 /** The AgentsGraph active root node id (live agents + live scheduler). */

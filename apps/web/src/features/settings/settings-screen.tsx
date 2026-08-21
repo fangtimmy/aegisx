@@ -133,7 +133,7 @@ export function SettingsScreen() {
             <FileText aria-hidden="true" /> 提示词模板
           </TabsTab>
           <TabsTab value="settings">
-            <Settings2 aria-hidden="true" /> 设置
+            <Settings2 aria-hidden="true" /> 运行参数
           </TabsTab>
         </TabsList>
       </div>
@@ -147,7 +147,7 @@ export function SettingsScreen() {
         <TabsPanel value="settings">
           <CardFrame className="min-w-0">
             <CardFrameHeader>
-              <CardFrameTitle>设置</CardFrameTitle>
+              <CardFrameTitle>运行参数</CardFrameTitle>
               <CardFrameDescription>
                 可搜索的配置项。修改会自动保存。
               </CardFrameDescription>

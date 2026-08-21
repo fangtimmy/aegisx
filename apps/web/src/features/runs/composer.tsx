@@ -13,6 +13,7 @@ import {
   MenuTrigger,
 } from "@/components/ui/menu"
 import { Textarea } from "@/components/ui/textarea"
+import { autoSizeTextarea } from "@/lib/utils"
 
 /** Composer command panel entry (slash-command style): clicking inserts the
  * command text into the composer; Conversation dispatches it on submit. */
@@ -102,6 +103,12 @@ export function Composer({
   useEffect(() => {
     if (!running && !locked) inputRef.current?.focus()
   }, [running, locked])
+
+  // Fit the textarea to its draft: multi-line drafts grow the composer
+  // instead of scrolling inside a single row (capped by max-h).
+  useEffect(() => {
+    autoSizeTextarea(inputRef.current)
+  }, [draft])
 
   // Outside-click closes the slash popup.
   useEffect(() => {

@@ -7,6 +7,7 @@ import { ListRow } from "@/components/list-row"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { schedulerStatusLabel } from "@/features/events/event-agents-shared"
 import { overallSolved } from "@/features/events/event-shared"
 import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -165,11 +166,21 @@ export function TaskList({
   const schedulerAgent = fleet.schedulerAgent
   const schedActive =
     schedulerAgent !== null && isActiveAgentStatus(schedulerAgent.status)
-  const schedLabel = !schedActive
-    ? "未启动"
+  const schedLabel = schedulerStatusLabel(schedulerAgent, fleet.config.paused)
+  const schedDotClass = !schedActive
+    ? "bg-muted-foreground/40"
     : fleet.config.paused
-      ? "已暂停"
-      : "运行中"
+      ? "bg-warning"
+      : schedulerAgent!.status === "running"
+        ? "bg-info"
+        : "bg-success"
+  const schedTextClass = !schedActive
+    ? "text-muted-foreground"
+    : fleet.config.paused
+      ? "text-warning"
+      : schedulerAgent!.status === "running"
+        ? "text-info"
+        : "text-success"
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
@@ -190,29 +201,13 @@ export function TaskList({
           >
             <span
               aria-hidden
-              className={cn(
-                "size-2 shrink-0 rounded-full",
-                !schedActive
-                  ? "bg-muted-foreground/40"
-                  : fleet.config.paused
-                    ? "bg-warning"
-                    : "bg-success"
-              )}
+              className={cn("size-2 shrink-0 rounded-full", schedDotClass)}
             />
             <span className="shrink-0 text-sm font-medium">调度者</span>
             <span className="truncate text-xs text-muted-foreground">
               {shortModel(schedulerAgent?.model ?? fleet.config.modelId)}
             </span>
-            <span
-              className={cn(
-                "ml-auto shrink-0 text-xs",
-                schedActive
-                  ? fleet.config.paused
-                    ? "text-warning"
-                    : "text-success"
-                  : "text-muted-foreground"
-              )}
-            >
+            <span className={cn("ml-auto shrink-0 text-xs", schedTextClass)}>
               {schedLabel}
             </span>
           </ListRow>
@@ -276,9 +271,9 @@ function TaskRowView({
     meta?.flags.filter((flag) => flag.status === "accepted").length ?? 0
 
   const dotClass = row.runningCount
-    ? "bg-success"
+    ? "bg-info"
     : row.liveCount
-      ? "bg-warning"
+      ? "bg-success"
       : "bg-muted-foreground/40"
 
   const deadline =

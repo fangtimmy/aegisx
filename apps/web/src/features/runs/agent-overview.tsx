@@ -6,12 +6,14 @@ export function statusVariant(status: AgentStatus) {
   return "secondary" as const
 }
 
+/** The single status vocabulary: every view (badges, dots, labels) renders
+ * these words for an AgentStatus value. */
 export function agentStatusLabel(status: AgentStatus): string {
   if (status === "running") return "运行中"
   if (status === "idle") return "空闲"
   if (status === "completed") return "已完成"
-  if (status === "aborted") return "已关闭"
-  if (status === "failed") return "失败"
+  if (status === "aborted") return "已中断"
+  if (status === "failed") return "已失败"
   return status
 }
 

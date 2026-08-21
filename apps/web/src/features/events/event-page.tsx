@@ -12,6 +12,7 @@ import {
   Settings,
   TriangleAlert,
   Users,
+  X,
 } from "lucide-react"
 import { useMemo, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router"
@@ -23,6 +24,7 @@ import {
   eventsApi,
   keys,
 } from "@/api"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { AppLayout } from "@/components/shell/app-layout"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -234,12 +236,14 @@ function EventAgentsPanel({
   }
 
   return (
-    <AgentsGraph
-      agents={agents}
-      challenges={challenges}
-      eventId={eventId}
-      scheduler={schedulerData}
-    />
+    <ErrorBoundary>
+      <AgentsGraph
+        agents={agents}
+        challenges={challenges}
+        eventId={eventId}
+        scheduler={schedulerData}
+      />
+    </ErrorBoundary>
   )
 }
 
@@ -541,6 +545,15 @@ export function EventPage() {
                   <TriangleAlert />
                   <AlertTitle>附件上传失败</AlertTitle>
                   <AlertDescription>{uploadError}</AlertDescription>
+                  <Button
+                    aria-label="关闭上传失败提示"
+                    data-slot="alert-action"
+                    onClick={() => setUploadError(null)}
+                    size="icon-sm"
+                    variant="ghost"
+                  >
+                    <X />
+                  </Button>
                 </Alert>
               )}
               {eventQuery.data.challenges.length === 0 ? (
@@ -582,7 +595,7 @@ export function EventPage() {
                             </Badge>
                           </div>
                         )}
-                        <div className="grid grid-cols-3 items-stretch gap-4">
+                        <div className="@container grid grid-cols-3 items-stretch gap-4 min-[1200px]:grid-cols-4 min-[1700px]:grid-cols-5">
                           {challengeGroup.items.map((challenge) => (
                             <ChallengeCard
                               challenge={challenge}

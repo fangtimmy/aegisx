@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Flag, Plus, Trash2 } from "lucide-react"
+import { Copy, Flag, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 
 import { type Challenge, type ChallengeFlag, challengesApi, keys } from "@/api"
@@ -23,6 +23,13 @@ const FLAG_STATUS_LABEL: Record<ChallengeFlag["status"], string> = {
   accepted: "已验证",
   rejected: "已拒绝",
   error: "错误",
+}
+
+function copyFlag(value: string) {
+  void navigator.clipboard.writeText(value).then(
+    () => toast.success("已复制 flag"),
+    () => toast.error("复制失败")
+  )
 }
 
 /** One-to-many flag management: record manual candidates, remove any flag. */
@@ -138,6 +145,17 @@ function FlagRow({
               : ""}
         </p>
       </div>
+      <IconTooltip label="复制 flag">
+        <Button
+          aria-label="复制 flag"
+          onClick={() => copyFlag(flag.flag)}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <Copy />
+        </Button>
+      </IconTooltip>
       <IconTooltip label="删除 flag">
         <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
           <AlertDialogTrigger

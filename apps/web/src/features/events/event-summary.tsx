@@ -29,29 +29,15 @@ import {
 } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  agentStatusLabel,
-  formatCost,
-  formatTokens,
-} from "@/features/runs/agent-overview"
+import { formatCost, formatTokens } from "@/features/runs/agent-overview"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 
+import { roleLabel, schedulerStatusLabel } from "./event-agents-shared"
 import { ErrorState, isChallengeSolved } from "./event-shared"
 
 /** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
    so the fleet/queue/usage must refresh regardless of locally-known state. */
 const POLL_INTERVAL_MS = 5000
-
-const ROLE_LABELS: Record<string, string> = {
-  solver: "求解者",
-  observer: "观察者",
-  orchestrator: "调度者",
-  child: "子代理",
-}
-
-function roleLabel(role: string): string {
-  return ROLE_LABELS[role] ?? role
-}
 
 /** Scheduler endpoint payload (the scheduler agent is `agent`). */
 type SchedulerData = SchedulerInfo
@@ -113,6 +99,7 @@ export function EventSummary({
       challenges={challenges}
       agentsByChallenge={agentsByChallenge}
       schedulerAgent={schedulerAgent}
+      schedulerPaused={fleet.data?.config.paused ?? false}
       queue={queue.data?.items ?? []}
       usage={usage.data?.usage}
     />
@@ -123,12 +110,14 @@ function SummaryTab({
   challenges,
   agentsByChallenge,
   schedulerAgent,
+  schedulerPaused,
   queue,
   usage,
 }: {
   challenges: Challenge[]
   agentsByChallenge: Record<string, AgentSummary[]>
   schedulerAgent: AgentSummary | null
+  schedulerPaused: boolean
   queue: QueueItem[]
   usage?: AgentUsage
 }) {
@@ -198,11 +187,7 @@ function SummaryTab({
             <StatCell
               icon={<Network className="size-4" />}
               label="调度者"
-              value={
-                schedulerAgent
-                  ? agentStatusLabel(schedulerAgent.status)
-                  : "未启用"
-              }
+              value={schedulerStatusLabel(schedulerAgent, schedulerPaused)}
             />
           </CardPanel>
         </Card>

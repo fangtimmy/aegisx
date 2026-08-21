@@ -1,24 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 
-import {
-  channelsApi,
-  keys,
-  schedulerApi,
-  type ChannelMessageList,
-  type ChannelMessagePublic,
-} from "@/api"
+import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Spinner } from "@/components/ui/spinner"
-import { appendChannelMessage } from "@/features/runs/channel-tail"
-import {
-  ChannelComposer,
-  MessageList,
-  RECONCILE_INTERVAL_MS,
-} from "@/features/runs/channels-view"
+import { ChannelComposer, ChannelTimeline } from "@/features/runs/channels-view"
 import { toast } from "@/lib/toast"
-import { parseLiveEvent } from "@/stream/parse-event"
 
 import { POLL_INTERVAL_MS } from "./event-agents-shared"
 
@@ -59,44 +46,7 @@ export function SchedulerDmTab({
   })
   const channelKey = snapshot.data?.channelKey ?? null
 
-  const messages = useQuery({
-    queryKey: keys.channels.messages(channelKey ?? ""),
-    enabled: Boolean(channelKey),
-    queryFn: () => channelsApi.listChannelMessages(channelKey!, 0, 100),
-    // SSE carries live pushes; the poll is a 60s reconciliation backstop.
-    refetchInterval: active ? RECONCILE_INTERVAL_MS : false,
-  })
-
-  // Live channel pushes for the orch key — same append path as the IM view,
-  // but only while the tab is visible.
   const queryClient = useQueryClient()
-  useEffect(() => {
-    if (!active || !channelKey) return
-    const source = new EventSource(`/api/channels/${channelKey}/stream`)
-    source.onmessage = (message) => {
-      let payload: unknown
-      try {
-        payload = JSON.parse(message.data)
-      } catch {
-        return
-      }
-      const event = parseLiveEvent(payload)
-      if (event?.type !== "channel.message") return
-      const live = event.message as ChannelMessagePublic
-      queryClient.setQueryData<ChannelMessageList>(
-        keys.channels.messages(channelKey),
-        (prev) => appendChannelMessage(prev, live)
-      )
-    }
-    return () => source.close()
-  }, [active, channelKey, queryClient])
-
-  const timelineRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const node = timelineRef.current
-    if (node) node.scrollTop = node.scrollHeight
-  }, [messages.data])
-
   const holdToggle = useMutation({
     mutationFn: (paused: boolean) =>
       paused
@@ -157,25 +107,20 @@ export function SchedulerDmTab({
       </div>
       {/* Timeline (the orch event stream — no recap) */}
       <div className="flex min-h-0 flex-1 flex-col">
-        {!channelKey ? (
+        {channelKey ? (
+          <>
+            <ChannelTimeline
+              active={active}
+              channelKey={channelKey}
+              key={channelKey}
+            />
+            <ChannelComposer channelKey={channelKey} />
+          </>
+        ) : (
           <p className="px-4 py-6 text-sm text-muted-foreground">
             尚无调度者频道（启动调度者后自动创建）。
           </p>
-        ) : messages.isPending ? (
-          <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Spinner aria-hidden /> 正在加载消息…
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto pt-1" ref={timelineRef}>
-            {(messages.data?.items ?? []).length === 0 && (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                尚无消息。
-              </p>
-            )}
-            <MessageList messages={messages.data?.items ?? []} />
-          </div>
         )}
-        {channelKey && <ChannelComposer channelKey={channelKey} />}
       </div>
     </div>
   )

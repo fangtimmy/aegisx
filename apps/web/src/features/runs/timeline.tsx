@@ -711,6 +711,7 @@ export function Timeline({
   canBacktrack = false,
   onBacktrack,
   footer,
+  running = false,
 }: {
   agentId: string
   stream: ConversationStore
@@ -721,6 +722,9 @@ export function Timeline({
   /** Tail content rendered after the last message, inside the scrollable
    * timeline (e.g. the live working-status indicator). */
   footer?: ReactNode
+  /** Whether the agent is mid-turn — drives the screen-reader turn
+   * announcements (start on a new user message, end on running → false). */
+  running?: boolean
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLElement>(null)
@@ -763,6 +767,28 @@ export function Timeline({
     }
     return { startByKey, endKeys }
   }, [items])
+
+  // Screen-reader announcements only on turn transitions — a per-delta
+  // "活动已更新" would flood during streaming.
+  const [announcement, setAnnouncement] = useState("")
+  const userCount = useMemo(
+    () =>
+      items.reduce(
+        (count, item) => (item.type === "user" ? count + 1 : count),
+        0
+      ),
+    [items]
+  )
+  const prevUserCount = useRef(userCount)
+  const prevRunning = useRef(running)
+  useEffect(() => {
+    if (userCount > prevUserCount.current) setAnnouncement("新回合开始")
+    prevUserCount.current = userCount
+  }, [userCount])
+  useEffect(() => {
+    if (prevRunning.current && !running) setAnnouncement("回合结束")
+    prevRunning.current = running
+  }, [running])
 
   const scrollToBottom = (behavior: ScrollBehavior) => {
     const viewport = viewportRef.current
@@ -890,7 +916,7 @@ export function Timeline({
       ))}
       {footer}
       <div aria-live="polite" className="sr-only">
-        {items.length > 0 ? "agent 活动已更新" : ""}
+        {announcement}
       </div>
     </div>
   )

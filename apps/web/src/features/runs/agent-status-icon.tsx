@@ -1,15 +1,8 @@
 import { Check, CircleDashed, LoaderCircle, OctagonX, X } from "lucide-react"
 
 import type { AgentStatus } from "@/api"
+import { agentStatusLabel } from "@/features/runs/agent-overview"
 import { cn } from "@/lib/utils"
-
-function agentStatusLabel(status: AgentStatus): string {
-  if (status === "running") return "运行中"
-  if (status === "completed") return "已完成"
-  if (status === "aborted") return "已中断"
-  if (status === "failed") return "已失败"
-  return "空闲"
-}
 
 /**
  * Inline status glyph for an agent. Spins while running; uses the theme status

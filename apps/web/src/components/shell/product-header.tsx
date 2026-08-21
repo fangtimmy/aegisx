@@ -49,7 +49,9 @@ export function ProductHeader({ eventName }: { eventName?: string }) {
                 size="xl"
                 variant="ghost"
               >
-                <span className="truncate">{eventName}</span>
+                <span className="truncate" title={eventName}>
+                  {eventName}
+                </span>
               </Button>
             </>
           )}

@@ -1182,6 +1182,49 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
   }
 
+  /** Resolve a recorded message attachment back to the challenge workspace
+   * it landed in (the UI download path): the path must match a file recorded
+   * on the message — no free-form workspace reads. team → the challenge
+   * workspace; dm → the target agent's; orch → the author agent's (only
+   * solver agents attach, user uploads are rejected on orch). */
+  function channelFileTarget(
+    channelKey: string,
+    messageId: number,
+    path: string
+  ): { eventId: string; challengeId: string; filename: string } {
+    const parsed = requireKey(channelKey)
+    const row = db
+      .select()
+      .from(channelMessages)
+      .where(eq(channelMessages.id, messageId))
+      .get()
+    if (!row || row.channelKey !== parsed.raw) {
+      throw new RunActionError("not_found", "消息不存在")
+    }
+    const file = parseMeta(row.meta).files?.find((f) => f.path === path)
+    if (!file) throw new RunActionError("not_found", "附件不存在")
+    let eventId: string | undefined
+    let challengeId: string | undefined
+    if (parsed.kind === "team") {
+      const challenge = challengeRow(parsed.id)
+      eventId = challenge?.eventId
+      challengeId = challenge?.id
+    } else {
+      const agent =
+        parsed.kind === "dm"
+          ? agentRow(parsed.id)
+          : row.authorAgentId
+            ? agentRow(row.authorAgentId)
+            : undefined
+      eventId = agent?.eventId
+      challengeId = agent?.challengeId ?? undefined
+    }
+    if (!eventId || !challengeId) {
+      throw new RunActionError("not_found", "附件所属题目不存在")
+    }
+    return { eventId, challengeId, filename: file.filename }
+  }
+
   /** SDK channels.list: solver = own #team + own dm + orch; scheduler =
    * every #team of its event's challenges + every dm of its event's solver
    * agents + orch. */
@@ -1343,6 +1386,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     challengeChannelTree,
     unreadCount,
     channelInfo,
+    channelFileTarget,
     // hold + inbox
     setDeliveryPaused,
     isDeliveryPaused,

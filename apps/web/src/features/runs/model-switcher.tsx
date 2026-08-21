@@ -180,6 +180,12 @@ export function ModelRefPicker({
               </SelectItem>
             </SelectGroup>
           )}
+          {grouped.length === 0 && (
+            <div className="flex flex-col gap-1 px-3 py-4 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">无可用模型</span>
+              <span>前往 设置 → 模型供应商 添加并启用一个供应商。</span>
+            </div>
+          )}
           {grouped.map(([providerLabel, list]) => {
             const visible = live
               ? list.filter((m) => m.address !== selectedAddress)

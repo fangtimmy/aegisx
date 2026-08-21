@@ -14,6 +14,7 @@ import {
   CardFrameTitle,
   CardPanel,
 } from "@/components/ui/card"
+import { schedulerStatusLabel } from "@/features/events/event-agents-shared"
 import { StartSchedulerDialog } from "@/features/events/start-scheduler-dialog"
 import { shortModel } from "@/features/tasks/task-list"
 import { toast } from "@/lib/toast"
@@ -76,12 +77,14 @@ export function SchedulerControlPanel({
     onError: (error) => toast.error("关闭调度者失败", error.message),
   })
 
-  const statusLabel = !active ? "未启动" : paused ? "已暂停" : "运行中"
+  const statusLabel = schedulerStatusLabel(agent, paused)
   const statusVariant = !active
     ? ("secondary" as const)
     : paused
       ? ("warning" as const)
-      : ("success" as const)
+      : agent!.status === "running"
+        ? ("info" as const)
+        : ("success" as const)
 
   return (
     <CardFrame>

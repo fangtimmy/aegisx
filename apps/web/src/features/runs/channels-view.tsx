@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  Download,
   Hash,
   Paperclip,
   Send,
@@ -24,14 +25,14 @@ import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { cn } from "@/lib/utils"
+import { autoSizeTextarea, cn } from "@/lib/utils"
 import { parseLiveEvent } from "@/stream/parse-event"
 
 import { appendChannelMessage, mergeChannelMessages } from "./channel-tail"
 
 /** Timeline / rail reconciliation cadence — a 60s backstop against silent
  * SSE loss, not the primary delivery path (that is the channel stream). */
-export const RECONCILE_INTERVAL_MS = 60_000
+const RECONCILE_INTERVAL_MS = 60_000
 const PAGE_SIZE = 100
 
 /** Stable empty fallback so `channels.data?.items ?? []` keeps one reference
@@ -61,25 +62,32 @@ function formatSize(bytes: number): string {
 
 // --- message rendering (Discord-style grouped rows) -----------------------
 
-/** 📎 attachment chip: the shared/ path (read directly — no download
- * endpoint in v19). Solver agents read /workspace/<path>; the scheduler
- * reads /challenges/<cid>/workspace/<path>. */
+/** 📎 attachment chip → download link. Files live in the challenge
+ * workspace's shared/ tree; the channel endpoint resolves the message +
+ * path back to that workspace (team → the challenge, dm → the target's,
+ * orch → the author's). */
 function AttachmentChip({
   file,
+  message,
 }: {
   file: ChannelMessagePublic["files"][number]
+  message: ChannelMessagePublic
 }) {
+  const url = `/api/channels/${message.channelKey}/files/download?message=${message.id}&path=${encodeURIComponent(file.path)}`
   return (
-    <span
-      className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs"
-      title={file.path}
+    <a
+      className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs transition-colors hover:bg-accent"
+      download
+      href={url}
+      title={`下载 ${file.filename}（${file.path}）`}
     >
       <Paperclip className="size-3 shrink-0" aria-hidden />
       <span className="truncate">{file.filename}</span>
       <span className="shrink-0 text-muted-foreground">
         · {formatSize(file.size)}
       </span>
-    </span>
+      <Download aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+    </a>
   )
 }
 
@@ -156,7 +164,7 @@ function MessageRow({
       {message.files.length > 0 && (
         <div className="my-1 flex flex-wrap gap-1.5">
           {message.files.map((file) => (
-            <AttachmentChip file={file} key={file.path} />
+            <AttachmentChip file={file} key={file.path} message={message} />
           ))}
         </div>
       )}
@@ -211,13 +219,9 @@ function groupMessages(items: ChannelMessagePublic[]): MessageGroup[] {
   return groups
 }
 
-/** The grouped message list (shared by the IM view and the scheduler DM
- * tab). Parents own the scroll container. */
-export function MessageList({
-  messages,
-}: {
-  messages: ChannelMessagePublic[]
-}) {
+/** The grouped message list (inside both timelines). Parents own the scroll
+ * container. */
+function MessageList({ messages }: { messages: ChannelMessagePublic[] }) {
   const groups = groupMessages(messages)
   if (groups.length === 0) {
     return (
@@ -258,7 +262,12 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
   const [urgent, setUrgent] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const textRef = useRef<HTMLTextAreaElement>(null)
   const queryClient = useQueryClient()
+
+  useEffect(() => {
+    autoSizeTextarea(textRef.current)
+  }, [text])
 
   const send = useMutation({
     mutationFn: () =>
@@ -308,7 +317,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
         )}
         <div className="flex items-end gap-1.5">
           <Textarea
-            className="max-h-32 flex-1 text-sm [&_textarea]:max-h-32 [&_textarea]:min-h-6 [&_textarea]:px-0 [&_textarea]:py-1 [&_textarea]:text-sm"
+            className="max-h-32 flex-1 text-sm [&_textarea]:max-h-32 [&_textarea]:min-h-6 [&_textarea]:overflow-y-auto [&_textarea]:px-0 [&_textarea]:py-1 [&_textarea]:text-sm"
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
               // IME composition: Enter commits the composition, never sends.
@@ -319,6 +328,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
               }
             }}
             placeholder="发送消息…"
+            ref={textRef}
             rows={1}
             unstyled
             value={text}
@@ -373,13 +383,20 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
 // --- timeline ---------------------------------------------------------------
 
 /**
- * The open channel's timeline. Loads the latest window once, then tails via
- * the `after` cursor (poll); "加载更早" pages backwards via the `before`
- * cursor with the viewport anchored. Follows the latest message unless the
- * user scrolled up (a jump button returns); prepending history keeps the
- * viewport anchored.
+ * The open channel's timeline (shared by the IM view and the scheduler DM
+ * tab). Loads the latest window once, then tails via the `after` cursor
+ * (poll); "加载更早" pages backwards via the `before` cursor with the
+ * viewport anchored. Follows the latest message unless the user scrolled up
+ * (a jump button returns); prepending history keeps the viewport anchored.
+ * `active=false` (a hidden keepMounted tab) stops polling + the SSE stream.
  */
-function ChannelTimeline({ channelKey }: { channelKey: string }) {
+export function ChannelTimeline({
+  channelKey,
+  active = true,
+}: {
+  channelKey: string
+  active?: boolean
+}) {
   const [items, setItems] = useState<ChannelMessagePublic[]>([])
   const [hasOlder, setHasOlder] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -398,7 +415,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
     queryKey: keys.channels.messages(channelKey),
     queryFn: () =>
       channelsApi.listChannelMessages(channelKey, newestId.current, PAGE_SIZE),
-    refetchInterval: RECONCILE_INTERVAL_MS,
+    refetchInterval: active ? RECONCILE_INTERVAL_MS : false,
     gcTime: 0,
   })
 
@@ -407,6 +424,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
   // delivered. EventSource reconnects natively; the server's snapshot replay
   // de-duplicates through mergeChannelMessages.
   useEffect(() => {
+    if (!active) return
     const source = new EventSource(`/api/channels/${channelKey}/stream`)
     source.onmessage = (message) => {
       let payload: unknown
@@ -425,7 +443,7 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
       newestId.current = Math.max(newestId.current, live.id)
     }
     return () => source.close()
-  }, [channelKey, queryClient])
+  }, [active, channelKey, queryClient])
 
   useEffect(() => {
     const data = tail.data
@@ -504,6 +522,16 @@ function ChannelTimeline({ channelKey }: { channelKey: string }) {
       </div>
     )
   }
+  if (tail.error) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-sm">
+        <p className="text-destructive">消息加载失败：{tail.error.message}</p>
+        <Button onClick={() => void tail.refetch()} size="sm" variant="outline">
+          重试
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -554,12 +582,12 @@ function RailItem({
   channel,
   active,
   onSelect,
-  unseen,
+  unseenCount,
 }: {
   channel: ChannelPublic
   active: boolean
   onSelect: () => void
-  unseen: boolean
+  unseenCount: number
 }) {
   return (
     <ListRow
@@ -583,11 +611,13 @@ function RailItem({
           {channel.liveAgentCount}
         </span>
       )}
-      {unseen && (
+      {unseenCount > 0 && (
         <span
-          aria-label="未读"
-          className="ml-auto size-2 shrink-0 rounded-full bg-primary"
-        />
+          aria-label={`${unseenCount} 条未读`}
+          className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[11px] leading-none font-medium text-primary-foreground tabular-nums"
+        >
+          {unseenCount > 99 ? "99+" : unseenCount}
+        </span>
       )}
     </ListRow>
   )
@@ -598,12 +628,12 @@ function ChannelRail({
   channels,
   activeKey,
   onSelect,
-  unseenKeys,
+  unreadCounts,
 }: {
   channels: ChannelPublic[]
   activeKey: string | null
   onSelect: (key: string) => void
-  unseenKeys: Set<string>
+  unreadCounts: Record<string, number>
 }) {
   const sections: Array<{ label: string; items: ChannelPublic[] }> = [
     { label: "频道", items: channels.filter((c) => c.kind !== "dm") },
@@ -622,7 +652,7 @@ function ChannelRail({
               channel={channel}
               key={channel.key}
               onSelect={() => onSelect(channel.key)}
-              unseen={unseenKeys.has(channel.key)}
+              unseenCount={unreadCounts[channel.key] ?? 0}
             />
           ))}
         </div>
@@ -644,9 +674,14 @@ export function ChannelsView({ challengeId }: { challengeId?: string }) {
   const [activeKey, setActiveKey] = useState<string | null>(null)
   /** Session-local unread baseline (UI unread is client session state,
    * never persisted): channel key → the last message timestamp this view has
-   * accounted for. A channel whose live `lastMessageAt` is newer shows an
-   * unread dot. */
+   * accounted for. */
   const [seenAt, setSeenAt] = useState<Record<string, string | null>>({})
+  /** Per-channel unseen counts, keyed to the rail `lastMessageAt` they were
+   * computed for (one message-window fetch per channel per change — bounded
+   * by the 60s rail poll; SSE only covers the open channel). */
+  const [unread, setUnread] = useState<
+    Record<string, { at: string; count: number }>
+  >({})
 
   const channels = useQuery({
     queryKey: challengeId
@@ -686,17 +721,50 @@ export function ChannelsView({ challengeId }: { challengeId?: string }) {
         ? prev
         : { ...prev, [activeKeyResolved]: activeLastMessageAt }
     )
+    setUnread((prev) =>
+      activeKeyResolved in prev
+        ? Object.fromEntries(
+            Object.entries(prev).filter(([key]) => key !== activeKeyResolved)
+          )
+        : prev
+    )
   }, [activeKeyResolved, activeLastMessageAt])
 
-  const unseenKeys = new Set(
-    list
-      .filter(
-        (channel) =>
-          channel.key !== active?.key &&
-          channel.lastMessageAt !== null &&
-          channel.lastMessageAt !== seenAt[channel.key]
-      )
-      .map((channel) => channel.key)
+  // A non-active channel whose lastMessageAt moved past its baseline: fetch
+  // its latest window once and count the messages newer than the baseline.
+  // The `at` watermark keeps each change to a single fetch.
+  useEffect(() => {
+    if (activeKeyResolved === undefined) return
+    let cancelled = false
+    for (const channel of list) {
+      const last = channel.lastMessageAt
+      if (
+        !last ||
+        channel.key === activeKeyResolved ||
+        last === seenAt[channel.key] ||
+        unread[channel.key]?.at === last
+      ) {
+        continue
+      }
+      void channelsApi
+        .listChannelMessages(channel.key, 0, PAGE_SIZE)
+        .then((data) => {
+          if (cancelled) return
+          const since = new Date(seenAt[channel.key] ?? 0).getTime()
+          const count = data.items.filter(
+            (message) => new Date(message.createdAt).getTime() > since
+          ).length
+          setUnread((prev) => ({ ...prev, [channel.key]: { at: last, count } }))
+        })
+        .catch(() => undefined)
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [list, activeKeyResolved, seenAt, unread])
+
+  const unreadCounts = Object.fromEntries(
+    Object.entries(unread).map(([key, entry]) => [key, entry.count])
   )
 
   return (
@@ -705,7 +773,7 @@ export function ChannelsView({ challengeId }: { challengeId?: string }) {
         activeKey={active?.key ?? null}
         channels={list}
         onSelect={setActiveKey}
-        unseenKeys={unseenKeys}
+        unreadCounts={unreadCounts}
       />
       {/* Timeline + composer */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">

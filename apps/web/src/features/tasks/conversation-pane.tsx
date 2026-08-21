@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 
 import {
   agentsApi,
+  ApiError,
   keys,
   type AgentDetail,
   type AgentSummary,
@@ -11,6 +12,7 @@ import {
   type ModelRef,
 } from "@/api"
 import { ListRow } from "@/components/list-row"
+import { Button } from "@/components/ui/button"
 import {
   Empty,
   EmptyContent,
@@ -341,14 +343,33 @@ function AgentConversation({
     )
   }
   if (detail.error || !agent) {
+    // A 404 is a genuinely missing agent; anything else is a transport
+    // failure worth retrying without claiming the agent is gone.
+    if (detail.error instanceof ApiError && detail.error.code === "not_found") {
+      return (
+        <Empty className="h-full py-16">
+          <EmptyHeader>
+            <EmptyTitle>Agent 不存在</EmptyTitle>
+            <EmptyDescription>
+              该 agent 可能已被删除。请刷新后重试。
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )
+    }
     return (
       <Empty className="h-full py-16">
         <EmptyHeader>
-          <EmptyTitle>Agent 不存在</EmptyTitle>
+          <EmptyTitle>对话加载失败</EmptyTitle>
           <EmptyDescription>
-            该 agent 可能已被删除，或数据未到达。请刷新后重试。
+            {detail.error?.message ?? "未获取到 agent 数据，请重试。"}
           </EmptyDescription>
         </EmptyHeader>
+        <EmptyContent>
+          <Button onClick={() => void detail.refetch()} variant="outline">
+            重试
+          </Button>
+        </EmptyContent>
       </Empty>
     )
   }

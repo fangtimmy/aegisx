@@ -580,6 +580,37 @@ export function registerRunRoutes(
     }
   })
 
+  /** Download a recorded message attachment: resolves the message + path
+   * back to the challenge workspace's shared/ tree it landed in (no
+   * free-form workspace reads). */
+  app.get("/api/channels/:channelKey/files/download", (c) => {
+    const messageId = Number.parseInt(c.req.query("message") ?? "", 10)
+    const path = c.req.query("path") ?? ""
+    if (!Number.isFinite(messageId) || messageId <= 0 || !path) {
+      return badRequest(c, "invalid", "message and path are required")
+    }
+    try {
+      const target = agentService.channels.channelFileTarget(
+        c.req.param("channelKey"),
+        messageId,
+        path
+      )
+      const file = agentService.workspaceDownloadPath(
+        target.eventId,
+        target.challengeId,
+        path
+      )
+      return new Response(file.stream as unknown as ReadableStream, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(target.filename)}`,
+        },
+      })
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
   /** Post a channel message. Two faces on one route:
    *  - JSON + agent principal (bearer token) → the SDK path (files = paths
    *    relative to the agent's own directory, server-side resolve check +
