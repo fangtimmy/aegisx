@@ -24,11 +24,11 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
-import { autoSizeTextarea, cn } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 import { parseLiveEvent } from "@/stream/parse-event"
 
 import { appendChannelMessage, mergeChannelMessages } from "./channel-tail"
+import { MessageComposer } from "./composer"
 
 /** Timeline / rail reconciliation cadence — a 60s backstop against silent
  * SSE loss, not the primary delivery path (that is the channel stream). */
@@ -262,12 +262,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
   const [urgent, setUrgent] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
-  const textRef = useRef<HTMLTextAreaElement>(null)
   const queryClient = useQueryClient()
-
-  useEffect(() => {
-    autoSizeTextarea(textRef.current)
-  }, [text])
 
   const send = useMutation({
     mutationFn: () =>
@@ -288,94 +283,86 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
     onError: (err: Error) => setError(err.message),
   })
 
+  const submit = () => {
+    if (text.trim() && !send.isPending) send.mutate()
+  }
+
   return (
     <div className="shrink-0 px-3 pb-3">
       {error && <p className="px-1 pb-1 text-xs text-destructive">{error}</p>}
-      <div className="flex flex-col gap-2 rounded-lg border bg-muted/50 px-3 py-2 shadow-xs">
-        {files.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {files.map((file, index) => (
-              <span
-                className="inline-flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs"
-                key={`${file.name}-${index}`}
-              >
-                <Paperclip className="size-3" aria-hidden />
-                {file.name} · {formatSize(file.size)}
-                <button
-                  aria-label={`移除附件 ${file.name}`}
-                  className="-me-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-[inherit] p-0 text-muted-foreground transition-colors outline-none hover:text-destructive focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                  onClick={() =>
-                    setFiles((prev) => prev.filter((_, i) => i !== index))
-                  }
-                  type="button"
+      <MessageComposer
+        above={
+          files.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+              {files.map((file, index) => (
+                <span
+                  className="inline-flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs"
+                  key={`${file.name}-${index}`}
                 >
-                  <X aria-hidden className="size-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="flex items-end gap-1.5">
-          <Textarea
-            className="max-h-32 flex-1 text-sm [&_textarea]:max-h-32 [&_textarea]:min-h-6 [&_textarea]:overflow-y-auto [&_textarea]:px-0 [&_textarea]:py-1 [&_textarea]:text-sm"
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              // IME composition: Enter commits the composition, never sends.
-              if (event.nativeEvent.isComposing || event.keyCode === 229) return
-              if (event.key === "Enter" && !event.shiftKey && text.trim()) {
-                event.preventDefault()
-                send.mutate()
-              }
-            }}
-            placeholder="发送消息…"
-            ref={textRef}
-            rows={1}
-            unstyled
-            value={text}
+                  <Paperclip className="size-3" aria-hidden />
+                  {file.name} · {formatSize(file.size)}
+                  <button
+                    aria-label={`移除附件 ${file.name}`}
+                    className="-me-1 inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-[inherit] p-0 text-muted-foreground transition-colors outline-none hover:text-destructive focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    onClick={() =>
+                      setFiles((prev) => prev.filter((_, i) => i !== index))
+                    }
+                    type="button"
+                  >
+                    <X aria-hidden className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )
+        }
+        ariaLabel="发送频道消息"
+        onChange={setText}
+        onSubmit={submit}
+        placeholder="发送消息…"
+        value={text}
+      >
+        <div
+          className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 text-[11px] leading-tight text-muted-foreground"
+          title="紧急消息立即投递；关闭后等待下一次合并投递"
+        >
+          <Switch
+            aria-label="紧急投递"
+            checked={urgent}
+            onCheckedChange={setUrgent}
           />
-          <input
-            className="hidden"
-            multiple
-            onChange={(event) =>
-              setFiles([...(event.target.files ?? [])].slice(0, 8))
-            }
-            ref={fileInput}
-            type="file"
-          />
-          <div
-            className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 pb-1 text-[11px] leading-tight text-muted-foreground"
-            title="紧急消息立即投递；关闭后等待下一次合并投递"
-          >
-            <Switch
-              aria-label="紧急投递"
-              checked={urgent}
-              onCheckedChange={setUrgent}
-            />
-            紧急
-          </div>
-          <Button
-            aria-label="添加附件"
-            className="mb-1"
-            disabled={files.length >= 8}
-            onClick={() => fileInput.current?.click()}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          >
-            <Paperclip />
-          </Button>
-          <Button
-            aria-label="发送"
-            className="mb-1"
-            disabled={!text.trim() || send.isPending}
-            onClick={() => send.mutate()}
-            size="icon-sm"
-            type="button"
-          >
-            {send.isPending ? <Spinner /> : <Send />}
-          </Button>
+          紧急
         </div>
-      </div>
+        <input
+          className="hidden"
+          multiple
+          onChange={(event) =>
+            setFiles([...(event.target.files ?? [])].slice(0, 8))
+          }
+          ref={fileInput}
+          type="file"
+        />
+        <Button
+          aria-label="添加附件"
+          disabled={files.length >= 8}
+          onClick={() => fileInput.current?.click()}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <Paperclip />
+        </Button>
+        <Button
+          aria-label="发送"
+          className="ml-auto"
+          disabled={!text.trim() || send.isPending}
+          onClick={submit}
+          size="icon-sm"
+          type="button"
+        >
+          {send.isPending ? <Spinner /> : <Send />}
+        </Button>
+      </MessageComposer>
     </div>
   )
 }

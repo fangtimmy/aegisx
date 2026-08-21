@@ -1,5 +1,12 @@
 import { ChevronDown, Send, Square, SquareSlash } from "lucide-react"
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react"
 
 import { ListRow } from "@/components/list-row"
 import { Button } from "@/components/ui/button"
@@ -14,6 +21,90 @@ import {
 } from "@/components/ui/menu"
 import { Textarea } from "@/components/ui/textarea"
 import { autoSizeTextarea } from "@/lib/utils"
+
+/** The shared input box under both message composers (agent conversation +
+ * channels): box chrome, auto-growing textarea, IME-safe Enter-to-send, and
+ * slots for feature chrome. `onKeyDown` runs after the IME guard and before
+ * Enter handling so callers can consume keys (slash palette navigation);
+ * children render as the toolbar row below the textarea. */
+export function MessageComposer({
+  ariaLabel,
+  placeholder,
+  value,
+  onChange,
+  onSubmit,
+  onKeyDown,
+  disabled = false,
+  inputRef,
+  overlay,
+  above,
+  children,
+}: {
+  ariaLabel: string
+  placeholder: string
+  value: string
+  onChange: (value: string) => void
+  onSubmit: () => void
+  onKeyDown?: (
+    event: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => boolean | void
+  disabled?: boolean
+  inputRef?: RefObject<HTMLTextAreaElement | null>
+  overlay?: ReactNode
+  above?: ReactNode
+  children?: ReactNode
+}) {
+  const fallbackRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = inputRef ?? fallbackRef
+  const inputId = useId()
+
+  // Fit the textarea to its draft: multi-line drafts grow the composer
+  // instead of scrolling inside a single row (capped by max-h).
+  useEffect(() => {
+    autoSizeTextarea(textareaRef.current)
+  }, [value, textareaRef])
+
+  return (
+    <form
+      className="relative rounded-lg border bg-muted/50 shadow-xs"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSubmit()
+      }}
+    >
+      {overlay}
+      {above}
+      {/* Label-associated textarea: clicking the composer's blank space
+         natively focuses the input (no container-level mouse handler). */}
+      <label className="block cursor-text" htmlFor={inputId}>
+        <Textarea
+          aria-label={ariaLabel}
+          className="min-w-0 flex-1 [&_textarea]:max-h-64 [&_textarea]:min-h-9 [&_textarea]:overflow-y-auto [&_textarea]:px-3 [&_textarea]:py-2.5 [&_textarea]:text-sm [&_textarea]:leading-6"
+          disabled={disabled}
+          id={inputId}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            // IME composition: Enter commits the composition, never sends/completes.
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return
+            if (onKeyDown?.(event)) return
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault()
+              onSubmit()
+            }
+          }}
+          placeholder={placeholder}
+          ref={textareaRef}
+          rows={1}
+          unstyled
+          value={value}
+        />
+      </label>
+      {children && (
+        <div className="flex items-center gap-1.5 p-1.5">{children}</div>
+      )}
+    </form>
+  )
+}
 
 /** Composer command panel entry (slash-command style): clicking inserts the
  * command text into the composer; Conversation dispatches it on submit. */
@@ -78,7 +169,7 @@ export function Composer({
       : running
         ? "引导或追问 agent…"
         : "向 agent 发送消息…"
-  const rootRef = useRef<HTMLFormElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
@@ -104,12 +195,6 @@ export function Composer({
     if (!running && !locked) inputRef.current?.focus()
   }, [running, locked])
 
-  // Fit the textarea to its draft: multi-line drafts grow the composer
-  // instead of scrolling inside a single row (capped by max-h).
-  useEffect(() => {
-    autoSizeTextarea(inputRef.current)
-  }, [draft])
-
   // Outside-click closes the slash popup.
   useEffect(() => {
     if (!slashOpen) return
@@ -128,84 +213,68 @@ export function Composer({
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // IME composition: Enter commits the composition, never sends/completes.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return
-    if (slashOpen) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault()
-        setSlashIndex((index) => (index + 1) % matches.length)
-        return
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault()
-        setSlashIndex((index) => (index - 1 + matches.length) % matches.length)
-        return
-      }
-      // Complete only (no execution) — sending the completed command is the
-      // next plain Enter.
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault()
-        pickCommand(matches[slashIndex]!.command)
-        return
-      }
-      if (event.key === "Escape") {
-        event.preventDefault()
-        setSlashDismissed(true)
-        return
-      }
-    }
-    if (event.key === "Enter" && !event.shiftKey) {
+  // Slash palette navigation consumes keys before Enter-to-send applies.
+  const onSlashKeyDown = (
+    event: React.KeyboardEvent<HTMLTextAreaElement>
+  ): boolean => {
+    if (!slashOpen) return false
+    if (event.key === "ArrowDown") {
       event.preventDefault()
-      onSubmit()
+      setSlashIndex((index) => (index + 1) % matches.length)
+      return true
     }
+    if (event.key === "ArrowUp") {
+      event.preventDefault()
+      setSlashIndex((index) => (index - 1 + matches.length) % matches.length)
+      return true
+    }
+    // Complete only (no execution) — sending the completed command is the
+    // next plain Enter.
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault()
+      pickCommand(matches[slashIndex]!.command)
+      return true
+    }
+    if (event.key === "Escape") {
+      event.preventDefault()
+      setSlashDismissed(true)
+      return true
+    }
+    return false
   }
 
   return (
-    <form
-      className="relative rounded-lg border bg-muted/50 shadow-xs"
-      onSubmit={(event) => {
-        event.preventDefault()
-        onSubmit()
-      }}
-      ref={rootRef}
-    >
-      {slashOpen && (
-        <div className="absolute inset-x-0 bottom-full z-20 mb-1.5 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md">
-          {matches.map((command, index) => (
-            <ListRow
-              className="items-center rounded-none px-3 py-1.5 text-xs"
-              key={command.command}
-              onClick={() => pickCommand(command.command)}
-              selected={index === slashIndex}
-            >
-              <span className="font-mono">{command.command}</span>
-              <span className="text-muted-foreground">{command.label}</span>
-            </ListRow>
-          ))}
-        </div>
-      )}
-      {/* Label-associated textarea: clicking the composer's blank space
-         natively focuses the input (no container-level mouse handler). */}
-      <label className="block cursor-text" htmlFor="composer-input">
-        <Textarea
-          aria-label="向 agent 发送消息"
-          className="min-w-0 flex-1 [&_textarea]:max-h-64 [&_textarea]:min-h-9 [&_textarea]:overflow-y-auto [&_textarea]:px-3 [&_textarea]:py-2.5 [&_textarea]:text-sm [&_textarea]:leading-6"
-          disabled={busy || locked}
-          id="composer-input"
-          onChange={(e) => {
-            onDraftChange(e.target.value)
-            setSlashDismissed(false)
-          }}
-          onKeyDown={onKeyDown}
-          placeholder={placeholder}
-          ref={inputRef}
-          rows={1}
-          unstyled
-          value={draft}
-        />
-      </label>
-      <div className="flex items-center gap-1.5 p-1.5">
+    <div ref={rootRef}>
+      <MessageComposer
+        ariaLabel="向 agent 发送消息"
+        disabled={busy || locked}
+        inputRef={inputRef}
+        onChange={(value) => {
+          onDraftChange(value)
+          setSlashDismissed(false)
+        }}
+        onKeyDown={onSlashKeyDown}
+        onSubmit={onSubmit}
+        overlay={
+          slashOpen && (
+            <div className="absolute inset-x-0 bottom-full z-20 mb-1.5 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md">
+              {matches.map((command, index) => (
+                <ListRow
+                  className="items-center rounded-none px-3 py-1.5 text-xs"
+                  key={command.command}
+                  onClick={() => pickCommand(command.command)}
+                  selected={index === slashIndex}
+                >
+                  <span className="font-mono">{command.command}</span>
+                  <span className="text-muted-foreground">{command.label}</span>
+                </ListRow>
+              ))}
+            </div>
+          )
+        }
+        placeholder={placeholder}
+        value={draft}
+      >
         <Menu>
           <MenuTrigger
             render={
@@ -291,7 +360,7 @@ export function Composer({
             )}
           </ButtonGroup>
         </div>
-      </div>
-    </form>
+      </MessageComposer>
+    </div>
   )
 }

@@ -117,7 +117,7 @@ const REMOTE_STATUS_OPTIONS: Array<{
 ]
 
 function readFullWidth(): boolean {
-  return localStorage.getItem(FULLWIDTH_KEY) === "1"
+  return localStorage.getItem(FULLWIDTH_KEY) !== "0"
 }
 
 function toggleInSet<T>(values: T[], value: T, checked: boolean) {
