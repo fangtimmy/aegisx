@@ -191,6 +191,27 @@ export function registerRunRoutes(
     }
   )
 
+  /** Force-halt a challenge: close its live agents + cancel its pending
+   * queue items + best-effort stop the platform target. */
+  app.post(
+    "/api/challenges/:challengeId/halt",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        const challengeId = c.req.param("challengeId")
+        const challenge = db
+          .select({ id: challenges.id })
+          .from(challenges)
+          .where(eq(challenges.id, challengeId))
+          .get()
+        if (!challenge) return notFound(c, "Challenge not found")
+        return c.json(await agentService.haltChallenge(challengeId))
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
   // --- fleet ----------------------------------------------------------------
 
   /** The event overview's single poll: challenges + per-challenge agents +

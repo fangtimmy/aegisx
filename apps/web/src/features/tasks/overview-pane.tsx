@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronRight, ListOrdered, Plus } from "lucide-react"
-import { useMemo } from "react"
+import { ChevronRight, ListOrdered, Plus, Square } from "lucide-react"
+import { useMemo, useState } from "react"
 
 import {
   agentsApi,
@@ -12,6 +12,15 @@ import {
 } from "@/api"
 import { ListRow } from "@/components/list-row"
 import { Markdown } from "@/components/markdown"
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -48,6 +57,7 @@ export function OverviewPane({
   challenge,
   lite,
   agents,
+  pendingCount,
   schedulerAgent,
   config,
   onSelectAgent,
@@ -57,6 +67,8 @@ export function OverviewPane({
   lite?: FleetInfo["challenges"][number]
   /** The challenge's agents (empty for the scheduler variant). */
   agents: AgentSummary[]
+  /** The challenge's pending queue items (halt-button gating + copy). */
+  pendingCount: number
   schedulerAgent: AgentSummary | null
   config: FleetInfo["config"]
   onSelectAgent: (agentId: string) => void
@@ -76,6 +88,7 @@ export function OverviewPane({
       challenge={challenge}
       eventId={eventId}
       lite={lite!}
+      pendingCount={pendingCount}
       onSelectAgent={onSelectAgent}
     />
   )
@@ -86,12 +99,14 @@ function ChallengeOverview({
   challenge,
   lite,
   agents,
+  pendingCount,
   onSelectAgent,
 }: {
   eventId: string
   challenge?: Challenge
   lite: FleetInfo["challenges"][number]
   agents: AgentSummary[]
+  pendingCount: number
   onSelectAgent: (agentId: string) => void
 }) {
   const queryClient = useQueryClient()
@@ -161,6 +176,15 @@ function ChallengeOverview({
             >
               <ListOrdered /> 入队
             </Button>
+            {(liveCount > 0 || pendingCount > 0) && (
+              <HaltChallengeButton
+                challengeId={lite.id}
+                eventId={eventId}
+                liveCount={liveCount}
+                name={lite.name}
+                pendingCount={pendingCount}
+              />
+            )}
           </span>
         </div>
 
@@ -194,6 +218,85 @@ function ChallengeOverview({
         <Roster agents={agents} onSelectAgent={onSelectAgent} />
       </div>
     </ScrollArea>
+  )
+}
+
+/** Header force-stop for one challenge: closes its live agents (terminal
+ * aborted, reopenable) + cancels its pending queue items; the server also
+ * stops the platform target best-effort. */
+function HaltChallengeButton({
+  challengeId,
+  eventId,
+  liveCount,
+  pendingCount,
+  name,
+}: {
+  challengeId: string
+  eventId: string
+  liveCount: number
+  pendingCount: number
+  name: string
+}) {
+  const queryClient = useQueryClient()
+  const [confirming, setConfirming] = useState(false)
+  const halt = useMutation({
+    mutationFn: () => agentsApi.haltChallenge(challengeId),
+    onSuccess: (result) => {
+      toast.success(
+        result.closed === 0 && result.cancelled === 0
+          ? "本题已无进行中的活动"
+          : `已停止：关闭 ${result.closed} 个 agent、取消 ${result.cancelled} 个排队项`
+      )
+      void queryClient.invalidateQueries({
+        queryKey: keys.scheduler.queue(eventId),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: keys.agents.fleet(eventId),
+      })
+    },
+    onError: (error) => toast.error("停止失败", error.message),
+  })
+  return (
+    <AlertDialog
+      onOpenChange={(open) => !open && setConfirming(false)}
+      open={confirming}
+    >
+      <Button
+        onClick={() => setConfirming(true)}
+        size="sm"
+        type="button"
+        variant="destructive-outline"
+      >
+        <Square /> 停止
+      </Button>
+      <AlertDialogPopup>
+        <AlertDialogHeader>
+          <AlertDialogTitle>停止「{name}」的全部活动？</AlertDialogTitle>
+          <AlertDialogDescription>
+            将关闭 {liveCount} 个 live agent（终态
+            aborted，文件与会话保留，可随时唤醒）
+            {pendingCount > 0 ? `，取消 ${pendingCount} 个排队项` : ""}
+            ，并停止平台 target。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+            取消
+          </AlertDialogClose>
+          <Button
+            loading={halt.isPending}
+            onClick={() => {
+              halt.mutate()
+              setConfirming(false)
+            }}
+            type="button"
+            variant="destructive"
+          >
+            停止
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogPopup>
+    </AlertDialog>
   )
 }
 

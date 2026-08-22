@@ -58,6 +58,11 @@ export function TaskDetail({
     ? fleet.challenges.find((item) => item.id === challengeId)
     : undefined
   const agents = isScheduler ? [] : (fleet.agentsByChallenge[selection.c] ?? [])
+  const pendingCount = isScheduler
+    ? 0
+    : queue.items.filter(
+        (item) => item.challengeId === challengeId && item.status === "pending"
+      ).length
 
   return (
     <Tabs
@@ -94,6 +99,7 @@ export function TaskDetail({
           config={fleet.config}
           eventId={eventId}
           lite={lite}
+          pendingCount={pendingCount}
           schedulerAgent={fleet.schedulerAgent}
           onSelectAgent={onSelectAgent}
         />

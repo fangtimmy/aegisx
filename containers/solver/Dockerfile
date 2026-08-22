@@ -24,11 +24,11 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so && \
     apt-get -y install --no-install-recommends \
       kali-linux-headless \
-      python3-venv build-essential pkg-config cmake fonts-noto-cjk \
-      bsdextrautils file unzip 7zip-rar jq yq ripgrep fd-find rlwrap \
+      python3.13-venv build-essential pkg-config cmake fonts-noto-cjk \
+      bsdextrautils bc file unzip 7zip-rar jq yq ripgrep fd-find rlwrap \
       iputils-ping sshpass ncat netcat-openbsd chisel \
       dirsearch feroxbuster httpx-toolkit nuclei seclists \
-      gdb checksec rizin qemu-user-binfmt jadx apktool \
+      gdb checksec rizin qemu-user-binfmt jadx apktool llvm-21 \
       patchelf strace upx-ucl \
       foremost steghide pngcheck ffmpeg imagemagick \
       libimage-exiftool-perl \
@@ -37,11 +37,11 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
       redis-tools sqlite3 \
       fcrackzip rarcrack \
       poppler-utils tesseract-ocr zbar-tools libzbar0 \
+      php8.4-gd php8.4-mbstring php8.4-xml php8.4-zip php8.4-curl php8.4-sqlite3 php8.4-imagick \
       default-jdk-headless nodejs npm golang-go ruby && \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd && \
+    ln -sf /usr/bin/llvm-pdbutil-21 /usr/local/bin/llvm-pdbutil && \
     (gzip -dk /usr/share/wordlists/rockyou.txt.gz 2>/dev/null || true)
-
-ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so
 
 # Strip package-provided file capabilities from network binaries. The solver
 # container runs with --cap-drop ALL + no-new-privileges, under which exec of a
@@ -72,8 +72,8 @@ RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked
     python3 /usr/local/bin/solver-cache.py sync-knowledges && \
     find /opt/solver/knowledges -name .git -type d -prune -exec rm -rf {} +
 
-# === GitHub Release Binary + outguess ===
-# ghidra · wsrx · katana · naabu · dalfox · cloudfox · kerbrute · bkcrack · dddd · fscan
+# === GitHub Release Binary ===
+# ghidra · wsrx · katana · naabu · dalfox · cloudfox · kerbrute · bkcrack · dddd · fscan · pwninit · dwarf2json
 RUN --mount=type=cache,id=solver-downloads,target=/var/cache/solver/downloads,sharing=locked \
     D=/var/cache/solver/downloads && \
     python3 /usr/local/bin/solver-cache.py sync-downloads && \
@@ -88,6 +88,8 @@ RUN --mount=type=cache,id=solver-downloads,target=/var/cache/solver/downloads,sh
     tar -xzf "$D/bkcrack.tar.gz" -C /tmp && install -m755 /tmp/bkcrack-*/bkcrack /usr/local/bin/bkcrack && \
     install -m755 "$D/dddd" /usr/local/bin/dddd && \
     install -m755 "$D/fscan" /usr/local/bin/fscan && \
+    install -m755 "$D/pwninit" /usr/local/bin/pwninit && \
+    install -m755 "$D/dwarf2json" /usr/local/bin/dwarf2json && \
     rm -rf /tmp/cloudfox /tmp/bkcrack-*
 
 # === pwndbg ===
@@ -99,7 +101,7 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
 
 # === Python venv ===
 RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
-    python3 -m venv /opt/venv && \
+    python3.13 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install \
       pwntools ropper ropgadget capstone requests \
@@ -110,7 +112,7 @@ RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
       opencv-python-headless \
       angr impacket ldap3 git-dumper playwright volatility3 \
       cryptography pyOpenSSL pyjwt flask-unsign scapy \
-      bloodyAD certipy-ad coercer pypykatz && \
+      bloodyAD certipy-ad coercer pypykatz cysignals setuptools yara-x && \
     ln -sfn /opt/venv/bin/python3 /usr/local/bin/python3 && \
     ln -sfn /opt/venv/bin/python /usr/local/bin/python
 
@@ -132,7 +134,8 @@ RUN gem sources --add https://mirrors.ustc.edu.cn/rubygems/ --remove https://rub
     gem install --no-document one_gadget zsteg
 
 RUN PWNDBG_GDBINIT=$(find / -name "gdbinit.py" -path "*pwndbg*" 2>/dev/null | head -1) && \
-    if [ -n "$PWNDBG_GDBINIT" ]; then printf 'source %s\n' "$PWNDBG_GDBINIT" >> /root/.gdbinit; fi && \
+    if [ -n "$PWNDBG_GDBINIT" ]; then PWNDBG_SITE=$(dirname "$(dirname "$PWNDBG_GDBINIT")") && \
+    printf 'python import sys; sys.path.insert(0, "%s")\nsource %s\n' "$PWNDBG_SITE" "$PWNDBG_GDBINIT" >> /root/.gdbinit; fi && \
     printf 'set follow-fork-mode child\nset pagination off\n' >> /root/.gdbinit && \
     printf 'alias ll="ls -la"\nexport PWNLIB_NOTES=true\n' >> /root/.bashrc
 

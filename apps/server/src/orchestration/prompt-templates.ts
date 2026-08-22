@@ -43,11 +43,6 @@ export function seedBuiltinTemplates(db: Database): void {
   }
 }
 
-/** One-time refresh of built-in template rows that still hold a known prior
- * default body. A row is updated only if its current body exactly equals the
- * `fromBody` (i.e. the user has not customized it), so user edits always
- * survive. Used to ship prompt improvements (e.g. the scheduler catalog) to
- * existing databases without a schema bump. */
 /**
  * Load the in-memory builtin template map (plugin='builtin' only — v9 has no
  * plugin templates). Returned as a Map so render never hits the DB — the run

@@ -34,6 +34,15 @@ export function spawnAgent(challengeId: string, input: SpawnAgentInput = {}) {
   )
 }
 
+/** Force-halt a challenge (POST /api/challenges/:id/halt): close its live
+ * agents + cancel its pending queue items + best-effort stop the target. */
+export function haltChallenge(challengeId: string) {
+  return apiRequest<{ closed: number; cancelled: number }>(
+    `/challenges/${challengeId}/halt`,
+    jsonRequest("POST", {})
+  )
+}
+
 /** Enqueue a spawn item (POST /api/events/:id/queue returns the queue item,
  * 202 — the drainer launches it when a fence slot is free). */
 export function enqueueSpawn(eventId: string, input: EnqueueSpawnInput) {

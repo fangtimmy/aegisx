@@ -238,7 +238,7 @@ export const SETTINGS_DEFS: SettingDef[] = [
   {
     key: "container.tmpfsSize",
     type: "string",
-    default: "64m",
+    default: "1g",
     minLength: 1,
     maxLength: 20,
     group: "容器",

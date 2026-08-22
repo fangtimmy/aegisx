@@ -34,8 +34,6 @@ import {
   workspaceDownload,
 } from "../infrastructure/workspace-files"
 import { DEFAULT_SCHEDULER_DIGEST_TEMPLATE } from "../orchestration/prompt-defaults"
-import { refreshSdkGuideSections } from "../orchestration/prompt-refresh-sdk-guide"
-import { refreshBuiltinTemplateSections } from "../orchestration/prompt-refresh-v19"
 import {
   loadTemplateMap,
   renderTemplateBody,
@@ -131,12 +129,9 @@ export function createAgentService(options: AgentServiceOptions) {
   const queries = createAgentQueries({ db })
   const bus: LiveBus = createLiveBus()
 
-  // Seed the four built-in prompt templates (idempotent) so the service is
-  // self-sufficient — any agent spawned here renders. Then apply the
-  // one-time section refreshes (user-edited sections keep their edits).
+  // Seed the built-in prompt templates (idempotent) so the service is
+  // self-sufficient — any agent spawned here renders.
   seedBuiltinTemplates(db)
-  refreshBuiltinTemplateSections(db)
-  refreshSdkGuideSections(db)
   // Idempotent guard: plugin-owned template rows (a pre-v9 concept) must
   // never come back — re-delete any who got re-seeded.
   db.run(`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
@@ -443,6 +438,62 @@ export function createAgentService(options: AgentServiceOptions) {
       bus.forget([agentId])
     })
     return requireAgent(agentId)
+  }
+
+  /** Manual challenge halt: close every live agent + cancel the challenge's
+   * pending queue items + best-effort stop the platform target — the
+   * human-triggered counterpart of the solve cleanup (stopOthersOnSolved).
+   * A running queue item settles via its agent's terminal close (markDone). */
+  async function haltChallenge(challengeId: string): Promise<{
+    closed: number
+    cancelled: number
+  }> {
+    const challenge = db
+      .select({
+        id: challenges.id,
+        eventId: challenges.eventId,
+        name: challenges.name,
+      })
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
+    if (!challenge) throw new RunActionError("not_found", "Challenge not found")
+    const live = db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.challengeId, challengeId),
+          inArray(agents.status, LIVE_AGENT_STATUSES)
+        )
+      )
+      .all()
+    let closed = 0
+    for (const row of live) {
+      await closeAgent(row.id)
+        .then(() => {
+          closed += 1
+        })
+        .catch(() => undefined)
+    }
+    const cancelled = queue
+      ? queue.cancelPendingForChallenge(challenge.eventId, challengeId)
+      : 0
+    if (isTargetCapable(getChallengeRemote(db, challengeId))) {
+      void platformService
+        .targetAction(challengeId, "stop")
+        .catch(() => undefined)
+    }
+    const parts: string[] = []
+    if (closed > 0) parts.push(`已关闭 ${closed} 个 agent`)
+    if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
+    if (parts.length > 0) {
+      postOrchNotice(
+        challenge.eventId,
+        `「${challenge.name}」已被操作员手动停止：${parts.join("；")}`
+      )
+    }
+    return { closed, cancelled }
   }
 
   /** Per-agent message — a DIRECT lifecycle.send (no channel row, no double
@@ -1184,6 +1235,7 @@ export function createAgentService(options: AgentServiceOptions) {
     fleet,
     stopAgent,
     closeAgent,
+    haltChallenge,
     finishAgent,
     sendMessage,
     switchAgentModel,

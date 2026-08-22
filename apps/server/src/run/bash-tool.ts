@@ -239,7 +239,7 @@ export function createBashTool(
       timeout: Type.Optional(
         Type.Integer({
           minimum: 1,
-          description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}).`,
+          description: `Timeout in seconds (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}). Pass this for long jobs — a shell-level \`timeout\` wrapper does not extend the tool's limit.`,
         })
       ),
     }),

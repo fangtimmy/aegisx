@@ -147,7 +147,9 @@ export function createContainerManager(options?: { socketPath?: string }) {
         SecurityOpt: ["no-new-privileges"],
         IpcMode: "none",
         Tmpfs: {
-          "/tmp": `rw,nosuid,nodev,noexec,size=${opts.tmpfsSize}`,
+          // exec must be explicit: docker defaults tmpfs mounts to noexec
+          // once any option string is given.
+          "/tmp": `rw,exec,size=${opts.tmpfsSize}`,
         },
         ...(opts.networkMode ? { NetworkMode: opts.networkMode } : {}),
       },

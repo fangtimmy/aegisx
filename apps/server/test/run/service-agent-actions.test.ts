@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents } from "../../src/db/schema"
+import { agents, spawnQueue } from "../../src/db/schema"
 import { builtinModelProfile } from "../../src/providers/builtin-models"
 import { createAgentService } from "../../src/run/service"
 import {
@@ -169,6 +169,54 @@ describe("per-agent actions (v19)", () => {
       const stopped = await service.stopAgent(agent.id)
       expect(stopped.id).toBe(agent.id)
       expect(aborted).toContain(agent.id)
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("haltChallenge closes the challenge's live agents + cancels its pending items, scoped to one challenge", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
+      const provider = twoModelProvider()
+      const { service } = makeService(db, dir, [provider])
+      const queue = service.queue()
+
+      const one = await spawnAgent(service)
+      const two = await spawnAgent(service)
+      const bystander = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-2",
+        model: MODEL_1_REF,
+      })
+      // Paused queue → the enqueued item stays pending (no launch race).
+      queue.pause("evt-1")
+      const item = queue.enqueue({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        source: "manual",
+      })
+
+      const result = await service.haltChallenge("ch-1")
+      expect(result).toEqual({ closed: 2, cancelled: 1 })
+      expect(
+        db.select().from(agents).where(eq(agents.id, one.id)).get()!.status
+      ).toBe("aborted")
+      expect(
+        db.select().from(agents).where(eq(agents.id, two.id)).get()!.status
+      ).toBe("aborted")
+      expect(
+        db.select().from(agents).where(eq(agents.id, bystander.id)).get()!
+          .status
+      ).not.toBe("aborted")
+      // queue.list() shows actionable items only — read the row directly.
+      expect(
+        db.select().from(spawnQueue).where(eq(spawnQueue.id, item.id)).get()!
+          .status
+      ).toBe("cancelled")
       await service.close()
     } finally {
       close()
