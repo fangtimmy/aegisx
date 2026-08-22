@@ -83,6 +83,47 @@ describe("W1 prompt fixes", () => {
   })
 })
 
+describe("prompt drift control (env facts live in ENVIRONMENT.md, not inline)", () => {
+  test("initial points to ENVIRONMENT.md instead of inlining the toolchain", () => {
+    const rendered = renderTemplateBody(
+      DEFAULT_INITIAL_PROMPT_TEMPLATE,
+      samplePromptContext
+    )
+    expect(rendered).toContain("/opt/solver/ENVIRONMENT.md")
+    expect(rendered).not.toContain("libc-database")
+  })
+
+  test("mainSystem install guidance matches the ENVIRONMENT.md SOP (venv, not workspace)", () => {
+    expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).not.toContain(
+      "install it into the workspace"
+    )
+    expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain("install SOP")
+  })
+
+  test("initial gates submit/finish on capabilities and carries no promptHint duplicate", () => {
+    const capped = renderTemplateBody(DEFAULT_INITIAL_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      capabilities: {
+        canFinish: false,
+        canSubmitFlag: false,
+        canManageTarget: false,
+      },
+      event: { ...samplePromptContext.event, promptHint: "flag{...}" },
+    })
+    expect(capped).not.toContain("submit_flag")
+    expect(capped).not.toContain("finish_run")
+    expect(capped).not.toContain("## Event instructions")
+
+    const normal = renderTemplateBody(DEFAULT_INITIAL_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      event: { ...samplePromptContext.event, promptHint: "flag{...}" },
+    })
+    expect(normal).toContain("finish_run")
+    // Event instructions stay a system-prompt-only block (survives compaction).
+    expect(normal).not.toContain("## Event instructions")
+  })
+})
+
 describe("prompt preview", () => {
   test("highlights interpolated variable values", () => {
     const segments = previewSystemPrompt(

@@ -9,7 +9,9 @@
 | `/opt/solver/tools` | 只读工具源码 (jwt_tool, jdwp-shellifier, ysoserial.jar) | 只读 |
 | `/opt/venv` | Python 共享环境 | 读写 |
 | `/opt/ghidra_*` | Ghidra 安装目录 | 只读 |
-| `/tmp` | tmpfs (1GB, 可执行)。容器重建即清空 — 需要留存的产物放工作目录 | 读写 |
+| `/tmp` | tmpfs (默认 1GB, 可执行)。容器重建即清空 — 需要留存的产物放工作目录 | 读写 |
+
+> libc-database 只含检索脚本, 未预置 libc 库 (libc/、db/ 为空) — 用时先 `cd /opt/solver/knowledges/libc-database && ./get <distro>` 联网拉取, 或直接用在线 libc.rip。
 
 ## Python (重要)
 
@@ -34,13 +36,13 @@ python3 script.py
 | `llvm-pdbutil` | PDB 调试信息解析 (Windows .pdb) |
 | `dwarf2json` | vmlinux DWARF → volatility3 ISF 符号表 |
 | `bkcrack` | ZipCrypto known-plaintext 攻击 |
-| `jwt_tool.py` | `/opt/solver/tools/jwt_tool/jwt_tool.py`, 用 `python3` 运行 |
+| `jwt_tool.py` | 不在 PATH: `python3 /opt/solver/tools/jwt_tool/jwt_tool.py` |
 
 ## 工具分类速查
 
 不是完整列表, 用 `which <tool>` / `ls /usr/local/bin` / `compgen -c` 自行探.
 
-- **Web**: nmap, ffuf, dirsearch, feroxbuster, httpx, nuclei, katana, naabu, dalfox, seclists, wsrx, dddd, fscan
+- **Web**: nmap, ffuf, sqlmap, wfuzz, dirsearch, feroxbuster, httpx, nuclei, katana, naabu, dalfox, seclists, wsrx, dddd, fscan
 - **Binary/Pwn**: gdb(+pwndbg), ropper, ropgadget, rizin, jadx, apktool, checksec, qemu-user, one_gadget, pwninit, patchelf, strace, upx, bkcrack
 - **Forensics/Stego**: binwalk, foremost, steghide, zsteg, pngcheck, exiftool, ffmpeg, imagemagick (`convert`/`identify`), tshark, volatility3 + `dwarf2json` (venv)
 - **OCR/Docs/QR**: tesseract, pdfinfo/pdftotext (poppler), zbarimg; pillow/pyzbar/pypdf/pdfminer (venv)
@@ -51,6 +53,7 @@ python3 script.py
 - **Java**: ysoserial.jar (`/opt/solver/tools/`), jdwp-shellifier (`/opt/solver/tools/`), jadx
 - **Ruby**: one_gadget, zsteg
 - **PHP**: php8.4 CLI, 常用扩展已预装 (gd / mbstring / xml / zip / curl / sqlite3 / imagick); 本地起服务用 `php -S 127.0.0.1:<port>`
+- **Bruteforce/字典**: hashcat, john, fcrackzip, rarcrack; 字典 rockyou (`/usr/share/wordlists/rockyou.txt`) + seclists
 - **Misc**: jq, yq, rg, fd, bc, 7z, unzip, file, rlwrap, chisel, ncat, sqlite3, redis-tools, cmake
 
 ## Workspace 约定
@@ -69,7 +72,7 @@ python3 script.py
 
 ## volatility3 符号表 (内存取证)
 
-`vol` 自带 yara-x (yarasan 可用)。符号表 (ISF) 不预置, 按镜像类型自备:
+`vol` 自带 yara-x (python 模块 `yara_x`)。符号表 (ISF) 不预置, 按镜像类型自备:
 
 - **Linux**: `strings <dump> | grep -m1 "Linux version"` 取内核版本 → 找到带 DWARF 的 vmlinux/调试符号包 → `dwarf2json linux --elf <vmlinux> > <kernel>.isf` → 放入 `/root/.cache/volatility3/symbols/`。
 - **Windows**: vol 自动下载对应 PDB 生成 ISF (需外网; `windows.info` 报 symbol 相关错误时先确认网络)。

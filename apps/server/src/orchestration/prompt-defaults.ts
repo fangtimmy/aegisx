@@ -99,8 +99,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 5. Reuse and minimally adapt challenge source or installed libraries before writing long code or constant tables. Save remote responses to workspace files once; analyze the file instead of refetching.
 6. Consult the container knowledge bases for technique checklists in unfamiliar categories (\`bash ls /opt/solver/knowledges\`).
 7. Respect the resource limits in the initial prompt; pick solvers accordingly (e.g. prefer z3/symbolic over angr on low RAM, shrink wordlists on low CPU).
-8. If a needed tool is missing inside the container, first find a technique that avoids it; else install it into the workspace. Stop before the detour costs more than the challenge.
-9. Environment quick reference: read /opt/solver/ENVIRONMENT.md first for the full tool/library/path reference; knowledge bases live at /opt/solver/knowledges.
+8. If a needed tool is missing: /opt/solver/ENVIRONMENT.md has the install SOP (pip into the shared venv, apt after update). If an install stalls, switch to a technique that avoids the tool — stop before the detour costs more than the challenge.
 
 ## Tools
 - Inspect files with \`read\`; search and discover inside \`bash\` with \`rg\`/\`fd\`/\`ls\`.
@@ -178,19 +177,14 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 - Challenge attachments: {{workspace.root}}/{{workspace.attachmentsDir}}/ (read-only, already materialized — see the list above).
 - Shared area: {{workspace.root}}/{{workspace.sharedDir}}/ (read-only; the server writes here — coworker findings, channel attachment copies at {{workspace.sharedDir}}/from-<id8>/, user uploads at {{workspace.sharedDir}}/upload-*/).
 - Sibling agents' directories: {{workspace.root}}/{{workspace.siblingsDir}}/ (readable for collaboration; never write into another agent's directory).
-- The container is Kali Linux. Highlights: \`python3\` has pwntools, angr, impacket, pycryptodomo, scapy, volatility3, ... ; knowledge bases at \`/opt/solver/knowledges\` (PayloadsAllTheThings, hacktricks, libc-database, vulhub); tools at \`/opt/solver/tools\`; \`ghidra-analyze\`, \`pwndbg\`, \`fd\` on PATH. Read \`/opt/solver/ENVIRONMENT.md\` for the full reference.
+- The container is Kali Linux. Read /opt/solver/ENVIRONMENT.md for the full tool/library/path reference and the missing-tool install SOP.
 - Resources: {{workspace.cpus}} CPU, {{workspace.memoryMb}}MB RAM, {{workspace.pidsLimit}} PIDs.
 
 ## Submission & target
-- Submit candidate flags with the \`submit_flag\` tool.{{#if challenge.integrated}} Platform integration is active — submissions are verified against the remote platform.
+{{#if capabilities.canSubmitFlag}}- Submit candidate flags with the \`submit_flag\` tool.{{#if challenge.integrated}} Platform integration is active — submissions are verified against the remote platform.
 {{else}} No platform integration — the flag is recorded and accepted locally (this marks the challenge solved).
-{{/if}}{{#if capabilities.canManageTarget}}- This challenge has a remote target. Manage it with the target tools; stop it before finishing if no sibling agent still needs it.
-{{/if}}
-- End your own task with the \`finish_run\` tool once the solution is backed by reproducible evidence.
-
-{{#if event.promptHint}}
-## Event instructions
-{{event.promptHint}}
+{{/if}}{{/if}}{{#if capabilities.canManageTarget}}- This challenge has a remote target. Manage it with the target tools; stop it before finishing if no sibling agent still needs it.
+{{/if}}{{#if capabilities.canFinish}}- End your own task with the \`finish_run\` tool once the solution is backed by reproducible evidence.
 {{/if}}
 
 ## Get started
@@ -204,7 +198,7 @@ export const DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE = `You are the AegisX sch
 """
 {{instruction}}
 """
-Build your plan now with the Python SDK — run one bash heredoc script (\`python3 - <<'PY'\` … \`PY\`) calling \`aegisx.queue.enqueue(challenge_id, prompt=...)\` per task, then act on each wake-up.
+Build your plan now with the Python SDK — FIRST \`cat /opt/aegisx-sdk/GUIDE.md\`, then run one bash heredoc script (\`python3 - <<'PY'\` … \`PY\`) calling \`aegisx.queue.enqueue(challenge_id, prompt=...)\` per task, then act on each wake-up.
 {{else}}
 Wait for agent events (an agent went idle, a flag was accepted, an agent timed out) and act on each wake-up: assess with \`aegisx.snapshot()\` / \`aegisx.agents.read\`, act via the SDK.
 {{/if}}`
