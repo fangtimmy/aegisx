@@ -17,8 +17,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # meta · base/files · net/tunnel · web · binary/pwn · forensics/stego · net-analysis · windows/ad · databases · bruteforce · crypto/math · docs/ocr · runtimes
 RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=solver-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    echo 'path-exclude=/usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/excludes && \
+    echo 'path-exclude=/usr/share/man/*' >> /etc/dpkg/dpkg.cfg.d/excludes && \
+    echo 'path-exclude=/usr/share/locale/*' >> /etc/dpkg/dpkg.cfg.d/excludes && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
-    sed -i "s@http://http.kali.org/kali@${KALI_MIRROR}@g" /etc/apt/sources.list.d/kali.sources && \
+    sed -Ei "s@https?://http\.kali\.org/kali@${KALI_MIRROR}@g" /etc/apt/sources.list.d/kali.sources && \
     apt-get update && \
     apt-get -y install --no-install-recommends eatmydata && \
     export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so && \
@@ -41,31 +44,11 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
       default-jdk-headless nodejs npm golang-go ruby && \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd && \
     ln -sf /usr/bin/llvm-pdbutil-21 /usr/local/bin/llvm-pdbutil && \
-    (gzip -dk /usr/share/wordlists/rockyou.txt.gz 2>/dev/null || true)
-
-# Strip package-provided file capabilities from network binaries. The solver
-# container runs with --cap-drop ALL + no-new-privileges, under which exec of a
-# file-capability binary (e.g. nmap's cap_net_raw=eip) is refused with EPERM at
-# exec time — before any privileged op. NET_RAW is granted to the *container*
-# instead (see container-manager.ts), so these binaries work via inherited caps
-# once their own file caps are gone. Runtime setcap is impossible (no CAP_SETFCP
-# in the container), so this must happen at build time.
-RUN setcap -r /usr/lib/nmap/nmap /usr/bin/fping 2>/dev/null || true
+    (gzip -df /usr/share/wordlists/rockyou.txt.gz 2>/dev/null || true) && \
+    rm -rf /usr/share/seclists/Fuzzing
 
 # Build context = repo root: docker buildx build -f containers/solver/Dockerfile -t aegisx/solver:kali .
 COPY containers/solver/solver-cache.py /usr/local/bin/solver-cache.py
-COPY containers/solver/ENVIRONMENT.md /opt/solver/ENVIRONMENT.md
-
-# === AegisX Agent SDK ===
-# The in-image SDK is the production path (PYTHONPATH preset; the agent
-# runtime injects AEGISX_EVENT_ID / AEGISX_API_URL / per-exec identity).
-# Host-side dev override: set AEGISX_SDK_PATH on the server to bind-mount a
-# live source tree over /opt/aegisx-sdk.
-COPY apps/sdk/python /opt/aegisx-sdk
-ENV KNOWLEDGES_DIR=/opt/solver/knowledges \
-    TOOLS_DIR=/opt/solver/tools \
-    VENV_BIN=/opt/venv/bin/python \
-    PYTHONPATH=/opt/aegisx-sdk
 
 # === Knowledge Base ===
 RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked \
@@ -78,7 +61,7 @@ RUN --mount=type=cache,id=solver-downloads,target=/var/cache/solver/downloads,sh
     D=/var/cache/solver/downloads && \
     python3 /usr/local/bin/solver-cache.py sync-downloads && \
     unzip -q "$D/ghidra.zip" -d /opt && \
-    ln -sf /opt/ghidra_12.1.2_PUBLIC/support/analyzeHeadless /usr/local/bin/ghidra-analyze && \
+    ln -sfn /opt/ghidra_*/support/analyzeHeadless /usr/local/bin/ghidra-analyze && \
     tar -xzf "$D/wsrx.tar.gz" -C /usr/local/bin && \
     unzip -q "$D/katana.zip" katana -d /usr/local/bin && \
     unzip -q "$D/naabu.zip" naabu -d /usr/local/bin && \
@@ -117,9 +100,15 @@ RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
     ln -sfn /opt/venv/bin/python /usr/local/bin/python
 
 # === Playwright Chromium ===
+# Browsers download into the cache mount (network skip on rebuilds) and are
+# copied into the layer — cache-mount contents do not ship in the image.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=solver-apt-lists,target=/var/lib/apt/lists,sharing=locked \
-    playwright install --with-deps chromium
+    --mount=type=cache,id=solver-playwright,target=/root/.cache/ms-playwright,sharing=locked \
+    PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright playwright install --with-deps chromium && \
+    mkdir -p /opt/ms-playwright && \
+    cp -a /root/.cache/ms-playwright/. /opt/ms-playwright/
 
 # === Java/Web Tools ===
 RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
@@ -133,6 +122,14 @@ RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
 RUN gem sources --add https://mirrors.ustc.edu.cn/rubygems/ --remove https://rubygems.org/ && \
     gem install --no-document one_gadget zsteg
 
+# === pycdc (py3.9+ bytecode decompiler; uncompyle6 tops out at 3.8) ===
+RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked \
+    python3 /usr/local/bin/solver-cache.py clone https://github.com/zrax/pycdc.git /tmp/pycdc-src /var/cache/solver/git && \
+    cmake -S /tmp/pycdc-src -B /tmp/pycdc-build && \
+    cmake --build /tmp/pycdc-build -j"$(nproc)" && \
+    install -m755 /tmp/pycdc-build/pycdc /tmp/pycdc-build/pycdas /usr/local/bin && \
+    rm -rf /tmp/pycdc-src /tmp/pycdc-build
+
 RUN PWNDBG_GDBINIT=$(find / -name "gdbinit.py" -path "*pwndbg*" 2>/dev/null | head -1) && \
     if [ -n "$PWNDBG_GDBINIT" ]; then PWNDBG_SITE=$(dirname "$(dirname "$PWNDBG_GDBINIT")") && \
     printf 'python import sys; sys.path.insert(0, "%s")\nsource %s\n' "$PWNDBG_SITE" "$PWNDBG_GDBINIT" >> /root/.gdbinit; fi && \
@@ -144,6 +141,45 @@ RUN --mount=type=cache,id=solver-npm,target=/root/.npm,sharing=locked \
     npm config set registry https://registry.npmmirror.com && \
     npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.80.7 && \
     mkdir -p /root/.pi/agent/skills
+
+# Cache politics: everything below changes often (SDK, docs, package tweaks)
+# and is kept last so the heavy toolchain above stays layer-cached.
+# === AegisX Agent SDK ===
+# The in-image SDK is the production path (PYTHONPATH preset; the agent
+# runtime injects AEGISX_EVENT_ID / AEGISX_API_URL / per-exec identity).
+# Host-side dev override: set AEGISX_SDK_PATH on the server to bind-mount a
+# live source tree over /opt/aegisx-sdk.
+COPY apps/sdk/python /opt/aegisx-sdk
+ENV KNOWLEDGES_DIR=/opt/solver/knowledges \
+    TOOLS_DIR=/opt/solver/tools \
+    VENV_BIN=/opt/venv/bin/python \
+    PYTHONPATH=/opt/aegisx-sdk
+COPY containers/solver/ENVIRONMENT.md /opt/solver/ENVIRONMENT.md
+
+# === Volatile package additions ===
+# Kept out of the bulk layer so adding tools later does not re-trigger the
+# ~15-min bulk unpack; dpkg state carries over from the parent layer.
+RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=solver-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update -qq && \
+    export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so && \
+    apt-get -y install --no-install-recommends wine64
+
+# wine: the Debian wine64 trampoline locates the real loader relative to its
+# own path, so PATH symlinks fail with "could not exec the wine loader" —
+# wrap with an absolute-path exec instead.
+RUN printf '#!/bin/sh\nexec /usr/lib/wine/wine64 "$@"\n' > /usr/local/bin/wine64 && \
+    chmod 755 /usr/local/bin/wine64 && \
+    ln -sf wine64 /usr/local/bin/wine && \
+    ln -sf /usr/lib/wine/wineserver /usr/local/bin/wineserver
+
+# Under no-new-privileges, exec of a file-capability binary dies with EPERM at
+# exec time whenever its caps exceed the container bounding set (NET_RAW only)
+# — nmap ships net_bind_service+net_admin+net_raw. NET_RAW is granted at the
+# container level, so no packaged binary needs file caps: strip them all after
+# the last apt layer and assert none remain.
+RUN getcap -r / 2>/dev/null | cut -d' ' -f1 | xargs -r -n1 setcap -r && \
+    test -z "$(getcap -r / 2>/dev/null)"
 
 WORKDIR /workspace
 

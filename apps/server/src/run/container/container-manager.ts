@@ -139,9 +139,11 @@ export function createContainerManager(options?: { socketPath?: string }) {
         Memory: opts.limits.memoryMb * 1024 * 1024,
         PidsLimit: opts.limits.pidsLimit,
         // NET_RAW restored after the drop: nmap -sS / scapy raw sockets /
-        // naabu / tshark capture need it. (nmap/fping still have their package
-        // file-caps stripped in the image — those trip no-new-privileges at
-        // exec, see Dockerfile.)
+        // naabu / tshark capture need it. Packaged binaries' file caps are
+        // stripped in the image — under no-new-privileges, exec of a file-cap
+        // binary fails with EPERM when its caps exceed the bounding set
+        // (nmap ships net_bind_service+net_admin+net_raw), and NET_RAW comes
+        // from this container-level grant anyway.
         CapDrop: ["ALL"],
         CapAdd: ["NET_RAW"],
         SecurityOpt: ["no-new-privileges"],

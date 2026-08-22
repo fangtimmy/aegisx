@@ -36,25 +36,35 @@ python3 script.py
 | `llvm-pdbutil` | PDB 调试信息解析 (Windows .pdb) |
 | `dwarf2json` | vmlinux DWARF → volatility3 ISF 符号表 |
 | `bkcrack` | ZipCrypto known-plaintext 攻击 |
+| `wine64` / `wine` | 运行 64 位 x86 Windows PE (见下节) |
+| `pycdc` / `pycdas` | Python 字节码反编译/反汇编; pycdc 对 3.13 退化 (调用语句变形, 此时以 `pycdas` 为准); ≤3.8 用 uncompyle6 |
 | `jwt_tool.py` | 不在 PATH: `python3 /opt/solver/tools/jwt_tool/jwt_tool.py` |
+
+## Windows exe (wine)
+
+`wine64 xxx.exe`（`wine` 同义），交互程序正常吃 stdin。首次运行会初始化 `~/.wine`（几秒）。
+
+- **仅 64 位 x86 PE**：32 位 PE 没有可用运行时（Rosetta 无 32 位 x86，wine 包不带 wow64 DLL），只能静态分析。
+- 输出中夹带的 `rosetta error: ...`、`failed to open ...syswow64\rundll32.exe` 等行是翻译层噪音，可忽略。
+- **兼容性有限**：个别二进制启动即 `Trace/breakpoint trap` (SIGTRAP，伴随 gdt 报错)——Rosetta 翻译层对部分启动路径 (如 Go 运行时定时器线程) 有 bug，随基础库版本漂移。遇到即转静态分析，不要重试。
 
 ## 工具分类速查
 
 不是完整列表, 用 `which <tool>` / `ls /usr/local/bin` / `compgen -c` 自行探.
 
-- **Web**: nmap, ffuf, sqlmap, wfuzz, dirsearch, feroxbuster, httpx, nuclei, katana, naabu, dalfox, seclists, wsrx, dddd, fscan
+- **Web**: nmap, ffuf, sqlmap, wfuzz, dirsearch, feroxbuster, httpx, nuclei, katana, naabu, dalfox, nikto, mitmproxy, seclists, wsrx, dddd, fscan
 - **Binary/Pwn**: gdb(+pwndbg), ropper, ropgadget, rizin, jadx, apktool, checksec, qemu-user, one_gadget, pwninit, patchelf, strace, upx, bkcrack
-- **Forensics/Stego**: binwalk, foremost, steghide, zsteg, pngcheck, exiftool, ffmpeg, imagemagick (`convert`/`identify`), tshark, volatility3 + `dwarf2json` (venv)
+- **Forensics/Stego**: binwalk, foremost, steghide, zsteg, pngcheck, exiftool, ffmpeg, imagemagick (`convert`/`identify`), tshark, sleuthkit (`fls`/`mmls`), testdisk/photorec, volatility3 + `dwarf2json` (venv)
 - **OCR/Docs/QR**: tesseract, pdfinfo/pdftotext (poppler), zbarimg; pillow/pyzbar/pypdf/pdfminer (venv)
-- **AD/Windows**: smbclient, krb5-user, enum4linux-ng, kerbrute, bloodyAD (venv), certipy-ad (venv), coercer (venv), pypykatz
+- **AD/Windows**: smbclient, krb5-user, enum4linux-ng, kerbrute, netexec, evil-winrm, responder, bloodyAD (venv), certipy-ad (venv), coercer (venv), pypykatz
 - **Crypto**: pycryptodome, gmpy2, sympy, z3-solver, numpy, scipy, fpylll, pysmx, gmssl, mnemonic, eth-account (venv)
-- **Rev helpers**: uncompyle6, pefile, lief, pyelftools, llvm-pdbutil, opencv-python-headless (venv)
+- **Rev helpers**: uncompyle6, pycdc, pefile, lief, pyelftools, llvm-pdbutil, opencv-python-headless (venv)
 - **Cloud**: cloudfox
 - **Java**: ysoserial.jar (`/opt/solver/tools/`), jdwp-shellifier (`/opt/solver/tools/`), jadx
 - **Ruby**: one_gadget, zsteg
 - **PHP**: php8.4 CLI, 常用扩展已预装 (gd / mbstring / xml / zip / curl / sqlite3 / imagick); 本地起服务用 `php -S 127.0.0.1:<port>`
-- **Bruteforce/字典**: hashcat, john, fcrackzip, rarcrack; 字典 rockyou (`/usr/share/wordlists/rockyou.txt`) + seclists
-- **Misc**: jq, yq, rg, fd, bc, 7z, unzip, file, rlwrap, chisel, ncat, sqlite3, redis-tools, cmake
+- **Bruteforce/字典**: hashcat, john, fcrackzip, rarcrack; 字典 rockyou (`/usr/share/wordlists/rockyou.txt`) + seclists (Fuzzing/ 目录已裁剪)
+- **Misc**: jq, yq, rg, fd, bc, 7z, unzip, file, rlwrap, chisel, ncat, socat, dig, masscan, sqlite3, redis-tools, cmake
 
 ## Workspace 约定
 
