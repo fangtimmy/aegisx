@@ -197,9 +197,12 @@ export function Composer({
 
   // Outside-click closes the slash popup.
   useEffect(() => {
-    if (!slashOpen) return
+    if (!slashOpen) return undefined
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node))
+      if (
+        event.target instanceof Node &&
+        !rootRef.current?.contains(event.target)
+      )
         setSlashDismissed(true)
     }
     document.addEventListener("pointerdown", onPointerDown)
@@ -232,7 +235,7 @@ export function Composer({
     // next plain Enter.
     if (event.key === "Enter" || event.key === "Tab") {
       event.preventDefault()
-      pickCommand(matches[slashIndex]!.command)
+      pickCommand(matches[slashIndex].command)
       return true
     }
     if (event.key === "Escape") {

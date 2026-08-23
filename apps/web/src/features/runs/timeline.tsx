@@ -251,7 +251,7 @@ function ToolActivity({
     if (tool.status !== "running") {
       startedRef.current = null
       setElapsed(null)
-      return
+      return undefined
     }
     // W6: prefer the server-known start (true elapsed, incl. time before the
     // dialog opened); fall back to first-seen local time for legacy data.
@@ -347,17 +347,15 @@ function ToolActivity({
   )
 }
 
+const SYSTEM_VARIANT_ICONS: Record<SystemVariant, LucideIcon> = {
+  compaction: Shrink,
+  branch: GitFork,
+  model: ArrowLeftRight,
+  thinking: Gauge,
+}
+
 function systemVariantIcon(variant: SystemVariant): LucideIcon {
-  switch (variant) {
-    case "compaction":
-      return Shrink
-    case "branch":
-      return GitFork
-    case "model":
-      return ArrowLeftRight
-    case "thinking":
-      return Gauge
-  }
+  return SYSTEM_VARIANT_ICONS[variant]
 }
 
 /** Unified collapsible/static row for meta events (system prompt, tool defs,
@@ -467,7 +465,10 @@ const ConversationRow = memo(function ConversationRow({
             <MetaIconButton
               icon={Undo2}
               label="回滚到此"
-              onClick={() => onBacktrack(item.seq as number)}
+              onClick={() => {
+                const seq = item.seq
+                if (seq !== undefined) onBacktrack(seq)
+              }}
             />
           )}
         </div>
@@ -802,7 +803,7 @@ export function Timeline({
     if (!hasConversation) {
       viewportRef.current = null
       setScrollContainer(null)
-      return
+      return undefined
     }
     const viewport = rootRef.current?.closest<HTMLElement>(
       '[data-slot="scroll-area-viewport"]'
@@ -810,7 +811,7 @@ export function Timeline({
     if (!viewport) {
       viewportRef.current = null
       setScrollContainer(null)
-      return
+      return undefined
     }
     viewportRef.current = viewport
     setScrollContainer(viewport.parentElement)

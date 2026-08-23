@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import { useSyncExternalStore } from "react"
 
 export type MarkdownArea = "user" | "assistant" | "thinking" | "system"
@@ -16,11 +17,8 @@ const DEFAULTS: MarkdownPrefs = {
 const AREAS: MarkdownArea[] = ["user", "assistant", "thinking", "system"]
 
 function isPrefs(value: unknown): value is MarkdownPrefs {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    AREAS.every((area) => typeof (value as MarkdownPrefs)[area] === "boolean")
-  )
+  if (!isRecord(value)) return false
+  return AREAS.every((area) => typeof value[area] === "boolean")
 }
 
 function load(): MarkdownPrefs {

@@ -38,6 +38,7 @@ import {
   credentialPrefixes,
   defaultBaseUrls,
   fixedRemoteEventIds,
+  PLATFORM_TYPES,
   platformLabels,
   refreshEvent,
 } from "./platform-config"
@@ -169,15 +170,15 @@ export function ConnectPlatformDialog({
                     disabled={Boolean(platform)}
                     items={platformLabels}
                     onValueChange={(value) => {
-                      const next = value as PlatformType
-                      field.onChange(next)
+                      if (value === null) return
+                      field.onChange(value)
                       // Swap the URL only while it is empty or still a
                       // pristine platform default; keep user-typed URLs.
                       if (
                         !baseUrl ||
                         Object.values(defaultBaseUrls).includes(baseUrl)
                       ) {
-                        form.setValue("baseUrl", defaultBaseUrls[next] ?? "")
+                        form.setValue("baseUrl", defaultBaseUrls[value] ?? "")
                       }
                       form.setValue("remoteEventId", "")
                       discover.reset()
@@ -189,13 +190,11 @@ export function ConnectPlatformDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectPopup>
-                      {(Object.keys(platformLabels) as PlatformType[]).map(
-                        (value) => (
-                          <SelectItem key={value} value={value}>
-                            {platformLabels[value]}
-                          </SelectItem>
-                        )
-                      )}
+                      {PLATFORM_TYPES.map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {platformLabels[value]}
+                        </SelectItem>
+                      ))}
                     </SelectPopup>
                   </Select>
                 )}

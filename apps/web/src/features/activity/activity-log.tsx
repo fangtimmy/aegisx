@@ -244,7 +244,7 @@ export function ActivityLogButton() {
           {items.map((item, index) => (
             <Fragment key={item.id}>
               {(index === 0 ||
-                dayLabel(item.time) !== dayLabel(items[index - 1]!.time)) && (
+                dayLabel(item.time) !== dayLabel(items[index - 1].time)) && (
                 <DayHeader label={dayLabel(item.time)} />
               )}
               <ActivityRow

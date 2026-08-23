@@ -8,16 +8,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { POLL_INTERVAL_MS } from "@/features/events/event-agents-shared"
 import { ErrorState } from "@/features/events/event-shared"
 
-import { TaskDetail, type TaskTab } from "./task-detail"
+import { isTaskTab, TaskDetail, type TaskTab } from "./task-detail"
 import { ORCH, TaskList } from "./task-list"
-
-const TASK_TAB_VALUES: readonly TaskTab[] = [
-  "overview",
-  "conversation",
-  "channels",
-  "files",
-  "queue",
-]
 
 /** Tabs that only exist on the scheduler variant. */
 const SCHEDULER_TABS: readonly TaskTab[] = ["queue"]
@@ -29,10 +21,9 @@ const taskTabKey = (eventId: string) => `aegisx:task-tab:${eventId}`
  * for plain challenges. Default: conversation. */
 function loadTaskTab(eventId: string, c: string | null): TaskTab {
   const stored = localStorage.getItem(taskTabKey(eventId))
-  if (TASK_TAB_VALUES.includes(stored as TaskTab)) {
-    const tab = stored as TaskTab
-    if (SCHEDULER_TABS.includes(tab) && c !== ORCH) return "conversation"
-    return tab
+  if (stored && isTaskTab(stored)) {
+    if (SCHEDULER_TABS.includes(stored) && c !== ORCH) return "conversation"
+    return stored
   }
   return "conversation"
 }

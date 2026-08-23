@@ -549,7 +549,7 @@ function PolicySwitch({
     <Field>
       <div className="flex items-center justify-between gap-4">
         <FieldLabel className="font-normal">{label}</FieldLabel>
-        <Switch checked={value} onCheckedChange={(c) => onChange(c === true)} />
+        <Switch checked={value} onCheckedChange={(c) => onChange(c)} />
       </div>
       <FieldDescription>{description}</FieldDescription>
     </Field>

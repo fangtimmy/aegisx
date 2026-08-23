@@ -68,11 +68,25 @@ import { EventSummary } from "./event-summary"
 import {
   type ChallengeGroup,
   type ChallengeSort,
+  isChallengeGroup,
+  isChallengeSort,
   useEventViewPrefs,
 } from "./event-view-prefs"
 import { ImportChallengesDialog } from "./platform-binding"
 
 type EventTab = "overview" | "tasks" | "agents" | "challenges" | "settings"
+
+const EVENT_TABS = [
+  "overview",
+  "tasks",
+  "agents",
+  "challenges",
+  "settings",
+] as const satisfies readonly EventTab[]
+
+function isEventTab(value: string): value is EventTab {
+  return EVENT_TABS.some((tab) => tab === value)
+}
 
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
@@ -273,7 +287,7 @@ export function EventPage() {
         ...new Set(
           challenges.map((challenge) => challenge.category || UNCATEGORIZED)
         ),
-      ].sort((left, right) =>
+      ].toSorted((left, right) =>
         left.localeCompare(right, "zh-Hans-CN", {
           numeric: true,
           sensitivity: "base",
@@ -309,9 +323,9 @@ export function EventPage() {
       {eventQuery.data && (
         <Tabs
           className="items-start gap-4"
-          onValueChange={(value) =>
-            navigate(pathForTab(eventId, value as EventTab))
-          }
+          onValueChange={(value) => {
+            if (isEventTab(value)) void navigate(pathForTab(eventId, value))
+          }}
           orientation="vertical"
           value={tab}
         >
@@ -482,12 +496,13 @@ export function EventPage() {
                         </MenuTrigger>
                         <MenuPopup align="end">
                           <MenuRadioGroup
-                            onValueChange={(value) =>
+                            onValueChange={(value) => {
+                              if (!isChallengeGroup(value)) return
                               setPrefs((prev) => ({
                                 ...prev,
-                                group: value as ChallengeGroup,
+                                group: value,
                               }))
-                            }
+                            }}
                             value={group}
                           >
                             <MenuRadioItem value="category">
@@ -511,12 +526,13 @@ export function EventPage() {
                         </MenuTrigger>
                         <MenuPopup align="end">
                           <MenuRadioGroup
-                            onValueChange={(value) =>
+                            onValueChange={(value) => {
+                              if (!isChallengeSort(value)) return
                               setPrefs((prev) => ({
                                 ...prev,
-                                sort: value as ChallengeSort,
+                                sort: value,
                               }))
-                            }
+                            }}
                             value={sort}
                           >
                             <MenuRadioItem value="event">

@@ -2,6 +2,14 @@ import type { QueryClient } from "@tanstack/react-query"
 
 import { keys, type PlatformType } from "@/api"
 
+export const PLATFORM_TYPES = [
+  "ctfd",
+  "ret2shell",
+  "a1ctf",
+  "tsecbench",
+  "dasctf",
+] as const satisfies readonly PlatformType[]
+
 export const platformLabels: Record<PlatformType, string> = {
   ctfd: "CTFd",
   ret2shell: "ret2shell",

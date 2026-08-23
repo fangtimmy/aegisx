@@ -34,7 +34,7 @@ export function SchedulerDmTab({
   // Ticking clock for the flush countdown; only runs while the tab is visible.
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
-    if (!active) return
+    if (!active) return undefined
     const timer = setInterval(() => setNowMs(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [active])
@@ -67,9 +67,15 @@ export function SchedulerDmTab({
       {/* Status header (orch unread / flush tick / hold) */}
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5 text-sm">
         {!snap ? (
-          <Badge size="sm" variant="secondary">
-            加载中…
-          </Badge>
+          snapshot.error ? (
+            <Badge size="sm" variant="destructive">
+              状态获取失败
+            </Badge>
+          ) : (
+            <Badge size="sm" variant="secondary">
+              加载中…
+            </Badge>
+          )
         ) : (
           <>
             {snap.deliveryPaused ? (

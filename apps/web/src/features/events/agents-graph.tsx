@@ -1,4 +1,4 @@
-import dagre from "@dagrejs/dagre"
+import { graphlib, layout } from "@dagrejs/dagre"
 import {
   Background,
   Controls,
@@ -8,7 +8,6 @@ import {
   ReactFlowProvider,
   type Edge,
   type Node,
-  type NodeMouseHandler,
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react"
@@ -23,7 +22,10 @@ import {
   Puzzle,
 } from "lucide-react"
 import { useCallback, useMemo, useState } from "react"
-import type { KeyboardEvent as ReactKeyboardEvent } from "react"
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react"
 import { useNavigate } from "react-router"
 
 import type { AgentSummary, Challenge, SchedulerInfo } from "@/api"
@@ -77,14 +79,30 @@ type GraphNodeData =
     }
   | { kind: "agent"; agent: AgentSummary }
 
+type ActiveFlowNode = Node<Extract<GraphNodeData, { kind: "active" }>, "active">
+type ArchiveFlowNode = Node<
+  Extract<GraphNodeData, { kind: "archive" }>,
+  "archive"
+>
+type SchedulerFlowNode = Node<
+  Extract<GraphNodeData, { kind: "scheduler" }>,
+  "scheduler"
+>
+type ChallengeFlowNode = Node<
+  Extract<GraphNodeData, { kind: "challenge" }>,
+  "challenge"
+>
+type AgentFlowNode = Node<Extract<GraphNodeData, { kind: "agent" }>, "agent">
+type GraphFlowNode = Node<GraphNodeData>
+
 /** Lay out nodes left-to-right with dagre, writing absolute positions back
  * onto each node (React Flow needs explicit positions). */
 function layoutWithDagre(
-  nodes: Node[],
+  nodes: GraphFlowNode[],
   edges: Edge[],
   dims: Record<string, { width: number; height: number }>
-): Node[] {
-  const graph = new dagre.graphlib.Graph()
+): GraphFlowNode[] {
+  const graph = new graphlib.Graph()
   graph.setGraph({
     rankdir: "LR",
     nodesep: 28,
@@ -98,7 +116,7 @@ function layoutWithDagre(
     graph.setNode(node.id, { width: dim.width, height: dim.height })
   }
   for (const edge of edges) graph.setEdge(edge.source, edge.target)
-  dagre.layout(graph)
+  layout(graph)
   return nodes.map((node) => {
     const laid = graph.node(node.id)
     const dim = dims[node.id] ?? { width: 160, height: 48 }
@@ -107,6 +125,17 @@ function layoutWithDagre(
       position: { x: laid.x - dim.width / 2, y: laid.y - dim.height / 2 },
     }
   })
+}
+
+function groupByChallenge(list: AgentSummary[]) {
+  const map = new Map<string, AgentSummary[]>()
+  for (const agent of list) {
+    if (!agent.challengeId) continue
+    const bucket = map.get(agent.challengeId) ?? []
+    bucket.push(agent)
+    map.set(agent.challengeId, bucket)
+  }
+  return map
 }
 
 /** The three-layer graph (v19) — {活跃/已归档} → {题目/调度者} → agent.
@@ -127,8 +156,8 @@ function buildAgentsGraph({
   agents: AgentSummary[]
   archiveOpen: boolean
   challenges: Challenge[]
-}): { nodes: Node[]; edges: Edge[] } {
-  const rawNodes: Node[] = []
+}): { nodes: GraphFlowNode[]; edges: Edge[] } {
+  const rawNodes: GraphFlowNode[] = []
   const rawEdges: Edge[] = []
   const dims: Record<string, { width: number; height: number }> = {}
   const addNode = (
@@ -175,20 +204,10 @@ function buildAgentsGraph({
   const schedFinished = schedAgent !== null && isAgentFinished(schedAgent)
 
   // Layer 2 helpers: challenges with agents, in event order.
-  const groupByChallenge = (list: AgentSummary[]) => {
-    const map = new Map<string, AgentSummary[]>()
-    for (const agent of list) {
-      if (!agent.challengeId) continue
-      const bucket = map.get(agent.challengeId) ?? []
-      bucket.push(agent)
-      map.set(agent.challengeId, bucket)
-    }
-    return map
-  }
   const challengeById = new Map(challenges.map((ch) => [ch.id, ch]))
   const challengeOrder = challenges.map((ch) => ch.id)
   const challengeIdsOf = (map: Map<string, AgentSummary[]>) =>
-    [...map.keys()].sort((a, b) => {
+    [...map.keys()].toSorted((a, b) => {
       const ia = challengeOrder.indexOf(a)
       const ib = challengeOrder.indexOf(b)
       if (ia === -1 && ib === -1) return a.localeCompare(b)
@@ -285,8 +304,8 @@ function GraphNodeShell({
   )
 }
 
-function SchedulerGraphNode({ data }: NodeProps) {
-  const d = data as Extract<GraphNodeData, { kind: "scheduler" }>
+function SchedulerGraphNode({ data }: NodeProps<SchedulerFlowNode>) {
+  const d = data
   const active = d.agentId !== null
   return (
     <GraphNodeShell className={cn("w-44", !active && "opacity-70")}>
@@ -306,8 +325,8 @@ function SchedulerGraphNode({ data }: NodeProps) {
   )
 }
 
-function ChallengeGraphNode({ data }: NodeProps) {
-  const d = data as Extract<GraphNodeData, { kind: "challenge" }>
+function ChallengeGraphNode({ data }: NodeProps<ChallengeFlowNode>) {
+  const d = data
   return (
     <GraphNodeShell className="w-52">
       <Puzzle className="size-4 shrink-0 text-muted-foreground" />
@@ -327,8 +346,8 @@ function ChallengeGraphNode({ data }: NodeProps) {
   )
 }
 
-function ActiveGraphNode({ data }: NodeProps) {
-  const d = data as Extract<GraphNodeData, { kind: "active" }>
+function ActiveGraphNode({ data }: NodeProps<ActiveFlowNode>) {
+  const d = data
   return (
     <GraphNodeShell className="w-44">
       <Activity className="size-4 shrink-0 text-primary" />
@@ -340,8 +359,8 @@ function ActiveGraphNode({ data }: NodeProps) {
   )
 }
 
-function ArchiveGraphNode({ data }: NodeProps) {
-  const d = data as Extract<GraphNodeData, { kind: "archive" }>
+function ArchiveGraphNode({ data }: NodeProps<ArchiveFlowNode>) {
+  const d = data
   return (
     <GraphNodeShell className="w-44">
       <Archive className="size-4 shrink-0 text-muted-foreground" />
@@ -359,8 +378,8 @@ function ArchiveGraphNode({ data }: NodeProps) {
   )
 }
 
-function AgentGraphNode({ data }: NodeProps) {
-  const d = data as Extract<GraphNodeData, { kind: "agent" }>
+function AgentGraphNode({ data }: NodeProps<AgentFlowNode>) {
+  const d = data
   const { agent } = d
   const finish = agentFinishBadge(agent.status)
   return (
@@ -401,12 +420,12 @@ function GraphCanvas({
   graphKey,
   onActivateNode,
 }: {
-  graph: { nodes: Node[]; edges: Edge[] }
+  graph: { nodes: GraphFlowNode[]; edges: Edge[] }
   graphKey: string
-  onActivateNode: (node: Node) => void
+  onActivateNode: (node: GraphFlowNode) => void
 }) {
-  const onNodeClick = useCallback<NodeMouseHandler>(
-    (_, node) => onActivateNode(node),
+  const onNodeClick = useCallback(
+    (_event: ReactMouseEvent, node: GraphFlowNode) => onActivateNode(node),
     [onActivateNode]
   )
 
@@ -415,9 +434,11 @@ function GraphCanvas({
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
       if (event.key !== "Enter" && event.key !== " ") return
-      const id = (event.target as HTMLElement).closest<HTMLElement>(
-        ".react-flow__node"
-      )?.dataset.id
+      const target = event.target
+      const id =
+        target instanceof HTMLElement
+          ? target.closest<HTMLElement>(".react-flow__node")?.dataset.id
+          : undefined
       const node = id ? graph.nodes.find((n) => n.id === id) : undefined
       if (!node) return
       event.preventDefault()
@@ -469,7 +490,7 @@ export function AgentsGraph({
 
   const sortedAgents = useMemo(
     () =>
-      [...agents].sort(
+      [...agents].toSorted(
         (left, right) =>
           Number(isAgentFinished(left)) - Number(isAgentFinished(right)) ||
           left.createdAt.localeCompare(right.createdAt)
@@ -499,8 +520,8 @@ export function AgentsGraph({
   )
 
   const onActivateNode = useCallback(
-    (node: Node) => {
-      const data = node.data as GraphNodeData
+    (node: GraphFlowNode) => {
+      const data = node.data
       if (data.kind === "active") {
         return
       } else if (data.kind === "archive") {

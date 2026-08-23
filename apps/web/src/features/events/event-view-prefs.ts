@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import { useEffect, useState } from "react"
 
 import type {
@@ -7,6 +8,14 @@ import type {
 
 export type ChallengeSort = "event" | "name" | "points"
 export type ChallengeGroup = "category" | "status" | "none"
+
+export function isChallengeSort(value: unknown): value is ChallengeSort {
+  return value === "event" || value === "name" || value === "points"
+}
+
+export function isChallengeGroup(value: unknown): value is ChallengeGroup {
+  return value === "category" || value === "status" || value === "none"
+}
 
 export type EventViewPrefs = {
   sort: ChallengeSort
@@ -38,14 +47,6 @@ const REMOTE_STATUS_VALUES: readonly RemoteChallengeStatus[] = [
   "unavailable",
 ]
 
-function isChallengeSort(value: unknown): value is ChallengeSort {
-  return value === "event" || value === "name" || value === "points"
-}
-
-function isChallengeGroup(value: unknown): value is ChallengeGroup {
-  return value === "category" || value === "status" || value === "none"
-}
-
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((item): item is string => typeof item === "string")
@@ -56,9 +57,9 @@ function filterEnum<T extends string>(
   allowed: readonly T[]
 ): T[] {
   if (!Array.isArray(values)) return []
-  const allowedSet = new Set(allowed)
+  const allowedSet = new Set<string>(allowed)
   return values.filter(
-    (item): item is T => typeof item === "string" && allowedSet.has(item as T)
+    (item): item is T => typeof item === "string" && allowedSet.has(item)
   )
 }
 
@@ -70,16 +71,15 @@ function filterEnum<T extends string>(
  * wipe legitimate filters on the first render).
  */
 function sanitize(raw: unknown): EventViewPrefs {
-  if (!raw || typeof raw !== "object") return { ...DEFAULT_EVENT_VIEW_PREFS }
-  const obj = raw as Record<string, unknown>
+  if (!isRecord(raw)) return { ...DEFAULT_EVENT_VIEW_PREFS }
   return {
-    sort: isChallengeSort(obj.sort) ? obj.sort : DEFAULT_EVENT_VIEW_PREFS.sort,
-    group: isChallengeGroup(obj.group)
-      ? obj.group
+    sort: isChallengeSort(raw.sort) ? raw.sort : DEFAULT_EVENT_VIEW_PREFS.sort,
+    group: isChallengeGroup(raw.group)
+      ? raw.group
       : DEFAULT_EVENT_VIEW_PREFS.group,
-    categoryFilter: stringArray(obj.categoryFilter),
-    localFilter: filterEnum(obj.localFilter, LOCAL_STATUS_VALUES),
-    remoteFilter: filterEnum(obj.remoteFilter, REMOTE_STATUS_VALUES),
+    categoryFilter: stringArray(raw.categoryFilter),
+    localFilter: filterEnum(raw.localFilter, LOCAL_STATUS_VALUES),
+    remoteFilter: filterEnum(raw.remoteFilter, REMOTE_STATUS_VALUES),
   }
 }
 

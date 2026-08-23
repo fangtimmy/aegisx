@@ -1,5 +1,6 @@
 import {
   type AgentSummary,
+  type ChannelMessagePublic,
   isSessionEntry,
   isTimingMeta,
   type LiveEvent,
@@ -38,6 +39,26 @@ function optStr(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined
 }
 
+/** Minimal wire guard for the channel.message ledger row — the render path
+ * dereferences id/author/body/meta/files unconditionally, so a malformed
+ * frame must be dropped rather than cached. */
+function isChannelMessage(value: unknown): value is ChannelMessagePublic {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.id === "number" &&
+    typeof value.channelKey === "string" &&
+    (value.authorType === "system" ||
+      value.authorType === "user" ||
+      value.authorType === "agent") &&
+    (value.authorAgentId === null || typeof value.authorAgentId === "string") &&
+    typeof value.authorName === "string" &&
+    typeof value.body === "string" &&
+    isRecord(value.meta) &&
+    typeof value.createdAt === "string" &&
+    Array.isArray(value.files)
+  )
+}
+
 /** Parse one SSE data payload into a typed LiveEvent, or undefined if malformed. */
 export function parseLiveEvent(value: unknown): LiveEvent | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined
@@ -47,13 +68,12 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
       : undefined
   }
   if (value.type === "channel.message") {
-    // Channel pushes: the message payload is the ledger row keyed by its
-    // derived channelKey; timeline views currently poll, so this is a
-    // pass-through.
-    return { type: "channel.message", message: value.message as never }
+    if (!isChannelMessage(value.message)) return undefined
+    return { type: "channel.message", message: value.message }
   }
   if (value.type === "agent.updated") {
     if (!isRecord(value.agent)) return undefined
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- 帧来自自家服务端；字段级校验会拒绝存量客户端依赖的部分帧（测试锁定）。
     return { type: "agent.updated", agent: value.agent as AgentSummary }
   }
   if (value.type === "message.progress") {
@@ -77,6 +97,7 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
   if (value.type === "tool.progress") {
     const revision = numberValue(value.revision)
     const status = value.status
+    const startedAt = optNum(value.startedAt)
     return typeof value.agentId === "string" &&
       typeof value.toolCallId === "string" &&
       typeof value.toolName === "string" &&
@@ -91,9 +112,7 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
           ...(value.args !== undefined ? { args: value.args } : {}),
           ...("result" in value ? { result: value.result } : {}),
           status,
-          ...(optNum(value.startedAt) !== undefined
-            ? { startedAt: value.startedAt as number }
-            : {}),
+          ...(startedAt !== undefined ? { startedAt } : {}),
           ...(value.isError === true ? { isError: true } : {}),
           ...(isTerminal(value.terminal)
             ? {
@@ -112,22 +131,18 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
       return { type: "agent.activity", agentId: value.agentId, activity: null }
     }
     if (!isTransientActivity(value.activity)) return undefined
+    const detail = optStr(value.detail)
+    const attempt = optNum(value.attempt)
+    const maxAttempts = optNum(value.maxAttempts)
+    const delayMs = optNum(value.delayMs)
     return {
       type: "agent.activity",
       agentId: value.agentId,
       activity: value.activity,
-      ...(optStr(value.detail) !== undefined
-        ? { detail: value.detail as string }
-        : {}),
-      ...(optNum(value.attempt) !== undefined
-        ? { attempt: value.attempt as number }
-        : {}),
-      ...(optNum(value.maxAttempts) !== undefined
-        ? { maxAttempts: value.maxAttempts as number }
-        : {}),
-      ...(optNum(value.delayMs) !== undefined
-        ? { delayMs: value.delayMs as number }
-        : {}),
+      ...(detail !== undefined ? { detail } : {}),
+      ...(attempt !== undefined ? { attempt } : {}),
+      ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+      ...(delayMs !== undefined ? { delayMs } : {}),
       ...(isCompactionReason(value.reason) ? { reason: value.reason } : {}),
     }
   }

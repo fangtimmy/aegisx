@@ -156,10 +156,10 @@ export function TaskList({
     return {
       active: rows
         .filter((row) => row.liveCount > 0 || row.pendingCount > 0)
-        .sort(byActivity),
+        .toSorted(byActivity),
       silent: rows
         .filter((row) => row.liveCount === 0 && row.pendingCount === 0)
-        .sort(byActivity),
+        .toSorted(byActivity),
     }
   }, [fleet, challengeById, pendingByChallenge, query, nowMs])
 
@@ -171,14 +171,14 @@ export function TaskList({
     ? "bg-muted-foreground/40"
     : fleet.config.paused
       ? "bg-warning"
-      : schedulerAgent!.status === "running"
+      : schedulerAgent.status === "running"
         ? "bg-info"
         : "bg-success"
   const schedTextClass = !schedActive
     ? "text-muted-foreground"
     : fleet.config.paused
       ? "text-warning"
-      : schedulerAgent!.status === "running"
+      : schedulerAgent.status === "running"
         ? "text-info"
         : "text-success"
 

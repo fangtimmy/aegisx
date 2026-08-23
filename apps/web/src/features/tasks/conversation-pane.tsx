@@ -67,7 +67,7 @@ export function ConversationPane({
 
   const ordered = useMemo(
     () =>
-      [...agents].sort((left, right) =>
+      [...agents].toSorted((left, right) =>
         left.createdAt.localeCompare(right.createdAt)
       ),
     [agents]

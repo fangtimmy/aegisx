@@ -1,11 +1,11 @@
-import { apiRequest, jsonRequest } from "./client"
 import type {
   AgentSummary,
   InboxSnapshot,
-  QueueItem,
-  QueueSnapshot,
-  SchedulerInfo,
-} from "./types"
+  SpawnQueueParams,
+} from "@aegisx/shared"
+
+import { apiRequest, jsonRequest } from "./client"
+import type { QueueItem, QueueSnapshot, SchedulerInfo } from "./types"
 
 export function getScheduler(eventId: string) {
   return apiRequest<SchedulerInfo>(`/events/${eventId}/scheduler`)
@@ -84,7 +84,7 @@ export function updateQueueItem(
   patch: {
     prompt?: string
     timeoutMs?: number
-    params?: Record<string, unknown>
+    params?: SpawnQueueParams
   }
 ) {
   return apiRequest<QueueItem>(

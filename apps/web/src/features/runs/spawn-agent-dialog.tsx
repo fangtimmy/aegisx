@@ -47,7 +47,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { ModelRefPicker } from "@/features/runs/model-switcher"
 import { toast } from "@/lib/toast"
 
-const PROMPT_MODE_LABELS = {
+const PROMPT_MODES = ["strategy", "override"] as const
+
+const PROMPT_MODE_LABELS: Record<(typeof PROMPT_MODES)[number], string> = {
   strategy: "追加到 Strategy（默认）",
   override: "完全替换 initial",
 } as const
@@ -318,22 +320,14 @@ function SpawnAgentDialogContent({
               <Select
                 disabled={!prompt.trim()}
                 items={PROMPT_MODE_LABELS}
-                onValueChange={(value) =>
-                  setPromptMode(
-                    (value ?? "strategy") as "strategy" | "override"
-                  )
-                }
+                onValueChange={(value) => setPromptMode(value ?? "strategy")}
                 value={promptMode}
               >
                 <SelectTrigger className="h-8 text-xs" size="sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopup>
-                  {(
-                    Object.keys(PROMPT_MODE_LABELS) as Array<
-                      keyof typeof PROMPT_MODE_LABELS
-                    >
-                  ).map((m) => (
+                  {PROMPT_MODES.map((m) => (
                     <SelectItem key={m} value={m}>
                       {PROMPT_MODE_LABELS[m]}
                     </SelectItem>

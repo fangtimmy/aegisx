@@ -1,3 +1,5 @@
+import { isRecord } from "./agent"
+
 export type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
 
 export type SettingGroup = "智能体" | "运行时" | "容器"
@@ -264,8 +266,10 @@ const DEF_BY_KEY = new Map(SETTINGS_DEFS.map((def) => [def.key, def] as const))
 
 export const SETTING_KEYS = SETTINGS_DEFS.map((def) => def.key)
 
+const DEF_KEYS = new Set<string>(SETTINGS_DEFS.map((def) => def.key))
+
 export function isSettingKey(value: string): value is SettingKey {
-  return DEF_BY_KEY.has(value as SettingKey)
+  return DEF_KEYS.has(value)
 }
 
 export function settingDef(key: SettingKey): SettingDef {
@@ -275,6 +279,7 @@ export function settingDef(key: SettingKey): SettingDef {
 }
 
 export function defaultSettings(): FlatSettings {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- 键集合由 SETTINGS_DEFS 枚举，逐键写入后即为完整 FlatSettings。
   const out = {} as FlatSettings
   for (const def of SETTINGS_DEFS) {
     ;(out as Record<string, unknown>)[def.key] = def.default
@@ -297,8 +302,8 @@ export function modifiedSettingKeys(settings: FlatSettings): SettingKey[] {
  * loading version-1 config docs written before a key rename (the rename drops
  * out of parseSettings otherwise, which only keeps known keys). Pure. */
 export function migrateSettingKeys(raw: unknown): unknown {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw
-  const source = raw as Record<string, unknown>
+  if (!isRecord(raw)) return raw
+  const source = raw
   if (
     "agent.defaultModelId" in source &&
     !("agent.defaultModelRef" in source)
@@ -312,10 +317,7 @@ export function migrateSettingKeys(raw: unknown): unknown {
 /** Map pre-flat / unversioned config.json settings into flat keys. */
 export function migrateLegacySettings(raw: unknown): FlatSettings {
   const source0 = migrateSettingKeys(raw)
-  const source =
-    source0 && typeof source0 === "object" && !Array.isArray(source0)
-      ? (source0 as Record<string, unknown>)
-      : {}
+  const source = isRecord(source0) ? source0 : {}
 
   // Already flat (has at least one known flat key)
   if (SETTING_KEYS.some((key) => key in source)) {
@@ -356,8 +358,8 @@ export function get<K extends SettingKey>(
   key: K
 ): FlatSettings[K] {
   const value = settings[key]
-  if (value !== undefined) return value as FlatSettings[K]
-  return settingDef(key).default as FlatSettings[K]
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- def.default 是全键默认值联合，与 K 的相关性 TS 无法表达。
+  return (value ?? settingDef(key).default) as FlatSettings[K]
 }
 
 function coerceValue(def: SettingDef, raw: unknown): unknown {
@@ -398,15 +400,14 @@ function coerceValue(def: SettingDef, raw: unknown): unknown {
       if (!def.enum.some((item) => item.value === raw)) return undefined
       return raw
     }
+    default:
+      return undefined
   }
 }
 
 /** Merge raw object with defaults; unknown keys dropped; invalid values use default. */
 export function parseSettings(raw: unknown): FlatSettings {
-  const source =
-    raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {}
+  const source = isRecord(raw) ? raw : {}
   const out = defaultSettings()
   for (const def of SETTINGS_DEFS) {
     const coerced = coerceValue(def, source[def.key])
@@ -422,10 +423,10 @@ export function patchSettings(
   current: FlatSettings,
   patch: unknown
 ): FlatSettings {
-  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+  if (!isRecord(patch)) {
     return { ...current }
   }
-  const source = patch as Record<string, unknown>
+  const source = patch
   const out = { ...current }
   for (const [key, raw] of Object.entries(source)) {
     if (!isSettingKey(key)) continue
@@ -458,8 +459,8 @@ const LEGACY_PROMPT_TEMPLATE_KEYS: Record<string, string> = {
 export function extractLegacyPromptTemplates(
   raw: unknown
 ): Record<string, string> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
-  const source = raw as Record<string, unknown>
+  if (!isRecord(raw)) return undefined
+  const source = raw
   const found: Record<string, string> = {}
   for (const [legacyKey, templateKey] of Object.entries(
     LEGACY_PROMPT_TEMPLATE_KEYS
@@ -483,8 +484,8 @@ export function isConfigDocumentV1(raw: unknown): raw is {
   settings: unknown
   providers: unknown[]
 } {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
-  const doc = raw as Record<string, unknown>
+  if (!isRecord(raw)) return false
+  const doc = raw
   return (
     doc.version === CONFIG_DOCUMENT_VERSION &&
     doc.settings !== undefined &&

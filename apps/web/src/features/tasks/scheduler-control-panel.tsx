@@ -82,7 +82,7 @@ export function SchedulerControlPanel({
     ? ("secondary" as const)
     : paused
       ? ("warning" as const)
-      : agent!.status === "running"
+      : agent.status === "running"
         ? ("info" as const)
         : ("success" as const)
 

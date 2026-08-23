@@ -1,3 +1,4 @@
+import { isAgentStatus } from "@aegisx/shared"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Archive,
@@ -12,13 +13,7 @@ import {
 } from "lucide-react"
 import { useState } from "react"
 
-import {
-  type Challenge,
-  challengesApi,
-  keys,
-  type AgentStatus,
-  type SolveState,
-} from "@/api"
+import { type Challenge, challengesApi, keys, type SolveState } from "@/api"
 import { IconTooltip } from "@/components/shell/product-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -315,8 +310,8 @@ export function ChallengeCard({
           <span className="ml-auto flex items-center gap-1.5">
             {Object.entries(challenge.agentStatusCounts).map(
               ([status, count]) => {
-                if (count <= 0) return null
-                const runStatus = status as AgentStatus
+                if (count <= 0 || !isAgentStatus(status)) return null
+                const runStatus = status
                 const Icon =
                   runStatus === "running"
                     ? Play

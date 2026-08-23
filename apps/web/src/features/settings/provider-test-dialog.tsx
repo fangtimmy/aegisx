@@ -1,5 +1,5 @@
 import { CircleAlert, Send } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 
 import type { ProviderConnection } from "@/api"
 import { streamProviderTest, type ProviderTestUsage } from "@/api/providers"
@@ -53,6 +53,8 @@ export function ProviderTestDialog({
   const [output, setOutput] = useState("")
   const [metrics, setMetrics] = useState<TestMetrics | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** The in-flight test stream; aborted when the dialog closes mid-run. */
+  const abortRef = useRef<AbortController | null>(null)
 
   const speed =
     metrics?.usage && metrics.ttftMs !== null && metrics.totalMs !== null
@@ -68,6 +70,8 @@ export function ProviderTestDialog({
     setError(null)
     const startedAt = performance.now()
     let ttft: number | null = null
+    const controller = new AbortController()
+    abortRef.current = controller
     try {
       await streamProviderTest(
         provider.id,
@@ -88,17 +92,31 @@ export function ProviderTestDialog({
           } else {
             setError(event.message)
           }
-        }
+        },
+        controller.signal
       )
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "测试失败")
+      // A user-initiated close aborts the stream — not an error to surface.
+      if (!controller.signal.aborted) {
+        setError(cause instanceof Error ? cause.message : "测试失败")
+      }
     } finally {
+      if (abortRef.current === controller) abortRef.current = null
       setRunning(false)
     }
   }
 
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
+    <Dialog
+      onOpenChange={(next) => {
+        if (!next) {
+          abortRef.current?.abort()
+          abortRef.current = null
+        }
+        onOpenChange(next)
+      }}
+      open={open}
+    >
       <DialogPopup className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>测试对话 — {provider.label}</DialogTitle>

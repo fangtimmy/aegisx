@@ -10,6 +10,10 @@
     "import"
   ],
   "ignorePatterns": ["src/components/ui/**", "dist/**", "tests/**"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
   "options": {
     "typeAware": true
   },
@@ -20,6 +24,8 @@
     }
   },
   "rules": {
+    "react/react-in-jsx-scope": "off",
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
     "tailwindcss/no-unknown-classes": [
       "error",
       { "allowlist": ["code-preview", "streamdown-md"] }

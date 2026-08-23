@@ -25,7 +25,17 @@ describe("parseLiveEvent", () => {
   })
 
   test("channel.message passes the payload through", () => {
-    const message = { id: 7, body: "hi" }
+    const message = {
+      id: 7,
+      channelKey: "team",
+      authorType: "agent",
+      authorAgentId: "a1",
+      authorName: "bot",
+      body: "hi",
+      meta: {},
+      createdAt: "2025-01-01T00:00:00Z",
+      files: [],
+    }
     expect(parseLiveEvent({ type: "channel.message", message })).toEqual({
       type: "channel.message",
       message,

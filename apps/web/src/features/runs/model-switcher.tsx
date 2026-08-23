@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useMemo } from "react"
 
 import { keys, providersApi } from "@/api"
+import { Button } from "@/components/ui/button"
 import {
   Select,
   SelectGroup,
@@ -25,6 +26,7 @@ const thinkingLevelLabels: Record<ThinkingLevel, string> = {
   max: "Maximum",
 }
 
+// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Record<ThinkingLevel,_> 的 keys 恰为 ThinkingLevel 本身。
 const THINKING_LEVELS = Object.keys(thinkingLevelLabels) as ThinkingLevel[]
 
 /** Models grouped by provider label (for grouped selects). */
@@ -180,27 +182,45 @@ export function ModelRefPicker({
               </SelectItem>
             </SelectGroup>
           )}
-          {grouped.length === 0 && (
+          {models.error ? (
+            <div className="flex flex-col items-start gap-1 px-3 py-4 text-xs">
+              <span className="font-medium text-destructive">
+                模型列表加载失败
+              </span>
+              <span className="text-muted-foreground">
+                {models.error.message}
+              </span>
+              <Button
+                onClick={() => void models.refetch()}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                重试
+              </Button>
+            </div>
+          ) : grouped.length === 0 ? (
             <div className="flex flex-col gap-1 px-3 py-4 text-xs text-muted-foreground">
               <span className="font-medium text-foreground">无可用模型</span>
               <span>前往 设置 → 模型供应商 添加并启用一个供应商。</span>
             </div>
+          ) : (
+            grouped.map(([providerLabel, list]) => {
+              const visible = live
+                ? list.filter((m) => m.address !== selectedAddress)
+                : list
+              return (
+                <SelectGroup key={providerLabel}>
+                  <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
+                  {visible.map((m) => (
+                    <SelectItem key={m.address} value={m.address}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              )
+            })
           )}
-          {grouped.map(([providerLabel, list]) => {
-            const visible = live
-              ? list.filter((m) => m.address !== selectedAddress)
-              : list
-            return (
-              <SelectGroup key={providerLabel}>
-                <SelectGroupLabel>{providerLabel}</SelectGroupLabel>
-                {visible.map((m) => (
-                  <SelectItem key={m.address} value={m.address}>
-                    {m.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            )
-          })}
         </SelectPopup>
       </Select>
       {showEffort && (
@@ -212,7 +232,7 @@ export function ModelRefPicker({
               thinkingLevelLabels[level],
             ])
           )}
-          onValueChange={(v) => v && applyEffort(v as ThinkingLevel)}
+          onValueChange={(v) => v && applyEffort(v)}
           value={effort}
         >
           <SelectTrigger

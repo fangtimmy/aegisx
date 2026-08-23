@@ -1,11 +1,11 @@
 import { apiRequest, jsonRequest } from "./client"
-import type { FlatSettings, SettingsResponse } from "./types"
+import type { SettingKey, SettingsResponse } from "./types"
 
 export function getSettings() {
   return apiRequest<SettingsResponse>("/settings")
 }
 
-export function updateSettings(input: Partial<FlatSettings>) {
+export function updateSettings(input: Partial<Record<SettingKey, unknown>>) {
   return apiRequest<SettingsResponse>("/settings", jsonRequest("PATCH", input))
 }
 

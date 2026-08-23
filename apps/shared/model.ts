@@ -95,6 +95,10 @@ export type ResolvedModelTarget<M = ProviderModel> = {
  * (run create / cold-restore / model-switch) and tests can use it. The caller
  * turns the resolved provider+model into an SDK model via its ModelRuntime.
  */
+function isEnabledProvider(provider: ProviderConnection): boolean {
+  return provider.enabled && !!provider.apiKey
+}
+
 export function resolveModelRef<M extends ProviderModel>(
   ref: ModelRef | null | undefined,
   providers: ProviderConnection[]
@@ -102,17 +106,15 @@ export function resolveModelRef<M extends ProviderModel>(
   const parsed = parseModelRef(ref)
   if (!parsed) return null
 
-  const enabled = (provider: ProviderConnection) =>
-    provider.enabled && !!provider.apiKey
-
   for (const provider of providers) {
-    if (!enabled(provider)) continue
+    if (!isEnabledProvider(provider)) continue
     for (const model of provider.models) {
       if (!model.enabled) continue
       if (
         modelAddress(provider, model) ===
         `${parsed.providerKey}/${parsed.modelId}`
       ) {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- 泛型收窄边界：M 由调用方按地址契约声明，运行时仅能按地址匹配。
         return { provider, model: model as M, thinkingLevel: parsed.effort }
       }
     }

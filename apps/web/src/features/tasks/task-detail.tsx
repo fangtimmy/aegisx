@@ -25,6 +25,18 @@ export type TaskTab =
   | "files"
   | "queue"
 
+const TASK_TAB_VALUES = [
+  "overview",
+  "conversation",
+  "channels",
+  "files",
+  "queue",
+] as const
+
+export function isTaskTab(value: string): value is TaskTab {
+  return TASK_TAB_VALUES.some((tab) => tab === value)
+}
+
 /** The right pane: one tab container per selection. The tab set switches
  * with the variant (challenge vs scheduler); the tab state itself lives in
  * the page shell so sibling panes can switch to the conversation tab. */
@@ -67,7 +79,9 @@ export function TaskDetail({
   return (
     <Tabs
       className="flex h-full min-h-0 min-w-0 flex-col"
-      onValueChange={(value) => onTabChange(value as TaskTab)}
+      onValueChange={(value) => {
+        if (isTaskTab(value)) onTabChange(value)
+      }}
       value={tab}
     >
       <TabsList

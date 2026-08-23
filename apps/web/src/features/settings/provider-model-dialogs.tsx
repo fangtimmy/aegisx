@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import { Brain, CircleAlert, Download, Image, Type } from "lucide-react"
 import { Controller } from "react-hook-form"
 
@@ -183,14 +184,11 @@ export function EditModelDialog({ editor }: { editor: ProviderEditor }) {
             if (!editingModel) return
             let metadata: ProviderModel["metadata"]
             try {
-              const parsed = JSON.parse(values.metadata) as unknown
-              if (
-                !parsed ||
-                typeof parsed !== "object" ||
-                Array.isArray(parsed)
-              ) {
+              const parsed: unknown = JSON.parse(values.metadata)
+              if (!isRecord(parsed)) {
                 throw new Error()
               }
+              // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- 粘贴的自由 JSON 只在客户端校验对象性；字段级校验由服务端 PATCH 兜底。
               metadata = parsed as ProviderModel["metadata"]
             } catch {
               setMetadataError("请输入一个 JSON 对象")

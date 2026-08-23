@@ -168,7 +168,8 @@ export function FilesWorkspace({
   const onHandlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault()
-      ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+      if (e.target instanceof HTMLElement)
+        e.target.setPointerCapture(e.pointerId)
       dragState.current = { startX: e.clientX, startWidth: sidebarWidth }
     },
     [sidebarWidth]
@@ -195,7 +196,8 @@ export function FilesWorkspace({
         return w
       })
     }
-    ;(e.target as HTMLElement).releasePointerCapture?.(e.pointerId)
+    if (e.target instanceof HTMLElement)
+      e.target.releasePointerCapture?.(e.pointerId)
   }, [])
 
   const root = useQuery({

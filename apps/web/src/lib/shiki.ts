@@ -1,9 +1,14 @@
 import {
   type BundledLanguage,
+  bundledLanguages,
   createHighlighter,
   type Highlighter,
   type ShikiTransformer,
 } from "shiki"
+
+function isBundledLanguage(lang: string): lang is BundledLanguage {
+  return lang in bundledLanguages
+}
 
 const THEMES = ["github-light", "github-dark-default"] as const
 
@@ -23,8 +28,9 @@ function getHighlighter() {
 async function ensureLang(highlighter: Highlighter, lang: string) {
   if (lang === "text" || lang === "plaintext" || lang === "txt") return "text"
   if (highlighter.getLoadedLanguages().includes(lang)) return lang
+  if (!isBundledLanguage(lang)) return "text"
   try {
-    await highlighter.loadLanguage(lang as BundledLanguage)
+    await highlighter.loadLanguage(lang)
     return lang
   } catch {
     return "text"

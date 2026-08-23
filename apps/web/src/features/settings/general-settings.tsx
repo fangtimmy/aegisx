@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import { Download, Monitor, Moon, Sun, Upload } from "lucide-react"
 import { useRef, useState } from "react"
 
@@ -16,11 +17,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Radio, RadioGroup } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
-import {
-  useMarkdownPrefs,
-  type MarkdownArea,
-  type MarkdownPrefs,
-} from "@/lib/markdown-prefs"
+import { useMarkdownPrefs, type MarkdownArea } from "@/lib/markdown-prefs"
 
 const themes = [
   { label: "跟随系统", value: "system" },
@@ -169,9 +166,7 @@ function MarkdownSettings() {
           <Switch
             aria-label={area.label}
             checked={prefs[area.key]}
-            onCheckedChange={(checked) =>
-              setPrefs({ [area.key]: checked } as Partial<MarkdownPrefs>)
-            }
+            onCheckedChange={(checked) => setPrefs({ [area.key]: checked })}
           />
         </div>
       ))}
@@ -228,26 +223,22 @@ function SettingsTransfer({
     setError(null)
     setMessage(null)
     try {
-      const document = JSON.parse(await file.text()) as {
-        version?: number
-        settings?: unknown
-        providers?: unknown
-        appearance?: { theme?: unknown }
+      const document: unknown = JSON.parse(await file.text())
+      if (!isRecord(document)) {
+        throw new Error("不支持设置文件（预期版本 1）")
       }
-      if (
-        document.version !== 1 ||
-        !document.settings ||
-        !Array.isArray(document.providers)
-      ) {
+      const { version, settings, providers, appearance } = document
+      if (version !== 1 || !settings || !Array.isArray(providers)) {
         throw new Error("不支持设置文件（预期版本 1）")
       }
       await settingsApi.importSettingsPayload({
         version: 1,
-        settings: document.settings,
-        providers: document.providers,
+        settings,
+        providers,
       })
-      if (document.appearance?.theme && isTheme(document.appearance.theme)) {
-        setTheme(document.appearance.theme)
+      const importedTheme = isRecord(appearance) ? appearance.theme : undefined
+      if (importedTheme !== undefined && isTheme(importedTheme)) {
+        setTheme(importedTheme)
       }
       setMessage("设置已导入。")
       window.location.reload()

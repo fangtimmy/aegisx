@@ -12,7 +12,7 @@ export function mergeChannelMessages(
   const seen = new Set(prev.map((message) => message.id))
   const incoming = fresh.filter((message) => !seen.has(message.id))
   if (incoming.length === 0) return prev
-  return [...prev, ...incoming].sort((a, b) => a.id - b.id)
+  return [...prev, ...incoming].toSorted((a, b) => a.id - b.id)
 }
 
 /** Append one live (SSE) message into a channel-messages cache entry,

@@ -23,11 +23,7 @@ const ThemeProviderContext = React.createContext<
 >(undefined)
 
 function isTheme(value: string | null): value is Theme {
-  if (value === null) {
-    return false
-  }
-
-  return THEME_VALUES.includes(value as Theme)
+  return value !== null && THEME_VALUES.some((theme) => theme === value)
 }
 
 function getSystemTheme(): ResolvedTheme {

@@ -189,7 +189,9 @@ export function ProviderTypeField({
       <Select
         items={providerTypeLabels}
         name="type"
-        onValueChange={(next) => onChange(next as ProviderType)}
+        onValueChange={(next) => {
+          if (next !== null) onChange(next)
+        }}
         value={value}
       >
         <SelectTrigger>

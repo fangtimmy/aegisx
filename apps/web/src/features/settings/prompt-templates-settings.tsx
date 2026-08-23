@@ -32,6 +32,15 @@ import { PromptEditor, type PromptPreviewKind } from "./prompt-editor"
 
 /** The builtin template keys (v9: the plugin namespace is gone).
  * Unknown keys returned by the server fall back to the raw key. */
+const TEMPLATE_KEYS = [
+  "mainSystem",
+  "initial",
+  "orchestratorSystem",
+  "schedulerInitial",
+  "channelDelivery",
+  "schedulerDigest",
+] as const
+
 const TEMPLATE_META: Record<string, { title: string; description: string }> = {
   mainSystem: {
     title: "主系统提示词",
@@ -133,9 +142,9 @@ export function PromptTemplatesSettings() {
       <Card>
         <CardPanel className="p-0">
           <div className="divide-y">
-            {Object.keys(TEMPLATE_META).map((key) => (
+            {TEMPLATE_KEYS.map((key) => (
               <PromptTemplateRow
-                defaultBody={defaults[key as keyof typeof defaults] ?? ""}
+                defaultBody={defaults[key] ?? ""}
                 key={key}
                 orchestratorVars={variables.orchestratorPromptVariables}
                 promptVars={variables.promptVariables}

@@ -42,6 +42,17 @@ import { SchemaSettingsForm } from "./schema-form"
 
 type SettingsSection = "general" | "models" | "prompts" | "settings"
 
+const SECTION_IDS = [
+  "general",
+  "models",
+  "prompts",
+  "settings",
+] as const satisfies readonly SettingsSection[]
+
+function toSettingsSection(value: string): SettingsSection | undefined {
+  return SECTION_IDS.find((id) => id === value)
+}
+
 const sectionPaths: Record<SettingsSection, string> = {
   general: "/settings/general",
   models: "/settings/models",
@@ -55,9 +66,8 @@ export function SettingsScreen() {
   const navigate = useNavigate()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const section =
-    (Object.entries(sectionPaths).find(
-      ([, path]) => path === location.pathname
-    )?.[0] as SettingsSection | undefined) ?? "general"
+    SECTION_IDS.find((id) => sectionPaths[id] === location.pathname) ??
+    "general"
   const providers = useQuery({
     queryKey: keys.providers.all,
     queryFn: () => providersApi.listProviders(),
@@ -115,9 +125,10 @@ export function SettingsScreen() {
   return (
     <Tabs
       className="w-full flex-row items-start gap-4"
-      onValueChange={(value) =>
-        void navigate(sectionPaths[value as SettingsSection])
-      }
+      onValueChange={(value) => {
+        const next = toSettingsSection(value)
+        if (next) void navigate(sectionPaths[next])
+      }}
       orientation="vertical"
       value={section}
     >
@@ -228,7 +239,7 @@ export function SettingsScreen() {
                           onCheckedChange={(enabled) =>
                             toggleProvider.mutate({
                               id: provider.id,
-                              enabled: enabled === true,
+                              enabled: enabled,
                             })
                           }
                         />

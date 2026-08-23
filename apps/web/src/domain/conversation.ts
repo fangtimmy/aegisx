@@ -227,12 +227,15 @@ function tsMs(value: string | number | undefined): number | undefined {
   return Number.isFinite(ms) ? ms : undefined
 }
 
+/** Coerce unknown to a finite number, else 0. */
+function finiteNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
+}
+
 /** Fold one assistant message's usage into the turn accumulator. */
 function accumulateUsage(target: ConversationAgentItem, usage: unknown): void {
   if (!isRecord(usage)) return
   const cost = isRecord(usage.cost) ? usage.cost.total : undefined
-  const add = (value: unknown) =>
-    typeof value === "number" && Number.isFinite(value) ? value : 0
   const prev = target.usage ?? {
     input: 0,
     output: 0,
@@ -241,11 +244,11 @@ function accumulateUsage(target: ConversationAgentItem, usage: unknown): void {
     cost: 0,
   }
   target.usage = {
-    input: prev.input + add(usage.input),
-    output: prev.output + add(usage.output),
-    cacheRead: prev.cacheRead + add(usage.cacheRead),
-    cacheWrite: prev.cacheWrite + add(usage.cacheWrite),
-    cost: prev.cost + add(cost),
+    input: prev.input + finiteNumber(usage.input),
+    output: prev.output + finiteNumber(usage.output),
+    cacheRead: prev.cacheRead + finiteNumber(usage.cacheRead),
+    cacheWrite: prev.cacheWrite + finiteNumber(usage.cacheWrite),
+    cost: prev.cost + finiteNumber(cost),
   }
 }
 

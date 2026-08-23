@@ -20,7 +20,6 @@ type MessageProgress = {
   key: string
   revision: number
   entry: SessionEntry
-  pending: boolean
 }
 
 type ToolProgress = {
@@ -165,10 +164,11 @@ export class ConversationStore {
   }
 
   /**
-   * Drop ephemeral live state that may be stale after an SSE disconnect.
-   * Keeps optimistic pending user messages; clears running tool/activity
-   * progress and non-pending streamed drafts so a reconnect re-derives them
-   * from the freshly re-fetched committed history + new live stream.
+   * Drop ALL ephemeral live state after an SSE disconnect: streamed drafts,
+   * running tool progress and transient activity are cleared so a reconnect
+   * re-derives them from the freshly re-fetched committed history + the new
+   * live stream (the server's seed snapshot replays in-flight tools; message
+   * drafts reappear with the next delta or commit).
    */
   resetForReconnect() {
     const agentIds = new Set([
@@ -176,19 +176,14 @@ export class ConversationStore {
       ...this.toolProgress.keys(),
       ...this.activity.keys(),
     ])
-    for (const [agentId, progress] of this.messageProgress) {
-      for (const [key, entry] of progress) {
-        if (!entry.pending) progress.delete(key)
-      }
-      if (progress.size === 0) this.messageProgress.delete(agentId)
-    }
+    this.messageProgress.clear()
     this.toolProgress.clear()
     this.activity.clear()
     for (const agentId of agentIds) this.rebuildLive(agentId)
   }
 
   private rebuildCommitted(agentId: string) {
-    const messages = [...(this.messages.get(agentId)?.values() ?? [])].sort(
+    const messages = [...(this.messages.get(agentId)?.values() ?? [])].toSorted(
       (left, right) => left.seq - right.seq
     )
     let boundary = -1
@@ -305,7 +300,12 @@ export class ConversationStore {
       const progress = this.messageProgress.get(event.agentId) ?? new Map()
       const existing = progress.get(event.key)
       if (!existing || event.revision > existing.revision) {
-        progress.set(event.key, { ...event, pending: false })
+        progress.set(event.key, {
+          agentId: event.agentId,
+          key: event.key,
+          revision: event.revision,
+          entry: event.entry,
+        })
         this.messageProgress.set(event.agentId, progress)
         this.rebuildLive(event.agentId)
       }
@@ -392,7 +392,7 @@ export class ConversationStore {
     )
     this.source = source
     let opened = false
-    source.onopen = () => {
+    source.addEventListener("open", () => {
       if (this.source !== source) return
       const reconnecting = opened
       opened = true
@@ -401,12 +401,12 @@ export class ConversationStore {
         this.resetForReconnect()
         onReconnect()
       }
-    }
-    source.onerror = () => {
+    })
+    source.addEventListener("error", () => {
       if (this.source !== source) return
       onDisconnectedChange(true)
-    }
-    source.onmessage = (message) => {
+    })
+    source.addEventListener("message", (message) => {
       if (this.source !== source) return
       let payload: unknown
       try {
@@ -416,15 +416,12 @@ export class ConversationStore {
       }
       const event = parseLiveEvent(payload)
       if (event) this.applyEvent(event)
-    }
+    })
     return () => this.close()
   }
 
   close() {
     if (this.source) {
-      this.source.onopen = null
-      this.source.onerror = null
-      this.source.onmessage = null
       this.source.close()
     }
     this.source = null

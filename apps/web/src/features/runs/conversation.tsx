@@ -188,7 +188,7 @@ export function Conversation(props: ConversationProps) {
   // caches update instantly (the store notifies every listener on each
   // agent-scoped event; filter to this agent's row).
   useEffect(() => {
-    if (!onAgentUpdated) return
+    if (!onAgentUpdated) return undefined
     return store.subscribe(agentId, () => {
       const next = store.getAgents().find((a) => a.id === agentId)
       if (next) onAgentUpdated(next)
@@ -424,6 +424,15 @@ export function Conversation(props: ConversationProps) {
         <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-xs text-destructive">
           <CircleAlert className="size-3 shrink-0" />
           <span className="min-w-0 truncate">无法加载对话：{loadError}</span>
+          <Button
+            className="ml-auto shrink-0"
+            onClick={() => void loadMessages()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            重试
+          </Button>
         </div>
       )}
       {disconnected && (

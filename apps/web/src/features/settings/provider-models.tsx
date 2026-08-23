@@ -335,7 +335,7 @@ export function ProviderModels({
                       onCheckedChange={(enabled) =>
                         modelMutation.mutate({
                           modelId: model.id,
-                          body: { enabled: enabled === true },
+                          body: { enabled: enabled },
                         })
                       }
                     />

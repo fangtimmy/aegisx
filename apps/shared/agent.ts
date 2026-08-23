@@ -77,12 +77,22 @@ export type AgentStatus =
   | "aborted"
   | "failed"
 
+export function isAgentStatus(value: unknown): value is AgentStatus {
+  return (
+    value === "running" ||
+    value === "idle" ||
+    value === "completed" ||
+    value === "aborted" ||
+    value === "failed"
+  )
+}
+
 /** An agent holds live resources (a session; the challenge workspace's
  * container is shared and lazily managed). */
 export const LIVE_AGENT_STATUSES: AgentStatus[] = ["running", "idle"]
 
 export function isActiveAgentStatus(status: string): boolean {
-  return LIVE_AGENT_STATUSES.includes(status as AgentStatus)
+  return LIVE_AGENT_STATUSES.some((live) => live === status)
 }
 
 import type {

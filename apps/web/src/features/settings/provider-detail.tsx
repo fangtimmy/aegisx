@@ -95,7 +95,7 @@ export function ProviderDetail({
                   type: form.getValues("type"),
                   baseUrl: form.getValues("baseUrl"),
                   apiKey: form.getValues("apiKey").trim() || undefined,
-                  enabled: enabled === true,
+                  enabled: enabled,
                 })
               }
             />

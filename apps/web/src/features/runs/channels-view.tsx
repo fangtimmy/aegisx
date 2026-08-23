@@ -208,7 +208,7 @@ function groupMessages(items: ChannelMessagePublic[]): MessageGroup[] {
       !dayStart &&
       sameAuthor &&
       new Date(message.createdAt).getTime() -
-        new Date(prev!.createdAt).getTime() <
+        new Date(prev.createdAt).getTime() <
         GROUP_WINDOW_MS
     ) {
       last!.messages.push(message)
@@ -233,8 +233,8 @@ function MessageList({ messages }: { messages: ChannelMessagePublic[] }) {
   return (
     <div className="pb-2">
       {groups.map((group) => (
-        <Fragment key={group.messages[0]!.id}>
-          {group.dayStart && <DayDivider iso={group.messages[0]!.createdAt} />}
+        <Fragment key={group.messages[0].id}>
+          {group.dayStart && <DayDivider iso={group.messages[0].createdAt} />}
           <div className="mt-2">
             {group.messages.map((message, index) => (
               <MessageRow
@@ -411,9 +411,9 @@ export function ChannelTimeline({
   // delivered. EventSource reconnects natively; the server's snapshot replay
   // de-duplicates through mergeChannelMessages.
   useEffect(() => {
-    if (!active) return
+    if (!active) return undefined
     const source = new EventSource(`/api/channels/${channelKey}/stream`)
-    source.onmessage = (message) => {
+    source.addEventListener("message", (message) => {
       let payload: unknown
       try {
         payload = JSON.parse(message.data)
@@ -422,13 +422,12 @@ export function ChannelTimeline({
       }
       const event = parseLiveEvent(payload)
       if (event?.type !== "channel.message") return
-      const live = event.message as ChannelMessagePublic
       queryClient.setQueryData<ChannelMessageList>(
         keys.channels.messages(channelKey),
-        (prev) => appendChannelMessage(prev, live)
+        (prev) => appendChannelMessage(prev, event.message)
       )
-      newestId.current = Math.max(newestId.current, live.id)
-    }
+      newestId.current = Math.max(newestId.current, event.message.id)
+    })
     return () => source.close()
   }, [active, channelKey, queryClient])
 
@@ -721,7 +720,7 @@ export function ChannelsView({ challengeId }: { challengeId?: string }) {
   // its latest window once and count the messages newer than the baseline.
   // The `at` watermark keeps each change to a single fetch.
   useEffect(() => {
-    if (activeKeyResolved === undefined) return
+    if (activeKeyResolved === undefined) return undefined
     let cancelled = false
     for (const channel of list) {
       const last = channel.lastMessageAt

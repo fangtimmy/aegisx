@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import { fetchEventSource } from "@microsoft/fetch-event-source"
 
 import { apiRequest, jsonRequest } from "./client"
@@ -88,11 +89,10 @@ export type ProviderTestEvent =
   | { type: "error"; message: string }
 
 function isProviderTestEvent(value: unknown): value is ProviderTestEvent {
-  if (typeof value !== "object" || value === null) return false
-  const event = value as Record<string, unknown>
-  if (event.type === "delta") return typeof event.text === "string"
-  if (event.type === "error") return typeof event.message === "string"
-  return event.type === "done"
+  if (!isRecord(value)) return false
+  if (value.type === "delta") return typeof value.text === "string"
+  if (value.type === "error") return typeof value.message === "string"
+  return value.type === "done"
 }
 
 /** Streamed test dialogue against the provider's SAVED config — one bare
@@ -115,10 +115,11 @@ export async function streamProviderTest(
       if (response.ok) return
       let message = `${response.status} ${response.statusText}`
       try {
-        const body = (await response.json()) as {
-          error?: { message?: string }
+        const body: unknown = await response.json()
+        if (isRecord(body) && isRecord(body.error)) {
+          if (typeof body.error.message === "string")
+            message = body.error.message
         }
-        if (body.error?.message) message = body.error.message
       } catch {
         // keep the HTTP status
       }

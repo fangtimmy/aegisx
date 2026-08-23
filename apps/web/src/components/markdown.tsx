@@ -1,5 +1,6 @@
-import { memo } from "react"
+import { memo, type ComponentProps } from "react"
 import ReactMarkdown from "react-markdown"
+import type { ExtraProps } from "react-markdown"
 import remarkCjkFriendly from "remark-cjk-friendly"
 import remarkGfm from "remark-gfm"
 
@@ -8,6 +9,17 @@ import { cn } from "@/lib/utils"
 const MAX_MARKDOWN_CHARS = 100_000
 
 const remarkPlugins = [remarkGfm, remarkCjkFriendly]
+
+function MarkdownLink({
+  children,
+  ...props
+}: ComponentProps<"a"> & ExtraProps) {
+  return (
+    <a {...props} rel="noreferrer" target="_blank">
+      {children}
+    </a>
+  )
+}
 
 function truncate(text: string) {
   return text.length > MAX_MARKDOWN_CHARS
@@ -25,13 +37,7 @@ export const Markdown = memo(function Markdown({
   return (
     <div className={cn("md min-w-0", className)}>
       <ReactMarkdown
-        components={{
-          a: ({ children, ...props }) => (
-            <a {...props} rel="noreferrer" target="_blank">
-              {children}
-            </a>
-          ),
-        }}
+        components={{ a: MarkdownLink }}
         remarkPlugins={remarkPlugins}
       >
         {truncate(children)}

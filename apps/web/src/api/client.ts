@@ -1,3 +1,5 @@
+import { isRecord } from "@aegisx/shared"
+
 /** Server errors carry { error: { code, message } } — preserve the code
  * so views can branch on it (e.g. target `not_bound`). */
 export class ApiError extends Error {
@@ -6,6 +8,15 @@ export class ApiError extends Error {
   constructor(message: string, code: string | undefined) {
     super(message)
     this.code = code
+  }
+}
+
+function readErrorBody(body: unknown): { message?: string; code?: string } {
+  if (!isRecord(body) || !isRecord(body.error)) return {}
+  return {
+    message:
+      typeof body.error.message === "string" ? body.error.message : undefined,
+    code: typeof body.error.code === "string" ? body.error.code : undefined,
   }
 }
 
@@ -20,11 +31,11 @@ export async function apiRequest<T>(
     let code: string | undefined
 
     try {
-      const body = (await response.json()) as {
-        error?: { code?: string; message?: string }
-      }
-      if (body.error?.message) message = body.error.message
-      code = body.error?.code
+      const { message: errorMessage, code: errorCode } = readErrorBody(
+        await response.json()
+      )
+      if (errorMessage) message = errorMessage
+      code = errorCode
     } catch {
       // Keep the HTTP status when the server does not return its JSON error shape.
     }
@@ -32,7 +43,9 @@ export async function apiRequest<T>(
     throw new ApiError(message || "The request failed", code)
   }
 
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- typed-RPC boundary: T is the caller's declared view of the endpoint contract.
   if (response.status === 204) return undefined as T
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- typed-RPC boundary: response body is trusted to match T per the endpoint contract.
   return response.json() as Promise<T>
 }
 

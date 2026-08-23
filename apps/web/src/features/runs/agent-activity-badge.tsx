@@ -13,10 +13,13 @@ function lastUserMs(stream: ConversationStore, agentId: string): number | null {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]
     if (item.type === "user") {
+      const ts = item.timestamp
       const ms =
-        typeof item.timestamp === "number"
-          ? item.timestamp
-          : Date.parse(item.timestamp as string)
+        typeof ts === "number"
+          ? ts
+          : typeof ts === "string"
+            ? Date.parse(ts)
+            : Number.NaN
       return Number.isFinite(ms) ? ms : null
     }
   }
@@ -52,7 +55,7 @@ export function AgentActivityBadge({
 
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    if (agentStatus !== "running") return
+    if (agentStatus !== "running") return undefined
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [agentStatus])

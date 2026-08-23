@@ -1,6 +1,6 @@
 /** Channel-layer wire types (docs/model-v19-challenge-centric.md §三).
- * Canonical definition — the server's channel service, the Python SDK and the
- * web UI all import from here.
+ * Canonical definition — the server's channel service and the web UI both
+ * import from here.
  *
  * A channel is a DERIVED KEY, not a table row — `team:<challengeId>`
  * (#team, shared by every agent on the challenge), `dm:<agentId>`

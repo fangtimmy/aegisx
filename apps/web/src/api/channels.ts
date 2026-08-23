@@ -1,3 +1,5 @@
+import { isRecord } from "@aegisx/shared"
+
 import { apiRequest } from "./client"
 import type {
   ChannelMessageList,
@@ -53,15 +55,17 @@ export function postChannelMessage(
     if (!response.ok) {
       let message = `${response.status} ${response.statusText}`
       try {
-        const body = (await response.json()) as {
-          error?: { message?: string }
+        const body: unknown = await response.json()
+        if (isRecord(body) && isRecord(body.error)) {
+          if (typeof body.error.message === "string")
+            message = body.error.message
         }
-        if (body.error?.message) message = body.error.message
       } catch {
         // keep the HTTP status text
       }
       throw new Error(message)
     }
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- typed-RPC boundary: response body is trusted to match the endpoint contract.
     return response.json() as Promise<ChannelMessagePublic>
   })
 }

@@ -12,6 +12,7 @@ export const providerTypeDefaults: Record<ProviderType, string> = {
   "anthropic-messages": "https://api.anthropic.com/v1",
 }
 
+// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Record<ProviderType,_> 的 keys 恰为 ProviderType 本身。
 export const providerTypes = Object.keys(providerTypeLabels) as ProviderType[]
 
 export type ProviderInput = {

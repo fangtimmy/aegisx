@@ -3,7 +3,6 @@ import { RotateCcw, Search } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 
 import {
-  type FlatSettings,
   isSettingModified,
   keys,
   SETTINGS_DEFS,
@@ -150,7 +149,7 @@ function SettingControl({
       <Switch
         checked={value === true}
         disabled={disabled}
-        onCheckedChange={(checked) => onChange(checked === true)}
+        onCheckedChange={(checked) => onChange(checked)}
       />
     )
   }
@@ -186,7 +185,7 @@ function SettingControl({
         disabled={disabled}
         items={items}
         onValueChange={(next) => onChange(next)}
-        value={typeof value === "string" ? value : String(def.default)}
+        value={typeof value === "string" ? value : def.default}
       >
         <SelectTrigger>
           <SelectValue />
@@ -240,7 +239,7 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
 
   const save = useMutation({
     mutationFn: (patch: Partial<Record<SettingKey, unknown>>) =>
-      settingsApi.updateSettings(patch as Partial<FlatSettings>),
+      settingsApi.updateSettings(patch),
     onSuccess: (response) => {
       queryClient.setQueryData(keys.settings.all, response)
       if (timers.current.size === 0) {
@@ -251,7 +250,7 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
   })
 
   function scheduleSave(key: SettingKey, value: unknown) {
-    setLocal((current) => ({ ...current, [key]: value }) as typeof local)
+    setLocal((current) => ({ ...current, [key]: value }))
     const existing = timers.current.get(key)
     if (existing) clearTimeout(existing)
     timers.current.set(
@@ -278,7 +277,7 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
       if (!matchesQuery(def, query)) return false
       if (modifiedOnly && !isSettingModified(local, def.key)) return false
       return true
-    }).sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order)
+    }).toSorted((a, b) => a.group.localeCompare(b.group) || a.order - b.order)
     const map = new Map<string, SettingDef[]>()
     for (const def of filtered) {
       const list = map.get(def.group) ?? []
@@ -307,7 +306,7 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
           <Switch
             checked={modifiedOnly}
             id="settings-modified-only"
-            onCheckedChange={(checked) => setModifiedOnly(checked === true)}
+            onCheckedChange={(checked) => setModifiedOnly(checked)}
           />
           <label htmlFor="settings-modified-only">
             仅显示已修改
