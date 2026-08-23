@@ -14,6 +14,10 @@ export type AgentSessionOpsDeps = {
   withLock<T>(id: string, op: () => T | Promise<T>): Promise<T>
   /** Prepare (or reopen) one agent's live session. */
   prepareAgent(agentId: string): Promise<void>
+  /** Full reopen for a terminal agent (prepare + idle flip + reopened
+   * event + deadline re-arm) — session switches must land the same
+   * converged state as a cold resume. */
+  resumeAgent(agentId: string): Promise<void>
   updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
   emitAgent(agentId: string): void
   requireAgent(agentId: string): AgentSummary
@@ -138,11 +142,28 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         return deps.requireAgent(agentId) // already active + live — no-op
       }
       requireIdleAgent(agentId)
+      const currentStatus = db
+        .select({ status: agents.status })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .get()?.status
+      const wasTerminal =
+        currentStatus === "completed" ||
+        currentStatus === "aborted" ||
+        currentStatus === "failed"
       deps.updateAgent(agentId, {
         sessionFile: sessionId,
         updatedAt: deps.now(),
       })
-      await rebuildAgentSession(agentId)
+      await disposeLiveAgent(agentId)
+      // A terminal agent's switch is a reopen: converge through the same
+      // path as a cold resume (idle flip + reopened event + timers), not a
+      // bare prepare that would leave the status stale.
+      if (wasTerminal) {
+        await deps.resumeAgent(agentId)
+      } else {
+        await deps.prepareAgent(agentId)
+      }
       deps.emitAgent(agentId)
       return deps.requireAgent(agentId)
     })

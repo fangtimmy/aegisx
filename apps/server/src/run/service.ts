@@ -312,6 +312,7 @@ export function createAgentService(options: AgentServiceOptions) {
     lifecycle,
     updateAgent,
     now,
+    getAgentStatus: (agentId) => queries.getAgentRow(agentId)?.status ?? null,
     forceTerminal: forceAbortAgent,
     emitAgentEvent: status.emitAgentEvent,
     timeoutGraceMs: options.timeoutGraceMs,
@@ -336,6 +337,7 @@ export function createAgentService(options: AgentServiceOptions) {
     lifecycle,
     withLock,
     prepareAgent: (agentId) => factory.prepareAgent(agentId),
+    resumeAgent: (agentId) => factory.resumeAgent(agentId),
     updateAgent,
     emitAgent: status.emitAgent,
     requireAgent,
@@ -742,9 +744,11 @@ export function createAgentService(options: AgentServiceOptions) {
 
   // --- agent deletion ---------------------------------------------------------
 
-  /** Delete one agent: dispose its live session, drop the row (cascades its
-   * sessions), sweep its dm channel data. Workspaces persist (challenge
-   * property). */
+  /** Delete one agent: dispose its live session, terminalize first so a
+   * queue-launched agent's running item settles done (the row is about to
+   * vanish — a skipped markDone would stick it running forever), drop the
+   * row (cascades its sessions), sweep its dm channel data. Workspaces
+   * persist (challenge property). */
   async function deleteAgent(agentId: string): Promise<void> {
     await withLock(agentId, async () => {
       const row = queries.getAgentRow(agentId)
@@ -760,6 +764,7 @@ export function createAgentService(options: AgentServiceOptions) {
       deadlines.clearAgentTimers(agentId)
       pendingFinish.delete(agentId)
       finishFlagWarned.delete(agentId)
+      status.terminalizeAgent(agentId, { status: "aborted" })
       channels.cleanupAgentChannels(agentId)
       bus.forget([agentId])
       if (row.role === "orchestrator") {

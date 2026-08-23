@@ -198,6 +198,73 @@ describe("agent timeout", () => {
     }
   })
 
+  test("a deadline firing on an already-settled agent only consumes itself — no abort, no timedOut event", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = makeProvider()
+      const { manager } = stubContainerManager()
+      let aborts = 0
+      const agentService = createAgentService({
+        db,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: refine({
+          submitFlag: async () => undefined,
+          targetAction: async () => ({
+            status: "running",
+            endpoints: [],
+            expiresAt: null,
+          }),
+        }),
+        configStore: stubConfigStore([provider]),
+        getSettings: flatSettingsWithDefaultModel,
+        timeoutGraceMs: 40,
+        createHost: mock(async () => {
+          const stub = stubHostAgentSession("sess-settled")
+          const session = refine<{
+            abort: () => Promise<void>
+          }>(stub.session)
+          session.abort = async () => {
+            aborts++
+          }
+          return stub
+        }),
+      })
+      // A terminal agent whose deadline lands shortly after the reopen: the
+      // turn settles idle well before the fire.
+      const agentId = seedAgent(db, {
+        id: "ag-settled",
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        status: "completed",
+        sessionFile: "sess-old",
+        deadlineAt: new Date(Date.now() + 80).toISOString(),
+      })
+
+      await agentService.sendMessage(agentId, { text: "hello" })
+      await wait(300)
+
+      // The fire consumed the one-shot deadline…
+      const row = db.select().from(agents).where(eq(agents.id, agentId)).get()!
+      expect(row.lastTimeoutAt).toBeTruthy()
+      expect(row.deadlineAt).toBeNull()
+      // …but the settled turn was not aborted and no misleading
+      // agent.timedOut reached the scheduler.
+      expect(aborts).toBe(0)
+      expect(row.status).toBe("idle")
+      expect(
+        agentService.channels
+          .listMessages(orchKey("evt-1"))
+          .items.some((m) => m.body.includes("超时"))
+      ).toBe(false)
+      await agentService.close()
+    } finally {
+      close()
+    }
+  })
+
   test("agent.timedOut wakes the event's scheduler with the outcome", async () => {
     const { db, dir, close } = setupDb()
     try {

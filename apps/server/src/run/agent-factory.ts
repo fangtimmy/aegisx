@@ -36,7 +36,6 @@ import type { AgentStatus } from "./agent-status"
 import type { ChannelService } from "./channels"
 import type { ContainerLifecycle } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
-import { createToolboxContainer } from "./container/container-manager"
 import type { AgentDeadlines } from "./deadlines"
 import { RunActionError, RunStartError } from "./errors"
 import { checkSpawnFence } from "./fence"
@@ -403,14 +402,16 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         sweepable: row.challengeId !== null,
       },
       async () => {
-        await createToolboxContainer(containerManager, {
+        await containerManager.create({
           name: ctx.containerName,
           image: get(settings, "container.image"),
-          workspace: ctx.containerWorkspace,
-          hostWorkspace: workspaceDir(ctx.rootDir),
-          cpus: get(settings, "container.cpus"),
-          memoryMb: get(settings, "container.memoryMb"),
-          pidsLimit: get(settings, "container.pidsLimit"),
+          workingDir: ctx.containerWorkspace,
+          binds: [`${workspaceDir(ctx.rootDir)}:${ctx.containerWorkspace}`],
+          limits: {
+            cpus: get(settings, "container.cpus"),
+            memoryMb: get(settings, "container.memoryMb"),
+            pidsLimit: get(settings, "container.pidsLimit"),
+          },
           tmpfsSize: get(settings, "container.tmpfsSize"),
           networkMode: get(settings, "container.networkMode"),
           ...(row.challengeId
@@ -827,22 +828,23 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     lifecycle.set(agentId, agentSession)
   }
 
-  /** Reopen a terminal agent (cold resume): status → idle, container +
-   * session rebuilt on demand via prepareAgent, timers re-armed, scheduler
-   * notified (`agent.reopened`). Invoked from lifecycle.send → onResume. */
+  /** Reopen a terminal agent (cold resume): container + session rebuilt on
+   * demand via prepareAgent, then status → idle, timers re-armed, scheduler
+   * notified (`agent.reopened`). A failed prepare leaves the terminal state
+   * untouched and rethrows. Invoked from lifecycle.send → onResume. */
   async function resumeAgent(agentId: string): Promise<void> {
     const row = queries.getAgentRow(agentId)
     if (!row) throw new RunActionError("not_found", "Agent not found")
-    if (
+    const reopen =
       row.status === "completed" ||
       row.status === "aborted" ||
       row.status === "failed"
-    ) {
+    await prepareAgent(agentId)
+    if (reopen) {
       updateAgent(agentId, { status: "idle", updatedAt: now() })
       status.emitAgent(agentId)
       status.emitAgentEvent(agentId, { type: "agent.reopened", agentId })
     }
-    await prepareAgent(agentId)
     deps.deadlines().armAgentTimers(agentId, row.deadlineAt)
   }
 

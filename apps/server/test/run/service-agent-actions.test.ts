@@ -131,6 +131,59 @@ describe("per-agent actions (v19)", () => {
     }
   })
 
+  test("a failed cold reopen keeps the terminal status (no ghost idle)", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = twoModelProvider()
+      const { manager } = stubContainerManager()
+      let failPrepare = false
+      const service = createAgentService({
+        db,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: refine({
+          submitFlag: async () => undefined,
+          targetAction: async () => ({
+            status: "running",
+            endpoints: [],
+            expiresAt: null,
+          }),
+        }),
+        configStore: stubConfigStore([provider]),
+        getSettings: flatSettingsWithDefaultModel,
+        createHost: mock(async (input: { agentId: string }) => {
+          if (failPrepare) throw new Error("docker down")
+          return stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
+            hang: true,
+          })
+        }),
+      })
+
+      const agent = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        model: MODEL_1_REF,
+      })
+      const closed = await service.closeAgent(agent.id)
+      expect(closed.status).toBe("aborted")
+
+      // Restore fails (docker/model unavailable): the error rethrows and the
+      // agent keeps its terminal state instead of flipping idle first.
+      failPrepare = true
+      await expect(
+        service.sendMessage(agent.id, { text: "cold ping" })
+      ).rejects.toThrow("docker down")
+      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+      expect(row.status).toBe("aborted")
+      expect(row.completedAt).not.toBeNull()
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
   test("switchAgentModel updates the named agent's own snapshot", async () => {
     const { db, dir, close } = setupDb()
     try {

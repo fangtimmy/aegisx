@@ -12,6 +12,8 @@ export type AgentDeadlinesDeps = {
     patch: Partial<typeof agents.$inferInsert>
   ) => void
   now: () => string
+  /** Current DB status of the agent (null when gone). */
+  getAgentStatus(agentId: string): (typeof agents.$inferSelect)["status"] | null
   /** Still streaming after grace → force terminal (aborted). */
   forceTerminal(agentId: string): void
   emitAgentEvent: (agentId: string, payload: EventScopePayload) => void
@@ -59,6 +61,13 @@ export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
       // One-shot: consume the deadline so warm reuse / reopen stays unbounded
       // instead of silently re-arming a stale one.
       updateAgent(agentId, { lastTimeoutAt: now(), deadlineAt: null })
+      // Only a live turn can time out. An agent that already settled idle or
+      // was closed since the timer was armed just loses its stale deadline —
+      // aborting it (or reporting agent.timedOut to the scheduler) would be
+      // misleading.
+      const live =
+        deps.getAgentStatus(agentId) === "running" || isStreaming(agentId)
+      if (!live) return
       void lifecycle.abort(agentId).catch(() => undefined)
       entry.grace = setTimeout(() => {
         // Still streaming after grace → force-dispose the session →

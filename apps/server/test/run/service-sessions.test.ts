@@ -246,6 +246,33 @@ describe("multi-session + flat backtrack (v12)", () => {
     }
   })
 
+  test("activating another session on a terminal agent reopens it (idle flip)", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { service, prepared } = makeService(db, dir)
+      const agent = await spawnAgent(service)
+
+      seedSession(db, "sess-1", agent.id, 1)
+      seedSession(db, "sess-2", agent.id, 1)
+      const finished = await service.finishAgent(agent.id, "done")
+      expect(finished.status).toBe("completed")
+
+      // Switching sessions on a closed agent is a reopen: the live session
+      // is rebuilt AND the status converges idle (same as a cold resume).
+      const result = await service.activateAgentSession(agent.id, "sess-2")
+      expect(prepared).toHaveLength(2)
+      expect(result.status).toBe("idle")
+      expect(
+        db.select().from(agents).where(eq(agents.id, agent.id)).get()!.status
+      ).toBe("idle")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
   test("backtrackAgent deletes entries after the target and rebuilds the live session", async () => {
     const { db, dir, close } = setupDb()
     try {
