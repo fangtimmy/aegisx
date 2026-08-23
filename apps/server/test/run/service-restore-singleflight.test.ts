@@ -16,6 +16,7 @@ import {
   stubHostAgentSession,
   now,
 } from "../helpers"
+import { refine } from "../support"
 
 /** Container manager whose create is SLOW (simulates a real docker build) and
  * records calls — lets two concurrent reopens overlap and race the shared
@@ -67,23 +68,23 @@ describe("reopen single-flight (v19)", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
           promptLog.set(input.agentId, list)
-          const sdk = stub.session as unknown as {
+          const sdk = refine<{
             prompt: (text: string) => Promise<void>
-          }
+          }>(stub.session)
           sdk.prompt = async (text: string) => {
             list.push(text)
           }
@@ -103,7 +104,7 @@ describe("reopen single-flight (v19)", () => {
       expect(created).toHaveLength(1)
       expect(removed).toHaveLength(0)
       // Both agents came online and both messages were driven.
-      expect([...promptLog.keys()].sort()).toEqual(["a-1", "a-2"])
+      expect([...promptLog.keys()].toSorted()).toEqual(["a-1", "a-2"])
       expect(promptLog.get("a-1")![0]).toContain("wake 1")
       expect(promptLog.get("a-2")![0]).toContain("wake 2")
       // No channel rows were produced by the direct messages (a reopen only

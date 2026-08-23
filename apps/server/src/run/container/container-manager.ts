@@ -101,6 +101,34 @@ export function execTimeoutMs(timeoutSec?: number): number | undefined {
   return timeoutSec * 1000
 }
 
+/** Writable that forwards every chunk to onData (merged stdout+stderr). */
+function onDataSink(onData: (chunk: Buffer) => void): NodeJS.WritableStream {
+  return new Writable({
+    write(chunk, _encoding, cb) {
+      onData(Buffer.from(chunk))
+      cb()
+    },
+  })
+}
+
+/**
+ * Resolve an exec's ExitCode after its hijacked stream closed. The daemon may
+ * briefly keep Running:true, so poll a few times.
+ */
+async function pollExitCode(execInst: {
+  inspect(): Promise<{ Running?: boolean; ExitCode?: number | null }>
+}): Promise<number | null> {
+  for (let i = 0; i < 10; i++) {
+    const info = await execInst.inspect()
+    if (info.Running === false && info.ExitCode != null) {
+      return info.ExitCode
+    }
+    await new Promise((r) => setTimeout(r, 30))
+  }
+  const info = await execInst.inspect()
+  return info.ExitCode ?? null
+}
+
 export function createContainerManager(options?: { socketPath?: string }) {
   const socketPath =
     options?.socketPath ?? process.env.DOCKER_SOCKET ?? "/var/run/docker.sock"
@@ -140,12 +168,14 @@ export function createContainerManager(options?: { socketPath?: string }) {
         PidsLimit: opts.limits.pidsLimit,
         // NET_RAW restored after the drop: nmap -sS / scapy raw sockets /
         // naabu / tshark capture need it. Packaged binaries' file caps are
-        // stripped in the image — under no-new-privileges, exec of a file-cap
-        // binary fails with EPERM when its caps exceed the bounding set
-        // (nmap ships net_bind_service+net_admin+net_raw), and NET_RAW comes
-        // from this container-level grant anyway.
+        // stripped in the image, but packages apt-installed at runtime bring
+        // their own back (e.g. tcpdump ships cap_net_admin), and execing such
+        // a binary fails with EPERM under no-new-privileges — SETFCAP lets
+        // the agent strip them again with `setcap -r`. No escalation risk:
+        // with an empty bounding set + no-new-privileges, even a mis-set file
+        // cap stays unusable (its exec still fails with EPERM).
         CapDrop: ["ALL"],
-        CapAdd: ["NET_RAW"],
+        CapAdd: ["NET_RAW", "SETFCAP"],
         SecurityOpt: ["no-new-privileges"],
         IpcMode: "none",
         Tmpfs: {
@@ -171,38 +201,10 @@ export function createContainerManager(options?: { socketPath?: string }) {
   async function isRunning(name: string): Promise<boolean> {
     try {
       const info = await get(name).inspect()
-      return Boolean(info.State?.Running)
+      return info.State.Running
     } catch {
       return false
     }
-  }
-
-  /** Writable that forwards every chunk to onData (merged stdout+stderr). */
-  function onDataSink(onData: (chunk: Buffer) => void): NodeJS.WritableStream {
-    return new Writable({
-      write(chunk, _encoding, cb) {
-        onData(Buffer.from(chunk))
-        cb()
-      },
-    })
-  }
-
-  /**
-   * Resolve an exec's ExitCode after its hijacked stream closed. The daemon may
-   * briefly keep Running:true, so poll a few times.
-   */
-  async function pollExitCode(execInst: {
-    inspect(): Promise<{ Running?: boolean; ExitCode?: number | null }>
-  }): Promise<number | null> {
-    for (let i = 0; i < 10; i++) {
-      const info = await execInst.inspect()
-      if (info.Running === false && info.ExitCode != null) {
-        return info.ExitCode
-      }
-      await new Promise((r) => setTimeout(r, 30))
-    }
-    const info = await execInst.inspect()
-    return info.ExitCode ?? null
   }
 
   /**

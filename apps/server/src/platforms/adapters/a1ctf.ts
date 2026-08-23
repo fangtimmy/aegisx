@@ -176,7 +176,10 @@ export class A1CtfAdapter extends BaseAdapter {
         { signal }
       )
       const value = body.data
-      const statuses = {
+      const statuses: Record<
+        string,
+        "running" | "starting" | "stopping" | "absent" | "failed"
+      > = {
         ContainerRunning: "running",
         ContainerStarting: "starting",
         ContainerQueueing: "starting",
@@ -184,14 +187,12 @@ export class A1CtfAdapter extends BaseAdapter {
         ContainerStopped: "absent",
         NoContainer: "absent",
         ContainerError: "failed",
-      } as const
+      }
       const containers = Array.isArray(value.containers)
         ? value.containers.filter(isRecord)
         : []
       return {
-        status:
-          statuses[String(value.container_status) as keyof typeof statuses] ??
-          "failed",
+        status: statuses[String(value.container_status)] ?? "failed",
         endpoints: containers.flatMap((container) => {
           const ports = Array.isArray(container.container_ports)
             ? container.container_ports.filter(isRecord)

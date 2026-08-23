@@ -2,10 +2,11 @@ import { describe, expect, test } from "bun:test"
 
 import type { WorkspaceBackend } from "../../src/run/workspace/backend"
 import { createWorkspaceTools } from "../../src/run/workspace/tools"
+import { refine } from "../support"
 
 /** Minimal WorkspaceBackend stub returning a fixed byte payload for read. */
 function mockBackend(bytes: Uint8Array): WorkspaceBackend {
-  return {
+  const stub = {
     cwd: "/workspace",
     resolvePath: (p: string) => `/workspace/${p}`,
     async read() {
@@ -15,7 +16,8 @@ function mockBackend(bytes: Uint8Array): WorkspaceBackend {
     async list() {
       return []
     },
-  } as unknown as WorkspaceBackend
+  }
+  return refine<WorkspaceBackend>(stub)
 }
 
 const invoke = async (
@@ -25,7 +27,7 @@ const invoke = async (
 ) => {
   const [read] = createWorkspaceTools(backend, { multimodal })
   const signal = new AbortController().signal
-  return read.execute("id", { filePath }, signal, undefined, undefined as never)
+  return read.execute("id", { filePath }, signal, undefined, refine(undefined))
 }
 
 // Minimal structurally valid 1×1 RGB PNG (signature + IHDR + IDAT + IEND) —
@@ -59,7 +61,7 @@ describe("read tool image attach", () => {
     expect(result.content[0]).toMatchObject({ type: "text" })
     expect(result.details).toMatchObject({ kind: "image", attached: false })
     // Hint should point the model at bash tooling.
-    expect((result.content[0] as { text: string }).text).toContain("bash")
+    expect(refine<{ text: string }>(result.content[0]).text).toContain("bash")
   })
 
   test("multimodal model but image too large: falls back to text hint", async () => {

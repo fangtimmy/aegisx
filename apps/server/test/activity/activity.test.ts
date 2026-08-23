@@ -82,7 +82,7 @@ describe("activity feed", () => {
     const kinds = feed.items.map((item) => item.kind)
     expect(kinds).toEqual(["timeout", "agentEnd", "agentSpawn", "agentSpawn"])
 
-    const end = feed.items[1]!
+    const end = feed.items[1]
     expect(end.id).toBe("agent:agent-2:end")
     expect(end.agentStatus).toBe("completed")
     expect(end.summary).toBe("solved with ret2libc")
@@ -113,9 +113,9 @@ describe("activity feed", () => {
     const kinds = feed.items.map((item) => item.kind)
     expect(kinds).toEqual(["queueFailed", "flag", "agentSpawn"])
 
-    const failed = feed.items[0]!
+    const failed = feed.items[0]
     expect(failed.summary).toBe("capacity full")
-    const flag = feed.items[1]!
+    const flag = feed.items[1]
     expect(flag.flag).toBe("flag{test}")
     close()
   })
@@ -136,7 +136,7 @@ describe("activity feed", () => {
     const feed = listActivity(db, 3)
     expect(feed.items).toHaveLength(3)
     expect(feed.items.every((item) => item.challengeId === null)).toBeTrue()
-    expect(feed.items[0]!.time > feed.items[2]!.time).toBeTrue()
+    expect(feed.items[0].time > feed.items[2].time).toBeTrue()
     close()
   })
 })

@@ -2,13 +2,15 @@ import { describe, expect, test } from "bun:test"
 
 import { extract } from "tar-stream"
 
+import type { ContainerManager } from "../../src/run/container/container-manager"
 import {
   buildSingleFileTar,
   createDockerExecBackend,
 } from "../../src/run/workspace/backend"
+import { refine } from "../support"
 
 /** manager is only touched by read/write/list/exec; resolvePath is pure. */
-const backend = createDockerExecBackend("container", {} as never, "/workspace")
+const backend = createDockerExecBackend("container", refine({}), "/workspace")
 
 /** Fake manager returning a fixed capture result (the backend only forwards
  * maxCapture; the cap enforcement itself is tested in container-manager). */
@@ -16,8 +18,8 @@ function fakeCaptureManager(result: {
   stdout: Buffer
   totalBytes: number
   truncated?: boolean
-}) {
-  return {
+}): ContainerManager {
+  const stub = {
     capture: async (
       _name: string,
       _command: string,
@@ -32,7 +34,8 @@ function fakeCaptureManager(result: {
       truncated: result.truncated ?? false,
       totalBytes: result.totalBytes,
     }),
-  } as never
+  }
+  return refine<ContainerManager>(stub)
 }
 
 describe("DockerExecBackend.resolvePath", () => {

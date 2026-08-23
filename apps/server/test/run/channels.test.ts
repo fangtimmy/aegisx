@@ -25,6 +25,7 @@ import {
   type ChannelService,
 } from "../../src/run/channels"
 import { seedChallenge, seedEvent, now } from "../helpers"
+import { refine } from "../support"
 
 type Db = ReturnType<typeof setupDbLite>["db"]
 type Dir = ReturnType<typeof setupDbLite>["dir"]
@@ -67,11 +68,11 @@ function makeService(
     // Late-bound lifecycle getter (the service constructs before the
     // lifecycle — same contract as production).
     lifecycle: () =>
-      ({
+      refine({
         send: async (agentId: string, text: string) => {
           sent.push({ agentId, text })
         },
-      }) as never,
+      }),
     now: () => new Date().toISOString(),
     challengeWorkspaceRoot: (eventId, challengeId) =>
       join(dir, "events", eventId, "challenges", challengeId, "workspace"),
@@ -147,6 +148,80 @@ function putAgentFile(
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10))
 
+/** The legacy (pre-template) renderer — kept byte-identical on purpose. */
+function timeOfLegacy(iso: string) {
+  const date = new Date(iso)
+  return `${String(date.getHours()).padStart(2, "0")}:${String(
+    date.getMinutes()
+  ).padStart(2, "0")}`
+}
+
+function legacy(
+  groups: Parameters<typeof renderMerged>[0],
+  maxChars = 8_000
+): string {
+  const header = "[频道消息]"
+  const blocks: string[][] = []
+  for (const grp of groups) {
+    for (const message of grp.messages) {
+      const mark = message.urgent ? "⚠ " : ""
+      const lines = [
+        `${mark}${grp.label} · ${message.authorName} · ${timeOfLegacy(message.createdAt)}`,
+        message.body.trim() || "(空)",
+      ]
+      for (const file of message.files) {
+        lines.push(
+          `📎 ${file.filename} · ${formatSize(file.size)} · ${file.path}`
+        )
+      }
+      blocks.push(lines)
+    }
+  }
+  const render = (kept: string[][]) =>
+    [header, ...kept.flatMap((lines) => lines)].join("\n")
+  if (render(blocks).length <= maxChars) return render(blocks)
+  const budget = maxChars - header.length - 120
+  let used = 0
+  let start2 = blocks.length
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const size = blocks[i].join("\n").length + 1
+    if (used + size > budget) break
+    used += size
+    start2 = i
+  }
+  const dropped = start2
+  const kept = blocks.slice(start2)
+  return dropped > 0
+    ? [
+        header,
+        `另有 ${dropped} 条较早消息，可 aegisx.channels.read 补读`,
+        ...kept.flatMap((lines) => lines),
+      ].join("\n")
+    : render(kept)
+}
+
+function testGroup(n: number, pad = 0) {
+  return {
+    label: "#team",
+    messages: Array.from({ length: n }, (_, i) => ({
+      authorName: `agent-${i}`,
+      createdAt: new Date(2025, 0, 1, 12, i % 60).toISOString(),
+      body: i % 3 === 0 ? "" : `body-${i} ${"x".repeat(pad)}`,
+      urgent: i % 2 === 0,
+      files:
+        i % 4 === 0
+          ? [
+              {
+                filename: `f${i}.py`,
+                size: 4300 * (i + 1),
+                path: `shared/from-a${i}/f${i}.py`,
+              },
+            ]
+          : [],
+    })),
+  }
+}
+
 describe("derived keys (§二)", () => {
   test("key derivation + parseChannelKey accepts the three shapes, rejects garbage", () => {
     expect(teamKey("ch-1")).toBe("team:ch-1")
@@ -180,9 +255,9 @@ describe("channel trees (§2.2 / §9.1)", () => {
         dmKey("a2"),
       ])
       expect(tree.map((c) => c.kind)).toEqual(["team", "dm", "dm"])
-      expect(tree[0]!.label).toBe("#team")
-      expect(tree[1]!.agentId).toBe("a1")
-      expect(tree[1]!.label).toBe("DM agent-a1")
+      expect(tree[0].label).toBe("#team")
+      expect(tree[1].agentId).toBe("a1")
+      expect(tree[1].label).toBe("DM agent-a1")
       // UI trees pass a null reader → no per-reader unread.
       expect(tree.every((c) => c.unread === 0)).toBe(true)
       channels.close()
@@ -405,7 +480,7 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
         urgent: true,
       })
       await settle()
-      expect(sent.map((s) => s.agentId).sort()).toEqual(["a2", "b1"])
+      expect(sent.map((s) => s.agentId).toSorted()).toEqual(["a2", "b1"])
       for (const s of sent) {
         expect(s.text).toContain("cross-attempt finding")
         // Unambiguous attribution: the agent's name in the author line.
@@ -445,11 +520,11 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       })
       await settle()
       expect(sent).toHaveLength(1)
-      expect(sent[0]!.agentId).toBe("a2")
-      expect(sent[0]!.text).toContain("wake up")
+      expect(sent[0].agentId).toBe("a2")
+      expect(sent[0].text).toContain("wake up")
       // The stored #team backlog stays unread — the cold wake touches only
       // the target agent, and only its dm face.
-      expect(sent[0]!.text).not.toContain("stored only")
+      expect(sent[0].text).not.toContain("stored only")
       expect(
         channels.agentChannels("a2").find((c) => c.kind === "team")!.unread
       ).toBe(1)
@@ -480,10 +555,10 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       })
       await settle()
       expect(sent.map((s) => s.agentId)).toEqual(["s1"])
-      expect(sent[0]!.text).toContain("ask")
-      expect(sent[0]!.text).toContain("[调度快照] mock digest for evt-1")
+      expect(sent[0].text).toContain("ask")
+      expect(sent[0].text).toContain("[调度快照] mock digest for evt-1")
       // The digest is separated from the merged block.
-      expect(sent[0]!.text).toContain("\n\n[调度快照]")
+      expect(sent[0].text).toContain("\n\n[调度快照]")
 
       // Solver-facing delivery: no digest.
       sent.length = 0
@@ -495,8 +570,8 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       })
       await settle()
       expect(sent.map((s) => s.agentId)).toEqual(["a1"])
-      expect(sent[0]!.text).toContain("team note")
-      expect(sent[0]!.text).not.toContain("调度快照")
+      expect(sent[0].text).toContain("team note")
+      expect(sent[0].text).not.toContain("调度快照")
       channels.close()
     } finally {
       close()
@@ -520,7 +595,7 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       })
       await settle()
       expect(sent.map((s) => s.agentId)).toEqual(["s1"])
-      expect(sent[0]!.text).toContain("ask: which challenge next?")
+      expect(sent[0].text).toContain("ask: which challenge next?")
 
       // Scheduler terminal → urgent stores only (next start catches up).
       sent.length = 0
@@ -606,8 +681,8 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
         urgent: true,
       })
       await settle()
-      expect(sent[0]!.text).toContain("[频道消息]")
-      expect(sent[0]!.text).toContain("⚠ ")
+      expect(sent[0].text).toContain("[频道消息]")
+      expect(sent[0].text).toContain("⚠ ")
       channels.close()
     } finally {
       close()
@@ -653,7 +728,7 @@ describe("flush tick (§3.4)", () => {
       for (const s of sent) {
         byAgent.set(s.agentId, [...(byAgent.get(s.agentId) ?? []), s.text])
       }
-      expect([...byAgent.keys()].sort()).toEqual(["a1", "a2", "b1", "s1"])
+      expect([...byAgent.keys()].toSorted()).toEqual(["a1", "a2", "b1", "s1"])
       for (const agentId of ["a1", "a2", "b1"]) {
         expect(byAgent.get(agentId)).toHaveLength(1)
       }
@@ -703,8 +778,8 @@ describe("flush tick (§3.4)", () => {
       channels.runFlushTick()
       await settle()
       expect(sent.map((s) => s.agentId)).toEqual(["a1"])
-      expect(sent[0]!.text).toContain("paused post")
-      expect(sent[0]!.text).toContain("paused tick post")
+      expect(sent[0].text).toContain("paused post")
+      expect(sent[0].text).toContain("paused tick post")
       channels.close()
     } finally {
       close()
@@ -808,8 +883,8 @@ describe("read cursors — three progression points (§3.5)", () => {
       seedAgent(db, "b1", { status: "running" })
       await channels.deliverAgentAwaited("b1")
       expect(sent.map((s) => s.agentId)).toEqual(["b1"])
-      expect(sent[0]!.text).toContain("prior finding: heap overflow in edit()")
-      expect(sent[0]!.text).toContain("remote libc 2.35 — trust the target")
+      expect(sent[0].text).toContain("prior finding: heap overflow in edit()")
+      expect(sent[0].text).toContain("remote libc 2.35 — trust the target")
       // Exactly once: a re-deliver finds nothing new.
       sent.length = 0
       await channels.deliverAgentAwaited("b1")
@@ -924,89 +999,28 @@ describe("renderMerged", () => {
   // format byte-for-byte with the default builtin body — the folding math
   // included. This locks the channelDelivery default against regressions.
   test("default template renders byte-identical to the legacy renderer", () => {
-    const legacy = (
-      groups: Parameters<typeof renderMerged>[0],
-      maxChars = 8_000
-    ): string => {
-      const header = "[频道消息]"
-      const timeOfLegacy = (iso: string) => {
-        const date = new Date(iso)
-        return `${String(date.getHours()).padStart(2, "0")}:${String(
-          date.getMinutes()
-        ).padStart(2, "0")}`
-      }
-      const blocks: string[][] = []
-      for (const group of groups) {
-        for (const message of group.messages) {
-          const mark = message.urgent ? "⚠ " : ""
-          const lines = [
-            `${mark}${group.label} · ${message.authorName} · ${timeOfLegacy(message.createdAt)}`,
-            message.body.trim() || "(空)",
-          ]
-          for (const file of message.files) {
-            lines.push(
-              `📎 ${file.filename} · ${formatSize(file.size)} · ${file.path}`
-            )
-          }
-          blocks.push(lines)
-        }
-      }
-      const render = (kept: string[][]) =>
-        [header, ...kept.flatMap((lines) => lines)].join("\n")
-      if (render(blocks).length <= maxChars) return render(blocks)
-      const budget = maxChars - header.length - 120
-      let used = 0
-      let start = blocks.length
-      for (let i = blocks.length - 1; i >= 0; i -= 1) {
-        const size = blocks[i]!.join("\n").length + 1
-        if (used + size > budget) break
-        used += size
-        start = i
-      }
-      const dropped = start
-      const kept = blocks.slice(start)
-      return dropped > 0
-        ? [
-            header,
-            `另有 ${dropped} 条较早消息，可 aegisx.channels.read 补读`,
-            ...kept.flatMap((lines) => lines),
-          ].join("\n")
-        : render(kept)
-    }
-
-    const group = (n: number, pad = 0) => ({
-      label: "#team",
-      messages: Array.from({ length: n }, (_, i) => ({
-        authorName: `agent-${i}`,
-        createdAt: new Date(2025, 0, 1, 12, i % 60).toISOString(),
-        body: i % 3 === 0 ? "" : `body-${i} ${"x".repeat(pad)}`,
-        urgent: i % 2 === 0,
-        files:
-          i % 4 === 0
-            ? [
-                {
-                  filename: `f${i}.py`,
-                  size: 4300 * (i + 1),
-                  path: `shared/from-a${i}/f${i}.py`,
-                },
-              ]
-            : [],
-      })),
-    })
     const matrix = [
       { label: "#team", messages: [] },
-      group(1),
-      group(12),
-      group(12, 900), // exercises the overflow path
-      group(60, 400), // deep overflow
+      testGroup(1),
+      testGroup(12),
+      testGroup(12, 900), // exercises the overflow path
+      testGroup(60, 400), // deep overflow
     ]
     for (const groups of matrix) {
       expect(renderMerged([groups])).toBe(legacy([groups]))
     }
     // Multi-group interleaving (team + dm faces in one delivery).
     expect(
-      renderMerged([group(3), { label: "#orch", messages: group(2).messages }])
-    ).toBe(legacy([group(3), { label: "#orch", messages: group(2).messages }]))
+      renderMerged([
+        testGroup(3),
+        { label: "#orch", messages: testGroup(2).messages },
+      ])
+    ).toBe(
+      legacy([
+        testGroup(3),
+        { label: "#orch", messages: testGroup(2).messages },
+      ])
+    )
   })
 })
 
@@ -1031,10 +1045,10 @@ describe("attachments — shared/ mechanism (§六)", () => {
         files: ["exp2.py"],
       })
       expect(message.files).toHaveLength(1)
-      expect(message.files[0]!.filename).toBe("exp2.py")
-      expect(message.files[0]!.size).toBe(4300)
+      expect(message.files[0].filename).toBe("exp2.py")
+      expect(message.files[0].size).toBe(4300)
       // The reader-facing shared path (relative to the workspace root).
-      expect(message.files[0]!.path).toBe("shared/from-a1/exp2.py")
+      expect(message.files[0].path).toBe("shared/from-a1/exp2.py")
       // The bytes are a copy inside the challenge workspace's shared/ tree.
       const host = join(
         dir,
@@ -1071,8 +1085,8 @@ describe("attachments — shared/ mechanism (§六)", () => {
         body: "two",
         files: ["poc.py"],
       })
-      expect(first.files[0]!.path).toBe("shared/from-a1/poc.py")
-      expect(second.files[0]!.path).toBe("shared/from-a1/poc-2.py")
+      expect(first.files[0].path).toBe("shared/from-a1/poc.py")
+      expect(second.files[0].path).toBe("shared/from-a1/poc-2.py")
       made.channels.close()
     } finally {
       close()
@@ -1184,14 +1198,14 @@ describe("attachments — shared/ mechanism (§六)", () => {
         ],
       })
       expect(message.files).toHaveLength(1)
-      expect(message.files[0]!.filename).toBe("notes.txt")
-      expect(message.files[0]!.size).toBe(5)
-      expect(message.files[0]!.path).toMatch(/^shared\/upload-\d+\/notes\.txt$/)
+      expect(message.files[0].filename).toBe("notes.txt")
+      expect(message.files[0].size).toBe(5)
+      expect(message.files[0].path).toMatch(/^shared\/upload-\d+\/notes\.txt$/)
       // urgent default true on the user path → both live agents got the
       // steer (the author is the user — no own-post exclusion).
       await settle()
-      expect(sent.map((s) => s.agentId).sort()).toEqual(["a1", "a2"])
-      expect(sent[0]!.text).toContain("📎 notes.txt")
+      expect(sent.map((s) => s.agentId).toSorted()).toEqual(["a1", "a2"])
+      expect(sent[0].text).toContain("📎 notes.txt")
 
       // Rollback: a failing second upload drops the message row (the first
       // upload's shared copy is orphaned under upload-<ts>/ — best effort,

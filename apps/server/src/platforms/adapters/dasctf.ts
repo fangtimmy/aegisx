@@ -22,7 +22,8 @@ const API_PREFIX = "/slab-match/api/v1/agent"
 type ApiEnvelope<T> = {
   code?: string
   message?: string
-  data?: T
+  /** Present on every successful envelope (code 00000); failures throw. */
+  data: T
 }
 
 type DasctfCategory = {
@@ -110,7 +111,7 @@ export class DasCtfAdapter extends BaseAdapter {
         body.code
       )
     }
-    return body.data as T
+    return body.data
   }
 
   async testConnection() {
@@ -132,7 +133,7 @@ export class DasCtfAdapter extends BaseAdapter {
         .filter((exercise) => exercise.isOpen !== false)
         .map((exercise) => ({
           id: String(exercise.id),
-          name: String(exercise.name ?? `Exercise ${exercise.id}`),
+          name: exercise.name ?? `Exercise ${exercise.id}`,
           category: nullableString(category.name),
           points: null,
           solved: exercise.hasSolved === true,
@@ -159,7 +160,7 @@ export class DasCtfAdapter extends BaseAdapter {
   async getChallenge(remoteId: string) {
     const detail = await this.fetchDetail(remoteId)
     const score = Number(detail.score)
-    const name = String(detail.name ?? "Untitled challenge")
+    const name = detail.name ?? "Untitled challenge"
     const endpoints = detail.endpoints ?? []
     const targetSupported =
       endpoints.length > 0 ||
@@ -183,7 +184,7 @@ export class DasCtfAdapter extends BaseAdapter {
     return {
       id: String(detail.id),
       name,
-      description: String(detail.description ?? ""),
+      description: detail.description ?? "",
       // The detail payload exposes no category (only difficulty); the sync
       // layer backfills from the list summary.
       category: null,
@@ -317,7 +318,7 @@ function attachmentFiles(attachment: unknown): DasctfFile[] {
   if (Array.isArray(attachment)) return attachment
   if (!isRecord(attachment)) return []
   if (Array.isArray(attachment.files)) return attachment.files
-  return [attachment as DasctfFile]
+  return [attachment]
 }
 
 /** Strip a `proto/` prefix ("http/80") from a port entry. */
@@ -373,7 +374,7 @@ function endpointAddresses(
         mapping.proxy
           ? [
               {
-                port: String(mapping.proxy),
+                port: mapping.proxy,
                 protocol: protocolOf(mapping.type),
               },
             ]

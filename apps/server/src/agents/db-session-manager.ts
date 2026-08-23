@@ -16,6 +16,7 @@ import { asc, eq } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { sessionEntries, sessions } from "../db/schema"
+import { parseJson } from "../lib/guards"
 
 /** Short unique id with collision check (mirrors pi's generateId). */
 function generateId(byId: Map<string, unknown>): string {
@@ -148,10 +149,17 @@ export class DbSessionManager {
     for (const row of rows) {
       let entry: SessionEntry
       try {
-        entry = JSON.parse(row.data) as SessionEntry
-      } catch {
+        // Written by this class (typed at commit time); parse only guards
+        // against corrupt/truncated rows.
+        entry = parseJson<SessionEntry>(row.data)
+      } catch (error) {
         // Corrupt row: skip but still count its seq so the next commit
         // does not collide.
+        console.warn("Skipping corrupt session entry", {
+          sessionId: this.sessionId,
+          seq: row.seq,
+          error: error instanceof Error ? error.message : String(error),
+        })
         if (row.seq > this.nextSeq) this.nextSeq = row.seq
         continue
       }
@@ -164,6 +172,9 @@ export class DbSessionManager {
 
   /** Append an entry: assign id/parentId/timestamp, update memory, persist. */
   private commit(type: string, payload: Record<string, unknown>): SessionEntry {
+    // Payload pieces are typed at each append* call site; the union cannot be
+    // expressed as a single spread parameter.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
     const entry = {
       ...payload,
       type,
@@ -210,11 +221,11 @@ export class DbSessionManager {
     return this.commit("model_change", { provider, modelId }).id
   }
 
-  appendCompaction<T = unknown>(
+  appendCompaction(
     summary: string,
     firstKeptEntryId: string,
     tokensBefore: number,
-    details?: T,
+    details?: unknown,
     fromHook?: boolean,
     usage?: Usage
   ): string {
@@ -232,11 +243,11 @@ export class DbSessionManager {
     return this.commit("custom", { customType, data }).id
   }
 
-  appendCustomMessageEntry<T = unknown>(
+  appendCustomMessageEntry(
     customType: string,
     content: string | Array<TextContent | ImageContent>,
     display: boolean,
-    details?: T
+    details?: unknown
   ): string {
     return this.commit("custom_message", {
       customType,
@@ -385,6 +396,7 @@ export class DbSessionManager {
     }
     const nodeMap = new Map<string, SessionTreeNode>()
     const roots: SessionTreeNode[] = []
+    const created: SessionTreeNode[] = []
     for (const entry of entries) {
       const l = labels.get(entry.id)
       const node: SessionTreeNode = {
@@ -393,9 +405,10 @@ export class DbSessionManager {
         ...(l ? { label: l.label, labelTimestamp: l.labelTimestamp } : {}),
       }
       nodeMap.set(entry.id, node)
+      created.push(node)
     }
-    for (const entry of entries) {
-      const node = nodeMap.get(entry.id) as SessionTreeNode
+    for (const [i, entry] of entries.entries()) {
+      const node = created[i]
       if (entry.parentId === null || entry.parentId === entry.id) {
         roots.push(node)
       } else {
@@ -406,7 +419,8 @@ export class DbSessionManager {
     }
     const stack: SessionTreeNode[] = [...roots]
     while (stack.length > 0) {
-      const node = stack.pop() as SessionTreeNode
+      const node = stack.pop()
+      if (!node) break
       node.children.sort(
         (a, b) =>
           new Date(a.entry.timestamp).getTime() -

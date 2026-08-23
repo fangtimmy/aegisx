@@ -78,14 +78,14 @@ function terminalOf(
       : undefined
   const terminal =
     isRecord(details) && isTerminalValue(details.terminal)
-      ? (details.terminal as ToolTerminal)
+      ? details.terminal
       : sdkError
         ? "failed"
         : undefined
   return { terminal, isError: terminal !== undefined }
 }
 
-function isTerminalValue(value: unknown): boolean {
+function isTerminalValue(value: unknown): value is ToolTerminal {
   return value === "timed_out" || value === "cancelled" || value === "failed"
 }
 
@@ -210,7 +210,7 @@ export function createAgentEventPipeline(options: {
     if (message.role !== "assistant" || assistantT0 === null) return
     const durationMs = Date.now() - assistantT0
     const blocks = [...blockTimings.entries()]
-      .sort((a, b) => a[0] - b[0])
+      .toSorted((a, b) => a[0] - b[0])
       .map(([index, b]) => ({
         type: b.type,
         index,

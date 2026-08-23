@@ -21,6 +21,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -42,23 +43,23 @@ function makeService(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async (_challengeId: string, action: string) => {
         opts.targetCalls?.push(action)
         return { status: "running", endpoints: [], expiresAt: null }
       },
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
       const list: string[] = []
       promptLog.set(input.agentId, list)
-      const sdk = stub.session as unknown as {
+      const sdk = refine<{
         prompt: (text: string) => Promise<void>
         abort: () => Promise<void>
-      }
+      }>(stub.session)
       sdk.prompt = async (text: string) => {
         list.push(text)
       }
@@ -573,8 +574,8 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
         .where(eq(channelMessages.channelKey, teamKey("ch-1")))
         .all()
       expect(team).toHaveLength(1)
-      expect(team[0]!.body).toContain("再解出一个 flag")
-      expect(team[0]!.body).toContain("agent-" + finder.id.slice(0, 8))
+      expect(team[0].body).toContain("再解出一个 flag")
+      expect(team[0].body).toContain("agent-" + finder.id.slice(0, 8))
       // No cleanup round: the sibling survives, the pending item stays, the
       // target is not stopped (it all ran at the FIRST acceptance).
       expect(

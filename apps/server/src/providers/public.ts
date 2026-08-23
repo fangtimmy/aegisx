@@ -1,4 +1,3 @@
-import type { ProviderType } from "@aegisx/shared/domain"
 import type { ProviderConnection, ProviderModel } from "@aegisx/shared/domain"
 
 import type { ConfigStore, ProviderData } from "../infrastructure/config-store"
@@ -25,7 +24,7 @@ function mapProviderConnection(provider: ProviderData): ProviderConnection {
   return {
     id: provider.id,
     label: provider.label,
-    type: provider.type as ProviderType,
+    type: provider.type,
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     enabled: provider.enabled,

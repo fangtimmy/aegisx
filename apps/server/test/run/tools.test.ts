@@ -4,6 +4,7 @@ import type { TargetState } from "@aegisx/shared/domain"
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 
 import { createMainTools, type AgentToolContext } from "../../src/run/tools"
+import { refine } from "../support"
 
 function mockCtx(overrides: Partial<AgentToolContext> = {}): AgentToolContext {
   return {
@@ -34,7 +35,7 @@ const fullTools = [
 ]
 
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
-  (result.content[0] as { text: string }).text
+  refine<{ text?: string }>(result.content[0]).text ?? ""
 
 /** Find a tool by name, failing loudly if it is missing. */
 const findTool = (tools: ToolDefinition[], name: string): ToolDefinition => {
@@ -45,23 +46,19 @@ const findTool = (tools: ToolDefinition[], name: string): ToolDefinition => {
 
 /**
  * Invoke a tool's execute with the trailing SDK args stubbed out. The generic
- * param schema is erased (`as never`) since tests pass ad-hoc objects.
+ * param schema is erased (refine) since tests pass ad-hoc objects.
  */
 const invoke = (tool: ToolDefinition, params: object) =>
   Promise.resolve(
-    tool.execute(
-      "id",
-      params as never,
-      undefined,
-      undefined,
-      undefined as never
-    )
+    tool.execute("id", refine(params), undefined, undefined, refine(undefined))
   )
 
 describe("createMainTools", () => {
   test("grants exactly the tools listed in the snapshot", () => {
     const tools = createMainTools(mockCtx(), fullTools)
-    expect(tools.map((t) => t.name).sort()).toEqual([...fullTools].sort())
+    expect(tools.map((t) => t.name).toSorted()).toEqual(
+      [...fullTools].toSorted()
+    )
   })
 
   test("empty snapshot grants no native tools (file tools are always on)", () => {
@@ -175,8 +172,7 @@ describe("createMainTools", () => {
     const warn = await invoke(finish, { summary: "solved" })
     expect(finished).toBe(0)
     expect(warn.terminate).not.toBe(true)
-    const first = warn.content[0]
-    const warnText = first && "text" in first ? String(first.text) : ""
+    const warnText = refine<{ text: string }>(warn.content[0]).text
     expect(warnText).toContain("submit_flag")
 
     // Second call (still no flag, but already warned) → finishes normally.

@@ -17,6 +17,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 type Db = ReturnType<typeof setupDb>
 
@@ -43,12 +44,12 @@ function streamingSession(abortResolves: boolean): HostAgentSession {
     followUp: async () => {},
     clearQueue: () => {},
   }
-  return {
-    session: session as never,
+  return refine<HostAgentSession>({
+    session,
     sessionId: "sess-timeout",
     pipeline: { attach: () => () => {}, detach: () => {} },
     dispose: async () => {},
-  } as unknown as HostAgentSession
+  })
 }
 
 /** A solver agent whose prime lands on a streaming (never-settling)
@@ -66,14 +67,14 @@ async function createHangingAgent(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
     timeoutGraceMs: 40,
@@ -151,14 +152,14 @@ describe("agent timeout", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         timeoutGraceMs: 40,
@@ -166,9 +167,9 @@ describe("agent timeout", () => {
         // unless a stale deadline fires at delay 0 and aborts it.
         createHost: mock(async () => {
           const stub = stubHostAgentSession("sess-reopen")
-          const session = stub.session as unknown as {
+          const session = refine<{
             abort: () => Promise<void>
-          }
+          }>(stub.session)
           session.abort = async () => {
             aborts++
           }
@@ -210,14 +211,14 @@ describe("agent timeout", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         timeoutGraceMs: 40,
@@ -227,9 +228,9 @@ describe("agent timeout", () => {
             const stub = stubHostAgentSession("sess-orch")
             const list: string[] = []
             promptLog.set(input.agentId, list)
-            const sdk = stub.session as unknown as {
+            const sdk = refine<{
               prompt: (text: string) => Promise<void>
-            }
+            }>(stub.session)
             sdk.prompt = async (text: string) => {
               list.push(text)
             }

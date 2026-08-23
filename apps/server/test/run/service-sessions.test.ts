@@ -15,6 +15,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 /** Stub service: every createHost call records the prepared agent and returns
  * a stub session (no real pi / DbSessionManager). Session rows/entries are
@@ -26,14 +27,14 @@ function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([
       makeProvider({ models: [createModel("model-1")] }),
     ]),

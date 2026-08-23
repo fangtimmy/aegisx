@@ -12,6 +12,8 @@ import {
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all"
 
+import { isRecord, parseJson } from "../lib/guards"
+
 export type { ThinkingLevelMap }
 
 export type ModelMetadata = {
@@ -54,10 +56,10 @@ const defaultModelMetadata: ModelMetadata = {
 }
 
 function record(value: unknown, message: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error(message)
   }
-  return value as Record<string, unknown>
+  return value
 }
 
 function nonNegativeNumber(value: unknown, name: string) {
@@ -67,11 +69,11 @@ function nonNegativeNumber(value: unknown, name: string) {
   return value
 }
 
-function positiveInteger(value: unknown, name: string) {
-  if (!Number.isInteger(value) || (value as number) < 1) {
+function positiveInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive integer`)
   }
-  return value as number
+  return value
 }
 
 function metadataCost(value: unknown): ModelCost {
@@ -87,11 +89,11 @@ function metadataCost(value: unknown): ModelCost {
   return {
     ...base,
     tiers: cost.tiers.map((tier) => {
-      const value = record(tier, "cost.tiers entries must be objects")
+      const tierCost = record(tier, "cost.tiers entries must be objects")
       return {
-        ...metadataCost(value),
+        ...metadataCost(tierCost),
         inputTokensAbove: positiveInteger(
-          value.inputTokensAbove,
+          tierCost.inputTokensAbove,
           "cost.tiers.inputTokensAbove"
         ),
       }
@@ -131,10 +133,15 @@ export function normalizeModelMetadata(value: unknown): ModelMetadata {
             throw new Error("input must be a non-empty array")
           }
           const values = [...new Set(input.input)]
-          if (!values.every((item) => item === "text" || item === "image")) {
+          if (
+            !values.every(
+              (item): item is "text" | "image" =>
+                item === "text" || item === "image"
+            )
+          ) {
             throw new Error("input supports only text and image")
           }
-          return values as Array<"text" | "image">
+          return values
         })()
   const headers =
     input.headers === undefined
@@ -191,26 +198,29 @@ export function normalizeModelMetadata(value: unknown): ModelMetadata {
 
 export function parseModelMetadata(value: string): ModelMetadata {
   try {
-    return normalizeModelMetadata(JSON.parse(value) as unknown)
-  } catch {
+    return normalizeModelMetadata(parseJson<unknown>(value))
+  } catch (error) {
+    console.warn("Model metadata parse failed, using defaults", {
+      error: error instanceof Error ? error.message : String(error),
+    })
     return { ...defaultModelMetadata }
   }
 }
 
 function parseThinkingLevelMap(value: string): ThinkingLevelMap {
   try {
-    const parsed = JSON.parse(value) as unknown
+    const parsed = parseJson<unknown>(value)
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {}
     }
     return Object.fromEntries(
       Object.entries(parsed).flatMap(([level, mapped]) =>
-        thinkingLevels.includes(level as ModelThinkingLevel) &&
+        (thinkingLevels as readonly string[]).includes(level) &&
         (typeof mapped === "string" || mapped === null)
           ? [[level, mapped]]
           : []
       )
-    ) as ThinkingLevelMap
+    )
   } catch {
     return {}
   }
@@ -224,7 +234,7 @@ export function supportedThinkingLevels(metadata: ModelMetadata) {
     api: "openai-completions",
     provider: "metadata",
     baseUrl: "http://localhost",
-  } as Model<Api>)
+  })
 }
 
 /** Map AegisX ProviderType → pi api stream identifier. */
@@ -256,7 +266,7 @@ function metadataFromModel(model: Model<Api>): ModelMetadata {
     maxTokens: model.maxTokens,
     ...(model.headers ? { headers: model.headers } : {}),
     ...(model.compat
-      ? { compat: model.compat as Record<string, unknown> }
+      ? { compat: Object.fromEntries(Object.entries(model.compat)) }
       : {}),
   })
 }

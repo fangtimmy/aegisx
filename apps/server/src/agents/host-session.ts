@@ -104,6 +104,9 @@ function ownerManagerOpts(owner: SessionOwner) {
  * single point that crosses the type boundary.
  */
 function asSdkSessionManager(sm: DbSessionManager): SessionManager {
+  // SessionManager carries private pi state; structural equivalence is
+  // asserted by db-session-manager.test — this is the single bridge point.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return sm as unknown as SessionManager
 }
 

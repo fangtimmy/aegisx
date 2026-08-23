@@ -21,6 +21,7 @@ import {
   channelReads,
   promptTemplates,
 } from "../db/schema"
+import { isRecord } from "../lib/guards"
 import { DEFAULT_CHANNEL_DELIVERY_TEMPLATE } from "../orchestration/prompt-defaults"
 import {
   BUILTIN_PLUGIN,
@@ -158,6 +159,92 @@ export type ChannelServiceDeps = {
 
 export type ChannelService = ReturnType<typeof createChannelService>
 
+/** Server-stamped meta for stored messages: agent posts always carry
+ * their agent id (spoof-proof attribution; callers may not override it)
+ * and urgent=true collapses to a single flag. */
+function serverMeta(
+  author: { type: "system" | "user" | "agent"; agentId?: string },
+  meta: ChannelMessageMeta | undefined,
+  urgent: boolean
+): ChannelMessageMeta & { files?: ChannelFileMeta[] } {
+  const stamped: ChannelMessageMeta & { files?: ChannelFileMeta[] } = {
+    ...meta,
+  }
+  if (urgent) stamped.urgent = true
+  else delete stamped.urgent
+  if (author.type === "agent" && author.agentId) {
+    stamped.agentId = author.agentId
+  }
+  return stamped
+}
+
+/** Defensive meta parse: keep only the known typed keys. */
+function parseMeta(
+  raw: string
+): ChannelMessageMeta & { files?: ChannelFileMeta[] } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  if (!isRecord(parsed)) {
+    return {}
+  }
+  const src = parsed
+  const meta: ChannelMessageMeta & { files?: ChannelFileMeta[] } = {}
+  if (src.urgent === true) meta.urgent = true
+  if (typeof src.agentId === "string") meta.agentId = src.agentId
+  if (src.source === "manual" || src.source === "scheduler") {
+    meta.source = src.source
+  }
+  if (typeof src.eventType === "string") meta.eventType = src.eventType
+  if (src.noticeType === "notice" || src.noticeType === "emergency") {
+    meta.noticeType = src.noticeType
+  }
+  if (Array.isArray(src.tags)) {
+    const tags = src.tags.filter((t): t is string => typeof t === "string")
+    if (tags.length) meta.tags = tags
+  }
+  if (Array.isArray(src.files)) {
+    const files = src.files.flatMap((f) => {
+      if (!isRecord(f)) return []
+      const file = f
+      if (
+        typeof file.path !== "string" ||
+        typeof file.filename !== "string" ||
+        typeof file.size !== "number"
+      ) {
+        return []
+      }
+      return [{ path: file.path, filename: file.filename, size: file.size }]
+    })
+    if (files.length) meta.files = files
+  }
+  return meta
+}
+
+function targetExists(path: string): boolean {
+  try {
+    statSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isActive(agent: typeof agents.$inferSelect): boolean {
+  return isActiveAgentStatus(agent.status)
+}
+
+function isUrgent(row: ChannelMessageRow): boolean {
+  try {
+    return JSON.parse(row.meta)?.urgent === true
+  } catch {
+    return false
+  }
+}
+
 export function createChannelService(deps: ChannelServiceDeps) {
   const { db, dataDir, bus } = deps
   const intervalMs = deps.flushIntervalMs ?? FLUSH_INTERVAL_MS
@@ -254,58 +341,12 @@ export function createChannelService(deps: ChannelServiceDeps) {
 
   // --- messages -----------------------------------------------------
 
-  /** Defensive meta parse: keep only the known typed keys. */
-  function parseMeta(
-    raw: string
-  ): ChannelMessageMeta & { files?: ChannelFileMeta[] } {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      return {}
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {}
-    }
-    const src = parsed as Record<string, unknown>
-    const meta: ChannelMessageMeta & { files?: ChannelFileMeta[] } = {}
-    if (src.urgent === true) meta.urgent = true
-    if (typeof src.agentId === "string") meta.agentId = src.agentId
-    if (src.source === "manual" || src.source === "scheduler") {
-      meta.source = src.source
-    }
-    if (typeof src.eventType === "string") meta.eventType = src.eventType
-    if (src.noticeType === "notice" || src.noticeType === "emergency") {
-      meta.noticeType = src.noticeType
-    }
-    if (Array.isArray(src.tags)) {
-      const tags = src.tags.filter((t): t is string => typeof t === "string")
-      if (tags.length) meta.tags = tags
-    }
-    if (Array.isArray(src.files)) {
-      const files = src.files.flatMap((f) => {
-        if (!f || typeof f !== "object" || Array.isArray(f)) return []
-        const file = f as Record<string, unknown>
-        if (
-          typeof file.path !== "string" ||
-          typeof file.filename !== "string" ||
-          typeof file.size !== "number"
-        ) {
-          return []
-        }
-        return [{ path: file.path, filename: file.filename, size: file.size }]
-      })
-      if (files.length) meta.files = files
-    }
-    return meta
-  }
-
   function toPublic(row: ChannelMessageRow): ChannelMessagePublic {
     const meta = parseMeta(row.meta)
     return {
       id: row.id,
       channelKey: row.channelKey,
-      authorType: row.authorType as "system" | "user" | "agent",
+      authorType: row.authorType,
       authorAgentId: row.authorAgentId,
       authorName: row.authorName,
       body: row.body,
@@ -367,25 +408,6 @@ export function createChannelService(deps: ChannelServiceDeps) {
       )
     }
     return { abs: candidate, filename: basename(candidate) }
-  }
-
-  /** Server-stamped meta for stored messages: agent posts always carry
-   * their agent id (spoof-proof attribution; callers may not override it)
-   * and urgent=true collapses to a single flag. */
-  function serverMeta(
-    author: { type: "system" | "user" | "agent"; agentId?: string },
-    meta: ChannelMessageMeta | undefined,
-    urgent: boolean
-  ): ChannelMessageMeta & { files?: ChannelFileMeta[] } {
-    const stamped: ChannelMessageMeta & { files?: ChannelFileMeta[] } = {
-      ...meta,
-    }
-    if (urgent) stamped.urgent = true
-    else delete stamped.urgent
-    if (author.type === "agent" && author.agentId) {
-      stamped.agentId = author.agentId
-    }
-    return stamped
   }
 
   function insertMessage(
@@ -460,15 +482,6 @@ export function createChannelService(deps: ChannelServiceDeps) {
       path: ["shared", prefix, basename(target)].join("/"),
       filename: basename(target),
       size: statSync(target).size,
-    }
-  }
-
-  function targetExists(path: string): boolean {
-    try {
-      statSync(path)
-      return true
-    } catch {
-      return false
     }
   }
 
@@ -833,13 +846,13 @@ export function createChannelService(deps: ChannelServiceDeps) {
         key,
         label: channelLabel(parsed),
         messages: rows,
-        maxId: rows[rows.length - 1]!.id,
+        maxId: rows[rows.length - 1].id,
       })
     }
     if (snapshots.length === 0) return
 
     const text = renderDelivery(
-      deliveryTemplateBody(db),
+      deliveryTemplateBody(),
       snapshots.map(({ label, messages }) => ({
         label,
         messages: messages.map((row) => ({
@@ -873,15 +886,11 @@ export function createChannelService(deps: ChannelServiceDeps) {
     await deps.lifecycle().send(agentId, withDigest, opts.deliverAs ?? "steer")
   }
 
-  function isActive(agent: typeof agents.$inferSelect): boolean {
-    return isActiveAgentStatus(agent.status)
-  }
-
   /** The channelDelivery template body for this delivery: the builtin row
    * when present (user-editable, takes effect on the next delivery), else
    * the built-in default (covers unseeded DBs). Per-delivery read — a few
    * local SQLite rows, no cache to invalidate. */
-  function deliveryTemplateBody(db: Database): string {
+  function deliveryTemplateBody(): string {
     const row = db
       .select({ body: promptTemplates.body })
       .from(promptTemplates)
@@ -893,14 +902,6 @@ export function createChannelService(deps: ChannelServiceDeps) {
       )
       .get()
     return row?.body ?? DEFAULT_CHANNEL_DELIVERY_TEMPLATE
-  }
-
-  function isUrgent(row: ChannelMessageRow): boolean {
-    try {
-      return JSON.parse(row.meta)?.urgent === true
-    } catch {
-      return false
-    }
   }
 
   /** Fire-and-forget delivery wrapper. Delivery is a trunk path (flag
@@ -1031,12 +1032,12 @@ export function createChannelService(deps: ChannelServiceDeps) {
       .orderBy(desc(channelMessages.id))
       .limit(limit + 1)
       .all()
-      .reverse()
+      .toReversed()
     const hasMore = rows.length > limit
     const shown = hasMore ? rows.slice(rows.length - limit) : rows
     return {
       items: shown.map(toPublic),
-      nextAfter: shown.length > 0 ? shown[shown.length - 1]!.id : after,
+      nextAfter: shown.length > 0 ? shown[shown.length - 1].id : after,
       hasMore,
     }
   }
@@ -1059,7 +1060,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     const result = listMessages(key, opts)
     const readerKey = readerKeyOf(agent)
     if (opts.markRead !== false && result.items.length > 0) {
-      markRead(key, readerKey, result.items[result.items.length - 1]!.id)
+      markRead(key, readerKey, result.items[result.items.length - 1].id)
     }
     return {
       channel: channelInfo(parseChannelKey(key)!, agentId),
@@ -1432,6 +1433,13 @@ type RenderGroup = {
   }>
 }
 
+function deliveryCtx(
+  messages: DeliveryRenderContext["messages"],
+  dropped: number
+): DeliveryRenderContext {
+  return { dropped, messages }
+}
+
 /** Render the merged delivery text via the channelDelivery template:
  * per-message header lines (⚠ prefix on urgent) + 📎 lines carrying the
  * shared-relative path; 8K cap with oldest-message folding. The folding
@@ -1443,10 +1451,6 @@ function renderDelivery(
   groups: RenderGroup[],
   maxChars: number
 ): string {
-  const ctx = (
-    messages: DeliveryRenderContext["messages"],
-    dropped: number
-  ): DeliveryRenderContext => ({ dropped, messages })
   const messages: DeliveryRenderContext["messages"] = groups.flatMap((group) =>
     group.messages.map((message) => ({
       urgent: message.urgent,
@@ -1462,22 +1466,22 @@ function renderDelivery(
     }))
   )
   const render = (c: DeliveryRenderContext) => renderTemplateBody(body, c)
-  const plain = render(ctx(messages, 0))
+  const plain = render(deliveryCtx(messages, 0))
   if (plain.length <= maxChars) return plain
   // Over budget: keep the NEWEST messages that fit; fold the dropped count.
   // Fixed prefix (header lines) measured through the same template so a
   // custom template budgets against its own prefix.
-  const prefixLen = render(ctx([], 0)).length
+  const prefixLen = render(deliveryCtx([], 0)).length
   const budget = maxChars - prefixLen - 120
   let used = 0
   let start = messages.length
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const size = render(ctx([messages[i]!], 0)).length - prefixLen
+    const size = render(deliveryCtx([messages[i]], 0)).length - prefixLen
     if (used + size > budget) break
     used += size
     start = i
   }
-  return render(ctx(messages.slice(start), start))
+  return render(deliveryCtx(messages.slice(start), start))
 }
 
 /** Default-template render (the pure/exported face — same output the

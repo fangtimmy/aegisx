@@ -7,6 +7,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 
 import { createAgentEventPipeline } from "../../src/agents/event-pipeline"
 import type { LiveBus } from "../../src/agents/live"
+import { refine } from "../support"
 
 type Committed = Extract<LiveEvent, { type: "message.committed" }>
 type ToolProgress = Extract<LiveEvent, { type: "tool.progress" }>
@@ -19,9 +20,9 @@ type Activity = Extract<LiveEvent, { type: "agent.activity" }>
  * since pi emits no equivalent event for regular messages). */
 function setup() {
   const emitted: LiveEvent[] = []
-  const bus = {
+  const bus = refine<LiveBus>({
     emit: (_channel: string, event: LiveEvent) => emitted.push(event),
-  } as unknown as LiveBus
+  })
   const pipeline = createAgentEventPipeline({
     channel: "run-1",
     agentId: "agent-1",
@@ -39,8 +40,8 @@ function messageEntry(role: string, ts: number, id: string): SessionEntry {
     id,
     parentId: null,
     timestamp: new Date(ts).toISOString(),
-    message: { role, content: [], timestamp: ts } as unknown as AgentMessage,
-  } as SessionEntry
+    message: refine<AgentMessage>({ role, content: [], timestamp: ts }),
+  }
 }
 
 describe("createAgentEventPipeline commitEntry", () => {
@@ -67,7 +68,7 @@ describe("createAgentEventPipeline commitEntry", () => {
         timestamp: new Date(1000).toISOString(),
         provider: "p",
         modelId: "m",
-      } as SessionEntry,
+      },
       1
     )
     pipeline.commitEntry(messageEntry("user", 2000, "e1"), 2)
@@ -89,7 +90,7 @@ describe("createAgentEventPipeline commitEntry", () => {
         summary: "summary",
         firstKeptEntryId: "e1",
         tokensBefore: 180000,
-      } as SessionEntry,
+      },
       2
     )
 
@@ -98,7 +99,7 @@ describe("createAgentEventPipeline commitEntry", () => {
     expect(committed[1].item.seq).toBe(2)
     expect(committed[1].item.entry.type).toBe("compaction")
     expect(
-      (committed[1].item.entry as { tokensBefore: number }).tokensBefore
+      refine<{ tokensBefore: number }>(committed[1].item.entry).tokensBefore
     ).toBe(180000)
   })
 
@@ -112,7 +113,7 @@ describe("createAgentEventPipeline commitEntry", () => {
         timestamp: new Date(1000).toISOString(),
         fromId: "root",
         summary: "abandoned branch",
-      } as SessionEntry,
+      },
       1
     )
     const committed = committedOf(emitted)
@@ -122,15 +123,19 @@ describe("createAgentEventPipeline commitEntry", () => {
 
   test("message_end / agent_end never emit committed (storage layer owns it)", () => {
     const { pipeline, emitted } = setup()
-    pipeline.handle({
-      type: "message_end",
-      message: {} as AgentMessage,
-    } as never)
-    pipeline.handle({
-      type: "agent_end",
-      messages: [],
-      willRetry: false,
-    } as never)
+    pipeline.handle(
+      refine({
+        type: "message_end",
+        message: refine<AgentMessage>({}),
+      })
+    )
+    pipeline.handle(
+      refine({
+        type: "agent_end",
+        messages: [],
+        willRetry: false,
+      })
+    )
     expect(committedOf(emitted).length).toBe(0)
   })
 })
@@ -138,12 +143,14 @@ describe("createAgentEventPipeline commitEntry", () => {
 describe("createAgentEventPipeline tool progress", () => {
   test("tool_execution_start emits a running tool.progress with args + server startedAt (W6)", () => {
     const { pipeline, emitted } = setup()
-    pipeline.handle({
-      type: "tool_execution_start",
-      toolCallId: "t1",
-      toolName: "bash",
-      args: { command: "echo hi" },
-    } as AgentSessionEvent)
+    pipeline.handle(
+      refine<AgentSessionEvent>({
+        type: "tool_execution_start",
+        toolCallId: "t1",
+        toolName: "bash",
+        args: { command: "echo hi" },
+      })
+    )
     const tp = emitted.filter(
       (e): e is ToolProgress => e.type === "tool.progress"
     )
@@ -167,7 +174,7 @@ describe("createAgentEventPipeline tool progress", () => {
         content: [{ type: "text", text: "1\n2\n3" }],
         details: { streaming: true },
       },
-    } as AgentSessionEvent)
+    })
     const tp = emitted.filter(
       (e): e is ToolProgress => e.type === "tool.progress"
     )
@@ -187,7 +194,7 @@ describe("createAgentEventPipeline tool progress", () => {
       toolName: "bash",
       result: { content: [{ type: "text", text: "ok" }], details: {} },
       isError: false,
-    } as AgentSessionEvent)
+    })
     const tp = emitted.filter(
       (e): e is ToolProgress => e.type === "tool.progress"
     )
@@ -210,16 +217,18 @@ describe("createAgentEventPipeline tool progress", () => {
       const { pipeline, emitted } = setup()
       // The bash tool now returns a result (isError:false) with the terminal
       // reason in details — the pipeline derives the error state from it.
-      pipeline.handle({
-        type: "tool_execution_end",
-        toolCallId: "t1",
-        toolName: "bash",
-        result: {
-          content: [{ type: "text", text: "out" }],
-          details: { exitCode: 1, terminal },
-        },
-        isError: false,
-      } as unknown as AgentSessionEvent)
+      pipeline.handle(
+        refine<AgentSessionEvent>({
+          type: "tool_execution_end",
+          toolCallId: "t1",
+          toolName: "bash",
+          result: {
+            content: [{ type: "text", text: "out" }],
+            details: { exitCode: 1, terminal },
+          },
+          isError: false,
+        })
+      )
       const tp = emitted.find(
         (e): e is ToolProgress => e.type === "tool.progress"
       )
@@ -233,13 +242,15 @@ describe("createAgentEventPipeline tool progress", () => {
   test("tool_execution_end falls back to 'failed' when the SDK reports an error without structured details", () => {
     // An untyped tool that still throws → SDK isError:true, details:{}.
     const { pipeline, emitted } = setup()
-    pipeline.handle({
-      type: "tool_execution_end",
-      toolCallId: "t1",
-      toolName: "something",
-      result: { content: [{ type: "text", text: "boom" }], details: {} },
-      isError: true,
-    } as unknown as AgentSessionEvent)
+    pipeline.handle(
+      refine<AgentSessionEvent>({
+        type: "tool_execution_end",
+        toolCallId: "t1",
+        toolName: "something",
+        result: { content: [{ type: "text", text: "boom" }], details: {} },
+        isError: true,
+      })
+    )
     const tp = emitted.find(
       (e): e is ToolProgress => e.type === "tool.progress"
     )
@@ -262,27 +273,29 @@ describe("createAgentEventPipeline message / activity", () => {
         isError: false,
         timestamp: 1,
       } as AgentMessage,
-    } as AgentSessionEvent)
+    })
     expect(emitted.some((e) => e.type === "message.progress")).toBe(false)
   })
 
   test("message_update toolcall_delta forwards the partial assistant message", () => {
     const { pipeline, emitted } = setup()
-    pipeline.handle({
-      type: "message_update",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "t1", name: "bash", arguments: '{"comm' },
-        ],
-        timestamp: 1,
-      } as unknown as AgentMessage,
-      assistantMessageEvent: {
-        type: "toolcall_delta",
-        contentIndex: 0,
-        delta: '{"comm',
-      },
-    } as AgentSessionEvent)
+    pipeline.handle(
+      refine<AgentSessionEvent>({
+        type: "message_update",
+        message: refine<AgentMessage>({
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "t1", name: "bash", arguments: '{"comm' },
+          ],
+          timestamp: 1,
+        }),
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: '{"comm',
+        },
+      })
+    )
     const mp = emitted.filter(
       (e): e is MessageProgress => e.type === "message.progress"
     )
@@ -294,10 +307,10 @@ describe("createAgentEventPipeline message / activity", () => {
     pipeline.handle({
       type: "compaction_end",
       reason: "threshold",
-      result: { tokensBefore: 180000, estimatedTokensAfter: 30000 } as never,
+      result: refine({ tokensBefore: 180000, estimatedTokensAfter: 30000 }),
       aborted: false,
       willRetry: false,
-    } as AgentSessionEvent)
+    })
     const act = emitted.filter(
       (e): e is Activity => e.type === "agent.activity"
     )
@@ -315,7 +328,7 @@ describe("createAgentEventPipeline message / activity", () => {
 // Date.now()-based offsets deterministic.
 
 function assistantMessage(timestamp: number): AgentMessage {
-  return {
+  return refine<AgentMessage>({
     role: "assistant",
     content: [],
     api: "test",
@@ -331,32 +344,32 @@ function assistantMessage(timestamp: number): AgentMessage {
     },
     stopReason: "stop",
     timestamp,
-  } as unknown as AgentMessage
+  })
 }
 
 function assistantEntry(msg: AgentMessage): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "message",
     id: "e",
     parentId: null,
     timestamp: "t",
     message: msg,
-  } as unknown as SessionEntry
+  })
 }
 
 function toolResultEntry(toolCallId: string): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "message",
     id: "e",
     parentId: null,
     timestamp: "t",
-    message: {
+    message: refine<AgentMessage>({
       role: "toolResult",
       toolCallId,
       content: [],
       isError: false,
-    } as unknown as AgentMessage,
-  } as unknown as SessionEntry
+    }),
+  })
 }
 
 function assistantEvents(message: AgentMessage): {
@@ -365,14 +378,14 @@ function assistantEvents(message: AgentMessage): {
   update: (ae: unknown) => AgentSessionEvent
 } {
   return {
-    start: () => ({ type: "message_start", message }) as AgentSessionEvent,
-    end: () => ({ type: "message_end", message }) as AgentSessionEvent,
+    start: () => ({ type: "message_start", message }),
+    end: () => ({ type: "message_end", message }),
     update: (ae: unknown) =>
-      ({
+      refine<AgentSessionEvent>({
         type: "message_update",
         message,
         assistantMessageEvent: ae,
-      }) as AgentSessionEvent,
+      }),
   }
 }
 
@@ -425,14 +438,14 @@ describe("createAgentEventPipeline timing state machine", () => {
       toolCallId: "tc-a",
       toolName: "bash",
       args: {},
-    } as AgentSessionEvent)
+    })
     setSystemTime(51_000)
     pipeline.handle({
       type: "tool_execution_start",
       toolCallId: "tc-b",
       toolName: "read",
       args: {},
-    } as AgentSessionEvent)
+    })
     setSystemTime(52_000)
     pipeline.handle({
       type: "tool_execution_end",
@@ -440,7 +453,7 @@ describe("createAgentEventPipeline timing state machine", () => {
       toolName: "bash",
       result: {},
       isError: false,
-    } as AgentSessionEvent)
+    })
     setSystemTime(53_000)
     pipeline.handle({
       type: "tool_execution_end",
@@ -448,7 +461,7 @@ describe("createAgentEventPipeline timing state machine", () => {
       toolName: "read",
       result: {},
       isError: false,
-    } as AgentSessionEvent)
+    })
 
     expect(pipeline.metaFor(toolResultEntry("tc-a"))).toEqual({
       durationMs: 2000,
@@ -468,14 +481,14 @@ describe("createAgentEventPipeline timing state machine", () => {
     setSystemTime(100_000)
     pipeline.handle({
       type: "message_start",
-      message: {
+      message: refine<AgentMessage>({
         role: "toolResult",
         toolCallId: "tc-x",
         content: [],
         isError: false,
         timestamp: 999,
-      } as unknown as AgentMessage,
-    } as AgentSessionEvent)
+      }),
+    })
     // No assistant message has started → assistant meta is null (no pollution).
     expect(pipeline.metaFor(assistantEntry(assistantMessage(999)))).toBeNull()
 
@@ -485,7 +498,7 @@ describe("createAgentEventPipeline timing state machine", () => {
       toolCallId: "tc-x",
       toolName: "bash",
       args: {},
-    } as AgentSessionEvent)
+    })
     setSystemTime(102_000)
     pipeline.handle({
       type: "tool_execution_end",
@@ -493,7 +506,7 @@ describe("createAgentEventPipeline timing state machine", () => {
       toolName: "bash",
       result: {},
       isError: false,
-    } as AgentSessionEvent)
+    })
 
     expect(pipeline.metaFor(toolResultEntry("tc-x"))).toEqual({
       durationMs: 1000,

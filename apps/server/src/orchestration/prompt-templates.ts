@@ -183,7 +183,17 @@ function render(template: string, context: PromptTemplateContext) {
  * optional, capabilities optional), and the built-in templates only reference
  * fields that the caller has populated. */
 export function renderTemplateBody(template: string, context: unknown): string {
-  return render(template, context as PromptTemplateContext)
+  return render(template, asTemplateContext(context))
+}
+
+/**
+ * Single seam for re-narrowing loosely-typed template contexts (deep-copied
+ * through unknown by markPreviewValues, or supplied as a documented superset
+ * by callers). Shape preservation is locked by the preview tests.
+ */
+function asTemplateContext(value: unknown): PromptTemplateContext {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+  return value as PromptTemplateContext
 }
 
 const HIGHLIGHT_START = "\uE000"
@@ -285,10 +295,7 @@ export function previewSystemPrompt(
   context: PromptTemplateContext
 ) {
   return previewSegments(
-    renderSystemPrompt(
-      template,
-      markPreviewValues(context) as PromptTemplateContext
-    )
+    renderSystemPrompt(template, asTemplateContext(markPreviewValues(context)))
   )
 }
 
@@ -306,10 +313,7 @@ export function previewInitialPrompt(
   context: PromptTemplateContext
 ) {
   return previewSegments(
-    renderSystemPrompt(
-      template,
-      markPreviewValues(context) as PromptTemplateContext
-    )
+    renderSystemPrompt(template, asTemplateContext(markPreviewValues(context)))
   )
 }
 

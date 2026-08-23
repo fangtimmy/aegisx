@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { createApp } from "../../src/app"
+import { responseJson } from "../../src/lib/guards"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -30,7 +31,7 @@ async function createEvent(app: ReturnType<typeof createTestApp>) {
     json("POST", { name: "Ev" })
   )
   expect(response.status).toBe(201)
-  return (await response.json()) as { id: string }
+  return await responseJson<{ id: string }>(response)
 }
 
 describe("event PATCH partial updates", () => {
@@ -67,7 +68,9 @@ describe("event PATCH partial updates", () => {
       json("PATCH", { name: "Renamed", promptHint: "hint" })
     )
     expect(response.status).toBe(200)
-    const body = (await response.json()) as { name: string; promptHint: string }
+    const body = await responseJson<{ name: string; promptHint: string }>(
+      response
+    )
     expect(body.name).toBe("Renamed")
     expect(body.promptHint).toBe("hint")
   })

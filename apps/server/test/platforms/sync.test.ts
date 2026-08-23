@@ -15,6 +15,7 @@ import type {
 } from "../../src/platforms/core"
 import { createPlatformSync } from "../../src/platforms/sync"
 import { seedEvent, setupDb } from "../helpers"
+import { refine } from "../support"
 
 const SOURCE_KEY = '["fake","https://fake.example","task"]'
 
@@ -34,8 +35,8 @@ function fakeAdapter(catalog: Map<string, RemoteChallengeSummary>) {
         attachments: [],
       }
     },
-  } as unknown as CtfPlatformAdapter
-  return adapter
+  }
+  return refine<CtfPlatformAdapter>(adapter)
 }
 
 function makeSync(db: ReturnType<typeof setupDb>["db"], dir: string) {
@@ -64,7 +65,7 @@ function bindPlatform(
   db.insert(eventPlatforms)
     .values({
       eventId,
-      type: "fake",
+      type: "ctfd",
       baseUrl: "https://fake.example",
       credential: "token",
       remoteEventId: "task",

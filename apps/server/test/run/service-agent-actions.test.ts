@@ -17,6 +17,7 @@ import {
   stubHostAgentSession,
   TEST_MODEL_REF,
 } from "../helpers"
+import { refine } from "../support"
 
 /** Two-model provider so a per-agent switch to a *different* model is real
  * (both carry real pi-builtin metadata so the live runtime resolves them
@@ -53,14 +54,14 @@ function makeService(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore(providers),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(
@@ -69,12 +70,12 @@ function makeService(
         const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
           hang: true,
         })
-        const sdk = stub.session as unknown as {
+        const sdk = refine<{
           modelRuntime: unknown
           thinkingLevel: string
           setThinkingLevel: (level: string) => void
           abort: () => Promise<void>
-        }
+        }>(stub.session)
         sdk.modelRuntime = input.modelRuntime
         sdk.thinkingLevel = "off"
         sdk.setThinkingLevel = (level: string) => {
@@ -301,14 +302,14 @@ describe("per-agent actions (v19)", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         createHost: mock(
@@ -317,12 +318,12 @@ describe("per-agent actions (v19)", () => {
               "sess-" + input.agentId.slice(0, 6),
               { hang: true }
             )
-            const sdk = stub.session as unknown as {
+            const sdk = refine<{
               modelRuntime: unknown
               thinkingLevel: string
               setThinkingLevel: (level: string) => void
               abort: () => Promise<void>
-            }
+            }>(stub.session)
             sdk.modelRuntime = input.modelRuntime
             sdk.thinkingLevel = "off"
             // Simulate the SDK clamping: high → medium on the target model.

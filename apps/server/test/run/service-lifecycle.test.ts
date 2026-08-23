@@ -17,6 +17,7 @@ import {
   stubHostAgentSession,
   now,
 } from "../helpers"
+import { refine } from "../support"
 
 /** A stub host whose prompt resolves after a tick, and whose isStreaming flips
  * true while a turn is notionally in flight (so the service observes a running
@@ -40,12 +41,12 @@ function stubHostFlipping(sessionId = "sess-1") {
     followUp: async () => {},
     clearQueue: () => {},
   }
-  return {
-    session: session as never,
+  return refine<import("../../src/agents/host-session").HostAgentSession>({
+    session,
     sessionId,
     pipeline: { attach: () => () => {}, detach: () => {} },
     dispose: async () => {},
-  } as unknown as import("../../src/agents/host-session").HostAgentSession
+  })
 }
 
 function makeService(
@@ -58,14 +59,14 @@ function makeService(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([makeProvider()]),
     getSettings: flatSettingsWithDefaultModel,
     createHost,
@@ -194,8 +195,8 @@ describe("agent lifecycle (v19)", () => {
       await new Promise((r) => setTimeout(r, 5))
 
       expect(captured).toHaveLength(1)
-      expect(captured[0]!.agentId).toBe("a-1")
-      expect(captured[0]!.systemPrompt).toBe("EDITED-SNAPSHOT-PROMPT")
+      expect(captured[0].agentId).toBe("a-1")
+      expect(captured[0].systemPrompt).toBe("EDITED-SNAPSHOT-PROMPT")
       expect(
         db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
       ).toBe("idle")

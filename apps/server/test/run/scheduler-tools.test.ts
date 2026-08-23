@@ -17,6 +17,7 @@ import {
   TEST_MODEL_REF,
   now,
 } from "../helpers"
+import { refine } from "../support"
 
 type Db = ReturnType<typeof setupDb>["db"]
 
@@ -36,14 +37,14 @@ function makeService(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(
@@ -57,9 +58,9 @@ function makeService(
         const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
           hang,
         })
-        const sdk = stub.session as unknown as {
+        const sdk = refine<{
           prompt: (text: string) => Promise<void>
-        }
+        }>(stub.session)
         sdk.prompt = async () => {
           if (hang) await new Promise(() => {})
         }
@@ -182,10 +183,12 @@ describe("scheduler service behaviors (SDK backend)", () => {
       await settle()
 
       expect(created.length).toBe(2)
-      const [schedOpts, solverOpts] = created as Array<{
-        extraBinds?: string[]
-        env?: string[]
-      }>
+      const [schedOpts, solverOpts] = refine<
+        Array<{
+          extraBinds?: string[]
+          env?: string[]
+        }>
+      >(created)
       // The scheduler container: the read-only challenge-workspaces mount
       // (WRITEUP.md / solve.sh live reads) + event env. The SDK itself ships
       // in the image — no bind mount, no PYTHONPATH override.
@@ -242,10 +245,12 @@ describe("scheduler service behaviors (SDK backend)", () => {
       await service.sendMessage("orch-1", { text: "wake" })
       await settle()
 
-      const [schedOpts] = created as Array<{
-        extraBinds?: string[]
-        env?: string[]
-      }>
+      const [schedOpts] = refine<
+        Array<{
+          extraBinds?: string[]
+          env?: string[]
+        }>
+      >(created)
       expect(
         schedOpts.extraBinds?.some((b) => b === `${dir}:/opt/aegisx-sdk:ro`)
       ).toBe(true)

@@ -15,6 +15,7 @@ import { join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
+import { parseJson } from "../lib/guards"
 import { createDatabase } from "./index"
 import { SCHEMA_VERSION } from "./schema"
 
@@ -31,9 +32,9 @@ function buildV18Database(dir: string) {
   sqlite.run("PRAGMA foreign_keys = ON")
   const folder = join(dir, "mig-v18")
   mkdirSync(join(folder, "meta"), { recursive: true })
-  const journal = JSON.parse(
+  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
     readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  ) as { entries: Array<{ tag: string }> }
+  )
   journal.entries = journal.entries.slice(0, 13) // 0000–0012 = v18
   writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
   for (const entry of journal.entries) {
@@ -120,19 +121,23 @@ describe("migration 0013 — v19 challenge-centric (destructive; old execution d
       const boot = createDatabase(dir)
       try {
         expect(
-          (
-            boot.sqlite.query("PRAGMA user_version").get() as {
-              user_version: number
-            }
-          ).user_version
+          boot.sqlite
+            .query<
+              {
+                user_version: number
+              },
+              []
+            >("PRAGMA user_version")
+            .get()!.user_version
         ).toBe(SCHEMA_VERSION)
 
         const tables = new Set(
-          (
-            boot.sqlite
-              .query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
-              .all() as Array<{ name: string }>
-          ).map((row) => row.name)
+          boot.sqlite
+            .query<{ name: string }, []>(
+              `SELECT name FROM sqlite_master WHERE type = 'table'`
+            )
+            .all()
+            .map((row) => row.name)
         )
         // The run layer is gone.
         expect(tables.has("runs")).toBe(false)
@@ -175,46 +180,51 @@ describe("migration 0013 — v19 challenge-centric (destructive; old execution d
           "channel_reads",
           "challenge_flags",
         ]) {
-          const n = (
-            boot.sqlite.query(`SELECT count(*) AS n FROM ${table}`).get() as {
-              n: number
-            }
-          ).n
+          const n = boot.sqlite
+            .query<
+              {
+                n: number
+              },
+              []
+            >(`SELECT count(*) AS n FROM ${table}`)
+            .get()!.n
           expect(n).toBe(0)
         }
 
         // Preserved data untouched.
         expect(
           boot.sqlite
-            .query(
+            .query<{ instruction: string; max_concurrent_targets: number }, []>(
               `SELECT instruction, max_concurrent_targets FROM scheduler_config WHERE event_id = 'evt-1'`
             )
-            .get() as { instruction: string; max_concurrent_targets: number }
+            .get()!
         ).toEqual({ instruction: "hint", max_concurrent_targets: 2 })
         expect(
-          (
-            boot.sqlite
-              .query(`SELECT status FROM queue_state WHERE event_id = 'evt-1'`)
-              .get() as { status: string }
-          ).status
+          boot.sqlite
+            .query<{ status: string }, []>(
+              `SELECT status FROM queue_state WHERE event_id = 'evt-1'`
+            )
+            .get()!.status
         ).toBe("paused")
         expect(
-          (
-            boot.sqlite
-              .query(
-                `SELECT body FROM prompt_templates WHERE key = 'mainSystem'`
-              )
-              .get() as { body: string }
-          ).body
+          boot.sqlite
+            .query<{ body: string }, []>(
+              `SELECT body FROM prompt_templates WHERE key = 'mainSystem'`
+            )
+            .get()!.body
         ).toBe("custom-body")
 
         // agents v19 shape: runId/slot/is_entry/parent_agent_id/task gone;
         // event_id/challenge_id/prompt/source/deadline columns present.
-        const agentCols = (
-          boot.sqlite.query(`PRAGMA table_info(agents)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        const agentCols = boot.sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(agents)`)
+          .all()
+          .map((c) => c.name)
         for (const col of [
           "event_id",
           "challenge_id",
@@ -246,40 +256,46 @@ describe("migration 0013 — v19 challenge-centric (destructive; old execution d
           expect(agentCols).not.toContain(gone)
         }
         // One orchestrator per event (partial unique index).
-        const agentIdx = (
-          boot.sqlite
-            .query(
-              `SELECT name FROM pragma_index_list('agents') WHERE "unique" = 1`
-            )
-            .all() as Array<{ name: string }>
-        ).map((i) => i.name)
+        const agentIdx = boot.sqlite
+          .query<{ name: string }, []>(
+            `SELECT name FROM pragma_index_list('agents') WHERE "unique" = 1`
+          )
+          .all()
+          .map((i) => i.name)
         expect(agentIdx).toContain("agents_event_orchestrator_unique")
 
         // session_entries lost its run_id column.
-        const entryCols = (
-          boot.sqlite
-            .query(`PRAGMA table_info(session_entries)`)
-            .all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        const entryCols = boot.sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(session_entries)`)
+          .all()
+          .map((c) => c.name)
         expect(entryCols).not.toContain("run_id")
 
         // spawn_queue: append semantics (no challenge unique constraint),
         // agent_id back-fill column.
-        const queueIdx = (
-          boot.sqlite
-            .query(`SELECT name FROM pragma_index_list('spawn_queue')`)
-            .all() as Array<{ name: string }>
-        ).map((i) => i.name)
+        const queueIdx = boot.sqlite
+          .query<{ name: string }, []>(
+            `SELECT name FROM pragma_index_list('spawn_queue')`
+          )
+          .all()
+          .map((i) => i.name)
         expect(queueIdx.filter((name) => name.includes("challenge"))).toEqual(
           []
         )
-        const queueCols = (
-          boot.sqlite.query(`PRAGMA table_info(spawn_queue)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        const queueCols = boot.sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(spawn_queue)`)
+          .all()
+          .map((c) => c.name)
         expect(queueCols).toContain("agent_id")
         // Two pending items on the same challenge are legal (append).
         boot.sqlite.run(
@@ -294,13 +310,15 @@ describe("migration 0013 — v19 challenge-centric (destructive; old execution d
         )
 
         // challenge_flags: source check is agent|manual; agent_id plain text.
-        const flagCols = (
-          boot.sqlite
-            .query(`PRAGMA table_info(challenge_flags)`)
-            .all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        const flagCols = boot.sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(challenge_flags)`)
+          .all()
+          .map((c) => c.name)
         expect(flagCols).toContain("agent_id")
         expect(flagCols).not.toContain("run_id")
         expect(() =>
@@ -324,17 +342,16 @@ describe("migration 0013 — v19 challenge-centric (destructive; old execution d
           [ts]
         )
         expect(
-          (
-            boot.sqlite
-              .query(`SELECT max(id) AS n FROM channel_messages`)
-              .get() as { n: number }
-          ).n
+          boot.sqlite
+            .query<{ n: number }, []>(
+              `SELECT max(id) AS n FROM channel_messages`
+            )
+            .get()!.n
         ).toBe(1)
 
-        expect(
-          (boot.sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[])
-            .length
-        ).toBe(0)
+        expect(boot.sqlite.query(`PRAGMA foreign_key_check`).all().length).toBe(
+          0
+        )
 
         // Legacy on-disk directories swept.
         expect(existsSync(join(dir, "runs"))).toBe(false)

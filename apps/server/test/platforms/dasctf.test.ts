@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { DasCtfAdapter } from "../../src/platforms/adapters/dasctf"
 import type { PlatformConfig } from "../../src/platforms/core"
 import { PlatformError } from "../../src/platforms/core"
+import { refine } from "../support"
 
 const config: PlatformConfig = {
   type: "dasctf",
@@ -30,24 +31,26 @@ function stubFetch(routes: Route[]) {
   const original = globalThis.fetch
   const queue = [...routes]
   const calls: { url: string; init: RequestInit | undefined }[] = []
-  globalThis.fetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
-    const url = requestUrlOf(input)
-    calls.push({ url, init })
-    const index = queue.findIndex((r) =>
-      typeof r.match === "string" ? url.includes(r.match) : r.match.test(url)
-    )
-    const route = index >= 0 ? queue.splice(index, 1)[0] : undefined
-    if (!route) {
-      return new Response("no stub route", {
-        status: 404,
-        headers: { "Content-Type": "text/plain" },
+  globalThis.fetch = refine<typeof fetch>(
+    async (input: URL | RequestInfo, init?: RequestInit) => {
+      const url = requestUrlOf(input)
+      calls.push({ url, init })
+      const index = queue.findIndex((r) =>
+        typeof r.match === "string" ? url.includes(r.match) : r.match.test(url)
+      )
+      const route = index >= 0 ? queue.splice(index, 1)[0] : undefined
+      if (!route) {
+        return new Response("no stub route", {
+          status: 404,
+          headers: { "Content-Type": "text/plain" },
+        })
+      }
+      return new Response(JSON.stringify(route.body ?? {}), {
+        status: route.status ?? 200,
+        headers: { "Content-Type": "application/json" },
       })
     }
-    return new Response(JSON.stringify(route.body ?? {}), {
-      status: route.status ?? 200,
-      headers: { "Content-Type": "application/json" },
-    })
-  }) as typeof fetch
+  )
   return {
     calls,
     restore: () => {
@@ -78,7 +81,7 @@ const sampleDetail = {
 }
 
 function headersOf(calls: { init: RequestInit | undefined }[], index = 0) {
-  return calls[index].init?.headers as Record<string, string>
+  return refine<Record<string, string>>(calls[index].init?.headers)
 }
 
 describe("dasctf adapter", () => {
@@ -255,7 +258,7 @@ describe("dasctf adapter", () => {
         expect.unreachable()
       } catch (error) {
         expect(error).toBeInstanceOf(PlatformError)
-        expect((error as PlatformError).status).toBe(404)
+        expect(refine<PlatformError>(error).status).toBe(404)
       }
     } finally {
       fetch.restore()
@@ -289,7 +292,7 @@ describe("dasctf adapter", () => {
         expect.unreachable()
       } catch (error) {
         expect(error).toBeInstanceOf(PlatformError)
-        expect((error as PlatformError).status).toBe(502)
+        expect(refine<PlatformError>(error).status).toBe(502)
       }
     } finally {
       fetch.restore()

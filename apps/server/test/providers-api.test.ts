@@ -4,6 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { createApp } from "../src/app"
+import { parseJson, responseJson } from "../src/lib/guards"
+import { refine } from "./support"
 import { json } from "./support"
 
 const tempDirs: string[] = []
@@ -40,7 +42,7 @@ describe("provider API (model-runtime hygiene)", () => {
       json("POST", { ...providerBody, apiKey: "$OPENAI_KEY" })
     )
     expect(response.status).toBe(400)
-    const body = (await response.json()) as { error: { message: string } }
+    const body = await responseJson<{ error: { message: string } }>(response)
     expect(body.error.message).toContain("literal")
   })
 
@@ -51,7 +53,7 @@ describe("provider API (model-runtime hygiene)", () => {
       json("POST", providerBody)
     )
     expect(created.status).toBe(201)
-    const { id } = (await created.json()) as { id: string }
+    const { id } = await responseJson<{ id: string }>(created)
     const patched = await app.request(
       `/api/providers/${id}`,
       json("PATCH", { apiKey: "$BAD" })
@@ -77,10 +79,10 @@ describe("pi builtin catalog endpoint", () => {
       json("POST", providerBody)
     )
     expect(created.status).toBe(201)
-    const { id } = (await created.json()) as { id: string }
+    const { id } = await responseJson<{ id: string }>(created)
     const response = await app.request(`/api/providers/${id}/models/builtins`)
     expect(response.status).toBe(200)
-    const body = (await response.json()) as {
+    const body = await responseJson<{
       items: Array<{
         providerId: string
         modelId: string
@@ -93,7 +95,7 @@ describe("pi builtin catalog endpoint", () => {
           input: string[]
         }
       }>
-    }
+    }>(response)
     expect(body.items.length).toBeGreaterThan(100)
     for (const item of body.items) {
       expect(item.metadata.contextWindow).toBeGreaterThan(0)
@@ -105,58 +107,58 @@ describe("pi builtin catalog endpoint", () => {
   })
 })
 
+/** Install a fetch mock (Bun's typeof fetch also carries `preconnect`, so
+ * plain functions need the widening cast — routed through refine). */
+function installFetchMock(
+  impl: (
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ) => Response | Promise<Response>
+) {
+  globalThis.fetch = refine<typeof fetch>(impl)
+}
+
+/** URL string of a fetch input (URL / string / Request). */
+function requestUrl(input: RequestInfo | URL): string {
+  if (input instanceof URL) return input.href
+  return typeof input === "string" ? input : input.url
+}
+
+/** An upstream SSE Response built from raw frames. */
+function upstreamSse(frames: string[]) {
+  const body = [
+    ...frames.map((frame) => `data: ${frame}\n\n`),
+    "data: [DONE]\n\n",
+  ].join("")
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  })
+}
+
+/** Parse the proxied client SSE stream into event objects. */
+async function readSseEvents(response: Response) {
+  expect(response.headers.get("content-type")).toContain("text/event-stream")
+  const text = await response.text()
+  return text
+    .split("\n\n")
+    .filter(Boolean)
+    .map((block) =>
+      parseJson<Record<string, unknown>>(
+        block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("\n")
+      )
+    )
+}
+
 describe("provider test dialogue (POST /api/providers/:id/test)", () => {
   const realFetch = globalThis.fetch
   afterEach(() => {
     globalThis.fetch = realFetch
   })
-
-  /** Install a fetch mock (Bun's typeof fetch also carries `preconnect`, so
-   * plain functions need the widening cast). */
-  function installFetchMock(
-    impl: (
-      input: RequestInfo | URL,
-      init?: RequestInit
-    ) => Response | Promise<Response>
-  ) {
-    globalThis.fetch = impl as unknown as typeof fetch
-  }
-
-  /** URL string of a fetch input (URL / string / Request). */
-  function requestUrl(input: RequestInfo | URL): string {
-    if (input instanceof URL) return input.href
-    return typeof input === "string" ? input : input.url
-  }
-
-  /** An upstream SSE Response built from raw frames. */
-  function upstreamSse(frames: string[]) {
-    const body = [
-      ...frames.map((frame) => `data: ${frame}\n\n`),
-      "data: [DONE]\n\n",
-    ].join("")
-    return new Response(body, {
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    })
-  }
-
-  /** Parse the proxied client SSE stream into event objects. */
-  async function readSseEvents(response: Response) {
-    expect(response.headers.get("content-type")).toContain("text/event-stream")
-    const text = await response.text()
-    return text
-      .split("\n\n")
-      .filter(Boolean)
-      .map((block) =>
-        JSON.parse(
-          block
-            .split("\n")
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5).trim())
-            .join("\n")
-        )
-      ) as Array<Record<string, unknown>>
-  }
 
   async function createTestProvider(
     type: "openai-compatible" | "openai-responses" | "anthropic-messages",
@@ -168,7 +170,7 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
       json("POST", { ...providerBody, type, baseUrl })
     )
     expect(created.status).toBe(201)
-    const { id } = (await created.json()) as { id: string }
+    const { id } = await responseJson<{ id: string }>(created)
     return { app, id }
   }
 
@@ -195,12 +197,14 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
         usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0 },
       },
     ])
-    expect(calls[0]!.url).toBe("https://api.example.com/v1/chat/completions")
-    expect(calls[0]!.init.method).toBe("POST")
-    const headers = calls[0]!.init.headers as Record<string, string>
+    expect(calls[0].url).toBe("https://api.example.com/v1/chat/completions")
+    expect(calls[0].init.method).toBe("POST")
+    const headers = refine<Record<string, string>>(calls[0].init.headers)
     expect(headers.Authorization).toBe("Bearer real-key")
     expect(headers["content-type"]).toBe("application/json")
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+    expect(
+      parseJson<Record<string, unknown>>(refine<string>(calls[0].init.body))
+    ).toEqual({
       model: "gpt-4o",
       stream: true,
       stream_options: { include_usage: true },
@@ -231,8 +235,10 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
         usage: { input: 7, output: 2, cacheRead: 0, cacheWrite: 0 },
       },
     ])
-    expect(calls[0]!.url).toBe("https://api.example.com/v1/responses")
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+    expect(calls[0].url).toBe("https://api.example.com/v1/responses")
+    expect(
+      parseJson<Record<string, unknown>>(refine<string>(calls[0].init.body))
+    ).toEqual({
       model: "gpt-5",
       stream: true,
       input: "hi",
@@ -267,12 +273,14 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
         usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0 },
       },
     ])
-    expect(calls[0]!.url).toBe("https://api.anthropic.com/v1/messages")
-    const headers = calls[0]!.init.headers as Record<string, string>
+    expect(calls[0].url).toBe("https://api.anthropic.com/v1/messages")
+    const headers = refine<Record<string, string>>(calls[0].init.headers)
     expect(headers.Authorization).toBeUndefined()
     expect(headers["x-api-key"]).toBe("real-key")
     expect(headers["anthropic-version"]).toBe("2023-06-01")
-    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({
+    expect(
+      parseJson<Record<string, unknown>>(refine<string>(calls[0].init.body))
+    ).toEqual({
       model: "claude-sonnet-4-5",
       stream: true,
       max_tokens: 1024,
@@ -293,9 +301,9 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
       json("POST", { modelId: "gpt-4o", prompt: "hi" })
     )
     expect(response.status).toBe(502)
-    const body = (await response.json()) as {
+    const body = await responseJson<{
       error: { code: string; message: string }
-    }
+    }>(response)
     expect(body.error.code).toBe("provider_unavailable")
     expect(body.error.message).toContain("401")
     expect(body.error.message).toContain("Incorrect API key")
@@ -321,9 +329,9 @@ describe("provider test dialogue (POST /api/providers/:id/test)", () => {
       json("POST", { modelId: "gpt-4o", prompt: "hi" })
     )
     expect(response.status).toBe(502)
-    const body = (await response.json()) as {
+    const body = await responseJson<{
       error: { code: string; message: string }
-    }
+    }>(response)
     expect(body.error.code).toBe("provider_unavailable")
     expect(body.error.message).toContain("timeout")
   })

@@ -217,6 +217,42 @@ export type AgentFactoryDeps = {
 
 export type AgentFactory = ReturnType<typeof createAgentFactory>
 
+/** The fixed solver tool set (no inter-agent communication tools — solvers
+ * coordinate via the workspace + channels). */
+const SOLVER_TOOLS = (targetSupported: boolean): string[] => [
+  "submit_flag",
+  "finish_run",
+  ...(targetSupported
+    ? ["get_target", "start_target", "extend_target", "stop_target"]
+    : []),
+]
+
+function workspaceKeyOf(row: {
+  eventId: string
+  challengeId: string | null
+}): string {
+  return row.challengeId ?? orchestratorKey(row.eventId)
+}
+
+/** Render the solver's first-turn prompt. `override` mode returns the raw
+ * prompt verbatim; otherwise the `initial` template renders with the
+ * spawn prompt as the Strategy section. `capabilities` are the same
+ * tool-list-derived values the system prompt rendered with. */
+function solverInitialPrompt(
+  templateMap: Map<string, string>,
+  promptContext: ReturnType<typeof buildSolverPromptContext>,
+  capabilities: Capabilities,
+  spawnPrompt: string | undefined,
+  promptMode: "strategy" | "override" | undefined
+): string {
+  if (promptMode === "override" && spawnPrompt) return spawnPrompt
+  return renderTemplate(templateMap, "initial", {
+    ...promptContext,
+    capabilities,
+    ...(spawnPrompt ? { strategy: spawnPrompt } : {}),
+  })
+}
+
 /**
  * v19 spawn + prepare + reopen orchestration (the execution unit is the
  * agent). One spawn = one agent row + a lazily-managed per-challenge
@@ -248,16 +284,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     createHost,
   } = deps
 
-  /** The fixed solver tool set (no inter-agent communication tools — solvers
-   * coordinate via the workspace + channels). */
-  const SOLVER_TOOLS = (targetSupported: boolean): string[] => [
-    "submit_flag",
-    "finish_run",
-    ...(targetSupported
-      ? ["get_target", "start_target", "extend_target", "stop_target"]
-      : []),
-  ]
-
   /** Scheduler management tools. EMPTY after the SDK convergence: the
    * orchestrator manages via the container-side `aegisx` Python SDK + bash,
    * not native tools. */
@@ -270,13 +296,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
   /** In-flight ModelRuntime refreshes per workspace (coalesce concurrent
    * callers onto the pending refresh). */
   const runtimeRefreshes = new Map<string, Promise<void>>()
-
-  function workspaceKeyOf(row: {
-    eventId: string
-    challengeId: string | null
-  }): string {
-    return row.challengeId ?? orchestratorKey(row.eventId)
-  }
 
   function rootDirOf(row: {
     eventId: string
@@ -343,10 +362,10 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     const pending = (async () => {
       const ctx = contexts.get(workspaceKey)
       if (!ctx) return
-      const runtimeDir = join(ctx.rootDir, "runtime")
-      mkdirSync(runtimeDir, { recursive: true })
+      const rtDir = join(ctx.rootDir, "runtime")
+      mkdirSync(rtDir, { recursive: true })
       writeFileSync(
-        join(runtimeDir, "models.json"),
+        join(rtDir, "models.json"),
         `${JSON.stringify(generateModelsJson(providers()), null, 2)}\n`
       )
       await ctx.modelRuntime.refresh({ allowNetwork: false })
@@ -458,25 +477,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
   }
 
   // --- spawn --------------------------------------------------------------
-
-  /** Render the solver's first-turn prompt. `override` mode returns the raw
-   * prompt verbatim; otherwise the `initial` template renders with the
-   * spawn prompt as the Strategy section. `capabilities` are the same
-   * tool-list-derived values the system prompt rendered with. */
-  function solverInitialPrompt(
-    templateMap: Map<string, string>,
-    promptContext: ReturnType<typeof buildSolverPromptContext>,
-    capabilities: Capabilities,
-    spawnPrompt: string | undefined,
-    promptMode: "strategy" | "override" | undefined
-  ): string {
-    if (promptMode === "override" && spawnPrompt) return spawnPrompt
-    return renderTemplate(templateMap, "initial", {
-      ...promptContext,
-      capabilities,
-      ...(spawnPrompt ? { strategy: spawnPrompt } : {}),
-    })
-  }
 
   /**
    * Spawn one agent: fence check (solver), model resolution, prompt

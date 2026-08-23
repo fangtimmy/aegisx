@@ -6,6 +6,7 @@ import {
   accumulateEntryUsage,
   entryUsageOf,
 } from "../../src/agents/entry-usage"
+import { refine } from "../support"
 
 /**
  * Parity anchor for `accumulateEntryUsage` / `entryUsageOf`.
@@ -60,28 +61,28 @@ const id = (p: string) => {
 const ts = () => new Date().toISOString()
 
 function assistant(u: UsageShape): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "message",
     id: id("a"),
     parentId: null,
     timestamp: ts(),
     message: { role: "assistant", usage: u },
-  } as unknown as SessionEntry
+  })
 }
 
 /** An assistant message with no usage (aborted/error) — still a turn. */
 function assistantNoUsage(): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "message",
     id: id("a"),
     parentId: null,
     timestamp: ts(),
     message: { role: "assistant" },
-  } as unknown as SessionEntry
+  })
 }
 
 function toolResult(u: UsageShape): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "message",
     id: id("t"),
     parentId: null,
@@ -92,21 +93,21 @@ function toolResult(u: UsageShape): SessionEntry {
       toolName: "bash",
       usage: u,
     },
-  } as unknown as SessionEntry
+  })
 }
 
 function user(): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "message",
     id: id("u"),
     parentId: null,
     timestamp: ts(),
     message: { role: "user", content: "hi" },
-  } as unknown as SessionEntry
+  })
 }
 
 function compaction(u: UsageShape): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "compaction",
     id: id("c"),
     parentId: null,
@@ -115,11 +116,11 @@ function compaction(u: UsageShape): SessionEntry {
     firstKeptEntryId: "k",
     tokensBefore: 1000,
     usage: u,
-  } as unknown as SessionEntry
+  })
 }
 
 function branchSummary(u: UsageShape): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "branch_summary",
     id: id("b"),
     parentId: null,
@@ -127,18 +128,18 @@ function branchSummary(u: UsageShape): SessionEntry {
     fromId: "root",
     summary: "s",
     usage: u,
-  } as unknown as SessionEntry
+  })
 }
 
 function custom(): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "custom",
     id: id("x"),
     parentId: null,
     timestamp: ts(),
     customType: "thing",
     data: { foo: 1 },
-  } as unknown as SessionEntry
+  })
 }
 
 describe("entryUsageOf", () => {
@@ -153,13 +154,13 @@ describe("entryUsageOf", () => {
   })
 
   test("toolResult without usage yields undefined", () => {
-    const noUsage = {
+    const noUsage = refine<SessionEntry>({
       type: "message",
       id: "t",
       parentId: null,
       timestamp: ts(),
       message: { role: "toolResult", toolCallId: "c", toolName: "bash" },
-    } as unknown as SessionEntry
+    })
     expect(entryUsageOf(noUsage)).toBeUndefined()
   })
 })

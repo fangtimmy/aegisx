@@ -13,6 +13,7 @@ import { renderTemplateBody } from "../../src/orchestration/prompt-templates"
 import { createAgentQueries } from "../../src/run/queries"
 import { createSchedulerAdmin } from "../../src/run/scheduler-admin"
 import { flatSettings, seedChallenge, seedEvent, now } from "../helpers"
+import { refine } from "../support"
 
 function setup() {
   const dir = `/tmp/aegisx-digest-${crypto.randomUUID()}`
@@ -23,7 +24,7 @@ function setup() {
     getSettings: flatSettings,
     now,
     providers: () => [],
-    modelResolver: {} as never,
+    modelResolver: refine({}),
   })
   return { db, admin, close: () => releaseLock() }
 }
@@ -58,7 +59,7 @@ function seedQueueItem(
   db: ReturnType<typeof createDatabase>["db"],
   id: string,
   challengeId: string,
-  status: string
+  status: "pending" | "running" | "done" | "cancelled" | "failed"
 ) {
   db.insert(spawnQueue)
     .values({
@@ -127,7 +128,7 @@ describe("scheduler digest (getDigestContext + default template)", () => {
         running: 1,
         pending: 1,
       })
-      expect(ctx.challenges[1]!.solvedLabel).toBe("部分")
+      expect(ctx.challenges[1].solvedLabel).toBe("部分")
 
       const text = renderTemplateBody(DEFAULT_SCHEDULER_DIGEST_TEMPLATE, ctx)
       expect(text).toContain("Agent 槽位：3/4")
@@ -163,7 +164,7 @@ describe("scheduler digest (getDigestContext + default template)", () => {
         .run()
 
       const ctx = admin.getDigestContext("evt-1")
-      expect(ctx.challenges[0]!.solvedLabel).toBe("已解")
+      expect(ctx.challenges[0].solvedLabel).toBe("已解")
       expect(ctx.agents.live).toBe(1)
 
       const text = renderTemplateBody(DEFAULT_SCHEDULER_DIGEST_TEMPLATE, ctx)

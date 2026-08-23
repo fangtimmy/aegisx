@@ -26,6 +26,12 @@ export function platformError(error: unknown): PlatformActionError {
   if (error instanceof PlatformError) {
     return new PlatformActionError("platform_error", error.message)
   }
+  console.error("Unmapped platform error", {
+    error:
+      error instanceof Error
+        ? { message: error.message, stack: error.stack }
+        : String(error),
+  })
   return new PlatformActionError("platform_error", "Platform request failed")
 }
 

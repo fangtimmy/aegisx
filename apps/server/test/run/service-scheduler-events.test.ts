@@ -15,6 +15,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -58,23 +59,23 @@ function makeService(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
       const list: string[] = []
       promptLog.set(input.agentId, list)
-      const sdk = stub.session as unknown as {
+      const sdk = refine<{
         prompt: (text: string) => Promise<void>
-      }
+      }>(stub.session)
       sdk.prompt = async (text: string) => {
         if (failSolver) {
           const row = db
@@ -218,7 +219,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       expect(
         orchRows(db).some(
           (r) =>
-            r.body.endsWith("「Test Challenge」agent-") === false &&
+            !r.body.endsWith("「Test Challenge」agent-") &&
             r.body.includes("「Test Challenge」") &&
             r.body.endsWith("已空闲（失败）") &&
             metaOf(r).eventType === "agent.idle"
@@ -305,8 +306,8 @@ describe("agent lifecycle events → orch messages (v19)", () => {
 
       const urgent = orchRows(db).filter((r) => metaOf(r).urgent === true)
       expect(urgent).toHaveLength(1)
-      expect(urgent[0]!.body).toContain("队列不足")
-      expect(metaOf(urgent[0]!).noticeType).toBe("emergency")
+      expect(urgent[0].body).toContain("队列不足")
+      expect(metaOf(urgent[0]).noticeType).toBe("emergency")
       // Immediate wake: the scheduler got the steer without any tick.
       const texts = promptLog.get(orch.id) ?? []
       expect(texts.length).toBe(primed + 1)
@@ -472,8 +473,8 @@ describe("agent lifecycle events → orch messages (v19)", () => {
         (r) => metaOf(r).eventType === "agent.started"
       )
       expect(started).toHaveLength(1)
-      expect(started[0]!.body).toBe(`${tagOf(solver.id)}已启动`)
-      expect(metaOf(started[0]!).source).toBe("scheduler")
+      expect(started[0].body).toBe(`${tagOf(solver.id)}已启动`)
+      expect(metaOf(started[0]).source).toBe("scheduler")
       await service.close()
     } finally {
       await service?.close().catch(() => undefined)

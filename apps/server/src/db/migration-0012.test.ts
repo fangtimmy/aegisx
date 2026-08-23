@@ -14,6 +14,8 @@ import { join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
+import { parseJson } from "../lib/guards"
+
 /** The real migrations folder (14 entries incl. 0013). */
 const realFolder = resolve(import.meta.dir, "../../drizzle")
 
@@ -27,9 +29,9 @@ function buildV17Database(dir: string) {
   sqlite.run("PRAGMA foreign_keys = ON")
   const folder = join(dir, "mig-v17")
   mkdirSync(join(folder, "meta"), { recursive: true })
-  const journal = JSON.parse(
+  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
     readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  ) as { entries: Array<{ tag: string }> }
+  )
   journal.entries = journal.entries.slice(0, 12) // 0000â€“0011 = v17
   writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
   for (const entry of journal.entries) {
@@ -47,9 +49,9 @@ function buildV17Database(dir: string) {
  * one entry; the migrator replays the same path the runtime takes). */
 function applyV18(dir: string, sqlite: Database) {
   const folder = join(dir, "mig-v17")
-  const journal = JSON.parse(
+  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
     readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  ) as { entries: Array<{ tag: string }> }
+  )
   journal.entries = journal.entries.slice(0, 13) // +0012 = v18
   writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
   cpSync(
@@ -221,11 +223,12 @@ describe("migration 0012 â€” v18 derived channel keys (docs/im-simplify-v18.md Â
 
       // The channels directory table is GONE.
       const tables = new Set(
-        (
-          sqlite
-            .query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
-            .all() as Array<{ name: string }>
-        ).map((row) => row.name)
+        sqlite
+          .query<{ name: string }, []>(
+            `SELECT name FROM sqlite_master WHERE type = 'table'`
+          )
+          .all()
+          .map((row) => row.name)
       )
       expect(tables.has("channels")).toBe(false)
 
@@ -233,8 +236,10 @@ describe("migration 0012 â€” v18 derived channel keys (docs/im-simplify-v18.md Â
       // global id order intact; recap rows deleted; the event-scope
       // scheduler DM became orch:<eventId>.
       const msgs = sqlite
-        .query(`SELECT * FROM channel_messages ORDER BY id`)
-        .all() as Array<Record<string, unknown>>
+        .query<Record<string, unknown>, []>(
+          `SELECT * FROM channel_messages ORDER BY id`
+        )
+        .all()
       expect(msgs.map((m) => [m.id, m.channel_key])).toEqual([
         [1, "team:ch-1"],
         [2, "team:ch-1"],
@@ -246,14 +251,16 @@ describe("migration 0012 â€” v18 derived channel keys (docs/im-simplify-v18.md Â
       ])
       expect(msgs.filter((m) => m.body === "recap snapshot")).toHaveLength(0)
       // Author snapshots + meta carried verbatim (no kind column left).
-      expect("kind" in msgs[0]!).toBe(false)
-      expect(msgs[0]!.author_name).toBe("Solver a1 Â· run-runA")
+      expect("kind" in msgs[0]).toBe(false)
+      expect(msgs[0].author_name).toBe("Solver a1 Â· run-runA")
 
       // Read cursors: re-keyed onto derived keys, team/announce merged
       // to MAX; the scheduler reader row keeps 'scheduler'.
       const reads = sqlite
-        .query(`SELECT * FROM channel_reads ORDER BY channel_key`)
-        .all() as Array<Record<string, unknown>>
+        .query<Record<string, unknown>, []>(
+          `SELECT * FROM channel_reads ORDER BY channel_key`
+        )
+        .all()
       expect(reads).toEqual([
         {
           channel_key: "dm:a1",
@@ -278,29 +285,32 @@ describe("migration 0012 â€” v18 derived channel keys (docs/im-simplify-v18.md Â
       // Files: channel_id column gone; the recap attachment dropped with
       // the digest mechanism.
       const files = sqlite
-        .query(`SELECT * FROM channel_files ORDER BY id`)
-        .all() as Array<Record<string, unknown>>
+        .query<Record<string, unknown>, []>(
+          `SELECT * FROM channel_files ORDER BY id`
+        )
+        .all()
       expect(files.map((f) => [f.id, f.message_id, f.filename])).toEqual([
         ["f1", 2, "remote.md"],
         ["f2", 5, "dump.bin"],
       ])
-      expect("channel_id" in files[0]!).toBe(false)
+      expect("channel_id" in files[0]).toBe(false)
 
       // Integrity + the AUTOINCREMENT sequence survived the table
       // recreation (the next message id stays monotonic past the recap).
-      expect(
-        (sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[]).length
-      ).toBe(0)
+      expect(sqlite.query(`PRAGMA foreign_key_check`).all().length).toBe(0)
       sqlite.run(
         `INSERT INTO channel_messages (channel_key, author_type, author_agent_id, author_name, body, meta, created_at)
          VALUES ('team:ch-1', 'system', NULL, 'system', 'post-migration', '{}', '${ts}')`
       )
       expect(
-        (
-          sqlite.query(`SELECT max(id) AS n FROM channel_messages`).get() as {
-            n: number
-          }
-        ).n
+        sqlite
+          .query<
+            {
+              n: number
+            },
+            []
+          >(`SELECT max(id) AS n FROM channel_messages`)
+          .get()!.n
       ).toBe(9)
       sqlite.close()
     } finally {

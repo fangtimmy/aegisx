@@ -118,7 +118,7 @@ async function suggestSimilarPaths(
         score: similarityScore(base, entry.name.toLowerCase()),
       }))
       .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)
+      .toSorted((a, b) => b.score - a.score)
       .slice(0, 3)
       .map((item) => {
         const dir = parent === "." || parent === "" ? "" : `${parent}/`
@@ -194,9 +194,9 @@ export function createWorkspaceTools(
       ),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<unknown>> => {
-      let read: { data: Uint8Array; truncated: boolean; totalBytes: number }
+      let file: { data: Uint8Array; truncated: boolean; totalBytes: number }
       try {
-        read = await backend.read(params.filePath, signal)
+        file = await backend.read(params.filePath, signal)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const suggestions = await suggestSimilarPaths(
@@ -208,9 +208,12 @@ export function createWorkspaceTools(
           suggestions.length > 0
             ? `\n\nDid you mean one of these?\n${suggestions.map((item) => `- ${item}`).join("\n")}`
             : ""
-        throw new Error(`File not found: ${params.filePath}. ${message}${hint}`)
+        throw new Error(
+          `File not found: ${params.filePath}. ${message}${hint}`,
+          { cause: error }
+        )
       }
-      const bytes = read.data
+      const bytes = file.data
       const detected = await fileTypeFromBuffer(bytes)
       const mime = detected?.mime.startsWith("image/") ? detected.mime : null
       if (mime) {
@@ -268,9 +271,9 @@ export function createWorkspaceTools(
       const slice = allLines.slice(offset - 1, offset - 1 + limit)
       const numbered = formatNumberedLines(slice, offset, maxOutput)
       const notices: string[] = []
-      if (read.truncated) {
+      if (file.truncated) {
         notices.push(
-          `File exceeds the 64MB read cap (${read.totalBytes} bytes total); only the leading portion was read. Use bash (head/sed/xxd) to inspect it in parts.`
+          `File exceeds the 64MB read cap (${file.totalBytes} bytes total); only the leading portion was read. Use bash (head/sed/xxd) to inspect it in parts.`
         )
       }
       if (
@@ -352,13 +355,13 @@ export function createWorkspaceTools(
     execute: async (_id, params, signal) => {
       const target = backend.resolvePath(params.filePath, true)
       return withFileLock(target, async () => {
-        const read = await backend.read(params.filePath, signal)
-        if (read.truncated) {
+        const current = await backend.read(params.filePath, signal)
+        if (current.truncated) {
           throw new Error(
-            `File exceeds the 64MB edit cap (${read.totalBytes} bytes total); edit is unsupported on files this large — use bash instead.`
+            `File exceeds the 64MB edit cap (${current.totalBytes} bytes total); edit is unsupported on files this large — use bash instead.`
           )
         }
-        const original = new TextDecoder().decode(read.data)
+        const original = new TextDecoder().decode(current.data)
         const result = applyExactEdit(
           original,
           params.filePath,

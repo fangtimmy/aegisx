@@ -21,7 +21,7 @@ const patchQueueInput = Type.Object(
   {
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
-    params: Type.Optional(Type.Unknown()),
+    params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   },
   { additionalProperties: false }
 )
@@ -207,9 +207,7 @@ export function registerSchedulerRoutes(
             ...(body.timeoutMs !== undefined
               ? { timeoutMs: body.timeoutMs }
               : {}),
-            ...(body.params !== undefined
-              ? { params: body.params as Record<string, unknown> }
-              : {}),
+            ...(body.params !== undefined ? { params: body.params } : {}),
           })
         )
       } catch (error) {

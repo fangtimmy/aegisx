@@ -14,6 +14,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 describe("agentService.spawn", () => {
   test("happy path: inserts the agent row, creates the tool-box container, provisions", async () => {
@@ -31,14 +32,14 @@ describe("agentService.spawn", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         createHost,
@@ -62,14 +63,14 @@ describe("agentService.spawn", () => {
 
       // Tool-box container created (bound to the challenge workspace).
       expect(created).toHaveLength(1)
-      const opts = created[0] as {
+      const opts = refine<{
         image: string
         workingDir: string
         binds: string[]
         limits: { cpus: number; memoryMb: number; pidsLimit: number }
         tmpfsSize: string
         networkMode?: string
-      }
+      }>(created[0])
       expect(opts.workingDir).toBe("/workspace")
       expect(opts.binds[0]).toMatch(/:\/workspace$/)
       expect(opts.limits).toEqual({
@@ -98,14 +99,14 @@ describe("agentService.spawn", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         createHost,
@@ -135,14 +136,14 @@ describe("agentService.spawn", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         createHost: async () => stubHostAgentSession(),
@@ -170,14 +171,14 @@ describe("agentService.spawn", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         createHost,

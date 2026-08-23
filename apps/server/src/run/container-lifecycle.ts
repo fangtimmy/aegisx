@@ -143,18 +143,18 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
    * reliably, so recovery only resets DB state; the sweep + create's
    * remove-first semantics handle strays. */
   function liveSolverChallengeIds(): Set<string> {
-    return new Set(
-      db
-        .select({ challengeId: agents.challengeId })
-        .from(agents)
-        .where(
-          and(
-            isNotNull(agents.challengeId),
-            inArray(agents.status, LIVE_AGENT_STATUSES)
-          )
+    const rows = db
+      .select({ challengeId: agents.challengeId })
+      .from(agents)
+      .where(
+        and(
+          isNotNull(agents.challengeId),
+          inArray(agents.status, LIVE_AGENT_STATUSES)
         )
-        .all()
-        .map((row) => row.challengeId as string)
+      )
+      .all()
+    return new Set(
+      rows.flatMap((row) => (row.challengeId ? [row.challengeId] : []))
     )
   }
 

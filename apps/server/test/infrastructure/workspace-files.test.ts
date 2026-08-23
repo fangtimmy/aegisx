@@ -14,6 +14,7 @@ import {
   WorkspaceFileError,
   workspaceDownload,
 } from "../../src/infrastructure/workspace-files"
+import { refine } from "../support"
 
 const tempDirs: string[] = []
 
@@ -162,7 +163,7 @@ describe("workspaceDownload", () => {
     const download = workspaceDownload(root, "solve.py")
     expect(download.filename).toBe("solve.py")
     const bytes = new Uint8Array(
-      await new Response(download.stream as unknown as BodyInit).arrayBuffer()
+      await new Response(refine<BodyInit>(download.stream)).arrayBuffer()
     )
     expect(new TextDecoder().decode(bytes)).toBe("print('x')")
   })
@@ -188,7 +189,7 @@ describe("WorkspaceFileError codes", () => {
       readWorkspacePath(root, "../x")
     } catch (error) {
       expect(error).toBeInstanceOf(WorkspaceFileError)
-      expect((error as WorkspaceFileError).code).toBe("invalid_path")
+      expect(refine<WorkspaceFileError>(error).code).toBe("invalid_path")
       return
     }
     throw new Error("expected a throw")

@@ -17,6 +17,7 @@ import type {
 import { badRequest, notFound } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
+import { isRecord } from "../lib/guards"
 import {
   DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
@@ -89,6 +90,42 @@ function settingsResponse(configStore: ConfigStore) {
   }
 }
 
+function previewPrompt(
+  kind:
+    | "mainSystemPrompt"
+    | "initialPrompt"
+    | "orchestratorSystemPrompt"
+    | "channelDeliveryPrompt"
+    | "schedulerDigestPrompt",
+  template: string
+) {
+  if (kind === "mainSystemPrompt") {
+    return previewSystemPrompt(template, samplePromptContext)
+  }
+  if (kind === "orchestratorSystemPrompt") {
+    return previewOrchestratorSystemPrompt(
+      template,
+      sampleOrchestratorPromptContext
+    )
+  }
+  if (kind === "channelDeliveryPrompt") {
+    return previewChannelDelivery(template)
+  }
+  if (kind === "schedulerDigestPrompt") {
+    return previewSchedulerDigest(template)
+  }
+  return previewInitialPrompt(template, samplePromptContext)
+}
+
+const transferModel = (model: ProviderModelData) => ({
+  id: model.id,
+  modelId: model.modelId,
+  label: model.label,
+  enabled: model.enabled,
+  metadata: parseModelMetadata(model.metadata),
+  metadataSource: model.metadataSource,
+})
+
 export function registerSettingsRoutes(
   app: Hono,
   options: {
@@ -97,42 +134,6 @@ export function registerSettingsRoutes(
   }
 ) {
   const { db, configStore } = options
-  const previewPrompt = (
-    kind:
-      | "mainSystemPrompt"
-      | "initialPrompt"
-      | "orchestratorSystemPrompt"
-      | "channelDeliveryPrompt"
-      | "schedulerDigestPrompt",
-    template: string
-  ) => {
-    if (kind === "mainSystemPrompt") {
-      return previewSystemPrompt(template, samplePromptContext)
-    }
-    if (kind === "orchestratorSystemPrompt") {
-      return previewOrchestratorSystemPrompt(
-        template,
-        sampleOrchestratorPromptContext
-      )
-    }
-    if (kind === "channelDeliveryPrompt") {
-      return previewChannelDelivery(template)
-    }
-    if (kind === "schedulerDigestPrompt") {
-      return previewSchedulerDigest(template)
-    }
-    return previewInitialPrompt(template, samplePromptContext)
-  }
-
-  const transferModel = (model: ProviderModelData) => ({
-    id: model.id,
-    modelId: model.modelId,
-    label: model.label,
-    enabled: model.enabled,
-    metadata: parseModelMetadata(model.metadata),
-    metadataSource: model.metadataSource,
-  })
-
   const transferProviders = () =>
     configStore.getProviders().map((provider) => ({
       id: provider.id,
@@ -208,14 +209,14 @@ export function registerSettingsRoutes(
     } catch {
       return badRequest(c, "invalid_json", "Request body must be JSON")
     }
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
+    if (!isRecord(body)) {
       return badRequest(
         c,
         "invalid_settings",
         "Settings patch must be an object of flat keys"
       )
     }
-    const patch = body as Record<string, unknown>
+    const patch = body
     if ("agent.defaultModelRef" in patch) {
       const modelRef = patch["agent.defaultModelRef"]
       if (modelRef !== null && modelRef !== undefined) {
@@ -278,11 +279,11 @@ export function registerSettingsRoutes(
       const modelIds = new Set<string>()
       const providerModelIds = new Set<string>()
       const newProviders: ProviderData[] = []
-      for (const raw of body.providers) {
-        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      for (const rawProvider of body.providers) {
+        if (!isRecord(rawProvider)) {
           throw new Error("Invalid provider entry")
         }
-        const provider = raw as Record<string, unknown>
+        const provider = rawProvider
         if (typeof provider.id !== "string" || !provider.id) {
           throw new Error("Provider id is required")
         }
@@ -306,14 +307,10 @@ export function registerSettingsRoutes(
         const modelsRaw = Array.isArray(provider.models) ? provider.models : []
         const models: ProviderModelData[] = []
         for (const rawModel of modelsRaw) {
-          if (
-            !rawModel ||
-            typeof rawModel !== "object" ||
-            Array.isArray(rawModel)
-          ) {
+          if (!isRecord(rawModel)) {
             throw new Error("Invalid model entry")
           }
-          const model = rawModel as Record<string, unknown>
+          const model = rawModel
           if (typeof model.id !== "string" || !model.id) {
             throw new Error("Model id is required")
           }

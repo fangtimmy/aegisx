@@ -76,9 +76,16 @@ python3 script.py
 按顺序尝试, 通常一两分钟到位:
 
 1. **Python 包** → `pip install <pkg>` (已配 ustc 镜像, wheel 秒装; 装进共享 venv, 同题容器内所有 agent 立即可用).
-2. **系统包** → 容器出厂**没有 apt 索引**, 必须先 `apt-get update -qq` 再 `apt-get install -y <pkg>` (kali-rolling @ ustc).
-3. 安装只对**当前题容器**生效, 容器重建即丢; 源码编译类大活放后台 (`nohup ... > build.log 2>&1 &`) 再轮询日志.
-4. 装不上就换不需要该工具的思路 — 不要在安装上耗过解题本身.
+2. **系统包** → 允许直接 apt 安装: 容器出厂**没有 apt 索引**, 先 `apt-get update -qq` 再 `apt-get install -y <pkg>` (kali-rolling @ ustc).
+3. **装完必剥 file caps** → 新装的系统包可能自带 file capabilities (如 tcpdump 的 `cap_net_admin`), 而 no-new-privileges 下 exec 带 caps 的二进制直接 EPERM. 装完立即检查并剥离 (容器已授予 SETFCAP, `setcap -r` 可正常执行):
+
+   ```bash
+   getcap -r /usr/bin /usr/sbin /usr/local/bin /opt 2>/dev/null
+   setcap -r <path>   # 对上一条每个命中路径各执行一次
+   ```
+
+4. 安装只对**当前题容器**生效, 容器重建即丢; 源码编译类大活放后台 (`nohup ... > build.log 2>&1 &`) 再轮询日志.
+5. 装不上就换不需要该工具的思路 — 不要在安装上耗过解题本身.
 
 ## volatility3 符号表 (内存取证)
 

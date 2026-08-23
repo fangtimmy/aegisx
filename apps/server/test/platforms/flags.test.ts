@@ -22,24 +22,25 @@ import {
   setupDb,
   stubConfigStore,
 } from "../helpers"
+import { refine } from "../support"
+
+function makePlatform(db: ReturnType<typeof setupDb>["db"], dir: string) {
+  const accepted: string[] = []
+  const platform = createPlatformService(
+    db,
+    createStorage(dir),
+    () => 1024 * 1024,
+    stubConfigStore([])
+  )
+  platform.setAgentHooks({
+    onAgentFlagAccepted: (_challengeId, agentId) => {
+      if (agentId) accepted.push(agentId)
+    },
+  })
+  return { platform, accepted }
+}
 
 describe("platform flags → agent hook", () => {
-  function makePlatform(db: ReturnType<typeof setupDb>["db"], dir: string) {
-    const accepted: string[] = []
-    const platform = createPlatformService(
-      db,
-      createStorage(dir),
-      () => 1024 * 1024,
-      stubConfigStore([])
-    )
-    platform.setAgentHooks({
-      onAgentFlagAccepted: (_challengeId, agentId) => {
-        if (agentId) accepted.push(agentId)
-      },
-    })
-    return { platform, accepted }
-  }
-
   test("non-platform accepted flag notifies the agent layer with agentId + source 'agent'", async () => {
     const { db, dir, close } = setupDb()
     try {
@@ -122,31 +123,31 @@ function flagRows(db: ReturnType<typeof setupDb>["db"]) {
   return db.select().from(challengeFlags).all()
 }
 
-describe("platform flags → async judge + concurrent submissions", () => {
-  function makeFlags(
-    db: Database,
-    adapter: Partial<CtfPlatformAdapter>,
-    hooks: {
-      onAgentFlagAccepted?: (
-        challengeId: string,
-        agentId?: string,
-        outcome?: string
-      ) => void
-    } = {}
-  ): ReturnType<typeof createPlatformFlags> {
-    return createPlatformFlags(
-      db,
-      () =>
-        db
-          .select()
-          .from(eventPlatforms)
-          .where(eq(eventPlatforms.eventId, "evt-1"))
-          .get() as never,
-      () => adapter as CtfPlatformAdapter,
-      hooks
-    )
-  }
+function makeFlags(
+  db: Database,
+  adapter: Partial<CtfPlatformAdapter>,
+  hooks: {
+    onAgentFlagAccepted?: (
+      challengeId: string,
+      agentId?: string,
+      outcome?: string
+    ) => void
+  } = {}
+): ReturnType<typeof createPlatformFlags> {
+  return createPlatformFlags(
+    db,
+    () =>
+      db
+        .select()
+        .from(eventPlatforms)
+        .where(eq(eventPlatforms.eventId, "evt-1"))
+        .get(),
+    () => refine<CtfPlatformAdapter>(adapter),
+    hooks
+  )
+}
 
+describe("platform flags → async judge + concurrent submissions", () => {
   test("acceptance outcomes: first solve, extra value on solved, repeat of accepted", async () => {
     const { db, close } = setupDb()
     try {

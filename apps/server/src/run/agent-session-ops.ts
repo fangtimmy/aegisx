@@ -75,7 +75,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
       .all()
     const counts = new Map<string, number>()
     if (rows.length > 0) {
-      for (const row of db
+      for (const entry of db
         .select({ sessionId: sessionEntries.sessionId, count: count() })
         .from(sessionEntries)
         .where(
@@ -86,7 +86,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         )
         .groupBy(sessionEntries.sessionId)
         .all()) {
-        counts.set(row.sessionId, row.count)
+        counts.set(entry.sessionId, entry.count)
       }
     }
     const active = db
@@ -94,11 +94,11 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
       .from(agents)
       .where(eq(agents.id, agentId))
       .get()?.sessionFile
-    return rows.map((row) => ({
-      id: row.id,
-      createdAt: row.createdAt,
-      messageCount: counts.get(row.id) ?? 0,
-      isActive: row.id === active,
+    return rows.map((session) => ({
+      id: session.id,
+      createdAt: session.createdAt,
+      messageCount: counts.get(session.id) ?? 0,
+      isActive: session.id === active,
     }))
   }
 

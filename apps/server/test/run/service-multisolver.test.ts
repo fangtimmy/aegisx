@@ -18,8 +18,30 @@ import {
   TEST_MODEL_REF,
   now,
 } from "../helpers"
+import { refine } from "../support"
 
 type Db = ReturnType<typeof setupDb>
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Seed #team history WITHOUT triggering delivery (non-urgent posts; the
+ * agents stay hanging/primed) — prior-attempt knowledge sitting in #team. */
+function seedChallengeHistory(
+  agentService: ReturnType<typeof makeService>["agentService"],
+  priorAgentId: string
+) {
+  agentService.channels.post({
+    channelKey: teamKey("ch-1"),
+    author: { type: "agent", agentId: priorAgentId },
+    body: "prior finding: heap overflow in edit()",
+  })
+  agentService.channels.post({
+    channelKey: teamKey("ch-1"),
+    author: { type: "system" },
+    body: "remote libc 2.35 — trust the target",
+  })
+}
 
 /** Service whose createHost stub records every prompt text per agent id. */
 function makeService(
@@ -35,25 +57,25 @@ function makeService(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
-    getSettings: (opts.getSettings ?? flatSettingsWithDefaultModel) as never,
+    getSettings: refine(opts.getSettings ?? flatSettingsWithDefaultModel),
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
         hang,
       })
       const list: string[] = []
       promptLog.set(input.agentId, list)
-      const sdk = stub.session as unknown as {
+      const sdk = refine<{
         prompt: (text: string) => Promise<void>
-      }
+      }>(stub.session)
       sdk.prompt = async (text: string) => {
         list.push(text)
       }
@@ -179,11 +201,10 @@ describe("v19 multi-spawn on one challenge", () => {
       seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const provider = makeProvider()
       const { agentService } = makeService(db, dir, provider, {
-        getSettings: () =>
-          ({
-            ...flatSettingsWithDefaultModel(),
-            "scheduler.maxConcurrentAgents": 6,
-          }) as never,
+        getSettings: () => ({
+          ...flatSettingsWithDefaultModel(),
+          "scheduler.maxConcurrentAgents": 6,
+        }),
       })
 
       // v19 decision: parallel attempts on one challenge are legal — with
@@ -236,29 +257,6 @@ describe("v19 multi-spawn on one challenge", () => {
       close()
     }
   })
-})
-
-describe("v19 channels — onboarding", () => {
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
-  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-  /** Seed #team history WITHOUT triggering delivery (non-urgent posts; the
-   * agents stay hanging/primed) — prior-attempt knowledge sitting in #team. */
-  function seedChallengeHistory(
-    agentService: ReturnType<typeof makeService>["agentService"],
-    priorAgentId: string
-  ) {
-    agentService.channels.post({
-      channelKey: teamKey("ch-1"),
-      author: { type: "agent", agentId: priorAgentId },
-      body: "prior finding: heap overflow in edit()",
-    })
-    agentService.channels.post({
-      channelKey: teamKey("ch-1"),
-      author: { type: "system" },
-      body: "remote libc 2.35 — trust the target",
-    })
-  }
 
   test("onboarding: a second spawn on the challenge sweeps the whole #team history into the first turn, exactly once", async () => {
     const { db, dir, close } = setupDb()
@@ -361,23 +359,23 @@ describe("v19 channels — onboarding", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: flatSettingsWithDefaultModel,
         createHost: mock(async (input: { agentId: string }) => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
           promptLog.set(input.agentId, list)
-          const sdk = stub.session as unknown as {
+          const sdk = refine<{
             prompt: (text: string) => Promise<void>
-          }
+          }>(stub.session)
           sdk.prompt = async (text: string) => {
             list.push(text)
           }

@@ -1,4 +1,4 @@
-import type { AgentStatus, ChallengeFlag } from "@aegisx/shared"
+import type { ChallengeFlag } from "@aegisx/shared"
 import type { AgentSummary, ToolDefinitionSnapshot } from "@aegisx/shared/agent"
 
 import type { agents, challengeFlags } from "../db/schema"
@@ -20,8 +20,8 @@ export function toFlagPublic(
     id: row.id,
     challengeId: row.challengeId,
     flag: row.flag,
-    status: row.status as ChallengeFlag["status"],
-    source: row.source as ChallengeFlag["source"],
+    status: row.status,
+    source: row.source,
     agentId: row.agentId,
     remoteId: row.remoteId,
     message: row.message,
@@ -39,11 +39,11 @@ export function toAgentSummary(
     eventId: row.eventId,
     challengeId: row.challengeId,
     challengeName,
-    role: row.role as AgentSummary["role"],
+    role: row.role,
     name: row.name,
     model: row.model,
-    status: row.status as AgentStatus,
-    source: row.source as AgentSummary["source"],
+    status: row.status,
+    source: row.source,
     prompt: row.prompt,
     summary: row.summary,
     error: row.error,

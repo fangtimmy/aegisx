@@ -31,13 +31,17 @@ const eventId = "evt-contract"
 const challengeId = "ch-contract"
 const schedulerId = "agent-scheduler-contract"
 const solverId = "agent-solver-contract"
+// Disposable second solver: agents.close lands a TERMINAL aborted status, so
+// it cannot share the fixture that the finish/compact tests need live.
+const solver2Id = "agent-solver2-contract"
 const token = () =>
   crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "")
 const schedulerToken = token()
 const solverToken = token()
 
-function seed(db: Database): void {
-  db.insert(events)
+function seed(database: Database): void {
+  database
+    .insert(events)
     .values({
       id: eventId,
       name: "Contract Event",
@@ -45,7 +49,8 @@ function seed(db: Database): void {
       updatedAt: now,
     })
     .run()
-  db.insert(challenges)
+  database
+    .insert(challenges)
     .values({
       id: challengeId,
       eventId,
@@ -60,8 +65,10 @@ function seed(db: Database): void {
   for (const [id, t, challengeId_, role, name] of [
     [schedulerId, schedulerToken, null, "orchestrator", "Scheduler"],
     [solverId, solverToken, challengeId, "solver", "agent-solver"],
+    [solver2Id, token(), challengeId, "solver", "agent-solver2"],
   ] as const) {
-    db.insert(agents)
+    database
+      .insert(agents)
       .values({
         id,
         token: t,
@@ -83,7 +90,8 @@ function seed(db: Database): void {
       .run()
   }
   // Three renderable entries so agents.read(limit=2) can prove the tail cap.
-  db.insert(sessions)
+  database
+    .insert(sessions)
     .values({
       id: "sess-contract",
       agentId: solverId,
@@ -92,7 +100,8 @@ function seed(db: Database): void {
     })
     .run()
   for (let seq = 1; seq <= 3; seq += 1) {
-    db.insert(sessionEntries)
+    database
+      .insert(sessionEntries)
       .values({
         id: `entry-contract-${seq}`,
         sessionId: "sess-contract",
@@ -130,6 +139,7 @@ const proc = Bun.spawn(
     `--scheduler-id=${schedulerId}`,
     `--solver-token=${solverToken}`,
     `--solver-id=${solverId}`,
+    `--solver2-id=${solver2Id}`,
   ],
   { cwd: repoRoot, stdout: "pipe", stderr: "pipe" }
 )

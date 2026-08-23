@@ -20,6 +20,16 @@ function item(db: Db, id: string) {
   return db.select().from(spawnQueue).where(eq(spawnQueue.id, id)).get()!
 }
 
+/** Poll until cond() holds or the deadline passes (real-timer waits for the
+ * drainer's debounced passes). */
+async function waitFor(cond: () => boolean, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("waitFor timed out")
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
+
 /** QueueService with a stubbed launch (records calls, controls outcome).
  * Each launch seeds the agent row the drainer's markRunning references. */
 function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
@@ -206,7 +216,7 @@ describe("queue CRUD", () => {
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
-      const item = svc.enqueue({
+      const enqueued = svc.enqueue({
         eventId: "evt-1",
         challengeId: "ch-a",
         source: "scheduler",
@@ -215,14 +225,14 @@ describe("queue CRUD", () => {
         promptMode: "override",
         timeoutMs: 3_600_000,
       })
-      expect(item.prompt).toBe("spawn strategy text")
-      expect(item.params).toEqual({
+      expect(enqueued.prompt).toBe("spawn strategy text")
+      expect(enqueued.params).toEqual({
         prompt: "spawn strategy text",
         model: "aegisx-prov-1/gpt-4o-mini",
         promptMode: "override",
       })
-      expect(item.timeoutMs).toBe(3_600_000)
-      expect(item.agentId).toBeNull()
+      expect(enqueued.timeoutMs).toBe(3_600_000)
+      expect(enqueued.agentId).toBeNull()
     } finally {
       close()
     }
@@ -575,6 +585,33 @@ describe("queue drainer", () => {
       expect(item(db, b.id).status).toBe("pending")
       // Nothing pending on ch-a → second cancel is a no-op.
       expect(svc.cancelPendingForChallenge("evt-1", "ch-a")).toBe(0)
+    } finally {
+      close()
+    }
+  })
+
+  test("a trigger arriving mid-pass opens a fresh debounced pass (trailing enqueue not lost)", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      // Stall pass 1 inside launch until released.
+      let release!: () => void
+      const gate = new Promise<void>((r) => (release = r))
+      let n = 0
+      const { svc, launches } = makeQueue(db, async () => {
+        if (++n === 1) await gate
+        return `run-${n}`
+      })
+      const a = enqueue(svc, "evt-1", "ch-a", 1)
+      await waitFor(() => launches.length === 1) // pass 1 blocked in launch
+      const b = enqueue(svc, "evt-1", "ch-b", 2) // trailing trigger mid-pass
+      release()
+      await waitFor(() => item(db, b.id).status === "running")
+      expect(launches).toEqual([a.id, b.id])
+      expect(item(db, a.id).agentId).toBe("run-1")
+      expect(item(db, b.id).agentId).toBe("run-2")
     } finally {
       close()
     }

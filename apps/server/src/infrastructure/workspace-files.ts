@@ -107,7 +107,7 @@ export function readWorkspacePath(
             if (child) closeSync(child.descriptor)
           }
         })
-        .sort((left, right) =>
+        .toSorted((left, right) =>
           left.type === right.type
             ? left.name.localeCompare(right.name)
             : left.type === "directory"

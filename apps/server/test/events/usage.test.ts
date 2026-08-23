@@ -8,6 +8,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite"
 
 import { createApp } from "../../src/app"
 import { agents, sessionEntries } from "../../src/db/schema"
+import { responseJson } from "../../src/lib/guards"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -102,9 +103,9 @@ function seedEntry(
 describe("event usage API (session_entries.agentId aggregation)", () => {
   test("GET aggregates usage across every agent of the event (scheduler included)", async () => {
     const { app, dataDir } = createTestApp()
-    const event = (await (
+    const event = await responseJson<{ id: string }>(
       await app.request("/api/events", json("POST", { name: "Event" }))
-    ).json()) as { id: string }
+    )
     const db = seedDb(dataDir)
     // Two solver agents + the scheduler agent.
     seedAgent(db, event.id, "agent-a")
@@ -116,7 +117,7 @@ describe("event usage API (session_entries.agentId aggregation)", () => {
 
     const response = await app.request(`/api/events/${event.id}/usage`)
     expect(response.status).toBe(200)
-    const { usage } = (await response.json()) as {
+    const { usage } = await responseJson<{
       usage: {
         input: number
         output: number
@@ -127,7 +128,7 @@ describe("event usage API (session_entries.agentId aggregation)", () => {
         cost: number
         turns: number
       }
-    }
+    }>(response)
     expect(usage).toEqual({
       input: 600,
       output: 150,
@@ -142,12 +143,12 @@ describe("event usage API (session_entries.agentId aggregation)", () => {
 
   test("GET scopes to the event (other events' usage does not leak)", async () => {
     const { app, dataDir } = createTestApp()
-    const event = (await (
+    const event = await responseJson<{ id: string }>(
       await app.request("/api/events", json("POST", { name: "Event" }))
-    ).json()) as { id: string }
-    const other = (await (
+    )
+    const other = await responseJson<{ id: string }>(
       await app.request("/api/events", json("POST", { name: "Other" }))
-    ).json()) as { id: string }
+    )
     const db = seedDb(dataDir)
     seedAgent(db, event.id, "agent-a")
     seedAgent(db, other.id, "other-agent")
@@ -155,18 +156,20 @@ describe("event usage API (session_entries.agentId aggregation)", () => {
     seedEntry(db, "other-agent", 2, assistantUsage(1000, 1000, 100))
 
     const response = await app.request(`/api/events/${event.id}/usage`)
-    const { usage } = (await response.json()) as { usage?: { input: number } }
+    const { usage } = await responseJson<{ usage?: { input: number } }>(
+      response
+    )
     expect(usage?.input).toBe(10)
   })
 
   test("GET returns no usage key for an event without agents", async () => {
     const { app } = createTestApp()
-    const event = (await (
+    const event = await responseJson<{ id: string }>(
       await app.request("/api/events", json("POST", { name: "Empty" }))
-    ).json()) as { id: string }
+    )
     const response = await app.request(`/api/events/${event.id}/usage`)
     expect(response.status).toBe(200)
-    const body = (await response.json()) as Record<string, unknown>
+    const body = await responseJson<Record<string, unknown>>(response)
     expect(body.usage).toBeUndefined()
   })
 

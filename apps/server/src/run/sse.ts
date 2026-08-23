@@ -38,7 +38,7 @@ function pumpLiveStream(
 
     try {
       if (!seed((event) => queue.push(event))) return
-      while (!aborted) {
+      for (;;) {
         if (queue.length === 0) {
           await new Promise<void>((resolve) => {
             resolveNext = resolve
@@ -46,16 +46,18 @@ function pumpLiveStream(
           if (aborted) break
         }
         while (queue.length > 0) {
-          const event = queue.shift() as LiveEvent
+          const event = queue.shift()
+          if (!event) break
           await stream.writeSSE({ data: JSON.stringify(event) })
         }
+        if (aborted) break
       }
     } catch {
       // client gone
     } finally {
       unsubscribe()
     }
-  }) as Response
+  })
 }
 
 /**

@@ -52,14 +52,14 @@ function toNum(value: unknown): number {
  * branch-summary usage. */
 export function entryUsageOf(entry: SessionEntry): EntryUsage | undefined {
   if (entry.type === "message") {
-    const message = entry.message as { role?: string; usage?: unknown }
+    const message = entry.message
     if (message.role === "assistant" || message.role === "toolResult") {
-      return message.usage as EntryUsage | undefined
+      return message.usage
     }
     return undefined
   }
   if (entry.type === "compaction" || entry.type === "branch_summary") {
-    return entry.usage as EntryUsage | undefined
+    return entry.usage
   }
   return undefined
 }

@@ -12,18 +12,17 @@ describe("schema bootstrap", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-db-"))
     try {
       const { db, sqlite, releaseLock } = createDatabase(dir)
-      const version = (
-        sqlite.query("PRAGMA user_version").get() as { user_version: number }
-      ).user_version
+      const version = sqlite
+        .query<{ user_version: number }, []>("PRAGMA user_version")
+        .get()!.user_version
       expect(version).toBe(SCHEMA_VERSION)
       const names = new Set(
-        (
-          sqlite
-            .query(
-              `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`
-            )
-            .all() as Array<{ name: string }>
-        ).map((row) => row.name)
+        sqlite
+          .query<{ name: string }, []>(
+            `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`
+          )
+          .all()
+          .map((row) => row.name)
       )
       for (const t of [
         "agents",
@@ -64,11 +63,15 @@ describe("schema bootstrap", () => {
     try {
       const { sqlite, releaseLock } = createDatabase(dir)
       const agentCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(agents)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(agents)`)
+          .all()
+          .map((c) => c.name)
       )
       for (const c of [
         "event_id",
@@ -103,19 +106,27 @@ describe("schema bootstrap", () => {
         expect(agentCols.has(gone)).toBe(false)
       }
 
-      const sessionCols = (
-        sqlite.query(`PRAGMA table_info(sessions)`).all() as Array<{
-          name: string
-        }>
-      ).map((c) => c.name)
+      const sessionCols = sqlite
+        .query<
+          {
+            name: string
+          },
+          []
+        >(`PRAGMA table_info(sessions)`)
+        .all()
+        .map((c) => c.name)
       expect(sessionCols).toEqual(["id", "agent_id", "cwd", "created_at"])
 
       const entryCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(session_entries)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(session_entries)`)
+          .all()
+          .map((c) => c.name)
       )
       // v10 meta + v19 run_id removal.
       expect(entryCols.has("meta")).toBe(true)
@@ -123,60 +134,75 @@ describe("schema bootstrap", () => {
 
       // 0006: queue_state rows + scheduler_config.paused (W2/W3)
       const queueStateCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(queue_state)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(queue_state)`)
+          .all()
+          .map((c) => c.name)
       )
       expect([...queueStateCols]).toEqual(
         expect.arrayContaining(["event_id", "status", "updated_at"])
       )
       const configCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(scheduler_config)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(scheduler_config)`)
+          .all()
+          .map((c) => c.name)
       )
       expect(configCols.has("paused")).toBe(true)
 
       // 0007: challenge_remote is event-scoped — event_id column + unique
       // index (event_id, source_key, remote_id)
       const remoteCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(challenge_remote)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(challenge_remote)`)
+          .all()
+          .map((c) => c.name)
       )
       expect(remoteCols.has("event_id")).toBe(true)
       const uniqueIdx = sqlite
-        .query(
+        .query<{ name: string }, []>(
           `SELECT name FROM pragma_index_list('challenge_remote') WHERE "unique" = 1 AND origin = 'c'`
         )
-        .all() as Array<{ name: string }>
+        .all()
       expect(uniqueIdx.map((i) => i.name)).toEqual([
         "challenge_remote_source_unique",
       ])
-      const idxCols = (
-        sqlite
-          .query(
-            `SELECT name FROM pragma_index_info('challenge_remote_source_unique')`
-          )
-          .all() as Array<{ name: string }>
-      ).map((c) => c.name)
+      const idxCols = sqlite
+        .query<{ name: string }, []>(
+          `SELECT name FROM pragma_index_info('challenge_remote_source_unique')`
+        )
+        .all()
+        .map((c) => c.name)
       expect(idxCols).toEqual(["event_id", "source_key", "remote_id"])
 
       // v18 (0012): derived-key channel shapes — channel_messages carries
       // the derived key (no channel id, no kind); channel_reads is keyed
       // (channel_key, reader_key).
       const msgCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(channel_messages)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(channel_messages)`)
+          .all()
+          .map((c) => c.name)
       )
       expect([...msgCols]).toEqual(
         expect.arrayContaining([
@@ -190,19 +216,22 @@ describe("schema bootstrap", () => {
       )
       expect(msgCols.has("channel_id")).toBe(false)
       expect(msgCols.has("kind")).toBe(false)
-      const msgIdx = (
-        sqlite
-          .query(
-            `SELECT name FROM pragma_index_list('channel_messages') WHERE origin = 'c'`
-          )
-          .all() as Array<{ name: string }>
-      ).map((i) => i.name)
+      const msgIdx = sqlite
+        .query<{ name: string }, []>(
+          `SELECT name FROM pragma_index_list('channel_messages') WHERE origin = 'c'`
+        )
+        .all()
+        .map((i) => i.name)
       expect(msgIdx).toContain("channel_messages_channel_key_idx")
-      const readCols = (
-        sqlite.query(`PRAGMA table_info(channel_reads)`).all() as Array<{
-          name: string
-        }>
-      ).map((c) => c.name)
+      const readCols = sqlite
+        .query<
+          {
+            name: string
+          },
+          []
+        >(`PRAGMA table_info(channel_reads)`)
+        .all()
+        .map((c) => c.name)
       expect(readCols).toEqual([
         "channel_key",
         "reader_key",
@@ -213,11 +242,15 @@ describe("schema bootstrap", () => {
       // v19 (0013): spawn_queue — agent back-fill + append semantics (no
       // challenge unique constraint).
       const queueCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(spawn_queue)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(spawn_queue)`)
+          .all()
+          .map((c) => c.name)
       )
       expect([...queueCols]).toEqual(
         expect.arrayContaining([
@@ -232,19 +265,23 @@ describe("schema bootstrap", () => {
         ])
       )
       const queueUnique = sqlite
-        .query(
+        .query<{ name: string }, []>(
           `SELECT name FROM pragma_index_list('spawn_queue') WHERE "unique" = 1 AND origin = 'c'`
         )
-        .all() as Array<{ name: string }>
+        .all()
       expect(queueUnique).toEqual([])
 
       // v19: challenge_flags anchors agent_id (text, no FK).
       const flagCols = new Set(
-        (
-          sqlite.query(`PRAGMA table_info(challenge_flags)`).all() as Array<{
-            name: string
-          }>
-        ).map((c) => c.name)
+        sqlite
+          .query<
+            {
+              name: string
+            },
+            []
+          >(`PRAGMA table_info(challenge_flags)`)
+          .all()
+          .map((c) => c.name)
       )
       expect(flagCols.has("agent_id")).toBe(true)
       expect(flagCols.has("run_id")).toBe(false)
@@ -339,8 +376,10 @@ describe("createDatabase classification", () => {
       // The snapshot was restored: the sentinel row survives.
       const check = new Database(join(dir, "aegisx.sqlite"))
       const rows = check
-        .query(`SELECT count(*) AS n FROM events WHERE id = 'sentinel'`)
-        .get() as { n: number }
+        .query<{ n: number }, []>(
+          `SELECT count(*) AS n FROM events WHERE id = 'sentinel'`
+        )
+        .get()!
       check.close()
       expect(rows.n).toBe(1)
     } finally {

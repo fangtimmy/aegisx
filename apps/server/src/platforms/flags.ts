@@ -51,8 +51,8 @@ function toPublic(row: typeof challengeFlags.$inferSelect): ChallengeFlag {
     id: row.id,
     challengeId: row.challengeId,
     flag: row.flag,
-    status: row.status as ChallengeFlag["status"],
-    source: row.source as ChallengeFlag["source"],
+    status: row.status,
+    source: row.source,
     agentId: row.agentId,
     remoteId: row.remoteId,
     message: row.message,
@@ -308,6 +308,9 @@ export function createPlatformFlags(
     }
 
     // Platform challenge with remote verification.
+    // Undefined only if the binding vanished mid-request; the try/catch below
+    // owns that failure path.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
     const adapter = adapterForEvent(challenge.eventId) as CtfPlatformAdapter
     const persist = (
       result: SubmissionResult,

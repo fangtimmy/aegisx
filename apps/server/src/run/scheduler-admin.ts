@@ -209,7 +209,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       const live = liveByChallenge.get(row.id)
       const pending = pendingByChallenge.get(row.id) ?? 0
       if (!live && pending === 0) return []
-      const manual = row.manualSolveState as "solved" | "partial" | "unsolved"
+      const manual = row.manualSolveState
       const solvedLabel =
         manual !== "unsolved"
           ? manual === "solved"

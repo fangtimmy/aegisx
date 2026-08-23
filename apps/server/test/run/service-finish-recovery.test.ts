@@ -15,6 +15,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 /** A service wired against a stub container/host (sessions hang so a reopened
  * agent stays deterministically `running`). */
@@ -25,14 +26,14 @@ function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(async () =>

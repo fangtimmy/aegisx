@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import { createBashTool } from "../../src/run/bash-tool"
 import type { ContainerManager } from "../../src/run/container/container-manager"
+import { refine } from "../support"
 
 /** Minimal ContainerManager stub: drives onData with canned output, then
  * resolves the configured exit/timedOut state. */
@@ -20,7 +21,7 @@ function mockManager(opts: {
       aborted: false,
     }
   }
-  return { exec } as unknown as ContainerManager
+  return refine<ContainerManager>({ exec })
 }
 
 const invoke = async (
@@ -33,7 +34,7 @@ const invoke = async (
     { command },
     signal,
     undefined,
-    undefined as never
+    refine(undefined)
   )
 }
 
@@ -75,7 +76,7 @@ describe("createBashTool result details", () => {
       { command: "sleep 1" },
       controller.signal,
       undefined,
-      undefined as never
+      refine(undefined)
     )
     expect(result.details).toMatchObject({ terminal: "cancelled" })
   })

@@ -104,7 +104,7 @@ export function createPlatformService(
     const platform = storedPlatform(eventId)
     return platform
       ? {
-          type: platform.type as PlatformType,
+          type: platform.type,
           baseUrl: platform.baseUrl,
           credential: platform.credential,
           remoteEventId: platform.remoteEventId,
@@ -158,7 +158,7 @@ export function createPlatformService(
     const { sourceKey: _, ...value } = platform
     return {
       ...value,
-      type: platform.type as EventPlatform["type"],
+      type: platform.type,
       credentialConfigured: Boolean(platform.credential),
     }
   }

@@ -1,9 +1,9 @@
-import type { SpawnQueueParams } from "@aegisx/shared/queue"
-import type { QueueItemPublic } from "@aegisx/shared/queue"
+import type { QueueItemPublic, SpawnQueueParams } from "@aegisx/shared/queue"
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, queueState, spawnQueue } from "../db/schema"
+import { isRecord, parseJson } from "../lib/guards"
 import { RunActionError } from "./errors"
 import { checkSpawnFence } from "./fence"
 
@@ -91,14 +91,11 @@ function toPublic(db: Database, row: QueueRow): QueueItemPublic {
     ord: row.ord,
     challengeId: row.challengeId,
     challengeName: challenge?.name ?? "",
-    params: parseSpawnQueueParams(row.params) as Record<
-      string,
-      unknown
-    > as SpawnQueueParams,
+    params: parseSpawnQueueParams(row.params),
     timeoutMs: row.timeoutMs,
     prompt: row.prompt,
-    source: row.source as QueueItemPublic["source"],
-    status: row.status as QueueItemPublic["status"],
+    source: row.source,
+    status: row.status,
     agentId: row.agentId,
     error: row.error,
     createdAt: row.createdAt,
@@ -108,16 +105,20 @@ function toPublic(db: Database, row: QueueRow): QueueItemPublic {
 
 function safeParseObject(raw: string): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {}
+    const parsed = parseJson<unknown>(raw)
+    return isRecord(parsed) ? parsed : {}
   } catch {
     return {}
   }
 }
 
 const now = () => new Date().toISOString()
+
+/** Notice line for a state flip; `manual` marks a user-driven flip so the
+ * scheduler can tell its own actions from user intervention. */
+function stateNotice(action: string, source: "manual" | "scheduler"): string {
+  return source === "manual" ? `队列已${action}（用户手动）` : `队列已${action}`
+}
 
 export function createQueueService(deps: QueueServiceDeps) {
   const { db } = deps
@@ -423,10 +424,17 @@ export function createQueueService(deps: QueueServiceDeps) {
 
   let drainTimer: ReturnType<typeof setTimeout> | null = null
   let draining = false
+  let drainRequested = false
 
   /** Debounced drain: collapses a burst of triggers (enqueue / agent
-   * terminal / boot) into one pass. */
+   * terminal / boot) into one pass. A trigger arriving mid-pass only sets
+   * {@link drainRequested}; the running pass re-arms the debounce when it
+   * finishes so the trigger is not lost. */
   function scheduleDrain(): void {
+    if (draining) {
+      drainRequested = true
+      return
+    }
     if (drainTimer) return
     drainTimer = setTimeout(() => {
       drainTimer = null
@@ -444,8 +452,9 @@ export function createQueueService(deps: QueueServiceDeps) {
    *    reject leave it pending; on other errors mark failed + notify.
    *  - global_capacity → stop the pass (no later item can launch either).
    *  - target_slots → skip (a different challenge may still launch).
-   * Single-flight: a pass already in progress ignores new triggers (the
-   * trailing trigger schedules a fresh debounced pass).
+   * Single-flight: a trigger arriving mid-pass is recorded via
+   * scheduleDrain → drainRequested; the finished pass re-arms the debounce
+   * so the trailing trigger opens a fresh pass instead of being dropped.
    */
   async function drainOnce(): Promise<void> {
     if (draining || deps.isDisposed()) return
@@ -479,12 +488,16 @@ export function createQueueService(deps: QueueServiceDeps) {
       }
     } finally {
       draining = false
+      const rerun = drainRequested
+      drainRequested = false
+      if (rerun && !deps.isDisposed()) scheduleDrain()
     }
   }
 
   /** Cancel any pending debounced drain (called from the service close so a
    * draining timer does not fire against a disposed service/db). */
   function cancelDrain(): void {
+    drainRequested = false
     if (drainTimer) {
       clearTimeout(drainTimer)
       drainTimer = null
@@ -514,14 +527,6 @@ export function createQueueService(deps: QueueServiceDeps) {
         set: { status, updatedAt: ts },
       })
       .run()
-  }
-
-  /** Notice line for a state flip; `manual` marks a user-driven flip so the
-   * scheduler can tell its own actions from user intervention. */
-  function stateNotice(action: string, source: "manual" | "scheduler"): string {
-    return source === "manual"
-      ? `队列已${action}（用户手动）`
-      : `队列已${action}`
   }
 
   function pause(
@@ -565,8 +570,5 @@ export function createQueueService(deps: QueueServiceDeps) {
 export type QueueService = ReturnType<typeof createQueueService>
 
 function isCapacity(error: unknown): boolean {
-  return (
-    error instanceof RunActionError &&
-    (error as RunActionError).code === "capacity"
-  )
+  return error instanceof RunActionError && error.code === "capacity"
 }

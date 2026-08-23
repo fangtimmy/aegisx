@@ -142,7 +142,14 @@ async function finalizeTail(
       overflowDirAbs,
       id,
       all
-    ).catch(() => undefined)
+    ).catch((error) => {
+      console.warn("Overflow output write failed", {
+        containerName,
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return undefined
+    })
   }
 
   return {

@@ -10,4 +10,5 @@ export const validateJson = <T extends Parameters<typeof tbValidator>[1]>(
         400
       )
     }
+    return undefined
   })

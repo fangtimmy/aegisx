@@ -14,6 +14,8 @@ import { join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
+import { parseJson } from "../lib/guards"
+
 /**
  * The historical chain (v16 → v17 → v18) through the real migrator.
  * Migration 0011 merges v16's per-run team/announce channels into
@@ -32,9 +34,9 @@ function buildV16Database(dir: string) {
   sqlite.run("PRAGMA journal_mode = WAL")
   const folder = join(dir, "mig-v16")
   mkdirSync(join(folder, "meta"), { recursive: true })
-  const journal = JSON.parse(
+  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
     readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  ) as { entries: Array<{ tag: string }> }
+  )
   journal.entries = journal.entries.slice(0, 11) // 0000–0010 = v16
   writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
   for (const entry of journal.entries) {
@@ -52,9 +54,9 @@ function buildV16Database(dir: string) {
  * with 0011+0012 and re-run the migrator (same path the runtime takes). */
 function upgradeToV18(dir: string, sqlite: Database) {
   const folder = join(dir, "mig-v16")
-  const journal = JSON.parse(
+  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
     readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  ) as { entries: Array<{ tag: string }> }
+  )
   journal.entries = journal.entries.slice(0, 13) // 0000–0012 = v18
   writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
   for (const entry of journal.entries.slice(11)) {
@@ -189,11 +191,12 @@ describe("migration 0011+0012 — v16 run-scope channels map onto v18 derived ke
       {
         // The channels directory table is gone (v18 end state).
         const tables = new Set(
-          (
-            sqlite
-              .query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
-              .all() as Array<{ name: string }>
-          ).map((row) => row.name)
+          sqlite
+            .query<{ name: string }, []>(
+              `SELECT name FROM sqlite_master WHERE type = 'table'`
+            )
+            .all()
+            .map((row) => row.name)
         )
         expect(tables.has("channels")).toBe(false)
 
@@ -201,8 +204,10 @@ describe("migration 0011+0012 — v16 run-scope channels map onto v18 derived ke
         // the announce rows fold into the same team:ch-1, all in global id
         // order. The scheduler DM became orch:<eventId>.
         const msgs = sqlite
-          .query(`SELECT * FROM channel_messages ORDER BY id`)
-          .all() as Array<Record<string, unknown>>
+          .query<Record<string, unknown>, []>(
+            `SELECT * FROM channel_messages ORDER BY id`
+          )
+          .all()
         expect(msgs.map((m) => [m.id, m.channel_key])).toEqual([
           [1, "team:ch-1"],
           [2, "team:ch-1"],
@@ -233,8 +238,10 @@ describe("migration 0011+0012 — v16 run-scope channels map onto v18 derived ke
         // Read cursors: re-keyed onto derived keys; a2's two merged cursors
         // collapsed to MAX across the whole composed chain.
         const reads = sqlite
-          .query(`SELECT * FROM channel_reads ORDER BY reader_key, channel_key`)
-          .all() as Array<Record<string, unknown>>
+          .query<Record<string, unknown>, []>(
+            `SELECT * FROM channel_reads ORDER BY reader_key, channel_key`
+          )
+          .all()
         expect(reads).toEqual([
           {
             channel_key: "dm:a1",
@@ -258,30 +265,33 @@ describe("migration 0011+0012 — v16 run-scope channels map onto v18 derived ke
 
         // Files: rows survive with the channel_id column gone.
         const files = sqlite
-          .query(`SELECT * FROM channel_files ORDER BY id`)
-          .all() as Array<Record<string, unknown>>
+          .query<Record<string, unknown>, []>(
+            `SELECT * FROM channel_files ORDER BY id`
+          )
+          .all()
         expect(files.map((f) => [f.id, f.message_id])).toEqual([
           ["f1", 4],
           ["f2", 8],
         ])
-        expect("channel_id" in files[0]!).toBe(false)
+        expect("channel_id" in files[0]).toBe(false)
 
         // Integrity: FK graph clean, and the AUTOINCREMENT sequence survived
         // both table recreations (the next message id stays monotonic).
-        expect(
-          (sqlite.query(`PRAGMA foreign_key_check`).all() as unknown[]).length
-        ).toBe(0)
+        expect(sqlite.query(`PRAGMA foreign_key_check`).all().length).toBe(0)
         sqlite.run(
           `INSERT INTO channel_messages (channel_key, author_type, author_agent_id, author_name, body, meta, created_at)
            VALUES ('team:ch-1', 'system', NULL, 'system', 'post-migration', '{}', ?)`,
           [ts]
         )
         expect(
-          (
-            sqlite.query(`SELECT max(id) AS n FROM channel_messages`).get() as {
-              n: number
-            }
-          ).n
+          sqlite
+            .query<
+              {
+                n: number
+              },
+              []
+            >(`SELECT max(id) AS n FROM channel_messages`)
+            .get()!.n
         ).toBe(12)
       }
       sqlite.close()

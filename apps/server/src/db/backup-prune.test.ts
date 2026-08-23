@@ -19,7 +19,7 @@ describe("migration backup pruning", () => {
         writeFileSync(join(dir, `aegisx.sqlite.bak-${stamp}`), "")
       }
       pruneBackups(dir)
-      const remaining = readdirSync(dir).sort()
+      const remaining = readdirSync(dir).toSorted()
       expect(remaining).toEqual([
         "aegisx.sqlite.bak-2026-08-16T00-00-00-000Z",
         "aegisx.sqlite.bak-2026-08-17T00-00-00-000Z",
@@ -36,7 +36,7 @@ describe("migration backup pruning", () => {
       writeFileSync(join(dir, "aegisx.sqlite"), "")
       writeFileSync(join(dir, "aegisx.sqlite.bak-2026-08-18T00-00-00-000Z"), "")
       pruneBackups(dir)
-      expect(readdirSync(dir).sort()).toEqual([
+      expect(readdirSync(dir).toSorted()).toEqual([
         "aegisx.sqlite",
         "aegisx.sqlite.bak-2026-08-18T00-00-00-000Z",
       ])

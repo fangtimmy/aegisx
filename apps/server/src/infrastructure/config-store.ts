@@ -21,6 +21,7 @@ import { modelAddress } from "@aegisx/shared"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 
+import { isRecord } from "../lib/guards"
 import { ProviderTypeSchema } from "../lib/schemas"
 import { builtinModelProfile } from "../providers/builtin-models"
 
@@ -174,9 +175,8 @@ function isCurrentDocument(raw: unknown): raw is {
   providers: unknown
   updatedAt?: unknown
 } {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
-  const doc = raw as Record<string, unknown>
-  return doc.version === CONFIG_DOCUMENT_VERSION
+  if (!isRecord(raw)) return false
+  return raw.version === CONFIG_DOCUMENT_VERSION
 }
 
 /** Rewrite a default-model ref that still points at a pre-provenance pi-bound
@@ -187,9 +187,8 @@ function rewriteLegacyModelRefs(
   raw: unknown,
   providers: ProviderData[]
 ): unknown {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw
-  const source = raw as Record<string, unknown>
-  const ref = source["agent.defaultModelRef"]
+  if (!isRecord(raw)) return raw
+  const ref = raw["agent.defaultModelRef"]
   if (typeof ref !== "string" || !ref) return raw
   for (const provider of providers) {
     for (const model of provider.models) {
@@ -198,7 +197,7 @@ function rewriteLegacyModelRefs(
       const legacy = origin.slice(3)
       if (ref === legacy || ref.startsWith(`${legacy}:`)) {
         return {
-          ...source,
+          ...raw,
           "agent.defaultModelRef": `${modelAddress(provider, model)}${ref.slice(legacy.length)}`,
         }
       }
@@ -236,14 +235,13 @@ export function createConfigStore(dataDir: string) {
       return defaults
     }
     try {
-      const raw = JSON.parse(readFileSync(path, "utf8")) as unknown
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      const doc: unknown = JSON.parse(readFileSync(path, "utf8"))
+      if (!isRecord(doc)) {
         throw new Error("invalid config root")
       }
-      const doc = raw as Record<string, unknown>
 
       // Current flat document
-      if (isCurrentDocument(raw)) {
+      if (isCurrentDocument(doc)) {
         const providers = normalizeProviders(doc.providers)
         return {
           version: CONFIG_DOCUMENT_VERSION,

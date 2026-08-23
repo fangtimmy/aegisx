@@ -30,6 +30,28 @@ export type AgentStatusDeps = {
 
 export type AgentStatus = ReturnType<typeof createAgentStatus>
 
+/** Event display line (the orch message body): the agent's challenge name
+ * + the agent label + a human verb — the machine shape lives in meta. */
+function eventName(p: EventScopePayload, tag: string): string {
+  switch (p.type) {
+    case "agent.started":
+      return `${tag}已启动${p.source === "manual" ? "（手动）" : ""}`
+    case "agent.idle":
+      return `${tag}已空闲${p.failed ? "（失败）" : ""}`
+    case "agent.flagAccepted":
+      return `${tag}flag 已接受`
+    case "agent.finished":
+      return `${tag}已完成${p.actor === "scheduler" ? "（调度者）" : ""}`
+    case "agent.timedOut":
+      return p.outcome === "aborted"
+        ? `${tag}超时（已强制终止）`
+        : `${tag}超时（已中止，agent 空闲）`
+    case "agent.reopened":
+    default:
+      return `${tag}已重开`
+  }
+}
+
 /**
  * Agent status writes + live emits + the orch event feed (v19: per-agent).
  * Turn start/settle maintain the agent row; settle consumes a pending
@@ -43,27 +65,6 @@ export function createAgentStatus(deps: AgentStatusDeps) {
   function emitAgent(agentId: string) {
     const agent = queries.getAgent(agentId)
     if (agent) bus.emit(agentId, { type: "agent.updated", agent })
-  }
-
-  /** Event display line (the orch message body): the agent's challenge name
-   * + the agent label + a human verb — the machine shape lives in meta. */
-  function eventName(p: EventScopePayload, tag: string): string {
-    switch (p.type) {
-      case "agent.started":
-        return `${tag}已启动${p.source === "manual" ? "（手动）" : ""}`
-      case "agent.idle":
-        return `${tag}已空闲${p.failed ? "（失败）" : ""}`
-      case "agent.flagAccepted":
-        return `${tag}flag 已接受`
-      case "agent.finished":
-        return `${tag}已完成${p.actor === "scheduler" ? "（调度者）" : ""}`
-      case "agent.timedOut":
-        return p.outcome === "aborted"
-          ? `${tag}超时（已强制终止）`
-          : `${tag}超时（已中止，agent 空闲）`
-      case "agent.reopened":
-        return `${tag}已重开`
-    }
   }
 
   /** Dispatch an agent lifecycle event as an orch system message. Only
@@ -82,7 +83,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       .get()?.name
     const agentTag = `agent-${agentId.slice(0, 8)}`
     const tag = challengeName ? `「${challengeName}」${agentTag}` : agentTag
-    const source = row.source as "manual" | "scheduler"
+    const source = row.source
     channels.post({
       channelKey: orchKey(row.eventId),
       author: { type: "system" },

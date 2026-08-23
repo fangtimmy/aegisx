@@ -468,11 +468,11 @@ export function createAgentService(options: AgentServiceOptions) {
         )
       )
       .all()
-    let closed = 0
+    let closedCount = 0
     for (const row of live) {
       await closeAgent(row.id)
         .then(() => {
-          closed += 1
+          closedCount += 1
         })
         .catch(() => undefined)
     }
@@ -485,7 +485,7 @@ export function createAgentService(options: AgentServiceOptions) {
         .catch(() => undefined)
     }
     const parts: string[] = []
-    if (closed > 0) parts.push(`已关闭 ${closed} 个 agent`)
+    if (closedCount > 0) parts.push(`已关闭 ${closedCount} 个 agent`)
     if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
     if (parts.length > 0) {
       postOrchNotice(
@@ -493,7 +493,7 @@ export function createAgentService(options: AgentServiceOptions) {
         `「${challenge.name}」已被操作员手动停止：${parts.join("；")}`
       )
     }
-    return { closed, cancelled }
+    return { closed: closedCount, cancelled }
   }
 
   /** Per-agent message — a DIRECT lifecycle.send (no channel row, no double
@@ -1153,7 +1153,7 @@ export function createAgentService(options: AgentServiceOptions) {
         prompt: params.prompt ?? (item.prompt || undefined),
         promptMode: params.promptMode,
         timeoutMs: item.timeoutMs ?? undefined,
-        source: item.source as "manual" | "scheduler",
+        source: item.source,
         queueItemId: item.id,
       })
     },
@@ -1260,7 +1260,7 @@ export function createAgentService(options: AgentServiceOptions) {
     pauseScheduler,
     resumeScheduler,
     closeScheduler,
-    queue: () => queue!,
+    queue: () => queue,
     refresh: queries.getAgent,
     recoverOnBoot: factory.recoverOnBoot,
     close,

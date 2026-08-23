@@ -11,6 +11,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { createApp } from "../../src/app"
+import { responseJson } from "../../src/lib/guards"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -37,7 +38,7 @@ async function createEvent(app: ReturnType<typeof createApp>["app"]) {
     json("POST", { name: "Ev" })
   )
   expect(response.status).toBe(201)
-  return (await response.json()) as { id: string }
+  return await responseJson<{ id: string }>(response)
 }
 
 async function createChallenge(
@@ -50,7 +51,7 @@ async function createChallenge(
     json("POST", { name, description: "d" })
   )
   expect(response.status).toBe(201)
-  return (await response.json()) as { id: string }
+  return await responseJson<{ id: string }>(response)
 }
 
 /** Insert an agent row directly (the live spawn path needs a model provider;
@@ -126,7 +127,7 @@ function countRows(dataDir: string, sql: string): number {
   const sqlite = new Database(join(dataDir, "aegisx.sqlite"), {
     readonly: true,
   })
-  const count = (sqlite.query(sql).get() as { count: number }).count
+  const count = sqlite.query<{ count: number }, []>(sql).get()!.count
   sqlite.close()
   return count
 }
@@ -144,7 +145,7 @@ describe("DELETE /api/events/:eventId/challenges — bulk challenge purge", () =
     expect(response.status).toBe(409)
     const detail = await app.request(`/api/events/${event.id}`)
     expect(
-      ((await detail.json()) as { challenges: unknown[] }).challenges
+      (await responseJson<{ challenges: unknown[] }>(detail)).challenges
     ).toHaveLength(1)
   })
 

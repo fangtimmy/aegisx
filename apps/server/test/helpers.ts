@@ -19,6 +19,7 @@ import type {
 } from "../src/infrastructure/config-store"
 import { builtinModelProfile } from "../src/providers/builtin-models"
 import type { ContainerManager } from "../src/run/container/container-manager"
+import { refine } from "./support"
 
 /** Fresh on-disk SQLite on a temp dir. FKs left on (tests seed real graphs). */
 export function setupDb(): {
@@ -149,10 +150,10 @@ export function makeModel(
 
 /** ConfigStore stub exposing only what the services read (getProviders). */
 export function stubConfigStore(providers: ProviderData[]): ConfigStore {
-  return {
+  return refine<ConfigStore>({
     getProviders: () => providers,
     getLegacyPromptTemplates: () => undefined,
-  } as unknown as ConfigStore
+  })
 }
 
 export const flatSettings = () => defaultSettings()
@@ -175,7 +176,7 @@ export function stubContainerManager() {
   const created: unknown[] = []
   const killed: string[] = []
   const removed: string[] = []
-  const manager = {
+  const stub = {
     create: async (opts: unknown) => {
       created.push(opts)
       return { id: "container-id" }
@@ -191,7 +192,8 @@ export function stubContainerManager() {
     capture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     putArchive: async () => {},
     get: () => ({}),
-  } as unknown as ContainerManager
+  }
+  const manager = refine<ContainerManager>(stub)
   return { manager, created, killed, removed }
 }
 
@@ -214,10 +216,10 @@ export function stubHostAgentSession(
     followUp: async () => {},
     clearQueue: () => {},
   }
-  return {
-    session: session as never,
+  return refine<HostAgentSession>({
+    session,
     sessionId,
     pipeline: { attach: () => () => {}, detach: () => {} },
     dispose: async () => {},
-  } as unknown as HostAgentSession
+  })
 }

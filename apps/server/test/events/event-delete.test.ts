@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { createApp } from "../../src/app"
+import { responseJson } from "../../src/lib/guards"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -31,7 +32,7 @@ async function createEvent(app: ReturnType<typeof createApp>["app"]) {
     json("POST", { name: "Ev" })
   )
   expect(response.status).toBe(201)
-  return (await response.json()) as { id: string }
+  return await responseJson<{ id: string }>(response)
 }
 
 /** Insert an agent row directly (the scheduler start path requires a live

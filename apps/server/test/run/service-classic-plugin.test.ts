@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents, challengeRemote, challenges } from "../../src/db/schema"
+import { parseJson } from "../../src/lib/guards"
 import { createAgentService } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
@@ -14,6 +15,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 /** Seed a challenge_remote row marking the challenge platform-integrated and
  * target-capable (drives isPlatformIntegrated / isTargetCapable). */
@@ -57,14 +59,14 @@ function makeService(
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(async () =>
@@ -91,7 +93,7 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
         .get()!
       await service.close()
 
-      const tools = JSON.parse(agent.tools) as string[]
+      const tools = parseJson<string[]>(agent.tools)
       expect(tools).toEqual(
         expect.arrayContaining([
           "finish_run",
@@ -127,7 +129,7 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
         .get()!
       await service.close()
 
-      const tools = JSON.parse(agent.tools) as string[]
+      const tools = parseJson<string[]>(agent.tools)
       expect(tools).toContain("finish_run")
       expect(tools).toContain("submit_flag")
       expect(tools).not.toContain("spawn_agent")
@@ -155,7 +157,7 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
 
       const all = db.select().from(agents).all()
       expect(all).toHaveLength(1)
-      expect(all[0]!.role).toBe("solver")
+      expect(all[0].role).toBe("solver")
     } finally {
       close()
     }

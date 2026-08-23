@@ -178,5 +178,5 @@ export function chainLock<T>(
   locks.set(key, next)
   return next.finally(() => {
     if (locks.get(key) === next) locks.delete(key)
-  }) as Promise<T>
+  })
 }

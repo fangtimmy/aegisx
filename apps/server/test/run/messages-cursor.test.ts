@@ -13,6 +13,7 @@ import {
   stubHostAgentSession,
   now,
 } from "../helpers"
+import { refine } from "../support"
 
 /** A minimal service whose listMessages is the per-agent query under test. */
 function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
@@ -22,14 +23,14 @@ function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
     createHost: mock(async () => stubHostAgentSession()),

@@ -12,6 +12,8 @@ import {
   jsonText,
   nullableNumber,
   nullableString,
+  parseJson,
+  responseJson,
 } from "../lib/guards"
 
 export type { PlatformType, RemoteEvent, RemoteTargetInfo, TargetState }
@@ -121,6 +123,18 @@ export type PlatformRequestError = {
   error: string | null
 }
 
+/**
+ * Flatten any HeadersInit into a plain record. In-repo callers pass plain
+ * objects; the Headers/array forms are handled for completeness instead of
+ * being silently dropped by a spread.
+ */
+function headerRecord(init?: HeadersInit): Record<string, string> {
+  if (!init) return {}
+  if (init instanceof Headers) return Object.fromEntries(init.entries())
+  if (Array.isArray(init)) return Object.fromEntries(init)
+  return init
+}
+
 export class PlatformHttp {
   readonly origin: string
   private readonly baseUrl: string
@@ -144,11 +158,11 @@ export class PlatformHttp {
   async request(path: string, init: RequestInit = {}, authenticated = true) {
     const url = new URL(path, `${this.baseUrl}/`)
     const sameOrigin = url.origin === this.origin
-    const method = String(init.method ?? "GET")
+    const method = init.method ?? "GET"
     const requestHeaders: Record<string, string> = {
       Accept: "application/json",
       ...(authenticated && sameOrigin ? this.headers : {}),
-      ...(init.headers as Record<string, string> | undefined),
+      ...headerRecord(init.headers),
     }
     const requestBody = typeof init.body === "string" ? init.body : null
 
@@ -190,7 +204,7 @@ export class PlatformHttp {
       let code: string | undefined
       if (responseBody) {
         try {
-          const body = JSON.parse(responseBody) as JsonRecord
+          const body = parseJson<JsonRecord>(responseBody)
           const extracted =
             body.message ??
             body.detail ??
@@ -231,7 +245,7 @@ export class PlatformHttp {
       )
     }
     try {
-      return (await response.json()) as T
+      return await responseJson<T>(response)
     } catch {
       throw new PlatformError(
         "Platform returned invalid JSON; check the platform base URL"
@@ -299,9 +313,9 @@ export function targetEndpoint(name: string, address: string) {
 
 export function challengeCategory(value: JsonRecord) {
   const tags = Array.isArray(value.tag) ? value.tag : []
-  const primary = tags.find((tag) => isRecord(tag) && tag.primary === true) as
-    | JsonRecord
-    | undefined
+  const primary = tags.find(
+    (tag): tag is JsonRecord => isRecord(tag) && tag.primary === true
+  )
   return nullableString(primary?.name ?? tags.find(isRecord)?.name)
 }
 

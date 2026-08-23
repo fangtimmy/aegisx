@@ -19,12 +19,31 @@ import {
   challenges,
   events,
 } from "../db/schema"
+import { parseJson } from "../lib/guards"
 import { RemoteTargetInfoSchema } from "../lib/schemas"
 import type { ChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 import { toFlagPublic } from "../run/public"
 
 type PlatformService = ReturnType<typeof createPlatformService>
+
+/** Per-status agent counts for a challenge (the Challenge wire's
+ * agentStatusCounts). Solver agents only (challengeId scope excludes the
+ * scheduler by construction). */
+type AgentStatusSummary = {
+  agentCount: number
+  counts: Partial<Record<AgentStatus, number>>
+}
+
+function agentStatusSummaryOf(
+  rows: Array<{ status: AgentStatus }>
+): AgentStatusSummary {
+  const counts: Partial<Record<AgentStatus, number>> = {}
+  for (const row of rows) {
+    counts[row.status] = (counts[row.status] ?? 0) + 1
+  }
+  return { agentCount: rows.length, counts }
+}
 
 export function createCatalogReader(
   db: Database,
@@ -56,9 +75,9 @@ export function createCatalogReader(
         )
         return {
           ...event,
-          challengeCount: Number(event.challengeCount),
-          solvedCount: Number(event.solvedCount),
-          activeAgentCount: Number(activeAgentCount ?? 0),
+          challengeCount: event.challengeCount,
+          solvedCount: event.solvedCount,
+          activeAgentCount: activeAgentCount ?? 0,
           lastActivityAt,
           platform: platformService.getPublic(event.id),
         }
@@ -98,25 +117,6 @@ export function createCatalogReader(
       .map(toFlagPublic)
   }
 
-  /** Per-status agent counts for a challenge (the Challenge wire's
-   * agentStatusCounts). Solver agents only (challengeId scope excludes the
-   * scheduler by construction). */
-  type AgentStatusSummary = {
-    agentCount: number
-    counts: Partial<Record<AgentStatus, number>>
-  }
-
-  function agentStatusSummaryOf(
-    rows: Array<{ status: string }>
-  ): AgentStatusSummary {
-    const counts: Partial<Record<AgentStatus, number>> = {}
-    for (const row of rows) {
-      counts[row.status as AgentStatus] =
-        (counts[row.status as AgentStatus] ?? 0) + 1
-    }
-    return { agentCount: rows.length, counts }
-  }
-
   const publicChallenge = (
     challenge: typeof challenges.$inferSelect,
     remote: ChallengeRemote | null,
@@ -128,7 +128,7 @@ export function createCatalogReader(
     const hasAcceptedFlag = flags.some((flag) => flag.status === "accepted")
     const solved: ChallengeSolved = {
       local: hasAcceptedFlag ? "solved" : "unsolved",
-      manual: challenge.manualSolveState as ChallengeSolved["manual"],
+      manual: challenge.manualSolveState,
       remote: remote?.solved ? "solved" : "unsolved",
     }
     return {
@@ -210,7 +210,7 @@ export function createCatalogReader(
       values.push(flag)
       flagsByChallenge.set(flag.challengeId, values)
     }
-    const agentsByChallenge = new Map<string, Array<{ status: string }>>()
+    const agentsByChallenge = new Map<string, Array<{ status: AgentStatus }>>()
     for (const agent of agentRows) {
       if (!agent.challengeId) continue
       const values = agentsByChallenge.get(agent.challengeId) ?? []
@@ -234,7 +234,7 @@ export function createCatalogReader(
 function parseTargetInfo(value: string | null | undefined): RemoteTargetInfo[] {
   if (!value) return []
   try {
-    const parsed = JSON.parse(value) as unknown
+    const parsed = parseJson<unknown>(value)
     if (!Array.isArray(parsed)) return []
     return parsed.flatMap((target) => {
       const cleaned = Value.Clean(RemoteTargetInfoSchema, target)

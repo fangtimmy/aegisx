@@ -3,12 +3,13 @@ import { describe, expect, test } from "bun:test"
 import type { LiveEvent } from "@aegisx/shared"
 
 import { createLiveBus } from "../../src/agents/live"
+import { refine } from "../support"
 
 type ToolProgressEvent = Extract<LiveEvent, { type: "tool.progress" }>
 
 /** Narrow a LiveEvent to its tool.progress variant (the bus snapshots these). */
 function asTool(event: LiveEvent): ToolProgressEvent {
-  return event as ToolProgressEvent
+  return refine<ToolProgressEvent>(event)
 }
 
 /** Build a tool.progress event with the fields the bus snapshots on. */
@@ -81,8 +82,9 @@ describe("createLiveBus ephemeral snapshots", () => {
       reason: "threshold",
     })
     expect(
-      (bus.getActivity("a1") as Extract<LiveEvent, { type: "agent.activity" }>)
-        ?.activity
+      refine<Extract<LiveEvent, { type: "agent.activity" }>>(
+        bus.getActivity("a1")
+      )?.activity
     ).toBe("compacting")
     bus.emit("run-1", { type: "agent.activity", agentId: "a1", activity: null })
     expect(bus.getActivity("a1")).toBeUndefined()

@@ -24,6 +24,8 @@ export function newAgentToken(): string {
 
 type Verdict = { ok: true } | { ok: false; reason: string }
 
+const deny = (reason: string): Verdict => ({ ok: false, reason })
+
 function agentEventOf(db: Database, agentId: string): string | null {
   const row = db
     .select({ eventId: agents.eventId })
@@ -58,7 +60,6 @@ function verdict(
   const seg = path.split("?")[0].split("/").filter(Boolean)
   const [, area, id, sub, leaf] = seg
   const isScheduler = p.role === "orchestrator"
-  const deny = (reason: string): Verdict => ({ ok: false, reason })
 
   // Channels face (both roles): visibility and identity are enforced inside
   // the channel service (readForAgent / resolvePostKey use the principal).
@@ -136,8 +137,7 @@ export function agentAuth(db: Database): MiddlewareHandler {
   return async (c, next) => {
     const header = c.req.header("authorization")
     if (!header?.startsWith("Bearer ")) {
-      await next()
-      return
+      return await next()
     }
     const token = header.slice(7).trim()
     const row = token
@@ -163,7 +163,7 @@ export function agentAuth(db: Database): MiddlewareHandler {
       id: row.id,
       eventId: row.eventId,
       challengeId: row.challengeId,
-      role: row.role as AgentPrincipal["role"],
+      role: row.role,
     }
     const decision = verdict(db, c.req.method, c.req.path, principal)
     if (!decision.ok) {
@@ -184,12 +184,18 @@ export function agentAuth(db: Database): MiddlewareHandler {
 type PrincipalEnv = { Variables: { agentPrincipal: AgentPrincipal } }
 
 function setPrincipal(c: Context, principal: AgentPrincipal): void {
+  // Hono's env typing does not flow through `app.use("*", ...)`; the
+  // Variables contract lives in PrincipalEnv below.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   ;(c as unknown as Context<PrincipalEnv>).set("agentPrincipal", principal)
 }
 
 /** The request's agent principal, when the call carries a valid token. */
 export function principalOf(c: Context): AgentPrincipal | undefined {
-  return (
-    c as unknown as Context<{ Variables: { agentPrincipal?: AgentPrincipal } }>
-  ).get("agentPrincipal")
+  // Hono's env typing does not flow through `app.use("*", ...)`.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+  const ctx = c as unknown as Context<{
+    Variables: { agentPrincipal?: AgentPrincipal }
+  }>
+  return ctx.get("agentPrincipal")
 }

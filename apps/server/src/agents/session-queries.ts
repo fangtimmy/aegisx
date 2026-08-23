@@ -10,6 +10,7 @@ import { and, asc, desc, eq, gt, sql, type SQL } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { sessionEntries } from "../db/schema"
+import { parseJson } from "../lib/guards"
 import { type EntryUsageTotals } from "./entry-usage"
 import { entryKeyOf } from "./event-pipeline"
 
@@ -37,7 +38,9 @@ export function readSessionEntries(
   const entries: SessionEntry[] = []
   for (const row of rows) {
     try {
-      entries.push(JSON.parse(row.data) as SessionEntry)
+      // Written by DbSessionManager (typed at commit time); parse only
+      // guards against corrupt/truncated rows.
+      entries.push(parseJson<SessionEntry>(row.data))
     } catch {
       // skip malformed
     }
@@ -226,7 +229,8 @@ export function listRenderableEntries(
   for (const row of rows) {
     let entry: SessionEntry
     try {
-      entry = JSON.parse(row.data) as SessionEntry
+      // Same trust boundary as readSessionEntries above.
+      entry = parseJson<SessionEntry>(row.data)
     } catch {
       continue
     }

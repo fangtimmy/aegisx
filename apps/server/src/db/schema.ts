@@ -1,3 +1,4 @@
+import type { AgentStatus, PlatformType } from "@aegisx/shared"
 import { sql } from "drizzle-orm"
 import {
   check,
@@ -25,7 +26,7 @@ export const eventPlatforms = sqliteTable("event_platforms", {
   eventId: text("event_id")
     .primaryKey()
     .references(() => events.id, { onDelete: "cascade" }),
-  type: text("type").notNull(),
+  type: text("type").$type<PlatformType>().notNull(),
   baseUrl: text("base_url").notNull(),
   credential: text("credential").notNull(),
   remoteEventId: text("remote_event_id").notNull(),
@@ -47,7 +48,11 @@ export const challenges = sqliteTable(
     category: text("category"),
     points: integer("points"),
     /** Manual solve-state override (user-assigned). Drives `solved.manual`. */
-    manualSolveState: text("manual_solve_state").notNull().default("unsolved"),
+    manualSolveState: text("manual_solve_state", {
+      enum: ["unsolved", "partial", "solved"],
+    })
+      .notNull()
+      .default("unsolved"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -141,7 +146,7 @@ export const agents = sqliteTable(
     challengeId: text("challenge_id").references(() => challenges.id, {
       onDelete: "cascade",
     }),
-    role: text("role").notNull(),
+    role: text("role").$type<"solver" | "orchestrator">().notNull(),
     name: text("name"),
     /** Canonical model ref string (`aegisx-<providerId>/<modelId>:<effort>`).
      * Per-agent snapshot — spawn writes it once; cold-restore reuses it
@@ -155,12 +160,15 @@ export const agents = sqliteTable(
      * JSON-Schema parameters), written when the host session is created so the
      * timeline can render real tool schemas incl. the always-on file tools. */
     toolDefinitions: text("tool_definitions"),
-    status: text("status").notNull(),
+    status: text("status").$type<AgentStatus>().notNull(),
     /** DB session id (or legacy jsonl path) for this agent (resume + audit). */
     sessionFile: text("session_file"),
     /** The spawn prompt (strategy input); reused when re-running an attempt. */
     prompt: text("prompt"),
-    source: text("source").notNull().default("manual"),
+    source: text("source")
+      .$type<"manual" | "scheduler">()
+      .notNull()
+      .default("manual"),
     timeoutMs: integer("timeout_ms"),
     deadlineAt: text("deadline_at"),
     /** Timestamp of the last timeout fire (Timeline source; outcome event). */
@@ -299,8 +307,11 @@ export const spawnQueue = sqliteTable(
     timeoutMs: integer("timeout_ms"),
     /** Display copy of params.prompt. */
     prompt: text("prompt").notNull(),
-    source: text("source").notNull(),
-    status: text("status").notNull().default("pending"),
+    source: text("source").$type<"manual" | "scheduler">().notNull(),
+    status: text("status")
+      .$type<"pending" | "running" | "done" | "cancelled" | "failed">()
+      .notNull()
+      .default("pending"),
     /** Back-filled when the drainer spawns the agent. */
     agentId: text("agent_id").references(() => agents.id, {
       onDelete: "cascade",
@@ -342,7 +353,9 @@ export const channelMessages = sqliteTable(
     /** Derived key: "team:<cid>" | "dm:<aid>" | "orch:<eid>". */
     channelKey: text("channel_key").notNull(),
     /** "system" | "user" | "agent". */
-    authorType: text("author_type").notNull(),
+    authorType: text("author_type")
+      .$type<"system" | "user" | "agent">()
+      .notNull(),
     authorAgentId: text("author_agent_id"),
     /** Display-name snapshot ("Solver · agent-a3f1" / "Scheduler" / "system" / "用户"). */
     authorName: text("author_name").notNull(),
@@ -464,10 +477,12 @@ export const challengeFlags = sqliteTable(
     flag: text("flag").notNull(),
     /** pending | accepted | rejected | error (adapter partial/already_solved
      * collapse to accepted — the flag itself was verified). */
-    status: text("status").notNull(),
+    status: text("status")
+      .$type<"pending" | "accepted" | "rejected" | "error">()
+      .notNull(),
     /** agent = submitted by an agent via submit_flag; manual = recorded by
      * the user. */
-    source: text("source").notNull(),
+    source: text("source").$type<"agent" | "manual">().notNull(),
     /** Submitting agent id (text, no FK — history outlives agent rows). */
     agentId: text("agent_id"),
     remoteId: text("remote_id"),

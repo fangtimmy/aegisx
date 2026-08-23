@@ -13,6 +13,7 @@ import { basename, join, resolve } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
+import { isRecord } from "../lib/guards"
 import * as schema from "./schema"
 import { SCHEMA_VERSION } from "./schema"
 
@@ -35,11 +36,15 @@ function acquireDataDirLock(dataDir: string) {
     }
     const pid = Number(existing)
     if (!Number.isInteger(pid) || pid <= 0) {
-      throw new Error("AegisX data directory is already in use")
+      throw new Error("AegisX data directory is already in use", {
+        cause: error,
+      })
     }
     try {
       process.kill(pid, 0)
-      throw new Error("AegisX data directory is already in use")
+      throw new Error("AegisX data directory is already in use", {
+        cause: error,
+      })
     } catch (probeError) {
       if (
         probeError instanceof Error &&
@@ -62,10 +67,10 @@ function acquireDataDirLock(dataDir: string) {
 
 function tableNames(sqlite: SqliteDatabase): Set<string> {
   const rows = sqlite
-    .query(
+    .query<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`
     )
-    .all() as Array<{ name: string }>
+    .all()
   return new Set(rows.map((row) => row.name))
 }
 
@@ -104,12 +109,15 @@ function classifyDatabaseState(
 }
 
 /** Number of migrations the binary knows about, from the drizzle journal. */
-function readJournalMigrationCount(migrationsFolder: string): number {
+function readJournalMigrationCount(folder: string): number {
   try {
-    const journal = JSON.parse(
-      readFileSync(join(migrationsFolder, "meta", "_journal.json"), "utf8")
-    ) as { entries?: unknown[] }
-    return Array.isArray(journal.entries) ? journal.entries.length : 0
+    const journal: unknown = JSON.parse(
+      readFileSync(join(folder, "meta", "_journal.json"), "utf8")
+    )
+    if (isRecord(journal) && Array.isArray(journal.entries)) {
+      return journal.entries.length
+    }
+    return 0
   } catch {
     return 0
   }
@@ -150,7 +158,7 @@ function backupDatabase(
 export function pruneBackups(dataDir: string, keep = 3): void {
   const names = readdirSync(dataDir)
     .filter((name) => name.startsWith("aegisx.sqlite.bak-"))
-    .sort()
+    .toSorted()
   for (const name of names.slice(0, Math.max(0, names.length - keep))) {
     try {
       unlinkSync(join(dataDir, name))
@@ -171,9 +179,9 @@ export function createDatabase(dataDir: string) {
     sqlite.run("PRAGMA journal_mode = WAL")
 
     const tables = tableNames(sqlite)
-    const userVersion = (
-      sqlite.query("PRAGMA user_version").get() as { user_version: number }
-    ).user_version
+    const userVersion = sqlite
+      .query<{ user_version: number }, []>("PRAGMA user_version")
+      .get()!.user_version
     const classification = classifyDatabaseState(
       tables,
       userVersion,
@@ -199,11 +207,11 @@ export function createDatabase(dataDir: string) {
     let backupPath: string | null = null
     if (classification.kind === "recognized") {
       const known = readJournalMigrationCount(migrationsFolder)
-      const applied = (
-        sqlite
-          .query("SELECT count(*) AS n FROM __drizzle_migrations")
-          .get() as { n: number }
-      ).n
+      const applied = sqlite
+        .query<{ n: number }, []>(
+          "SELECT count(*) AS n FROM __drizzle_migrations"
+        )
+        .get()!.n
       backupPath = backupDatabase(
         sqlite,
         dataDir,
@@ -231,7 +239,8 @@ export function createDatabase(dataDir: string) {
       throw new Error(
         `Database migration failed${
           backupPath ? `; restored from ${basename(backupPath)}` : ""
-        }: ${error instanceof Error ? error.message : String(error)}`
+        }: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
       )
     }
     sqlite.run(`PRAGMA user_version = ${SCHEMA_VERSION}`)

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { createApp } from "../../src/app"
+import { responseJson } from "../../src/lib/guards"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -29,14 +30,14 @@ describe("prompt template store API", () => {
     const app = createTestApp()
     const response = await app.request("/api/prompt-templates")
     expect(response.status).toBe(200)
-    const { items } = (await response.json()) as {
+    const { items } = await responseJson<{
       items: Array<{ plugin: string; key: string; body: string }>
-    }
+    }>(response)
     expect(items.length).toBeGreaterThanOrEqual(4)
     const builtinKeys = items
       .filter((item) => item.plugin === "builtin")
       .map((item) => item.key)
-      .sort()
+      .toSorted()
     expect(builtinKeys).toEqual([
       "channelDelivery",
       "initial",
@@ -61,9 +62,9 @@ describe("prompt template store API", () => {
     expect(patch.status).toBe(200)
 
     const response = await app.request("/api/prompt-templates")
-    const { items } = (await response.json()) as {
+    const { items } = await responseJson<{
       items: Array<{ plugin: string; key: string; body: string }>
-    }
+    }>(response)
     const row = items.find(
       (item) => item.plugin === "builtin" && item.key === "mainSystem"
     )
@@ -81,9 +82,9 @@ describe("prompt template store API", () => {
       })
     )
     expect(patch.status).toBe(200)
-    const { items } = (await patch.json()) as {
+    const { items } = await responseJson<{
       items: Array<{ plugin: string; key: string; body: string }>
-    }
+    }>(patch)
     expect(
       items.find(
         (item) => item.plugin === "trio" && item.key === "observerSystem"

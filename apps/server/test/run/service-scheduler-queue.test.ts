@@ -15,6 +15,7 @@ import {
   stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
+import { refine } from "../support"
 
 type Db = ReturnType<typeof setupDb>["db"]
 
@@ -38,14 +39,14 @@ function makeService(
       db,
       dataDir: dir,
       containerManager: manager,
-      platformService: {
+      platformService: refine({
         submitFlag: async () => undefined,
         targetAction: async () => ({
           status: "running",
           endpoints: [],
           expiresAt: null,
         }),
-      } as never,
+      }),
       configStore: stubConfigStore([provider]),
       getSettings: settingsWithModel,
       createHost: mock(async (input: { agentId: string }) =>
@@ -66,14 +67,14 @@ function makeCapturingService(db: Db, dir: string) {
     db,
     dataDir: dir,
     containerManager: manager,
-    platformService: {
+    platformService: refine({
       submitFlag: async () => undefined,
       targetAction: async () => ({
         status: "running",
         endpoints: [],
         expiresAt: null,
       }),
-    } as never,
+    }),
     configStore: stubConfigStore([provider]),
     getSettings: settingsWithModel,
     createHost: mock(async (input: { agentId: string }) => {
@@ -82,9 +83,9 @@ function makeCapturingService(db: Db, dir: string) {
       })
       const list: string[] = []
       promptLog.set(input.agentId, list)
-      const sdk = stub.session as unknown as {
+      const sdk = refine<{
         prompt: (text: string) => Promise<void>
-      }
+      }>(stub.session)
       sdk.prompt = async (text: string) => {
         list.push(text)
       }
@@ -241,7 +242,7 @@ describe("scheduler queue integration (v19)", () => {
         prompt: "go",
       })
       await queue.drainOnce()
-      const agentId = queue.list("evt-1")[0]!.agentId!
+      const agentId = queue.list("evt-1")[0].agentId!
       const before = db
         .select()
         .from(agents)
@@ -352,14 +353,14 @@ describe("scheduler queue integration (v19)", () => {
         db,
         dataDir: dir,
         containerManager: manager,
-        platformService: {
+        platformService: refine({
           submitFlag: async () => undefined,
           targetAction: async () => ({
             status: "running",
             endpoints: [],
             expiresAt: null,
           }),
-        } as never,
+        }),
         configStore: stubConfigStore([provider]),
         getSettings: settingsWithModel,
         createHost: mock(async (input: { agentId: string }) => {
@@ -376,9 +377,9 @@ describe("scheduler queue integration (v19)", () => {
           const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
           const list: string[] = []
           promptLog.set(input.agentId, list)
-          const sdk = stub.session as unknown as {
+          const sdk = refine<{
             prompt: (text: string) => Promise<void>
-          }
+          }>(stub.session)
           sdk.prompt = async (text: string) => {
             list.push(text)
           }
@@ -428,7 +429,7 @@ describe("scheduler queue integration (v19)", () => {
         prompt: "Hit crypto first; try z3.",
       })
       await queue.drainOnce()
-      const agentId = queue.list("evt-1")[0]!.agentId!
+      const agentId = queue.list("evt-1")[0].agentId!
       const prime = promptLog.get(agentId)?.[0] ?? ""
       // The standard blocks are always rendered; the strategy is a section.
       expect(prime).toContain("## Challenge")

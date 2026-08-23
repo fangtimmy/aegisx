@@ -18,6 +18,7 @@ import {
   type StallWatchdog,
 } from "../../src/run/stall-watchdog"
 import { seedChallenge, seedEvent, now } from "../helpers"
+import { refine } from "../support"
 
 type Db = ReturnType<typeof setupLite>["db"]
 
@@ -36,7 +37,7 @@ function makeWatchdog(
     db,
     dataDir: dir,
     bus: createLiveBus(),
-    lifecycle: () => ({ send: async () => {} }) as never,
+    lifecycle: () => refine({ send: async () => {} }),
     now: () => new Date().toISOString(),
     challengeWorkspaceRoot: (eventId, challengeId) =>
       `${dir}/events/${eventId}/challenges/${challengeId}/workspace`,
@@ -101,10 +102,10 @@ describe("stall watchdog (docs/im-simplify-v18.md §五)", () => {
       await wait(50)
       const rows = orchRows(db)
       expect(rows).toHaveLength(1)
-      expect(rows[0]!.body).toContain("停滞")
-      expect(rows[0]!.body).toContain("agent-a1")
-      expect(rows[0]!.body).toContain("已闲置")
-      const meta = JSON.parse(rows[0]!.meta)
+      expect(rows[0].body).toContain("停滞")
+      expect(rows[0].body).toContain("agent-a1")
+      expect(rows[0].body).toContain("已闲置")
+      const meta = JSON.parse(rows[0].meta)
       expect(meta.urgent).toBe(true)
       expect(meta.noticeType).toBe("emergency")
       expect(meta.agentId).toBe("a1")

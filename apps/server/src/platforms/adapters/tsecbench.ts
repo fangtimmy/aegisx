@@ -111,7 +111,7 @@ export class TsecBenchAdapter extends BaseAdapter {
       name: challenge.unique_code,
       category: nullableString(challenge.difficulty),
       points: nullableNumber(challenge.total_score),
-      solved: challenge.is_completed === true,
+      solved: challenge.is_completed,
     }))
   }
 
@@ -126,7 +126,7 @@ export class TsecBenchAdapter extends BaseAdapter {
       description: describeChallenge(challenge),
       category: nullableString(challenge.difficulty),
       points: nullableNumber(challenge.total_score),
-      solved: challenge.is_completed === true,
+      solved: challenge.is_completed,
       targetSupported: true,
       targetCount: 1,
       targets: [{ name: challenge.unique_code, services: [] }],
@@ -139,7 +139,7 @@ export class TsecBenchAdapter extends BaseAdapter {
     if (!challenge) {
       throw new PlatformError("Challenge not found on platform", 404)
     }
-    return challenge.is_completed === true
+    return challenge.is_completed
   }
 
   async submitFlag(

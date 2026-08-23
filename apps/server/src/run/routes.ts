@@ -8,6 +8,7 @@ import { principalOf } from "../infrastructure/agent-auth"
 import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { WorkspaceFileError } from "../infrastructure/workspace-files"
+import { responseJson } from "../lib/guards"
 import { EmptyInputSchema } from "../lib/schemas"
 import { platformActionHttpError } from "../platforms/errors"
 import { runActionError as runError } from "./errors"
@@ -264,6 +265,8 @@ export function registerRunRoutes(
         challengeId,
         c.req.query("path") ?? ""
       )
+      // Bun's File.stream() type differs from the DOM ReadableStream alias.
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion
       return new Response(file.stream as unknown as ReadableStream, {
         headers: {
           "content-type": "application/octet-stream",
@@ -621,6 +624,8 @@ export function registerRunRoutes(
         target.challengeId,
         path
       )
+      // Bun's File.stream() type differs from the DOM ReadableStream alias.
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion
       return new Response(file.stream as unknown as ReadableStream, {
         headers: {
           "content-type": "application/octet-stream",
@@ -677,13 +682,13 @@ export function registerRunRoutes(
           "JSON posts require an agent token (or use multipart)"
         )
       }
-      const input = (await c.req.json()) as {
+      const input = await responseJson<{
         text?: unknown
         tags?: unknown
         urgent?: unknown
         deliverAs?: unknown
         files?: unknown
-      }
+      }>(c.req)
       if (typeof input.text !== "string" || !input.text.trim()) {
         return badRequest(c, "invalid", "text is required")
       }

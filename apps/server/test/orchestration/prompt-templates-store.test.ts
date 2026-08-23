@@ -18,7 +18,7 @@ describe("prompt_templates store (builtin-only)", () => {
     try {
       seedBuiltinTemplates(db)
       const rows = db.select().from(promptTemplates).all()
-      const keys = rows.map((r) => r.key).sort()
+      const keys = rows.map((r) => r.key).toSorted()
       expect(keys).toEqual(
         [
           "channelDelivery",
@@ -27,7 +27,7 @@ describe("prompt_templates store (builtin-only)", () => {
           "orchestratorSystem",
           "schedulerDigest",
           "schedulerInitial",
-        ].sort()
+        ].toSorted()
       )
       for (const row of rows) {
         expect(row.plugin).toBe(BUILTIN_PLUGIN)

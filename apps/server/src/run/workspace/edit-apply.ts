@@ -181,7 +181,7 @@ export function applyExactEdit(
     }
     const applyRanges = replaceAll ? ranges : [first]
     // Apply from end so earlier offsets stay valid.
-    const ordered = [...applyRanges].sort((a, b) => b.start - a.start)
+    const ordered = applyRanges.toSorted((a, b) => b.start - a.start)
     const firstInFile = ordered[ordered.length - 1] ?? first
     matchIndex = firstInFile.start
     matchedOld = content.slice(firstInFile.start, firstInFile.end)
