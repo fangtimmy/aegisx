@@ -435,12 +435,13 @@ describe("queue drainer", () => {
       const stale = enqueue(svc, "evt-1", "ch-solved", 1)
       const open = enqueue(svc, "evt-1", "ch-open", 2)
       await svc.drainOnce()
-      // Silent cancel — no launch, no failure, no emergency line (the
-      // full-solve notice already went out).
+      // Silent cancel — no launch, no failure record. The penultimate-item
+      // cancel still crosses the starved edge (markCancelled feeds
+      // checkStarved like every other pending-consuming path).
       expect(launches).toEqual([open.id])
       expect(item(db, stale.id).status).toBe("cancelled")
       expect(item(db, open.id).status).toBe("running")
-      expect(emergencies).toHaveLength(0)
+      expect(emergencies).toEqual(["evt-1: 队列不足：仅剩 1 项排队"])
     } finally {
       close()
     }
@@ -509,6 +510,23 @@ describe("queue drainer", () => {
       expect(emergencies).toHaveLength(1)
       svc.remove(d.id)
       expect(emergencies).toHaveLength(2)
+    } finally {
+      close()
+    }
+  })
+
+  test("markCancelled crosses the starved edge like remove/markFailed do", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      const { svc, emergencies } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      const a = enqueue(svc, "evt-1", "ch-a", 1)
+      enqueue(svc, "evt-1", "ch-b", 2) // ≥2 pending resets the starved edge
+      svc.markCancelled(a.id) // 2 → 1 crossing fires exactly once
+      expect(emergencies).toEqual(["evt-1: 队列不足：仅剩 1 项排队"])
     } finally {
       close()
     }

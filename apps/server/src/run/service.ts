@@ -387,6 +387,15 @@ export function createAgentService(options: AgentServiceOptions) {
       throw new RunActionError("invalid_state", "Agent is already closed")
     }
     await withLock(agentId, async () => {
+      const current = queries.getAgentRow(agentId)
+      if (
+        current &&
+        (current.status === "completed" ||
+          current.status === "aborted" ||
+          current.status === "failed")
+      ) {
+        throw new RunActionError("invalid_state", "Agent is already closed")
+      }
       const session = lifecycle.get(agentId)
       if (session?.session.isStreaming) {
         await session.session.abort().catch(() => undefined)
@@ -417,7 +426,15 @@ export function createAgentService(options: AgentServiceOptions) {
     if (agent.status === "aborted" || agent.status === "failed") {
       throw new RunActionError("invalid_state", "Agent is already closed")
     }
-    await withLock(agentId, async () => {
+    return withLock(agentId, async () => {
+      const current = queries.getAgentRow(agentId)
+      if (current?.status === "completed") return requireAgent(agentId)
+      if (
+        current &&
+        (current.status === "aborted" || current.status === "failed")
+      ) {
+        throw new RunActionError("invalid_state", "Agent is already closed")
+      }
       const session = lifecycle.get(agentId)
       if (session?.session.isStreaming) {
         await session.session.abort().catch(() => undefined)
@@ -436,8 +453,8 @@ export function createAgentService(options: AgentServiceOptions) {
         actor,
       })
       bus.forget([agentId])
+      return requireAgent(agentId)
     })
-    return requireAgent(agentId)
   }
 
   /** Manual challenge halt: close every live agent + cancel the challenge's
@@ -1028,36 +1045,42 @@ export function createAgentService(options: AgentServiceOptions) {
     eventId: string,
     opts: { reset?: boolean } = {}
   ): Promise<AgentSummary> {
-    const config = schedulerAdmin.getSchedulerConfig(eventId)
-    const existing = schedulerAdmin.getSchedulerAgent(eventId)
-    if (existing && isActiveAgentStatus(existing.status)) {
-      if (config.paused) {
-        await resumeScheduler(eventId)
+    // Per-event start lock: two racing starts would both read "no active
+    // orchestrator" and double-spawn (orchestrators bypass the spawn fence,
+    // which only serializes quick DB ops, not container builds). The
+    // existing/config checks rerun inside the critical section.
+    return chainLock(locks, `start:${eventId}`, async () => {
+      const config = schedulerAdmin.getSchedulerConfig(eventId)
+      const existing = schedulerAdmin.getSchedulerAgent(eventId)
+      if (existing && isActiveAgentStatus(existing.status)) {
+        if (config.paused) {
+          await resumeScheduler(eventId)
+          return requireAgent(existing.id)
+        }
+        throw new RunActionError(
+          "invalid_state",
+          "A scheduler agent is already active for this event"
+        )
+      }
+      if (existing && !opts.reset) {
+        // Reopen keeps memory — wake the orchestrator (onResume → resumeAgent:
+        // container + session rebuilt, session kept).
+        schedulerAdmin.setSchedulerPaused(eventId, false)
+        await sendMessage(existing.id, { text: SCHEDULER_RESUME_MESSAGE })
         return requireAgent(existing.id)
       }
-      throw new RunActionError(
-        "invalid_state",
-        "A scheduler agent is already active for this event"
-      )
-    }
-    if (existing && !opts.reset) {
-      // Reopen keeps memory — wake the orchestrator (onResume → resumeAgent:
-      // container + session rebuilt, session kept).
+      if (existing && opts.reset) {
+        await deleteAgent(existing.id)
+      }
       schedulerAdmin.setSchedulerPaused(eventId, false)
-      await sendMessage(existing.id, { text: SCHEDULER_RESUME_MESSAGE })
-      return requireAgent(existing.id)
-    }
-    if (existing && opts.reset) {
-      await deleteAgent(existing.id)
-    }
-    schedulerAdmin.setSchedulerPaused(eventId, false)
-    const agentId = await factory.spawnAgent({
-      eventId,
-      challengeId: null,
-      role: "orchestrator",
-      source: "manual",
+      const agentId = await factory.spawnAgent({
+        eventId,
+        challengeId: null,
+        role: "orchestrator",
+        source: "manual",
+      })
+      return requireAgent(agentId)
     })
-    return requireAgent(agentId)
   }
 
   /** Disable the scheduler (W3): set paused=1 (the event gate drops its

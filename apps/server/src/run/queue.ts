@@ -379,10 +379,12 @@ export function createQueueService(deps: QueueServiceDeps) {
   /** Cancel one item — stale work (the challenge is solved; the full-solve
    * notice already went out), dropped silently rather than recorded failed. */
   function markCancelled(itemId: string): void {
+    const row = getRow(itemId)
     db.update(spawnQueue)
       .set({ status: "cancelled", updatedAt: now() })
       .where(eq(spawnQueue.id, itemId))
       .run()
+    if (row) checkStarved(row.eventId)
   }
 
   /**
@@ -554,6 +556,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     remove,
     clear,
     cancelPendingForChallenge,
+    markCancelled,
     update,
     reorder,
     markDone,
