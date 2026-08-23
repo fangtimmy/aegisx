@@ -174,10 +174,11 @@ export const agents = sqliteTable(
     /** Timestamp of the last timeout fire (Timeline source; outcome event). */
     lastTimeoutAt: text("last_timeout_at"),
     /** Back-filled when the scheduler drainer spawns this agent; used with
-     * `agentId` to guard the agent→queue done transition. The FK to
-     * spawn_queue exists in the DB but is intentionally omitted from the TS
-     * schema to avoid a circular type inference cycle (TS7022); the reverse
-     * direction (spawn_queue.agent_id → agents) is declared there instead. */
+     * `agentId` to guard the agent→queue done transition. No FK on this
+     * column — the DB schema (0013) and this TS schema both omit it to avoid
+     * a circular type inference cycle (TS7022), so the reference is
+     * maintained at the application layer. The reverse direction
+     * (spawn_queue.agent_id → agents) is declared there instead. */
     queueItemId: text("queue_item_id"),
     error: text("error"),
     /** finish_run's result (written at the terminal completed settle). */

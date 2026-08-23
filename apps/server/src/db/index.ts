@@ -10,10 +10,10 @@ import {
 } from "node:fs"
 import { basename, join, resolve } from "node:path"
 
+import { isRecord } from "@aegisx/shared"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
-import { isRecord } from "../lib/guards"
 import * as schema from "./schema"
 import { SCHEMA_VERSION } from "./schema"
 
@@ -51,6 +51,16 @@ function acquireDataDirLock(dataDir: string) {
         probeError.message.includes("already in use")
       ) {
         throw probeError
+      }
+      if (
+        probeError instanceof Error &&
+        "code" in probeError &&
+        probeError.code === "EPERM"
+      ) {
+        // The pid exists but signals are denied — a live owner.
+        throw new Error("AegisX data directory is already in use", {
+          cause: probeError,
+        })
       }
       unlinkSync(path)
       writeFileSync(path, owner, { encoding: "utf8", flag: "wx" })
@@ -225,8 +235,8 @@ export function createDatabase(dataDir: string) {
     } catch (error) {
       // A failed migration can leave the DB half-applied. Restore the
       // pre-migration snapshot so the next startup retries cleanly.
+      sqlite.close()
       if (backupPath) {
-        sqlite.close()
         copyFileSync(backupPath, dbPath)
         for (const ext of ["-wal", "-shm"]) {
           try {

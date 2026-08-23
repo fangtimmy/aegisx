@@ -39,6 +39,7 @@ export function createStorage(dataDir: string) {
     const reader = body.getReader()
     const hash = createHash("sha256")
     let size = 0
+    const flushThresholdBytes = 1024 * 1024
 
     try {
       while (true) {
@@ -50,7 +51,10 @@ export function createStorage(dataDir: string) {
           throw new StorageLimitError(maxBytes)
         }
         hash.update(value)
-        void writer.write(value)
+        const buffered = writer.write(value)
+        if (typeof buffered === "number" && buffered >= flushThresholdBytes) {
+          await writer.flush()
+        }
       }
       await writer.end()
       renameSync(temporaryPath, finalPath)
