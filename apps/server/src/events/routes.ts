@@ -99,6 +99,9 @@ export function registerEventRoutes(
     /** Remove the orchestrator workspace + every challenge workspace of the
      * event on event deletion. */
     deleteEventWorkspaces(eventId: string): void
+    /** Drop the event's in-memory queue bookkeeping (starved edge memory);
+     * the queue's DB rows cascade away with the event row itself. */
+    cleanupQueueState(eventId: string): void
   }
 ) {
   const { db, storage, platformService, agentManager, catalog } = options
@@ -217,6 +220,7 @@ export function registerEventRoutes(
       // the challenge/agent rows still exist (the enumeration needs them).
       options.cleanupEventChannels(eventId)
       options.deleteEventWorkspaces(eventId)
+      options.cleanupQueueState(eventId)
       db.delete(events).where(eq(events.id, eventId)).run()
     } catch (error) {
       if (trashedPath) storage.restore(trashedPath, path)

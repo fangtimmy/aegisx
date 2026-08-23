@@ -506,6 +506,12 @@ export function createQueueService(deps: QueueServiceDeps) {
     }
   }
 
+  /** Drop per-event in-memory bookkeeping (starved edge memory). The DB rows
+   * cascade away with the event; only this map would linger. */
+  function forget(eventId: string): void {
+    starvedFired.delete(eventId)
+  }
+
   // --- per-event queue state (W2) -----------------------------------------
   // Absent row = `running` (a fresh event's queue drains immediately). pause
   // blocks FUTURE launches only — already-live agents keep going (pause ≠
@@ -564,6 +570,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     scheduleDrain,
     drainOnce,
     cancelDrain,
+    forget,
     pause,
     resume,
     stateOf,

@@ -299,10 +299,15 @@ export function registerRunRoutes(
   })
 
   // Live event stream (EventSource). Ephemeral progress; reconnect re-reads
-  // committed messages via GET .../messages.
-  app.get("/api/agents/:agentId/stream", (c) =>
-    streamAgent(c, agentService, c.req.param("agentId"))
-  )
+  // committed messages via GET .../messages. 404 for a missing agent — a
+  // 200+EOF would leave the browser retrying a dead id forever.
+  app.get("/api/agents/:agentId/stream", (c) => {
+    const agentId = c.req.param("agentId")
+    if (!agentService.getAgent(agentId)) {
+      return notFound(c, "Agent not found")
+    }
+    return streamAgent(c, agentService, agentId)
+  })
 
   app.post(
     "/api/agents/:agentId/message",
@@ -692,8 +697,8 @@ export function registerRunRoutes(
       if (typeof input.text !== "string" || !input.text.trim()) {
         return badRequest(c, "invalid", "text is required")
       }
-      if (input.text.length > 16_000) {
-        return badRequest(c, "invalid", "text exceeds the 16K character cap")
+      if (input.text.length > 20_000) {
+        return badRequest(c, "invalid", "text exceeds the 20K character cap")
       }
       const tags = Array.isArray(input.tags)
         ? input.tags

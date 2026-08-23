@@ -113,6 +113,8 @@ export function createApp(options: { dataDir: string }) {
       agentService.channels.cleanupEventChannels(eventId),
     deleteEventWorkspaces: (eventId: string) =>
       agentService.deleteEventWorkspaces(eventId),
+    cleanupQueueState: (eventId: string) =>
+      agentService.queue().forget(eventId),
   })
   registerRunRoutes(app, {
     db,
