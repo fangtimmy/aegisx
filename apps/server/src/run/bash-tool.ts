@@ -194,7 +194,7 @@ function bashDescription(containerCwd: string): string {
 
 ## Working directory & paths
 - The shell starts in your working directory (\`${containerCwd}\`) — the same directory the write/edit file tools operate on. Reference files as paths relative to it or as absolute paths; do not prefix commands with \`cd\`.
-${solverNote}- The full CTF toolchain is on PATH: python3 (venv with pwntools/angr/impacket/pycryptodome/...), nmap, gdb/pwndbg, ghidra-analyze, fd, rg, ...
+${solverNote}- The full CTF toolchain is on PATH; the complete tool inventory lives in \`/opt/solver/ENVIRONMENT.md\`.
 - Search and file discovery happen here: \`rg\` for content search, \`fd\` for finding files, \`ls\` for listing.
 
 ## Output

@@ -93,4 +93,4 @@ python3 script.py
 
 - **Linux**: `strings <dump> | grep -m1 "Linux version"` 取内核版本 → 找到带 DWARF 的 vmlinux/调试符号包 → `dwarf2json linux --elf <vmlinux> > <kernel>.isf` → 放入 `/root/.cache/volatility3/symbols/`。
 - **Windows**: vol 自动下载对应 PDB 生成 ISF (需外网; `windows.info` 报 symbol 相关错误时先确认网络)。
-- 符号表拿不到时, yarasan / strings / 手工 carving 仍是可行路径。
+- 符号表拿不到时, strings / 手工 carving 仍是可行路径。
