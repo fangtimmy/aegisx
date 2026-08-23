@@ -44,7 +44,8 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
       default-jdk-headless nodejs npm golang-go ruby && \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd && \
     ln -sf /usr/bin/llvm-pdbutil-21 /usr/local/bin/llvm-pdbutil && \
-    (gzip -df /usr/share/wordlists/rockyou.txt.gz 2>/dev/null || true) && \
+    (gzip -df /usr/share/wordlists/rockyou.txt.gz 2>/dev/null) && \
+    test -s /usr/share/wordlists/rockyou.txt && \
     rm -rf /usr/share/seclists/Fuzzing
 
 # Build context = repo root: docker buildx build -f containers/solver/Dockerfile -t aegisx/solver:kali .
@@ -171,7 +172,8 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
 RUN printf '#!/bin/sh\nexec /usr/lib/wine/wine64 "$@"\n' > /usr/local/bin/wine64 && \
     chmod 755 /usr/local/bin/wine64 && \
     ln -sf wine64 /usr/local/bin/wine && \
-    ln -sf /usr/lib/wine/wineserver /usr/local/bin/wineserver
+    ln -sf /usr/lib/wine/wineserver /usr/local/bin/wineserver && \
+    test -x /usr/lib/wine/wine64 && test -x /usr/lib/wine/wineserver
 
 # Under no-new-privileges, exec of a file-capability binary dies with EPERM at
 # exec time whenever its caps exceed the container bounding set (NET_RAW only)
