@@ -5,6 +5,7 @@ import {
   Bot,
   Download,
   Hash,
+  LoaderCircle,
   Paperclip,
   Send,
   Users,
@@ -389,6 +390,7 @@ export function ChannelTimeline({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [olderError, setOlderError] = useState<string | null>(null)
   const [showJump, setShowJump] = useState(false)
+  const [disconnected, setDisconnected] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const followsLatest = useRef(true)
   const anchor = useRef<{ height: number; top: number } | null>(null)
@@ -413,6 +415,8 @@ export function ChannelTimeline({
   useEffect(() => {
     if (!active) return undefined
     const source = new EventSource(`/api/channels/${channelKey}/stream`)
+    source.addEventListener("open", () => setDisconnected(false))
+    source.addEventListener("error", () => setDisconnected(true))
     source.addEventListener("message", (message) => {
       let payload: unknown
       try {
@@ -520,9 +524,9 @@ export function ChannelTimeline({
   }
 
   return (
-    <div className="relative min-h-0 flex-1">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <div
-        className="h-full overflow-y-auto pt-1"
+        className="min-h-0 flex-1 overflow-y-auto pt-1"
         onScroll={onScroll}
         ref={listRef}
         role="log"
@@ -546,6 +550,11 @@ export function ChannelTimeline({
         )}
         <MessageList messages={items} />
       </div>
+      {disconnected && (
+        <div className="flex shrink-0 items-center gap-2 border-t px-4 py-2 text-xs text-muted-foreground">
+          <LoaderCircle className="size-3 animate-spin" /> 正在重新连接…
+        </div>
+      )}
       {showJump && (
         <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
           <Button

@@ -27,9 +27,5 @@ export function previewPrompts(input: { kind: string; template: string }) {
 }
 
 export function importSettingsPayload(body: object) {
-  return apiRequest<unknown>("/settings/import", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
+  return apiRequest<unknown>("/settings/import", jsonRequest("POST", body))
 }

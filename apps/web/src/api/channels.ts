@@ -1,5 +1,3 @@
-import { isRecord } from "@aegisx/shared"
-
 import { apiRequest } from "./client"
 import type {
   ChannelMessageList,
@@ -48,24 +46,8 @@ export function postChannelMessage(
   form.set("text", input.text)
   form.set("urgent", String(input.urgent ?? true))
   for (const file of input.files ?? []) form.append("files", file)
-  return fetch(`/api/channels/${channelKey}/messages`, {
+  return apiRequest<ChannelMessagePublic>(`/channels/${channelKey}/messages`, {
     method: "POST",
     body: form,
-  }).then(async (response) => {
-    if (!response.ok) {
-      let message = `${response.status} ${response.statusText}`
-      try {
-        const body: unknown = await response.json()
-        if (isRecord(body) && isRecord(body.error)) {
-          if (typeof body.error.message === "string")
-            message = body.error.message
-        }
-      } catch {
-        // keep the HTTP status text
-      }
-      throw new Error(message)
-    }
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- typed-RPC boundary: response body is trusted to match the endpoint contract.
-    return response.json() as Promise<ChannelMessagePublic>
   })
 }
