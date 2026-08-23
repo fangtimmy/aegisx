@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { FileText, RotateCcw } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import {
   keys,
@@ -197,6 +197,18 @@ function PromptTemplateRow({
     if (!open) setValue(tracked)
   }, [tracked, open])
 
+  // Debounced save (~600ms) with a stale-response guard: only write the cache
+  // back when the response still matches the newest input, so an out-of-order
+  // older response cannot clobber a newer keystroke's pending save.
+  const latestBody = useRef(row?.body ?? defaultBody)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const timer = saveTimer
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [])
+
   const save = useMutation({
     mutationFn: (body: string) =>
       promptTemplatesApi.updateTemplate({
@@ -205,10 +217,24 @@ function PromptTemplateRow({
         body,
       }),
     onSuccess: (response) => {
-      queryClient.setQueryData(keys.promptTemplates.all, response)
+      const saved = response.items.find(
+        (r) => r.plugin === "builtin" && r.key === templateKey
+      )
+      if (saved && saved.body === latestBody.current) {
+        queryClient.setQueryData(keys.promptTemplates.all, response)
+      }
     },
     onError: (error) => toast.error("保存提示词模板失败", error.message),
   })
+
+  const requestSave = (body: string) => {
+    latestBody.current = body
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null
+      save.mutate(body)
+    }, 600)
+  }
 
   const vars = useMemo(() => {
     if (ORCHESTRATOR_CONTEXT_KEYS.has(templateKey)) return orchestratorVars
@@ -235,7 +261,7 @@ function PromptTemplateRow({
         {modified && (
           <Button
             disabled={save.isPending}
-            onClick={() => save.mutate(defaultBody)}
+            onClick={() => requestSave(defaultBody)}
             size="sm"
             title="恢复为内置默认模板"
             type="button"
@@ -264,7 +290,7 @@ function PromptTemplateRow({
               kind={BUILTIN_PREVIEW_KIND[templateKey]}
               onChange={(next) => {
                 setValue(next)
-                save.mutate(next)
+                requestSave(next)
               }}
               title={meta.title}
               value={value}

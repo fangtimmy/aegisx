@@ -99,8 +99,27 @@ export class ConversationStore {
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly pendingNotifications = new Set<string>()
   private notificationFrame: number | null = null
+  private notificationIsTimeout = false
   private source: EventSource | null = null
   private agents = new Map<string, AgentSummary>()
+  /** Generation per agent, bumped by reset(). Async reloads capture it up
+   * front and applySnapshot rejects responses from older generations. */
+  private readonly epochs = new Map<string, number>()
+  /** Epoch of the last applied snapshot per agent. */
+  private readonly snapshotEpochs = new Map<string, number>()
+
+  /** Queued notifications drain here; rAF stalls in hidden tabs, so the
+   * visibility handler force-drains on restore (see notify). */
+  private readonly handleVisibilityChange = () => {
+    if (
+      document.hidden ||
+      this.notificationFrame !== null ||
+      this.pendingNotifications.size === 0
+    ) {
+      return
+    }
+    this.flushNotifications()
+  }
 
   subscribe(agentId: string, listener: Listener) {
     const listeners = this.listeners.get(agentId) ?? new Set<Listener>()
@@ -114,6 +133,13 @@ export class ConversationStore {
 
   get(agentId: string) {
     return this.snapshots.get(agentId) ?? emptyItems
+  }
+
+  /** Current generation for an agent — capture before an async reload and
+   * pass back to applySnapshot so a stale response (an older reload landing
+   * after a newer reset) cannot merge truncated rows back in. */
+  epochOf(agentId: string) {
+    return this.epochs.get(agentId) ?? 0
   }
 
   getAgents() {
@@ -151,6 +177,7 @@ export class ConversationStore {
    * committed map is otherwise append-only (applySnapshot never removes keys),
    * so a truncated session would keep its deleted tail without this. */
   reset(agentId: string) {
+    this.epochs.set(agentId, (this.epochs.get(agentId) ?? 0) + 1)
     this.messages.delete(agentId)
     this.messageProgress.delete(agentId)
     this.toolProgress.delete(agentId)
@@ -247,7 +274,12 @@ export class ConversationStore {
     this.notify(agentId)
   }
 
-  applySnapshot(agentId: string, items: EntryItem[]) {
+  applySnapshot(agentId: string, items: EntryItem[], epoch?: number) {
+    // Callers mid-reload pass the generation captured before their fetch so a
+    // stale response cannot merge truncated rows back in; without one the
+    // snapshot is treated as current.
+    const current = this.epochOf(agentId)
+    if (epoch !== undefined && epoch !== current) return
     const stored = this.messages.get(agentId) ?? new Map()
     const committedKeys = new Set<string>()
     const completedTools = this.completedTools.get(agentId) ?? new Set<string>()
@@ -268,6 +300,7 @@ export class ConversationStore {
       for (const toolCallId of completedTools) tools.delete(toolCallId)
     }
     this.rebuildCommitted(agentId)
+    this.snapshotEpochs.set(agentId, current)
   }
 
   applyEvent(event: LiveEvent) {
@@ -280,6 +313,15 @@ export class ConversationStore {
       return
     }
     if (event.type === "message.committed") {
+      // Between reset() and the next snapshot the committed map was truncated
+      // server-side; a commit landing in that window predates the truncation
+      // (the agent is idle, new turns need an explicit send) and would ghost
+      // as a row no later snapshot will ever contain.
+      if (
+        this.snapshotEpochs.get(event.agentId) !== this.epochOf(event.agentId)
+      ) {
+        return
+      }
       const stored = this.messages.get(event.agentId) ?? new Map()
       stored.set(event.item.key, event.item)
       this.messages.set(event.agentId, stored)
@@ -366,14 +408,31 @@ export class ConversationStore {
   private notify(agentId: string) {
     this.pendingNotifications.add(agentId)
     if (this.notificationFrame !== null) return
-    this.notificationFrame = window.requestAnimationFrame(() => {
-      this.notificationFrame = null
-      const pending = [...this.pendingNotifications]
-      this.pendingNotifications.clear()
-      for (const id of pending) {
-        for (const listener of this.listeners.get(id) ?? []) listener()
-      }
-    })
+    // Hidden tabs suspend rAF, which would freeze background streams; fall
+    // back to a macrotask there (browsers throttle it to ~1 Hz — fine for a
+    // tab the user cannot see). The visibility handler drains on restore.
+    const hidden = typeof document !== "undefined" && document.hidden
+    if (hidden) {
+      this.notificationIsTimeout = true
+      this.notificationFrame = window.setTimeout(
+        () => this.flushNotifications(),
+        0
+      )
+    } else {
+      this.notificationIsTimeout = false
+      this.notificationFrame = window.requestAnimationFrame(() =>
+        this.flushNotifications()
+      )
+    }
+  }
+
+  private flushNotifications() {
+    this.notificationFrame = null
+    const pending = [...this.pendingNotifications]
+    this.pendingNotifications.clear()
+    for (const id of pending) {
+      for (const listener of this.listeners.get(id) ?? []) listener()
+    }
   }
 
   /**
@@ -387,6 +446,7 @@ export class ConversationStore {
     streamPath?: string
   ) {
     this.close()
+    document.addEventListener("visibilitychange", this.handleVisibilityChange)
     const source = new EventSource(
       streamPath ?? `/api/agents/${agentId}/stream`
     )
@@ -425,8 +485,16 @@ export class ConversationStore {
       this.source.close()
     }
     this.source = null
+    document.removeEventListener(
+      "visibilitychange",
+      this.handleVisibilityChange
+    )
     if (this.notificationFrame !== null) {
-      window.cancelAnimationFrame(this.notificationFrame)
+      if (this.notificationIsTimeout) {
+        window.clearTimeout(this.notificationFrame)
+      } else {
+        window.cancelAnimationFrame(this.notificationFrame)
+      }
       this.notificationFrame = null
       this.pendingNotifications.clear()
     }

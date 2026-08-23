@@ -189,17 +189,23 @@ export function Conversation(props: ConversationProps) {
   // agent-scoped event; filter to this agent's row).
   useEffect(() => {
     if (!onAgentUpdated) return undefined
+    let lastSerialized: string | null = null
     return store.subscribe(agentId, () => {
       const next = store.getAgents().find((a) => a.id === agentId)
-      if (next) onAgentUpdated(next)
+      if (!next) return
+      const serialized = JSON.stringify(next)
+      if (serialized === lastSerialized) return
+      lastSerialized = serialized
+      onAgentUpdated(next)
     })
   }, [store, agentId, onAgentUpdated])
 
   const loadMessages = useCallback(async () => {
+    const epoch = store.epochOf(agentId)
     try {
       const items = await loadMessagesFn()
       setLoadError(null)
-      store.applySnapshot(agentId, items)
+      store.applySnapshot(agentId, items, epoch)
     } catch (error) {
       // Surface the failure (e.g. agent deleted / unreachable) instead of a
       // silent empty timeline; a later reconnect retry that succeeds clears it.
@@ -226,7 +232,10 @@ export function Conversation(props: ConversationProps) {
 
   const switchModel = useMutation({
     mutationFn: (ref: ModelRef) => switchModelFn(ref),
-    onError: (error) => toast.error("切换模型失败", error.message),
+    onError: (error) => {
+      setModelDraft(null)
+      toast.error("切换模型失败", error.message)
+    },
   })
 
   const compact = useMutation({

@@ -269,9 +269,14 @@ function AgentConversation({
   const switchModel = useCallback(
     (ref: ModelRef) =>
       agentsApi.switchModel(agentId, { model: ref }).then(() =>
-        queryClient.invalidateQueries({
-          queryKey: keys.agents.fleet(eventId),
-        })
+        Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: keys.agents.detail(agentId),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: keys.agents.fleet(eventId),
+          }),
+        ])
       ),
     [eventId, queryClient, agentId]
   )

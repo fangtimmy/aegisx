@@ -228,6 +228,12 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
   const [query, setQuery] = useState("")
   const [modifiedOnly, setModifiedOnly] = useState(false)
   const [local, setLocal] = useState(data.settings)
+  /** Once the user edits, external refreshes must not clobber local state;
+   * while clean, follow data.settings so background updates stay in sync. */
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => {
+    if (!dirty) setLocal(data.settings)
+  }, [data.settings, dirty])
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
   useEffect(() => {
@@ -244,6 +250,7 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
       queryClient.setQueryData(keys.settings.all, response)
       if (timers.current.size === 0) {
         setLocal(response.settings)
+        setDirty(false)
       }
     },
     onError: (error) => toast.error("保存设置失败", error.message),
@@ -251,6 +258,7 @@ export function SchemaSettingsForm({ data }: { data: SettingsResponse }) {
 
   function scheduleSave(key: SettingKey, value: unknown) {
     setLocal((current) => ({ ...current, [key]: value }))
+    setDirty(true)
     const existing = timers.current.get(key)
     if (existing) clearTimeout(existing)
     timers.current.set(
