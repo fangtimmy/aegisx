@@ -9,7 +9,7 @@ export const providerTypeLabels: Record<ProviderType, string> = {
 export const providerTypeDefaults: Record<ProviderType, string> = {
   "openai-compatible": "https://api.openai.com/v1",
   "openai-responses": "https://api.openai.com/v1",
-  "anthropic-messages": "https://api.anthropic.com/v1",
+  "anthropic-messages": "https://api.anthropic.com",
 }
 
 // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Record<ProviderType,_> 的 keys 恰为 ProviderType 本身。

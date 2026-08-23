@@ -1,4 +1,4 @@
-import { modelAddress, parseModelRef } from "@aegisx/shared"
+import { isRecord, modelAddress, parseModelRef } from "@aegisx/shared"
 import type { ModelOption } from "@aegisx/shared/domain"
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
@@ -17,7 +17,7 @@ import {
 } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
-import { isRecord, optRecord, responseJson } from "../lib/guards"
+import { optRecord, responseJson } from "../lib/guards"
 import {
   builtinModelProfile,
   builtinModelProfiles,
@@ -407,7 +407,11 @@ export function registerProviderRoutes(
               "x-api-key": provider.apiKey,
             }
           : { Authorization: `Bearer ${provider.apiKey}` }
-      const response = await fetch(`${provider.baseUrl}/models`, {
+      const url =
+        provider.type === "anthropic-messages"
+          ? `${provider.baseUrl}/v1/models`
+          : `${provider.baseUrl}/models`
+      const response = await fetch(url, {
         headers,
         signal: AbortSignal.timeout(timeout),
       })
@@ -494,10 +498,19 @@ export function registerProviderRoutes(
             ]
 
       const controller = new AbortController()
-      const timer = setTimeout(
+      // Overall timeout for the connect phase (time to first chunk); from the
+      // first chunk on it doubles as an idle budget, re-armed per chunk.
+      let timer = setTimeout(
         () => controller.abort(new Error("timeout")),
         timeout
       )
+      const rearmTimer = () => {
+        clearTimeout(timer)
+        timer = setTimeout(
+          () => controller.abort(new Error("timeout")),
+          timeout
+        )
+      }
       let response: Response
       try {
         response = await fetch(url, {
@@ -557,7 +570,8 @@ export function registerProviderRoutes(
           const { usage, terminated } = await pumpUpstreamSse(
             response.body!,
             api,
-            (text) => send({ type: "delta", text })
+            (text) => send({ type: "delta", text }),
+            rearmTimer
           )
           if (terminated) {
             await send({ type: "done", ...(usage ? { usage } : {}) })
@@ -713,7 +727,8 @@ function handleUpstreamEvent(
 async function pumpUpstreamSse(
   body: ReadableStream<Uint8Array>,
   api: UpstreamApi,
-  onDelta: (text: string) => Promise<void> | void
+  onDelta: (text: string) => Promise<void> | void,
+  onChunk?: () => void
 ): Promise<{ usage: TestUsage | undefined; terminated: boolean }> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
@@ -742,6 +757,7 @@ async function pumpUpstreamSse(
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
+    onChunk?.()
     buffer = (buffer + decoder.decode(value, { stream: true })).replace(
       /\r\n/g,
       "\n"

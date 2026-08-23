@@ -11,6 +11,7 @@ import {
   CONFIG_DOCUMENT_VERSION,
   defaultSettings,
   type FlatSettings,
+  isRecord,
   migrateLegacySettings,
   migrateSettingKeys,
   type ProviderType,
@@ -21,7 +22,6 @@ import { modelAddress } from "@aegisx/shared"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 
-import { isRecord } from "../lib/guards"
 import { ProviderTypeSchema } from "../lib/schemas"
 import { builtinModelProfile } from "../providers/builtin-models"
 
@@ -89,7 +89,7 @@ function defaultProviders(): ProviderData[] {
       id: "default-provider",
       label: "Anthropic",
       type: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com/v1",
+      baseUrl: "https://api.anthropic.com",
       apiKey: "",
       enabled: true,
       models: [
