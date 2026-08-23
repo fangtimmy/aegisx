@@ -29,6 +29,8 @@ The API stores its SQLite database, attachments, and per-event workspaces under 
 
 The agent loop runs **host-side in-process** via the pi SDK. `bash` and the CTF toolchain execute inside a dedicated Kali container (a long-lived `sleep infinity` tool box, workspace bind-mounted at `/workspace`) over `docker exec`; the file tools (`read`/`edit`/`write`/`grep`/`find`/`ls`) operate on the host workspace, which is shared with the container. Container resources (CPU, memory, PIDs) are configurable.
 
+Network exposure: solver containers sit on the default bridge (or share a VPN container's netns via the `container.networkMode` setting) and hold `NET_RAW`, so they have unrestricted outbound reach — including the host's LAN. Isolation is enforced solver↔host-data and solver↔other-challenges, **not** solver↔LAN; tighten via `container.networkMode` (e.g. a custom bridge with egress rules) if your threat model requires it.
+
 A challenge workspace hosts 1..N parallel solver agents sharing one container (each agent has its own model, prompt, and deadline); an event hosts a single orchestrator agent that manages the event's task queue. Each agent works in its own directory (agents/<id8>) within the challenge workspace; shared findings land in shared/ (read-only to agents).
 
 ## Solve container image
