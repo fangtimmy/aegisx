@@ -16,6 +16,10 @@ import {
   targetEndpoint,
 } from "../core"
 
+/** Hard cap on paginated listings; a platform returning a bad total or a
+ * non-empty last page must not spin the loop forever. */
+const MAX_PAGES = 50
+
 export class Ret2ShellAdapter extends BaseAdapter {
   constructor(
     config: PlatformConfig,
@@ -41,7 +45,7 @@ export class Ret2ShellAdapter extends BaseAdapter {
 
   async listEvents() {
     const items: RemoteEvent[] = []
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
       const body = await this.http.json<[JsonRecord[], number]>(
         `/api/game?page=${page}&page_size=100`
       )
@@ -53,11 +57,12 @@ export class Ret2ShellAdapter extends BaseAdapter {
       )
       if (items.length >= body[1] || body[0].length === 0) return items
     }
+    return items
   }
 
   async listChallenges() {
     const items: RemoteChallengeSummary[] = []
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
       const body = await this.http.json<[JsonRecord[], number]>(
         `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge?page=${page}&page_size=100`
       )
@@ -74,6 +79,7 @@ export class Ret2ShellAdapter extends BaseAdapter {
       )
       if (items.length >= body[1] || body[0].length === 0) return items
     }
+    return items
   }
 
   async getChallenge(remoteId: string) {

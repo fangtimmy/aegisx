@@ -245,6 +245,24 @@ describe("dasctf adapter", () => {
     }
   })
 
+  test("getChallenge treats numeric port entries as bare ports", async () => {
+    // The platform sends numbers despite the documented string[] type.
+    const fetch = stubFetch([
+      detailRoute({
+        ...sampleDetail,
+        endpoints: [{ exposeIps: ["10.0.0.10"], ports: [80, "http/443"] }],
+      }),
+    ])
+    try {
+      const challenge = await new DasCtfAdapter(config).getChallenge("1001")
+      expect(challenge.targets).toEqual([
+        { name: "endpoint 1", services: ["80", "443"] },
+      ])
+    } finally {
+      fetch.restore()
+    }
+  })
+
   test("getSolveState reads hasSolved; missing exercise is a 404", async () => {
     const fetch = stubFetch([
       detailRoute({ ...sampleDetail, hasSolved: true }),

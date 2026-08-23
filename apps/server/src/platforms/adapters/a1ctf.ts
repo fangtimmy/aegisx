@@ -99,15 +99,19 @@ export class A1CtfAdapter extends BaseAdapter {
             ? `/api/file/download/${encodeURIComponent(hash)}`
             : remoteUrl
         if (!url) return []
+        let sameOrigin = false
+        try {
+          sameOrigin =
+            new URL(url, `${this.config.baseUrl}/`).origin === this.http.origin
+        } catch {
+          // Unparseable URL; download will fail loudly later.
+        }
         return [
           {
             id: `${type}:${hash ?? url}`,
             filename: jsonText(attachment.attach_name ?? "attachment"),
             url,
-            authenticated:
-              type !== "REMOTEFILE" ||
-              new URL(url, `${this.config.baseUrl}/`).origin ===
-                this.http.origin,
+            authenticated: type !== "REMOTEFILE" || sameOrigin,
           },
         ]
       }),

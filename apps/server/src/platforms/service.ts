@@ -241,13 +241,14 @@ export function createPlatformService(
     }
     const platform = storedPlatform(eventId)
     if (!platform) return
+    // agents.eventId covers both challenge-bound solvers and the event's
+    // orchestrator (challengeId null), which a challenges join would drop.
     const activeAgent = db
       .select({ id: agents.id })
       .from(agents)
-      .innerJoin(challenges, eq(agents.challengeId, challenges.id))
       .where(
         and(
-          eq(challenges.eventId, eventId),
+          eq(agents.eventId, eventId),
           inArray(agents.status, LIVE_AGENT_STATUSES)
         )
       )

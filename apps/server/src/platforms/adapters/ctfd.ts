@@ -10,6 +10,10 @@ import {
   type SubmissionResult,
 } from "../core"
 
+/** Hard cap on paginated listings; a platform returning a bad pagination
+ * payload must not spin the loop forever. */
+const MAX_PAGES = 50
+
 export class CtfdAdapter extends BaseAdapter {
   constructor(
     config: PlatformConfig,
@@ -39,7 +43,7 @@ export class CtfdAdapter extends BaseAdapter {
 
   async listChallenges() {
     const items: RemoteChallengeSummary[] = []
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
       const body = await this.http.json<{
         data?: JsonRecord[]
         meta?: { pagination?: { pages?: number; next?: number | null } }
@@ -62,6 +66,7 @@ export class CtfdAdapter extends BaseAdapter {
       )
         return items
     }
+    return items
   }
 
   async getChallenge(remoteId: string) {
@@ -83,13 +88,17 @@ export class CtfdAdapter extends BaseAdapter {
       attachments: files.flatMap((file) => {
         if (typeof file !== "string") return []
         const path = new URL(file, `${this.config.baseUrl}/`)
+        const rawName = path.pathname.split("/").pop() ?? "attachment"
+        let filename = rawName
+        try {
+          filename = decodeURIComponent(rawName) || "attachment"
+        } catch {
+          // Malformed percent-encoding; keep the raw segment.
+        }
         return [
           {
             id: path.toString(),
-            filename:
-              decodeURIComponent(
-                path.pathname.split("/").pop() ?? "attachment"
-              ) || "attachment",
+            filename,
             url: path.toString(),
           },
         ]

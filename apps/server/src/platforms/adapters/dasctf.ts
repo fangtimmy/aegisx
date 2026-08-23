@@ -321,13 +321,15 @@ function attachmentFiles(attachment: unknown): DasctfFile[] {
   return [attachment]
 }
 
-/** Strip a `proto/` prefix ("http/80") from a port entry. */
-function splitPortEntry(entry: string) {
-  const slash = entry.indexOf("/")
-  if (slash <= 0) return { protocol: null as string | null, port: entry }
+/** Strip a `proto/` prefix ("http/80") from a port entry. The platform may
+ * send numeric entries despite the documented string[] type. */
+function splitPortEntry(entry: string | number) {
+  const value = String(entry)
+  const slash = value.indexOf("/")
+  if (slash <= 0) return { protocol: null as string | null, port: value }
   return {
-    protocol: protocolOf(entry.slice(0, slash)),
-    port: entry.slice(slash + 1),
+    protocol: protocolOf(value.slice(0, slash)),
+    port: value.slice(slash + 1),
   }
 }
 
