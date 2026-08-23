@@ -98,7 +98,17 @@ Every failure raises `aegisx.AegisxError` with `.code`, `.message`,
 | `capacity`                       | Concurrency cap full (spawn/enqueue). Adjust the plan; queued work stays pending. |
 | `not_found`                      | Stale id — re-read state (`snapshot()`).                                          |
 | `invalid_state`                  | e.g. compaction without a live session, close on a closed agent.                  |
+| `invalid_request`                | Body failed the server's schema validation (wrong types/fields). Fix the call.    |
+| `invalid`                        | Semantically bad input (unknown channel key, empty text, bad id format).          |
+| `launch_failed`                  | The agent process failed to launch (model/container problem) — report, don't retry blindly. |
+| `not_bound`                      | No platform connected for that target — bind one first (user face).               |
+| `platform_error`                 | The remote platform integration failed — treat as external outage.                |
+| `internal_error`                 | Server fault — one careful retry is reasonable, then report.                      |
 | `network_error` / `bad_response` | Transport/protocol failure — one careful retry is reasonable.                     |
+
+A non-JSON error body (proxy HTML page, plain-text 404) degrades to
+`http_error` with only the HTTP status preserved — treat it as an unknown
+transport-level failure.
 
 ## Rules
 

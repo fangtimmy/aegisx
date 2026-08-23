@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, TypeVar
+
+from .errors import AegisxError
 
 _WORD_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 _LIST_OF_DATACLASS = re.compile(r"list\[(\w+)\]")
@@ -64,8 +66,12 @@ _NESTED_TYPES: dict[str, type] = {}
 
 
 def _convert_field(annotation: Any, value: Any) -> Any:
-    """Build nested dataclasses for `list[<Dataclass>]` annotations; every
-    other value passes through untouched (plain dicts stay dicts by design)."""
+    """Build nested dataclasses for bare `<Dataclass>` and `list[<Dataclass>]`
+    annotations; every other value passes through untouched (plain dicts stay
+    dicts by design)."""
+    nested = _NESTED_TYPES.get(str(annotation))
+    if nested is not None and isinstance(value, dict):
+        return from_dict(nested, value)
     match = _LIST_OF_DATACLASS.fullmatch(str(annotation))
     if match and isinstance(value, list):
         inner = _NESTED_TYPES.get(match.group(1))
@@ -81,9 +87,9 @@ def _convert_field(annotation: Any, value: Any) -> Any:
 
 def from_dict(cls: type[T], payload: dict[str, Any] | None) -> T | None:
     """Build a dataclass from a wire dict (camelCase → snake_case). Nested
-    `list[<Dataclass>]` fields are built recursively; unknown keys are
-    ignored (server may add fields the SDK doesn't know — a MISSING known
-    field fails loudly, which is drift detection)."""
+    dataclass-typed fields are built recursively; unknown keys are ignored
+    (server may add fields the SDK doesn't know — a MISSING known field
+    raises AegisxError("bad_response"), which is drift detection)."""
     if payload is None:
         return None
     fields = getattr(cls, "__dataclass_fields__", {})
@@ -94,6 +100,19 @@ def from_dict(cls: type[T], payload: dict[str, Any] | None) -> T | None:
         if field is None:
             continue
         kwargs[name] = _convert_field(field.type, value)
+    missing = sorted(
+        name
+        for name, spec in fields.items()
+        if name not in kwargs
+        and spec.default is MISSING
+        and spec.default_factory is MISSING
+    )
+    if missing:
+        raise AegisxError(
+            "bad_response",
+            f"{cls.__name__} payload is missing known fields: "
+            + ", ".join(missing),
+        )
     return cls(**kwargs)
 
 
@@ -267,9 +286,11 @@ class ChannelFile:
     size: int
 
 
-# ChannelMessage.files is the one nested wire list — register AFTER the class
-# exists (from_dict looks _NESTED_TYPES up at call time).
+# Nested wire objects from_dict builds recursively (single or list) —
+# register AFTER the classes exist (from_dict looks _NESTED_TYPES up at
+# call time).
 _NESTED_TYPES["ChannelFile"] = ChannelFile
+_NESTED_TYPES["AgentSummary"] = AgentSummary
 
 
 @dataclass

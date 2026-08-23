@@ -1,7 +1,8 @@
 """`aegisx.challenges` — read the event's challenge inventory."""
 from __future__ import annotations
 
-from .client import AegisxError, get_client
+from .client import get_client
+from .errors import AegisxError
 from .models import Challenge, from_dict
 
 #: Hoisted above `def list` — the module-level name `list` shadows the builtin

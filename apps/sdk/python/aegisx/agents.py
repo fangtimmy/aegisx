@@ -2,7 +2,10 @@
 face: a solver calling these gets `forbidden` from the server."""
 from __future__ import annotations
 
-from .client import AegisxError, get_client
+from typing import Literal
+
+from .client import get_client
+from .errors import AegisxError
 from .models import AgentSummary, ChannelMessage, AgentRead, from_dict
 
 #: Hoisted above `def list` — the module-level name shadows the builtin for
@@ -163,12 +166,13 @@ def start(
     prompt: str | None = None,
     model: str | None = None,
     timeout_ms: int | None = None,
+    prompt_mode: Literal["strategy", "override"] | None = None,
 ) -> AgentSummary:
     """ESCAPE HATCH: spawn an agent on the challenge IMMEDIATELY (bypasses the
     queue — the fence cap rejects with code "capacity" when full). Prefer
     `aegisx.queue.enqueue` for ordinary planning. The agent's `prompt` is its
-    strategy (appended as a Strategy section; `prompt_mode="override"` is the
-    server-side field, not exposed here)."""
+    strategy (appended as a Strategy section; `prompt_mode="override"`
+    replaces the first prompt entirely)."""
     body: dict = {}
     if prompt:
         body["prompt"] = prompt
@@ -176,6 +180,8 @@ def start(
         body["model"] = model
     if timeout_ms:
         body["timeoutMs"] = timeout_ms
+    if prompt_mode:
+        body["promptMode"] = prompt_mode
     data = get_client().request(
         "POST", f"/api/challenges/{challenge_id}/agents", body=body
     )

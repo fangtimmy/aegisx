@@ -19,6 +19,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .errors import AegisxError
+
 DEFAULT_API_URL = os.environ.get(
     "AEGISX_API_URL", "http://host.docker.internal:3000"
 )
@@ -29,24 +31,6 @@ def agent_id() -> str:
     string. Used to address your own agent face (channels.list); the server
     verifies it against the token."""
     return os.environ.get("AEGISX_AGENT_ID", "")
-
-
-class AegisxError(Exception):
-    """API error. `code` mirrors the server's error code so scripts can
-    branch on it; `status` is the HTTP status; `message` is the server's
-    message, or a client-side failure description.
-
-    Common codes: forbidden (outside your role's API surface), unauthorized
-    (bad token), not_found, invalid_state (e.g. compaction without a live
-    session), capacity (back off and adjust the plan), network_error,
-    bad_response."""
-
-    def __init__(self, code: str, message: str, status: int | None = None):
-        suffix = f" (HTTP {status})" if status is not None else ""
-        super().__init__(f"[{code}] {message}{suffix}")
-        self.code = code
-        self.message = message
-        self.status = status
 
 
 class Client:

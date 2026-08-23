@@ -31,7 +31,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .client import AegisxError, get_client
+from .client import get_client
+from .errors import AegisxError
 from .models import Channel, ChannelMessage, from_dict
 
 #: Type aliases hoisted above `def list` — the module-level name `list`

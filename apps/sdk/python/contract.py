@@ -28,6 +28,7 @@ SCHEDULER_TOKEN = ARGS["scheduler-token"]
 SCHEDULER_ID = ARGS["scheduler-id"]
 SOLVER_TOKEN = ARGS["solver-token"]
 SOLVER_ID = ARGS["solver-id"]
+SOLVER2_ID = ARGS["solver2-id"]
 
 aegisx.configure(api_url=BASE_URL, event_id=EVENT_ID)
 
@@ -81,13 +82,20 @@ assert any(a.id == SOLVER_ID for a in solvers)
 ok("agents list (solver-scoped)")
 
 detail = aegisx.agents.get(SOLVER_ID)
-assert detail.agent["id"] == SOLVER_ID
+assert detail.agent.id == SOLVER_ID
 ok("agents get")
 
 read = aegisx.agents.read(SOLVER_ID, limit=2)
 # The P1 regression guard: the tail cap is honored client-side.
 assert len(read.messages or []) <= 2, "agents.read: limit ignored"
 ok("agents read limit tail cap")
+
+aegisx.agents.message(SOLVER_ID, "contract directive")
+ok("agents message (dm directive)")
+
+stopped = aegisx.agents.stop(SOLVER_ID)
+assert stopped.id == SOLVER_ID and stopped.status == "idle"
+ok("agents stop")
 
 # Queue lifecycle on a paused queue: enqueue stays pending (no real spawn).
 assert aegisx.queue.state() == "running"
@@ -100,9 +108,12 @@ assert any(i.id == item.id for i in listed)
 aegisx.queue.reorder([item.id])
 aegisx.queue.remove(item.id)
 assert not any(i.id == item.id for i in aegisx.queue.list())
+doomed = aegisx.queue.enqueue(CHALLENGE_ID, prompt="contract clear probe")
+aegisx.queue.clear()
+assert not any(i.id == doomed.id for i in aegisx.queue.list())
 aegisx.queue.resume()
 assert aegisx.queue.state() == "running"
-ok("queue pause/enqueue/reorder/remove/resume")
+ok("queue pause/enqueue/reorder/remove/clear/resume")
 
 after_timeout = aegisx.agents.set_timeout(SOLVER_ID, 3_600_000)
 assert after_timeout.id == SOLVER_ID
@@ -121,6 +132,10 @@ expect_error(
     "agents get error contract (not_found)",
 )
 
+closed = aegisx.agents.close(SOLVER2_ID)
+assert closed.id == SOLVER2_ID and closed.status == "aborted"
+ok("agents close (terminal aborted)")
+
 team_key = f"team:{CHALLENGE_ID}"
 msg = aegisx.channels.announce(CHALLENGE_ID, "contract announce")
 assert msg.channel_key == team_key
@@ -132,6 +147,13 @@ orch_msgs = aegisx.channels.read("orch", mark_read=False)
 assert isinstance(orch_msgs, list)
 ok("channels read orch (scheduler)")
 
+# Pull = read: a mark_read pull advances the reader's cursor, so the
+# unread backlog drains (the delivery layer will not re-inject consumed
+# messages). Asserted on the solver face below, where the solver has a
+# non-zero unread backlog authored by the scheduler.
+probe = aegisx.channels.post(team_key, "contract cursor probe")
+ok("channels mark_read probe posted")
+
 # --- solver face --------------------------------------------------------------
 
 become(SOLVER_TOKEN, SOLVER_ID)
@@ -140,13 +162,27 @@ keys = [c.key for c in aegisx.channels.list()]
 assert team_key in keys and f"orch:{EVENT_ID}" in keys, f"solver channels: {keys}"
 ok("solver channels list")
 
+# Pull = read: a mark_read pull advances the reader's cursor, so the
+# unread backlog drains (the delivery layer will not re-inject consumed
+# messages). Measured on the solver face BEFORE its own first post — an
+# author's own post also advances their cursor (channels.ts), which would
+# mask the effect.
+unread_before = next(c.unread for c in aegisx.channels.list() if c.key == team_key)
+pulled = [m.id for m in aegisx.channels.read(team_key)]
+assert probe.id in pulled, "posted probe missing from the pull"
+unread_after = next(c.unread for c in aegisx.channels.list() if c.key == team_key)
+assert unread_before > 0 and unread_after < unread_before, (
+    f"cursor did not advance (pull != read): {unread_before} -> {unread_after}"
+)
+ok("channels mark_read advances the cursor")
+
 posted = aegisx.channels.post("#team", "solver contract post")
 assert posted.channel_key == team_key
 aegisx.ask("contract ask", urgent=False)
 ok("solver channels post + ask")
 
 mine = aegisx.agents.get(SOLVER_ID)
-assert mine.agent["id"] == SOLVER_ID
+assert mine.agent.id == SOLVER_ID
 ok("solver reads own agent face")
 
 expect_error(

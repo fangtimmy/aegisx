@@ -38,7 +38,8 @@ Rules:
 from __future__ import annotations
 
 from . import agents, challenges, channels, queue
-from .client import AegisxError, configure, get_client
+from .client import configure, get_client
+from .errors import AegisxError
 from .models import (
     AgentSummary,
     Challenge,

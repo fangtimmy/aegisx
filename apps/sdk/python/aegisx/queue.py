@@ -1,9 +1,10 @@
 """`aegisx.queue` — the event's task queue (the plan)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from .client import AegisxError, get_client
+from .client import get_client
+from .errors import AegisxError
 from .models import QueueItem, from_dict
 
 #: Hoisted aliases — the module-level name `list` shadows the builtin for
@@ -44,16 +45,16 @@ def enqueue(
     prompt: str | None = None,
     model: str | None = None,
     timeout_ms: int | None = None,
+    prompt_mode: Literal["strategy", "override"] | None = None,
 ) -> QueueItem:
     """Append a spawn item in the queue — one challenge may hold several
     pending items (parallel attempts are a legal plan). The queue drains FIFO
     under the concurrency caps; with a free slot the agent spawns right away.
 
     `prompt` is the spawned agent's strategy (appended as a Strategy section;
-    pass `prompt_mode="override"` server-side to replace the first prompt
-    entirely). A capacity rejection stays pending (no failure); adjust the
-    plan, do not retry blindly. Prefer this over `aegisx.agents.start` for
-    planned work."""
+    `prompt_mode="override"` replaces the first prompt entirely). A capacity
+    rejection stays pending (no failure); adjust the plan, do not retry
+    blindly. Prefer this over `aegisx.agents.start` for planned work."""
     body: dict = {"challengeId": challenge_id}
     if prompt:
         body["prompt"] = prompt
@@ -61,8 +62,34 @@ def enqueue(
         body["model"] = model
     if timeout_ms:
         body["timeoutMs"] = timeout_ms
+    if prompt_mode:
+        body["promptMode"] = prompt_mode
     data = get_client().request(
         "POST", get_client().event_path("/queue"), body=body
+    )
+    return _item(data)
+
+
+def edit(
+    item_id: str,
+    *,
+    prompt: str | None = None,
+    timeout_ms: int | None = None,
+    params: dict[str, Any] | None = None,
+) -> QueueItem:
+    """Edit a pending queue item in place — its FIFO position is kept
+    (remove+enqueue would lose it). Omitted arguments leave the current
+    values untouched. Usable while the queue is paused or running."""
+    body: dict = {}
+    if prompt:
+        body["prompt"] = prompt
+    if timeout_ms:
+        body["timeoutMs"] = timeout_ms
+    if params:
+        body["params"] = params
+    client = get_client()
+    data = client.request(
+        "PATCH", client.event_path(f"/queue/{item_id}"), body=body
     )
     return _item(data)
 
