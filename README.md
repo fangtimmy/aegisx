@@ -25,7 +25,7 @@ Open the URL printed by Vite. The web development server proxies `/api` to `http
 
 ## Data and execution
 
-The API stores its SQLite database, attachments, and run workspaces under `data/`. Set `AEGISX_DATA_DIR` to use another directory.
+The API stores its SQLite database, attachments, and per-event workspaces under `data/` (`data/events/<eventId>/challenges/<challengeId>/workspace` for solvers, `data/events/<eventId>/orchestrator` for the scheduler). Set `AEGISX_DATA_DIR` to use another directory.
 
 The agent loop runs **host-side in-process** via the pi SDK. `bash` and the CTF toolchain execute inside a dedicated Kali container (a long-lived `sleep infinity` tool box, workspace bind-mounted at `/workspace`) over `docker exec`; the file tools (`read`/`edit`/`write`/`grep`/`find`/`ls`) operate on the host workspace, which is shared with the container. Container resources (CPU, memory, PIDs) are configurable.
 
@@ -48,7 +48,7 @@ Then point an `openai-compatible` provider at `http://127.0.0.1:<port>/v1` with 
 ## Checks
 
 ```sh
-bun run check        # oxlint (lint + type-check) + oxfmt (format) across all workspaces
+bun run check        # oxfmt (format) + knip (unused-code gate) + oxlint (lint + type-check) across all workspaces
 bun run test         # tests across all workspaces
 bun run build        # web production build
 bun run db:generate  # server drizzle migrations

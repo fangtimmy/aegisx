@@ -4,7 +4,7 @@
   "ignoreBinaries": ["wait"],
   "workspaces": {
     "apps/server": {
-      "project": ["src/**/*.ts", "test/**/*.ts"]
+      "project": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
     },
     "apps/web": {
       "project": ["src/**/*.{ts,tsx}"],
