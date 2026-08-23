@@ -32,7 +32,7 @@ import { RunActionError } from "./errors"
 import { schedulerPolicyFor } from "./scheduler-policy"
 
 /**
- * Derived-key channel core (docs/model-v19-challenge-centric.md §三). A
+ * Derived-key channel core. A
  * channel is NOT a table row — it is a derived key:
  *
  *   #team          team:<challengeId>   same-challenge knowledge base shared

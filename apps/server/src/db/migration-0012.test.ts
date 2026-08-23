@@ -62,7 +62,7 @@ function applyV18(dir: string, sqlite: Database) {
   sqlite.run("PRAGMA user_version = 18")
 }
 
-describe("migration 0012 — v18 derived channel keys (docs/im-simplify-v18.md §7.1)", () => {
+describe("migration 0012 — v18 derived channel keys", () => {
   test("v17 channels map onto derived keys with merge order, cursors and files intact; recap dropped; channels table gone", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-mig0012-"))
     try {

@@ -1,7 +1,7 @@
 import { join } from "node:path"
 
 /**
- * v19 workspace paths (docs/model-v19-challenge-centric.md §2.1). The
+ * v19 workspace paths. The
  * workspace is a DERIVED PATH, not a row: every challenge of an event owns a
  * directory tree under data/events/<eventId>/challenges/<challengeId>/, the
  * scheduler owns data/events/<eventId>/orchestrator/. Each holds workspace/

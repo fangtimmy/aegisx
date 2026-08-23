@@ -522,7 +522,7 @@ export function registerRunRoutes(
     }
   })
 
-  // --- unified message layer (docs/im-channels.md §9.1) ---------------------
+  // --- unified message layer ---------------------
 
   /** Channel message SSE (IM view): initial latest-window snapshot, then live
    * `channel.message` pushes for the derived key. No agent identity — the UI

@@ -83,7 +83,7 @@ export type ExecOptions = {
   timeout?: number
   /** Per-call env additions as "KEY=value" entries (dockerode exec Env).
    * Per-agent identity injection for shared containers — e.g. the solver SDK's
-   * AEGISX_AGENT_ID (docs/im-channels.md §四). */
+   * AEGISX_AGENT_ID. */
   env?: string[]
 }
 

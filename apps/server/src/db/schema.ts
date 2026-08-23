@@ -136,7 +136,7 @@ export const agents = sqliteTable(
   {
     id: text("id").primaryKey(),
     /** Opaque credential injected per-exec as AEGISX_TOKEN; the server derives
-     * the agent principal from it (docs/sdk-refactor.md W1). */
+     * the agent principal from it. */
     token: text("token").notNull().default(""),
     /** Redundant event anchor (accelerates fleet/usage/flush queries). */
     eventId: text("event_id")
@@ -336,7 +336,7 @@ export const spawnQueue = sqliteTable(
 )
 
 /**
- * Channel message ledger (docs/im-simplify-v18.md, schema v18): the single
+ * Channel message ledger: the single
  * write/store/render point for ALL inter-agent communication. A channel is a
  * DERIVED KEY — "team:<challengeId>" | "dm:<agentId>" | "orch:<eventId>" —
  * stored on the row; there is no channels directory table. `id` is a global

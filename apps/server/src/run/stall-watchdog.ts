@@ -36,7 +36,7 @@ export type StallWatchdogDeps = {
 export type StallWatchdog = ReturnType<typeof createStallWatchdog>
 
 /**
- * 停滞 watchdog（per-agent，docs/model-v19-challenge-centric.md §四）：agent
+ * 停滞 watchdog（per-agent）：agent
  * turn settle 后 arm 2min 计时器，到点现查该 agent 仍 idle/failed → post
  * 一条 urgent 消息到 orch:<eventId>（调度者不在线时只存储，下次启动
  * catch-up）。每个 idle 周期只触发一次（再次 settle 重新 arm）。

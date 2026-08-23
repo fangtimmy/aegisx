@@ -41,7 +41,7 @@ export type ContainerLifecycleDeps = {
 export type ContainerLifecycle = ReturnType<typeof createContainerLifecycle>
 
 /**
- * v19 container lifecycle (docs/model-v19-challenge-centric.md §2.3):
+ * v19 container lifecycle:
  * challenge containers are lazily created on first spawn and reclaimed once
  * the challenge has had no live agent for 10 minutes; the scheduler
  * container is created/removed by the scheduler agent's lifecycle

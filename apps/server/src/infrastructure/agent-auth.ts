@@ -6,7 +6,7 @@ import { agents, challenges } from "../db/schema"
 import { jsonError } from "./http-errors"
 
 /** The authenticated agent identity, derived from the bearer token — never
- * from client-reported headers (docs/sdk-refactor.md W1). */
+ * from client-reported headers. */
 export type AgentPrincipal = {
   id: string
   eventId: string
