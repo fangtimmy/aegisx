@@ -1,9 +1,10 @@
+import { isRecord } from "@aegisx/shared"
 import type { QueueItemPublic, SpawnQueueParams } from "@aegisx/shared/queue"
 import { and, asc, count, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, queueState, spawnQueue } from "../db/schema"
-import { isRecord, parseJson } from "../lib/guards"
+import { parseJson } from "../lib/guards"
 import { RunActionError } from "./errors"
 import { checkSpawnFence } from "./fence"
 

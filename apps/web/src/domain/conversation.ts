@@ -1,3 +1,5 @@
+import { isRecord } from "@aegisx/shared"
+
 import type {
   CompactionEntry,
   EntryItem,
@@ -6,10 +8,6 @@ import type {
   TimingBlock,
   TimingMeta,
 } from "@/api"
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
 
 export function text(value: unknown): string {
   if (typeof value === "string") return value
@@ -272,7 +270,7 @@ function applyUser(
 }
 
 /** Format a token count like the pi-TUI compaction marker. */
-function formatTokens(count: number): string {
+export function formatTokens(count: number): string {
   if (count < 1000) return String(count)
   if (count < 1_000_000) return `${Math.round(count / 1000)}k`
   return `${(count / 1_000_000).toFixed(1)}M`

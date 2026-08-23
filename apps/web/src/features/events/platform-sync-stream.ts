@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import { fetchEventSource } from "@microsoft/fetch-event-source"
 
 import {
@@ -5,7 +6,6 @@ import {
   type ChallengeSyncProgress,
   type ChallengeSyncResult,
 } from "@/api"
-import { isRecord } from "@/domain/conversation"
 
 export type SyncStreamEvent =
   | {

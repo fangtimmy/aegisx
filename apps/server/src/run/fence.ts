@@ -130,20 +130,6 @@ function occupiesTargetSlot(
   challengeId: string,
   drained: boolean
 ): boolean {
-  if (drained) {
-    const row = db
-      .select({
-        available: challengeRemote.available,
-        targetSupported: challengeRemote.targetSupported,
-        targetIgnored: challengeRemote.targetIgnored,
-      })
-      .from(challengeRemote)
-      .where(eq(challengeRemote.challengeId, challengeId))
-      .get()
-    return Boolean(
-      row?.available && row?.targetSupported && !row?.targetIgnored
-    )
-  }
   const row = db
     .select({
       available: challengeRemote.available,
@@ -153,9 +139,10 @@ function occupiesTargetSlot(
     .from(challengeRemote)
     .where(eq(challengeRemote.challengeId, challengeId))
     .get()
-  if (!row) return false
-  if (!row.available || !row.targetSupported || row.targetIgnored) return false
-  return !fullySolved(db, challengeId)
+  if (!row?.available || !row?.targetSupported || row?.targetIgnored) {
+    return false
+  }
+  return drained || !fullySolved(db, challengeId)
 }
 
 /**

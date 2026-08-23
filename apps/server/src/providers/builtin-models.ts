@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import type { ProviderType } from "@aegisx/shared/domain"
 import {
   type Api,
@@ -12,7 +13,7 @@ import {
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all"
 
-import { isRecord, parseJson } from "../lib/guards"
+import { parseJson } from "../lib/guards"
 
 export type { ThinkingLevelMap }
 

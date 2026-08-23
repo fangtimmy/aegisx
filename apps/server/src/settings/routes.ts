@@ -1,5 +1,6 @@
 import {
   isConfigDocumentV1,
+  isRecord,
   parseSettings,
   resolveModelRef,
 } from "@aegisx/shared"
@@ -17,7 +18,6 @@ import type {
 import { badRequest, notFound } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
-import { isRecord } from "../lib/guards"
 import {
   DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,

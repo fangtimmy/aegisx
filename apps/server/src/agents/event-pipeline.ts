@@ -1,4 +1,5 @@
 import type { TimingBlockType, TimingMeta } from "@aegisx/shared"
+import { isRecord } from "@aegisx/shared"
 import type { ContextSnapshot, ToolTerminal } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type {
@@ -8,7 +9,6 @@ import type {
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
 
-import { isRecord } from "../lib/guards"
 import { accumulateEntryUsage } from "./entry-usage"
 import type { LiveBus } from "./live"
 

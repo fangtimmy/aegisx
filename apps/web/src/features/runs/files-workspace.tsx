@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
-import { formatTime } from "@/lib/format"
+import { formatBytes, formatTime } from "@/lib/format"
 
 const SIDEBAR_STORAGE_KEY = "aegisx:files-sidebar-width"
 const SIDEBAR_DEFAULT = 288
@@ -40,12 +40,6 @@ function readStoredWidth(): number {
   if (!stored) return SIDEBAR_DEFAULT
   const n = Number(stored)
   return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT
-}
-
-function formatSize(size: number) {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
 function DirectoryEntry({
@@ -83,7 +77,7 @@ function DirectoryEntry({
         <span className="size-3.5" />
         <File className="text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-        <span className="text-muted-foreground">{formatSize(entry.size)}</span>
+        <span className="text-muted-foreground">{formatBytes(entry.size)}</span>
       </Button>
     )
   }
@@ -264,7 +258,7 @@ export function FilesWorkspace({
             </h3>
             {selected.data?.type === "text" && (
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>{formatSize(selected.data.size)}</span>
+                <span>{formatBytes(selected.data.size)}</span>
                 <span>修改于 {formatTime(selected.data.modifiedAt)}</span>
                 {selected.data.truncated && <span>预览已截断</span>}
               </div>
@@ -321,7 +315,7 @@ export function FilesWorkspace({
             <Info />
             <AlertTitle>二进制文件</AlertTitle>
             <AlertDescription>
-              无法预览。大小：{formatSize(selected.data.size)}。修改于：
+              无法预览。大小：{formatBytes(selected.data.size)}。修改于：
               {formatTime(selected.data.modifiedAt)}。
             </AlertDescription>
           </Alert>

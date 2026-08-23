@@ -1,3 +1,5 @@
+import { isRecord } from "@aegisx/shared"
+
 import {
   type AgentSummary,
   type ChannelMessagePublic,
@@ -5,7 +7,6 @@ import {
   isTimingMeta,
   type LiveEvent,
 } from "@/api"
-import { isRecord } from "@/domain/conversation"
 
 function numberValue(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0

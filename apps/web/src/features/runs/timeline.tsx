@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -53,7 +54,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   type ConversationItem,
-  isRecord,
+  formatTokens,
   type SystemVariant,
   type ToolBlock,
   toolStatusLabel,
@@ -81,12 +82,6 @@ function formatClock(value: string | number | undefined) {
     hour: "2-digit",
     minute: "2-digit",
   })
-}
-
-function formatTokens(count: number) {
-  if (count < 1000) return String(count)
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`
-  return `${(count / 1_000_000).toFixed(1)}M`
 }
 
 function tsMs(value: string | number | undefined): number | undefined {

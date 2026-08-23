@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 
+import { escapeHtml } from "@/lib/html"
 import { langFromPath } from "@/lib/lang-from-path"
 import { highlightCode } from "@/lib/shiki"
 import { useResolvedTheme } from "@/lib/use-resolved-theme"
@@ -11,14 +12,6 @@ type CodePreviewProps = {
   className?: string
   /** 1-based starting line number (default 1). */
   startLine?: number
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
 }
 
 /**

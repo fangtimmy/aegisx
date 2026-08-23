@@ -1,12 +1,9 @@
+import { isRecord } from "@aegisx/shared"
 import { type ReactNode, useEffect, useRef, useState } from "react"
 
 import { CodePreview } from "@/components/code-preview"
-import {
-  isRecord,
-  type ToolBlock,
-  text,
-  toolFilePath,
-} from "@/domain/conversation"
+import { type ToolBlock, text, toolFilePath } from "@/domain/conversation"
+import { escapeHtml } from "@/lib/html"
 import { highlightCode } from "@/lib/shiki"
 import { useResolvedTheme } from "@/lib/use-resolved-theme"
 import { cn } from "@/lib/utils"
@@ -229,14 +226,6 @@ function DiffPreview({ diff }: { diff: string }) {
       </div>
     </ToolScroll>
   )
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
 }
 
 /** Plain (un-highlighted) command HTML mirroring Shiki's line structure. */

@@ -4,11 +4,11 @@ import type {
   RemoteTargetInfo,
   TargetState,
 } from "@aegisx/shared"
+import { isRecord } from "@aegisx/shared"
 import { isActiveTarget } from "@aegisx/shared/domain"
 
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import {
-  isRecord,
   jsonText,
   nullableNumber,
   nullableString,
