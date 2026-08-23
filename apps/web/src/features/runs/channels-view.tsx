@@ -1,3 +1,4 @@
+import { formatSize } from "@aegisx/shared"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowDown,
@@ -49,16 +50,6 @@ function timeOf(iso: string): string {
 
 function dayOf(iso: string): string {
   return new Date(iso).toDateString()
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) {
-    const kb = bytes / 1024
-    return `${kb >= 10 ? Math.round(kb) : kb.toFixed(1)}KB`
-  }
-  const mb = bytes / (1024 * 1024)
-  return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)}MB`
 }
 
 // --- message rendering (Discord-style grouped rows) -----------------------

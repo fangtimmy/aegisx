@@ -81,3 +81,15 @@ export type ChannelMessageList = {
   nextAfter: number
   hasMore: boolean
 }
+
+/** `4.2KB`-style attachment sizes for 📎 lines and file rows (server renders
+ * them into delivery texts, the web UI mirrors the same format). */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) {
+    const kb = bytes / 1024
+    return `${kb >= 10 ? Math.round(kb) : kb.toFixed(1)}KB`
+  }
+  const mb = bytes / (1024 * 1024)
+  return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)}MB`
+}

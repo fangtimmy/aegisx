@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, truncateSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
+import { formatSize } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
 import { createLiveBus } from "../../src/agents/live"
@@ -17,7 +18,6 @@ import {
   SCHEDULER_READ_KEY,
   createChannelService,
   dmKey,
-  formatSize,
   orchKey,
   parseChannelKey,
   renderMerged,
@@ -71,6 +71,7 @@ function makeService(
       refine({
         send: async (agentId: string, text: string) => {
           sent.push({ agentId, text })
+          return true
         },
       }),
     now: () => new Date().toISOString(),

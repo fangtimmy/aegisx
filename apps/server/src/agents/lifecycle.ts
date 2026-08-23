@@ -1,3 +1,4 @@
+import { RunActionError } from "../run/errors"
 import type { HostAgentSession } from "./host-session"
 
 /**
@@ -57,12 +58,18 @@ export type SessionLifecycle = {
    * it. Generation-guarded: a turn whose generation is superseded settles no-op. */
   drive(id: string, text: string): void
   /** Deliver a message: steer / followUp while streaming, else a fresh turn.
-   * Rejects if there is no live session and no `onResume` can produce one. */
+   * Resolves false WITHOUT delivering when there is no live session and no
+   * `onResume` can produce one, or `opts.assertLive` rejects the id inside
+   * the lock before any resume (the delivery path re-checked liveness
+   * outside the lock and may have lost a race to a concurrent close).
+   * Resolves true once the text landed (steer/followUp queued or turn
+   * driven). */
   send(
     id: string,
     text: string,
-    deliverAs?: "steer" | "followUp"
-  ): Promise<void>
+    deliverAs?: "steer" | "followUp",
+    opts?: { assertLive?: (id: string) => boolean }
+  ): Promise<boolean>
   /** Abort the current turn (like Esc). It settles to idle via onTurnSettled. */
   abort(id: string): Promise<void>
   /** Drain locks, dispose every live session. Called from the service's close(). */
@@ -104,34 +111,48 @@ export function createSessionLifecycle(
     error: string | null,
     gen: number
   ): void {
-    void options.withLock(id, () => {
-      if (turnGeneration.get(id) !== gen) return
-      if (sessions.get(id) !== driven) return
-      options.onTurnSettled(id, error)
-    })
+    void options
+      .withLock(id, () => {
+        if (turnGeneration.get(id) !== gen) return
+        if (sessions.get(id) !== driven) return
+        options.onTurnSettled(id, error)
+      })
+      .catch((err) => {
+        // A service close mid-turn rejects the lock with invalid_state — a
+        // settling turn racing shutdown is expected, not an error.
+        if (err instanceof RunActionError && err.code === "invalid_state")
+          return
+        console.error(`${kind} settle failed`, {
+          id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
   }
 
   async function send(
     id: string,
     text: string,
-    deliverAs?: "steer" | "followUp"
-  ): Promise<void> {
-    await options.withLock(id, async () => {
+    deliverAs?: "steer" | "followUp",
+    opts?: { assertLive?: (id: string) => boolean }
+  ): Promise<boolean> {
+    return options.withLock(id, async (): Promise<boolean> => {
+      if (opts?.assertLive && !opts.assertLive(id)) return false
       let session = sessions.get(id)
       if (!session) {
-        if (!options.onResume) return
+        if (!options.onResume) return false
         await options.onResume(id)
         session = sessions.get(id)
-        if (!session) return
+        if (!session) return false
       }
       if (session.session.isStreaming) {
         if (deliverAs === "followUp") await session.session.followUp(text)
         else await session.session.steer(text)
-        return
+        return true
       }
       await options.onTurnGate?.(id)
       options.onBeforeNewTurn?.(id)
       drive(id, text)
+      return true
     })
   }
 

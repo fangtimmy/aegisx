@@ -1,7 +1,12 @@
 import { copyFileSync, mkdirSync, statSync, writeFileSync } from "node:fs"
 import { basename, join, relative, resolve, sep } from "node:path"
 
-import { isActiveAgentStatus, LIVE_AGENT_STATUSES } from "@aegisx/shared"
+import {
+  formatSize,
+  isActiveAgentStatus,
+  isRecord,
+  LIVE_AGENT_STATUSES,
+} from "@aegisx/shared"
 import type {
   ChannelFileMeta,
   ChannelMessageList,
@@ -21,7 +26,6 @@ import {
   channelReads,
   promptTemplates,
 } from "../db/schema"
-import { isRecord } from "../lib/guards"
 import { DEFAULT_CHANNEL_DELIVERY_TEMPLATE } from "../orchestration/prompt-defaults"
 import {
   BUILTIN_PLUGIN,
@@ -417,7 +421,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       | { type: "user"; name: string }
       | { type: "agent"; agentId: string; name: string },
     body: string,
-    meta: ChannelMessageMeta
+    meta: ChannelMessageMeta & { files?: ChannelFileMeta[] }
   ): ChannelMessagePublic {
     const ts = deps.now()
     const inserted = db
@@ -485,8 +489,8 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
   }
 
-  /** Post one message (the single write path): persist first (crash-safe),
-   * copy attachments into shared/, advance the author's own cursor,
+  /** Post one message (the single write path): resolve + copy attachments
+   * into shared/, persist (crash-safe), advance the author's own cursor,
    * broadcast SSE, then apply the urgent/tick delivery policy. Sync — the
    * attachment copy is a filesystem copy. */
   function post(input: PostInput): ChannelMessagePublic {
@@ -509,9 +513,10 @@ export function createChannelService(deps: ChannelServiceDeps) {
     // Author resolution + write permission (the 3 rules).
     const author = resolveAuthor(parsed, input.author)
 
-    // Attachment sources resolved BEFORE the row insert (escape check);
-    // copies happen right after the insert (message id irrelevant to the
-    // target path — shared/from-<id8>/).
+    // Attachment sources resolved AND copied into shared/ BEFORE the row
+    // insert (escape check; message id irrelevant to the target path —
+    // shared/from-<id8>/), so a failed copy can't leave a stored but
+    // never-broadcast ghost message behind.
     if ((input.files?.length ?? 0) > MAX_FILES_PER_MESSAGE) {
       throw new RunActionError(
         "invalid",
@@ -545,23 +550,22 @@ export function createChannelService(deps: ChannelServiceDeps) {
       }
     }
 
-    const meta = serverMeta(author, input.meta, urgent)
-    const message = insertMessage(key, author, body, meta)
-
-    // shared/ copies: the file bytes freeze at post time into
-    // shared/from-<agentId8>/<filename>; later workspace edits never mutate
-    // the sent copy.
+    // shared/ copies freeze at post time into shared/from-<agentId8>/<filename>;
+    // later workspace edits never mutate the sent copy.
+    let files: ChannelFileMeta[] | undefined
     if (sources.length > 0) {
       const agent = senderAgentRow!
-      const files = sources.map((source) =>
+      files = sources.map((source) =>
         copyIntoShared(agent, source, `from-${agent.id.slice(0, 8)}`)
       )
-      db.update(channelMessages)
-        .set({ meta: JSON.stringify({ ...meta, files }) })
-        .where(eq(channelMessages.id, message.id))
-        .run()
-      message.files = files
     }
+    const base = serverMeta(author, input.meta, urgent)
+    const message = insertMessage(
+      key,
+      author,
+      body,
+      files ? { ...base, files } : base
+    )
 
     // Own posts are never the author's unread.
     if (author.type === "agent") {
@@ -619,12 +623,15 @@ export function createChannelService(deps: ChannelServiceDeps) {
     }
     const urgent = input.urgent ?? true
     const author = resolveAuthor(parsed, input.author)
-    const meta = serverMeta(author, input.meta, urgent)
-    const message = insertMessage(parsed.raw, author, body, meta)
+    const base = serverMeta(author, input.meta, urgent)
 
+    // Upload targets resolved + blobs landed BEFORE the insert (team → the
+    // challenge workspace; dm → the target agent's challenge workspace;
+    // orch → no workspace to land in), so a failed write can't leave a
+    // stored but never-broadcast ghost message behind. The orphan
+    // shared/upload-<ts>/ dir is swept with the workspace.
+    let files: ChannelFileMeta[] | undefined
     if (input.uploads.length > 0) {
-      // Upload targets: team → the challenge workspace; dm → the target
-      // agent's challenge workspace; orch → no workspace to land in.
       let eventId: string | undefined
       let challengeId: string | undefined
       if (parsed.kind === "team") {
@@ -645,32 +652,23 @@ export function createChannelService(deps: ChannelServiceDeps) {
       const workspaceRoot = deps.challengeWorkspaceRoot(eventId, challengeId)
       const dir = join(workspaceRoot, "shared", `upload-${Date.now()}`)
       mkdirSync(dir, { recursive: true })
-      const files: ChannelFileMeta[] = []
-      try {
-        for (const upload of input.uploads) {
-          const safe = basename(upload.filename) || "attachment"
-          writeFileSync(join(dir, safe), Buffer.from(await upload.stream()))
-          files.push({
-            path: ["shared", basename(dir), safe].join("/"),
-            filename: safe,
-            size: upload.size,
-          })
-        }
-      } catch (error) {
-        // Roll the message row back — a user post that failed to land its
-        // blobs must not linger (the orphan shared/upload-<ts>/ dir is swept
-        // with the workspace).
-        db.delete(channelMessages)
-          .where(eq(channelMessages.id, message.id))
-          .run()
-        throw error
+      files = []
+      for (const upload of input.uploads) {
+        const safe = basename(upload.filename) || "attachment"
+        writeFileSync(join(dir, safe), Buffer.from(await upload.stream()))
+        files.push({
+          path: ["shared", basename(dir), safe].join("/"),
+          filename: safe,
+          size: upload.size,
+        })
       }
-      db.update(channelMessages)
-        .set({ meta: JSON.stringify({ ...meta, files }) })
-        .where(eq(channelMessages.id, message.id))
-        .run()
-      message.files = files
     }
+    const message = insertMessage(
+      parsed.raw,
+      author,
+      body,
+      files ? { ...base, files } : base
+    )
 
     if (author.type === "agent") {
       markRead(parsed.raw, author.agentId, message.id)
@@ -873,17 +871,25 @@ export function createChannelService(deps: ChannelServiceDeps) {
         ? (deps.renderSchedulerDigest?.(agent.eventId) ?? "")
         : ""
     const withDigest = digest ? `${text}\n\n${digest}` : text
-    // Send-time liveness re-check (race guard): the entry check may have
-    // raced a concurrent close — a broadcast must never land on (and so
-    // reopen) a terminal agent; only a DM cold-wake may. Re-read, markRead,
-    // and send form one synchronous block, so no close can interleave between
-    // the check and the send landing.
-    const agentNow = agentRow(agentId)
-    if (!agentNow || (!isActive(agentNow) && !coldWake)) return
+    // Send-time liveness guard (race): the entry check may have raced a
+    // concurrent close — while the delivery op waits on the agent lock (a
+    // close mid-abort holds it), the agent can go terminal. The predicate
+    // runs inside send()'s lock BEFORE any resume, so a lost race bails
+    // instead of cold-reviving an aborted agent; only a DM cold-wake may.
+    const delivered = await deps
+      .lifecycle()
+      .send(agentId, withDigest, opts.deliverAs ?? "steer", {
+        assertLive: (id) => {
+          const row = agentRow(id)
+          return row !== undefined && (isActive(row) || coldWake)
+        },
+      })
+    if (!delivered) return
+    // Cursors advance only on an accepted delivery — a bail above leaves
+    // them untouched (nothing marked read that was never delivered).
     for (const { key, maxId } of snapshots) {
       markRead(key, readerKey, maxId)
     }
-    await deps.lifecycle().send(agentId, withDigest, opts.deliverAs ?? "steer")
   }
 
   /** The channelDelivery template body for this delivery: the builtin row
@@ -1403,17 +1409,6 @@ export function createChannelService(deps: ChannelServiceDeps) {
 }
 
 // --- rendering helpers -----------------------------------------------------------
-
-/** `4.2KB`-style sizes for 📎 lines. */
-export function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) {
-    const kb = bytes / 1024
-    return `${kb >= 10 ? Math.round(kb) : kb.toFixed(1)}KB`
-  }
-  const mb = bytes / (1024 * 1024)
-  return `${mb >= 10 ? Math.round(mb) : mb.toFixed(1)}MB`
-}
 
 function timeOf(iso: string): string {
   const date = new Date(iso)

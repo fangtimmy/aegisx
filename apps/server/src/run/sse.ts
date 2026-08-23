@@ -118,7 +118,15 @@ export function streamChannel(
     (listener) => {
       const unsubscribers = busChannels.map((channel) =>
         service.bus.subscribe(channel, (event) => {
-          if (event.type === "channel.message") listener(event)
+          // Server-side filter parity with the snapshot: a bus channel fans
+          // out several channel keys (a #team post also rides the event
+          // channel) — forward only messages of THIS request's key.
+          if (
+            event.type === "channel.message" &&
+            event.message.channelKey === channelKey
+          ) {
+            listener(event)
+          }
         })
       )
       return () => {
