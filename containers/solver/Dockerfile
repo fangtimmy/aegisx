@@ -49,6 +49,8 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     rm -rf /usr/share/seclists/Fuzzing
 
 # Build context = repo root: docker buildx build -f containers/solver/Dockerfile -t aegisx/solver:kali .
+# The image COPYs apps/sdk/python — run `bun run test:sdk` before rebuilding so
+# a stale in-image SDK never drifts against the server it talks to.
 COPY containers/solver/solver-cache.py /usr/local/bin/solver-cache.py
 
 # === Knowledge Base ===
