@@ -41,7 +41,7 @@ Server responsibilities:
 │         AegisX server (Hono / Bun)          │
 │                                            │
 │  ┌─ Run AgentSession (main, per run) ──────┐ │
-│  │  tools: read/bash/edit/write/grep/find/ls │
+│  │  tools: read/bash/edit/write │
 │  │         submit_flag / target_* / finish   │
 │  │         spawn_agent (child session)       │
 │  │  session.subscribe → events.ts →          │
@@ -150,7 +150,7 @@ active turn rebuilds on streaming.
 | Tool | Purpose | Registered when |
 |------|---------|-----------------|
 | `bash` | run inside the Kali container (`docker exec`) | always (overrides builtin) |
-| `read`/`edit`/`write`/`grep`/`find`/`ls` | host workspace (bind-shared) | always |
+| `read`/`bash`/`edit`/`write` | host workspace (bind-shared) | always |
 | `submit_flag` | `platformService.submitFlag` (in-process) | platform integrated |
 | `target_get`/`start`/`extend`/`stop` | `platformService.targetAction` | challenge has a target |
 | `finish_run` | summary → finalize → `completed` | main only |

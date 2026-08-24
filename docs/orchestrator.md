@@ -133,7 +133,7 @@ session 注入一条系统消息（streaming 时 `steer`，否则 `prompt` 开�
 
 ## 六、orchestrator 工具
 
-orchestrator 启用 solver 同款文件工具（read/bash/edit/write/grep/find/ls），用于
+orchestrator 启用 solver 同款文件工具（read/bash/edit/write），用于
 在战略工作台写文件、跑分析脚本——这部分和 solver 完全一致，不在此表列出。下面的
 管理工具全部 `defineTool`，execute 前置围栏校验，结果回 tool result。
 
