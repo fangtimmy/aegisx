@@ -75,8 +75,8 @@ export type HostAgentSession = {
 
 export type CreateHostAgentSessionInput = {
   owner: SessionOwner
-  /** LiveBus channel: the run id (solver) or event id (orchestrator). */
-  channel: string
+  /** LiveBus topic: the run id (solver) or event id (orchestrator). */
+  topic: string
   /** Agent id for entry keys + SSE routing (main/child ids, or ORCHESTRATOR_AGENT_ID). */
   agentId: string
   /** Container-internal workspace path surfaced to the model as its cwd (pi
@@ -166,7 +166,7 @@ export async function createHostAgentSession(
 ): Promise<HostAgentSession> {
   const {
     owner,
-    channel,
+    topic,
     agentId,
     cwd,
     model,
@@ -224,7 +224,7 @@ export async function createHostAgentSession(
     sessionRef ? computeContextSample(sessionRef) : null
 
   const pipeline = createAgentEventPipeline({
-    channel,
+    topic,
     agentId,
     bus,
     sampleContext,

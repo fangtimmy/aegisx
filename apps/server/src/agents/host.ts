@@ -54,8 +54,8 @@ export function buildHostFileTools(
 export type AgentHostInput = {
   /** Who the session belongs to (run agent vs. orchestrator). */
   owner: SessionOwner
-  /** LiveBus channel: the run id (solver) or event id (orchestrator). */
-  channel: string
+  /** LiveBus topic: the run id (solver) or event id (orchestrator). */
+  topic: string
   /** Agent id for entry keys + SSE routing (main/child ids, ORCHESTRATOR_AGENT_ID). */
   agentId: string
   /** Container-internal workspace path surfaced to the model as its cwd. */
@@ -121,7 +121,7 @@ export async function createAgentHost(
   ]
   return createHostAgentSession({
     owner: input.owner,
-    channel: input.channel,
+    topic: input.topic,
     agentId: input.agentId,
     cwd: input.cwd,
     modelRuntime: input.modelRuntime,

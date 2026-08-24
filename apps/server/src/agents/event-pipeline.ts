@@ -52,7 +52,7 @@ function syntheticMessageEntry(
 }
 
 /** Read a tool's structured terminal reason from its result.details — the
- * AgentToolResult side channel that survives into the persisted toolResult
+ * AgentToolResult side topic that survives into the persisted toolResult
  * (unlike `content`, `details` is not sent to the model). Tools that classify
  * outcomes (the AegisX bash tool) put a `terminal` field there so the UI can
  * show 已超时 / 已取消 instead of a generic 失败, without the pipeline parsing
@@ -120,11 +120,11 @@ export type AgentEventPipeline = ReturnType<typeof createAgentEventPipeline>
  * positional guess. retry is intentionally transient (SSE activity only);
  * compaction / branch_summary surface as their own entries (centered markers).
  *
- * The `channel` is the LiveBus key: a run id for solver agents, an event id
+ * The `topic` is the LiveBus key: a run id for solver agents, an event id
  * for the orchestrator. The pipeline is agnostic to which.
  */
 export function createAgentEventPipeline(options: {
-  channel: string
+  topic: string
   agentId: string
   bus: LiveBus
   /** Live context snapshot for the conversation stat strip. */
@@ -133,14 +133,14 @@ export function createAgentEventPipeline(options: {
    * branch_summary), so the service can recompute + re-emit the run snapshot. */
   onUsageMaybeChanged?: () => void
 }) {
-  const { channel, agentId, bus } = options
+  const { topic, agentId, bus } = options
   let revision = 0
   const nextRevision = () => (revision += 1)
 
   function emitContext(): void {
     const sample = options.sampleContext?.()
     if (!sample) return
-    bus.emit(channel, { type: "context.updated", agentId, ...sample })
+    bus.emit(topic, { type: "context.updated", agentId, ...sample })
   }
 
   /** Called by DbSessionManager.onAppend for every persisted entry. Emits
@@ -156,7 +156,7 @@ export function createAgentEventPipeline(options: {
     ) {
       return
     }
-    bus.emit(channel, {
+    bus.emit(topic, {
       type: "message.committed",
       agentId,
       item: { entry, seq, key: entryKeyOf(agentId, entry) },
@@ -181,7 +181,7 @@ export function createAgentEventPipeline(options: {
           ae.type === "toolcall_end"
         ) {
           const entry = syntheticMessageEntry(agentId, event.message)
-          bus.emit(channel, {
+          bus.emit(topic, {
             type: "message.progress",
             agentId,
             key: messageIdOf(agentId, event.message),
@@ -201,7 +201,7 @@ export function createAgentEventPipeline(options: {
           return
         }
         const entry = syntheticMessageEntry(agentId, event.message)
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "message.progress",
           agentId,
           key: messageIdOf(agentId, event.message),
@@ -228,7 +228,7 @@ export function createAgentEventPipeline(options: {
         return
       }
       case "tool_execution_start": {
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "tool.progress",
           agentId,
           toolCallId: event.toolCallId,
@@ -240,7 +240,7 @@ export function createAgentEventPipeline(options: {
         return
       }
       case "tool_execution_update": {
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "tool.progress",
           agentId,
           toolCallId: event.toolCallId,
@@ -259,7 +259,7 @@ export function createAgentEventPipeline(options: {
         // from result.details.terminal (structured) when the tool provides it,
         // falling back to the SDK's isError for untyped tools that still throw.
         const { terminal, isError } = terminalOf(event.result, event.isError)
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "tool.progress",
           agentId,
           toolCallId: event.toolCallId,
@@ -274,7 +274,7 @@ export function createAgentEventPipeline(options: {
       }
       case "auto_retry_start": {
         // Transient: retry never persists (pi itself doesn't); SSE badge only.
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "agent.activity",
           agentId,
           activity: "retrying",
@@ -286,13 +286,13 @@ export function createAgentEventPipeline(options: {
         return
       }
       case "auto_retry_end": {
-        bus.emit(channel, { type: "agent.activity", agentId, activity: null })
+        bus.emit(topic, { type: "agent.activity", agentId, activity: null })
         return
       }
       case "summarization_retry_scheduled": {
         // Retry of a compaction/branch-summary summarization call (shared pi
         // retry budget). Transient SSE badge — mirrors auto_retry_start.
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "agent.activity",
           agentId,
           activity: "retrying",
@@ -308,15 +308,15 @@ export function createAgentEventPipeline(options: {
         // compaction. Reflect it so the badge matches what pi is doing.
         const activity =
           event.source === "branchSummary" ? "retrying" : "compacting"
-        bus.emit(channel, { type: "agent.activity", agentId, activity })
+        bus.emit(topic, { type: "agent.activity", agentId, activity })
         return
       }
       case "summarization_retry_finished": {
-        bus.emit(channel, { type: "agent.activity", agentId, activity: null })
+        bus.emit(topic, { type: "agent.activity", agentId, activity: null })
         return
       }
       case "compaction_start": {
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "agent.activity",
           agentId,
           activity: "compacting",
@@ -327,11 +327,11 @@ export function createAgentEventPipeline(options: {
       case "compaction_end": {
         // The compaction summary (tokensBefore) is surfaced as a committed
         // system marker via message.committed; here we only clear the badge.
-        bus.emit(channel, { type: "agent.activity", agentId, activity: null })
+        bus.emit(topic, { type: "agent.activity", agentId, activity: null })
         return
       }
       case "queue_update": {
-        bus.emit(channel, {
+        bus.emit(topic, {
           type: "queue.updated",
           agentId,
           steering: [...event.steering],

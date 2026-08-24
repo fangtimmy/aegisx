@@ -141,7 +141,7 @@ session.subscribe(event)
 
 `GET /api/runs/:id/messages?after=&agentId=` returns durable committed entries
 (from `session_entries`, ordered by `seq`). `GET /api/runs/:id/stream`
-is the ephemeral SSE channel. The frontend `ConversationStore` merges committed
+is the ephemeral SSE topic. The frontend `ConversationStore` merges committed
 history with live progress, splitting at the last user message so only the
 active turn rebuilds on streaming.
 

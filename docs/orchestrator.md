@@ -139,7 +139,7 @@ orchestrator 启用 solver 同款文件工具（read/bash/edit/write/grep/find/l
 
 | 工具 | 参数 | 作用 |
 |------|------|------|
-| `list_challenges` | — | 该 event 所有题的 digest：id/name/category/points/靶机能力/已解/尝试次数/上次结果。扫描选题用 |
+| `list_challenges` | — | 该 event 所有题的摘要：id/name/category/points/靶机能力/已解/尝试次数/上次结果。扫描选题用 |
 | `get_challenge` | `challengeId` | 单题完整详情：description/附件清单/靶机连接信息（name+services）/可用与已解状态/run 活动计数/上次 summary。开题前或判断难度时深读 |
 | `list_runs` | `challengeId?`, `status?` | 枚举 run（最近优先，上限 50），含 summary/flag/error/时间戳。复盘历史、找 runId 用 |
 | `start_run` | `challengeId`, `initialPromptOverride?`, `timeoutMs?`, `modelId?` | 围栏内启动 solver run；内部调 `runService.create`。允许多 run 打同一题 |

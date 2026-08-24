@@ -289,7 +289,7 @@ export function RunWorkspace({
               <Conversation
                 agents={agents}
                 canEditQueue
-                channel={runId}
+                topic={runId}
                 closedReopenable
                 findCurrentModelId={findCurrentModelId}
                 loadMessages={loadMessages}

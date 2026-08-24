@@ -23,7 +23,7 @@ function setup() {
     emit: (_channel: string, event: LiveEvent) => emitted.push(event),
   } as unknown as LiveBus
   const pipeline = createAgentEventPipeline({
-    channel: "run-1",
+    topic: "run-1",
     agentId: "agent-1",
     bus,
   })

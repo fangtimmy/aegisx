@@ -3,13 +3,13 @@ import type { LiveEvent } from "@aegisx/shared"
 type Listener = (event: LiveEvent) => void
 
 /**
- * In-memory SSE fan-out. One bus per server; subscribers per channel (browser
- * tabs). A channel is the LiveBus key — a run id for solver agents, an event id
+ * In-memory SSE fan-out. One bus per server; subscribers per topic (browser
+ * tabs). A topic is the LiveBus key — a run id for solver agents, an event id
  * for the orchestrator. Events are ephemeral; durable history lives in
  * session_entries and is served by the messages API.
  *
  * Reconnect correctness: the bus snapshots the latest `run` / `context` /
- * `queue` per channel/agent AND the current ephemeral state — the active
+ * `queue` per topic/agent AND the current ephemeral state — the active
  * `agent.activity` plus every still-running `tool.progress` (carrying the last
  * partial result). The SSE route replays these to a freshly connected
  * EventSource so a new tab / refresh sees an in-progress bash command's
@@ -28,21 +28,21 @@ export function createLiveBus() {
    * done/error so only genuinely in-flight tools are replayed on connect. */
   const runningTools = new Map<string, Map<string, LiveEvent>>()
 
-  function subscribe(channel: string, listener: Listener): () => void {
-    let set = subscribers.get(channel)
+  function subscribe(topic: string, listener: Listener): () => void {
+    let set = subscribers.get(topic)
     if (!set) {
       set = new Set()
-      subscribers.set(channel, set)
+      subscribers.set(topic, set)
     }
     set.add(listener)
     return () => {
       set?.delete(listener)
-      if (set && set.size === 0) subscribers.delete(channel)
+      if (set && set.size === 0) subscribers.delete(topic)
     }
   }
 
-  function emit(channel: string, event: LiveEvent) {
-    if (event.type === "run.updated") lastRun.set(channel, event)
+  function emit(topic: string, event: LiveEvent) {
+    if (event.type === "run.updated") lastRun.set(topic, event)
     if (event.type === "context.updated") lastContext.set(event.agentId, event)
     if (event.type === "queue.updated") lastQueue.set(event.agentId, event)
     if (event.type === "agent.activity") {
@@ -63,14 +63,14 @@ export function createLiveBus() {
         if (perAgent.size === 0) runningTools.delete(event.agentId)
       }
     }
-    const set = subscribers.get(channel)
+    const set = subscribers.get(topic)
     if (!set) return
     for (const listener of set) {
       try {
         listener(event)
       } catch (error) {
         console.error("live listener failed", {
-          channel,
+          topic,
           error: error instanceof Error ? error.message : String(error),
         })
       }

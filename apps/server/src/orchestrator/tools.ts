@@ -1,8 +1,8 @@
 import { defineTool } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 
-/** Digest of a challenge for the list_challenges tool. */
-export type ChallengeDigest = {
+/** Summary of a challenge for the list_challenges tool. */
+export type ChallengeSummary = {
   id: string
   name: string
   category: string | null
@@ -14,8 +14,8 @@ export type ChallengeDigest = {
   attempts: number
 }
 
-/** Digest of a run for get_status / start_run feedback. */
-export type RunDigest = {
+/** Summary of a run for get_status / start_run feedback. */
+export type RunSummary = {
   id: string
   challengeId: string
   challengeName: string
@@ -29,7 +29,7 @@ export type RunDigest = {
 }
 
 /** A run row for the list_runs tool (incl. closed/history). Surfaces the
- * outcome (summary + flag) and timing the active-only RunDigest omits, so the
+ * outcome (summary + flag) and timing the active-only RunSummary omits, so the
  * orchestrator can review what has already been tried on a challenge. */
 export type RunListItem = {
   id: string
@@ -48,9 +48,9 @@ export type RunListItem = {
 
 /** Full challenge detail for the get_challenge tool. Adds the description,
  * attachments, target connectivity, platform/solved state, and run-activity
- * breakdown that the list digest omits — everything the orchestrator needs to
+ * breakdown that the list summary omits — everything the orchestrator needs to
  * judge a challenge and write a targeted initial prompt before starting. */
-export type ChallengeDetail = ChallengeDigest & {
+export type ChallengeDetail = ChallengeSummary & {
   description: string
   platformIntegrated: boolean
   available: boolean
@@ -77,7 +77,7 @@ export type ReadRunResult = {
  * the orchestrator (an LLM) can adjust its plan. */
 export type OrchestratorToolContext = {
   eventId: string
-  listChallenges(): ChallengeDigest[]
+  listChallenges(): ChallengeSummary[]
   getChallenge(challengeId: string): ChallengeDetail | { reason: string }
   listRuns(opts?: {
     challengeId?: string
@@ -104,7 +104,7 @@ export type OrchestratorToolContext = {
     maxConcurrentRuns: number
     inflightTargets: number
     maxConcurrentTargets: number
-    runs: RunDigest[]
+    runs: RunSummary[]
   }
 }
 

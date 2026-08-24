@@ -421,7 +421,7 @@ export function OrchestratorView({ eventId }: { eventId: string }) {
               <Conversation
                 agents={agents}
                 canEditQueue={false}
-                channel={eventId}
+                topic={eventId}
                 closedReopenable={false}
                 findCurrentModelId={findCurrentModelId}
                 loadMessages={loadMessages}

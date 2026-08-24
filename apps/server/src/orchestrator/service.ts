@@ -50,13 +50,13 @@ import {
 } from "./session"
 import {
   type ChallengeDetail,
-  type ChallengeDigest,
+  type ChallengeSummary,
   createOrchestratorTools,
   flattenEntryText,
   LIST_RUNS_ROW_LIMIT,
   type OrchestratorToolContext,
   type ReadRunResult,
-  type RunDigest,
+  type RunSummary,
   type RunListItem,
 } from "./tools"
 
@@ -157,7 +157,7 @@ export function buildOrchestratorToolContext(
   const ctx: OrchestratorToolContext = {
     eventId,
 
-    listChallenges(): ChallengeDigest[] {
+    listChallenges(): ChallengeSummary[] {
       const list = db
         .select({ challenge: challenges, remote: challengeRemote })
         .from(challenges)
@@ -437,7 +437,7 @@ export function buildOrchestratorToolContext(
         .orderBy(desc(runs.updatedAt))
         .all()
         .filter(({ run }) => run.status === "running" || run.status === "idle")
-      const digest: RunDigest[] = active.map(({ run, challenge }) => ({
+      const runSummaries: RunSummary[] = active.map(({ run, challenge }) => ({
         id: run.id,
         challengeId: run.challengeId,
         challengeName: challenge.name,
@@ -453,7 +453,7 @@ export function buildOrchestratorToolContext(
         maxConcurrentRuns: get(getSettings(), "scheduler.maxConcurrentRuns"),
         inflightTargets: countTargetChallenges(db, eventId),
         maxConcurrentTargets: r.maxConcurrentTargets,
-        runs: digest,
+        runs: runSummaries,
       }
     },
   }
@@ -753,7 +753,7 @@ export function createOrchestratorService(options: OrchestratorServiceOptions) {
       try {
         orchSession = await createHost({
           owner: { type: "orchestrator", id: eventId },
-          channel: eventId,
+          topic: eventId,
           agentId: ORCHESTRATOR_AGENT_ID,
           cwd: cfg.workspace,
           containerName: name,

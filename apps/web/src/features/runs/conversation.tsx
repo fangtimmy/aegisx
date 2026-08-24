@@ -53,8 +53,8 @@ import { Timeline } from "./timeline"
  * (useCallback) so the SSE connection effect does not reconnect on re-render.
  */
 export type ConversationProps = {
-  /** LiveBus channel id (run id / event id). */
-  channel: string
+  /** LiveBus topic id (run id / event id). */
+  topic: string
   /** SSE endpoint path. */
   streamPath: string
   /** Agents in this conversation (≥1). Re-renders agent tabs; does NOT affect
@@ -93,7 +93,7 @@ export type ConversationProps = {
 
 export function Conversation(props: ConversationProps) {
   const {
-    channel,
+    topic,
     streamPath,
     agents,
     status,
@@ -177,14 +177,14 @@ export function Conversation(props: ConversationProps) {
 
   useEffect(() => {
     const disconnect = store.connect(
-      channel,
+      topic,
       loadMessages,
       setDisconnected,
       streamPath
     )
     void loadMessages()
     return disconnect
-  }, [channel, streamPath, store, loadMessages])
+  }, [topic, streamPath, store, loadMessages])
 
   // Re-fetch when the agent list grows (e.g. a child spawned) so its history
   // is loaded even if committed SSE events raced ahead.

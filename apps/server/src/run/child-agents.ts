@@ -153,7 +153,7 @@ export function createChildAgentRuntime(deps: ChildAgentDeps) {
     try {
       childSession = await createAgentHost({
         owner: { type: "run", id: runId, runId, agentId: childAgentId },
-        channel: runId,
+        topic: runId,
         agentId: childAgentId,
         cwd: ctx.containerWorkspace,
         containerName: ctx.containerName,
