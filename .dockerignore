@@ -1,0 +1,9 @@
+# Keep the solver image build context (repo root) minimal — only what the
+# Dockerfiles COPY plus the source tree needs.
+.data
+data
+**/node_modules
+**/.venv
+**/__pycache__
+**/dist
+**/.git
