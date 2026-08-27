@@ -1,111 +1,36 @@
-<?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" data-d2-version="v0.8.2" preserveAspectRatio="xMinYMin meet" viewBox="0 0 1842 410"><svg class="d2-2735308289 d2-svg" width="1842" height="410" viewBox="-89 -89 1842 410"><rect x="-89.000000" y="-89.000000" width="1842.000000" height="410.000000" rx="0.000000" fill="#FFFFFF" class=" fill-N7" stroke-width="0" /><style type="text/css"><![CDATA[
-.d2-2735308289 .text {
-	font-family: "d2-2735308289-font-regular";
-}
-@font-face {
-	font-family: d2-2735308289-font-regular;
-	src: url("data:application/font-woff;base64,d09GRgABAAAAAAYMAAoAAAAACqwAAguFAAAAAAAAAAAAAAAAAAAAAAAAAABPUy8yAAAA9AAAAGAAAABgXd/Vo2NtYXAAAAFUAAAAOgAAADoBYP/OZ2x5ZgAAAZAAAACYAAAAmFjvcBdoZWFkAAACKAAAADYAAAA2G4Ue32hoZWEAAAJgAAAAJAAAACQKhAXGaG10eAAAAoQAAAAQAAAAEAVHANtsb2NhAAAClAAAAAoAAAAKAHgAYm1heHAAAAKgAAAAIAAAACAAHAD2bmFtZQAAAsAAAAMrAAAIFAbDVU1wb3N0AAAF7AAAACAAAAAg/9EAMgADAgkBkAAFAAACigJYAAAASwKKAlgAAAFeADIBIwAAAgsFAwMEAwICBGAAAvcAAAADAAAAAAAAAABBREJPAEAAIP//Au7/BgAAA9gBESAAAZ8AAAAAAeYClAAAACAAAwAAAAEAAwABAAAADAAEAC4AAAAGAAQAAQACACAAt///AAAAIAC3////4f9LAAEAAAAAAAAAAQACAAAAAAAFAFkAAAI1ApQAAwAJAA8AEgAVAAAzESERJSEnJyMHNzM3NyMXAzcnAREHWQHc/pABAUk0BDY2BDFC60J5f38BWH4ClP1sOoRnZ8Ved3f+jebo/jIBzuj//wBBAQMAuAGBAgcAAwAAAQ8AAAABAEH/9AC4AHIACwAAFyImNTQ2MzIWFRQGfRkjIxkYIyMMIxsdIyMdGyMAAAEAAAACC4XQRwSXXw889QADA+gAAAAA2F2goQAAAADdZi82/jr+2whvA8gAAAADAAIAAAAAAAAAAQAAA9j+7wAACJj+Ov46CG8AAQAAAAAAAAAAAAAAAAAAAAQCjQBZAMgAAAD5AEEA+QBBAAAALAAsADYATAAAAAEAAAAEAIwADABmAAcAAQAAAAAAAAAAAAAAAAAEAAN4nJyU32obVxDGf4oltaE0F8UE58acy7Y4KzXYIbGv1nVMlhor1Sr9A6WwltaSkLS77K7kuPQBet236Fvkqs/Rhyi9LjMaKdq0ECxCzLc6M998Z+abA+zyDzvU6veBP5s/GK6x3zw2fI8HzQPDO1w0/jJc34hpMGj8arjJl42u4Y94W//d8Mcc1n82fJ+9+rnhT3hS3zX86Y7jb8MPOOTtEtfgGb8ZrrFHZvgeu/xkeIeHGGetzkPahht8xr7hJvtAjzElU8YkDHFcM2bInJyYgpCYnDHXxAxwBPhMKfXXhEiRY/i/v0aElOREyjiixDElZEpEwcgYf9GslFdaUerkiqSaT8mIiCvNmBCR4EgZkpIQM1GekpKMY1q0KOir3oySAo+CMVM8UnKGtOhwzgU9RowpcJwrkygLSbmm5IZI6zuLkM70iUkoTNWchIHqdKov1uyACxwdMo3dZL6oMBzg+E6zRZvEOL7C0/9uQ1m17kpNxEL7KT28Yqo6b3SCI+241PX5VnHJMW6r/lSVfLhHA1Unsx5zxVznL/OTPFGS4NwePqE6KHSPcJzqd0CoHfmegB4v6fCann77dOnic0mPgBea26GL42s6XHKmGYHi5dm5OuaSH3F8Q6Axwh1bf6Tn8vWGzNwt2sUZco8ZmW6BzFjuL86Pt5qw7FBacUehrujrHkmk7IF0RfYsYmiuyNQVM+3lyhuF9W9gjpDTUmf77ly2YWG7t9riW1LdYcfcNMnkloo+NFXvPc/c6D+PiAEpVxrRJ2VGi5JbvdsrIuZMcZypj1/qlpT46xypc6suiZmpgoBEeXIy/RuZb0LT3q/43tlbIps30x2drG+1TRVhTjZm9Fq7tzoLrcvxxgRaNtXUcmTCwry8qXhfor2K/lDdX+jrlvKYLrG+rjL//D/vwBM82hxyxAkjrSP8CQt7I9r6TrR5zon2YEKsUfJqvtFuCcMRHk854ojnPK1w+pxxSoeTO2hcZnU45cV7J5scbs3ijOcPVdNWvY7H669nW8/r8zv48gsOKi+jKJc9yFkY2zv/XxIxEy1ub7Mv7hHevwAAAP//AwAHW0wwAAADAAAAAAAA/84AMgAAAAAAAAAAAAAAAAAAAAAAAAAA");
-}
-.d2-2735308289 .text-bold {
-	font-family: "d2-2735308289-font-bold";
-}
-@font-face {
-	font-family: d2-2735308289-font-bold;
-	src: url("data:application/font-woff;base64,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");
-}
-.d2-2735308289 .text-italic {
-	font-family: "d2-2735308289-font-italic";
-}
-@font-face {
-	font-family: d2-2735308289-font-italic;
-	src: url("data:application/font-woff;base64,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");
-}]]></style><style type="text/css"><![CDATA[.shape {
-  shape-rendering: geometricPrecision;
-  stroke-linejoin: round;
-}
-.connection {
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.blend {
-  mix-blend-mode: multiply;
-  opacity: 0.5;
-}
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="480" viewBox="0 0 1360 480" font-family="'PingFang SC','Hiragino Sans GB','Arial Unicode MS',sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#64748b"/></marker>
+    <marker id="al" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker>
+  </defs>
 
-		.d2-2735308289 .fill-N1{fill:#0A0F25;}
-		.d2-2735308289 .fill-N2{fill:#676C7E;}
-		.d2-2735308289 .fill-N3{fill:#9499AB;}
-		.d2-2735308289 .fill-N4{fill:#CFD2DD;}
-		.d2-2735308289 .fill-N5{fill:#DEE1EB;}
-		.d2-2735308289 .fill-N6{fill:#EEF1F8;}
-		.d2-2735308289 .fill-N7{fill:#FFFFFF;}
-		.d2-2735308289 .fill-B1{fill:#0D32B2;}
-		.d2-2735308289 .fill-B2{fill:#0D32B2;}
-		.d2-2735308289 .fill-B3{fill:#E3E9FD;}
-		.d2-2735308289 .fill-B4{fill:#E3E9FD;}
-		.d2-2735308289 .fill-B5{fill:#EDF0FD;}
-		.d2-2735308289 .fill-B6{fill:#F7F8FE;}
-		.d2-2735308289 .fill-AA2{fill:#4A6FF3;}
-		.d2-2735308289 .fill-AA4{fill:#EDF0FD;}
-		.d2-2735308289 .fill-AA5{fill:#F7F8FE;}
-		.d2-2735308289 .fill-AB4{fill:#EDF0FD;}
-		.d2-2735308289 .fill-AB5{fill:#F7F8FE;}
-		.d2-2735308289 .stroke-N1{stroke:#0A0F25;}
-		.d2-2735308289 .stroke-N2{stroke:#676C7E;}
-		.d2-2735308289 .stroke-N3{stroke:#9499AB;}
-		.d2-2735308289 .stroke-N4{stroke:#CFD2DD;}
-		.d2-2735308289 .stroke-N5{stroke:#DEE1EB;}
-		.d2-2735308289 .stroke-N6{stroke:#EEF1F8;}
-		.d2-2735308289 .stroke-N7{stroke:#FFFFFF;}
-		.d2-2735308289 .stroke-B1{stroke:#0D32B2;}
-		.d2-2735308289 .stroke-B2{stroke:#0D32B2;}
-		.d2-2735308289 .stroke-B3{stroke:#E3E9FD;}
-		.d2-2735308289 .stroke-B4{stroke:#E3E9FD;}
-		.d2-2735308289 .stroke-B5{stroke:#EDF0FD;}
-		.d2-2735308289 .stroke-B6{stroke:#F7F8FE;}
-		.d2-2735308289 .stroke-AA2{stroke:#4A6FF3;}
-		.d2-2735308289 .stroke-AA4{stroke:#EDF0FD;}
-		.d2-2735308289 .stroke-AA5{stroke:#F7F8FE;}
-		.d2-2735308289 .stroke-AB4{stroke:#EDF0FD;}
-		.d2-2735308289 .stroke-AB5{stroke:#F7F8FE;}
-		.d2-2735308289 .background-color-N1{background-color:#0A0F25;}
-		.d2-2735308289 .background-color-N2{background-color:#676C7E;}
-		.d2-2735308289 .background-color-N3{background-color:#9499AB;}
-		.d2-2735308289 .background-color-N4{background-color:#CFD2DD;}
-		.d2-2735308289 .background-color-N5{background-color:#DEE1EB;}
-		.d2-2735308289 .background-color-N6{background-color:#EEF1F8;}
-		.d2-2735308289 .background-color-N7{background-color:#FFFFFF;}
-		.d2-2735308289 .background-color-B1{background-color:#0D32B2;}
-		.d2-2735308289 .background-color-B2{background-color:#0D32B2;}
-		.d2-2735308289 .background-color-B3{background-color:#E3E9FD;}
-		.d2-2735308289 .background-color-B4{background-color:#E3E9FD;}
-		.d2-2735308289 .background-color-B5{background-color:#EDF0FD;}
-		.d2-2735308289 .background-color-B6{background-color:#F7F8FE;}
-		.d2-2735308289 .background-color-AA2{background-color:#4A6FF3;}
-		.d2-2735308289 .background-color-AA4{background-color:#EDF0FD;}
-		.d2-2735308289 .background-color-AA5{background-color:#F7F8FE;}
-		.d2-2735308289 .background-color-AB4{background-color:#EDF0FD;}
-		.d2-2735308289 .background-color-AB5{background-color:#F7F8FE;}
-		.d2-2735308289 .color-N1{color:#0A0F25;}
-		.d2-2735308289 .color-N2{color:#676C7E;}
-		.d2-2735308289 .color-N3{color:#9499AB;}
-		.d2-2735308289 .color-N4{color:#CFD2DD;}
-		.d2-2735308289 .color-N5{color:#DEE1EB;}
-		.d2-2735308289 .color-N6{color:#EEF1F8;}
-		.d2-2735308289 .color-N7{color:#FFFFFF;}
-		.d2-2735308289 .color-B1{color:#0D32B2;}
-		.d2-2735308289 .color-B2{color:#0D32B2;}
-		.d2-2735308289 .color-B3{color:#E3E9FD;}
-		.d2-2735308289 .color-B4{color:#E3E9FD;}
-		.d2-2735308289 .color-B5{color:#EDF0FD;}
-		.d2-2735308289 .color-B6{color:#F7F8FE;}
-		.d2-2735308289 .color-AA2{color:#4A6FF3;}
-		.d2-2735308289 .color-AA4{color:#EDF0FD;}
-		.d2-2735308289 .color-AA5{color:#F7F8FE;}
-		.d2-2735308289 .color-AB4{color:#EDF0FD;}
-		.d2-2735308289 .color-AB5{color:#F7F8FE;}.appendix text.text{fill:#0A0F25}.md{--color-fg-default:#0A0F25;--color-fg-muted:#676C7E;--color-fg-subtle:#9499AB;--color-canvas-default:#FFFFFF;--color-canvas-subtle:#EEF1F8;--color-border-default:#0D32B2;--color-border-muted:#0D32B2;--color-neutral-muted:#EEF1F8;--color-accent-fg:#0D32B2;--color-accent-emphasis:#0D32B2;--color-attention-subtle:#676C7E;--color-danger-fg:red;}.sketch-overlay-B1{fill:url(#streaks-darker-d2-2735308289);mix-blend-mode:lighten}.sketch-overlay-B2{fill:url(#streaks-darker-d2-2735308289);mix-blend-mode:lighten}.sketch-overlay-B3{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-B4{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-B5{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-B6{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-AA2{fill:url(#streaks-dark-d2-2735308289);mix-blend-mode:overlay}.sketch-overlay-AA4{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-AA5{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-AB4{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-AB5{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-N1{fill:url(#streaks-darker-d2-2735308289);mix-blend-mode:lighten}.sketch-overlay-N2{fill:url(#streaks-dark-d2-2735308289);mix-blend-mode:overlay}.sketch-overlay-N3{fill:url(#streaks-normal-d2-2735308289);mix-blend-mode:color-burn}.sketch-overlay-N4{fill:url(#streaks-normal-d2-2735308289);mix-blend-mode:color-burn}.sketch-overlay-N5{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-N6{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.sketch-overlay-N7{fill:url(#streaks-bright-d2-2735308289);mix-blend-mode:darken}.light-code{display: block}.dark-code{display: none}]]></style><g class="5YaF546v grp"><g class="shape" ><rect x="12.000000" y="12.000000" width="674.000000" height="208.000000" rx="8.000000" stroke="#cbd5e1" fill="#f8fafc" style="stroke-width:2;" /></g><text x="349.000000" y="45.000000" fill="#0A0F25" class="text fill-N1" style="text-anchor:middle;font-size:28px">内环 · 一场赛事之内</text></g><g class="6K6w5b2V box"><g class="shape" ><rect x="952.000000" y="38.000000" width="170.000000" height="77.000000" rx="6.000000" stroke="#64748b" fill="#ffffff" style="stroke-width:2;" /></g><text x="1037.000000" y="74.000000" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:16px"><tspan x="1037.000000" dy="0.000000">完整记录</tspan><tspan x="1037.000000" dy="18.500000">会话 · 事件 · 费用</tspan></text></g><g class="5b2S5Zug box"><g class="shape" ><rect x="1192.000000" y="38.000000" width="190.000000" height="77.000000" rx="6.000000" stroke="#64748b" fill="#ffffff" style="stroke-width:2;" /></g><text x="1287.000000" y="74.000000" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:16px"><tspan x="1287.000000" dy="0.000000">复盘归因</tspan><tspan x="1287.000000" dy="18.500000">卡在哪一步 · 为什么</tspan></text></g><g class="5pS56L-b key"><g class="shape" ><rect x="1462.000000" y="77.000000" width="190.000000" height="77.000000" rx="6.000000" stroke="#4f46e5" fill="#eef2ff" style="stroke-width:2;" /></g><text x="1557.000000" y="113.000000" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:16px"><tspan x="1557.000000" dy="0.000000">系统改进</tspan><tspan x="1557.000000" dy="18.500000">镜像 · 提示词 · 策略</tspan></text></g><g class="5YaF546vLua0vuWPkQ== box"><g class="shape" ><rect x="62.000000" y="72.000000" width="124.000000" height="66.000000" rx="6.000000" stroke="#64748b" fill="#ffffff" style="stroke-width:2;" /></g><text x="124.000000" y="110.500000" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:16px">派发决策</text></g><g class="5YaF546vLuino-mimA== box"><g class="shape" ><rect x="266.000000" y="104.000000" width="145.000000" height="66.000000" rx="6.000000" stroke="#64748b" fill="#ffffff" style="stroke-width:2;" /></g><text x="338.500000" y="142.500000" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:16px">求解者解题</text></g><g class="5YaF546vLuS6i-S7tg== box"><g class="shape" ><rect x="491.000000" y="72.000000" width="145.000000" height="66.000000" rx="6.000000" stroke="#64748b" fill="#ffffff" style="stroke-width:2;" /></g><text x="563.500000" y="110.500000" fill="#0A0F25" class="text-bold fill-N1" style="text-anchor:middle;font-size:16px">结果与事件</text></g><g class="5YaF546vLijmtL7lj5EgLSZndDsg6Kej6aKYKVswXQ=="><marker id="mk-d2-2735308289-3488378134" markerWidth="10.000000" markerHeight="12.000000" refX="7.000000" refY="6.000000" viewBox="0.000000 0.000000 10.000000 12.000000" orient="auto" markerUnits="userSpaceOnUse"> <polygon points="0.000000,0.000000 10.000000,6.000000 0.000000,12.000000" fill="#0D32B2" class="connection fill-B1" stroke-width="2" /> </marker><path d="M 188.000000 116.000000 L 262.000000 116.000000" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2735308289-3488378134)" mask="url(#d2-2735308289)" /></g><g class="5YaF546vLijop6PpopggLSZndDsg5LqL5Lu2KVswXQ=="><path d="M 413.000000 116.000000 L 487.000000 116.000000" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2735308289-3488378134)" mask="url(#d2-2735308289)" /></g><g class="5YaF546vLijkuovku7YgLSZndDsg5rS-5Y-RKVswXQ=="><marker id="mk-d2-2735308289-2177206569" markerWidth="10.000000" markerHeight="12.000000" refX="7.000000" refY="6.000000" viewBox="0.000000 0.000000 10.000000 12.000000" orient="auto" markerUnits="userSpaceOnUse"> <polygon points="0.000000,0.000000 10.000000,6.000000 0.000000,12.000000" fill="#0D32B2" class="connection fill-B2" stroke-width="2" /> </marker><path d="M 489.000000 94.000000 L 461.000000 94.000000 S 451.000000 94.000000 451.000000 84.000000 L 451.000000 83.000000 S 451.000000 73.000000 441.000000 73.000000 L 236.000000 73.000000 S 226.000000 73.000000 226.000000 83.000000 L 226.000000 84.000000 S 226.000000 94.000000 216.000000 94.000000 L 190.000000 94.000000" stroke="#0D32B2" fill="none" class="connection stroke-B2" style="stroke-width:2;stroke-dasharray:8.000000,7.892511;" marker-end="url(#mk-d2-2735308289-2177206569)" mask="url(#d2-2735308289)" /><text x="338.500000" y="79.000000" fill="#676C7E" class="text-italic fill-N2" style="text-anchor:middle;font-size:16px">纳入经验</text></g><g class="KOWGheeOryAtJmd0OyDorrDlvZUpWzBd"><path d="M 688.000000 76.750000 L 948.000000 76.750000" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2735308289-3488378134)" mask="url(#d2-2735308289)" /><text x="819.000000" y="82.000000" fill="#676C7E" class="text-italic fill-N2" style="text-anchor:middle;font-size:16px">一场比赛打完</text></g><g class="KOiusOW9lSAtJmd0OyDlvZLlm6ApWzBd"><path d="M 1124.000000 76.750000 L 1188.000000 76.750000" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2735308289-3488378134)" mask="url(#d2-2735308289)" /></g><g class="KOW9kuWboCAtJmd0OyDmlLnov5spWzBd"><path d="M 1384.000000 103.166000 L 1458.000000 103.166000" stroke="#0D32B2" fill="none" class="connection stroke-B1" style="stroke-width:2;" marker-end="url(#mk-d2-2735308289-3488378134)" mask="url(#d2-2735308289)" /></g><g class="KOaUuei_myAtJmd0OyDlhoXnjq8pWzBd"><path d="M 1460.000000 128.832993 L 1432.000000 128.832993 S 1422.000000 128.832993 1422.000000 138.832993 L 1422.000000 145.250000 S 1422.000000 155.250000 1412.000000 155.250000 L 690.000000 155.250000" stroke="#0D32B2" fill="none" class="connection stroke-B2" style="stroke-width:2;stroke-dasharray:8.000000,7.892511;" marker-end="url(#mk-d2-2735308289-2177206569)" mask="url(#d2-2735308289)" /><text x="1087.000000" y="161.000000" fill="#676C7E" class="text-italic fill-N2" style="text-anchor:middle;font-size:16px">成为下一场的起点</text></g><mask id="d2-2735308289" maskUnits="userSpaceOnUse" x="-89" y="-89" width="1842" height="410">
-<rect x="-89" y="-89" width="1842" height="410" fill="white"></rect>
-<rect x="298.000000" y="63.000000" width="81" height="21" fill="black"></rect>
-<rect x="759.000000" y="66.000000" width="120" height="21" fill="black"></rect>
-<rect x="1008.000000" y="145.000000" width="158" height="21" fill="black"></rect>
-</mask></svg></svg>
+  <rect x="40" y="60" width="520" height="300" rx="12" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <text x="300" y="99" text-anchor="middle" font-size="16" font-weight="600" fill="#334155">内环 · 一场赛事之内</text>
+  <rect x="90" y="200" width="120" height="60" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="150" y="235" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2937">派发决策</text>
+  <rect x="240" y="200" width="120" height="60" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="300" y="235" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2937">求解者解题</text>
+  <rect x="390" y="200" width="120" height="60" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="450" y="235" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2937">结果与事件</text>
+  <path d="M210 230 L236 230" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+  <path d="M360 230 L386 230" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+  <path d="M450 260 L450 340 L150 340 L150 264" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="7 5" marker-end="url(#al)"/>
+  <text x="300" y="328" text-anchor="middle" font-size="12.5" fill="#64748b">纳入经验 · 影响下一笔派发</text>
+
+  <rect x="640" y="170" width="170" height="80" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="725" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2937">完整记录</text>
+  <text x="725" y="230" text-anchor="middle" font-size="12.5" fill="#6b7280">会话 · 事件 · 费用</text>
+  <rect x="870" y="170" width="190" height="80" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="965" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2937">复盘归因</text>
+  <text x="965" y="230" text-anchor="middle" font-size="12.5" fill="#6b7280">卡在哪一步 · 为什么</text>
+  <rect x="1120" y="170" width="190" height="80" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5"/>
+  <text x="1215" y="205" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2937">系统改进</text>
+  <text x="1215" y="230" text-anchor="middle" font-size="12.5" fill="#6b7280">镜像 · 提示词 · 策略</text>
+
+  <path d="M560 210 L636 210" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="598" y="196" text-anchor="middle" font-size="12.5" fill="#64748b">一场比赛打完</text>
+  <path d="M810 210 L866 210" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+  <path d="M1060 210 L1116 210" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#a)"/>
+  <path d="M1215 250 L1215 310 L566 310" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="7 5" marker-end="url(#al)"/>
+  <text x="760" y="298" text-anchor="middle" font-size="12.5" fill="#64748b">成为下一场的起点</text>
+</svg>
