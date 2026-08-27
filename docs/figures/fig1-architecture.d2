@@ -1,0 +1,39 @@
+direction: down
+vars: { d2-config: { layout-engine: elk } }
+
+赛事层: {
+  调度者: "调度者 Agent ×1"
+}
+
+题目层: {
+  题目A: "题目 A" {
+    s1: "求解者 A1"
+    s2: "求解者 A2"
+  }
+  题目B: "题目 B" {
+    s1: "求解者 B1"
+  }
+}
+
+频道层: {
+  teamA: "#team · 题目 A"
+  teamB: "#team · 题目 B"
+  orch: "#orch"
+  dm: "DM"
+}
+
+赛事层.调度者 -> 题目层.题目A.s1: "派出（模型·方向）"
+赛事层.调度者 -> 题目层.题目A.s2: "派出"
+赛事层.调度者 -> 题目层.题目B.s1: "派出"
+
+题目层.题目A.s1 -> 频道层.teamA: "写入事实·exp"
+题目层.题目A.s2 -> 频道层.teamA
+题目层.题目B.s1 -> 频道层.teamB
+
+频道层.teamA -> 题目层.题目A.s1: "后来者拉取全部历史" {style.stroke-dash: 4}
+频道层.teamB -> 题目层.题目B.s1: "游标 0 起读" {style.stroke-dash: 4}
+
+题目层.题目A -> 频道层.orch: "汇报·系统事件"
+频道层.orch -> 赛事层.调度者: "汇总"
+赛事层.调度者 -> 频道层.dm: "指派·介入" {style.stroke-dash: 4}
+频道层.dm -> 题目层.题目A.s2 {style.stroke-dash: 4}

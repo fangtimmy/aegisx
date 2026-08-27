@@ -1,0 +1,27 @@
+direction: down
+
+频道: "#team · 题目 A" {
+  seq: "" {
+    grid-rows: 1
+    grid-columns: 4
+    grid-gap: 6
+
+    m1: "① 探测结果\n端口 8080 开放"
+    m2: "② 已证伪\n弱口令不存在"
+    m3: "③ exp 片段\n可复用脚本"
+    m4: "④ 已确认\n框架版本"
+  }
+}
+
+a1: "Agent 1"
+a2: "Agent 2"
+a3: "Agent 3"
+
+a1 -> 频道: "写入 ①②"
+a2 -> 频道: "写入 ③"
+a3 -> 频道: "写入 ④"
+
+频道 -> a2: "游标 0：拉取全部历史" {style.stroke-dash: 4}
+
+a1 -> a2: "该次尝试结束" {style.stroke-dash: 4}
+a2 -> a3: "接力" {style.stroke-dash: 4}

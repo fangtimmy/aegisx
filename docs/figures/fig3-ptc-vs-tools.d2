@@ -1,0 +1,34 @@
+vars: { d2-config: { layout-engine: elk } }
+
+对比: {
+  grid-rows: 1
+  grid-columns: 2
+  grid-gap: 40
+
+  原子工具: "原子工具\nN 轮往返，中间状态进入上下文" {
+    llm: "调度者 LLM"
+    t1: "启动 Agent"
+    t2: "停止 Agent"
+    t3: "查询状态"
+    t4: "调整队列"
+
+    llm <-> t1: "①"
+    llm <-> t2: "②"
+    llm <-> t3: "③"
+    llm <-> t4: "④"
+  }
+
+  PTC: "PTC\n多步动作压缩为单次执行" {
+    llm: "调度者 LLM"
+    script: "for c in snap.challenges:\n    if not c.solved_now and c.points >= 200:\n        queue.enqueue(c.id)" {
+      shape: code
+    }
+    sdk: "容器内平台 Python SDK"
+    api: "平台"
+
+    llm -> script: "一次执行"
+    script -> sdk
+    sdk -> api
+    sdk -> llm: "结构化结果，一次返回" {style.stroke-dash: 4}
+  }
+}
