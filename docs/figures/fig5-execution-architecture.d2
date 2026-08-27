@@ -1,21 +1,67 @@
 direction: right
 vars: { d2-config: { layout-engine: elk } }
 
-宿主: {
-  agent: "Agent 循环 ×N（pi SDK）\n推理与决策，含调度者"
-  server: "服务端\n编排 · 队列 · 记录"
-  webui: "WebUI"
-
-  server -> webui: "SSE 实时推送"
+classes: {
+  box: {
+    style: {
+      fill: "#ffffff"
+      stroke: "#64748b"
+      border-radius: 6
+    }
+  }
+  key: {
+    style: {
+      fill: "#eef2ff"
+      stroke: "#4f46e5"
+      border-radius: 6
+    }
+  }
+  grp: {
+    style: {
+      fill: "#f8fafc"
+      stroke: "#cbd5e1"
+      border-radius: 8
+    }
+  }
 }
 
-容器: "Kali 容器（按题目共享）" {
-  tools: "离线 CTF 工具链"
-  ws: "/workspace\nagents/<id>/ · shared/ · attachments/"
+agent: "Agent 循环 ×N\n推理 · 决策（含调度者）" {
+  class: key
+  width: 240
+  height: 84
 }
 
-靶机: "靶机容器\n按需启动 · 闲置回收"
+容器: "Kali 容器 · 按题目共享" {
+  class: grp
+  g: "" {
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 8
 
-宿主.agent -> 容器.ws: "bash：docker exec"
-容器 -> 宿主.server: "容器内 aegisx SDK → API\n题目同步 · flag 判定 · 靶机管理"
-宿主.server -> 靶机
+    tools: "离线 CTF 工具链" {class: box}
+    ws: "/workspace\nagents/<id>/ · shared/ · attachments/" {class: box}
+  }
+}
+
+server: "服务端\n编排 · 队列 · 记录" {
+  class: box
+  width: 200
+  height: 84
+}
+
+webui: "WebUI\n实时对话流 · 队列 · 消耗" {
+  class: box
+  width: 220
+  height: 84
+}
+
+靶机: "靶机容器" {
+  class: box
+  width: 160
+  height: 84
+}
+
+agent -> 容器: "bash：docker exec"
+容器 -> server: "容器内 aegisx SDK → API\n题目同步 · flag 判定" {style.stroke-dash: 4}
+server -> webui: "SSE"
+server -> 靶机: "按需启动 · 闲置回收"

@@ -1,39 +1,55 @@
 direction: down
 vars: { d2-config: { layout-engine: elk } }
 
-赛事层: {
-  调度者: "调度者 Agent ×1"
-}
-
-题目层: {
-  题目A: "题目 A" {
-    s1: "求解者 A1"
-    s2: "求解者 A2"
+classes: {
+  box: {
+    style: {
+      fill: "#ffffff"
+      stroke: "#64748b"
+      border-radius: 6
+    }
   }
-  题目B: "题目 B" {
-    s1: "求解者 B1"
+  key: {
+    style: {
+      fill: "#eef2ff"
+      stroke: "#4f46e5"
+      border-radius: 6
+    }
+  }
+  grp: {
+    style: {
+      fill: "#f8fafc"
+      stroke: "#cbd5e1"
+      border-radius: 8
+    }
   }
 }
 
-频道层: {
-  teamA: "#team · 题目 A"
-  teamB: "#team · 题目 B"
-  orch: "#orch"
-  dm: "DM"
+赛事层: "赛事层" {
+  class: grp
+  调度者: "调度者 Agent ×1" {class: key}
 }
 
-赛事层.调度者 -> 题目层.题目A.s1: "派出（模型·方向）"
-赛事层.调度者 -> 题目层.题目A.s2: "派出"
-赛事层.调度者 -> 题目层.题目B.s1: "派出"
+题目层: "题目层" {
+  class: grp
+  A: "题目 A · 求解者 ×N" {class: box}
+  B: "题目 B · 求解者 ×N" {class: box}
+}
 
-题目层.题目A.s1 -> 频道层.teamA: "写入事实·exp"
-题目层.题目A.s2 -> 频道层.teamA
-题目层.题目B.s1 -> 频道层.teamB
+频道层: "频道层 · 协作全部经过频道" {
+  class: grp
+  g: "" {
+    grid-rows: 1
+    grid-columns: 4
+    grid-gap: 8
 
-频道层.teamA -> 题目层.题目A.s1: "后来者拉取全部历史" {style.stroke-dash: 4}
-频道层.teamB -> 题目层.题目B.s1: "游标 0 起读" {style.stroke-dash: 4}
+    teamA: "#team · A" {class: box}
+    teamB: "#team · B" {class: box}
+    orch: "#orch" {class: box}
+    dm: "DM" {class: box}
+  }
+}
 
-题目层.题目A -> 频道层.orch: "汇报·系统事件"
-频道层.orch -> 赛事层.调度者: "汇总"
-赛事层.调度者 -> 频道层.dm: "指派·介入" {style.stroke-dash: 4}
-频道层.dm -> 题目层.题目A.s2 {style.stroke-dash: 4}
+赛事层 -> 题目层: "派出（模型 · 方向）"
+题目层 -> 频道层: "写入事实 · 情报 · exp"
+频道层 -> 赛事层: "汇报 · 系统事件" {style.stroke-dash: 4}
