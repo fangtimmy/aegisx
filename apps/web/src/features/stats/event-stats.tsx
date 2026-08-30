@@ -7,7 +7,7 @@ import {
   BarChart,
   CartesianGrid,
   ResponsiveContainer,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   XAxis,
   YAxis,
 } from "recharts"
@@ -44,7 +44,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { formatCost, formatTokens } from "@/features/runs/agent-overview"
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  agentStatusLabel,
+  formatCost,
+  formatTokens,
+} from "@/features/runs/agent-overview"
 import { formatTime } from "@/lib/format"
 
 /** Statistics tab: derived per-event analytics (score / billing / efficiency /
@@ -222,6 +227,38 @@ function timeAxis(startMs: number, endMs: number) {
   return { domain: [lo, hi] as [number, number], ticks }
 }
 
+/** Whole-number Y ticks: every integer for small maxima, otherwise a
+ * half-way tick — recharts' auto ticks pick uneven steps (0/6/12/21). */
+function integerTicks(max: number): number[] {
+  if (max <= 4) return Array.from({ length: max + 1 }, (_, i) => i)
+  return [0, Math.round(max / 2), max]
+}
+
+/** Custom score tooltip: recharts' default would only show the cumulative
+ * value — the solved challenge name (already computed per point) is what a
+ * reviewer actually wants at hover time. */
+function ScoreTooltipContent(props: {
+  active?: boolean
+  payload?: ReadonlyArray<{
+    payload?: { t?: number; cumulative?: number; label?: string }
+  }>
+}) {
+  if (!props.active) return null
+  const point = props.payload?.[0]?.payload
+  if (!point) return null
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md/5">
+      <span className="text-muted-foreground">
+        {formatTime(new Date(point.t ?? 0).toISOString())}
+      </span>
+      {point.label ? (
+        <span className="font-medium text-balance">{point.label}</span>
+      ) : null}
+      <span className="tabular-nums">累计 {point.cumulative ?? 0} 分</span>
+    </div>
+  )
+}
+
 /** Cumulative earned points over the event window (the赛后 score curve). */
 function ScoreChart({ data }: { data: EventStats }) {
   if (data.scoreTimeline.length === 0) return null
@@ -258,6 +295,7 @@ function ScoreChart({ data }: { data: EventStats }) {
             <AreaChart
               data={points}
               margin={{ bottom: 0, left: 0, right: 12, top: 8 }}
+              syncId="event-stats"
             >
               <CartesianGrid
                 stroke="var(--border)"
@@ -278,13 +316,12 @@ function ScoreChart({ data }: { data: EventStats }) {
                 tick={{ fontSize: 11 }}
                 width={44}
               />
-              <Tooltip
-                {...chartTooltip}
-                cursor={{ stroke: "var(--muted-foreground)", strokeOpacity: 0.35 }}
-                formatter={(value) => [`${Number(value)} 分`, "累计"]}
-                labelFormatter={(label) =>
-                  formatTime(new Date(Number(label)).toISOString())
-                }
+              <RechartsTooltip
+                content={<ScoreTooltipContent />}
+                cursor={{
+                  stroke: "var(--muted-foreground)",
+                  strokeOpacity: 0.35,
+                }}
               />
               <Area
                 dataKey="cumulative"
@@ -374,12 +411,30 @@ function AgentTimeline({ data }: { data: EventStats }) {
                     const left = ((start - domainStart) / spanMs) * 100
                     const width = Math.max(0.5, ((end - start) / spanMs) * 100)
                     return (
-                      <div
-                        className={`absolute top-0.5 h-4 rounded-sm ${spanColor(span)}`}
-                        key={span.id}
-                        style={{ left: `${left}%`, width: `${width}%` }}
-                        title={`${span.name} · ${span.model}\n${formatTime(span.start)} → ${formatTime(span.end)}`}
-                      />
+                      <Tooltip key={span.id}>
+                        <TooltipTrigger
+                          render={
+                            <span
+                              className={`absolute top-0.5 h-4 cursor-default rounded-sm ${spanColor(span)}`}
+                              style={{ left: `${left}%`, width: `${width}%` }}
+                            />
+                          }
+                        />
+                        <TooltipPopup>
+                          <span className="flex flex-col gap-0.5 text-left">
+                            <span className="font-medium">
+                              {span.name} · {agentStatusLabel(span.status)}
+                            </span>
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              {span.model}
+                            </span>
+                            <span className="tabular-nums">
+                              {formatTime(span.start)} → {formatTime(span.end)}
+                              （{formatDuration(end - start)}）
+                            </span>
+                          </span>
+                        </TooltipPopup>
+                      </Tooltip>
                     )
                   })}
                 </div>
@@ -436,6 +491,7 @@ function ConcurrencyChart({ data }: { data: EventStats }) {
             <AreaChart
               data={points}
               margin={{ bottom: 0, left: 0, right: 12, top: 8 }}
+              syncId="event-stats"
             >
               <CartesianGrid
                 stroke="var(--border)"
@@ -454,11 +510,15 @@ function ConcurrencyChart({ data }: { data: EventStats }) {
                 allowDecimals={false}
                 domain={[0, maxRunning]}
                 tick={{ fontSize: 11 }}
+                ticks={integerTicks(maxRunning)}
                 width={32}
               />
-              <Tooltip
+              <RechartsTooltip
                 {...chartTooltip}
-                cursor={{ stroke: "var(--muted-foreground)", strokeOpacity: 0.35 }}
+                cursor={{
+                  stroke: "var(--muted-foreground)",
+                  strokeOpacity: 0.35,
+                }}
                 formatter={(value) => [`${Number(value)}`, "并发"]}
                 labelFormatter={(label) =>
                   formatTime(new Date(Number(label)).toISOString())
@@ -865,6 +925,8 @@ function CollaborationCards({ data }: { data: EventStats }) {
   }
   const maxMessages = Math.max(...data.messageActivity.map((b) => b.count), 1)
   const maxCalls = Math.max(...data.toolUsage.map((t) => t.calls), 1)
+  const toolCallsTotal =
+    data.toolUsage.reduce((sum, tool) => sum + tool.calls, 0) || 1
   return (
     <CardFrame>
       <CardFrameHeader>
@@ -925,7 +987,7 @@ function CollaborationCards({ data }: { data: EventStats }) {
                     tick={{ fontSize: 10 }}
                     width={28}
                   />
-                  <Tooltip
+                  <RechartsTooltip
                     {...chartTooltip}
                     cursor={{ fill: "var(--muted)", fillOpacity: 0.6 }}
                     formatter={(value) => [`${Number(value)} 条`, "消息"]}
@@ -961,8 +1023,11 @@ function CollaborationCards({ data }: { data: EventStats }) {
                       style={{ width: `${(tool.calls / maxCalls) * 100}%` }}
                     />
                   </div>
-                  <span className="w-12 shrink-0 text-right font-mono text-xs tabular-nums">
+                  <span className="w-24 shrink-0 text-right font-mono text-xs tabular-nums">
                     {tool.calls}
+                    <span className="ml-1 text-muted-foreground">
+                      {Math.round((tool.calls / toolCallsTotal) * 100)}%
+                    </span>
                   </span>
                 </div>
               ))}
