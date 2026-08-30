@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
@@ -31,16 +31,26 @@ async function waitFor(cond: () => boolean, timeoutMs = 5_000) {
 }
 
 /** QueueService with a stubbed launch (records calls, controls outcome).
- * Each launch seeds the agent row the drainer's markRunning references. */
+ * Each launch seeds the agent row the drainer's markRunning references.
+ * Created services are disposed by the file-level afterEach (mirrors the
+ * production close: isDisposed → true + cancelDrain) so a leftover debounced
+ * drain never fires against the test's closed DB. */
+const createdQueues: Array<{ dispose: () => void }> = []
+
+afterEach(() => {
+  for (const svc of createdQueues.splice(0)) svc.dispose()
+})
+
 function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
   const launches: string[] = []
   const emergencies: string[] = []
   const notices: string[] = []
   let n = 0
+  let disposed = false
   const svc = createQueueService({
     db,
     getSettings: flatSettings,
-    isDisposed: () => false,
+    isDisposed: () => disposed,
     launch: async (row) => {
       launches.push(row.id)
       const agentId = await launch(row.id)
@@ -55,6 +65,12 @@ function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
     onQueueEmergency: (eventId, line) =>
       emergencies.push(`${eventId}: ${line}`),
     onQueueNotice: (eventId, line) => notices.push(`${eventId}: ${line}`),
+  })
+  createdQueues.push({
+    dispose: () => {
+      disposed = true
+      svc.cancelDrain()
+    },
   })
   return { svc, launches, emergencies, notices }
 }

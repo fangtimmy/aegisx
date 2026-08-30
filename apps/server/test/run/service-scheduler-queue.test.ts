@@ -97,6 +97,23 @@ function makeCapturingService(db: Db, dir: string) {
 
 const settle = () => new Promise((r) => setTimeout(r, 10))
 
+/** The launch-failure notice rides fire-and-forget delivery
+ * (post → deliverChannel → deliverAgentAwaited) — a fixed sleep races it
+ * under load, so poll until the deadline. */
+async function deliveredTo(
+  log: Map<string, string[]>,
+  agentId: string,
+  needle: string,
+  deadlineMs = 2000
+): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs
+  while (Date.now() < deadline) {
+    if (log.get(agentId)?.some((t) => t.includes(needle))) return true
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  return false
+}
+
 describe("v19 spawn-spec passthrough (params → drainer → spawn)", () => {
   test("enqueue with model + prompt launches one agent shaped by the params", async () => {
     const { db, dir, close } = setupDb()
@@ -405,9 +422,7 @@ describe("scheduler queue integration (v19)", () => {
       expect(failed.status).toBe("failed")
       expect(failed.error).toBeTruthy()
       // The urgent launch-failure line woke the live scheduler.
-      expect(
-        promptLog.get("a-sched")?.some((t) => t.includes("启动失败"))
-      ).toBe(true)
+      expect(await deliveredTo(promptLog, "a-sched", "启动失败")).toBe(true)
       await service.close()
     } finally {
       close()
