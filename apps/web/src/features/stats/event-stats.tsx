@@ -192,6 +192,21 @@ function OverviewCards({ data }: { data: EventStats }) {
   )
 }
 
+/** Recharts' default tooltip is an unstyled white box that clashes with the
+ * dark theme — theme it with popover tokens so both modes read correctly. */
+const chartTooltip = {
+  contentStyle: {
+    background: "var(--popover)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    boxShadow: "0 4px 12px rgb(0 0 0 / 0.2)",
+    fontSize: 12,
+    color: "var(--popover-foreground)",
+  },
+  labelStyle: { color: "var(--muted-foreground)" },
+  itemStyle: { color: "var(--popover-foreground)" },
+} as const
+
 /** Padded [start, end] domain + 5 explicit ticks for a time axis. Recharts'
  * own tick generation on numeric time axes is unreliable (single tick on
  * multi-hour windows, overlapping labels on degenerate ones), so both the
@@ -264,7 +279,8 @@ function ScoreChart({ data }: { data: EventStats }) {
                 width={44}
               />
               <Tooltip
-                contentStyle={{ fontSize: 12 }}
+                {...chartTooltip}
+                cursor={{ stroke: "var(--muted-foreground)", strokeOpacity: 0.35 }}
                 formatter={(value) => [`${Number(value)} 分`, "累计"]}
                 labelFormatter={(label) =>
                   formatTime(new Date(Number(label)).toISOString())
@@ -441,7 +457,8 @@ function ConcurrencyChart({ data }: { data: EventStats }) {
                 width={32}
               />
               <Tooltip
-                contentStyle={{ fontSize: 12 }}
+                {...chartTooltip}
+                cursor={{ stroke: "var(--muted-foreground)", strokeOpacity: 0.35 }}
                 formatter={(value) => [`${Number(value)}`, "并发"]}
                 labelFormatter={(label) =>
                   formatTime(new Date(Number(label)).toISOString())
@@ -909,7 +926,8 @@ function CollaborationCards({ data }: { data: EventStats }) {
                     width={28}
                   />
                   <Tooltip
-                    contentStyle={{ fontSize: 12 }}
+                    {...chartTooltip}
+                    cursor={{ fill: "var(--muted)", fillOpacity: 0.6 }}
                     formatter={(value) => [`${Number(value)} 条`, "消息"]}
                     labelFormatter={(bucket) =>
                       formatTime(
