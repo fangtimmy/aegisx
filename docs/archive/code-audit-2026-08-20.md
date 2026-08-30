@@ -65,6 +65,8 @@
 
 ### P1-1 巨型工厂闭包三件套（体量榜 + churn 榜双料冠军）
 
+> **状态：channels.ts 已拆分（2026-08-30）**。1490 行的 `createChannelService` 按职责切为同包五模块：`channels-context`（共享状态 + 键/meta 助手）、`channels-post`（写路径 + 附件）、`channels-delivery`（推送引擎 + flush tick）、`channels-reads`（读取/列表/可见性）、`channels-render`（纯投递渲染）；`channels.ts` 保留为组装壳 + 清理 + 公共导出面（约 190 行），外部引用零变更。`service.ts` 的 flag 通知族已随 v19 重构移除，该文件与 `agent-factory.ts` 维持现状。
+
 | 文件 | 行数 | 工厂函数 | 闭包跨度 |
 |---|---|---|---|
 | `run/channels.ts` | 1434 | `createChannelService` | 160→1350，约 **1190 行** |
@@ -80,6 +82,8 @@ churn 榜：`service.ts` 全库第一（80 次改动）、`channels.ts` 同属�
 `closeAgent`（380-407）、`finishAgent`（410-441）、`deleteAgent`（675-）的 `withLock` 内部善后体逐行重复：abort → dispose → `lifecycle.delete` → `deadlines.clearAgentTimers` → `pendingFinish.delete` → `finishFlagWarned.delete` → `terminalizeAgent` → `bus.forget`。jscpd 确认 384↔417（18 行）、390↔679（11 行）两组克隆。三处的差异只有终态 status 与附加字段。抽一个 `settleAgent(agentId, outcome)` 私有函数即可收敛，改动风险低（有 service-lifecycle 测试覆盖）。
 
 ### P1-3 `providers/routes.ts` 宽 try/catch 错误归因混淆
+
+> **状态：已随 v19 重构解决（2026-08-30 确认）**。现行代码的 try 已收窄到只包 `normalizeHttpBaseUrl`，`updateProviders` 等业务调用不在任何兜底 catch 内，归因精确；两条 delete 路由重复的 defaultModelRef 清理块已收敛为 `clearDefaultModelRef` 单一函数。
 
 `providers/routes.ts:204-206、238-240` 等多处：整个业务体包进 try，任何异常统一翻译为 `"Invalid provider endpoint"`（invalid_base_url）。`configStore.updateProviders` 抛出的非 URL 错误（乃至未来的逻辑 bug）都会被伪装成用户输入错误，排查时误导。**建议**：只把 `normalizeHttpBaseUrl` 包进 try，或让它抛带类型的错误由外层精确分支。同文件 722 行/12 路由，业务规则（删 provider 时清理 defaultModelRef 等）混在 HTTP 层，是 server 侧最「胖」的路由文件。
 
@@ -100,6 +104,8 @@ churn 榜：`service.ts` 全库第一（80 次改动）、`channels.ts` 同属�
 `apps/shared/package.json` 声明 `@earendil-works/pi-coding-agent@0.83.0`，根 overrides 强制 0.84.2（提交 a8c5e0d 升级时漏改了 shared 的声明）。`bun pm ls` 证实实际安装 0.84.2。声明与解析不一致，overrides 掩盖了漂移。顺手改为 `0.84.2` 对齐 server/web。
 
 ### P1-6 循环依赖与文档化 workaround
+
+> **状态：环已消除（2026-08-30）**。`shared/agent.ts ↔ shared/live-event.ts` 环按单向化原则拆解：`AgentStatus`/`ThinkingLevel` 两套基础词表（类型 + 守卫）下沉到零依赖的 `shared/domain.ts`，`agent/workspace/model` 改从 domain 引；`TimingMeta` 族从 live-event 移入 `agent.ts`（session entry 元数据本属其域）；`live-event.ts` 对 `ThinkingLevel` 做 re-export 转发，下游 6 处 `@aegisx/shared/live-event` 直接导入零变更。madge 复测全仓无环。
 
 - madge 报唯一环：`shared/agent.ts` ↔ `shared/live-event.ts`。类型层互相引用目前无害，但每次给 LiveEvent 加携带 Agent 的新变体都会加深它。建议 `live-event.ts` 里对 agent 的引用改为泛型参数或从 `agent.ts` 单向引。
 - `db/schema.ts:168-173`：`agents.queueItemId` 有意省略 FK 声明以规避 TS7022 循环类型推断（注释已说明，反向 FK 声明在 spawn_queue 侧）。文档化良好，仅记录在案。
