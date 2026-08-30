@@ -4,6 +4,7 @@ import type {
   Challenge,
   ChallengeInput,
   EventInput,
+  EventStats,
   EventSummary,
 } from "./types"
 
@@ -51,6 +52,11 @@ export function deleteEventAgents(
 /** Event-wide token usage + cost (aggregated by agents.event_id). */
 export function getEventUsage(eventId: string) {
   return apiRequest<{ usage?: AgentUsage }>(`/events/${eventId}/usage`)
+}
+
+/** Per-event statistics view (score/billing/efficiency/concurrency/…). */
+export function getEventStats(eventId: string) {
+  return apiRequest<{ stats: EventStats }>(`/events/${eventId}/stats`)
 }
 
 export function createChallenge(eventId: string, input: ChallengeInput) {

@@ -1,0 +1,703 @@
+import { useQuery } from "@tanstack/react-query"
+import { RefreshCw } from "lucide-react"
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts"
+
+import { eventsApi, keys } from "@/api"
+import type {
+  EventChallengeEfficiency,
+  EventStats,
+  EventStatsAgentSpan,
+} from "@/api/types"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardFrame,
+  CardFrameDescription,
+  CardFrameHeader,
+  CardFrameTitle,
+  CardPanel,
+} from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { formatCost, formatTokens } from "@/features/runs/agent-overview"
+import { formatTime } from "@/lib/format"
+
+/** Statistics tab: derived per-event analytics (score / billing / efficiency /
+ * concurrency / timeline / collaboration). No polling — a derived view that
+ * changes only with agent activity; refresh is explicit. */
+export function EventStatsPanel({ eventId }: { eventId: string }) {
+  const stats = useQuery({
+    queryKey: keys.events.stats(eventId),
+    queryFn: () => eventsApi.getEventStats(eventId),
+  })
+
+  if (stats.isPending) {
+    return null
+  }
+  if (stats.error) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-16">
+        <p className="text-sm text-muted-foreground">{stats.error.message}</p>
+        <Button
+          onClick={() => void stats.refetch()}
+          size="sm"
+          variant="outline"
+        >
+          重试
+        </Button>
+      </div>
+    )
+  }
+
+  const data = stats.data.stats
+  const empty =
+    data.overview.attempts === 0 && data.overview.challengesTotal === 0
+  if (empty) {
+    return (
+      <Empty className="mx-auto mt-16 max-w-md">
+        <EmptyHeader>
+          <EmptyTitle>暂无统计数据</EmptyTitle>
+          <EmptyDescription>
+            接入平台同步题目、派出 Agent
+            后，这里会给出赛事的解题、消耗与调度复盘。
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  return (
+    <ScrollArea className="h-full pr-1" scrollFade>
+      <div className="flex flex-col gap-4 p-1">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold">统计</h1>
+          <Button
+            onClick={() => void stats.refetch()}
+            size="sm"
+            variant="outline"
+          >
+            <RefreshCw /> 刷新
+          </Button>
+        </div>
+
+        <OverviewCards data={data} />
+        <ScoreChart data={data} />
+        <AgentTimeline data={data} />
+        <ConcurrencyChart data={data} />
+        <ModelBilling data={data} />
+        <ChallengeEfficiency data={data} />
+        <CollaborationCards data={data} />
+      </div>
+    </ScrollArea>
+  )
+}
+
+function OverviewCards({ data }: { data: EventStats }) {
+  const o = data.overview
+  const durationMs =
+    data.window.start && data.window.end
+      ? Math.max(0, Date.parse(data.window.end) - Date.parse(data.window.start))
+      : 0
+  const cells: Array<{ label: string; value: string; hint?: string }> = [
+    {
+      label: "解题进度",
+      value: `${o.challengesSolved} / ${o.challengesTotal}`,
+      hint: `得分 ${o.pointsEarned}${o.pointsAvailable > 0 ? ` / ${o.pointsAvailable}` : ""}`,
+    },
+    { label: "总费用", value: formatCost(o.cost), hint: `${o.turns} 轮请求` },
+    {
+      label: "总 token",
+      value: formatTokens(o.inputTokens + o.outputTokens),
+      hint: `输入 ${formatTokens(o.inputTokens)} · 输出 ${formatTokens(o.outputTokens)}`,
+    },
+    {
+      label: "尝试次数",
+      value: `${o.attempts}`,
+      hint: `活跃 ${o.attemptsActive} · 超时 ${data.failures.timeouts}`,
+    },
+    {
+      label: "活动时长",
+      value: formatDuration(durationMs),
+      hint:
+        data.window.start && data.window.end
+          ? `${formatTime(data.window.start)} 起`
+          : undefined,
+    },
+    {
+      label: "队列",
+      value: `${data.queue.done} 完成`,
+      hint: `失败 ${data.queue.failed} · 取消 ${data.queue.cancelled}`,
+    },
+  ]
+  return (
+    <Card>
+      <CardPanel className="grid grid-cols-3 divide-x md:grid-cols-6">
+        {cells.map((cell) => (
+          <div className="flex flex-col gap-0.5 px-4 py-3" key={cell.label}>
+            <span className="text-xs text-muted-foreground">{cell.label}</span>
+            <span className="font-semibold tabular-nums">{cell.value}</span>
+            {cell.hint && (
+              <span className="text-xs text-muted-foreground">{cell.hint}</span>
+            )}
+          </div>
+        ))}
+      </CardPanel>
+    </Card>
+  )
+}
+
+/** Cumulative earned points over the event window (the赛后 score curve). */
+function ScoreChart({ data }: { data: EventStats }) {
+  if (data.scoreTimeline.length === 0) return null
+  const startMs = data.window.start
+    ? Date.parse(data.window.start)
+    : Date.parse(data.scoreTimeline[0].time)
+  const lastPoint = data.scoreTimeline.at(-1)
+  const endMs = data.window.end
+    ? Date.parse(data.window.end)
+    : lastPoint
+      ? Date.parse(lastPoint.time)
+      : startMs
+  const points = [
+    { t: startMs, cumulative: 0, label: "" },
+    ...data.scoreTimeline.map((point) => ({
+      t: Date.parse(point.time),
+      cumulative: point.cumulative,
+      label: `${point.challengeName} +${point.points}`,
+    })),
+  ]
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>得分曲线</CardFrameTitle>
+        <CardFrameDescription>
+          累计得分随时间的变化（{data.scoreTimeline.length} 次解出）
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel>
+          <ResponsiveContainer height={220} width="100%">
+            <AreaChart
+              data={points}
+              margin={{ bottom: 0, left: 0, right: 12, top: 8 }}
+            >
+              <CartesianGrid
+                stroke="var(--border)"
+                strokeDasharray="3 3"
+                vertical={false}
+              />
+              <XAxis
+                dataKey="t"
+                domain={[startMs, Math.max(endMs, startMs + 1)]}
+                scale="time"
+                tick={{ fontSize: 11 }}
+                tickCount={5}
+                tickFormatter={axisTickTime}
+                type="number"
+              />
+              <YAxis tick={{ fontSize: 11 }} width={44} />
+              <Tooltip
+                contentStyle={{ fontSize: 12 }}
+                formatter={(value) => [`${Number(value)} 分`, "累计"]}
+                labelFormatter={(label) =>
+                  formatTime(new Date(Number(label)).toISOString())
+                }
+              />
+              <Area
+                dataKey="cumulative"
+                dot
+                fill="var(--primary)"
+                fillOpacity={0.12}
+                stroke="var(--primary)"
+                strokeWidth={2}
+                type="monotone"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+/** fig-2 style Gantt: one lane per challenge (scheduler on top), one bar per
+ * agent span. Hand-rolled divs — recharts has no dense lane layout. */
+function AgentTimeline({ data }: { data: EventStats }) {
+  const spans = data.agentTimeline
+  if (spans.length === 0) return null
+  const starts = spans.map((span) => Date.parse(span.start))
+  const ends = spans.map((span) => Date.parse(span.end))
+  const domainStart = Math.min(
+    ...starts,
+    data.window.start ? Date.parse(data.window.start) : Infinity
+  )
+  const domainEnd = Math.max(
+    ...ends,
+    data.window.end ? Date.parse(data.window.end) : -Infinity
+  )
+  const spanMs = Math.max(1, domainEnd - domainStart)
+
+  const lanes: Array<{
+    key: string
+    title: string
+    spans: EventStatsAgentSpan[]
+  }> = []
+  const scheduler = spans.filter((span) => span.challengeId === null)
+  if (scheduler.length > 0) {
+    lanes.push({ key: ":scheduler", title: "调度者", spans: scheduler })
+  }
+  const byChallenge = new Map<string, EventStatsAgentSpan[]>()
+  for (const span of spans) {
+    if (span.challengeId === null) continue
+    const values = byChallenge.get(span.challengeId) ?? []
+    values.push(span)
+    byChallenge.set(span.challengeId, values)
+  }
+  for (const [challengeId, challengeSpans] of byChallenge) {
+    lanes.push({
+      key: challengeId,
+      title: challengeSpans[0].challengeName ?? challengeId,
+      spans: challengeSpans,
+    })
+  }
+
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>Agent 时间线</CardFrameTitle>
+        <CardFrameDescription>
+          每个 Agent 的运行区间，按题目分行（{spans.length} 个）
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel className="flex flex-col gap-3">
+          <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+            <span>{formatTime(new Date(domainStart).toISOString())}</span>
+            <span>{formatTime(new Date(domainEnd).toISOString())}</span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {lanes.map((lane) => (
+              <div
+                className="grid grid-cols-[minmax(6rem,10rem)_1fr] items-center gap-2"
+                key={lane.key}
+              >
+                <span className="truncate text-xs text-muted-foreground">
+                  {lane.title}
+                </span>
+                <div className="relative h-5 rounded bg-muted/50">
+                  {lane.spans.map((span) => {
+                    const start = Date.parse(span.start)
+                    const end = Date.parse(span.end)
+                    const left = ((start - domainStart) / spanMs) * 100
+                    const width = Math.max(0.5, ((end - start) / spanMs) * 100)
+                    return (
+                      <div
+                        className={`absolute top-0.5 h-4 rounded-sm ${spanColor(span)}`}
+                        key={span.id}
+                        style={{ left: `${left}%`, width: `${width}%` }}
+                        title={`${span.name} · ${span.model}\n${formatTime(span.start)} → ${formatTime(span.end)}`}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+function spanColor(span: EventStatsAgentSpan): string {
+  if (span.status === "running") return "bg-success"
+  if (span.status === "idle") return "bg-secondary"
+  if (span.status === "aborted" || span.status === "failed")
+    return "bg-destructive"
+  return "bg-primary"
+}
+
+/** Concurrent running solver agents over the event window (step series). */
+function ConcurrencyChart({ data }: { data: EventStats }) {
+  if (data.concurrency.length === 0) return null
+  const startMs = data.window.start
+    ? Date.parse(data.window.start)
+    : Date.parse(data.concurrency[0].time)
+  const maxRunning = Math.max(...data.concurrency.map((p) => p.running), 1)
+  const points = data.concurrency.map((point) => ({
+    t: Date.parse(point.time),
+    running: point.running,
+  }))
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>并发利用</CardFrameTitle>
+        <CardFrameDescription>
+          运行中的求解者 Agent 数量；调度 {data.spawnSource.scheduler} · 手动{" "}
+          {data.spawnSource.manual} · 排队均候{" "}
+          {data.queue.avgWaitMs !== null
+            ? formatDuration(data.queue.avgWaitMs)
+            : "—"}
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel>
+          <ResponsiveContainer height={160} width="100%">
+            <AreaChart
+              data={points}
+              margin={{ bottom: 0, left: 0, right: 12, top: 8 }}
+            >
+              <CartesianGrid
+                stroke="var(--border)"
+                strokeDasharray="3 3"
+                vertical={false}
+              />
+              <XAxis
+                dataKey="t"
+                domain={[startMs, Math.max(Date.now(), startMs + 1)]}
+                scale="time"
+                tick={{ fontSize: 11 }}
+                tickCount={5}
+                tickFormatter={axisTickTime}
+                type="number"
+              />
+              <YAxis
+                allowDecimals={false}
+                domain={[0, maxRunning]}
+                tick={{ fontSize: 11 }}
+                width={32}
+              />
+              <Tooltip
+                contentStyle={{ fontSize: 12 }}
+                formatter={(value) => [`${Number(value)}`, "并发"]}
+                labelFormatter={(label) =>
+                  formatTime(new Date(Number(label)).toISOString())
+                }
+              />
+              <Area
+                dataKey="running"
+                fill="var(--success)"
+                fillOpacity={0.15}
+                stroke="var(--success)"
+                strokeWidth={2}
+                type="stepAfter"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+function ModelBilling({ data }: { data: EventStats }) {
+  if (data.modelBilling.length === 0) return null
+  const totalCost =
+    data.modelBilling.reduce((sum, row) => sum + row.cost, 0) || 1
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>模型账单</CardFrameTitle>
+        <CardFrameDescription>
+          按模型聚合的请求与费用（含调度者）
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>模型</TableHead>
+                <TableHead className="text-right">请求</TableHead>
+                <TableHead className="text-right">输入</TableHead>
+                <TableHead className="text-right">输出</TableHead>
+                <TableHead className="text-right">缓存读</TableHead>
+                <TableHead className="text-right">费用</TableHead>
+                <TableHead className="text-right">占比</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.modelBilling.map((row) => (
+                <TableRow key={row.model}>
+                  <TableCell className="max-w-64 truncate font-mono text-xs">
+                    {row.model}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.requests}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatTokens(row.input)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatTokens(row.output)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatTokens(row.cacheRead)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCost(row.cost)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {Math.round((row.cost / totalCost) * 100)}%
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+/** Per-challenge ROI: score vs consumed cost/time/attempts. */
+function ChallengeEfficiency({ data }: { data: EventStats }) {
+  if (data.challengeEfficiency.length === 0) return null
+  const rows = data.challengeEfficiency.toSorted((a, b) => {
+    if (a.solved !== b.solved) return a.solved ? -1 : 1
+    return roiOf(b) - roiOf(a)
+  })
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>题目投入产出</CardFrameTitle>
+        <CardFrameDescription>
+          按性价比（分 / 美元）排序，已解题目在前
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>题目</TableHead>
+                <TableHead className="text-right">分数</TableHead>
+                <TableHead className="text-right">尝试</TableHead>
+                <TableHead className="text-right">token</TableHead>
+                <TableHead className="text-right">费用</TableHead>
+                <TableHead className="text-right">性价比</TableHead>
+                <TableHead className="text-right">提交</TableHead>
+                <TableHead className="text-right">消息</TableHead>
+                <TableHead className="text-right">投入时长</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.challengeId}>
+                  <TableCell className="max-w-56">
+                    <span className="flex items-center gap-1.5">
+                      {row.solved ? (
+                        <Badge variant="secondary">已解</Badge>
+                      ) : null}
+                      <span className="truncate">{row.name}</span>
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.points ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.attempts}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs tabular-nums">
+                    {formatTokens(row.tokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCost(row.cost)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {roiLabel(row)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.rejectedSubmissions > 0
+                      ? `${row.submissions - row.rejectedSubmissions}/${row.submissions}`
+                      : row.submissions}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.messages}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatDuration(row.durationMs)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+function roiOf(row: EventChallengeEfficiency): number {
+  if (row.cost <= 0) return row.points && row.points > 0 ? Infinity : 0
+  return (row.points ?? 0) / row.cost
+}
+
+function roiLabel(row: EventChallengeEfficiency): string {
+  const roi = roiOf(row)
+  if (!Number.isFinite(roi)) return "∞"
+  if (row.cost <= 0) return "—"
+  return roi.toFixed(0)
+}
+
+/** Collaboration extras: hourly team-message volume + tool TopN + failures. */
+function CollaborationCards({ data }: { data: EventStats }) {
+  if (
+    data.messageActivity.length === 0 &&
+    data.toolUsage.length === 0 &&
+    data.failures.timeouts + data.failures.aborted + data.failures.failed === 0
+  ) {
+    return null
+  }
+  const maxMessages = Math.max(...data.messageActivity.map((b) => b.count), 1)
+  const maxCalls = Math.max(...data.toolUsage.map((t) => t.calls), 1)
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>协作与工具</CardFrameTitle>
+        <CardFrameDescription>
+          频道消息量、工具调用 TopN 与异常结束
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {data.messageActivity.length > 0 && (
+          <Card>
+            <CardPanel>
+              <p className="mb-2 text-xs text-muted-foreground">
+                #team 消息量（按小时）
+              </p>
+              <ResponsiveContainer height={160} width="100%">
+                <BarChart
+                  data={data.messageActivity}
+                  margin={{ bottom: 0, left: 0, right: 0, top: 4 }}
+                >
+                  <CartesianGrid
+                    stroke="var(--border)"
+                    strokeDasharray="3 3"
+                    vertical={false}
+                  />
+                  <XAxis
+                    dataKey="bucket"
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={(bucket) => formatTime(`${bucket}:00`)}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={{ fontSize: 10 }}
+                    width={28}
+                  />
+                  <Tooltip
+                    contentStyle={{ fontSize: 12 }}
+                    formatter={(value) => [`${Number(value)} 条`, "消息"]}
+                    labelFormatter={(bucket) =>
+                      formatTime(
+                        `${typeof bucket === "string" ? bucket : ""}:00`
+                      )
+                    }
+                  />
+                  <Bar dataKey="count" fill="var(--primary)" />
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                峰值 {maxMessages} 条/小时
+              </p>
+            </CardPanel>
+          </Card>
+        )}
+        {data.toolUsage.length > 0 && (
+          <Card>
+            <CardPanel className="flex flex-col gap-1.5">
+              <p className="text-xs text-muted-foreground">
+                工具调用 Top{data.toolUsage.length}
+              </p>
+              {data.toolUsage.map((tool) => (
+                <div className="flex items-center gap-2" key={tool.tool}>
+                  <span className="w-28 shrink-0 truncate font-mono text-xs">
+                    {tool.tool}
+                  </span>
+                  <div className="h-2 flex-1 rounded bg-muted/50">
+                    <div
+                      className="h-2 rounded bg-primary"
+                      style={{ width: `${(tool.calls / maxCalls) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-12 shrink-0 text-right font-mono text-xs tabular-nums">
+                    {tool.calls}
+                  </span>
+                </div>
+              ))}
+            </CardPanel>
+          </Card>
+        )}
+        <Card>
+          <CardPanel className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">超时</p>
+              <p className="font-semibold tabular-nums">
+                {data.failures.timeouts}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">中止</p>
+              <p className="font-semibold tabular-nums">
+                {data.failures.aborted}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">失败</p>
+              <p className="font-semibold tabular-nums">
+                {data.failures.failed}
+              </p>
+            </div>
+          </CardPanel>
+        </Card>
+      </div>
+    </CardFrame>
+  )
+}
+
+function formatDuration(ms: number): string {
+  if (ms <= 0) return "—"
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 60) return `${minutes} 分`
+  const hours = minutes / 60
+  if (hours < 48) return `${hours.toFixed(1)} 时`
+  return `${(hours / 24).toFixed(1)} 天`
+}
+
+/** Compact HH:mm tick label (cross-day ticks fall back to the full format). */
+function axisTickTime(ms: number): string {
+  const date = new Date(ms)
+  const now = new Date()
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+  return formatTime(date.toISOString())
+}

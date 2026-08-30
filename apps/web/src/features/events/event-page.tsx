@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowUpDown,
+  ChartColumn,
   Crosshair,
   Flag,
   LayoutPanelTop,
@@ -50,6 +51,7 @@ import {
 } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { EventStatsPanel } from "@/features/stats/event-stats"
 import { TasksPage } from "@/features/tasks/tasks-page"
 
 import { AgentsGraph } from "./agents-graph"
@@ -74,13 +76,20 @@ import {
 } from "./event-view-prefs"
 import { ImportChallengesDialog } from "./platform-binding"
 
-type EventTab = "overview" | "tasks" | "agents" | "challenges" | "settings"
+type EventTab =
+  | "overview"
+  | "tasks"
+  | "agents"
+  | "challenges"
+  | "stats"
+  | "settings"
 
 const EVENT_TABS = [
   "overview",
   "tasks",
   "agents",
   "challenges",
+  "stats",
   "settings",
 ] as const satisfies readonly EventTab[]
 
@@ -90,6 +99,7 @@ function isEventTab(value: string): value is EventTab {
 
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
+  if (pathname === `/events/${eventId}/stats`) return "stats"
   if (pathname === `/events/${eventId}/challenges`) return "challenges"
   if (pathname === `/events/${eventId}/agents`) return "agents"
   if (pathname === `/events/${eventId}/tasks`) return "tasks"
@@ -101,6 +111,7 @@ function pathForTab(eventId: string, tab: EventTab) {
   if (tab === "settings") return `/events/${eventId}/settings`
   if (tab === "agents") return `/events/${eventId}/agents`
   if (tab === "tasks") return `/events/${eventId}/tasks`
+  if (tab === "stats") return `/events/${eventId}/stats`
   return `/events/${eventId}`
 }
 
@@ -342,6 +353,9 @@ export function EventPage() {
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="challenges">
                 <Puzzle /> 题目
+              </TabsTab>
+              <TabsTab className="justify-start gap-2" value="stats">
+                <ChartColumn /> 统计
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="settings">
                 <Settings /> 设置
@@ -630,6 +644,9 @@ export function EventPage() {
                   )}
                 </div>
               )}
+            </TabsPanel>
+            <TabsPanel className="h-[calc(100svh-5.5rem)]" value="stats">
+              <EventStatsPanel eventId={eventId} />
             </TabsPanel>
             <TabsPanel className="pt-0" value="settings">
               <EventSettings event={eventQuery.data.event} />

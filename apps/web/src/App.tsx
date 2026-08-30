@@ -13,7 +13,13 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { HomePage } from "@/features/events/home-page"
 
 const settingsSections = ["general", "models", "prompts", "settings"] as const
-const eventTabs = ["agents", "challenges", "tasks", "settings"] as const
+const eventTabs = [
+  "agents",
+  "challenges",
+  "tasks",
+  "stats",
+  "settings",
+] as const
 
 const loadEventPage = () =>
   import("@/features/events/event-page").then((m) => ({

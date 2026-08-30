@@ -20,6 +20,7 @@ import { validateJson } from "../infrastructure/validation"
 import { platformActionHttpError } from "../platforms/errors"
 import type { createPlatformService } from "../platforms/service"
 import type { createCatalogReader } from "./catalog"
+import { buildEventStats } from "./stats"
 
 const createEventInput = Type.Object(
   {
@@ -158,6 +159,14 @@ export function registerEventRoutes(
       return notFound(c, "Event not found")
     }
     return c.json({ usage: agentManager.usageForEvent(eventId) })
+  })
+
+  app.get("/api/events/:eventId/stats", (c) => {
+    const eventId = c.req.param("eventId")
+    if (!getEvent(eventId)) {
+      return notFound(c, "Event not found")
+    }
+    return c.json({ stats: buildEventStats(db, eventId) })
   })
 
   app.patch("/api/events/:eventId", validateJson(updateEventInput), (c) => {

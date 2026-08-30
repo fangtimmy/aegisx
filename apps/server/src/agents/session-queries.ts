@@ -50,8 +50,9 @@ export function readSessionEntries(
 
 /** One usage field value, JSON-validity guarded: malformed `data` rows are
  * skipped (json_extract raises on invalid JSON; readSessionEntries skips
- * them, so the SQL must contribute 0 the same way). */
-const usageField = (path: string) => sql<number>`
+ * them, so the SQL must contribute 0 the same way). Exported for aggregate
+ * queries that join session_entries with agents (e.g. per-model billing). */
+export const usageField = (path: string) => sql<number>`
     CAST(
       COALESCE(
         json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${path}),
@@ -60,7 +61,7 @@ const usageField = (path: string) => sql<number>`
     )
   `
 /** Extract `$.message.role` with the same guard (null when data is invalid). */
-const roleField = sql`json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${"$.message.role"})`
+export const roleField = sql`json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${"$.message.role"})`
 
 /** One aggregate SQL pass over session_entries matching `where`: token/cost
  * sums (the parity twin of {@link accumulateEntryUsage} — see

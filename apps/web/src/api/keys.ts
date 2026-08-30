@@ -6,6 +6,7 @@ export const keys = {
     all: ["events"] as const,
     detail: (id: string) => ["events", id] as const,
     usage: (id: string) => ["events", id, "usage"] as const,
+    stats: (id: string) => ["events", id, "stats"] as const,
   },
   agents: {
     /** Per-challenge agents + the scheduler agent (the fleet view). */
