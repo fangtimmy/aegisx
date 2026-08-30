@@ -49,6 +49,10 @@ export type EventModelBillingItem = {
   cacheRead: number
   cacheWrite: number
   cost: number
+  /** Solver attempts spawned with this model. */
+  solverAgents: number
+  /** Accepted flags attributed to this model via the submitting agent. */
+  solves: number
 }
 
 export type EventChallengeEfficiency = {
@@ -96,6 +100,44 @@ export type EventStatsAgentSpan = {
   end: string
 }
 
+export type EventAgentEfficiency = {
+  id: string
+  name: string | null
+  role: "solver" | "orchestrator"
+  challengeId: string | null
+  challengeName: string | null
+  model: string
+  source: "manual" | "scheduler"
+  status: AgentStatus
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  cost: number
+  turns: number
+  toolCalls: number
+  /** Wall interval start → span end (same semantics as agentTimeline). */
+  durationMs: number
+  /** For a currently-idle agent: how long it has been sitting idle.
+   * Zero otherwise. */
+  idleMs: number
+  error: string | null
+  /** finish_run result written at terminal settle (null otherwise). */
+  summary: string | null
+}
+
+export type EventCategoryStats = {
+  category: string | null
+  challenges: number
+  /** Merged solve semantics (accepted flag / manual / remote). */
+  solved: number
+  points: number
+  pointsAvailable: number
+  attempts: number
+  tokens: number
+  cost: number
+}
+
 export type EventStats = {
   window: EventStatsWindow
   overview: EventStatsOverview
@@ -115,6 +157,8 @@ export type EventStats = {
   }
   /** Team-channel message volume per hour. */
   messageActivity: EventMessageBucket[]
+  /** Message volume by channel kind across the event. */
+  messageKinds: { team: number; dm: number; orch: number }
   /** Top tools by toolResult count. */
   toolUsage: EventToolUsageItem[]
   failures: {
@@ -123,4 +167,8 @@ export type EventStats = {
     failed: number
   }
   agentTimeline: EventStatsAgentSpan[]
+  /** One row per agent (solver + orchestrator). */
+  agentEfficiency: EventAgentEfficiency[]
+  /** Challenges grouped by category. */
+  categoryStats: EventCategoryStats[]
 }

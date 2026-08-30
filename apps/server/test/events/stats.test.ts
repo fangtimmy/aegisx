@@ -168,7 +168,10 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
     expect(stats.modelBilling).toEqual([])
     expect(stats.concurrency).toEqual([])
     expect(stats.agentTimeline).toEqual([])
+    expect(stats.agentEfficiency).toEqual([])
+    expect(stats.categoryStats).toEqual([])
     expect(stats.messageActivity).toEqual([])
+    expect(stats.messageKinds).toEqual({ team: 0, dm: 0, orch: 0 })
     expect(stats.toolUsage).toEqual([])
   })
 
@@ -182,11 +185,13 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
     seedChallenge(db, event.id, {
       id: "ch-1",
       points: 300,
+      category: "web",
       updatedAt: "2025-01-01T00:30:00Z",
     })
     seedChallenge(db, event.id, {
       id: "ch-2",
       points: 200,
+      category: "pwn",
       updatedAt: "2025-01-01T00:40:00Z",
     })
     // ch-2 solved by remote sync only (no local flag).
@@ -308,6 +313,22 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
         })
         .run()
     }
+    for (const [channelKey, createdAt] of [
+      ["dm:agent-a", "2025-01-01T01:10:00Z"],
+      [`orch:${event.id}`, "2025-01-01T01:12:00Z"],
+    ] as const) {
+      db.insert(channelMessages)
+        .values({
+          channelKey,
+          authorType: "agent",
+          authorAgentId: "agent-a",
+          authorName: "agent-a",
+          body: "relay",
+          meta: "{}",
+          createdAt,
+        })
+        .run()
+    }
 
     const response = await app.request(`/api/events/${event.id}/stats`)
     expect(response.status).toBe(200)
@@ -352,7 +373,8 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
       },
     ])
 
-    // Billing grouped by model, sorted by cost desc.
+    // Billing grouped by model, sorted by cost desc. Solves attribute to the
+    // submitting agent's model (flag-1 → agent-a → model-a).
     expect(stats.modelBilling).toEqual([
       {
         model: "aegisx-prov-1/model-a:off",
@@ -362,6 +384,8 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
         cacheRead: 0,
         cacheWrite: 0,
         cost: 3,
+        solverAgents: 2,
+        solves: 1,
       },
       {
         model: "aegisx-prov-1/model-b:off",
@@ -371,6 +395,8 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
         cacheRead: 0,
         cacheWrite: 0,
         cost: 0.5,
+        solverAgents: 0,
+        solves: 0,
       },
     ])
 
@@ -408,6 +434,7 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
       { bucket: "2025-01-01T01:00", count: 2 },
       { bucket: "2025-01-01T02:00", count: 1 },
     ])
+    expect(stats.messageKinds).toEqual({ team: 3, dm: 1, orch: 1 })
 
     expect(stats.toolUsage).toEqual([
       { tool: "bash", calls: 2 },
@@ -415,6 +442,55 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
     ])
 
     expect(stats.failures).toEqual({ timeouts: 1, aborted: 0, failed: 0 })
+
+    // Per-agent ledger sorted by cost desc (agent-b 2 / agent-a 1 / sched 0.5).
+    expect(stats.agentEfficiency.map((a) => a.id)).toEqual([
+      "agent-b",
+      "agent-a",
+      "sched-1",
+    ])
+    expect(stats.agentEfficiency[1]).toMatchObject({
+      role: "solver",
+      challengeId: "ch-1",
+      challengeName: "ch-1",
+      input: 100,
+      output: 50,
+      turns: 1,
+      toolCalls: 3,
+      durationMs: 600_000,
+      idleMs: 0,
+      error: null,
+      summary: null,
+    })
+    expect(stats.agentEfficiency[2]).toMatchObject({
+      role: "orchestrator",
+      challengeName: null,
+      model: "aegisx-prov-1/model-b:off",
+    })
+
+    // Categories grouped separately, sorted by earned points desc.
+    expect(stats.categoryStats).toEqual([
+      {
+        category: "web",
+        challenges: 1,
+        solved: 1,
+        points: 300,
+        pointsAvailable: 300,
+        attempts: 2,
+        tokens: 425,
+        cost: 3,
+      },
+      {
+        category: "pwn",
+        challenges: 1,
+        solved: 1,
+        points: 200,
+        pointsAvailable: 200,
+        attempts: 0,
+        tokens: 0,
+        cost: 0,
+      },
+    ])
 
     // Timeline: scheduler first by start, solver spans with terminal ends.
     expect(stats.agentTimeline.map((a) => [a.id, a.start, a.end])).toEqual([
@@ -466,5 +542,11 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
     const run = stats.agentTimeline.find((a) => a.id === "agent-run")
     expect(idle?.end).toBe("2025-01-01T00:05:00Z")
     expect(run != null && run.end > run.start).toBe(true)
+    // The idle agent's idleMs counts from its last activity; a running agent
+    // is actively producing — no idle time.
+    const idleRow = stats.agentEfficiency.find((a) => a.id === "agent-idle")
+    const runRow = stats.agentEfficiency.find((a) => a.id === "agent-run")
+    expect(idleRow != null && idleRow.idleMs > 0).toBe(true)
+    expect(runRow?.idleMs).toBe(0)
   })
 })

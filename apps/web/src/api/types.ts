@@ -16,6 +16,7 @@ export type {
   ChannelPublic,
   CompactionEntry,
   EntryItem,
+  EventAgentEfficiency,
   EventChallengeEfficiency,
   EventInput,
   EventPlatform,

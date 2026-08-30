@@ -14,6 +14,7 @@ import {
 
 import { eventsApi, keys } from "@/api"
 import type {
+  EventAgentEfficiency,
   EventChallengeEfficiency,
   EventStats,
   EventStatsAgentSpan,
@@ -108,7 +109,9 @@ export function EventStatsPanel({ eventId }: { eventId: string }) {
         <ScoreChart data={data} />
         <AgentTimeline data={data} />
         <ConcurrencyChart data={data} />
+        <AgentEfficiency data={data} />
         <ModelBilling data={data} />
+        <CategoryStats data={data} />
         <ChallengeEfficiency data={data} />
         <CollaborationCards data={data} />
       </div>
@@ -153,6 +156,25 @@ function OverviewCards({ data }: { data: EventStats }) {
       hint: `失败 ${data.queue.failed} · 取消 ${data.queue.cancelled}`,
     },
   ]
+  if (o.challengesSolved > 0 && o.cost > 0) {
+    cells.push({
+      label: "费用 / 解出",
+      value: formatCost(o.cost / o.challengesSolved),
+    })
+    if (o.pointsEarned > 0) {
+      cells.push({
+        label: "费用 / 得分",
+        value: formatCost(o.cost / o.pointsEarned),
+        hint: "每得一分的花费",
+      })
+    }
+    cells.push({
+      label: "token / 解出",
+      value: formatTokens(
+        (o.inputTokens + o.outputTokens) / o.challengesSolved
+      ),
+    })
+  }
   return (
     <Card>
       <CardPanel className="grid grid-cols-2 gap-y-3 sm:grid-cols-3 xl:grid-cols-6 xl:divide-x">
@@ -441,6 +463,140 @@ function ConcurrencyChart({ data }: { data: EventStats }) {
   )
 }
 
+/** Per-agent ledger: usage / cost / tools / duration / idle, sorted by cost.
+ * The description line aggregates solver vs orchestrator spend — the direct
+ * answer to "how much does the relay's command layer cost". */
+function AgentEfficiency({ data }: { data: EventStats }) {
+  if (data.agentEfficiency.length === 0) return null
+  const sumRole = (role: EventAgentEfficiency["role"]) => {
+    const rows = data.agentEfficiency.filter((row) => row.role === role)
+    return {
+      count: rows.length,
+      cost: rows.reduce((sum, row) => sum + row.cost, 0),
+    }
+  }
+  const solver = sumRole("solver")
+  const orchestrator = sumRole("orchestrator")
+  const idleRows = data.agentEfficiency.filter((row) => row.idleMs > 0)
+  const idleTotal = idleRows.reduce((sum, row) => sum + row.idleMs, 0)
+  const share = (part: number) =>
+    solver.cost + orchestrator.cost > 0
+      ? `（${Math.round((part / (solver.cost + orchestrator.cost)) * 100)}%）`
+      : ""
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>Agent 投入</CardFrameTitle>
+        <CardFrameDescription>
+          {`${solver.count} 求解者 ${formatCost(solver.cost)}${share(solver.cost)} · ${orchestrator.count} 调度者 ${formatCost(orchestrator.cost)}${share(orchestrator.cost)}`}
+          {idleRows.length > 0 &&
+            ` · ${idleRows.length} 个空转中（合计 ${formatDuration(idleTotal)}）`}
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel className="max-h-96 overflow-y-auto p-0">
+          <Table>
+            <TableHeader className="sticky top-0 z-10 bg-card">
+              <TableRow>
+                <TableHead>Agent</TableHead>
+                <TableHead>题目</TableHead>
+                <TableHead>模型</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead className="text-right">token</TableHead>
+                <TableHead className="text-right">费用</TableHead>
+                <TableHead className="text-right">轮次</TableHead>
+                <TableHead className="text-right">工具</TableHead>
+                <TableHead className="text-right">时长</TableHead>
+                <TableHead className="text-right">空转</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.agentEfficiency.map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell className="max-w-44">
+                    <span className="flex flex-col">
+                      <span className="truncate text-xs">
+                        {row.name ?? row.id}
+                      </span>
+                      {row.error && (
+                        <span
+                          className="truncate text-[10px] text-destructive"
+                          title={row.error}
+                        >
+                          {row.error}
+                        </span>
+                      )}
+                      {!row.error && row.summary && (
+                        <span
+                          className="truncate text-[10px] text-muted-foreground"
+                          title={row.summary}
+                        >
+                          {row.summary}
+                        </span>
+                      )}
+                    </span>
+                  </TableCell>
+                  <TableCell className="max-w-32 truncate text-xs text-muted-foreground">
+                    {row.role === "orchestrator" ? "—" : row.challengeName}
+                  </TableCell>
+                  <TableCell className="max-w-44 truncate font-mono text-xs">
+                    {row.model}
+                  </TableCell>
+                  <TableCell>{statusBadge(row.status)}</TableCell>
+                  <TableCell className="text-right font-mono text-xs tabular-nums">
+                    {formatTokens(row.input + row.output)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCost(row.cost)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.turns}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.toolCalls}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatDuration(row.durationMs)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.idleMs > 0 ? formatDuration(row.idleMs) : "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+function statusBadge(status: EventAgentEfficiency["status"]) {
+  const variant =
+    status === "running"
+      ? "success"
+      : status === "idle"
+        ? "warning"
+        : status === "aborted" || status === "failed"
+          ? "destructive"
+          : "secondary"
+  const label =
+    status === "running"
+      ? "运行"
+      : status === "idle"
+        ? "空闲"
+        : status === "aborted"
+          ? "中止"
+          : status === "failed"
+            ? "失败"
+            : "完成"
+  return (
+    <Badge size="sm" variant={variant}>
+      {label}
+    </Badge>
+  )
+}
+
 function ModelBilling({ data }: { data: EventStats }) {
   if (data.modelBilling.length === 0) return null
   const totalCost =
@@ -450,7 +606,7 @@ function ModelBilling({ data }: { data: EventStats }) {
       <CardFrameHeader>
         <CardFrameTitle>模型账单</CardFrameTitle>
         <CardFrameDescription>
-          按模型聚合的请求与费用（含调度者）
+          按模型聚合的请求、费用与解出归因（含调度者）
         </CardFrameDescription>
       </CardFrameHeader>
       <Card>
@@ -465,6 +621,9 @@ function ModelBilling({ data }: { data: EventStats }) {
                 <TableHead className="text-right">缓存读</TableHead>
                 <TableHead className="text-right">费用</TableHead>
                 <TableHead className="text-right">占比</TableHead>
+                <TableHead className="text-right">求解者</TableHead>
+                <TableHead className="text-right">解出</TableHead>
+                <TableHead className="text-right">费用/解出</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -490,6 +649,76 @@ function ModelBilling({ data }: { data: EventStats }) {
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {Math.round((row.cost / totalCost) * 100)}%
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.solverAgents}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.solves}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.solves > 0 ? formatCost(row.cost / row.solves) : "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardPanel>
+      </Card>
+    </CardFrame>
+  )
+}
+
+/** Challenges grouped by category — solve rate and spend per category. */
+function CategoryStats({ data }: { data: EventStats }) {
+  if (data.categoryStats.length === 0) return null
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>分类统计</CardFrameTitle>
+        <CardFrameDescription>按题目分类聚合的解题与投入</CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>分类</TableHead>
+                <TableHead className="text-right">题目</TableHead>
+                <TableHead className="text-right">解出</TableHead>
+                <TableHead className="text-right">得分</TableHead>
+                <TableHead className="text-right">尝试</TableHead>
+                <TableHead className="text-right">token</TableHead>
+                <TableHead className="text-right">费用</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.categoryStats.map((row) => (
+                <TableRow key={row.category ?? "uncategorized"}>
+                  <TableCell>{row.category ?? "未分类"}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.challenges}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.solved}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.points}
+                    {row.pointsAvailable > 0 && (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        / {row.pointsAvailable}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.attempts}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs tabular-nums">
+                    {formatTokens(row.tokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCost(row.cost)}
                   </TableCell>
                 </TableRow>
               ))}
@@ -591,12 +820,29 @@ function roiLabel(row: EventChallengeEfficiency): string {
   return roi.toFixed(0)
 }
 
-/** Collaboration extras: hourly team-message volume + tool TopN + failures. */
+/** Collaboration extras: channel-kind volume + hourly team messages + tool
+ * TopN + failures (with the agents' last error) + flag submission accuracy. */
 function CollaborationCards({ data }: { data: EventStats }) {
+  const submissions = data.challengeEfficiency.reduce(
+    (sum, row) => sum + row.submissions,
+    0
+  )
+  const rejectedSubmissions = data.challengeEfficiency.reduce(
+    (sum, row) => sum + row.rejectedSubmissions,
+    0
+  )
+  const failureRows = data.agentEfficiency.filter(
+    (row) => (row.status === "aborted" || row.status === "failed") && row.error
+  )
+  const kindsTotal =
+    data.messageKinds.team + data.messageKinds.dm + data.messageKinds.orch
   if (
     data.messageActivity.length === 0 &&
     data.toolUsage.length === 0 &&
-    data.failures.timeouts + data.failures.aborted + data.failures.failed === 0
+    data.failures.timeouts + data.failures.aborted + data.failures.failed ===
+      0 &&
+    submissions === 0 &&
+    kindsTotal === 0
   ) {
     return null
   }
@@ -607,10 +853,34 @@ function CollaborationCards({ data }: { data: EventStats }) {
       <CardFrameHeader>
         <CardFrameTitle>协作与工具</CardFrameTitle>
         <CardFrameDescription>
-          频道消息量、工具调用 TopN 与异常结束
+          频道消息量、工具调用 TopN、提交准确率与异常结束
         </CardFrameDescription>
       </CardFrameHeader>
       <div className="grid gap-3 lg:grid-cols-2">
+        {kindsTotal > 0 && (
+          <Card>
+            <CardPanel className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">#team 频道</p>
+                <p className="font-semibold tabular-nums">
+                  {data.messageKinds.team}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">dm 频道</p>
+                <p className="font-semibold tabular-nums">
+                  {data.messageKinds.dm}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">orch 频道</p>
+                <p className="font-semibold tabular-nums">
+                  {data.messageKinds.orch}
+                </p>
+              </div>
+            </CardPanel>
+          </Card>
+        )}
         {data.messageActivity.length > 0 && (
           <Card>
             <CardPanel>
@@ -682,25 +952,58 @@ function CollaborationCards({ data }: { data: EventStats }) {
           </Card>
         )}
         <Card>
-          <CardPanel className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-            <div>
-              <p className="text-xs text-muted-foreground">超时</p>
-              <p className="font-semibold tabular-nums">
-                {data.failures.timeouts}
-              </p>
+          <CardPanel className="flex flex-col gap-2 text-sm">
+            <div className="flex flex-wrap gap-x-8 gap-y-2">
+              <div>
+                <p className="text-xs text-muted-foreground">超时</p>
+                <p className="font-semibold tabular-nums">
+                  {data.failures.timeouts}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">中止</p>
+                <p className="font-semibold tabular-nums">
+                  {data.failures.aborted}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">失败</p>
+                <p className="font-semibold tabular-nums">
+                  {data.failures.failed}
+                </p>
+              </div>
+              {submissions > 0 && (
+                <div>
+                  <p className="text-xs text-muted-foreground">flag 提交</p>
+                  <p className="font-semibold tabular-nums">
+                    {submissions - rejectedSubmissions}/{submissions}
+                    {rejectedSubmissions > 0 && (
+                      <span className="text-xs font-normal text-muted-foreground">
+                        {" "}
+                        （拒绝 {rejectedSubmissions}）
+                      </span>
+                    )}
+                  </p>
+                </div>
+              )}
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground">中止</p>
-              <p className="font-semibold tabular-nums">
-                {data.failures.aborted}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">失败</p>
-              <p className="font-semibold tabular-nums">
-                {data.failures.failed}
-              </p>
-            </div>
+            {failureRows.length > 0 && (
+              <div className="flex flex-col gap-1 border-t pt-2">
+                {failureRows.map((row) => (
+                  <div className="flex items-baseline gap-2" key={row.id}>
+                    <span className="shrink-0 text-xs font-medium">
+                      {row.name ?? row.id}
+                    </span>
+                    <span
+                      className="truncate text-xs text-destructive"
+                      title={row.error ?? undefined}
+                    >
+                      {row.error}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardPanel>
         </Card>
       </div>
