@@ -155,7 +155,7 @@ function OverviewCards({ data }: { data: EventStats }) {
   ]
   return (
     <Card>
-      <CardPanel className="grid grid-cols-3 divide-x md:grid-cols-6">
+      <CardPanel className="grid grid-cols-2 gap-y-3 sm:grid-cols-3 xl:grid-cols-6 xl:divide-x">
         {cells.map((cell) => (
           <div className="flex flex-col gap-0.5 px-4 py-3" key={cell.label}>
             <span className="text-xs text-muted-foreground">{cell.label}</span>
@@ -170,6 +170,21 @@ function OverviewCards({ data }: { data: EventStats }) {
   )
 }
 
+/** Padded [start, end] domain + 5 explicit ticks for a time axis. Recharts'
+ * own tick generation on numeric time axes is unreliable (single tick on
+ * multi-hour windows, overlapping labels on degenerate ones), so both the
+ * domain padding and the ticks are computed here. */
+function timeAxis(startMs: number, endMs: number) {
+  const span = Math.max(0, endMs - startMs)
+  const pad = Math.max(span * 0.03, 60_000)
+  const lo = startMs - pad
+  const hi = endMs + pad
+  const ticks = Array.from({ length: 5 }, (_, i) =>
+    Math.round(lo + ((hi - lo) * i) / 4)
+  )
+  return { domain: [lo, hi] as [number, number], ticks }
+}
+
 /** Cumulative earned points over the event window (the赛后 score curve). */
 function ScoreChart({ data }: { data: EventStats }) {
   if (data.scoreTimeline.length === 0) return null
@@ -182,6 +197,7 @@ function ScoreChart({ data }: { data: EventStats }) {
     : lastPoint
       ? Date.parse(lastPoint.time)
       : startMs
+  const axis = timeAxis(startMs, endMs)
   const points = [
     { t: startMs, cumulative: 0, label: "" },
     ...data.scoreTimeline.map((point) => ({
@@ -190,6 +206,7 @@ function ScoreChart({ data }: { data: EventStats }) {
       label: `${point.challengeName} +${point.points}`,
     })),
   ]
+  const maxCumulative = Math.max(...points.map((p) => p.cumulative), 1)
   return (
     <CardFrame>
       <CardFrameHeader>
@@ -212,14 +229,18 @@ function ScoreChart({ data }: { data: EventStats }) {
               />
               <XAxis
                 dataKey="t"
-                domain={[startMs, Math.max(endMs, startMs + 1)]}
-                scale="time"
+                domain={axis.domain}
                 tick={{ fontSize: 11 }}
-                tickCount={5}
+                ticks={axis.ticks}
                 tickFormatter={axisTickTime}
                 type="number"
               />
-              <YAxis tick={{ fontSize: 11 }} width={44} />
+              <YAxis
+                allowDecimals={false}
+                domain={[0, maxCumulative]}
+                tick={{ fontSize: 11 }}
+                width={44}
+              />
               <Tooltip
                 contentStyle={{ fontSize: 12 }}
                 formatter={(value) => [`${Number(value)} 分`, "累计"]}
@@ -344,14 +365,21 @@ function spanColor(span: EventStatsAgentSpan): string {
 /** Concurrent running solver agents over the event window (step series). */
 function ConcurrencyChart({ data }: { data: EventStats }) {
   if (data.concurrency.length === 0) return null
-  const startMs = data.window.start
-    ? Date.parse(data.window.start)
-    : Date.parse(data.concurrency[0].time)
-  const maxRunning = Math.max(...data.concurrency.map((p) => p.running), 1)
   const points = data.concurrency.map((point) => ({
     t: Date.parse(point.time),
     running: point.running,
   }))
+  const first = points[0]
+  const last = points.at(-1)
+  const startMs = data.window.start ? Date.parse(data.window.start) : first.t
+  // The event window bounds the chart — a Date.now() end would compress a
+  // finished event into a sliver at the left edge.
+  const endMs = Math.max(
+    data.window.end ? Date.parse(data.window.end) : 0,
+    last ? last.t : first.t
+  )
+  const axis = timeAxis(startMs, endMs)
+  const maxRunning = Math.max(...points.map((p) => p.running), 1)
   return (
     <CardFrame>
       <CardFrameHeader>
@@ -378,10 +406,9 @@ function ConcurrencyChart({ data }: { data: EventStats }) {
               />
               <XAxis
                 dataKey="t"
-                domain={[startMs, Math.max(Date.now(), startMs + 1)]}
-                scale="time"
+                domain={axis.domain}
                 tick={{ fontSize: 11 }}
-                tickCount={5}
+                ticks={axis.ticks}
                 tickFormatter={axisTickTime}
                 type="number"
               />
@@ -602,6 +629,7 @@ function CollaborationCards({ data }: { data: EventStats }) {
                   />
                   <XAxis
                     dataKey="bucket"
+                    interval="equidistantPreserveStart"
                     tick={{ fontSize: 10 }}
                     tickFormatter={(bucket) => formatTime(`${bucket}:00`)}
                   />

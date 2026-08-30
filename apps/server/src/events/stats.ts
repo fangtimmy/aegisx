@@ -66,16 +66,16 @@ function usageByAgentGroup(
     .all()
 }
 
-/** Agent wall interval end: completedAt for terminal agents, `now` for live
- * ones, updatedAt as the fallback for rows that never recorded an end. */
+/** Agent wall interval end: completedAt for terminal agents, `now` only for
+ * actively-running ones (they are producing output right now). idle agents
+ * end at their last activity — an idle wait can span hours and would
+ * otherwise stretch the timeline far past the real work. */
 function agentSpanEnd(
   row: typeof agents.$inferSelect,
   now: string
 ): string | null {
-  return (
-    row.completedAt ??
-    (row.status === "running" || row.status === "idle" ? now : row.updatedAt)
-  )
+  if (row.completedAt) return row.completedAt
+  return row.status === "running" ? now : row.updatedAt
 }
 
 export function buildEventStats(db: Database, eventId: string): EventStats {
@@ -270,10 +270,9 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
     const end = agentSpanEnd(row, now)
     if (!end) continue
     deltas.push({ time: row.startedAt, delta: 1 })
-    // Live agents (running/idle, no completedAt) stay open — no closing delta,
-    // so the step series holds their slot through the right edge.
-    const live =
-      !row.completedAt && (row.status === "running" || row.status === "idle")
+    // Only actively-running agents stay open (no closing delta) — their slot
+    // holds through the right edge. idle closes at its last activity.
+    const live = !row.completedAt && row.status === "running"
     if (!live) deltas.push({ time: end, delta: -1 })
     agentTimeline.push({
       id: row.id,

@@ -425,7 +425,7 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
     expect(stats.agentTimeline[0].challengeId).toBeNull()
   })
 
-  test("live agents hold their concurrency slot without a closing step", async () => {
+  test("running holds its concurrency slot; idle ends at its last activity", async () => {
     const { app, dataDir } = createTestApp()
     const event = await responseJson<{ id: string }>(
       await app.request("/api/events", json("POST", { name: "Stats Event" }))
@@ -442,15 +442,29 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
       startedAt: "2025-01-01T00:10:00Z",
       updatedAt: "2025-01-01T00:10:00Z",
     })
+    seedAgent(db, {
+      id: "agent-idle",
+      eventId: event.id,
+      challengeId: "ch-1",
+      status: "idle",
+      completedAt: null,
+      startedAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:05:00Z",
+    })
 
     const response = await app.request(`/api/events/${event.id}/stats`)
     const { stats } = await responseJson<{ stats: EventStats }>(response)
-    expect(stats.overview.attemptsActive).toBe(1)
-    // Only the opening step — the slot is held through the chart's right edge.
+    expect(stats.overview.attemptsActive).toBe(2)
+    // running: only the opening step (slot held through the right edge);
+    // idle: closed at updatedAt so a stale wait doesn't stretch the chart.
     expect(stats.concurrency).toEqual([
+      { time: "2025-01-01T00:00:00Z", running: 1 },
+      { time: "2025-01-01T00:05:00Z", running: 0 },
       { time: "2025-01-01T00:10:00Z", running: 1 },
     ])
-    expect(stats.agentTimeline).toHaveLength(1)
-    expect(stats.agentTimeline[0].end > stats.agentTimeline[0].start).toBe(true)
+    const idle = stats.agentTimeline.find((a) => a.id === "agent-idle")
+    const run = stats.agentTimeline.find((a) => a.id === "agent-run")
+    expect(idle?.end).toBe("2025-01-01T00:05:00Z")
+    expect(run != null && run.end > run.start).toBe(true)
   })
 })
