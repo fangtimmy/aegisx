@@ -100,6 +100,23 @@ function findModel(provider: ProviderData, modelId: string) {
   return provider.models.find((m) => m.id === modelId)
 }
 
+/** Deletion hygiene: drop the global default-model ref when it points at
+ * the provider (any model) or at one specific model being removed. */
+function clearDefaultModelRef(
+  store: ConfigStore,
+  provider: ProviderData,
+  model?: ProviderModelData
+): void {
+  const parsed = parseModelRef(store.getSettings()["agent.defaultModelRef"])
+  if (parsed?.kind !== "model") return
+  const ref = `${parsed.providerKey}/${parsed.modelId}`
+  const hit =
+    model !== undefined
+      ? modelAddress(provider, model) === ref
+      : provider.models.some((m) => modelAddress(provider, m) === ref)
+  if (hit) store.updateSettings({ "agent.defaultModelRef": null })
+}
+
 function publicModel(model: ProviderModelData) {
   const parsedMetadata = parseModelMetadata(model.metadata)
   return {
@@ -249,20 +266,7 @@ export function registerProviderRoutes(
     const providers = cloneProviders(configStore)
     const idx = providers.findIndex((p) => p.id === c.req.param("providerId"))
     if (idx === -1) return notFound(c, "Provider not found")
-    const provider = providers[idx]
-    const settings = configStore.getSettings()
-    const defaultModelRef = settings["agent.defaultModelRef"]
-    const parsedDefault = parseModelRef(defaultModelRef)
-    if (
-      parsedDefault?.kind === "model" &&
-      provider.models.some(
-        (m) =>
-          modelAddress(provider, m) ===
-          `${parsedDefault.providerKey}/${parsedDefault.modelId}`
-      )
-    ) {
-      configStore.updateSettings({ "agent.defaultModelRef": null })
-    }
+    clearDefaultModelRef(configStore, providers[idx])
     providers.splice(idx, 1)
     configStore.updateProviders(providers)
     return c.body(null, 204)
@@ -377,15 +381,7 @@ export function registerProviderRoutes(
       c.req.param("modelId")
     )
     if (!provider || !model) return notFound(c, "Model not found")
-    const settings = configStore.getSettings()
-    const parsedDefault = parseModelRef(settings["agent.defaultModelRef"])
-    if (
-      parsedDefault?.kind === "model" &&
-      modelAddress(provider, model) ===
-        `${parsedDefault.providerKey}/${parsedDefault.modelId}`
-    ) {
-      configStore.updateSettings({ "agent.defaultModelRef": null })
-    }
+    clearDefaultModelRef(configStore, provider, model)
     provider.models = provider.models.filter((m) => m.id !== model.id)
     configStore.updateProviders(providers)
     return c.body(null, 204)
