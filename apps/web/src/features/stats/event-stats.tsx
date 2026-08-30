@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { RefreshCw } from "lucide-react"
+import { useState } from "react"
 import {
   Area,
   AreaChart,
@@ -24,6 +25,7 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardFrame,
+  CardFrameAction,
   CardFrameDescription,
   CardFrameHeader,
   CardFrameTitle,
@@ -44,6 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   agentStatusLabel,
@@ -340,9 +343,88 @@ function ScoreChart({ data }: { data: EventStats }) {
   )
 }
 
-/** fig-2 style Gantt: one lane per challenge (scheduler on top), one bar per
- * agent span. Hand-rolled divs — recharts has no dense lane layout. */
+/** fig-2 style Gantt: one bar per agent span, hand-rolled divs (recharts has
+ * no dense lane layout). "challenge" rows spans by challenge (scheduler on
+ * top); "compact" packs them into the fewest tracks via greedy interval
+ * packing — for interval graphs the greedy result equals peak concurrency. */
+type TimelineMode = "challenge" | "compact"
+
+type TimelineLane = {
+  key: string
+  /** Null = an unlabeled compact track. */
+  title: string | null
+  spans: EventStatsAgentSpan[]
+}
+
+function timelineLanes(
+  spans: EventStatsAgentSpan[],
+  mode: TimelineMode
+): TimelineLane[] {
+  if (mode === "challenge") {
+    const lanes: TimelineLane[] = []
+    const scheduler = spans.filter((span) => span.challengeId === null)
+    if (scheduler.length > 0) {
+      lanes.push({ key: ":scheduler", title: "调度者", spans: scheduler })
+    }
+    const byChallenge = new Map<string, EventStatsAgentSpan[]>()
+    for (const span of spans) {
+      if (span.challengeId === null) continue
+      const values = byChallenge.get(span.challengeId) ?? []
+      values.push(span)
+      byChallenge.set(span.challengeId, values)
+    }
+    for (const [challengeId, challengeSpans] of byChallenge) {
+      lanes.push({
+        key: challengeId,
+        title: challengeSpans[0].challengeName ?? challengeId,
+        spans: challengeSpans,
+      })
+    }
+    return lanes
+  }
+  const trackEnds: number[] = []
+  const trackOf = new Map<string, number>()
+  const order = spans.toSorted(
+    (a, b) =>
+      Date.parse(a.start) - Date.parse(b.start) ||
+      Date.parse(a.end) - Date.parse(b.end)
+  )
+  for (const span of order) {
+    const start = Date.parse(span.start)
+    const end = Date.parse(span.end)
+    // Best fit: reuse the already-freed track with the latest end.
+    let best = -1
+    let bestEnd = -Infinity
+    for (let i = 0; i < trackEnds.length; i++) {
+      if (trackEnds[i] <= start && trackEnds[i] > bestEnd) {
+        best = i
+        bestEnd = trackEnds[i]
+      }
+    }
+    if (best === -1) {
+      trackEnds.push(end)
+      trackOf.set(span.id, trackEnds.length - 1)
+    } else {
+      trackEnds[best] = end
+      trackOf.set(span.id, best)
+    }
+  }
+  const tracks: EventStatsAgentSpan[][] = Array.from(
+    { length: trackEnds.length },
+    () => []
+  )
+  for (const span of order) {
+    tracks[trackOf.get(span.id) ?? 0].push(span)
+  }
+  return tracks.map((trackSpans, i) => ({
+    key: `track-${i}`,
+    title: null,
+    spans: trackSpans,
+  }))
+}
+
 function AgentTimeline({ data }: { data: EventStats }) {
+  const [mode, setMode] = useState<TimelineMode>("challenge")
   const spans = data.agentTimeline
   if (spans.length === 0) return null
   const starts = spans.map((span) => Date.parse(span.start))
@@ -357,37 +439,34 @@ function AgentTimeline({ data }: { data: EventStats }) {
   )
   const spanMs = Math.max(1, domainEnd - domainStart)
 
-  const lanes: Array<{
-    key: string
-    title: string
-    spans: EventStatsAgentSpan[]
-  }> = []
-  const scheduler = spans.filter((span) => span.challengeId === null)
-  if (scheduler.length > 0) {
-    lanes.push({ key: ":scheduler", title: "调度者", spans: scheduler })
-  }
-  const byChallenge = new Map<string, EventStatsAgentSpan[]>()
-  for (const span of spans) {
-    if (span.challengeId === null) continue
-    const values = byChallenge.get(span.challengeId) ?? []
-    values.push(span)
-    byChallenge.set(span.challengeId, values)
-  }
-  for (const [challengeId, challengeSpans] of byChallenge) {
-    lanes.push({
-      key: challengeId,
-      title: challengeSpans[0].challengeName ?? challengeId,
-      spans: challengeSpans,
-    })
-  }
+  const lanes = timelineLanes(spans, mode)
+  const compact = mode === "compact"
 
   return (
     <CardFrame>
       <CardFrameHeader>
         <CardFrameTitle>Agent 时间线</CardFrameTitle>
         <CardFrameDescription>
-          每个 Agent 的运行区间，按题目分行（{spans.length} 个）
+          {compact
+            ? `最少轨道合并：${lanes.length} 条轨道承载 ${spans.length} 个 Agent`
+            : `每个 Agent 的运行区间，按题目分行（${spans.length} 个）`}
         </CardFrameDescription>
+        <CardFrameAction>
+          <ToggleGroup
+            size="sm"
+            value={[mode]}
+            variant="outline"
+            onValueChange={(value) => {
+              const next = value.at(-1)
+              if (next === "challenge" || next === "compact") {
+                setMode(next)
+              }
+            }}
+          >
+            <ToggleGroupItem value="challenge">按题目</ToggleGroupItem>
+            <ToggleGroupItem value="compact">合并</ToggleGroupItem>
+          </ToggleGroup>
+        </CardFrameAction>
       </CardFrameHeader>
       <Card>
         <CardPanel className="flex flex-col gap-3">
@@ -398,12 +477,18 @@ function AgentTimeline({ data }: { data: EventStats }) {
           <div className="flex flex-col gap-2">
             {lanes.map((lane) => (
               <div
-                className="grid grid-cols-[minmax(6rem,10rem)_1fr] items-center gap-2"
+                className={
+                  compact
+                    ? "grid items-center"
+                    : "grid grid-cols-[minmax(6rem,10rem)_1fr] items-center gap-2"
+                }
                 key={lane.key}
               >
-                <span className="truncate text-xs text-muted-foreground">
-                  {lane.title}
-                </span>
+                {lane.title !== null && (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {lane.title}
+                  </span>
+                )}
                 <div className="relative h-5 rounded bg-muted/50">
                   {lane.spans.map((span) => {
                     const start = Date.parse(span.start)
