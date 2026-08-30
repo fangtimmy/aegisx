@@ -1,4 +1,4 @@
-import type { ThinkingLevel } from "./live-event"
+import type { ThinkingLevel } from "./domain"
 
 /** Aggregated token usage + cost across an agent's assistant messages.
  * `turns` is the number of assistant messages that reported usage. */

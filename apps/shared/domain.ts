@@ -78,7 +78,72 @@ export type SubmissionStatus =
   | "already_solved"
   | "rate_limited"
   | "error"
-import type { ThinkingLevel } from "./live-event"
+
+/** Per-agent lifecycle. Solver + orchestrator agents use running|idle
+ * (turn-by-turn); terminal states keep the DB session + files for reopen. */
+export type AgentStatus =
+  | "running"
+  | "idle"
+  | "completed"
+  | "aborted"
+  | "failed"
+
+export function isAgentStatus(value: unknown): value is AgentStatus {
+  return (
+    value === "running" ||
+    value === "idle" ||
+    value === "completed" ||
+    value === "aborted" ||
+    value === "failed"
+  )
+}
+
+/** An agent holds live resources (a session; the challenge workspace's
+ * container is shared and lazily managed). */
+export const LIVE_AGENT_STATUSES: AgentStatus[] = ["running", "idle"]
+
+export function isActiveAgentStatus(status: string): boolean {
+  return LIVE_AGENT_STATUSES.some((live) => live === status)
+}
+
+export type ThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+
+const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]
+
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh" ||
+    value === "max"
+  )
+}
+
+export function normalizeThinkingLevel(value: unknown): ThinkingLevel {
+  return isThinkingLevel(value) ? value : "off"
+}
+
+export function thinkingLevels(): readonly ThinkingLevel[] {
+  return THINKING_LEVELS
+}
 
 export type PiModelProfile = {
   providerId: string
@@ -202,8 +267,6 @@ export type RemoteTargetInfo = {
   name: string
   services: string[]
 }
-import type { AgentStatus } from "./agent"
-
 export type Attachment = {
   id: string
   challengeId: string

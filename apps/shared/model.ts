@@ -1,5 +1,5 @@
 import type { ProviderConnection, ProviderModel } from "./domain"
-import { isThinkingLevel, type ThinkingLevel } from "./live-event"
+import { isThinkingLevel, type ThinkingLevel } from "./domain"
 
 /**
  * Model reference — the single canonical way to point at "one model + one
