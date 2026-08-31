@@ -1,59 +1,67 @@
 # AegisX
 
-AegisX is a local, single-user workspace for running multi-agent CTF solving sessions. It manages events, challenges, attachments, model providers, isolated agent workspaces, live agent conversations, an event task queue (scheduler), and token usage.
+AegisX is a local, single-operator platform for attacking CTF competitions with agents. One scheduler agent per event plans the work and fills the spawn queue; solver agents — each with its own model, prompt, and deadline — work the challenges, share findings in per-challenge channels, and submit flags. The web UI shows live conversations, token usage, and the queue, and lets you intervene through the same channels.
 
-> **Schema v19（题中心模型）** — Run 作为一等实体被移除。Event → Challenge → Workspace → Agent 四层；agents 表重建（eventId/challengeId/role/prompt/source/deadlineAt/summary），spawn_queue（append 语义），challenge_flags.agentId + source 'agent'；频道附件改为 shared/ 路径（删 channel_files 表）；调度者容器挂载 /challenges 只读。迁移 0013 为纯破坏性 DDL（旧数据弃置）。
-> Design notes: [docs/model-v19-challenge-centric.md](docs/model-v19-challenge-centric.md)（v19 题中心设计，已实施）、[docs/model-v19-implementation.md](docs/model-v19-implementation.md)（实施计划，已实施）、[docs/tasks-tab-design.md](docs/tasks-tab-design.md)（任务 Tab：题中心作战视图，已实施）、[docs/composer-realtime-design.md](docs/composer-realtime-design.md)（SteerQueue/多行输入/频道 SSE/provider 测试，已实施）、[docs/agents-graph-and-activity-log.md](docs/agents-graph-and-activity-log.md)（Agents tab 纯 Graph 化 + 全局活动日志，已实施）、[docs/sdk-refactor.md](docs/sdk-refactor.md)（agent token / 权限收口 / SDK 契约测试，已实施；SDK 用法见 apps/sdk/python/GUIDE.md）。更早的设计史（v9 编排 / v16-18 频道 IM / v18 统一消息层）见 git 历史。
+Architecture: [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
 
 - [Bun](https://bun.sh/)
-- Docker when using the container execution environment
-
-## Run locally
-
-Install everything, then start the API and web app together:
+- Docker
+- Solver image — build from the repo root (default `container.image` is `aegisx/solver:full`):
 
 ```sh
-bun install    # at repo root — installs all workspaces (single lockfile)
-bun run dev    # starts server + web concurrently
+docker buildx build -f containers/solver/Dockerfile --target full -t aegisx/solver:full .
 ```
 
-Or start them individually: `bun run dev:server` / `bun run dev:web`.
+Tiers: `minimal` 0.85 GB / `essential` 4.75 GB / `full` 16.7 GB — [containers/solver/README.md](containers/solver/README.md).
 
-Open the URL printed by Vite. The web development server proxies `/api` to `http://127.0.0.1:3000` by default. Set `VITE_API_URL` to use another API endpoint.
-
-## Data and execution
-
-The API stores its SQLite database, attachments, and per-event workspaces under `data/` (`data/events/<eventId>/challenges/<challengeId>/workspace` for solvers, `data/events/<eventId>/orchestrator` for the scheduler). Set `AEGISX_DATA_DIR` to use another directory.
-
-The agent loop runs **host-side in-process** via the pi SDK. `bash` and the CTF toolchain execute inside a dedicated Kali container (a long-lived `sleep infinity` tool box, workspace bind-mounted at `/workspace`) over `docker exec`; the file tools (`read`/`edit`/`write`/`grep`/`find`/`ls`) operate on the host workspace, which is shared with the container. Container resources (CPU, memory, PIDs) are configurable.
-
-Network exposure: solver containers sit on the default bridge (or share a VPN container's netns via the `container.networkMode` setting) and hold `NET_RAW`, so they have unrestricted outbound reach — including the host's LAN. Isolation is enforced solver↔host-data and solver↔other-challenges, **not** solver↔LAN; tighten via `container.networkMode` (e.g. a custom bridge with egress rules) if your threat model requires it.
-
-A challenge workspace hosts 1..N parallel solver agents sharing one container (each agent has its own model, prompt, and deadline); an event hosts a single orchestrator agent that manages the event's task queue. Each agent works in its own directory (agents/<id8>) within the challenge workspace; shared findings land in shared/ (read-only to agents).
-
-## Solve container image
-
-`containers/solver` defines the Kali-based solver image used as the per-run tool box (main process `sleep infinity`).
-
-## LLM gateway relay
-
-Some competitions hand out fixed-endpoint LLM proxy URLs (e.g. `https://llm-gateway.dasctf.com/llm-gateway/proxy/e/<id>`) that must be used verbatim: any path appended to them 404s, but every provider type appends `/chat/completions` / `/responses` / `/v1/messages`. `bun run relay` starts a local strip-path proxy that forwards every request to such a URL as-is (streaming and SSE included):
+## Run
 
 ```sh
-bun run relay <upstream-url> [port]   # defaults to 8788; one process per upstream
+bun install    # repo root, all workspaces (single lockfile)
+bun run dev    # server + web concurrently
 ```
 
-Then point an `openai-compatible` provider at `http://127.0.0.1:<port>/v1` with the upstream's API key, and add models manually (these gateways don't serve `GET /models`, so model discovery fails by design).
+Open the URL printed by Vite (`bun run dev:server` / `bun run dev:web` run them separately). The dev server proxies `/api` to `http://127.0.0.1:3000`; set `VITE_API_URL` to use another API endpoint.
 
-## Checks
+First steps:
+
+1. Settings → Models: add a provider (OpenAI-compatible / OpenAI Responses / Anthropic Messages), discover models, set the default model.
+2. Home: create an event; in its settings, bind a platform (CTFd, A1CTF, DASCTF, Ret2Shell, TSecBench). Challenge sync, remote flag submission, and target lifecycle come with the binding.
+3. Event's Tasks tab: start the scheduler, or enqueue and spawn solvers manually.
+4. Follow progress in Tasks and Stats; intervene by posting to a challenge's `#team` or DMing a solver.
+
+## Execution and data
+
+Agent loops run host-side in-process (pi SDK). `bash` and the CTF toolchain execute in a per-challenge Kali container — a long-lived tool box with the workspace bind-mounted — over `docker exec`; file tools operate on the host workspace, shared with the container. Each agent works in its own directory in the challenge workspace; shared findings land in `shared/` (read-only to agents).
+
+Everything is stored under `data/` (SQLite database, attachments, per-event workspaces); set `AEGISX_DATA_DIR` to relocate.
+
+Solver containers hold `NET_RAW` on the default bridge (or share a VPN container's netns via `container.networkMode`) and have unrestricted outbound reach, including the host LAN. Isolation is enforced solver↔host-data and solver↔other-challenges, not solver↔LAN; tighten via `container.networkMode` if required.
+
+## Configuration
+
+Runtime settings live in the web UI under Settings: agent defaults, scheduler concurrency and task timeout, container resources, `container.image`, `container.networkMode`. Per-event scheduler policy (model, instruction, target slots, flag handling) is in the event's settings tab.
+
+Relay — for fixed-endpoint LLM gateways where any appended path 404s:
 
 ```sh
-bun run check        # oxfmt (format) + knip (unused-code gate) + oxlint (lint + type-check) across all workspaces
-bun run test         # tests across all workspaces
-bun run build        # web production build
-bun run db:generate  # server drizzle migrations
+bun run relay <upstream-url> [port]   # default 8788, one process per upstream
 ```
 
-All run from the repo root. Lint and formatting are provided by the oxc toolchain: `oxlint` (with the native `oxlint-tailwindcss` plugin for Tailwind v4 class checking and type-aware/`--type-check` via `tsgolint`) and `oxfmt` (with built-in import, Tailwind class, and package.json sorting). The workspace is a Bun monorepo: `apps/server` (`@aegisx/server`), `apps/web` (`@aegisx/web`), and `apps/shared` (`@aegisx/shared`, wire types) are linked as workspace packages; shared model-provider versions are pinned centrally via `overrides` in the root `package.json`.
+The relay forwards every request as-is. Point an `openai-compatible` provider at `http://127.0.0.1:<port>/v1`; such gateways don't serve `GET /models`, so add models manually.
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — architecture overview
+- [apps/sdk/python/GUIDE.md](apps/sdk/python/GUIDE.md) — agent Python SDK (shipped in the container at `/opt/aegisx-sdk`)
+- [docs/README.md](docs/README.md) — full index (report, migrations, audits, design archive)
+
+## Development
+
+```sh
+bun run check   # format + lint + type-check across workspaces
+bun run test    # tests across workspaces (test:sdk: Python SDK contract suite)
+bun run build   # web production build
+```
