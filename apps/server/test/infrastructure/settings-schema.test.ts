@@ -58,14 +58,14 @@ describe("settings schema", () => {
       environment: "container",
       toolTimeouts: { bash: 99_000 },
       maxAttachmentMb: 256,
-      containerImage: "aegisx/solver:kali",
+      containerImage: "aegisx/solver:full",
       // v2-era prompt templates left FlatSettings in v8 (prompt_templates
       // table); the legacy extractor carries them into the DB at boot instead.
       mainSystemPromptTemplate: "custom main",
     })
     expect(migrated["agent.defaultModelRef"]).toBe("m1")
     expect(migrated["runtime.maxAttachmentMb"]).toBe(256)
-    expect(migrated["container.image"]).toBe("aegisx/solver:kali")
+    expect(migrated["container.image"]).toBe("aegisx/solver:full")
     // removed v2 settings are absent from the flat shape
     expect(Object.hasOwn(migrated, "prompts.mainSystem")).toBe(false)
     expect(Object.hasOwn(migrated, "runtime.maxConcurrency")).toBe(false)

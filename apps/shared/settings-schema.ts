@@ -183,7 +183,7 @@ export const SETTINGS_DEFS: SettingDef[] = [
   {
     key: "container.image",
     type: "string",
-    default: "aegisx/solver:kali",
+    default: "aegisx/solver:full",
     minLength: 1,
     maxLength: 300,
     pattern: IMAGE_PATTERN,
