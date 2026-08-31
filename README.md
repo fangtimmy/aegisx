@@ -1,67 +1,51 @@
 # AegisX
 
-AegisX is a local, single-operator platform for attacking CTF competitions with agents. One scheduler agent per event plans the work and fills the spawn queue; solver agents — each with its own model, prompt, and deadline — work the challenges, share findings in per-challenge channels, and submit flags. The web UI shows live conversations, token usage, and the queue, and lets you intervene through the same channels.
+**中文** · [English](README.en.md)
 
-Architecture: [docs/architecture.md](docs/architecture.md).
+AegisX 是本地单机部署的多智能体 CTF 作战平台。每场赛事一个调度者 agent 负责规划并维护派发队列；求解者 agent——各自独立的模型、提示词与时限——解题、在题目频道沉淀情报并提交 flag。Web UI 提供实时会话、token 用量与队列视图，人通过同一套频道介入。
 
-## Requirements
+架构概览：[docs/architecture.md](docs/architecture.md)。使用流程：[docs/usage.md](docs/usage.md)。
 
-- [Bun](https://bun.sh/)
+## 环境要求
+
+- [Bun](https://bun.sh/) — 本项目仅支持 Bun：安装、开发、测试全部经 bun 执行，不提供对 Node、pnpm 等其他运行时/包管理器的支持。
 - Docker
-- Solver image — build from the repo root (default `container.image` is `aegisx/solver:full`):
+- 解题镜像 — 在仓库根目录构建（默认 `container.image` 为 `aegisx/solver:full`）：
 
 ```sh
 docker buildx build -f containers/solver/Dockerfile --target full -t aegisx/solver:full .
 ```
 
-Tiers: `minimal` 0.85 GB / `essential` 4.75 GB / `full` 16.7 GB — [containers/solver/README.md](containers/solver/README.md).
+三档镜像：`minimal` 0.85 GB / `essential` 4.75 GB / `full` 16.7 GB，详见 [containers/solver/README.md](containers/solver/README.md)。
 
-## Run
+## 启动
 
 ```sh
-bun install    # repo root, all workspaces (single lockfile)
-bun run dev    # server + web concurrently
+bun install    # 仓库根目录，一次安装全部 workspace（单一 lockfile）
+bun run dev    # 同时启动 server 与 web
 ```
 
-Open the URL printed by Vite (`bun run dev:server` / `bun run dev:web` run them separately). The dev server proxies `/api` to `http://127.0.0.1:3000`; set `VITE_API_URL` to use another API endpoint.
+打开 Vite 输出的地址（`bun run dev:server` / `bun run dev:web` 可分别启动）。开发服务器将 `/api` 代理到 `http://127.0.0.1:3000`，可用 `VITE_API_URL` 指向其他 API 端点。
 
-First steps:
+## 数据与执行
 
-1. Settings → Models: add a provider (OpenAI-compatible / OpenAI Responses / Anthropic Messages), discover models, set the default model.
-2. Home: create an event; in its settings, bind a platform (CTFd, A1CTF, DASCTF, Ret2Shell, TSecBench). Challenge sync, remote flag submission, and target lifecycle come with the binding.
-3. Event's Tasks tab: start the scheduler, or enqueue and spawn solvers manually.
-4. Follow progress in Tasks and Stats; intervene by posting to a challenge's `#team` or DMing a solver.
+agent loop 在宿主进程内运行（pi SDK）；bash 与 CTF 工具链在每题一个的 Kali 容器中执行——长寿工具箱，工作区 bind mount——经 `docker exec` 调用；文件工具操作宿主工作区，与容器共享。每个 agent 在题目工作区内有独立目录，共享成果落在 `shared/`（对 agent 只读）。
 
-## Execution and data
+所有数据存于 `data/`（SQLite 数据库、附件、按赛事划分的工作区），可用 `AEGISX_DATA_DIR` 重定位。
 
-Agent loops run host-side in-process (pi SDK). `bash` and the CTF toolchain execute in a per-challenge Kali container — a long-lived tool box with the workspace bind-mounted — over `docker exec`; file tools operate on the host workspace, shared with the container. Each agent works in its own directory in the challenge workspace; shared findings land in `shared/` (read-only to agents).
+网络：solver 容器在默认 bridge 上持有 `NET_RAW`（或经 `container.networkMode` 共享 VPN 容器的网络命名空间），出站不受限，包括宿主局域网。隔离施加于 solver↔宿主数据 与 solver↔其他题目，不含 solver↔局域网；有需要时通过 `container.networkMode` 收紧。
 
-Everything is stored under `data/` (SQLite database, attachments, per-event workspaces); set `AEGISX_DATA_DIR` to relocate.
+## 文档
 
-Solver containers hold `NET_RAW` on the default bridge (or share a VPN container's netns via `container.networkMode`) and have unrestricted outbound reach, including the host LAN. Isolation is enforced solver↔host-data and solver↔other-challenges, not solver↔LAN; tighten via `container.networkMode` if required.
+- [docs/usage.md](docs/usage.md) — 使用指南
+- [docs/architecture.md](docs/architecture.md) — 架构概览
+- [apps/sdk/python/GUIDE.md](apps/sdk/python/GUIDE.md) — agent Python SDK（随镜像分发于 `/opt/aegisx-sdk`）
+- [docs/README.md](docs/README.md) — 文档索引（报告、迁移、审计、设计存档）
 
-## Configuration
-
-Runtime settings live in the web UI under Settings: agent defaults, scheduler concurrency and task timeout, container resources, `container.image`, `container.networkMode`. Per-event scheduler policy (model, instruction, target slots, flag handling) is in the event's settings tab.
-
-Relay — for fixed-endpoint LLM gateways where any appended path 404s:
+## 开发
 
 ```sh
-bun run relay <upstream-url> [port]   # default 8788, one process per upstream
-```
-
-The relay forwards every request as-is. Point an `openai-compatible` provider at `http://127.0.0.1:<port>/v1`; such gateways don't serve `GET /models`, so add models manually.
-
-## Documentation
-
-- [docs/architecture.md](docs/architecture.md) — architecture overview
-- [apps/sdk/python/GUIDE.md](apps/sdk/python/GUIDE.md) — agent Python SDK (shipped in the container at `/opt/aegisx-sdk`)
-- [docs/README.md](docs/README.md) — full index (report, migrations, audits, design archive)
-
-## Development
-
-```sh
-bun run check   # format + lint + type-check across workspaces
-bun run test    # tests across workspaces (test:sdk: Python SDK contract suite)
-bun run build   # web production build
+bun run check   # 格式 + lint + 类型检查（全部 workspace）
+bun run test    # 全部测试（test:sdk 为 Python SDK 契约测试）
+bun run build   # web 生产构建
 ```

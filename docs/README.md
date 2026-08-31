@@ -2,6 +2,7 @@
 
 | 文档 | 内容 |
 |---|---|
+| [usage.md](usage.md) | 使用指南：首次使用流程、配置、LLM 网关 relay |
 | [aegisx-report.md](aegisx-report.md) | 成果报告：架构理念、实战成绩（西湖论剑 / TSecBench），配图在 [figures/](figures/) |
 | [architecture.md](architecture.md) | 架构概览（活文档）：模块图、数据模型、agent 生命周期、协作与调度数据流 |
 | [migrations.md](migrations.md) | 数据库迁移工作流：版本机制、开机四态分类、备份回滚、schema 变更步骤 |
