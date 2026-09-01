@@ -14,7 +14,7 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 | `apps/sdk/python` | 容器内 Python SDK，构建时 COPY 进镜像 `/opt/aegisx-sdk` |
 | `containers/solver` | Kali 解题镜像，minimal / essential / full 三档共用一个 Dockerfile |
 
-进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `overrides` 统一钉住）。bash 与 CTF 工具链不在进程内执行——每道题一个长寿 Kali 容器（主进程 `sleep infinity`，纯工具箱），命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。
+进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `overrides` 统一钉住）。bash 与 CTF 工具链不在进程内执行：每道题一个长寿 Kali 容器（主进程 `sleep infinity`，纯工具箱）承载执行，命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。网络边界：solver 容器在默认 bridge 上持有 `NET_RAW`，出站不受限，宿主局域网亦可达（也可经 `container.networkMode` 共享 VPN 容器的网络命名空间）；系统强制的隔离是 solver↔宿主数据与 solver↔其他题目，不含 solver↔局域网，有需要时通过 `container.networkMode` 收紧。
 
 数据全部落在 `data/`（可用 `AEGISX_DATA_DIR` 改址）：`aegisx.sqlite`（库）、`files/`（附件）、`events/<eventId>/challenges/<challengeId>/workspace`（求解者工作区，内含 `agents/<id8>` 与 `shared/`）、`events/<eventId>/orchestrator`（调度者工作区）。
 
@@ -22,7 +22,7 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 
 Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径，无表行；容器是按题惰性管理的资源，跟随该题的存活 agent。
 
-- **`agents`** — 执行单元，一次解题尝试一行。`challengeId` 为 null 即该赛事的调度者（每赛事至多一个，唯一索引强制）。model / systemPrompt / tools 在 spawn 时快照，冷恢复原样复用。`token` 为注入凭据（运行时以 `AEGISX_TOKEN` 注入，中间件据此还原 agent 主体）。
+- **`agents`** — 执行单元，一次解题尝试一行。`challengeId` 为 null 即该赛事的调度者（orchestrator；每赛事至多一个，唯一索引强制）。model / systemPrompt / tools 在 spawn 时快照，冷恢复原样复用。`token` 为注入凭据（运行时以 `AEGISX_TOKEN` 注入，中间件据此还原 agent 主体）。
 - **`sessions` + `session_entries`** — DB 会话树（取代每 agent 一个 jsonl）：一条 entry 逐字节对应 pi 会写进 jsonl 的一行，`seq` 为会话内单调序。
 - **`spawn_queue`** — 调度计划表。一项 = 「在题 X 上派一个 agent」，enqueue 恒为 append（同题多项是合法的并行计划）。生命周期 pending → running（回填 agentId）→ done / failed；`queue_state` 按赛事暂停排水。
 - **`channel_messages` + `channel_reads`** — 全部 agent 间通信的唯一账本。频道是派生键（见下），无频道表；`channel_reads` 记 (channelKey, readerKey) → lastReadMsgId，是投递去重锚点。
@@ -72,11 +72,11 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 - `dm:<agentId>` — 指向单个 agent 的私信（用户介入与调度者指派共用）。
 - `orch:<eventId>` — 汇聚面：solver 的 `ask`、系统事件（flag 被接受、超时、停滞）。
 
-写路径（`channels-post.ts`）：消息入账本，附件拷入该题工作区 `shared/` 树（路径存 `meta` JSON，容器内直读，无取回步骤）。投递引擎（`channels-delivery.ts`）是唯一的推送出口：按读游标取增量、按 agent 的投递面（solver = 本题 #team + 自身 dm；调度者 = orch）渲染成投递提示，全局 flush tick 批量冲刷——事件先落账、再聚合唤醒，调度者不会被逐条事件牵引。dm 支持 urgent 冷唤醒（终态 agent 也可被重新叫起）；team/orch 只向存活 agent 投递，终态后仅存档。
+写路径（`channels-post.ts`）：消息入账本，附件拷入该题工作区 `shared/` 树（路径存 `meta` JSON，容器内直读，无取回步骤）。投递引擎（`channels-delivery.ts`）是唯一的推送出口：按读游标取增量、按 agent 的投递面（solver = 本题 #team + 自身 dm；调度者 = orch）渲染成投递提示，全局 flush tick 批量冲刷；事件先落账、再聚合唤醒，调度者不会被逐条事件牵引。dm 支持 urgent 冷唤醒（终态 agent 也可被重新叫起）；team/orch 只向存活 agent 投递，终态后仅存档。
 
 ## 调度
 
-调度者不是代码里的循环，而是**一个 orchestrator agent**：吃 `orch` 频道的事件投递，用 Python SDK（`queue.enqueue` / `agents.*`）产出计划，由 `queue.ts` 排水落地。系统侧的约束都在 `fence.ts` 与 `run/scheduler-policy.ts`（读侧合并 `scheduler_config`：flag 通知、解出后停兄弟、槽位释放时机 eager/drained 等）——并发与槽位在启动侧强制校验，不依赖调度者自觉。事件批处理与阈值触发由投递引擎的 flush tick 承担。
+调度者不是代码里的循环，而是**一个 agent**：消费 `orch` 频道的事件投递，用 Python SDK（`queue.enqueue` / `agents.*`）产出计划，由 `queue.ts` 排水落地。系统侧的约束都在 `fence.ts` 与 `run/scheduler-policy.ts`（读侧合并 `scheduler_config`：flag 通知、解出后停兄弟、槽位释放时机 eager/drained 等）。并发与槽位在启动侧强制校验，不依赖调度者自觉；事件批处理与阈值触发由投递引擎的 flush tick 承担。
 
 ## 平台适配（`apps/server/src/platforms/`）
 
