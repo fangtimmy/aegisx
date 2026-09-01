@@ -2,7 +2,7 @@
 
 **中文** · [English](README.en.md)
 
-AegisX 是本地单机部署的多智能体 CTF 作战平台。
+AegisX 是本地单机部署的网络安全多智能体协同任务平台。
 
 架构概览：[docs/architecture.md](docs/architecture.md)。使用指南：[docs/usage.md](docs/usage.md)。
 

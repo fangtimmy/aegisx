@@ -90,7 +90,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 - `api/` — REST 客户端，类型直接取自 `@aegisx/shared`。
 - `stream/` — SSE 消费：`conversation-store.ts` 持有单个 agent 的会话状态（stable/tail 记忆化 + rAF 批量通知 + 断线重连；**单流约束**——同时只订阅一个 agent），`parse-event.ts` 解析 LiveEvent。
-- `features/` — 页面域：events（赛事/题目/平台）、runs（agent 会话时间线与频道视图）、tasks（题中心作战视图 / 队列）、stats（统计）、activity（全局活动日志）、settings。
+- `features/` — 页面域：events（赛事/题目/平台）、runs（agent 会话时间线与频道视图）、tasks（题中心任务视图 / 队列）、stats（统计）、activity（全局活动日志）、settings。
 - `domain/` / `components/` — 前端本地领域与 coss UI 组件库（只读）。
 
 ## Python SDK（`apps/sdk/python/`）

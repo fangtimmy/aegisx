@@ -2,7 +2,7 @@
 
 [中文](README.md) · **English**
 
-AegisX is a local, single-operator platform for attacking CTF competitions with agents.
+AegisX is a locally deployed multi-agent platform for collaborative security tasks.
 
 Architecture: [docs/architecture.md](docs/architecture.md). Usage guide: [docs/usage.md](docs/usage.md).
 
