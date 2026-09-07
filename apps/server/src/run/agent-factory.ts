@@ -36,6 +36,7 @@ import type { AgentStatus } from "./agent-status"
 import type { ChannelService } from "./channels"
 import type { ContainerLifecycle } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
+import { isLocalExecBackend } from "./container/local-manager"
 import type { AgentDeadlines } from "./deadlines"
 import { RunActionError, RunStartError } from "./errors"
 import { checkSpawnFence } from "./fence"
@@ -73,9 +74,12 @@ type PlatformService = ReturnType<typeof createPlatformService>
  * a dev-only override enabled by AEGISX_SDK_PATH (missing path there is a
  * hard error — it was explicitly requested). AEGISX_API_URL pointing at the
  * host loopback is normalized to host.docker.internal (a 127.0.0.1 value
- * leaks from host-side env and would address the container itself). */
+ * leaks from host-side env and would address the container itself) — except
+ * under the local execution backend, where solver bash runs in this same
+ * container and the loopback address is the correct one. */
 function containerApiUrl(): string {
   const raw = process.env.AEGISX_API_URL ?? "http://host.docker.internal:3000"
+  if (isLocalExecBackend()) return raw
   return raw
     .replace("://127.0.0.1", "://host.docker.internal")
     .replace("://localhost", "://host.docker.internal")

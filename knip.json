@@ -4,7 +4,8 @@
   "ignoreBinaries": ["wait"],
   "workspaces": {
     "apps/server": {
-      "project": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
+      "project": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"],
+      "entry": ["src/index.ts", "src/run/container/local-manager.probe.ts"]
     },
     "apps/web": {
       "project": ["src/**/*.{ts,tsx}"],

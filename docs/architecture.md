@@ -13,10 +13,13 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 | `apps/shared` | 前后端 wire 类型的 canonical 来源（无 runtime 代码路径） |
 | `apps/sdk/python` | 容器内 Python SDK，构建时 COPY 进镜像 `/opt/aegisx-sdk` |
 | `containers/solver` | Kali 解题镜像，minimal / essential / full 三档共用一个 Dockerfile |
+| `containers/allinone` | 单镜像整机（server + web + 解题工具链，local 执行后端） |
 
 进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `overrides` 统一钉住）。bash 与 CTF 工具链不在进程内执行：每道题一个长寿 Kali 容器（主进程 `sleep infinity`，纯工具箱）承载执行，命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。网络边界：solver 容器在默认 bridge 上持有 `NET_RAW`，出站不受限，宿主局域网亦可达（也可经 `container.networkMode` 共享 VPN 容器的网络命名空间）；系统强制的隔离是 solver↔宿主数据与 solver↔其他题目，不含 solver↔局域网，有需要时通过 `container.networkMode` 收紧。
 
 数据全部落在 `data/`（可用 `AEGISX_DATA_DIR` 改址）：`aegisx.sqlite`（库）、`files/`（附件）、`events/<eventId>/challenges/<challengeId>/workspace`（求解者工作区，内含 `agents/<id8>` 与 `shared/`）、`events/<eventId>/orchestrator`（调度者工作区）。
+
+**单镜像整机**（`containers/allinone`，详见其 README）：`AEGISX_EXEC_BACKEND=local` 时执行后端换成 `run/container/local-manager.ts` —— solver bash 直接以本进程命名空间内的 `bash -c` 子进程运行，bind 语义用「路径映射（cwd）+ 容器路径符号链接」复刻，不再有独立工具箱容器，题间隔离随之消失（单机自用取舍）。`AEGISX_BOOTSTRAP=1` 时 `src/bootstrap.ts` 在启动后按环境变量幂等地完成 provider / 赛事 / 平台绑定 / 拉题 / 调度者启动；`AEGISX_WEB_DIR` 让 server 直接伺服构建好的 SPA。
 
 ## 数据模型（`apps/server/src/db/schema.ts`）
 

@@ -2,6 +2,7 @@ import { get } from "@aegisx/shared"
 import { Hono } from "hono"
 
 import { registerActivityRoutes } from "./activity/routes"
+import { readBootstrapSpec, runBootstrap } from "./bootstrap"
 import { createDatabase } from "./db"
 import { SCHEMA_VERSION } from "./db/schema"
 import { createCatalogReader } from "./events/catalog"
@@ -9,10 +10,15 @@ import { registerEventRoutes } from "./events/routes"
 import { agentAuth } from "./infrastructure/agent-auth"
 import { createConfigStore } from "./infrastructure/config-store"
 import { createStorage } from "./infrastructure/storage"
+import { registerWebApp } from "./infrastructure/web-static"
 import { registerPlatformRoutes } from "./platforms/routes"
 import { createPlatformService } from "./platforms/service"
 import { registerProviderRoutes } from "./providers/routes"
 import { createContainerManager } from "./run/container/container-manager"
+import {
+  createLocalContainerManager,
+  isLocalExecBackend,
+} from "./run/container/local-manager"
 import { registerRunRoutes } from "./run/routes"
 import { createAgentService } from "./run/service"
 import { registerSchedulerRoutes } from "./scheduler/routes"
@@ -32,7 +38,12 @@ export function createApp(options: { dataDir: string }) {
     configStore
   )
 
-  const containerManager = createContainerManager()
+  // Single-image appliance (AEGISX_EXEC_BACKEND=local): the solver tool box
+  // is this same container; otherwise solver tool boxes are separate docker
+  // containers driven over dockerode.
+  const containerManager = isLocalExecBackend()
+    ? createLocalContainerManager()
+    : createContainerManager()
   const agentService = createAgentService({
     db,
     dataDir: options.dataDir,
@@ -57,11 +68,25 @@ export function createApp(options: { dataDir: string }) {
     },
   })
 
-  void agentService.recoverOnBoot().catch((error: unknown) => {
+  const boot = agentService.recoverOnBoot().catch((error: unknown) => {
     console.error("Boot recovery failed", {
       error: error instanceof Error ? error.message : String(error),
     })
   })
+  // Appliance auto-configuration (AEGISX_BOOTSTRAP=1): provider/event/
+  // platform/scheduler setup from env, after boot recovery settled.
+  if (process.env.AEGISX_BOOTSTRAP === "1") {
+    void boot.then(() =>
+      runBootstrap(
+        { db, configStore, platformService, agentService },
+        readBootstrapSpec(process.env)
+      ).catch((error: unknown) => {
+        console.error("Bootstrap failed", {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    )
+  }
 
   const app = new Hono()
   const catalog = createCatalogReader(db, platformService)
@@ -83,9 +108,11 @@ export function createApp(options: { dataDir: string }) {
     )
   })
 
-  app.get("/", (c) =>
-    c.json({ name: "AegisX", status: "ok", version: SCHEMA_VERSION })
-  )
+  if (!process.env.AEGISX_WEB_DIR) {
+    app.get("/", (c) =>
+      c.json({ name: "AegisX", status: "ok", version: SCHEMA_VERSION })
+    )
+  }
 
   // Model runtime sync is lazy: a live run's ModelRuntime refreshes on
   // demand when a model switch targets a provider/model added after the run
@@ -124,6 +151,11 @@ export function createApp(options: { dataDir: string }) {
   registerActivityRoutes(app, { db })
 
   app.get("/api/platform/status", (c) => c.json({ available: true }))
+
+  // The SPA catch-all must be registered after every /api route.
+  if (process.env.AEGISX_WEB_DIR) {
+    registerWebApp(app, process.env.AEGISX_WEB_DIR)
+  }
 
   return {
     app,
