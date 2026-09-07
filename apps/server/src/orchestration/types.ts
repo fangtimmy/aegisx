@@ -63,14 +63,15 @@ export type PromptContext = {
   }
   workspace?: {
     root: string
-    agentDir: string
-    sharedDir: string
-    attachmentsDir: string
-    siblingsDir: string
-    containerImage: string
-    cpus: number
-    memoryMb: number
-    pidsLimit: number
+    /** Solver-context extras; the scheduler context carries only the root. */
+    agentDir?: string
+    sharedDir?: string
+    attachmentsDir?: string
+    siblingsDir?: string
+    containerImage?: string
+    cpus?: number
+    memoryMb?: number
+    pidsLimit?: number
   }
   capabilities?: Capabilities
   /** event-scope only (scheduler instruction). */

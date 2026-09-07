@@ -36,7 +36,10 @@ import type { AgentStatus } from "./agent-status"
 import type { ChannelService } from "./channels"
 import type { ContainerLifecycle } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
-import { isLocalExecBackend } from "./container/local-manager"
+import {
+  isLocalExecBackend,
+  localContainerWorkspace,
+} from "./container/local-manager"
 import type { AgentDeadlines } from "./deadlines"
 import { RunActionError, RunStartError } from "./errors"
 import { checkSpawnFence } from "./fence"
@@ -317,7 +320,9 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       const key = workspaceKeyOf(row)
       const root = rootDirOf(row)
       const settings = getSettings()
-      const containerWorkspace = get(settings, "container.workspace")
+      const containerWorkspace = isLocalExecBackend()
+        ? localContainerWorkspace(key)
+        : get(settings, "container.workspace")
       mkdirSync(workspaceDir(root), { recursive: true })
       mkdirSync(sessionsDir(root), { recursive: true })
       mkdirSync(runtimeDir(root), { recursive: true })
@@ -631,6 +636,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           eventId: input.eventId,
           instruction: deps.getSchedulerConfig(input.eventId).instruction,
           model: modelConfig,
+          containerWorkspace: wsCtx.containerWorkspace,
         },
         db
       )

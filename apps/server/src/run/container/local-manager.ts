@@ -43,6 +43,21 @@ export function isLocalExecBackend(): boolean {
   return process.env.AEGISX_EXEC_BACKEND === "local"
 }
 
+/**
+ * Container-internal workspace root for one workspace under the local
+ * backend. The docker backend isolates workspaces by giving every container
+ * its own /workspace bind; the local backend shares one filesystem, so each
+ * workspace gets a unique container path (symlinked to its host dir at
+ * create time) — otherwise the second workspace's /workspace references
+ * would resolve into the first one's files.
+ */
+export function localContainerWorkspace(key: string): string {
+  const id8 = key.startsWith("orch:")
+    ? `orch-${key.slice(5, 13)}`
+    : key.slice(0, 8)
+  return `/opt/aegisx-ws/${id8}`
+}
+
 type MountRule = { containerPath: string; hostPath: string }
 
 type LocalWorkspace = {

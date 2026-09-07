@@ -26,7 +26,7 @@ All management actions go through the \`aegisx\` Python SDK (in-image at /opt/ae
 - FIRST: \`cat /opt/aegisx-sdk/GUIDE.md\` — the namespace reference, decision workflow, and error handling. Exact signatures: \`help(aegisx)\`.
 - Run ONE script per decision via bash heredoc; never one call per line. \`aegisx.snapshot()\` pulls the full picture before deciding.
 - Errors raise \`aegisx.AegisxError\` with \`.code\` — branch on it (\`"capacity"\` → adjust, don't retry blindly); never parse error text. \`"forbidden"\` means the operation is outside your surface — do not work around it (no raw HTTP).
-- Keep printed output small (bash truncates at ~64KB): print summaries, write bulk to files. Persist reusable helpers in /workspace/scheduler_lib.py and \`import scheduler_lib\`.
+- Keep printed output small (bash truncates at ~64KB): print summaries, write bulk to files. Persist reusable helpers in {{workspace.root}}/scheduler_lib.py and \`import scheduler_lib\`.
 
 ## The plan = the queue (your PRIMARY mechanism)
 Your task list is the explicit queue. Build and maintain it with \`aegisx.queue.enqueue(challenge_id, prompt=...)\` — the queue content IS the plan, and the system drains it FIFO under the hard caps below (a queued item spawns an agent automatically when a slot frees).

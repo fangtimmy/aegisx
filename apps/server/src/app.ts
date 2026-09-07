@@ -74,18 +74,35 @@ export function createApp(options: { dataDir: string }) {
     })
   })
   // Appliance auto-configuration (AEGISX_BOOTSTRAP=1): provider/event/
-  // platform/scheduler setup from env, after boot recovery settled.
+  // platform/scheduler setup from env, after boot recovery settled. A few
+  // bounded retries ride out transient platform/gateway unavailability at
+  // boot; the flow is idempotent, so retries only fill what's missing.
   if (process.env.AEGISX_BOOTSTRAP === "1") {
-    void boot.then(() =>
-      runBootstrap(
-        { db, configStore, platformService, agentService },
-        readBootstrapSpec(process.env)
-      ).catch((error: unknown) => {
-        console.error("Bootstrap failed", {
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
-    )
+    const spec = readBootstrapSpec(process.env)
+    void boot.then(async () => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await runBootstrap(
+            { db, configStore, platformService, agentService },
+            spec
+          )
+          return
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (attempt >= 3) {
+            console.error("Bootstrap failed (giving up; restart to retry)", {
+              error: message,
+            })
+            return
+          }
+          console.warn("Bootstrap attempt failed, retrying", {
+            attempt,
+            error: message,
+          })
+          await new Promise((r) => setTimeout(r, 15_000))
+        }
+      }
+    })
   }
 
   const app = new Hono()

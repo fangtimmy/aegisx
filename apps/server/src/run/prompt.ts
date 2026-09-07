@@ -107,8 +107,8 @@ export function buildSolverPromptContext(
 
 /**
  * Build the {@link PromptContext} for the scheduler (orchestrator) agent. No
- * `challenge`/`workspace` block — the scheduler works at its workspace root
- * and manages the event, not one challenge. No `capabilities` — the
+ * `challenge` block — the scheduler manages the event, not one challenge;
+ * `workspace` carries only the root it works at. No `capabilities` — the
  * scheduler's abilities come from its tool list (empty after the SDK
  * convergence), injected by the factory like every other agent.
  */
@@ -117,6 +117,8 @@ export function buildSchedulerPromptContext(
     eventId: string
     instruction: string
     model: ModelConfig
+    /** The scheduler workspace root as seen inside its container. */
+    containerWorkspace: string
   },
   db: Database
 ): PromptContext {
@@ -139,6 +141,9 @@ export function buildSchedulerPromptContext(
       provider: model.providerLabel ?? model.provider,
       name: model.modelLabel ?? model.modelId,
       id: model.modelId,
+    },
+    workspace: {
+      root: inputs.containerWorkspace,
     },
     // The scheduler does not solve challenges — no flag/target context.
     instruction,
