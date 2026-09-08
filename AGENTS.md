@@ -1,31 +1,62 @@
-# 项目规则 - AegisX
+# AGENTS.md
 
-## 项目背景
+AegisX：本地单机部署的网络安全多智能体协同 CTF 平台。Bun monorepo（单一 lockfile），workspace 间以 `@aegisx/*` 互相引用。仓库文档以中文为主，提交信息用英文 conventional commits（`fix(run): …`）。
 
-本地部署的网络安全多智能体协同任务平台。用户是专家，非生产环境。
+## 协作规则
 
-## 工作节奏
+- 一轮对话内完成全部修改后统一检查（类型 / lint / 测试），不要写一个文件检查一次。
+- 先规划再实施，规划经用户确认后再动手；完成规划的全部内容后才停止，并明确说明未完成项。
+- `apps/web/src/components/ui/**` 是 coss UI 组件库，只读，禁止修改。
 
-- 不要使用子代理
-- 一轮对话中完成所有修改后再统一进行检查（类型检查、lint、测试），不要写一个文件检查一次，避免打断实现节奏。
-- 先规划再实施。规划需要用户确认。在用户明确给出实施信号后再开始执行。
-- 在完成规划的所有内容后再停止。请明确说明未完成内容。
+## 包结构
 
-## 编码与架构原则
+| 包 | 职责 |
+|---|---|
+| `apps/server` | Hono API + agent 宿主进程，全部业务逻辑所在 |
+| `apps/web` | React + Vite 前端（dev 时 `/api` 代理到 `127.0.0.1:3000`） |
+| `apps/shared` | 前后端 wire 类型的 canonical 来源，无 runtime 代码路径 |
+| `apps/sdk/python` | 容器内 Python SDK，构建时 COPY 进镜像 `/opt/aegisx-sdk`，位置固定不可移动 |
+| `containers/solver` | Kali 解题镜像，minimal / essential / full 三档共用一个 Dockerfile |
+| `containers/allinone` | 单镜像整机（`AEGISX_EXEC_BACKEND=local`，无独立工具箱容器） |
 
-- 不要在代码中引用文档。允许少量注释，但最好少用。我认为好的代码是自文档的。
-- 不要维护向后兼容性。直接移除废弃路径，不要新增兼容层、降级逻辑或迁移方案。
-- 在充分满足当前需求的前提下，采用尽可能简单的实现方案。避免引入缺乏实际需求依据的抽象、配置项和间接层。
-- 保持组件模块化，职责清晰分离。
-- 当成熟且维护良好的库能够降低整体复杂度或提高可靠性时，应优先采用。除非有明确理由，不要重复实现通用功能。
-- 架构决策应着眼于长期演进。不要采用仅能解决当前问题、且预期需要在后续替换的权宜方案。
-- 抵抗四种过度设计：过早抽象、臆想式错误处理、不必要的可配置、没有生命力的灵活性。判断标准很简单——如果某处抽象的唯一理由是「以防以后需要」，那就是过度设计。
+## 命令
 
-## 禁止修改的文件
+仅支持 Bun 作为包管理器与运行时，不兼容 node / npm / pnpm。
 
-- `apps/web/src/components/ui/**` — coss UI 组件库，只读。忽略未使用的组件警告。
+```sh
+bun install         # 仓库根目录，一次装全部 workspace
+bun run dev         # server + web 并行（dev:server / dev:web 可单独启）
+bun run check       # oxfmt --check + knip + oxlint --type-check（全部 workspace；无 tsc 脚本，类型检查走 oxlint）
+bun run fmt         # oxlint --fix + oxfmt
+bun run test        # 全部测试；server 侧脚本是 bun test --max-concurrency 1，勿绕过并发限制
+bun run test:sdk    # Python SDK 契约测试（apps/server/scripts/sdk-contract.ts）
+bun run build       # web 生产构建
+bun run db:generate # drizzle 迁移生成（在 apps/server 下执行）
+```
 
-## 敏感信息
+knip 会卡未使用的导出：新增导出若无消费方，`bun run check` 直接失败。
 
-- 部署环境为本地、单用户，无需对敏感字段脱敏（API key、token、密码、连接串等可直接写入代码与日志）。
-- 不要为脱敏引入额外抽象（mask、redact、env 注入等），除非用户明确要求。
+## 架构边界
+
+- agent loop 在宿主 server 进程内运行（`@earendil-works/pi-coding-agent`，版本由根 package.json `overrides` 统一钉住，升级须多处同步）；bash 与文件工具不落宿主进程——每题一个长寿 Kali 容器，命令经 dockerode `exec` 送入，工作区双向 bind mount。
+- `apps/server/src/run/` 是运行时心脏：`service.ts` 组装根，`agent-factory.ts` 单次 spawn 组装（容器 → host session → 工具注入），`fence.ts` 强制并发上限与槽位——系统约束在启动侧强制校验，不依赖调度者自觉。
+- 调度者是 agent 而非代码循环：消费 `orch` 频道事件，用 Python SDK 产出计划，`run/queue.ts` 排水落地。
+- 频道键全部派生、无频道表：`team:<challengeId>` / `dm:<agentId>` / `orch:<eventId>`；`channel_messages` 是全部 agent 间通信的唯一账本，`channels-delivery.ts` 是唯一推送出口。
+- 数据模型 Event → Challenge → Agent（`apps/server/src/db/schema.ts`）；Workspace 是派生路径无表行；数据全落 `data/`（`AEGISX_DATA_DIR` 可改址）。
+- web 侧 SSE 消费有单流约束（同时只订阅一个 agent，`stream/conversation-store.ts`）；前端 API 类型直接取自 `@aegisx/shared`。
+
+## Schema 变更工作流
+
+1. 改 `apps/server/src/db/schema.ts` → `bun run db:generate`。
+2. 人工审查生成 SQL：`DROP COLUMN/TABLE`、`RENAME`、类型变更、无默认值的 `NOT NULL` 按生成即数据丢失，须手写为「加新列 → UPDATE 回填 → 再删旧列」。
+3. 同步 bump `SCHEMA_VERSION`（同文件），migration + journal + schema + 版本号一个提交。
+
+详见 docs/migrations.md（开机四态分类、备份与失败自动回滚）。
+
+## 文档导航
+
+- docs/README.md — 文档总索引
+- docs/architecture.md — 架构概览（活文档），动敏感区域前先读，改架构后同步更新
+- docs/migrations.md — 数据库迁移工作流
+- apps/sdk/python/GUIDE.md — agent Python SDK 参考
+- containers/solver/README.md — 解题镜像三档的构建与内容
