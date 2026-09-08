@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs"
+import { setTimeout as sleep } from "node:timers/promises"
 
 import type {
   AgentDetail,
@@ -19,7 +20,10 @@ import { and, desc, eq, inArray, ne } from "drizzle-orm"
 
 import { applyModelSwitch } from "../agents/agent-ops"
 import { createAgentHost } from "../agents/host"
-import type { AgentLoopSettings } from "../agents/host-session"
+import type {
+  AgentLoopSettings,
+  HostAgentSession,
+} from "../agents/host-session"
 import {
   chainLock,
   createSessionLifecycle,
@@ -93,6 +97,8 @@ export type AgentServiceOptions = {
   createHost?: typeof createAgentHost
   /** Test seam: grace between deadline-abort and a forced dispose. */
   timeoutGraceMs?: number
+  /** Test seam: bound on `session.abort()` inside close paths (default 5s). */
+  closeAbortGraceMs?: number
   /** Test seam: container idle-sweep cadence. */
   sweepIntervalMs?: number
   /** Test seam: container idle TTL. */
@@ -116,6 +122,7 @@ export function createAgentService(options: AgentServiceOptions) {
     options
   const createHost = options.createHost ?? createAgentHost
   const getSettings = () => options.getSettings()
+  const closeAbortGraceMs = options.closeAbortGraceMs ?? 5_000
 
   function providers(): ProviderConnection[] {
     return getProviderConnections(configStore)
@@ -260,6 +267,22 @@ export function createAgentService(options: AgentServiceOptions) {
     bus.forget([agentId])
   }
 
+  /** Close paths must never hang on `session.abort()`: pi's abort does not
+   * interrupt an in-flight tool call, so a streaming turn can outwait the
+   * awaiter indefinitely — the deadline path carries the same
+   * abort-then-force-dispose fallback for exactly this reason. Bound the
+   * wait; the caller disposes regardless, which is the sanctioned force
+   * stop. */
+  async function abortSessionBounded(
+    session: HostAgentSession | undefined
+  ): Promise<void> {
+    if (!session?.session.isStreaming) return
+    await Promise.race([
+      session.session.abort().catch(() => undefined),
+      sleep(closeAbortGraceMs),
+    ])
+  }
+
   const lifecycle: SessionLifecycle = createSessionLifecycle({
     kind: "agent",
     withLock,
@@ -399,9 +422,7 @@ export function createAgentService(options: AgentServiceOptions) {
         throw new RunActionError("invalid_state", "Agent is already closed")
       }
       const session = lifecycle.get(agentId)
-      if (session?.session.isStreaming) {
-        await session.session.abort().catch(() => undefined)
-      }
+      await abortSessionBounded(session)
       if (session) {
         void session.dispose()
         lifecycle.delete(agentId)
@@ -438,9 +459,7 @@ export function createAgentService(options: AgentServiceOptions) {
         throw new RunActionError("invalid_state", "Agent is already closed")
       }
       const session = lifecycle.get(agentId)
-      if (session?.session.isStreaming) {
-        await session.session.abort().catch(() => undefined)
-      }
+      await abortSessionBounded(session)
       if (session) {
         void session.dispose()
         lifecycle.delete(agentId)
@@ -754,9 +773,7 @@ export function createAgentService(options: AgentServiceOptions) {
       const row = queries.getAgentRow(agentId)
       if (!row) throw new RunActionError("not_found", "Agent not found")
       const session = lifecycle.get(agentId)
-      if (session?.session.isStreaming) {
-        await session.session.abort().catch(() => undefined)
-      }
+      await abortSessionBounded(session)
       if (session) {
         void session.dispose()
         lifecycle.delete(agentId)
@@ -1006,9 +1023,6 @@ export function createAgentService(options: AgentServiceOptions) {
           )
           .all()
       : []
-    for (const sibling of siblings) {
-      void closeAgent(sibling.id).catch(() => undefined)
-    }
     const cancelled = queue
       ? queue.cancelPendingForChallenge(eventId, challengeId)
       : 0
@@ -1022,13 +1036,26 @@ export function createAgentService(options: AgentServiceOptions) {
         .targetAction(challengeId, "stop")
         .catch(() => undefined)
     }
-    const parts: string[] = []
-    if (siblings.length > 0)
-      parts.push(`已停止 ${siblings.length} 个同题 agent`)
-    if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
-    if (parts.length > 0) {
-      postOrchNotice(eventId, `「${name}」已完全解出：${parts.join("；")}`)
-    }
+    // Close siblings and count the ones that actually terminalized — a
+    // close can still lose a race (already closed). The notice posts once
+    // the closes settle, so it never claims a stop that didn't land.
+    void (async () => {
+      const stopped = (
+        await Promise.all(
+          siblings.map((sibling) =>
+            closeAgent(sibling.id)
+              .then(() => 1)
+              .catch(() => 0)
+          )
+        )
+      ).reduce<number>((sum, stopped_) => sum + stopped_, 0)
+      const parts: string[] = []
+      if (stopped > 0) parts.push(`已停止 ${stopped} 个同题 agent`)
+      if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
+      if (parts.length > 0) {
+        postOrchNotice(eventId, `「${name}」已完全解出：${parts.join("；")}`)
+      }
+    })()
   }
 
   // --- scheduler (event orchestrator) lifecycle -------------------------------

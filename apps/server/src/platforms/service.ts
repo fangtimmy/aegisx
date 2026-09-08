@@ -140,8 +140,8 @@ export function createPlatformService(
     storedPlatform,
     adapterForEvent,
     {
-      onAgentFlagAccepted: (challengeId, agentId) =>
-        onAgentFlagAccepted?.(challengeId, agentId),
+      onAgentFlagAccepted: (challengeId, agentId, outcome) =>
+        onAgentFlagAccepted?.(challengeId, agentId, outcome),
       onAgentFlagPartial: (challengeId, message, agentId) =>
         onAgentFlagPartial?.(challengeId, message, agentId),
     }

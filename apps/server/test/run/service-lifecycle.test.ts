@@ -52,7 +52,8 @@ function stubHostFlipping(sessionId = "sess-1") {
 function makeService(
   db: ReturnType<typeof setupDb>["db"],
   dir: string,
-  createHost: ReturnType<typeof mock>
+  createHost: ReturnType<typeof mock>,
+  opts: { closeAbortGraceMs?: number } = {}
 ) {
   const { manager } = stubContainerManager()
   return createAgentService({
@@ -70,6 +71,7 @@ function makeService(
     configStore: stubConfigStore([makeProvider()]),
     getSettings: flatSettingsWithDefaultModel,
     createHost,
+    ...opts,
   })
 }
 
@@ -200,6 +202,55 @@ describe("agent lifecycle (v19)", () => {
       expect(
         db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
       ).toBe("idle")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+})
+
+describe("closeAgent bounded abort (solve-time sibling stop regression)", () => {
+  test("closeAgent lands aborted even when session.abort never resolves", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      // A mid-tool turn: isStreaming stays true and abort() never settles —
+      // the exact state that used to hang closeAgent past the deadline
+      // reaper (the tsecbench a-13/a-14 siblings ran to timeout despite the
+      // "stopped" notice).
+      const disposed: string[] = []
+      const service = makeService(
+        db,
+        dir,
+        mock(async () => {
+          const stub = stubHostAgentSession("sess-1")
+          const sdk = refine<{
+            isStreaming: boolean
+            abort: () => Promise<void>
+          }>(stub.session)
+          sdk.isStreaming = true
+          sdk.abort = () => new Promise<void>(() => {})
+          stub.dispose = async () => {
+            disposed.push("sess-1")
+          }
+          return stub
+        }),
+        { closeAbortGraceMs: 10 }
+      )
+      const agent = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      await new Promise((r) => setTimeout(r, 5))
+
+      const closed = await service.closeAgent(agent.id)
+      expect(closed.status).toBe("aborted")
+      expect(
+        db.select().from(agents).where(eq(agents.id, agent.id)).get()!.status
+      ).toBe("aborted")
+      // The force half of the fallback: the streaming session is disposed.
+      expect(disposed).toEqual(["sess-1"])
       await service.close()
     } finally {
       close()
