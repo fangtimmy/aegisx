@@ -243,6 +243,30 @@ export function createAgentService(options: AgentServiceOptions) {
     channels,
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
     onAgentSettled: (agentId) => stallWatchdog.noteAgentIdle(agentId),
+    // The target-slot fence counts a challenge as occupying a slot while it
+    // has a live agent; the platform counts a running instance. Release the
+    // instance when the last live agent leaves, or the two views diverge and
+    // the fence keeps admitting spawns the platform cannot serve.
+    onAgentTerminal: (agentId) => {
+      const row = queries.getAgentRow(agentId)
+      if (!row?.challengeId) return
+      const challengeId = row.challengeId
+      if (!schedulerPolicyFor(db, row.eventId).stopTargetOnSolve) return
+      const live = db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.challengeId, challengeId),
+            inArray(agents.status, LIVE_AGENT_STATUSES)
+          )
+        )
+        .get()
+      if (live || !isTargetCapable(getChallengeRemote(db, challengeId))) return
+      void platformService
+        .targetAction(challengeId, "stop")
+        .catch(() => undefined)
+    },
     now,
     updateAgent,
     queue: () => queue,

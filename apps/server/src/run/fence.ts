@@ -5,7 +5,6 @@ import { and, eq, inArray, isNotNull, sql } from "drizzle-orm"
 import type { Database } from "../db"
 import {
   agents,
-  challengeFlags,
   challengeRemote,
   challenges,
   schedulerConfig,
@@ -100,8 +99,6 @@ function activeTargetSlots(
           : [
               eq(challengeRemote.solved, false),
               eq(challenges.manualSolveState, "unsolved"),
-              // No accepted flag → still unsolved.
-              sql`NOT EXISTS (SELECT 1 FROM ${challengeFlags} WHERE ${challengeFlags.challengeId} = ${challenges.id} AND ${challengeFlags.status} = 'accepted')`,
             ])
       )
     )

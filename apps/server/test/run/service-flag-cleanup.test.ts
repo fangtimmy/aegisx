@@ -591,4 +591,51 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
       close()
     }
   })
+
+  test("last live agent terminal releases the challenge target (a closed run must not leak the instance)", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      db.insert(require("../../src/db/schema").challengeRemote)
+        .values({
+          challengeId: "ch-1",
+          eventId: "evt-1",
+          sourceKey: "src",
+          remoteId: "r-1",
+          available: true,
+          solved: false,
+          targetSupported: true,
+          targetIgnored: false,
+          targetCount: 1,
+          targetInfo: "[]",
+          syncedAt: new Date().toISOString(),
+        })
+        .run()
+      const targetCalls: string[] = []
+      const made = makeService(db, dir, { targetCalls })
+      service = made.service
+
+      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await settle()
+      targetCalls.length = 0
+
+      // First close: a sibling is still live → the target stays for it.
+      await service.closeAgent(a.id)
+      await settle()
+      expect(targetCalls).not.toContain("stop")
+
+      // Last live agent terminal → the instance is released. Without this
+      // the platform keeps the instance while the fence stops counting the
+      // slot, and every later spawn on a new challenge is refused.
+      await service.closeAgent(b.id)
+      await wait(50)
+      expect(targetCalls).toContain("stop")
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
 })

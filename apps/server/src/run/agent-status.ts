@@ -19,6 +19,9 @@ export type AgentStatusDeps = {
   isSchedulerPaused(eventId: string): boolean
   /** Agent turn settled idle/failed: arms the stall watchdog (solver only). */
   onAgentSettled(agentId: string): void
+  /** Agent went terminal: the caller releases resources that only a live
+   * agent justifies holding (the challenge's platform target instance). */
+  onAgentTerminal(agentId: string): void
   now: () => string
   updateAgent: (
     agentId: string,
@@ -149,6 +152,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
     const row = queries.getAgentRow(agentId)
     deps.queue()?.markDone(row?.queueItemId, agentId)
     deps.queue()?.scheduleDrain()
+    deps.onAgentTerminal(agentId)
     if (opts.event) {
       emitAgentEvent(agentId, {
         type: opts.event,

@@ -23,6 +23,8 @@ export function fullySolvedAsideFromFlag(
   const row = db
     .select({
       remoteSolved: challengeRemote.solved,
+      remoteAvailable: challengeRemote.available,
+      remoteId: challengeRemote.remoteId,
       manual: challenges.manualSolveState,
     })
     .from(challenges)
@@ -31,6 +33,14 @@ export function fullySolvedAsideFromFlag(
     .get()
   if (!row) return false
   if (row.remoteSolved || row.manual === "solved") return true
+  // A platform-integrated challenge's verdict belongs to the platform:
+  // accepted local flag rows can be multi-flag PARTIALS (the platform only
+  // reports the challenge solved on the last flag), so "an accepted flag
+  // exists" must not read as fully solved — that would classify the final
+  // flag as an extra value and skip the solve cleanup. Non-integrated
+  // challenges have no platform verdict, so there an accepted flag IS the
+  // full local verdict.
+  if (row.remoteId && row.remoteAvailable) return false
   return (
     db
       .select({ id: challengeFlags.id })

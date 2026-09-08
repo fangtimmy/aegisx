@@ -185,6 +185,48 @@ describe("platform flags → async judge + concurrent submissions", () => {
     }
   })
 
+  test("multi-flag platform challenge: the final flag fires 'first' — partials are not a solve", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, { id: "a-1", challengeId: "ch-1" })
+      integratedFixture(db)
+      let submitted = 0
+      const outcomes: Array<[string | undefined, string | undefined]> = []
+      const flags = makeFlags(
+        db,
+        {
+          submitFlag: async (_rid, value) => {
+            submitted += 1
+            return submitted < 3
+              ? {
+                  status: "partial",
+                  remoteId: `sub-${value}`,
+                  message: `flag ${submitted}/3 已确认`,
+                }
+              : { status: "accepted", remoteId: `sub-${value}` }
+          },
+        },
+        {
+          onAgentFlagAccepted: (_challengeId, agentId, outcome) =>
+            outcomes.push([agentId, outcome]),
+        }
+      )
+
+      await flags.submitFlag("ch-1", "a-1", "flag{one}")
+      await flags.submitFlag("ch-1", "a-1", "flag{two}")
+      await flags.submitFlag("ch-1", "a-1", "flag{three}")
+
+      // The two partials steer via onAgentFlagPartial, never the solve hook;
+      // the last one is the real solve and must NOT be tiered "extra" (that
+      // would skip the solve cleanup and leak the platform target instance).
+      expect(outcomes).toEqual([["a-1", "first"]])
+    } finally {
+      close()
+    }
+  })
+
   test("pending → polled accepted persists one row without UNIQUE crash", async () => {
     const { db, close } = setupDb()
     try {
