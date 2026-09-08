@@ -422,6 +422,39 @@ describe("queue drainer", () => {
     }
   })
 
+  // Regression: a `queue_state` row with status 'running' must not widen the
+  // drainer's WHERE. As a raw sql fragment the OR sat at the top level of the
+  // AND chain (AND binds tighter), degrading to
+  // `status='pending' AND x IS NULL OR x != 'paused'` — true for every row —
+  // so done/cancelled items were re-launched on every pass.
+  test("drainer ignores non-pending items when the event's queue_state is 'running'", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
+      db.insert(queueState)
+        .values({ eventId: "evt-1", status: "running", updatedAt: now() })
+        .run()
+      let n = 0
+      const { svc, launches } = makeQueue(db, async () => `run-${++n}`)
+      svc.cancelDrain()
+      const live = enqueue(svc, "evt-1", "ch-a", 1)
+      const done = enqueue(svc, "evt-1", "ch-b", 2)
+      // Terminal history that must never re-launch.
+      db.update(spawnQueue)
+        .set({ status: "done" })
+        .where(eq(spawnQueue.id, done.id))
+        .run()
+      await svc.drainOnce()
+      expect(launches).toEqual([live.id])
+      expect(item(db, live.id).status).toBe("running")
+      expect(item(db, done.id).status).toBe("done")
+    } finally {
+      close()
+    }
+  })
+
   test("a pending item on a solved challenge is cancelled (not launched); later items still drain", async () => {
     const { db, close } = setupDb()
     try {

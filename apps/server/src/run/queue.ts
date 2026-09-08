@@ -1,6 +1,6 @@
 import { isRecord } from "@aegisx/shared"
 import type { QueueItemPublic, SpawnQueueParams } from "@aegisx/shared/queue"
-import { and, asc, count, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, count, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, queueState, spawnQueue } from "../db/schema"
@@ -349,7 +349,13 @@ export function createQueueService(deps: QueueServiceDeps) {
       .where(
         and(
           eq(spawnQueue.status, "pending"),
-          sql`${queueState.status} is null or ${queueState.status} != 'paused'`
+          // Parenthesized deliberately: as a raw sql fragment `a or b` sits
+          // at the top level of the AND chain, and since AND binds tighter
+          // than OR the whole predicate degrades to `status='pending' AND x
+          // IS NULL OR x != 'paused'` — true for every row once a running
+          // queue_state exists, so the drainer re-launched done/cancelled
+          // items forever. or(...) keeps the group nested.
+          or(isNull(queueState.status), ne(queueState.status, "paused"))
         )
       )
       .orderBy(asc(spawnQueue.ord), asc(spawnQueue.createdAt))
