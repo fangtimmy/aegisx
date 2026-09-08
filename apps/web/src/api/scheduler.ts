@@ -23,6 +23,7 @@ export function updateSchedulerConfig(
     notifyTeamOnFlag?: boolean
     stopSiblingsOnSolve?: boolean
     stopTargetOnSolve?: boolean
+    stopSubmitterOnSolve?: boolean
     nextTaskPolicy?: "eager" | "drained"
     urgentTeamMessages?: boolean
     blockSpawnOnSolved?: boolean

@@ -45,8 +45,9 @@ Your task list is the explicit queue. Build and maintain it with \`aegisx.queue.
 - Every challenge workspace is mounted read-only at \`/challenges/<challengeId>/workspace\` — read WRITEUP.md / solve.sh / FAILURE.md / logs directly with the read tool (live agents' work shows live progress; the \`agents/\` tree holds each attempt's own directory). Do NOT dig file contents out of message history.
 - \`aegisx.challenges.get(id)\` judges a challenge before committing — read it for one you do not know. \`aegisx.agents.list(challenge_id=...)\` reviews a challenge's attempts (history included) so you do not repeat failed strategies.
 - \`aegisx.agents.read(agent_id, limit?)\` assesses an agent before steering or closing it.
-- \`aegisx.agents.message(agent_id, ...)\` directs one specific agent (a terminal agent is reopened, keeping its files and memory — only that agent wakes). 「给题加人手」= 再 spawn 一个 agent（\`agents.start\` 或 enqueue），并附上明确的分工 prompt。
-- Prefer \`message\` over stop+restart when an agent has useful context; \`aegisx.agents.stop\` cuts a stuck or off-track running turn before re-directing; \`aegisx.agents.close\` closes an agent you are done with (files and session survive — close instead of leaving it idle); \`aegisx.agents.set_timeout\` sets/extends its hard deadline.
+- \`aegisx.agents.message(agent_id, ...)\` directs one specific agent (a terminal agent is reopened, keeping its session memory — only that agent wakes; a recycled working directory restarts empty). 「给题加人手」= 再 spawn 一个 agent（\`agents.start\` 或 enqueue），并附上明确的分工 prompt。
+- Prefer \`message\` over stop+restart when an agent has useful context; \`aegisx.agents.stop\` cuts a stuck or off-track running turn before re-directing; \`aegisx.agents.close\` closes an agent you are done with (a completed attempt's WRITEUP/files and session memory survive; an aborted/failed attempt's working directory is recycled — its #team posts remain). Close instead of leaving it idle; \`aegisx.agents.set_timeout\` sets/extends its hard deadline.
+- Genuinely stuck (repeated failed probes, no new evidence) ≠ off-track: for a stuck challenge spawn a NEW agent with a materially different attack angle instead of steering the same one again — a steered agent keeps its earlier assumptions. Reserve steering for light correction when the direction is right but details drift.
 - File tools (read/bash/edit/write): keep strategy and state notes in your workspace (e.g. STRATEGY.md, STATE.md, DECISIONS.md, a per-challenge log of what has been tried).
 
 ## Hard guardrails (server-enforced — you cannot violate)
@@ -61,6 +62,8 @@ Agents with source=manual were spawned by the user. Observe them (agents.read) a
 ## Scheduling principles
 - Match effort to value and difficulty. Use \`challenges.get\` to judge difficulty before committing; weight by points and your instruction's priorities.
 - Parallelize on one hard challenge (several agents with different strategy prompts) or spread across challenges — both are valid; choose per the instruction and the slot budget.
+- Keep the slot mix diverse, in proportion to the target-slot cap: never commit every slot to hard challenges or to one challenge. Quick wins keep score coming and slots turning over, so part of the board always cycles them; concentrating several slots on a single hard challenge is a deliberate escalation, not a default stance.
+- When every target slot is busy but the agent cap still has room, spend the spare concurrency on division of labor on an ALREADY-occupied target (spawn a second agent with a different angle on that challenge) instead of leaving it idle.
 - Close agents you are done with (\`agents.close\`) so they stop occupying the agent cap; their files persist and a message reopens them.
 - Do not thrash: each wake-up, act (snapshot → read → message/close/enqueue) then wait for the next event.
 
@@ -100,6 +103,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 6. Consult the container knowledge bases for technique checklists in unfamiliar categories (\`bash ls /opt/solver/knowledges\`).
 7. Respect the resource limits in the initial prompt; pick solvers accordingly (e.g. prefer z3/symbolic over angr on low RAM, shrink wordlists on low CPU).
 8. If a needed tool is missing: /opt/solver/ENVIRONMENT.md has the install SOP (pip into the shared venv, apt after update). If an install stalls, switch to a technique that avoids the tool — stop before the detour costs more than the challenge.
+9. Any command expected to run longer than ~2 minutes (large brute force, full-disk search, long scans) must run detached: \`nohup … > scan.log 2>&1 &\`, then poll the log. A foreground command freezes your whole loop while it runs and is killed outright at the bash timeout (~600s), losing all of its work.
 
 ## Tools
 - Inspect files with \`read\`; search and discover inside \`bash\` with \`rg\`/\`fd\`/\`ls\`.
@@ -110,7 +114,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 - \`finish_run\` ends YOUR task with a summary once the solution is backed by reproducible evidence.{{#if capabilities.canManageTarget}} Stop the target first if no sibling agent still needs it.{{/if}}
 {{/if}}
 {{#if capabilities.canManageTarget}}
-- Target tools (\`get_target\` / \`start_target\` / \`extend_target\` / \`stop_target\`) control the remote target: inspect before starting, extend before expiry, stop before finishing.
+- Target tools (\`get_target\` / \`start_target\` / \`extend_target\` / \`stop_target\`) control the remote target: inspect before starting, stop before finishing. Extend only when \`get_target\` reports an expiry — no expiry means the instance never times out. If \`start_target\` fails, escalate to the scheduler immediately (\`aegisx.ask\`, urgent=True) and stand by — do not retry in a loop; slot allocation is the scheduler's call.
 {{/if}}
 ## Channels（团队频道）
 本挑战有一个频道式消息层，用容器内 Python SDK 访问（PYTHONPATH 已预设）。读帖/发帖直接照抄（消息字段是 \`.author_name\` / \`.body\` / \`.created_at\`——没有 \`.sender\` / \`.from\`）：
@@ -166,6 +170,11 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 
 {{challenge.description}}
 
+{{#if challenge.confirmedFlags.length}}
+## Confirmed flags (already accepted — do not resubmit)
+{{#each challenge.confirmedFlags}}- {{this}}
+{{/each}}Focus on the remaining flags.
+{{/if}}
 {{#if strategy}}
 ## Strategy
 {{strategy}}
@@ -208,12 +217,12 @@ Wait for agent events (an agent went idle, a flag was accepted, an agent timed o
 {{/if}}`
 
 /** The merged channel delivery block (the text pushed into an agent's
- * turn). Variables: `dropped` (folded older-message count, 0 = none),
+ * turn). Variables: `dropped` (folded newer-message count, 0 = none),
  * `messages` (each with `urgent`, `label`, `authorName`, `time`, `body`,
  * `files` of `{filename, size, path}`). Renders the DEFAULT byte format;
  * the budget folding itself stays in code. */
 export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[频道消息]
-{{#if dropped}}另有 {{dropped}} 条较早消息，可 aegisx.channels.read 补读
+{{#if dropped}}另有 {{dropped}} 条较新消息未并入本次投递（下次投递继续，或 aegisx.channels.read 补读）
 {{/if}}{{#each messages}}{{#if urgent}}⚠ {{/if}}{{label}} · {{authorName}} · {{time}}
 {{body}}
 {{#each files}}📎 {{filename}} · {{size}} · {{path}}
@@ -224,8 +233,9 @@ export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[频道消息]
  * tail points to `aegisx.snapshot()` for detail — no system-prompt
  * cooperation required. Variables: `agents.live/max`, `targets.used/max`,
  * `queue.pending/running/paused`, `challenges[]` with `name, points,
- * solvedLabel, live, running, pending`. */
+ * solvedLabel, live, running, pending, attempts, tokens` (invested
+ * attempts / cumulative tokens — the value-per-effort inputs). */
 export const DEFAULT_SCHEDULER_DIGEST_TEMPLATE = `[调度快照]（投递时状态，非实时）
 Agent 槽位：{{agents.live}}/{{agents.max}} · 靶机槽：{{targets.used}}/{{targets.max}} · 队列：{{queue.pending}} 待发 / {{queue.running}} 运行{{#if queue.paused}}（已暂停）{{/if}}
-{{#each challenges}}- {{name}}{{#if points}} · {{points}}pt{{/if}} · {{solvedLabel}} · {{live}} live（{{running}} running）{{#if pending}} · 队列 {{pending}}{{/if}}
+{{#each challenges}}- {{name}}{{#if points}} · {{points}}pt{{/if}} · {{solvedLabel}} · {{live}} live（{{running}} running）{{#if pending}} · 队列 {{pending}}{{/if}} · 已投 {{attempts}} 次{{#if tokens}} · {{tokens}} tok{{/if}}
 {{/each}}需要更细的状态再 aegisx.snapshot()。`

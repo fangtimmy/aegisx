@@ -10,6 +10,7 @@ export type SchedulerPolicy = {
   notifyTeamOnFlag: boolean
   stopSiblingsOnSolve: boolean
   stopTargetOnSolve: boolean
+  stopSubmitterOnSolve: boolean
   nextTaskPolicy: NextTaskPolicy
   urgentTeamMessages: boolean
   blockSpawnOnSolved: boolean
@@ -28,6 +29,7 @@ export function schedulerPolicyFor(
       notifyTeamOnFlag: schedulerConfig.notifyTeamOnFlag,
       stopSiblingsOnSolve: schedulerConfig.stopSiblingsOnSolve,
       stopTargetOnSolve: schedulerConfig.stopTargetOnSolve,
+      stopSubmitterOnSolve: schedulerConfig.stopSubmitterOnSolve,
       nextTaskPolicy: schedulerConfig.nextTaskPolicy,
       urgentTeamMessages: schedulerConfig.urgentTeamMessages,
       blockSpawnOnSolved: schedulerConfig.blockSpawnOnSolved,
@@ -39,6 +41,7 @@ export function schedulerPolicyFor(
     notifyTeamOnFlag: row?.notifyTeamOnFlag ?? true,
     stopSiblingsOnSolve: row?.stopSiblingsOnSolve ?? true,
     stopTargetOnSolve: row?.stopTargetOnSolve ?? true,
+    stopSubmitterOnSolve: row?.stopSubmitterOnSolve ?? false,
     nextTaskPolicy: row?.nextTaskPolicy === "drained" ? "drained" : "eager",
     urgentTeamMessages: row?.urgentTeamMessages ?? true,
     blockSpawnOnSolved: row?.blockSpawnOnSolved ?? true,

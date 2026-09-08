@@ -60,7 +60,6 @@ export function createDeliveryEngine(ctx: ChannelContext) {
       key: string
       label: string
       messages: (typeof channelMessages.$inferSelect)[]
-      maxId: number
     }
     const snapshots: Snapshot[] = []
     for (const key of deliveryKeys(agent)) {
@@ -81,23 +80,29 @@ export function createDeliveryEngine(ctx: ChannelContext) {
         .all()
         .filter(
           (row) =>
-            !(row.authorType === "agent" && row.authorAgentId === agentId)
+            // Skip the reader's own posts AND system notices it triggered
+            // (a flag acceptance must not wake the submitter itself).
+            !(row.authorType === "agent" && row.authorAgentId === agentId) &&
+            !(
+              row.authorType === "system" &&
+              parseMeta(row.meta).agentId === agentId
+            )
         )
       if (rows.length === 0) continue
       snapshots.push({
         key,
         label: ctx.channelLabel(parsed),
         messages: rows,
-        maxId: rows[rows.length - 1].id,
       })
     }
     if (snapshots.length === 0) return
 
-    const text = renderDelivery(
+    const { text, lastIds } = renderDelivery(
       deliveryTemplateBody(),
       snapshots.map(({ label, messages }) => ({
         label,
         messages: messages.map((row) => ({
+          id: row.id,
           authorName: row.authorName,
           createdAt: row.createdAt,
           body: row.body,
@@ -130,10 +135,14 @@ export function createDeliveryEngine(ctx: ChannelContext) {
       })
     if (!delivered) return
     // Cursors advance only on an accepted delivery — a bail above leaves
-    // them untouched (nothing marked read that was never delivered).
-    for (const { key, maxId } of snapshots) {
-      ctx.markRead(key, readerKey, maxId)
-    }
+    // them untouched (nothing marked read that was never delivered), and
+    // only past messages the render actually carried (an over-budget
+    // delivery folds its NEWEST messages; they stay unread for the next
+    // flush instead of being silently dropped).
+    snapshots.forEach(({ key }, index) => {
+      const lastId = lastIds[index]
+      if (lastId !== null) ctx.markRead(key, readerKey, lastId)
+    })
   }
 
   /** The channelDelivery template body for this delivery: the builtin row

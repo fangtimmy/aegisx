@@ -250,10 +250,7 @@ export function createQueueService(deps: QueueServiceDeps) {
   function clear(eventId: string): void {
     db.delete(spawnQueue)
       .where(
-        and(
-          eq(spawnQueue.eventId, eventId),
-          sql`${spawnQueue.status} != 'running'`
-        )
+        and(eq(spawnQueue.eventId, eventId), ne(spawnQueue.status, "running"))
       )
       .run()
   }

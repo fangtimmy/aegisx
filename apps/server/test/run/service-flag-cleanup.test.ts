@@ -1,10 +1,13 @@
 import { describe, expect, mock, test } from "bun:test"
+import { existsSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 
 import { eq } from "drizzle-orm"
 
 import {
   agents,
   challengeFlags,
+  challengeRemote,
   channelMessages,
   schedulerConfig,
   spawnQueue,
@@ -33,7 +36,7 @@ type Db = ReturnType<typeof setupDb>["db"]
 function makeService(
   db: Db,
   dir: string,
-  opts: { targetCalls?: string[] } = {}
+  opts: { targetCalls?: string[]; solvedWrapupMs?: number } = {}
 ) {
   const provider = makeProvider()
   const { manager } = stubContainerManager()
@@ -52,6 +55,9 @@ function makeService(
     }),
     configStore: stubConfigStore([provider]),
     getSettings: flatSettingsWithDefaultModel,
+    ...(opts.solvedWrapupMs !== undefined
+      ? { solvedWrapupMs: opts.solvedWrapupMs }
+      : {}),
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
       const list: string[] = []
@@ -279,7 +285,9 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       await wait(60)
       expect(steered(coSolver.id)).toHaveLength(1)
       expect(steered(sibling.id)).toHaveLength(1)
-      expect(steered(submitter.id)).toHaveLength(1)
+      // The submitter does NOT receive its own partial notice (it already
+      // holds the verdict from submit_flag's tool result).
+      expect(steered(submitter.id)).toHaveLength(0)
       expect(steered(coSolver.id)[0]).toContain("flag{one}")
       expect(steered(coSolver.id)[0]).toContain("flag 2/3 已确认")
       // …and the tick does not re-deliver (cursors advanced).
@@ -633,6 +641,228 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
       await service.closeAgent(b.id)
       await wait(50)
       expect(targetCalls).toContain("stop")
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+})
+
+/** Seed a target-capable remote row (the fence's slot accounting). */
+function seedRemote(db: Db, challengeId: string, eventId = "evt-1") {
+  db.insert(challengeRemote)
+    .values({
+      challengeId,
+      eventId,
+      sourceKey: "src",
+      remoteId: `r-${challengeId}`,
+      available: true,
+      solved: false,
+      targetSupported: true,
+      targetIgnored: false,
+      targetCount: 1,
+      targetInfo: "[]",
+      syncedAt: new Date().toISOString(),
+    })
+    .run()
+}
+
+function seedPolicy(
+  db: Db,
+  patch: Partial<typeof schedulerConfig.$inferInsert>,
+  eventId = "evt-1"
+) {
+  const ts = new Date().toISOString()
+  db.insert(schedulerConfig)
+    .values({ eventId, createdAt: ts, updatedAt: ts, ...patch })
+    .run()
+}
+
+describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drain", () => {
+  test("self-exclusion: the submitter is not delivered its own full-solve notice; a live sibling still gets it", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      // Siblings survive (stop off) so BOTH agents are live recipients.
+      seedPolicy(db, { stopSiblingsOnSolve: false })
+      const made = makeService(db, dir)
+      service = made.service
+
+      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await settle()
+      made.promptLog.get(a.id)!.length = 0
+      made.promptLog.get(b.id)!.length = 0
+
+      service.notifyFlagAccepted("ch-1", a.id, "first")
+      await settle()
+      await settle()
+
+      const aText = (made.promptLog.get(a.id) ?? []).join("\n")
+      const bText = (made.promptLog.get(b.id) ?? []).join("\n")
+      expect(aText).not.toContain("已完全解出")
+      expect(bText).toContain("已完全解出")
+      // Provenance: the stored notice carries the submitter for the filter.
+      const row = db
+        .select()
+        .from(channelMessages)
+        .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+        .get()!
+      expect(row.meta).toContain(a.id)
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("stopSubmitterOnSolve: a full solve terminates the submitter too (no wrap-up)", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      seedPolicy(db, { stopSubmitterOnSolve: true })
+      const made = makeService(db, dir)
+      service = made.service
+
+      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await settle()
+
+      service.notifyFlagAccepted("ch-1", a.id, "first")
+      await wait(80)
+
+      expect(service.refresh(a.id)!.status).toBe("aborted")
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("multi-flag partial does not terminate the submitter (intermediate flags are not a solve)", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      seedPolicy(db, { stopSubmitterOnSolve: true })
+      const made = makeService(db, dir)
+      service = made.service
+
+      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await settle()
+
+      service.notifyFlagPartial("ch-1", "flag 1/3 已确认", a.id)
+      await wait(80)
+
+      expect(service.refresh(a.id)!.status).toBe("idle")
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("full solve shortens the surviving submitter's deadline (write-up wrap-up bound)", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const made = makeService(db, dir, { solvedWrapupMs: 60_000 })
+      service = made.service
+
+      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await settle()
+
+      service.notifyFlagAccepted("ch-1", a.id, "first")
+      await settle()
+
+      const row = db.select().from(agents).where(eq(agents.id, a.id)).get()!
+      expect(Date.parse(row.deadlineAt!)).toBeGreaterThan(Date.now())
+      // Spawn default is 1h out; the wrap-up bound must pull it inside 90s.
+      expect(Date.parse(row.deadlineAt!)).toBeLessThan(Date.now() + 90_000)
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("terminal aborted/failed attempts recycle their workspace dir; completed attempts keep it", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const made = makeService(db, dir)
+      service = made.service
+
+      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await settle()
+      const dirOf = (id: string) =>
+        join(
+          dir,
+          "events",
+          "evt-1",
+          "challenges",
+          "ch-1",
+          "workspace",
+          "agents",
+          id.slice(0, 8)
+        )
+      writeFileSync(join(dirOf(a.id), "scan.log"), "x")
+      writeFileSync(join(dirOf(b.id), "WRITEUP.md"), "# wp")
+
+      await service.closeAgent(a.id)
+      await wait(50)
+      expect(existsSync(dirOf(a.id))).toBe(false)
+
+      await service.finishAgent(b.id, "solved")
+      await wait(50)
+      expect(existsSync(dirOf(b.id))).toBe(true)
+    } finally {
+      await service?.close().catch(() => undefined)
+      close()
+    }
+  })
+
+  test("solved-challenge slot release wakes the drainer (pending item launches with no sibling closes)", async () => {
+    const { db, dir, close } = setupDb()
+    let service: ReturnType<typeof makeService>["service"] | undefined
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
+      seedRemote(db, "ch-1")
+      seedRemote(db, "ch-2")
+      // Submitter survives (no sibling closes → nothing else triggers a drain).
+      seedPolicy(db, { stopSiblingsOnSolve: false })
+      const made = makeService(db, dir)
+      service = made.service
+
+      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await settle()
+      // maxConcurrentTargets=1: ch-1 holds the only slot, ch-2 must queue.
+      const item = service
+        .queue()
+        .enqueue({ eventId: "evt-1", challengeId: "ch-2", source: "manual" })
+      await wait(400)
+      expect(item.status).toBe("pending")
+
+      // Full solve: eager policy frees ch-1's slot at acceptance.
+      db.update(challengeRemote)
+        .set({ solved: true })
+        .where(eq(challengeRemote.challengeId, "ch-1"))
+        .run()
+      service.notifyFlagAccepted("ch-1", a.id, "first")
+      await wait(400)
+
+      const after = service
+        .queue()
+        .list("evt-1")
+        .find((i) => i.id === item.id)
+      expect(after?.status).toBe("running")
     } finally {
       await service?.close().catch(() => undefined)
       close()

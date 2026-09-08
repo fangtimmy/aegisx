@@ -8,6 +8,7 @@ import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { SchedulerStatusSnapshot } from "@aegisx/shared/scheduler"
 import { and, eq, inArray } from "drizzle-orm"
 
+import { usageTotalsSql } from "../agents/session-queries"
 import type { Database } from "../db"
 import {
   agents,
@@ -16,12 +17,13 @@ import {
   challenges,
   queueState,
   schedulerConfig,
+  sessionEntries,
   spawnQueue,
 } from "../db/schema"
 import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
 import { fenceSnapshot } from "./fence"
 import type { ModelResolver } from "./model-resolver"
-import type { AgentQueries } from "./queries"
+import { collapseToAttempts, type AgentQueries } from "./queries"
 import {
   type NextTaskPolicy,
   type SchedulerPolicy,
@@ -136,8 +138,9 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
 
   /** Fleet digest context for scheduler deliveries (schedulerDigest
    * template): caps, queue, and one line per challenge with live agents /
-   * pending items. Advisory snapshot rendered at delivery time — derive,
-   * don't cache. */
+   * pending items plus the invested attempts / cumulative tokens (the
+   * value-per-effort inputs for diversity decisions). Advisory snapshot
+   * rendered at delivery time — derive, don't cache. */
   function getDigestContext(eventId: string): SchedulerDigestContext {
     const snap = fenceSnapshot(db, getSettings(), eventId)
 
@@ -192,6 +195,23 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       )
     }
 
+    // Real dispatch attempts per challenge (queue-item replays collapsed)
+    // and the agents to bill each challenge's tokens to.
+    const attemptsByChallenge = new Map<string, number>()
+    const agentsByChallenge = new Map<string, string[]>()
+    for (const row of collapseToAttempts(
+      db.select().from(agents).where(eq(agents.eventId, eventId)).all()
+    )) {
+      if (!row.challengeId) continue
+      attemptsByChallenge.set(
+        row.challengeId,
+        (attemptsByChallenge.get(row.challengeId) ?? 0) + 1
+      )
+      const ids = agentsByChallenge.get(row.challengeId) ?? []
+      ids.push(row.id)
+      agentsByChallenge.set(row.challengeId, ids)
+    }
+
     const rows = db
       .select({
         id: challenges.id,
@@ -226,6 +246,8 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
           live: live?.live ?? 0,
           running: live?.running ?? 0,
           pending,
+          attempts: attemptsByChallenge.get(row.id) ?? 0,
+          tokens: tokensOfChallenge(agentsByChallenge.get(row.id) ?? []),
         },
       ]
     })
@@ -255,6 +277,21 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     }
   }
 
+  /** Cumulative tokens spent on a challenge's agents, compact-formatted
+   * ("" when nothing was spent — the digest line omits the segment). */
+  function tokensOfChallenge(agentIds: string[]): string {
+    if (agentIds.length === 0) return ""
+    const totals = usageTotalsSql(db, inArray(sessionEntries.agentId, agentIds))
+    if (totals.totalTokens <= 0) return ""
+    if (totals.totalTokens >= 1_000_000) {
+      return `${(totals.totalTokens / 1_000_000).toFixed(1)}M`
+    }
+    if (totals.totalTokens >= 1_000) {
+      return `${Math.round(totals.totalTokens / 1_000)}K`
+    }
+    return `${Math.round(totals.totalTokens)}`
+  }
+
   /** The scheduler agent row, if any. */
   function getSchedulerAgent(eventId: string): AgentSummary | undefined {
     const row = queries.schedulerAgentRow(eventId)
@@ -262,7 +299,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   }
 
   /** Read the event's scheduler policy (defaults if unset). `paused` gates
-   * the event's agent-lifecycle events (W3). The five policy knobs resolve
+   * the event's agent-lifecycle events (W3). The policy knobs resolve
    * via schedulerPolicyFor (single source of defaults). */
   function getSchedulerConfig(eventId: string): {
     eventId: string
@@ -335,6 +372,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     notifyTeamOnFlag?: boolean
     stopSiblingsOnSolve?: boolean
     stopTargetOnSolve?: boolean
+    stopSubmitterOnSolve?: boolean
     nextTaskPolicy?: NextTaskPolicy
     urgentTeamMessages?: boolean
     blockSpawnOnSolved?: boolean
@@ -361,6 +399,8 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         update.stopSiblingsOnSolve = patch.stopSiblingsOnSolve
       if (patch.stopTargetOnSolve !== undefined)
         update.stopTargetOnSolve = patch.stopTargetOnSolve
+      if (patch.stopSubmitterOnSolve !== undefined)
+        update.stopSubmitterOnSolve = patch.stopSubmitterOnSolve
       if (patch.nextTaskPolicy !== undefined)
         update.nextTaskPolicy = patch.nextTaskPolicy
       if (patch.urgentTeamMessages !== undefined)
@@ -381,6 +421,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
           notifyTeamOnFlag: patch.notifyTeamOnFlag ?? true,
           stopSiblingsOnSolve: patch.stopSiblingsOnSolve ?? true,
           stopTargetOnSolve: patch.stopTargetOnSolve ?? true,
+          stopSubmitterOnSolve: patch.stopSubmitterOnSolve ?? false,
           nextTaskPolicy: patch.nextTaskPolicy ?? "eager",
           urgentTeamMessages: patch.urgentTeamMessages ?? true,
           blockSpawnOnSolved: patch.blockSpawnOnSolved ?? true,

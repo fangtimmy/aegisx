@@ -46,6 +46,10 @@ const containerStatusMap: Record<string, TargetState["status"]> = {
   stopped: "absent",
 }
 
+/** Read-path list cache window (agents poll get_target every few seconds
+ * while an instance transitions; each poll must not re-pull all 63 rows). */
+const LIST_CACHE_TTL_MS = 3_000
+
 /**
  * Adapter for the TSecBench Benchmark Platform.
  *
@@ -54,7 +58,9 @@ const containerStatusMap: Record<string, TargetState["status"]> = {
  *   identifies exactly one benchmark task, so there is no event list —
  *   `listEvents` returns a single synthetic "task" event.
  * - There is no per-challenge detail endpoint; `getChallenge` re-reads the
- *   list endpoint and filters by `unique_code`.
+ *   list endpoint and filters by `unique_code`. Agents poll `get_target`
+ *   heavily, so read paths share a short-lived list cache; lifecycle
+ *   actions invalidate it so they observe their own effect.
  * - Challenges may have multiple flags (`flag_count`). A correct but non-final
  *   flag maps to `partial` so the challenge is only marked solved once all
  *   flags are in; only the final correct submission returns `accepted`.
@@ -62,6 +68,9 @@ const containerStatusMap: Record<string, TargetState["status"]> = {
  *   implemented (the service layer reports it as unsupported).
  */
 export class TsecBenchAdapter extends BaseAdapter {
+  /** Short-lived list-cache (see class doc); verdict reads stay uncached. */
+  private listCache: { at: number; data: TsecChallenge[] } | null = null
+
   constructor(
     config: PlatformConfig,
     onError?: (info: PlatformRequestError) => void,
@@ -87,18 +96,27 @@ export class TsecBenchAdapter extends BaseAdapter {
     return [{ id: "task", name: "TSecBench Task" }]
   }
 
-  private async fetchList(signal?: AbortSignal): Promise<TsecChallenge[]> {
+  private async fetchList(
+    signal?: AbortSignal,
+    maxAgeMs = 0
+  ): Promise<TsecChallenge[]> {
+    if (this.listCache && Date.now() - this.listCache.at <= maxAgeMs) {
+      return this.listCache.data
+    }
     const body = await this.http.json<TsecChallenge[] | null>(
       "/openapi/v1/challenges",
       { signal }
     )
-    return body ?? []
+    this.listCache = { at: Date.now(), data: body ?? [] }
+    return this.listCache.data
   }
 
   private async fetchChallenge(
     remoteId: string,
     signal?: AbortSignal
   ): Promise<TsecChallenge | undefined> {
+    // Verdict-grade reads (getSolveState, submit-duplicate re-check) bypass
+    // the cache: a stale is_completed would mis-tier an acceptance.
     return (await this.fetchList(signal)).find(
       (challenge) => challenge.unique_code === remoteId
     )
@@ -116,7 +134,8 @@ export class TsecBenchAdapter extends BaseAdapter {
   }
 
   async getChallenge(remoteId: string) {
-    const challenge = await this.fetchChallenge(remoteId)
+    const list = await this.fetchList(undefined, LIST_CACHE_TTL_MS)
+    const challenge = list.find((item) => item.unique_code === remoteId)
     if (!challenge) {
       throw new PlatformError("Challenge not found on platform", 404)
     }
@@ -197,7 +216,8 @@ export class TsecBenchAdapter extends BaseAdapter {
     remoteId: string,
     signal?: AbortSignal
   ): Promise<TargetState> {
-    const challenge = await this.fetchChallenge(remoteId, signal)
+    const list = await this.fetchList(signal, LIST_CACHE_TTL_MS)
+    const challenge = list.find((item) => item.unique_code === remoteId)
     if (!challenge) return absentTarget()
     const status = containerStatusMap[challenge.container_status] ?? "failed"
     return {
@@ -217,6 +237,8 @@ export class TsecBenchAdapter extends BaseAdapter {
       `/openapi/v1/challenges/start?unique_code=${encodeURIComponent(remoteId)}`,
       { method: "POST", signal }
     )
+    // The action's own effect must be visible to the read that follows.
+    this.listCache = null
     return this.getTarget(remoteId, signal)
   }
 
@@ -225,6 +247,7 @@ export class TsecBenchAdapter extends BaseAdapter {
       `/openapi/v1/challenges/close?unique_code=${encodeURIComponent(remoteId)}`,
       { method: "POST", signal }
     )
+    this.listCache = null
     return this.getTarget(remoteId, signal)
   }
 }

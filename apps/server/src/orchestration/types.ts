@@ -51,6 +51,9 @@ export type PromptContext = {
     integrated?: boolean
     attachments: PromptAttachment[]
     attachmentPaths: string[]
+    /** Accepted multi-flag values at spawn time (live progress — the
+     * description's count is a sync-time snapshot). */
+    confirmedFlags?: string[]
   }
   agent?: {
     role: "solver" | "orchestrator"

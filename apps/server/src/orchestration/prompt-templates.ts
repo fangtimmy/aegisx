@@ -91,6 +91,7 @@ export const PROMPT_TEMPLATE_VARIABLES = [
   "challenge.points",
   "challenge.attachments",
   "challenge.attachmentPaths",
+  "challenge.confirmedFlags",
   "model.provider",
   "model.name",
   "model.id",
@@ -142,6 +143,7 @@ export const samplePromptContext: PromptTemplateContext = {
       { name: "challenge.zip", path: "challenge.zip", size: 12_345 },
     ],
     attachmentPaths: ["challenge.zip"],
+    confirmedFlags: [],
   },
   model: {
     provider: "Sample Provider",
@@ -397,6 +399,10 @@ export type SchedulerDigestContext = {
     live: number
     running: number
     pending: number
+    /** Real dispatch attempts invested (queue-item replays collapsed). */
+    attempts: number
+    /** Cumulative tokens, compact-formatted ("" when none spent). */
+    tokens: string
   }>
 }
 
@@ -415,6 +421,8 @@ export const SCHEDULER_DIGEST_TEMPLATE_VARIABLES = [
   "challenges[].live",
   "challenges[].running",
   "challenges[].pending",
+  "challenges[].attempts",
+  "challenges[].tokens",
 ] as const
 
 const sampleSchedulerDigestContext: SchedulerDigestContext = {
@@ -429,6 +437,8 @@ const sampleSchedulerDigestContext: SchedulerDigestContext = {
       live: 2,
       running: 1,
       pending: 1,
+      attempts: 3,
+      tokens: "1.2M",
     },
     {
       name: "pwn2",
@@ -437,6 +447,8 @@ const sampleSchedulerDigestContext: SchedulerDigestContext = {
       live: 1,
       running: 0,
       pending: 1,
+      attempts: 1,
+      tokens: "350K",
     },
     {
       name: "crypto1",
@@ -445,6 +457,8 @@ const sampleSchedulerDigestContext: SchedulerDigestContext = {
       live: 0,
       running: 0,
       pending: 0,
+      attempts: 1,
+      tokens: "",
     },
   ],
 }

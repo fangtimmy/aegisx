@@ -183,28 +183,29 @@ function legacy(
   if (render(blocks).length <= maxChars) return render(blocks)
   const budget = maxChars - header.length - 120
   let used = 0
-  let start2 = blocks.length
-  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+  let kept = 0
+  for (let i = 0; i < blocks.length; i += 1) {
     const size = blocks[i].join("\n").length + 1
     if (used + size > budget) break
     used += size
-    start2 = i
+    kept += 1
   }
-  const dropped = start2
-  const kept = blocks.slice(start2)
+  if (kept === 0 && blocks.length > 0) kept = 1
+  const dropped = blocks.length - kept
   return dropped > 0
     ? [
         header,
-        `另有 ${dropped} 条较早消息，可 aegisx.channels.read 补读`,
-        ...kept.flatMap((lines) => lines),
+        `另有 ${dropped} 条较新消息未并入本次投递（下次投递继续，或 aegisx.channels.read 补读）`,
+        ...blocks.slice(0, kept).flatMap((lines) => lines),
       ].join("\n")
-    : render(kept)
+    : render(blocks)
 }
 
 function testGroup(n: number, pad = 0) {
   return {
     label: "#team",
     messages: Array.from({ length: n }, (_, i) => ({
+      id: i + 1,
       authorName: `agent-${i}`,
       createdAt: new Date(2025, 0, 1, 12, i % 60).toISOString(),
       body: i % 3 === 0 ? "" : `body-${i} ${"x".repeat(pad)}`,
@@ -953,6 +954,7 @@ describe("renderMerged", () => {
         label: "#team",
         messages: [
           {
+            id: 1,
             authorName: "agent-a1",
             createdAt: "2025-01-01T00:00:00Z",
             body: "exp 骨架在 exp2.py",
@@ -977,11 +979,12 @@ describe("renderMerged", () => {
     expect(text).not.toContain("xxxx")
   })
 
-  test("overflow folds the oldest messages within the 8K cap", () => {
+  test("overflow folds the NEWEST messages within the 8K cap (oldest = ground truth)", () => {
     const text = renderMerged([
       {
         label: "#team",
         messages: Array.from({ length: 30 }, (_, i) => ({
+          id: i + 1,
           authorName: "system",
           createdAt: "2025-01-01T00:00:00Z",
           body: `msg-${i} ${"y".repeat(900)}`,
@@ -991,9 +994,9 @@ describe("renderMerged", () => {
       },
     ])
     expect(text.length).toBeLessThanOrEqual(8_200)
-    expect(text).toContain("条较早消息，可 aegisx.channels.read 补读")
-    expect(text).toContain("msg-29") // newest kept
-    expect(text).not.toContain("msg-0") // oldest folded
+    expect(text).toContain("条较新消息未并入本次投递")
+    expect(text).toContain("msg-0") // oldest kept
+    expect(text).not.toContain("msg-29 ") // newest folded
   })
 
   // The template-driven renderer must reproduce the legacy (pre-template)
@@ -1412,6 +1415,56 @@ describe("terminal agents and urgent delivery (kill-undo guard)", () => {
         body: "later",
       })
       expect(sent).toHaveLength(0)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+})
+
+const groundTruthBodyOf = (i: number) => `ground-truth-${i} ${"x".repeat(600)}`
+
+describe("delivery budget folds the NEWEST, keeps the OLDEST (ground truth first)", () => {
+  test("over-budget onboarding sweep delivers oldest-first, cursor advances only past the delivered, batches converge", async () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, "fresh")
+      disableUrgentTeam(db)
+      const { channels, sent } = makeService(db, dir)
+
+      for (let i = 1; i <= 30; i += 1) {
+        channels.post({
+          channelKey: teamKey("ch-1"),
+          author: { type: "user", name: "u" },
+          body: groundTruthBodyOf(i),
+        })
+      }
+
+      channels.runFlushTick()
+      await settle()
+      expect(sent).toHaveLength(1)
+      const first = sent[0].text
+      // The earliest findings (entry points / credentials) must survive.
+      expect(first).toContain("ground-truth-1 ")
+      expect(first).not.toContain("ground-truth-30 ")
+      // The fold line points at the not-yet-delivered NEWER messages.
+      expect(first).toContain("较新消息")
+      // Cursor advanced past exactly the delivered prefix, not everything.
+      const cursor = channels.readCursor(teamKey("ch-1"), "fresh")
+      expect(cursor).toBeGreaterThan(0)
+      expect(cursor).toBeLessThan(30)
+
+      // Successive ticks keep making progress until the whole backlog lands.
+      for (let tick = 0; tick < 4; tick += 1) {
+        channels.runFlushTick()
+        await settle()
+      }
+      const all = sent.map((entry) => entry.text).join("\n")
+      for (let i = 1; i <= 30; i += 1) {
+        expect(all).toContain(`ground-truth-${i} `)
+      }
       channels.close()
     } finally {
       close()

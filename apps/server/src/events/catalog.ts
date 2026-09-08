@@ -24,6 +24,7 @@ import { RemoteTargetInfoSchema } from "../lib/schemas"
 import type { ChallengeRemote } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 import { toFlagPublic } from "../run/public"
+import { collapseToAttempts } from "../run/queries"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
@@ -163,11 +164,9 @@ export function createCatalogReader(
       .where(eq(challenges.id, challengeId))
       .get()
     if (!row) return undefined
-    const agentRows = db
-      .select({ status: agents.status })
-      .from(agents)
-      .where(eq(agents.challengeId, challengeId))
-      .all()
+    const agentRows = collapseToAttempts(
+      db.select().from(agents).where(eq(agents.challengeId, challengeId)).all()
+    )
     return publicChallenge(
       row.challenge,
       row.remote,
@@ -190,14 +189,13 @@ export function createCatalogReader(
     const agentRows =
       ids.length === 0
         ? []
-        : db
-            .select({
-              challengeId: agents.challengeId,
-              status: agents.status,
-            })
-            .from(agents)
-            .where(inArray(agents.challengeId, ids))
-            .all()
+        : collapseToAttempts(
+            db
+              .select()
+              .from(agents)
+              .where(inArray(agents.challengeId, ids))
+              .all()
+          )
     const attachmentsByChallenge = new Map<string, typeof attachmentRows>()
     for (const attachment of attachmentRows) {
       const values = attachmentsByChallenge.get(attachment.challengeId) ?? []

@@ -428,6 +428,15 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
   stopTargetOnSolve: integer("stop_target_on_solve", { mode: "boolean" })
     .notNull()
     .default(true),
+  /** Evaluation mode: on a FULL solve the submitting agent is terminated
+   * immediately (no write-up wrap-up — the platform only scores flags).
+   * Default false: the submitter keeps its session to write up, bounded by
+   * the solved wrap-up deadline. */
+  stopSubmitterOnSolve: integer("stop_submitter_on_solve", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(false),
   /** 'eager' = a solved challenge frees its target slot at flag acceptance;
    * 'drained' = it holds the slot until its last agent goes terminal. */
   nextTaskPolicy: text("next_task_policy").notNull().default("eager"),

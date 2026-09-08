@@ -13,6 +13,9 @@ export const MAX_DELIVER_CHARS = 8_000
 export type RenderGroup = {
   label: string
   messages: Array<{
+    /** Channel-message id — the delivery cursor advances to the last
+     * DELIVERED id per group (the engine reads it back from the render). */
+    id: number
     authorName: string
     createdAt: string
     body: string
@@ -21,6 +24,10 @@ export type RenderGroup = {
   }>
 }
 
+/** A render plus, per group, the id of the last message it actually
+ * delivered (null = nothing from that group made the cut). */
+export type RenderedDelivery = { text: string; lastIds: Array<number | null> }
+
 function timeOf(iso: string): string {
   const date = new Date(iso)
   const hh = String(date.getHours()).padStart(2, "0")
@@ -28,28 +35,44 @@ function timeOf(iso: string): string {
   return `${hh}:${mm}`
 }
 
-function deliveryCtx(
-  messages: DeliveryRenderContext["messages"],
-  dropped: number
-): DeliveryRenderContext {
-  return { dropped, messages }
-}
-
 /** Render the merged delivery text via the channelDelivery template:
  * per-message header lines (⚠ prefix on urgent) + 📎 lines carrying the
- * shared-relative path; 8K cap with oldest-message folding. The folding
+ * shared-relative path; 8K cap with NEWEST-message folding. The folding
  * math stays in code (per-message size measured through the SAME template,
  * so a custom template folds accurately). Attachment CONTENT never enters
- * the text — readers open the shared path directly. */
+ * the text — readers open the shared path directly.
+ *
+ * Over budget, the OLDEST messages win: the earliest findings on a channel
+ * are its ground truth (entry points, credentials) and the common overflow
+ * case is a fresh agent's onboarding sweep of the whole history. The
+ * newer overflow folds to a count line and stays unread — the next flush
+ * delivers it (the cursor only advances past what was rendered). At least
+ * one message is always delivered so the cursor never stalls. */
 export function renderDelivery(
   body: string,
   groups: RenderGroup[],
   maxChars: number
-): string {
-  const messages: DeliveryRenderContext["messages"] = groups.flatMap((group) =>
+): RenderedDelivery {
+  const messages = groups.flatMap((group, groupIndex) =>
     group.messages.map((message) => ({
+      group,
+      groupIndex,
+      id: message.id,
       urgent: message.urgent,
-      label: group.label,
+      authorName: message.authorName,
+      body: message.body,
+      createdAt: message.createdAt,
+      files: message.files,
+    }))
+  )
+  const toCtx = (
+    list: typeof messages,
+    dropped: number
+  ): DeliveryRenderContext => ({
+    dropped,
+    messages: list.map((message) => ({
+      urgent: message.urgent,
+      label: message.group.label,
       authorName: message.authorName,
       time: timeOf(message.createdAt),
       body: message.body.trim() || "(空)",
@@ -58,25 +81,37 @@ export function renderDelivery(
         size: formatSize(file.size),
         path: file.path,
       })),
-    }))
-  )
+    })),
+  })
+  const lastIdsOf = (kept: number): Array<number | null> => {
+    const lastIds: Array<number | null> = groups.map(() => null)
+    for (let i = 0; i < kept; i += 1) {
+      lastIds[messages[i].groupIndex] = messages[i].id
+    }
+    return lastIds
+  }
   const render = (c: DeliveryRenderContext) => renderTemplateBody(body, c)
-  const plain = render(deliveryCtx(messages, 0))
-  if (plain.length <= maxChars) return plain
-  // Over budget: keep the NEWEST messages that fit; fold the dropped count.
+  const plain = render(toCtx(messages, 0))
+  if (plain.length <= maxChars) {
+    return { text: plain, lastIds: lastIdsOf(messages.length) }
+  }
   // Fixed prefix (header lines) measured through the same template so a
   // custom template budgets against its own prefix.
-  const prefixLen = render(deliveryCtx([], 0)).length
+  const prefixLen = render(toCtx([], 0)).length
   const budget = maxChars - prefixLen - 120
   let used = 0
-  let start = messages.length
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const size = render(deliveryCtx([messages[i]], 0)).length - prefixLen
+  let kept = 0
+  for (const message of messages) {
+    const size = render(toCtx([message], 0)).length - prefixLen
     if (used + size > budget) break
     used += size
-    start = i
+    kept += 1
   }
-  return render(deliveryCtx(messages.slice(start), start))
+  if (kept === 0 && messages.length > 0) kept = 1
+  return {
+    text: render(toCtx(messages.slice(0, kept), messages.length - kept)),
+    lastIds: lastIdsOf(kept),
+  }
 }
 
 /** Default-template render (the pure/exported face — same output the
@@ -86,5 +121,5 @@ export function renderMerged(groups: RenderGroup[]): string {
     DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
     groups,
     MAX_DELIVER_CHARS
-  )
+  ).text
 }

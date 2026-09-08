@@ -36,6 +36,7 @@ const schedulerConfigInput = Type.Object(
     notifyTeamOnFlag: Type.Optional(Type.Boolean()),
     stopSiblingsOnSolve: Type.Optional(Type.Boolean()),
     stopTargetOnSolve: Type.Optional(Type.Boolean()),
+    stopSubmitterOnSolve: Type.Optional(Type.Boolean()),
     nextTaskPolicy: Type.Optional(
       Type.Union([Type.Literal("eager"), Type.Literal("drained")])
     ),

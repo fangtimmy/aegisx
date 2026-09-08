@@ -127,6 +127,8 @@ describe("scheduler digest (getDigestContext + default template)", () => {
         live: 2,
         running: 1,
         pending: 1,
+        attempts: 2,
+        tokens: "",
       })
       expect(ctx.challenges[1].solvedLabel).toBe("部分")
 
@@ -134,7 +136,7 @@ describe("scheduler digest (getDigestContext + default template)", () => {
       expect(text).toContain("Agent 槽位：3/4")
       expect(text).toContain("队列：1 待发 / 1 运行（已暂停）")
       expect(text).toContain(
-        "- web1 · 300pt · 已解 · 2 live（1 running） · 队列 1"
+        "- web1 · 300pt · 已解 · 2 live（1 running） · 队列 1 · 已投 2 次"
       )
       expect(text).toContain("- pwn2 · 500pt · 部分 · 1 live（0 running）")
       expect(text).not.toContain("quiet")
@@ -169,6 +171,83 @@ describe("scheduler digest (getDigestContext + default template)", () => {
 
       const text = renderTemplateBody(DEFAULT_SCHEDULER_DIGEST_TEMPLATE, ctx)
       expect(text).toContain("crypto1 · 100pt · 已解")
+    } finally {
+      close()
+    }
+  })
+})
+
+describe("scheduler digest: invested attempts + cumulative tokens", () => {
+  test("attempts collapse queue-item replays; tokens aggregate the challenge's agents", () => {
+    const { db, admin, close } = setup()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1", name: "web1", points: 300 })
+      seedChallenge(db, { id: "ch-2", name: "pwn2", points: 500 })
+      seedLiveAgent(db, "a1", "ch-1", "running")
+      seedLiveAgent(db, "a2", "ch-1", "idle")
+      seedLiveAgent(db, "b1", "ch-2", "running")
+      // Three ghost-replay rows sharing one queue item → ONE attempt.
+      for (const [id, created] of [
+        ["g1", "2025-01-01T00:00:01.000Z"],
+        ["g2", "2025-01-01T00:00:02.000Z"],
+        ["g3", "2025-01-01T00:00:03.000Z"],
+      ] as const) {
+        db.insert(agents)
+          .values({
+            id,
+            eventId: "evt-1",
+            challengeId: "ch-1",
+            role: "solver",
+            name: `agent-${id}`,
+            model: "m",
+            systemPrompt: "s",
+            tools: "[]",
+            status: "aborted",
+            source: "scheduler",
+            timeoutMs: 3_600_000,
+            queueItemId: "qg",
+            createdAt: created,
+            startedAt: created,
+            updatedAt: created,
+          })
+          .run()
+      }
+      // One assistant entry on a1: 1.5M prompt tokens.
+      db.insert(require("../../src/db/schema").sessions)
+        .values({ id: "s-a1", agentId: "a1", cwd: "/w", createdAt: now() })
+        .run()
+      db.insert(require("../../src/db/schema").sessionEntries)
+        .values({
+          id: "e-1",
+          sessionId: "s-a1",
+          agentId: "a1",
+          seq: 1,
+          type: "message",
+          data: JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              usage: { input: 1_500_000, output: 0 },
+            },
+          }),
+          createdAt: now(),
+        })
+        .run()
+
+      const ctx = admin.getDigestContext("evt-1")
+      const web1 = ctx.challenges.find((c) => c.name === "web1")!
+      const pwn2 = ctx.challenges.find((c) => c.name === "pwn2")!
+      // 2 direct live + 1 collapsed replay group.
+      expect(web1.attempts).toBe(3)
+      expect(web1.tokens).toBe("1.5M")
+      expect(pwn2.attempts).toBe(1)
+      expect(pwn2.tokens).toBe("")
+
+      const text = renderTemplateBody(DEFAULT_SCHEDULER_DIGEST_TEMPLATE, ctx)
+      expect(text).toContain("已投 3 次 · 1.5M tok")
+      // No dangling separator when nothing was spent.
+      expect(text).not.toContain("已投 1 次 ·")
     } finally {
       close()
     }

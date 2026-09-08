@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs"
+import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 import type {
@@ -78,6 +79,7 @@ import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
 import { type SchedulerPolicy, schedulerPolicyFor } from "./scheduler-policy"
 import { createStallWatchdog, type StallWatchdog } from "./stall-watchdog"
 import {
+  agentId8,
   challengeRoot,
   orchestratorKey,
   orchestratorRoot,
@@ -85,6 +87,11 @@ import {
 } from "./workspace-resolver"
 
 type PlatformService = ReturnType<typeof createPlatformService>
+
+/** Write-up wrap-up bound after a full solve: the surviving submitter's
+ * deadline is pulled to this horizon (code constant; measured wrap-up p90
+ * is ~2.3min, so 5min only cuts the pathological tail). */
+const SOLVED_WRAPUP_MS = 5 * 60_000
 
 export type AgentServiceOptions = {
   db: Database
@@ -107,6 +114,8 @@ export type AgentServiceOptions = {
   flushIntervalMs?: number
   /** Test seam: stall watchdog threshold (default 2min). */
   stallMs?: number
+  /** Test seam: solved write-up wrap-up bound (default SOLVED_WRAPUP_MS). */
+  solvedWrapupMs?: number
 }
 
 export type SendMessageInput = {
@@ -251,6 +260,20 @@ export function createAgentService(options: AgentServiceOptions) {
       const row = queries.getAgentRow(agentId)
       if (!row?.challengeId) return
       const challengeId = row.challengeId
+      // An aborted/failed attempt leaves no curated artifacts (a completed
+      // attempt's WRITEUP.md is kept); recycle its directory eagerly or one
+      // long-fought challenge accumulates dozens of stale trees that then
+      // mislead every later spawn reading the workspace.
+      if (row.status === "aborted" || row.status === "failed") {
+        rmSync(
+          join(
+            challengeWorkspaceRoot(row.eventId, challengeId),
+            "agents",
+            agentId8(agentId)
+          ),
+          { recursive: true, force: true }
+        )
+      }
       if (!schedulerPolicyFor(db, row.eventId).stopTargetOnSolve) return
       const live = db
         .select({ id: agents.id })
@@ -901,7 +924,10 @@ export function createAgentService(options: AgentServiceOptions) {
       channelKey: teamKey(challengeId),
       author: { type: "system" },
       body: `「${name}」再解出一个 flag${flag ? `：${flag}` : ""}${by}。`,
-      meta: { eventType: "flagAccepted" },
+      meta: {
+        eventType: "flagAccepted",
+        ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+      },
     })
   }
 
@@ -945,18 +971,22 @@ export function createAgentService(options: AgentServiceOptions) {
       channelKey: teamKey(challengeId),
       author: { type: "system" },
       body: `「${name}」已完全解出${flag ? `：${flag}` : ""}${by}，平台已接受。${tail}`,
-      meta: { eventType: "flagAccepted" },
+      meta: {
+        eventType: "flagAccepted",
+        ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+      },
     })
   }
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
-   * (TSecBench partial — the challenge is NOT fully solved). ONE non-urgent
-   * system post into the challenge's #team (policy-gated) + a non-urgent
-   * orch notice. */
+   * (a multi-flag partial — the challenge is NOT fully solved). ONE
+   * non-urgent system post into the challenge's #team (policy-gated) + a
+   * non-urgent orch notice. The submitter rides in meta so delivery can
+   * skip its own notice. */
   function notifyFlagPartial(
     challengeId: string,
     message: string | null,
-    _submitterAgentId?: string
+    submitterAgentId?: string
   ): void {
     const name =
       db
@@ -989,7 +1019,10 @@ export function createAgentService(options: AgentServiceOptions) {
         channelKey: teamKey(challengeId),
         author: { type: "system" },
         body: text,
-        meta: { eventType: "flagPartial" },
+        meta: {
+          eventType: "flagPartial",
+          ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+        },
       })
     }
     if (eventId) {
@@ -1013,8 +1046,12 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Full-solve cleanup (see notifyFlagAccepted), shaped by the event's
-   * policy: siblings stopped / target stopped are each skippable; the
-   * challenge's pending queue items are always cancelled. */
+   * policy: siblings stopped / target stopped / submitter stopped are each
+   * skippable; the challenge's pending queue items are always cancelled.
+   * The surviving submitter gets its deadline pulled to the wrap-up bound.
+   * The target stop is AWAITED before the closes land, so the slot release
+   * the drainer reacts to has actually happened on the platform (no
+   * capacity-rejection race with the next spawn's start_target). */
   function stopOthersOnSolved(
     challengeId: string,
     submitterAgentId: string | undefined,
@@ -1032,9 +1069,14 @@ export function createAgentService(options: AgentServiceOptions) {
         .from(challenges)
         .where(eq(challenges.id, challengeId))
         .get()?.name ?? challengeId
-    // Other live agents on the challenge: terminal close (aborted). The
-    // submitter keeps its session to finish the write-up via finish_run.
-    const siblings = policy.stopSiblingsOnSolve
+    // Live agents on the challenge to close: siblings (policy) and, in
+    // evaluation mode (stopSubmitterOnSolve), the submitter itself — no
+    // write-up wrap-up. Otherwise the submitter keeps its session to
+    // finish via finish_run, bounded by the wrap-up deadline below.
+    const stopSubmitter =
+      policy.stopSubmitterOnSolve && submitterAgentId !== undefined
+    const closing = policy.stopSiblingsOnSolve || stopSubmitter
+    const siblings = closing
       ? db
           .select({ id: agents.id })
           .from(agents)
@@ -1042,7 +1084,9 @@ export function createAgentService(options: AgentServiceOptions) {
             and(
               eq(agents.challengeId, challengeId),
               inArray(agents.status, LIVE_AGENT_STATUSES),
-              submitterAgentId ? ne(agents.id, submitterAgentId) : undefined
+              !stopSubmitter && submitterAgentId
+                ? ne(agents.id, submitterAgentId)
+                : undefined
             )
           )
           .all()
@@ -1050,20 +1094,25 @@ export function createAgentService(options: AgentServiceOptions) {
     const cancelled = queue
       ? queue.cancelPendingForChallenge(eventId, challengeId)
       : 0
-    // Orphaned platform target: the challenge is fully solved — its target
-    // is no longer needed (the submitter finishes its write-up without it).
-    if (
-      policy.stopTargetOnSolve &&
-      isTargetCapable(getChallengeRemote(db, challengeId))
-    ) {
-      void platformService
-        .targetAction(challengeId, "stop")
-        .catch(() => undefined)
+    if (submitterAgentId && !stopSubmitter) {
+      armSolvedWrapup(submitterAgentId)
     }
-    // Close siblings and count the ones that actually terminalized — a
-    // close can still lose a race (already closed). The notice posts once
-    // the closes settle, so it never claims a stop that didn't land.
     void (async () => {
+      // Orphaned platform target: the challenge is fully solved — its
+      // target is no longer needed. Awaited BEFORE the closes below: their
+      // terminal drains launch the next queued agent, whose start_target
+      // must not race an instance that is still shutting down.
+      if (
+        policy.stopTargetOnSolve &&
+        isTargetCapable(getChallengeRemote(db, challengeId))
+      ) {
+        await platformService
+          .targetAction(challengeId, "stop")
+          .catch(() => undefined)
+      }
+      // Close siblings and count the ones that actually terminalized — a
+      // close can still lose a race (already closed). The notice posts once
+      // the closes settle, so it never claims a stop that didn't land.
       const stopped = (
         await Promise.all(
           siblings.map((sibling) =>
@@ -1073,6 +1122,9 @@ export function createAgentService(options: AgentServiceOptions) {
           )
         )
       ).reduce<number>((sum, stopped_) => sum + stopped_, 0)
+      // The freed target slot may admit a queued item even when no sibling
+      // closed — wake the drainer explicitly (nothing else would).
+      queue?.scheduleDrain()
       const parts: string[] = []
       if (stopped > 0) parts.push(`已停止 ${stopped} 个同题 agent`)
       if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
@@ -1080,6 +1132,20 @@ export function createAgentService(options: AgentServiceOptions) {
         postOrchNotice(eventId, `「${name}」已完全解出：${parts.join("；")}`)
       }
     })()
+  }
+
+  /** Pull a surviving submitter's hard deadline to the wrap-up bound so a
+   * solved challenge cannot hold an agent slot indefinitely. Only ever
+   * shortens — an existing earlier deadline keeps precedence. */
+  function armSolvedWrapup(agentId: string): void {
+    const row = queries.getAgentRow(agentId)
+    if (!row || !isActiveAgentStatus(row.status)) return
+    const ms = options.solvedWrapupMs ?? SOLVED_WRAPUP_MS
+    const horizon = Date.now() + ms
+    if (row.deadlineAt && Date.parse(row.deadlineAt) <= horizon) return
+    const iso = new Date(horizon).toISOString()
+    updateAgent(agentId, { deadlineAt: iso, updatedAt: now() })
+    deadlines.armAgentTimers(agentId, iso)
   }
 
   // --- scheduler (event orchestrator) lifecycle -------------------------------

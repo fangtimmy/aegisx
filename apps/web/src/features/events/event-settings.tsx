@@ -327,6 +327,7 @@ type PolicyFormValues = {
   notifyTeamOnFlag: boolean
   stopSiblingsOnSolve: boolean
   stopTargetOnSolve: boolean
+  stopSubmitterOnSolve: boolean
   nextTaskPolicy: "eager" | "drained"
   urgentTeamMessages: boolean
   blockSpawnOnSolved: boolean
@@ -347,6 +348,7 @@ function SchedulerPolicyForm({
       notifyTeamOnFlag: config.notifyTeamOnFlag,
       stopSiblingsOnSolve: config.stopSiblingsOnSolve,
       stopTargetOnSolve: config.stopTargetOnSolve,
+      stopSubmitterOnSolve: config.stopSubmitterOnSolve,
       nextTaskPolicy: config.nextTaskPolicy,
       urgentTeamMessages: config.urgentTeamMessages,
       blockSpawnOnSolved: config.blockSpawnOnSolved,
@@ -360,6 +362,7 @@ function SchedulerPolicyForm({
         notifyTeamOnFlag: input.notifyTeamOnFlag,
         stopSiblingsOnSolve: input.stopSiblingsOnSolve,
         stopTargetOnSolve: input.stopTargetOnSolve,
+        stopSubmitterOnSolve: input.stopSubmitterOnSolve,
         nextTaskPolicy: input.nextTaskPolicy,
         urgentTeamMessages: input.urgentTeamMessages,
         blockSpawnOnSolved: input.blockSpawnOnSolved,
@@ -490,6 +493,18 @@ function SchedulerPolicyForm({
             <PolicySwitch
               description="完全解出后立即停止平台靶机实例；关闭时靶机保留给同题 agent 验证（注意平台资源占用）。"
               label="完全解出后停靶机"
+              onChange={field.onChange}
+              value={field.value}
+            />
+          )}
+        />
+        <Controller
+          control={form.control}
+          name="stopSubmitterOnSolve"
+          render={({ field }) => (
+            <PolicySwitch
+              description="评测模式：完全解出后连提交者一并终止（不写 writeup，平台只计 flag）。关闭时提交者保留有界的收尾窗口完成 finish_run。"
+              label="完全解出即终止提交者（评测）"
               onChange={field.onChange}
               value={field.value}
             />

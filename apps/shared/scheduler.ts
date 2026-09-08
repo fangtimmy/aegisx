@@ -14,6 +14,10 @@ export type SchedulerPolicyConfig = {
   notifyTeamOnFlag: boolean
   stopSiblingsOnSolve: boolean
   stopTargetOnSolve: boolean
+  /** Evaluation mode: a FULL solve terminates the submitting agent too
+   * (no write-up wrap-up); off = the submitter keeps a bounded wrap-up
+   * window to finish_run. */
+  stopSubmitterOnSolve: boolean
   nextTaskPolicy: NextTaskPolicy
   urgentTeamMessages: boolean
   /** A fully-solved challenge rejects new spawns (queue items cancel,

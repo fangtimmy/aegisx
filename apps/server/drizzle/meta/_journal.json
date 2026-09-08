@@ -120,6 +120,13 @@
       "when": 1790700000000,
       "tag": "0016_block_spawn_on_solved",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "17",
+      "when": 1788885910243,
+      "tag": "0017_stop_submitter_on_solve",
+      "breakpoints": true
     }
   ]
 }

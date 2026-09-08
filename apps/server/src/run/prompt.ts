@@ -6,11 +6,12 @@ import type {
   ModelConfig,
   PromptAttachment,
 } from "@aegisx/shared"
-import { eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
   attachments,
+  challengeFlags,
   type challenges,
   eventPlatforms,
   events,
@@ -69,6 +70,20 @@ export function buildSolverPromptContext(
     .where(eq(eventPlatforms.eventId, event.id))
     .get()
   const platformIntegrated = isPlatformIntegrated(remote)
+  // Live multi-flag progress: the stored description's count is a sync-time
+  // snapshot; the accepted-flag rows are the truth at spawn time.
+  const confirmedFlags = db
+    .select({ flag: challengeFlags.flag })
+    .from(challengeFlags)
+    .where(
+      and(
+        eq(challengeFlags.challengeId, challenge.id),
+        eq(challengeFlags.status, "accepted")
+      )
+    )
+    .orderBy(asc(challengeFlags.createdAt), asc(challengeFlags.id))
+    .all()
+    .map((row) => row.flag)
   return {
     event: {
       id: event.id,
@@ -85,6 +100,7 @@ export function buildSolverPromptContext(
       integrated: platformIntegrated,
       attachments: challengeAttachments,
       attachmentPaths: challengeAttachments.map(({ path }) => path),
+      confirmedFlags,
     },
     model: {
       provider: model.providerLabel ?? model.provider,
