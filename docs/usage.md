@@ -17,6 +17,13 @@
 
 每赛事的调度策略在赛事自己的设置页：模型、常驻指令、并发靶机槽位、flag 处置。
 
+## TSecBench 断网评测镜像
+
+`aegisx/tsecbench` 是面向 TSecBench 断网评测的 all-in-one 单镜像（服务端 + Web + 求解
+工具链同容器，`AEGISX_EXEC_BACKEND=local`）：工具集与词表按全量跑实测裁剪，TSecBench
+平台简报与调度策略（靶机槽 3、解出即停）烘焙进镜像，运行时只注入 LLM 与平台凭据。
+未压缩 1.79GB / 压缩 591MB。构建与运行见 [containers/tsecbench/README.md](../containers/tsecbench/README.md)。
+
 ## LLM 网关 relay
 
 部分赛事会发放固定端点的 LLM 代理 URL。这类网关对任何追加路径都返回 404，而所有 provider 类型都会在 base URL 后追加 `/chat/completions` 等路径，因此无法直接接入。
