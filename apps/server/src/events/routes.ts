@@ -115,6 +115,10 @@ export function registerEventRoutes(
   const listEvents = () => catalog.listEvents()
   const listChallengesForEvent = (eventId: string) =>
     catalog.listChallengesForEvent(eventId)
+  // 404 gates use a PK select — the catalog aggregation is only paid by
+  // genuine list/detail responses (same idiom as scheduler requireEvent).
+  const requireEventRow = (eventId: string) =>
+    db.select().from(events).where(eq(events.id, eventId)).get()
 
   app.get("/api/events", (c) => c.json({ items: listEvents() }))
 
@@ -155,7 +159,7 @@ export function registerEventRoutes(
 
   app.get("/api/events/:eventId/usage", (c) => {
     const eventId = c.req.param("eventId")
-    if (!getEvent(eventId)) {
+    if (!requireEventRow(eventId)) {
       return notFound(c, "Event not found")
     }
     return c.json({ usage: agentManager.usageForEvent(eventId) })
@@ -163,7 +167,7 @@ export function registerEventRoutes(
 
   app.get("/api/events/:eventId/stats", (c) => {
     const eventId = c.req.param("eventId")
-    if (!getEvent(eventId)) {
+    if (!requireEventRow(eventId)) {
       return notFound(c, "Event not found")
     }
     return c.json({ stats: buildEventStats(db, eventId) })
@@ -171,7 +175,7 @@ export function registerEventRoutes(
 
   app.patch("/api/events/:eventId", validateJson(updateEventInput), (c) => {
     const eventId = c.req.param("eventId")
-    if (!getEvent(eventId)) {
+    if (!requireEventRow(eventId)) {
       return notFound(c, "Event not found")
     }
     const input = c.req.valid("json")
@@ -194,7 +198,7 @@ export function registerEventRoutes(
 
   app.delete("/api/events/:eventId", async (c) => {
     const eventId = c.req.param("eventId")
-    if (!getEvent(eventId)) {
+    if (!requireEventRow(eventId)) {
       return notFound(c, "Event not found")
     }
     // Any live agent (solver OR scheduler — both carry eventId) blocks the
@@ -245,7 +249,7 @@ export function registerEventRoutes(
   // work is not history.
   app.delete("/api/events/:eventId/agents", async (c) => {
     const eventId = c.req.param("eventId")
-    if (!getEvent(eventId)) {
+    if (!requireEventRow(eventId)) {
       return notFound(c, "Event not found")
     }
     const scope = c.req.query("scope") === "all" ? "all" : "solver"
@@ -259,7 +263,7 @@ export function registerEventRoutes(
   // (trash-restored on error).
   app.delete("/api/events/:eventId/challenges", async (c) => {
     const eventId = c.req.param("eventId")
-    if (!getEvent(eventId)) {
+    if (!requireEventRow(eventId)) {
       return notFound(c, "Event not found")
     }
     const liveChallengeAgent = db
@@ -314,7 +318,7 @@ export function registerEventRoutes(
     validateJson(challengeInput),
     (c) => {
       const eventId = c.req.param("eventId")
-      if (!getEvent(eventId)) {
+      if (!requireEventRow(eventId)) {
         return notFound(c, "Event not found")
       }
       const input = c.req.valid("json")

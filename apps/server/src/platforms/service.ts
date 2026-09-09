@@ -211,13 +211,25 @@ export function createPlatformService(
 
   function publicPlatform(eventId: string): EventPlatform | null {
     const platform = storedPlatform(eventId)
-    if (!platform) return null
-    const { sourceKey: _, ...value } = platform
-    return {
-      ...value,
-      type: platform.type,
-      credentialConfigured: Boolean(platform.credential),
-    }
+    return platform ? toPublicPlatform(platform) : null
+  }
+
+  /** Batch getPublic: one eventPlatforms query for N events; unbound events
+   * map to null. Same projection as getPublic. */
+  function publicPlatformMany(
+    eventIds: string[]
+  ): Map<string, EventPlatform | null> {
+    const result = new Map<string, EventPlatform | null>(
+      eventIds.map((eventId) => [eventId, null])
+    )
+    if (eventIds.length === 0) return result
+    const rows = db
+      .select()
+      .from(eventPlatforms)
+      .where(inArray(eventPlatforms.eventId, eventIds))
+      .all()
+    for (const row of rows) result.set(row.eventId, toPublicPlatform(row))
+    return result
   }
 
   async function bind(
@@ -399,6 +411,7 @@ export function createPlatformService(
     detach,
     discoverChallenges: platformSync.discoverChallenges,
     getPublic: publicPlatform,
+    getPublicMany: publicPlatformMany,
     ignoreTarget: platformTargets.ignoreTarget,
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
@@ -450,6 +463,17 @@ function platformSourceKey(config: PlatformConfig) {
     normalizeBaseUrl(config.baseUrl),
     config.remoteEventId,
   ])
+}
+
+function toPublicPlatform(
+  platform: typeof eventPlatforms.$inferSelect
+): EventPlatform {
+  const { sourceKey: _, ...value } = platform
+  return {
+    ...value,
+    type: platform.type,
+    credentialConfigured: Boolean(platform.credential),
+  }
 }
 
 /** Platforms with no real event concept get a fixed synthetic remoteEventId

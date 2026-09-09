@@ -68,11 +68,13 @@ export function createCatalogReader(
       .from(events)
       .leftJoin(challenges, eq(challenges.eventId, events.id))
       .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
-    return (eventId ? query.where(eq(events.id, eventId)) : query)
+    const rows = (eventId ? query.where(eq(events.id, eventId)) : query)
       .groupBy(events.id)
       .orderBy(events.createdAt)
       .all()
-      .map(({ lastChallengeAt, activeAgentCount, lastAgentAt, ...event }) => {
+    const platforms = platformService.getPublicMany(rows.map((row) => row.id))
+    return rows.map(
+      ({ lastChallengeAt, activeAgentCount, lastAgentAt, ...event }) => {
         const lastActivityAt = [lastChallengeAt, lastAgentAt].reduce<string>(
           (latest, value) => (value && value > latest ? value : latest),
           event.updatedAt
@@ -83,9 +85,10 @@ export function createCatalogReader(
           solvedCount: event.solvedCount,
           activeAgentCount: activeAgentCount ?? 0,
           lastActivityAt,
-          platform: platformService.getPublic(event.id),
+          platform: platforms.get(event.id) ?? null,
         }
-      })
+      }
+    )
   }
 
   const getEvent = (eventId: string) => listEvents(eventId)[0]
