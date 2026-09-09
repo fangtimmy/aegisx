@@ -18,6 +18,8 @@ const port = Number(portArg ?? 8788)
 
 Bun.serve({
   port,
+  // Bun's default 10s idle timeout kills LLM streams that pause between chunks.
+  idleTimeout: 255,
   async fetch(req) {
     const headers = new Headers(req.headers)
     headers.delete("host")
@@ -29,6 +31,10 @@ Bun.serve({
         body:
           req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
         signal: req.signal,
+        // Keep the body bytes as-is so forwarded headers (content-encoding,
+        // content-length) stay truthful — Bun's auto-decompress would emit
+        // plain bytes still labeled `content-encoding: gzip`.
+        decompress: false,
       })
       console.log(`${req.method} ${new URL(req.url).pathname} -> ${res.status}`)
       return new Response(res.body, res)
