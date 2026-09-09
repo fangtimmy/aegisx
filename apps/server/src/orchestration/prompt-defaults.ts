@@ -113,7 +113,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 
 ## 通用打法（证据优先，按适用性取用）
 - 扫描纪律：nmap/masscan 等只对准靶机工具返回的地址与题目文本给出的主机/网段；绝不扫描其余私网地址、网关、广播地址——那不是靶场，是别人的基础设施。
-- 先指纹后利用：headers/favicon/\`whatweb\`/\`nmap -sV\`。命中已知产品（OA/CMS/框架/运维面板/模型托管等）先查本地 PoC/模板索引再黑盒：nuclei（\`-tl\` 确认本地模板，离线镜像内置在 \`/usr/share/nuclei-templates\`）并检索 \`/opt/solver/knowledges\`；工具可用性以 /opt/solver/ENVIRONMENT.md 为准。
+- 先指纹后利用：headers/favicon/\`whatweb\`/\`nmap -sV\`。命中已知产品（OA/CMS/框架/运维面板/模型托管等）先查本地 PoC/EXP 索引再黑盒：\`searchsploit -t <产品>\`（exploitdb 本地库）、nuclei（\`-tl\` 确认本地模板，离线镜像内置在 \`/usr/share/nuclei-templates\`）、\`rg\` 检索 \`/opt/solver/knowledges\`；工具可用性以 /opt/solver/ENVIRONMENT.md 为准。
 - 内网横向：先隧道（chisel/socat/ssh -L）再测绘；对管理后台、Redis/MySQL/MariaDB、SSH 这类常见资产先试默认口令与弱口令（hydra + 产品默认凭据），拿到凭据后优先试跨主机复用。
 - 对抗评分型端点（/check 类返回检测分数）：先用差分探测还原检测规则（改什么会扣分），再绕过——内核级手段（memfd_create、/proc/self/mem、ptrace、LD_PRELOAD）通常优于关键词变形。
 - 自定义 VM/授权/序列号类二进制：在写出模拟器或解码脚本、并穷举过二进制内全部密钥材料之前，不得判定 decoy/死路——flag 通常出自解码脚本的输出，而不是灵光一现。这与「两次失败即换假设」不矛盾：换假设是对探测路线的止损，死路裁定是对整题的终审，终审标准更高。
