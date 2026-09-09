@@ -32,12 +32,12 @@ import { Spinner } from "@/components/ui/spinner"
 import { formatCost, formatTokens } from "@/features/runs/agent-overview"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
 
-import { roleLabel, schedulerStatusLabel } from "./event-agents-shared"
+import {
+  roleLabel,
+  POLL_INTERVAL_MS,
+  schedulerStatusLabel,
+} from "./event-agents-shared"
 import { ErrorState, isChallengeSolved } from "./event-shared"
-
-/** Overview poll cadence (ms). Unconditional — the scheduler acts server-side,
-   so the fleet/queue/usage must refresh regardless of locally-known state. */
-const POLL_INTERVAL_MS = 5000
 
 /** Scheduler endpoint payload (the scheduler agent is `agent`). */
 type SchedulerData = SchedulerInfo

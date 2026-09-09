@@ -160,6 +160,8 @@ function buildAgentsGraph({
   const rawNodes: GraphFlowNode[] = []
   const rawEdges: Edge[] = []
   const dims: Record<string, { width: number; height: number }> = {}
+  /** Archive challenge leaves — reflowed into a grid after the dagre pass. */
+  const archiveLeafIds = new Set<string>()
   const addNode = (
     id: string,
     type: "active" | "archive" | "scheduler" | "challenge" | "agent",
@@ -219,7 +221,8 @@ function buildAgentsGraph({
     id: string,
     root: string,
     challengeId: string,
-    attempts: AgentSummary[]
+    attempts: AgentSummary[],
+    { withAgents = true }: { withAgents?: boolean } = {}
   ) => {
     const meta = challengeById.get(challengeId)
     addNode(id, "challenge", {
@@ -231,9 +234,12 @@ function buildAgentsGraph({
       agentCount: attempts.length,
     })
     addEdge(`e:${id}`, root, id, EDGE_STYLE.challenge)
-    for (const agent of attempts) addAgent(agent, id)
+    // Archive challenges render their attempts as the node's count badge
+    // instead of 1:1 leaf nodes — a few hundred agent nodes can neither fit
+    // the viewport nor stay readable (details live one click away on tasks).
+    if (withAgents) for (const agent of attempts) addAgent(agent, id)
+    else archiveLeafIds.add(id)
   }
-
   // Layer 1: the 活跃 root. Layer 2 under it: the scheduler (live or the
   // "未启用" placeholder) + challenges with live agents. Layer 3: each live
   // attempt hangs directly off its challenge.
@@ -263,21 +269,83 @@ function buildAgentsGraph({
       open: archiveOpen,
     })
     if (archiveOpen) {
-      if (schedFinished)
+      if (schedFinished) {
         addSchedulerNode(ARCHIVED_SCHED_NODE_ID, schedAgent, ARCHIVE_NODE_ID)
+        // Grid slot keeps it from dangling at dagre's single-column depth,
+        // which would stretch the fit bounds far below the leaf grid.
+        archiveLeafIds.add(ARCHIVED_SCHED_NODE_ID)
+      }
       const finishedByChallenge = groupByChallenge(finished)
       for (const challengeId of challengeIdsOf(finishedByChallenge)) {
         addChallengeNode(
           archivedChallengeNodeId(challengeId),
           ARCHIVE_NODE_ID,
           challengeId,
-          finishedByChallenge.get(challengeId)!
+          finishedByChallenge.get(challengeId)!,
+          { withAgents: false }
         )
       }
     }
   }
 
-  return { nodes: layoutWithDagre(rawNodes, rawEdges, dims), edges: rawEdges }
+  return {
+    nodes: layoutArchiveLeafGrid(
+      layoutWithDagre(rawNodes, rawEdges, dims),
+      dims,
+      archiveLeafIds
+    ),
+    edges: rawEdges,
+  }
+}
+
+/** Reflow the archive challenge leaves into a grid anchored right of the
+ * archive root. Dagre stacks same-rank leaves into one column, which pushes
+ * a large archive far outside any readable zoom; a wrapped grid keeps the
+ * whole branch visible at roughly full size. */
+function layoutArchiveLeafGrid(
+  nodes: GraphFlowNode[],
+  dims: Record<string, { width: number; height: number }>,
+  leafIds: Set<string>
+): GraphFlowNode[] {
+  if (leafIds.size === 0) return nodes
+  const root = nodes.find((node) => node.id === ARCHIVE_NODE_ID)
+  const leaves = nodes.filter((node) => leafIds.has(node.id))
+  if (!root) return nodes
+
+  const GAP = 24
+  const columns = Math.min(
+    8,
+    Math.max(1, Math.ceil(Math.sqrt(leaves.length * 0.6)))
+  )
+  const rows = Math.ceil(leaves.length / columns)
+  // Mixed node kinds (scheduler + challenges): step by the largest so cells
+  // never overlap.
+  const step = leaves.reduce(
+    (acc, node) => {
+      const dim = dims[node.id] ?? { width: 208, height: 60 }
+      return {
+        width: Math.max(acc.width, dim.width),
+        height: Math.max(acc.height, dim.height),
+      }
+    },
+    { width: 0, height: 0 }
+  )
+  const anchorX = root.position.x + (dims[root.id]?.width ?? 176) + 48
+  const anchorY = root.position.y + (dims[root.id]?.height ?? 56) / 2
+  const gridHeight = rows * step.height + (rows - 1) * GAP
+  return nodes.map((node) => {
+    if (!leafIds.has(node.id)) return node
+    const index = leaves.indexOf(node)
+    const column = index % columns
+    const row = Math.floor(index / columns)
+    return {
+      ...node,
+      position: {
+        x: anchorX + column * (step.width + GAP),
+        y: anchorY - gridHeight / 2 + row * (step.height + GAP),
+      },
+    }
+  })
 }
 
 function GraphNodeShell({
@@ -334,13 +402,13 @@ function ChallengeGraphNode({ data }: NodeProps<ChallengeFlowNode>) {
         <span className="block truncate text-sm leading-tight font-medium">
           {d.name}
         </span>
-        <span className="block truncate text-[11px] leading-tight text-muted-foreground">
+        <span className="block truncate text-2xs leading-tight text-muted-foreground">
           {d.category ?? "未分类"}
           {d.points != null ? ` · ${d.points} 分` : ""}
         </span>
       </span>
       <Badge size="sm" variant="secondary">
-        {d.agentCount} agent
+        ×{d.agentCount}
       </Badge>
     </GraphNodeShell>
   )
@@ -353,7 +421,7 @@ function ActiveGraphNode({ data }: NodeProps<ActiveFlowNode>) {
       <Activity className="size-4 shrink-0 text-primary" />
       <span className="min-w-0 flex-1 truncate text-sm font-medium">活跃</span>
       <Badge size="sm" variant="secondary">
-        {d.count} agent
+        ×{d.count}
       </Badge>
     </GraphNodeShell>
   )
@@ -389,7 +457,7 @@ function AgentGraphNode({ data }: NodeProps<AgentFlowNode>) {
         <span className="block truncate text-sm leading-tight">
           {agent.name ?? roleLabel(agent.role)}
         </span>
-        <span className="block truncate text-[11px] leading-tight text-muted-foreground">
+        <span className="block truncate text-2xs leading-tight text-muted-foreground">
           {agentShortId(agent.id)} ·{" "}
           {agent.source === "scheduler" ? "调度" : "手动"}
         </span>
@@ -453,7 +521,9 @@ function GraphCanvas({
       fitView
       fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
       key={graphKey}
-      minZoom={0.2}
+      // An expanded archive is a very tall single-column layout; the fit must
+      // be allowed to zoom out far enough that the whole graph stays visible.
+      minZoom={0.1}
       nodeTypes={GRAPH_NODE_TYPES}
       nodes={graph.nodes}
       nodesConnectable={false}
@@ -551,7 +621,7 @@ export function AgentsGraph({
           </span>
         </CardTitle>
         <CardDescription>
-          活跃/已归档 → 题目/调度者 → agents，点击进入任务
+          活跃与已归档的运行按题目分组，点击节点进入对应任务；归档节点可展开。
         </CardDescription>
       </CardHeader>
       <CardPanel className="relative min-h-0 flex-1 overflow-hidden p-0">

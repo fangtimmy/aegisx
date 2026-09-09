@@ -226,7 +226,7 @@ export function ProviderDetail({
             </Button>
             <AlertDialog>
               <AlertDialogTrigger
-                render={<Button type="button" variant="outline" />}
+                render={<Button type="button" variant="destructive-outline" />}
               >
                 <Trash2 /> 删除供应商
               </AlertDialogTrigger>

@@ -3,7 +3,7 @@ import { Copy, Flag, Plus, Trash2 } from "lucide-react"
 import { useState } from "react"
 
 import { type Challenge, type ChallengeFlag, challengesApi, keys } from "@/api"
-import { IconTooltip } from "@/components/shell/product-header"
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import {
   AlertDialog,
   AlertDialogClose,

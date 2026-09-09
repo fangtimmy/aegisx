@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { schedulerStatusLabel } from "@/features/events/event-agents-shared"
 import { overallSolved } from "@/features/events/event-shared"
+import { agentStatusVisual } from "@/features/runs/agent-overview"
 import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -52,9 +53,9 @@ export function formatAgo(iso: string, nowMs: number): string {
   const ms = nowMs - new Date(iso).getTime()
   if (ms < 60_000) return "刚刚"
   const minutes = Math.floor(ms / 60_000)
-  if (minutes < 60) return `${minutes}m 前`
+  if (minutes < 60) return `${minutes} 分钟前`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h 前`
+  if (hours < 24) return `${hours} 小时前`
   return formatTime(iso)
 }
 
@@ -171,16 +172,12 @@ export function TaskList({
     ? "bg-muted-foreground/40"
     : fleet.config.paused
       ? "bg-warning"
-      : schedulerAgent.status === "running"
-        ? "bg-info"
-        : "bg-success"
+      : agentStatusVisual[schedulerAgent.status].dot
   const schedTextClass = !schedActive
     ? "text-muted-foreground"
     : fleet.config.paused
       ? "text-warning"
-      : schedulerAgent.status === "running"
-        ? "text-info"
-        : "text-success"
+      : agentStatusVisual[schedulerAgent.status].text
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
@@ -245,7 +242,7 @@ export function TaskList({
 
 function GroupHeader({ label, count }: { label: string; count: number }) {
   return (
-    <div className="flex items-center gap-1.5 border-t px-2 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase first:border-t-0">
+    <div className="flex items-center gap-1.5 border-t px-2 pt-2 pb-1 text-2xs font-medium tracking-wide text-muted-foreground uppercase first:border-t-0">
       {label}
       <Badge size="sm" variant="secondary">
         {count}
@@ -271,9 +268,9 @@ function TaskRowView({
     meta?.flags.filter((flag) => flag.status === "accepted").length ?? 0
 
   const dotClass = row.runningCount
-    ? "bg-info"
+    ? agentStatusVisual.running.dot
     : row.liveCount
-      ? "bg-success"
+      ? agentStatusVisual.idle.dot
       : "bg-muted-foreground/40"
 
   const deadline =
@@ -304,7 +301,7 @@ function TaskRowView({
           </span>
         )}
       </span>
-      <span className="flex min-w-0 items-center gap-1.5 pl-4 text-[11px] text-muted-foreground">
+      <span className="flex min-w-0 items-center gap-1.5 pl-4 text-2xs text-muted-foreground">
         <span className="shrink-0 tabular-nums">{row.agents.length} 尝试</span>
         {deadline && (
           <span className={cn("shrink-0 tabular-nums", deadline.className)}>

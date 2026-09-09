@@ -14,7 +14,7 @@ import {
 import { useState } from "react"
 
 import { type Challenge, challengesApi, keys, type SolveState } from "@/api"
-import { IconTooltip } from "@/components/shell/product-header"
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -45,7 +45,10 @@ import {
   MenuTrigger,
 } from "@/components/ui/menu"
 import { SpawnAgentDialog } from "@/features/runs"
-import { agentStatusLabel, statusVariant } from "@/features/runs/agent-overview"
+import {
+  agentStatusLabel,
+  agentStatusVisual,
+} from "@/features/runs/agent-overview"
 import { toast } from "@/lib/toast"
 
 import { ChallengeDialog } from "./challenge-dialog"
@@ -322,7 +325,7 @@ export function ChallengeCard({
                   <Badge
                     key={status}
                     size="sm"
-                    variant={statusVariant(runStatus)}
+                    variant={agentStatusVisual[runStatus].badge}
                   >
                     {count}
                     <Icon className="size-3" />

@@ -11,6 +11,7 @@ import { useState } from "react"
 
 import { keys, type QueueItem, schedulerApi } from "@/api"
 import { ListRow } from "@/components/list-row"
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import {
   AlertDialog,
   AlertDialogClose,
@@ -140,48 +141,52 @@ export function QueueList({
             </ListRow>
             {editable ? (
               <span className="flex shrink-0 items-center gap-0.5">
-                <Button
-                  aria-label="上移"
-                  disabled={reorderMutation.isPending}
-                  onClick={() => move(item, -1)}
-                  size="icon-xs"
-                  title="上移"
-                  type="button"
-                  variant="ghost"
-                >
-                  <ArrowUp />
-                </Button>
-                <Button
-                  aria-label="下移"
-                  disabled={reorderMutation.isPending}
-                  onClick={() => move(item, 1)}
-                  size="icon-xs"
-                  title="下移"
-                  type="button"
-                  variant="ghost"
-                >
-                  <ArrowDown />
-                </Button>
-                <Button
-                  aria-label="编辑队列项"
-                  onClick={() => setEditing(item)}
-                  size="icon-xs"
-                  title="编辑提示词 / 超时"
-                  type="button"
-                  variant="ghost"
-                >
-                  <Pencil />
-                </Button>
-                <Button
-                  aria-label="移除队列项"
-                  onClick={() => setRemoving(item)}
-                  size="icon-xs"
-                  title="移除"
-                  type="button"
-                  variant="ghost"
-                >
-                  <Trash2 />
-                </Button>
+                <IconTooltip label="上移">
+                  <Button
+                    aria-label="上移"
+                    disabled={reorderMutation.isPending}
+                    onClick={() => move(item, -1)}
+                    size="icon-xs"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <ArrowUp />
+                  </Button>
+                </IconTooltip>
+                <IconTooltip label="下移">
+                  <Button
+                    aria-label="下移"
+                    disabled={reorderMutation.isPending}
+                    onClick={() => move(item, 1)}
+                    size="icon-xs"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <ArrowDown />
+                  </Button>
+                </IconTooltip>
+                <IconTooltip label="编辑提示词 / 超时">
+                  <Button
+                    aria-label="编辑队列项"
+                    onClick={() => setEditing(item)}
+                    size="icon-xs"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Pencil />
+                  </Button>
+                </IconTooltip>
+                <IconTooltip label="移除队列项">
+                  <Button
+                    aria-label="移除队列项"
+                    onClick={() => setRemoving(item)}
+                    size="icon-xs"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Trash2 />
+                  </Button>
+                </IconTooltip>
               </span>
             ) : null}
           </div>

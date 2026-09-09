@@ -2,25 +2,9 @@ import { Settings, ShieldCheck } from "lucide-react"
 import { Link, useParams } from "react-router"
 
 import { Button } from "@/components/ui/button"
-import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
 import { ActivityLogButton } from "@/features/activity/activity-log"
 
-export function IconTooltip({
-  label,
-  children,
-}: {
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex" />}>
-        {children}
-      </TooltipTrigger>
-      <TooltipPopup>{label}</TooltipPopup>
-    </Tooltip>
-  )
-}
+import { IconTooltip } from "./icon-tooltip"
 
 export function ProductHeader({ eventName }: { eventName?: string }) {
   const { eventId } = useParams()

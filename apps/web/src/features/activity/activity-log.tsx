@@ -45,7 +45,7 @@ function dayLabel(iso: string): string {
 function DayHeader({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-      <span className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+      <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
         {label}
       </span>
       <div className="h-px flex-1 bg-border" />
@@ -211,7 +211,7 @@ export function ActivityLogButton() {
       >
         <ScrollText />
         {unreadCount > 0 && (
-          <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] leading-none font-medium text-primary-foreground tabular-nums">
+          <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-2xs leading-none font-medium text-primary-foreground tabular-nums">
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         )}

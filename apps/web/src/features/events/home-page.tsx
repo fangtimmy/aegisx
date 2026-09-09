@@ -45,6 +45,7 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
+import { formatTime } from "@/lib/format"
 
 import { ErrorState } from "./event-shared"
 
@@ -55,11 +56,6 @@ const platformLabels = {
   tsecbench: "TSecBench",
   dasctf: "DASCTF",
 } as const
-
-const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  dateStyle: "medium",
-  timeStyle: "short",
-})
 
 function EventDialog() {
   const [open, setOpen] = useState(false)
@@ -196,7 +192,7 @@ function EventCard({ event }: { event: EventSummary }) {
             <Clock3 className="size-3.5 shrink-0" />
             更新于
             <time dateTime={event.lastActivityAt}>
-              {dateTimeFormatter.format(new Date(event.lastActivityAt))}
+              {formatTime(event.lastActivityAt)}
             </time>
           </span>
           {event.platform && (
@@ -204,7 +200,7 @@ function EventCard({ event }: { event: EventSummary }) {
               <RefreshCw className="size-3.5 shrink-0" />
               {event.platform.credentialConfigured
                 ? event.platform.lastSyncedAt
-                  ? `已同步 ${dateTimeFormatter.format(new Date(event.platform.lastSyncedAt))}`
+                  ? `已同步 ${formatTime(event.platform.lastSyncedAt)}`
                   : "未同步"
                 : "需要凭据"}
             </span>

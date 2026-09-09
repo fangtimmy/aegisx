@@ -6,6 +6,9 @@
   --font-sans: var(--font-sans);
   --font-heading: var(--font-sans);
   --font-mono: var(--font-mono);
+  /* Micro copy (group headers, badges, dense meta). Replaces bare
+     text-[10px]/text-[11px] so the small end of the scale has one token. */
+  --text-2xs: 0.6875rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-sidebar-ring: var(--sidebar-ring);

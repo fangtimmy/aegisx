@@ -113,7 +113,7 @@ export function CodePreview({
         dangerouslySetInnerHTML={{ __html: html }}
       />
       {normalized.footer ? (
-        <p className="border-t px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <p className="border-t px-2.5 py-1.5 font-mono text-2xs text-muted-foreground">
           {normalized.footer.trim()}
         </p>
       ) : null}

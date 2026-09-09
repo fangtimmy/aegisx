@@ -12,6 +12,7 @@ import {
 import { Controller, useForm } from "react-hook-form"
 
 import type { ProviderConnection } from "@/api"
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -271,30 +272,33 @@ export function ProviderModels({
                         )}
                       </div>
                     </div>
-                    <Button
-                      aria-label={`编辑 ${model.label}`}
-                      onClick={() => openEditModel(model)}
-                      size="icon"
-                      title="编辑模型"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <Pencil />
-                    </Button>
-                    <AlertDialog>
-                      <AlertDialogTrigger
-                        render={
-                          <Button
-                            aria-label={`删除 ${model.label}`}
-                            size="icon"
-                            title="删除模型"
-                            type="button"
-                            variant="ghost"
-                          />
-                        }
+                    <IconTooltip label="编辑模型">
+                      <Button
+                        aria-label={`编辑 ${model.label}`}
+                        onClick={() => openEditModel(model)}
+                        size="icon"
+                        type="button"
+                        variant="ghost"
                       >
-                        <Trash2 />
-                      </AlertDialogTrigger>
+                        <Pencil />
+                      </Button>
+                    </IconTooltip>
+                    <AlertDialog>
+                      <IconTooltip label="删除模型">
+                        <AlertDialogTrigger
+                          render={
+                            <Button
+                              aria-label={`删除 ${model.label}`}
+                              className="text-destructive"
+                              size="icon"
+                              type="button"
+                              variant="ghost"
+                            />
+                          }
+                        >
+                          <Trash2 />
+                        </AlertDialogTrigger>
+                      </IconTooltip>
                       <AlertDialogPopup>
                         <AlertDialogHeader>
                           <AlertDialogTitle>

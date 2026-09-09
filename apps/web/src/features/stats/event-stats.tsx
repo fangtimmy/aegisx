@@ -38,6 +38,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -48,12 +49,15 @@ import {
 } from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip"
+import { ErrorState } from "@/features/events/event-shared"
 import {
   agentStatusLabel,
+  agentStatusVisual,
   formatCost,
   formatTokens,
 } from "@/features/runs/agent-overview"
-import { formatTime } from "@/lib/format"
+import { formatDurationClock, formatTime } from "@/lib/format"
+import { cn } from "@/lib/utils"
 
 /** Statistics tab: derived per-event analytics (score / billing / efficiency /
  * concurrency / timeline / collaboration). No polling — a derived view that
@@ -65,21 +69,16 @@ export function EventStatsPanel({ eventId }: { eventId: string }) {
   })
 
   if (stats.isPending) {
-    return null
-  }
-  if (stats.error) {
     return (
-      <div className="flex flex-col items-center gap-3 py-16">
-        <p className="text-sm text-muted-foreground">{stats.error.message}</p>
-        <Button
-          onClick={() => void stats.refetch()}
-          size="sm"
-          variant="outline"
-        >
-          重试
-        </Button>
+      <div className="flex flex-col gap-4 p-1">
+        <Skeleton className="h-44 rounded-2xl" />
+        <Skeleton className="h-64 rounded-2xl" />
+        <Skeleton className="h-56 rounded-2xl" />
       </div>
     )
+  }
+  if (stats.error) {
+    return <ErrorState error={stats.error} retry={() => stats.refetch()} />
   }
 
   const data = stats.data.stats
@@ -133,7 +132,14 @@ function OverviewCards({ data }: { data: EventStats }) {
     data.window.start && data.window.end
       ? Math.max(0, Date.parse(data.window.end) - Date.parse(data.window.start))
       : 0
-  const cells: Array<{ label: string; value: string; hint?: string }> = [
+  const cells: Array<{
+    label: string
+    value: string
+    hint?: string
+    /** Efficiency ratios fill the 6-col xl grid two cells wide, so 9 cells
+     * end flush instead of stranding the last row's right half. */
+    wide?: boolean
+  }> = [
     {
       label: "解题进度",
       value: `${o.challengesSolved} / ${o.challengesTotal}`,
@@ -152,7 +158,7 @@ function OverviewCards({ data }: { data: EventStats }) {
     },
     {
       label: "活动时长",
-      value: formatDuration(durationMs),
+      value: durationMs > 0 ? formatDurationClock(durationMs) : "—",
       hint:
         data.window.start && data.window.end
           ? `${formatTime(data.window.start)} 起`
@@ -168,12 +174,14 @@ function OverviewCards({ data }: { data: EventStats }) {
     cells.push({
       label: "费用 / 解出",
       value: formatCost(o.cost / o.challengesSolved),
+      wide: true,
     })
     if (o.pointsEarned > 0) {
       cells.push({
         label: "费用 / 得分",
         value: formatCost(o.cost / o.pointsEarned),
         hint: "每得一分的花费",
+        wide: true,
       })
     }
     cells.push({
@@ -181,13 +189,20 @@ function OverviewCards({ data }: { data: EventStats }) {
       value: formatTokens(
         (o.inputTokens + o.outputTokens) / o.challengesSolved
       ),
+      wide: true,
     })
   }
   return (
     <Card>
       <CardPanel className="grid grid-cols-2 gap-y-3 sm:grid-cols-3 xl:grid-cols-6 xl:divide-x">
         {cells.map((cell) => (
-          <div className="flex flex-col gap-0.5 px-4 py-3" key={cell.label}>
+          <div
+            className={cn(
+              "flex flex-col gap-0.5 px-4 py-3",
+              cell.wide && "xl:col-span-2"
+            )}
+            key={cell.label}
+          >
             <span className="text-xs text-muted-foreground">{cell.label}</span>
             <span className="font-semibold tabular-nums">{cell.value}</span>
             {cell.hint && (
@@ -470,7 +485,7 @@ function AgentTimeline({ data }: { data: EventStats }) {
       </CardFrameHeader>
       <Card>
         <CardPanel className="flex flex-col gap-3">
-          <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+          <div className="flex justify-between font-mono text-2xs text-muted-foreground">
             <span>{formatTime(new Date(domainStart).toISOString())}</span>
             <span>{formatTime(new Date(domainEnd).toISOString())}</span>
           </div>
@@ -510,12 +525,12 @@ function AgentTimeline({ data }: { data: EventStats }) {
                             <span className="font-medium">
                               {span.name} · {agentStatusLabel(span.status)}
                             </span>
-                            <span className="font-mono text-[11px] text-muted-foreground">
+                            <span className="font-mono text-2xs text-muted-foreground">
                               {span.model}
                             </span>
                             <span className="tabular-nums">
                               {formatTime(span.start)} → {formatTime(span.end)}
-                              （{formatDuration(end - start)}）
+                              （{formatDurationClock(end - start)}）
                             </span>
                           </span>
                         </TooltipPopup>
@@ -533,11 +548,7 @@ function AgentTimeline({ data }: { data: EventStats }) {
 }
 
 function spanColor(span: EventStatsAgentSpan): string {
-  if (span.status === "running") return "bg-success"
-  if (span.status === "idle") return "bg-secondary"
-  if (span.status === "aborted" || span.status === "failed")
-    return "bg-destructive"
-  return "bg-primary"
+  return agentStatusVisual[span.status].span
 }
 
 /** Concurrent running solver agents over the event window (step series). */
@@ -566,7 +577,7 @@ function ConcurrencyChart({ data }: { data: EventStats }) {
           运行中的求解者 Agent 数量；调度 {data.spawnSource.scheduler} · 手动{" "}
           {data.spawnSource.manual} · 排队均候{" "}
           {data.queue.avgWaitMs !== null
-            ? formatDuration(data.queue.avgWaitMs)
+            ? formatDurationClock(data.queue.avgWaitMs)
             : "—"}
         </CardFrameDescription>
       </CardFrameHeader>
@@ -652,7 +663,7 @@ function AgentEfficiency({ data }: { data: EventStats }) {
         <CardFrameDescription>
           {`${solver.count} 求解者 ${formatCost(solver.cost)}${share(solver.cost)} · ${orchestrator.count} 调度者 ${formatCost(orchestrator.cost)}${share(orchestrator.cost)}`}
           {idleRows.length > 0 &&
-            ` · ${idleRows.length} 个空转中（合计 ${formatDuration(idleTotal)}）`}
+            ` · ${idleRows.length} 个空转中（合计 ${formatDurationClock(idleTotal)}）`}
         </CardFrameDescription>
       </CardFrameHeader>
       <Card>
@@ -682,7 +693,7 @@ function AgentEfficiency({ data }: { data: EventStats }) {
                       </span>
                       {row.error && (
                         <span
-                          className="truncate text-[10px] text-destructive"
+                          className="truncate text-2xs text-destructive"
                           title={row.error}
                         >
                           {row.error}
@@ -690,7 +701,7 @@ function AgentEfficiency({ data }: { data: EventStats }) {
                       )}
                       {!row.error && row.summary && (
                         <span
-                          className="truncate text-[10px] text-muted-foreground"
+                          className="truncate text-2xs text-muted-foreground"
                           title={row.summary}
                         >
                           {row.summary}
@@ -718,10 +729,10 @@ function AgentEfficiency({ data }: { data: EventStats }) {
                     {row.toolCalls}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {formatDuration(row.durationMs)}
+                    {formatDurationClock(row.durationMs)}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {row.idleMs > 0 ? formatDuration(row.idleMs) : "—"}
+                    {row.idleMs > 0 ? formatDurationClock(row.idleMs) : "—"}
                   </TableCell>
                 </TableRow>
               ))}
@@ -958,7 +969,7 @@ function ChallengeEfficiency({ data }: { data: EventStats }) {
                     {row.messages}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {formatDuration(row.durationMs)}
+                    {formatDurationClock(row.durationMs)}
                   </TableCell>
                 </TableRow>
               ))}
@@ -1085,7 +1096,7 @@ function CollaborationCards({ data }: { data: EventStats }) {
                   <Bar dataKey="count" fill="var(--primary)" />
                 </BarChart>
               </ResponsiveContainer>
-              <p className="mt-1 text-[10px] text-muted-foreground">
+              <p className="mt-1 text-2xs text-muted-foreground">
                 峰值 {maxMessages} 条/小时
               </p>
             </CardPanel>
@@ -1177,15 +1188,6 @@ function CollaborationCards({ data }: { data: EventStats }) {
       </div>
     </CardFrame>
   )
-}
-
-function formatDuration(ms: number): string {
-  if (ms <= 0) return "—"
-  const minutes = Math.round(ms / 60_000)
-  if (minutes < 60) return `${minutes} 分`
-  const hours = minutes / 60
-  if (hours < 48) return `${hours.toFixed(1)} 时`
-  return `${(hours / 24).toFixed(1)} 天`
 }
 
 /** Compact HH:mm tick label (cross-day ticks fall back to the full format). */

@@ -126,7 +126,7 @@ function MessageRow({
       {first ? (
         <MessageAvatar message={message} />
       ) : (
-        <span className="top-0.5 left-3 hidden w-9 text-right text-[10px] leading-6 text-muted-foreground group-hover/row:block">
+        <span className="top-0.5 left-3 hidden w-9 text-right text-2xs leading-6 text-muted-foreground group-hover/row:block">
           {timeOf(message.createdAt)}
         </span>
       )}
@@ -315,7 +315,7 @@ export function ChannelComposer({ channelKey }: { channelKey: string }) {
         value={text}
       >
         <div
-          className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 text-[11px] leading-tight text-muted-foreground"
+          className="flex shrink-0 cursor-pointer flex-col items-center gap-0.5 text-2xs leading-tight text-muted-foreground"
           title="紧急消息立即投递；关闭后等待下一次合并投递"
         >
           <Switch
@@ -590,7 +590,7 @@ function RailItem({
       <span className="truncate">{channel.label}</span>
       {channel.liveAgentCount !== null && (
         <span
-          className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-[11px] leading-4 text-muted-foreground"
+          className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 font-mono text-2xs leading-4 text-muted-foreground"
           title={`同题共享频道 · ${channel.liveAgentCount} 个 live agent`}
         >
           <Users className="size-2.5" aria-hidden />
@@ -600,7 +600,7 @@ function RailItem({
       {unseenCount > 0 && (
         <span
           aria-label={`${unseenCount} 条未读`}
-          className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[11px] leading-none font-medium text-primary-foreground tabular-nums"
+          className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-2xs leading-none font-medium text-primary-foreground tabular-nums"
         >
           {unseenCount > 99 ? "99+" : unseenCount}
         </span>
@@ -629,7 +629,7 @@ function ChannelRail({
     <div className="flex w-48 shrink-0 flex-col gap-2 overflow-y-auto border-r p-2">
       {sections.map((section) => (
         <div className="flex flex-col gap-0.5" key={section.label}>
-          <p className="px-2 pt-1 pb-0.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          <p className="px-2 pt-1 pb-0.5 text-2xs font-medium tracking-wide text-muted-foreground uppercase">
             {section.label}
           </p>
           {section.items.map((channel) => (

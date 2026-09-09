@@ -16,6 +16,7 @@ import type {
   ModelRef,
 } from "@/api"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import {
   AlertDialog,
   AlertDialogClose,
@@ -385,23 +386,24 @@ export function Conversation(props: ConversationProps) {
             >
               会话 {index + 1}
               {session.messageCount > 0 && (
-                <span className="font-mono text-[11px] text-muted-foreground">
+                <span className="font-mono text-2xs text-muted-foreground">
                   {session.messageCount}
                 </span>
               )}
             </Toggle>
           ))}
-          <Button
-            aria-label="新建会话"
-            disabled={running || newSession.isPending}
-            onClick={() => newSession.mutate()}
-            size="icon-sm"
-            title="新建会话 (/new)"
-            type="button"
-            variant="ghost"
-          >
-            <Plus />
-          </Button>
+          <IconTooltip label="新建会话 (/new)">
+            <Button
+              aria-label="新建会话"
+              disabled={running || newSession.isPending}
+              onClick={() => newSession.mutate()}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            >
+              <Plus />
+            </Button>
+          </IconTooltip>
         </div>
       )}
       <div className="min-h-0 flex-1">

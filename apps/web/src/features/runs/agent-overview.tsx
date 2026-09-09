@@ -1,9 +1,50 @@
 import type { AgentStatus } from "@/api"
 
-export function statusVariant(status: AgentStatus) {
-  if (status === "running") return "info" as const
-  if (status === "idle") return "success" as const
-  return "secondary" as const
+type AgentStatusTone = {
+  /** Inline glyph / status-word color. */
+  text: string
+  /** Status-dot background (task list rows). */
+  dot: string
+  /** Solid span / bar background (stats timeline). */
+  span: string
+  /** Badge variant. */
+  badge: "info" | "secondary" | "success" | "warning" | "destructive"
+}
+
+/** The single status→color mapping behind every status surface (icons, dots,
+ * badges, stats spans): blue = working, neutral = waiting, green/amber/red =
+ * terminal outcome. Each view picks the channel it renders. */
+export const agentStatusVisual: Record<AgentStatus, AgentStatusTone> = {
+  running: {
+    text: "text-info",
+    dot: "bg-info",
+    span: "bg-info",
+    badge: "info",
+  },
+  idle: {
+    text: "text-muted-foreground",
+    dot: "bg-muted-foreground/60",
+    span: "bg-secondary",
+    badge: "secondary",
+  },
+  completed: {
+    text: "text-success",
+    dot: "bg-success",
+    span: "bg-success",
+    badge: "success",
+  },
+  aborted: {
+    text: "text-warning",
+    dot: "bg-warning",
+    span: "bg-warning",
+    badge: "warning",
+  },
+  failed: {
+    text: "text-destructive",
+    dot: "bg-destructive",
+    span: "bg-destructive",
+    badge: "destructive",
+  },
 }
 
 /** The single status vocabulary: every view (badges, dots, labels) renders

@@ -104,7 +104,7 @@ export function ConversationPane({
             <button
               aria-pressed={onlyActive}
               className={cn(
-                "rounded-sm border px-1.5 py-0.5 text-[11px] transition-colors hover:bg-accent",
+                "rounded-sm border px-1.5 py-0.5 text-2xs transition-colors hover:bg-accent",
                 onlyActive && "border-transparent bg-secondary font-medium"
               )}
               onClick={() => setOnlyActive((value) => !value)}
@@ -112,7 +112,7 @@ export function ConversationPane({
             >
               仅活跃
             </button>
-            <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
+            <span className="ml-auto text-2xs text-muted-foreground tabular-nums">
               {visible.length}
             </span>
           </div>
@@ -230,7 +230,7 @@ function AgentListRow({
         <span className="block truncate text-xs font-medium">
           #{index + 1} {shortModel(agent.model)}
         </span>
-        <span className="block truncate text-[11px] text-muted-foreground">
+        <span className="block truncate text-2xs text-muted-foreground">
           {formatAgo(agent.updatedAt, nowMs)}
         </span>
       </span>

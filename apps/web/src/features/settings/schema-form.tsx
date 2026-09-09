@@ -84,7 +84,7 @@ function SettingMeta({ def }: { def: SettingDef }) {
           {def.description}
         </p>
       )}
-      <code className="block text-[11px] leading-snug text-muted-foreground">
+      <code className="block text-2xs leading-snug text-muted-foreground">
         {def.key}
       </code>
     </div>

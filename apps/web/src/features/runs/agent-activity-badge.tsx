@@ -2,9 +2,8 @@ import { LoaderCircle } from "lucide-react"
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 
 import type { AgentStatus } from "@/api"
+import { formatDuration } from "@/lib/format"
 import type { ConversationStore } from "@/stream/conversation-store"
-
-import { formatDuration } from "./timeline"
 
 /** Epoch ms of the last user message (the "time since your last message"
  * anchor for the running-turn footer). */

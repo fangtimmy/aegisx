@@ -1,7 +1,7 @@
 import { Download, FileArchive, Trash2 } from "lucide-react"
 
 import { type Attachment } from "@/api"
-import { IconTooltip } from "@/components/shell/product-header"
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import {
   AlertDialog,
   AlertDialogClose,

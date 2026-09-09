@@ -59,19 +59,13 @@ import {
   type ToolBlock,
   toolStatusLabel,
 } from "@/domain/conversation"
+import { formatDuration } from "@/lib/format"
 import { useMarkdownPrefs } from "@/lib/markdown-prefs"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
 
 import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
-
-export function formatDuration(durationMs: number) {
-  const seconds = durationMs / 1000
-  if (seconds < 10) return `${Math.max(0.1, seconds).toFixed(1)}s`
-  if (seconds < 60) return `${Math.round(seconds)}s`
-  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
-}
 
 function formatClock(value: string | number | undefined) {
   if (value === undefined) return null

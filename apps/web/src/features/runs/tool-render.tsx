@@ -166,7 +166,7 @@ function DiffPreview({ diff }: { diff: string }) {
   return (
     <ToolScroll>
       {(path || note || additions > 0 || deletions > 0) && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b px-2.5 py-1.5 font-mono text-2xs text-muted-foreground">
           {path ? (
             <span
               className="min-w-0 truncate text-foreground"

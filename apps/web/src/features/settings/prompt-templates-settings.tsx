@@ -253,7 +253,7 @@ function PromptTemplateRow({
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium">{meta.title}</div>
         <p className="text-xs text-muted-foreground">{meta.description}</p>
-        <code className="text-[11px] text-muted-foreground">
+        <code className="text-2xs text-muted-foreground">
           builtin / {templateKey}
         </code>
       </div>
@@ -297,7 +297,7 @@ function PromptTemplateRow({
               variables={vars}
             />
             <div className="mt-2">
-              <code className="text-[11px] text-muted-foreground">
+              <code className="text-2xs text-muted-foreground">
                 builtin / {templateKey}
               </code>
             </div>

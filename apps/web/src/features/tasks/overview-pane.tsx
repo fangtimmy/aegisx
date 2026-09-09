@@ -382,7 +382,7 @@ function RosterRow({
           <span className="truncate font-medium">
             {agent.name ?? `agent-${agent.id.slice(0, 8)}`}
           </span>
-          <code className="shrink-0 font-mono text-[11px] text-muted-foreground">
+          <code className="shrink-0 font-mono text-2xs text-muted-foreground">
             {shortModel(agent.model)}
           </code>
         </div>
@@ -390,7 +390,7 @@ function RosterRow({
           {agent.summary ?? agent.error ?? "—"}
         </p>
       </div>
-      <div className="shrink-0 text-right text-[11px] text-muted-foreground">
+      <div className="shrink-0 text-right text-2xs text-muted-foreground">
         <div>{formatTime(agent.createdAt)} 创建</div>
         {deadline ? (
           <div className={cn("tabular-nums", deadline.className)}>

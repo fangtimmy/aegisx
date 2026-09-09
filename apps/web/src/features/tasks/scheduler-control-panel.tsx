@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/card"
 import { schedulerStatusLabel } from "@/features/events/event-agents-shared"
 import { StartSchedulerDialog } from "@/features/events/start-scheduler-dialog"
+import { agentStatusVisual } from "@/features/runs/agent-overview"
 import { shortModel } from "@/features/tasks/task-list"
 import { toast } from "@/lib/toast"
 
@@ -82,9 +83,9 @@ export function SchedulerControlPanel({
     ? ("secondary" as const)
     : paused
       ? ("warning" as const)
-      : agent.status === "running"
-        ? ("info" as const)
-        : ("success" as const)
+      : agent !== null
+        ? agentStatusVisual[agent.status].badge
+        : ("secondary" as const)
 
   return (
     <CardFrame>

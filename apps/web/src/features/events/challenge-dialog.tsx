@@ -4,6 +4,7 @@ import { useRef, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 
 import { type Challenge, challengesApi, eventsApi, keys } from "@/api"
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -308,16 +309,17 @@ function ChallengeDialogContent({
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {(challenge?.attachments.length ?? 0) + pendingFiles.length}
                 </span>
-                <Button
-                  aria-label="上传附件"
-                  onClick={() => uploadInput.current?.click()}
-                  size="icon-sm"
-                  title="上传附件"
-                  type="button"
-                  variant="outline"
-                >
-                  <Upload />
-                </Button>
+                <IconTooltip label="上传附件">
+                  <Button
+                    aria-label="上传附件"
+                    onClick={() => uploadInput.current?.click()}
+                    size="icon-sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Upload />
+                  </Button>
+                </IconTooltip>
                 <input
                   className="sr-only"
                   multiple
