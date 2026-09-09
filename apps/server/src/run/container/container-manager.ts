@@ -249,15 +249,12 @@ export function createContainerManager(options?: { socketPath?: string }) {
         // ignore
       }
     }
+    const onAbort = () => {
+      aborted = true
+      destroyStream()
+    }
     if (opts.signal && !aborted) {
-      opts.signal.addEventListener(
-        "abort",
-        () => {
-          aborted = true
-          destroyStream()
-        },
-        { once: true }
-      )
+      opts.signal.addEventListener("abort", onAbort, { once: true })
     }
     let timer: ReturnType<typeof setTimeout> | undefined
     const ms = execTimeoutMs(opts.timeout)
@@ -281,7 +278,7 @@ export function createContainerManager(options?: { socketPath?: string }) {
       return { exitCode: timedOut ? null : exitCode, timedOut, aborted }
     } finally {
       if (timer) clearTimeout(timer)
-      if (opts.signal) opts.signal.removeEventListener("abort", destroyStream)
+      if (opts.signal) opts.signal.removeEventListener("abort", onAbort)
     }
   }
 
