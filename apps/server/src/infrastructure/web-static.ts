@@ -13,7 +13,13 @@ export function registerWebApp(app: Hono, webDir: string) {
   const root = resolve(webDir)
   const index = join(root, "index.html")
   app.get("*", (c) => {
-    const pathname = decodeURIComponent(new URL(c.req.url).pathname)
+    let pathname: string
+    try {
+      pathname = decodeURIComponent(new URL(c.req.url).pathname)
+    } catch {
+      // Malformed percent-encoding is a bad request path, not a server fault.
+      return c.notFound()
+    }
     if (pathname.startsWith("/api/")) return c.notFound()
     const candidate = join(root, pathname)
     if (!underRoot(candidate, root)) return c.notFound()

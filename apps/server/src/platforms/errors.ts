@@ -17,6 +17,18 @@ export class PlatformActionError extends Error {
 }
 
 /**
+ * A platform application-level failure delivered inside an HTTP-success
+ * envelope (HTTP 200 + error code body). Unlike transport failures (non-JSON
+ * body, timeout, abort — also status-less {@link PlatformError}s) it is the
+ * platform's definitive answer, so verdict paths may treat it as terminal.
+ */
+export class PlatformEnvelopeError extends PlatformError {
+  constructor(message: string, code?: string) {
+    super(message, undefined, code)
+  }
+}
+
+/**
  * Normalize any thrown value into a {@link PlatformActionError}. Already-mapped
  * errors pass through unchanged; SDK-level {@link PlatformError}s and unknown
  * errors collapse to a generic `platform_error`.

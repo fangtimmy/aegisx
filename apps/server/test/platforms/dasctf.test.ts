@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 
 import { DasCtfAdapter } from "../../src/platforms/adapters/dasctf"
 import type { PlatformConfig } from "../../src/platforms/core"
 import { PlatformError } from "../../src/platforms/core"
+import { PlatformEnvelopeError } from "../../src/platforms/errors"
 import { refine } from "../support"
 
 const config: PlatformConfig = {
@@ -16,6 +17,10 @@ type Route = {
   match: string | RegExp
   body?: unknown
   status?: number
+  /** Non-JSON responses (raw body string). */
+  contentType?: string
+  /** Reject the request instead of responding (transport failure). */
+  error?: unknown
 }
 
 /** URL string of a fetch input (URL / string / Request). */
@@ -45,9 +50,14 @@ function stubFetch(routes: Route[]) {
           headers: { "Content-Type": "text/plain" },
         })
       }
-      return new Response(JSON.stringify(route.body ?? {}), {
+      if (route.error !== undefined) throw route.error
+      const payload =
+        route.contentType && typeof route.body === "string"
+          ? route.body
+          : JSON.stringify(route.body ?? {})
+      return new Response(payload, {
         status: route.status ?? 200,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": route.contentType ?? "application/json" },
       })
     }
   )
@@ -58,6 +68,11 @@ function stubFetch(routes: Route[]) {
     },
   }
 }
+
+const stubs: Array<{ restore: () => void }> = []
+afterEach(() => {
+  for (const stub of stubs.splice(0)) stub.restore()
+})
 
 const envelope = (data: unknown) => ({ code: "00000", message: "", data })
 
@@ -104,10 +119,15 @@ describe("dasctf adapter", () => {
     const fetch = stubFetch([
       { match: "match-info", body: { code: "A0001", message: "invalid key" } },
     ])
+    stubs.push(fetch)
     try {
-      await expect(new DasCtfAdapter(config).testConnection()).rejects.toThrow(
-        "invalid key"
-      )
+      try {
+        await new DasCtfAdapter(config).testConnection()
+        expect.unreachable()
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlatformEnvelopeError)
+        expect(refine<PlatformError>(error).message).toBe("invalid key")
+      }
     } finally {
       fetch.restore()
     }
@@ -314,6 +334,35 @@ describe("dasctf adapter", () => {
       }
     } finally {
       fetch.restore()
+    }
+  })
+
+  test("submitFlag propagates HTTP-200 transport failures instead of rejecting", async () => {
+    const aborted = new DOMException("The operation was aborted.", "AbortError")
+    const fetch = stubFetch([
+      {
+        match: "answer-panel/answer",
+        body: "<html>login page</html>",
+        contentType: "text/html",
+      },
+      { match: "answer-panel/answer", error: aborted },
+    ])
+    stubs.push(fetch)
+    const adapter = new DasCtfAdapter(config)
+    // Non-JSON 200 body: the request never reached the verdict layer.
+    try {
+      await adapter.submitFlag("1001", "flag{html}")
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBeInstanceOf(PlatformError)
+      expect(error).not.toBeInstanceOf(PlatformEnvelopeError)
+    }
+    // Aborted request: also a transport failure, not a terminal verdict.
+    try {
+      await adapter.submitFlag("1001", "flag{abort}")
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBe(aborted)
     }
   })
 

@@ -11,6 +11,7 @@ import {
   type TargetState,
   targetEndpoint,
 } from "../core"
+import { PlatformEnvelopeError } from "../errors"
 
 /**
  * DASCTF AI Agent API types. All endpoints share the
@@ -105,9 +106,8 @@ export class DasCtfAdapter extends BaseAdapter {
   private async api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const body = await this.http.json<ApiEnvelope<T>>(path, init)
     if (body.code !== "00000") {
-      throw new PlatformError(
+      throw new PlatformEnvelopeError(
         nullableString(body.message) ?? `DASCTF API error (${body.code})`,
-        undefined,
         body.code
       )
     }
@@ -243,9 +243,10 @@ export class DasCtfAdapter extends BaseAdapter {
     } catch (error) {
       // A platform verdict arrived as an envelope error code (HTTP 200):
       // usually "wrong flag". Map it to a definitive rejection so the run
-      // layer does not retry. HTTP-level failures keep their error status
-      // (status !== undefined) and propagate as retryable errors.
-      if (error instanceof PlatformError && error.status === undefined) {
+      // layer does not retry. Transport failures (non-JSON body, timeout,
+      // abort) also surface as status-less PlatformErrors — they must keep
+      // propagating so the flag value is not poisoned by a transient outage.
+      if (error instanceof PlatformEnvelopeError) {
         return { status: "rejected", message: error.message }
       }
       throw error

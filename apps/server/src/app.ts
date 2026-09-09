@@ -1,5 +1,6 @@
 import { get } from "@aegisx/shared"
 import { Hono } from "hono"
+import { HTTPException } from "hono/http-exception"
 
 import { registerActivityRoutes } from "./activity/routes"
 import { readBootstrapSpec, runBootstrap } from "./bootstrap"
@@ -9,6 +10,7 @@ import { createCatalogReader } from "./events/catalog"
 import { registerEventRoutes } from "./events/routes"
 import { agentAuth } from "./infrastructure/agent-auth"
 import { createConfigStore } from "./infrastructure/config-store"
+import { jsonError } from "./infrastructure/http-errors"
 import { createStorage } from "./infrastructure/storage"
 import { registerWebApp } from "./infrastructure/web-static"
 import { registerPlatformRoutes } from "./platforms/routes"
@@ -114,6 +116,12 @@ export function createApp(options: { dataDir: string }) {
   app.use("*", agentAuth(db))
 
   app.onError((error, c) => {
+    // Hono's body parser reports malformed request bodies (e.g. broken JSON)
+    // as client-input HTTPExceptions — not server faults, so no "Request
+    // failed" log and a 400 envelope instead of the 500 path.
+    if (error instanceof HTTPException) {
+      return jsonError(c, { code: "invalid_json", message: error.message }, 400)
+    }
     console.error("Request failed", {
       method: c.req.method,
       path: c.req.path,
