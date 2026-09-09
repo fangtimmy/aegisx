@@ -233,6 +233,36 @@ RUN printf '#!/bin/sh\nexec /usr/lib/wine/wine64 "$@"\n' > /usr/local/bin/wine64
     ln -sf /usr/lib/wine/wineserver /usr/local/bin/wineserver && \
     test -x /usr/lib/wine/wine64 && test -x /usr/lib/wine/wineserver
 
+# === Field-report additions ===
+# Gaps observed in the 2026-09-08 TSecBench run (agent invocations, not guesses):
+#  - telnetlib was removed from the stdlib in Python 3.13; telnet targets need
+#    telnetlib3 as the replacement.
+#  - AI-service targets (Gradio/ComfyUI) and YAML/JSON-heavy web apps went
+#    without their client libraries — agents fell back to hand-rolled protocol
+#    code over requests.
+#  - /usr/bin/time (the `time` package) was reached for and missing.
+RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=solver-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update -qq && \
+    export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libeatmydata.so && \
+    apt-get -y install --no-install-recommends time
+
+RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
+    /opt/venv/bin/pip install \
+      telnetlib3 gradio_client websockets pyyaml aiohttp pymysql
+
+# Wordlist name aliases: agents consistently ask for the seclists canonical
+# names, while the image ships the DirBuster-2007_* / xato-net-* variants.
+# Symlinks (no copies) so both spellings resolve.
+RUN W=/usr/share/seclists/Discovery/Web-Content && \
+    P=/usr/share/seclists/Passwords/Common-Credentials && \
+    ln -sf "$W/DirBuster-2007_directory-list-2.3-small.txt"  "$W/directory-list-2.3-small.txt" && \
+    ln -sf "$W/DirBuster-2007_directory-list-2.3-medium.txt" "$W/directory-list-2.3-medium.txt" && \
+    ln -sf "$P/xato-net-10-million-passwords-1000.txt"  "$P/10-million-password-list-top-1000.txt" && \
+    ln -sf "$P/xato-net-10-million-passwords-10000.txt" "$P/10-million-password-list-top-10000.txt" && \
+    test -s "$W/directory-list-2.3-medium.txt" && \
+    test -s "$P/10-million-password-list-top-10000.txt"
+
 # The image COPYs apps/sdk/python — run `bun run test:sdk` before rebuilding so
 # a stale in-image SDK never drifts against the server it talks to.
 COPY apps/sdk/python /opt/aegisx-sdk
