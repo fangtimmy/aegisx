@@ -25,9 +25,10 @@ import type { AgentService } from "./run/service"
  * Appliance bootstrap (AEGISX_BOOTSTRAP=1): turn env vars into a fully
  * configured instance — LLM provider + default model, event + platform
  * binding, challenge sync, a running scheduler. Idempotent: existing
- * resources are matched and only rewritten when env drift is detected, so a
- * container restart on a persistent data dir converges without duplicating
- * anything. Failures log and leave the server up (the UI stays usable for
+ * resources are matched and only completed — bootstrap fills absent values
+ * and adds missing models, never overwriting user edits, so a container
+ * restart on a persistent data dir converges without duplicating anything.
+ * Failures log and leave the server up (the UI stays usable for
  * manual repair). The TSecBench hosted harness injects BENCHMARK_BASE_URL /
  * BENCHMARK_TOKEN instead of the AEGISX_PLATFORM_* names — accepted as
  * fallbacks (AEGISX_* wins), with the platform type defaulting to tsecbench
@@ -226,9 +227,14 @@ function metadataFor(modelId: string): { metadata: string; source: string } {
   return { metadata: FALLBACK_MODEL_METADATA, source: "bootstrap" }
 }
 
-/** Ensure the bootstrap provider + model match env; set the global default
- * model ref. Returns the ref (null when no provider was configured).
- * Exported for tests. */
+/** Ensure the bootstrap provider + model exist. Merge, never clobber: env
+ * fills only absent/empty fields (baseUrl/apiKey/type) and contributes the
+ * wanted model (added when missing, re-enabled when disabled) — non-empty
+ * values the user edited via the UI survive every restart. The default model
+ * ref is seeded only when this run contributed something AND the slot is
+ * still unclaimed, so a user pick (or clear) is never restored away.
+ * Returns the ref (null when no provider was configured). Exported for
+ * tests. */
 export function ensureProvider(
   configStore: ConfigStore,
   spec: BootstrapSpec
@@ -237,31 +243,40 @@ export function ensureProvider(
   const want = spec.provider
   const providers = configStore.getProviders()
   const index = providers.findIndex((p) => p.label === want.label)
-  const base: ProviderData =
-    index >= 0
-      ? providers[index]
-      : {
-          id: "bootstrap-provider",
-          label: want.label,
-          type: want.type,
-          baseUrl: want.baseUrl,
-          apiKey: want.apiKey,
-          enabled: true,
-          models: [],
-        }
 
-  let provider: ProviderData = {
-    ...base,
-    type: want.type,
-    baseUrl: want.baseUrl,
-    apiKey: want.apiKey,
-    enabled: true,
+  let changed: boolean
+  let provider: ProviderData
+  if (index < 0) {
+    changed = true
+    provider = {
+      id: "bootstrap-provider",
+      label: want.label,
+      type: want.type,
+      baseUrl: want.baseUrl,
+      apiKey: want.apiKey,
+      enabled: true,
+      models: [],
+    }
+  } else {
+    const base = providers[index]
+    provider = {
+      ...base,
+      type: base.type || want.type,
+      baseUrl: base.baseUrl || want.baseUrl,
+      apiKey: base.apiKey || want.apiKey,
+    }
+    changed =
+      provider.type !== base.type ||
+      provider.baseUrl !== base.baseUrl ||
+      provider.apiKey !== base.apiKey
   }
+
   const modelIndex = provider.models.findIndex(
     (m) => m.modelId === want.modelId
   )
   if (modelIndex >= 0) {
     if (!provider.models[modelIndex].enabled) {
+      changed = true
       provider = {
         ...provider,
         models: provider.models.map((m, i) =>
@@ -270,6 +285,7 @@ export function ensureProvider(
       }
     }
   } else {
+    changed = true
     const meta = metadataFor(want.modelId)
     provider = {
       ...provider,
@@ -287,20 +303,22 @@ export function ensureProvider(
     }
   }
 
-  if (JSON.stringify(provider) !== JSON.stringify(base)) {
+  if (changed) {
     const next =
       index >= 0
         ? providers.map((p, i) => (i === index ? provider : p))
         : [...providers, provider]
     configStore.updateProviders(next)
+    const model = provider.models.find((m) => m.modelId === want.modelId)!
+    const ref = `${modelAddress(provider, model)}${want.effort ? `:${want.effort}` : ""}`
+    if (!configStore.getSettings()["agent.defaultModelRef"]) {
+      configStore.updateSettings({ "agent.defaultModelRef": ref })
+    }
+    return ref
   }
-
-  const model = provider.models.find((m) => m.modelId === want.modelId)!
-  const ref = `${modelAddress(provider, model)}${want.effort ? `:${want.effort}` : ""}`
-  if (configStore.getSettings()["agent.defaultModelRef"] !== ref) {
-    configStore.updateSettings({ "agent.defaultModelRef": ref })
-  }
-  return ref
+  // Nothing contributed: the ref (set or cleared) is whatever the user left.
+  const existing = configStore.getSettings()["agent.defaultModelRef"]
+  return existing ?? null
 }
 
 /** Find or create the event, then bind the platform if env asks for one and

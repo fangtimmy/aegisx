@@ -2,6 +2,7 @@ import {
   isConfigDocumentV1,
   isRecord,
   parseSettings,
+  rejectedSettingsKeys,
   resolveModelRef,
 } from "@aegisx/shared"
 import { asc } from "drizzle-orm"
@@ -217,6 +218,14 @@ export function registerSettingsRoutes(
       )
     }
     const patch = body
+    const rejected = rejectedSettingsKeys(patch)
+    if (rejected.length > 0) {
+      return badRequest(
+        c,
+        "invalid_settings",
+        `Invalid setting keys or values: ${rejected.join(", ")}`
+      )
+    }
     if ("agent.defaultModelRef" in patch) {
       const modelRef = patch["agent.defaultModelRef"]
       if (modelRef !== null && modelRef !== undefined) {

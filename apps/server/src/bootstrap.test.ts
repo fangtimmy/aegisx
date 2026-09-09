@@ -149,7 +149,7 @@ describe("ensureProvider", () => {
     }
   })
 
-  test("idempotent rerun writes nothing; env drift updates in place", () => {
+  test("idempotent rerun writes nothing; user edits survive", () => {
     const t = store()
     try {
       const spec = {
@@ -167,16 +167,120 @@ describe("ensureProvider", () => {
       ensureProvider(t.configStore, spec)
       expect(t.configStore.configVersion).toBe(version)
 
-      ensureProvider(t.configStore, {
-        ...spec,
-        provider: { ...spec.provider, apiKey: "sk-2" },
-      })
-      expect(t.configStore.configVersion).toBeGreaterThan(version)
+      // A UI-entered apiKey must not be reset to the env value.
+      t.configStore.updateProviders(
+        t.configStore
+          .getProviders()
+          .map((p) =>
+            p.label === "Bootstrap" ? { ...p, apiKey: "sk-user" } : p
+          )
+      )
+      const edited = t.configStore.configVersion
+      ensureProvider(t.configStore, spec)
+      expect(t.configStore.configVersion).toBe(edited)
       const provider = t.configStore
         .getProviders()
         .find((p) => p.label === "Bootstrap")
-      expect(provider?.apiKey).toBe("sk-2")
+      expect(provider?.apiKey).toBe("sk-user")
       expect(provider?.models.map((m) => m.modelId)).toEqual(["m1"])
+    } finally {
+      t.cleanup()
+    }
+  })
+
+  test("empty fields are filled from env on an existing provider", () => {
+    const t = store()
+    try {
+      t.configStore.updateProviders([
+        {
+          id: "mine",
+          label: "Bootstrap",
+          type: "openai-compatible",
+          baseUrl: "",
+          apiKey: "",
+          enabled: true,
+          models: [],
+        },
+      ])
+      const ref = ensureProvider(t.configStore, {
+        enqueueAll: false,
+        provider: {
+          label: "Bootstrap",
+          type: "openai-compatible",
+          baseUrl: "http://gw:8080/v1",
+          apiKey: "sk-1",
+          modelId: "m1",
+        },
+      })
+      const provider = t.configStore
+        .getProviders()
+        .find((p) => p.label === "Bootstrap")
+      expect(provider?.id).toBe("mine")
+      expect(provider?.baseUrl).toBe("http://gw:8080/v1")
+      expect(provider?.apiKey).toBe("sk-1")
+      // This run contributed the model, so the unclaimed default slot seeds.
+      expect(ref).toBe("aegisx-mine/m1")
+      expect(t.configStore.getSettings()["agent.defaultModelRef"]).toBe(ref)
+    } finally {
+      t.cleanup()
+    }
+  })
+
+  test("cleared default model ref stays cleared on re-bootstrap", () => {
+    const t = store()
+    try {
+      const spec = {
+        enqueueAll: false,
+        provider: {
+          label: "Bootstrap",
+          type: "openai-compatible" as const,
+          baseUrl: "http://gw:8080/v1",
+          apiKey: "sk-1",
+          modelId: "m1",
+        },
+      }
+      ensureProvider(t.configStore, spec)
+      t.configStore.updateSettings({ "agent.defaultModelRef": null })
+      const version = t.configStore.configVersion
+      ensureProvider(t.configStore, spec)
+      expect(t.configStore.configVersion).toBe(version)
+      expect(t.configStore.getSettings()["agent.defaultModelRef"]).toBeNull()
+    } finally {
+      t.cleanup()
+    }
+  })
+
+  test("env drift adds a new model without clobbering user fields", () => {
+    const t = store()
+    try {
+      const base = {
+        enqueueAll: false,
+        provider: {
+          label: "Bootstrap",
+          type: "openai-compatible" as const,
+          baseUrl: "http://gw:8080/v1",
+          apiKey: "sk-1",
+          modelId: "m1",
+        },
+      }
+      ensureProvider(t.configStore, base)
+      t.configStore.updateProviders(
+        t.configStore
+          .getProviders()
+          .map((p) =>
+            p.label === "Bootstrap" ? { ...p, apiKey: "sk-user" } : p
+          )
+      )
+      const ref = ensureProvider(t.configStore, {
+        ...base,
+        provider: { ...base.provider, modelId: "m2" },
+      })
+      expect(ref).toBe("aegisx-bootstrap-provider/m2")
+      const provider = t.configStore
+        .getProviders()
+        .find((p) => p.label === "Bootstrap")
+      expect(provider?.apiKey).toBe("sk-user")
+      expect(provider?.models.map((m) => m.modelId)).toEqual(["m1", "m2"])
     } finally {
       t.cleanup()
     }

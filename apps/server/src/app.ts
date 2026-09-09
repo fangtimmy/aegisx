@@ -175,8 +175,6 @@ export function createApp(options: { dataDir: string }) {
   registerSchedulerRoutes(app, { db, agentService })
   registerActivityRoutes(app, { db })
 
-  app.get("/api/platform/status", (c) => c.json({ available: true }))
-
   // The SPA catch-all must be registered after every /api route.
   if (process.env.AEGISX_WEB_DIR) {
     registerWebApp(app, process.env.AEGISX_WEB_DIR)

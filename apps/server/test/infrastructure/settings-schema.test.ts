@@ -5,6 +5,7 @@ import {
   isSettingModified,
   parseSettings,
   patchSettings,
+  rejectedSettingsKeys,
 } from "@aegisx/shared"
 
 describe("settings schema", () => {
@@ -41,5 +42,22 @@ describe("settings schema", () => {
     expect(next["container.image"]).toBe(base["container.image"])
     expect(isSettingModified(next, "runtime.maxAttachmentMb")).toBe(true)
     expect(isSettingModified(base, "runtime.maxAttachmentMb")).toBe(false)
+  })
+
+  test("rejectedSettingsKeys reports unknown keys and values failing coercion", () => {
+    expect(
+      rejectedSettingsKeys({
+        "scheduler.maxConcurrentAgents": 999,
+        unknown: true,
+      })
+    ).toEqual(["scheduler.maxConcurrentAgents", "unknown"])
+    expect(
+      rejectedSettingsKeys({
+        "scheduler.maxConcurrentAgents": 8,
+        "agent.defaultModelRef": null,
+        "container.image": "aegisx/solver:full",
+      })
+    ).toEqual([])
+    expect(rejectedSettingsKeys("not an object")).toEqual([])
   })
 })

@@ -378,6 +378,20 @@ export function patchSettings(
   return out
 }
 
+/** Keys a patch would drop: unknown keys and values that fail their
+ * definition's coercion. Merge paths (parseSettings / patchSettings) skip
+ * these silently — the settings PATCH route reports them as a 400. */
+export function rejectedSettingsKeys(patch: unknown): string[] {
+  if (!isRecord(patch)) return []
+  const rejected: string[] = []
+  for (const [key, raw] of Object.entries(patch)) {
+    if (!isSettingKey(key) || coerceValue(settingDef(key), raw) === undefined) {
+      rejected.push(key)
+    }
+  }
+  return rejected
+}
+
 export const CONFIG_DOCUMENT_VERSION = 1 as const
 
 export function isConfigDocumentV1(raw: unknown): raw is {

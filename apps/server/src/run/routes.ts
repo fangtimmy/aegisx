@@ -5,7 +5,12 @@ import { Type } from "typebox"
 import type { Database } from "../db"
 import { challenges, events } from "../db/schema"
 import { principalOf } from "../infrastructure/agent-auth"
-import { badRequest, jsonError, notFound } from "../infrastructure/http-errors"
+import {
+  badRequest,
+  jsonError,
+  notFound,
+  payloadTooLarge,
+} from "../infrastructure/http-errors"
 import { validateJson } from "../infrastructure/validation"
 import { WorkspaceFileError } from "../infrastructure/workspace-files"
 import { responseJson } from "../lib/guards"
@@ -643,6 +648,10 @@ export function registerRunRoutes(
     }
   })
 
+  /** Mirrors MAX_MESSAGE_TOTAL_BYTES in channels-post: the per-message
+   * attachment ceiling its per-file checks enforce. A body declared beyond
+   * it can never pass, so reject before formData() buffers it all. */
+  const MAX_UPLOAD_BODY_BYTES = 128 * 1024 * 1024
   /** Post a channel message. Two faces on one route:
    *  - JSON + agent principal (bearer token) → the SDK path (files = paths
    *    relative to the agent's own directory, server-side resolve check +
@@ -661,6 +670,17 @@ export function registerRunRoutes(
             c,
             "invalid",
             "multipart posts are the user face; agents post JSON (files = workspace paths)"
+          )
+        }
+        const declared = Number.parseInt(
+          c.req.header("content-length") ?? "",
+          10
+        )
+        if (Number.isFinite(declared) && declared > MAX_UPLOAD_BODY_BYTES) {
+          return payloadTooLarge(
+            c,
+            "payload_too_large",
+            "Multipart body exceeds the 128MB attachment cap"
           )
         }
         const form = await c.req.formData()

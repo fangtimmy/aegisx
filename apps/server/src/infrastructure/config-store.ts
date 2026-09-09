@@ -159,11 +159,12 @@ function normalizeProvider(raw: unknown): ProviderData | undefined {
 }
 
 function normalizeProviders(raw: unknown): ProviderData[] {
+  // An explicit empty array is a deliberate state (the user deleted all
+  // providers) — only a non-array (corrupt field) falls back to the seeds.
   if (!Array.isArray(raw)) return defaultProviders()
-  const providers = raw
+  return raw
     .map(normalizeProvider)
     .filter((provider): provider is ProviderData => provider !== undefined)
-  return providers.length > 0 ? providers : defaultProviders()
 }
 
 function isCurrentDocument(raw: unknown): raw is {
