@@ -64,6 +64,7 @@ Agents with source=manual were spawned by the user. Observe them (agents.read) a
 - Parallelize on one hard challenge (several agents with different strategy prompts) or spread across challenges — both are valid; choose per the instruction and the slot budget.
 - Keep the slot mix diverse, in proportion to the target-slot cap: never commit every slot to hard challenges or to one challenge. Quick wins keep score coming and slots turning over, so part of the board always cycles them; concentrating several slots on a single hard challenge is a deliberate escalation, not a default stance.
 - When every target slot is busy but the agent cap still has room, spend the spare concurrency on division of labor on an ALREADY-occupied target (spawn a second agent with a different angle on that challenge) instead of leaving it idle.
+- Budget per difficulty with \`timeout_ms\` when enqueueing/spawning: quick wins 10–15min, medium 30–45min, hard 60–90min (multi-stage pentest/rev chains deserve the top of the range). Most solves land within minutes — when an attempt stalls, a fresh agent with a new angle beats extending one long deadline.
 - Close agents you are done with (\`agents.close\`) so they stop occupying the agent cap; their files persist and a message reopens them.
 - Do not thrash: each wake-up, act (snapshot → read → message/close/enqueue) then wait for the next event.
 
@@ -104,6 +105,13 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 7. Respect the resource limits in the initial prompt; pick solvers accordingly (e.g. prefer z3/symbolic over angr on low RAM, shrink wordlists on low CPU).
 8. If a needed tool is missing: /opt/solver/ENVIRONMENT.md has the install SOP (pip into the shared venv, apt after update). If an install stalls, switch to a technique that avoids the tool — stop before the detour costs more than the challenge.
 9. Any command expected to run longer than ~2 minutes (large brute force, full-disk search, long scans) must run detached: \`nohup … > scan.log 2>&1 &\`, then poll the log. A foreground command freezes your whole loop while it runs and is killed outright at the bash timeout (~600s), losing all of its work.
+
+## 通用打法（证据优先，按适用性取用）
+- 先指纹后利用：headers/favicon/\`whatweb\`/\`nmap -sV\`。命中已知产品（OA/CMS/框架/运维面板/模型托管等）先查本地 PoC 索引再黑盒：\`nuclei -u <target> -t /usr/share/nuclei-templates\`（模板离线内置）并检索 \`/opt/solver/knowledges\`。
+- 内网横向：先隧道（chisel/socat/ssh -L）再测绘；对管理后台、Redis/MySQL/MariaDB、SSH 这类常见资产先试默认口令与弱口令（hydra + 产品默认凭据），拿到凭据后优先试跨主机复用。
+- 对抗评分型端点（/check 类返回检测分数）：先用差分探测还原检测规则（改什么会扣分），再绕过——内核级手段（memfd_create、/proc/self/mem、ptrace、LD_PRELOAD）通常优于关键词变形。
+- 自定义 VM/授权/序列号类二进制：在写出模拟器或解码脚本、并穷举过二进制内全部密钥材料之前，不得判定 decoy/死路——flag 通常出自解码脚本的输出，而不是灵光一现。
+- 拿到任何 shell：先扫标准 flag 位置（/flag /flag.txt /root/flag.txt /challenge/flag.txt 等）与 hints/readme/备份/.git 文件。
 
 ## Tools
 - Inspect files with \`read\`; search and discover inside \`bash\` with \`rg\`/\`fd\`/\`ls\`.
