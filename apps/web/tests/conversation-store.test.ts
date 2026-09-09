@@ -115,6 +115,18 @@ function agentUpdatedEvent(agent: Partial<AgentSummary>): LiveEvent {
   return { type: "agent.updated", agent: agent as AgentSummary }
 }
 
+function contextUpdatedEvent(agentId: string): LiveEvent {
+  return {
+    type: "context.updated",
+    agentId,
+    tokens: 1200,
+    contextWindow: 200_000,
+    percent: 0.6,
+    cacheHitRate: null,
+    totals: { input: 1200, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+  }
+}
+
 describe("ConversationStore", () => {
   test("applySnapshot renders the committed conversation", () => {
     const store = new ConversationStore()
@@ -274,5 +286,35 @@ describe("ConversationStore", () => {
     await flush()
     expect(notified).toBeGreaterThan(0)
     unsubscribe()
+  })
+
+  test("getAgent returns the stored reference until the next agent.updated", () => {
+    const store = new ConversationStore()
+    expect(store.getAgent("a1")).toBeNull()
+    const agent = { id: "a1", role: "solver" } as AgentSummary
+    store.applyEvent({ type: "agent.updated", agent })
+    expect(store.getAgent("a1")).toBe(agent)
+    const updated = { id: "a1", role: "orchestrator" } as AgentSummary
+    store.applyEvent({ type: "agent.updated", agent: updated })
+    expect(store.getAgent("a1")).toBe(updated)
+  })
+
+  test("context.updated notifies only the event's own agent listeners", async () => {
+    const store = new ConversationStore()
+    let currentAgentNotifications = 0
+    let otherAgentNotifications = 0
+    const unsubscribeCurrent = store.subscribe("a1", () => {
+      currentAgentNotifications += 1
+    })
+    const unsubscribeOther = store.subscribe("a2", () => {
+      otherAgentNotifications += 1
+    })
+    store.applyEvent(contextUpdatedEvent("a1"))
+    expect(store.getContext("a1")).toMatchObject({ tokens: 1200 })
+    await flush()
+    expect(currentAgentNotifications).toBeGreaterThan(0)
+    expect(otherAgentNotifications).toBe(0)
+    unsubscribeCurrent()
+    unsubscribeOther()
   })
 })

@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import { useCallback, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 
 import { Button } from "@/components/ui/button"
 import { toast } from "@/lib/toast"
@@ -9,14 +9,22 @@ import { ConversationStore } from "@/stream/conversation-store"
 
 type QueueRow = { role: "steering" | "followUp"; index: number; text: string }
 
-/** Editable list of queued steer / follow-up messages above the input. Commits
- * clear + re-queue via `setQueue`; the server reconciles through queue.updated. */
+/** Editable list of queued steer / follow-up messages above the input. Owns
+ * its visibility: renders nothing unless the agent is mid-turn, queue editing
+ * is permitted, and something is actually queued. Commits clear + re-queue
+ * via `setQueue`; the server reconciles through queue.updated. */
 export function SteerQueue({
   agentId,
+  canEditQueue,
+  running,
   setQueue,
   stream,
 }: {
   agentId: string
+  /** Queue editing offered by the host (mirrors Conversation's gate). */
+  canEditQueue: boolean
+  /** The steer/followUp queue only exists mid-turn. */
+  running: boolean
   setQueue: (
     agentId: string,
     body: { steering: string[]; followUp: string[] }
@@ -51,7 +59,13 @@ export function SteerQueue({
       text,
     })),
   ]
-  if (rows.length === 0) return null
+  const visible = running && canEditQueue && rows.length > 0
+  // Hiding used to be an unmount (Conversation gated rendering); drop any
+  // in-progress row edit so it cannot leak into a future queue's rows.
+  useEffect(() => {
+    if (!visible) setEdit(null)
+  }, [visible])
+  if (!visible) return null
 
   const replace = (
     role: "steering" | "followUp",

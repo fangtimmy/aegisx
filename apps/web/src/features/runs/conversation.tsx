@@ -1,12 +1,6 @@
 import { useMutation } from "@tanstack/react-query"
 import { CircleAlert, LoaderCircle, Plus } from "lucide-react"
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
   AgentDetail,
@@ -133,13 +127,58 @@ export function Conversation(props: ConversationProps) {
   const locked = closed && !props.closedReopenable
 
   // Drafts survive agent switches and reloads: restore on agent change,
-  // persist on every edit (send success clears it via setDraft("")).
-  useEffect(() => {
-    setDraft(localStorage.getItem(`composer-draft:${agentId}`) ?? "")
+  // persist with a trailing debounce (a write per keystroke is wasted I/O).
+  // Pending writes flush on send-clear, agent switch and unmount, so a fast
+  // type-then-switch never loses text.
+  const pendingDraft = useRef<{ agentId: string; text: string } | null>(null)
+  const draftTimer = useRef<number | null>(null)
+  const flushDraft = useCallback(() => {
+    if (draftTimer.current !== null) {
+      window.clearTimeout(draftTimer.current)
+      draftTimer.current = null
+    }
+    const pending = pendingDraft.current
+    pendingDraft.current = null
+    if (pending)
+      localStorage.setItem(`composer-draft:${pending.agentId}`, pending.text)
+  }, [])
+  const updateDraft = useCallback(
+    (text: string) => {
+      setDraft(text)
+      if (draftTimer.current !== null) window.clearTimeout(draftTimer.current)
+      pendingDraft.current = { agentId, text }
+      draftTimer.current = window.setTimeout(flushDraft, 300)
+    },
+    [agentId, flushDraft]
+  )
+  // Clears are terminal (send accepted / session replaced): write "" now
+  // instead of leaving a stale draft on disk for the debounce window.
+  const clearDraft = useCallback(() => {
+    setDraft("")
+    if (draftTimer.current !== null) {
+      window.clearTimeout(draftTimer.current)
+      draftTimer.current = null
+    }
+    pendingDraft.current = null
+    localStorage.setItem(`composer-draft:${agentId}`, "")
   }, [agentId])
   useEffect(() => {
-    localStorage.setItem(`composer-draft:${agentId}`, draft)
-  }, [agentId, draft])
+    flushDraft()
+    setDraft(localStorage.getItem(`composer-draft:${agentId}`) ?? "")
+  }, [agentId, flushDraft])
+  useEffect(() => {
+    return () => flushDraft()
+  }, [flushDraft])
+
+  // Evict the previous agent's committed + live state on switch (never on
+  // unmount: hidden tabs unmount and remount the same agent and must keep
+  // their live state). Without this, browsing N agents retains N histories.
+  const previousAgentIdRef = useRef(agentId)
+  useEffect(() => {
+    const previousAgentId = previousAgentIdRef.current
+    previousAgentIdRef.current = agentId
+    if (previousAgentId !== agentId) store.reset(previousAgentId)
+  }, [agentId, store])
 
   // The steer/followUp picker is only meaningful mid-turn; once the turn
   // settles (idle/closed) the next send starts a fresh turn, so drop a stale
@@ -171,32 +210,18 @@ export function Conversation(props: ConversationProps) {
     setModelDraft(null)
   }, [agent.id, agent.model])
 
-  const queuedMessages = useSyncExternalStore(
-    useCallback(
-      (listener) => store.subscribe(agentId, listener),
-      [store, agentId]
-    ),
-    useCallback(() => store.getQueue(agentId), [store, agentId]),
-    useCallback(() => store.getQueue(agentId), [store, agentId])
-  )
-  const showSteerQueue =
-    running &&
-    canEditQueue &&
-    queuedMessages !== null &&
-    (queuedMessages.steering.length > 0 || queuedMessages.followUp.length > 0)
-
   // Live agent pushes (SSE agent.updated) forwarded to the host so external
   // caches update instantly (the store notifies every listener on each
-  // agent-scoped event; filter to this agent's row).
+  // agent-scoped event; filter to this agent's row). The store keeps the
+  // SAME object per agent until the next agent.updated, so reference
+  // identity dedupes without serializing on every streamed frame.
   useEffect(() => {
     if (!onAgentUpdated) return undefined
-    let lastSerialized: string | null = null
+    let last: AgentSummary | null = null
     return store.subscribe(agentId, () => {
-      const next = store.getAgents().find((a) => a.id === agentId)
-      if (!next) return
-      const serialized = JSON.stringify(next)
-      if (serialized === lastSerialized) return
-      lastSerialized = serialized
+      const next = store.getAgent(agentId)
+      if (!next || next === last) return
+      last = next
       onAgentUpdated(next)
     })
   }, [store, agentId, onAgentUpdated])
@@ -227,7 +252,7 @@ export function Conversation(props: ConversationProps) {
 
   const send = useMutation({
     mutationFn: () => sendMessageFn(draft.trim(), deliverAs),
-    onSuccess: () => setDraft(""),
+    onSuccess: () => clearDraft(),
     onError: (error) => toast.error("发送消息失败", error.message),
   })
 
@@ -245,7 +270,7 @@ export function Conversation(props: ConversationProps) {
       return compactAgentFn()
     },
     onSuccess: () => {
-      setDraft("")
+      clearDraft()
       toast.success("上下文已压缩")
     },
     onError: (error) => toast.error("压缩失败", error.message),
@@ -269,7 +294,7 @@ export function Conversation(props: ConversationProps) {
       return props.closeAgent()
     },
     onSuccess: () => {
-      setDraft("")
+      clearDraft()
       toast.success("任务已关闭")
     },
     onError: (error) => toast.error("关闭失败", error.message),
@@ -285,7 +310,7 @@ export function Conversation(props: ConversationProps) {
       return sessionOps.createSession()
     },
     onSuccess: async () => {
-      setDraft("")
+      clearDraft()
       toast.success("已创建新会话")
       store.reset(agentId)
       await loadMessages()
@@ -453,9 +478,13 @@ export function Conversation(props: ConversationProps) {
       )}
       <div className="shrink-0 px-3 pb-3">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
-          {showSteerQueue && (
-            <SteerQueue setQueue={setQueue} stream={store} agentId={agentId} />
-          )}
+          <SteerQueue
+            agentId={agentId}
+            canEditQueue={canEditQueue}
+            running={running}
+            setQueue={setQueue}
+            stream={store}
+          />
           <Composer
             busy={send.isPending}
             closed={closed}
@@ -476,7 +505,7 @@ export function Conversation(props: ConversationProps) {
               />
             }
             onDeliverAsChange={setDeliverAs}
-            onDraftChange={setDraft}
+            onDraftChange={updateDraft}
             onStop={props.stopAgent ? () => stop.mutate() : undefined}
             onSubmit={onSubmit}
             running={running}

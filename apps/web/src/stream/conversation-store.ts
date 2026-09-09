@@ -146,6 +146,12 @@ export class ConversationStore {
     return [...this.agents.values()]
   }
 
+  /** Per-agent row (the SAME object reference until the next agent.updated),
+   * so consumers can dedupe by identity instead of deep comparison. */
+  getAgent(agentId: string) {
+    return this.agents.get(agentId) ?? null
+  }
+
   getActivity(agentId: string) {
     return this.activity.get(agentId) ?? null
   }
@@ -392,9 +398,7 @@ export class ConversationStore {
         cacheHitRate: event.cacheHitRate,
         totals: event.totals,
       })
-      for (const listeners of this.listeners.values()) {
-        for (const listener of listeners) listener()
-      }
+      this.notify(event.agentId)
       return
     }
     if (event.type === "queue.updated") {
