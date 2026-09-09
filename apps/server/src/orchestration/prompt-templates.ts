@@ -93,6 +93,7 @@ export const PROMPT_TEMPLATE_VARIABLES = [
   "challenge.attachments",
   "challenge.attachmentPaths",
   "challenge.confirmedFlags",
+  "challenge.integrated",
   "model.provider",
   "model.name",
   "model.id",
@@ -282,6 +283,7 @@ export const ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES = [
   "event.name",
   "event.promptHint",
   "instruction",
+  "workspace.root",
 ] as const
 
 export type OrchestratorPromptContext = {
