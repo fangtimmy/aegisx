@@ -4,18 +4,12 @@ import { eq } from "drizzle-orm"
 
 import type { AgentHostInput } from "../../src/agents/host"
 import { agents } from "../../src/db/schema"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
-  makeProvider,
-  seedAgent,
-  seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
-  stubHostAgentSession,
+  makeAgentService,
   now,
+  seedAgent,
+  setupDb,
+  stubHostAgentSession,
 } from "../helpers"
 import { refine } from "../support"
 
@@ -49,130 +43,102 @@ function stubHostFlipping(sessionId = "sess-1") {
   })
 }
 
-function makeService(
-  db: ReturnType<typeof setupDb>["db"],
-  dir: string,
-  createHost: ReturnType<typeof mock>,
-  opts: { closeAbortGraceMs?: number } = {}
-) {
-  const { manager } = stubContainerManager()
-  return createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore([makeProvider()]),
-    getSettings: flatSettingsWithDefaultModel,
-    createHost,
-    ...opts,
-  })
-}
-
 describe("agent lifecycle (v19)", () => {
   test("a hanging spawn lands the agent running; a flipping spawn settles idle", async () => {
-    const { db, dir, close } = setupDb()
+    const store = setupDb()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const hanging = makeService(
-        db,
-        dir,
-        mock(async () => stubHostAgentSession("sess-1", { hang: true }))
-      )
-      const agent = await hanging.spawn({
+      const hanging = makeAgentService({
+        store,
+        createHost: mock(async () =>
+          stubHostAgentSession("sess-1", { hang: true })
+        ),
+      })
+      const agent = await hanging.service.spawn({
         eventId: "evt-1",
         challengeId: "ch-1",
       })
       expect(agent.status).toBe("running")
       expect(
-        db.select().from(agents).where(eq(agents.id, agent.id)).get()!.status
+        store.db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+          .status
       ).toBe("running")
       await hanging.close()
 
-      const flipping = makeService(
-        db,
-        dir,
-        mock(async () => stubHostFlipping("sess-1"))
-      )
-      const other = await flipping.spawn({
+      const flipping = makeAgentService({
+        store,
+        event: false,
+        challenge: false,
+        createHost: mock(async () => stubHostFlipping("sess-1")),
+      })
+      const other = await flipping.service.spawn({
         eventId: "evt-1",
         challengeId: "ch-1",
       })
       await new Promise((r) => setTimeout(r, 5))
       expect(
-        db.select().from(agents).where(eq(agents.id, other.id)).get()!.status
+        store.db.select().from(agents).where(eq(agents.id, other.id)).get()!
+          .status
       ).toBe("idle")
       await flipping.close()
     } finally {
-      close()
+      store.close()
     }
   })
 
   test("finishAgent lands the agent completed + summary", async () => {
-    const { db, dir, close } = setupDb()
+    const h = makeAgentService({
+      createHost: mock(async () => stubHostFlipping("sess-1")),
+    })
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const service = makeService(
-        db,
-        dir,
-        mock(async () => stubHostFlipping("sess-1"))
-      )
-      const agent = await service.spawn({
+      const agent = await h.service.spawn({
         eventId: "evt-1",
         challengeId: "ch-1",
       })
       await new Promise((r) => setTimeout(r, 5))
-      const finished = await service.finishAgent(agent.id, "solved it")
+      const finished = await h.service.finishAgent(agent.id, "solved it")
       expect(finished.status).toBe("completed")
-      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()
+      const row = h.db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .get()
       expect(row?.status).toBe("completed")
       expect(row?.summary).toBe("solved it")
       expect(row?.completedAt).not.toBeNull()
-      await service.close()
     } finally {
-      close()
+      await h.close()
     }
   })
 
   test("recoverOnBoot flips a running agent to idle; terminal states survive", async () => {
-    const { db, dir, close } = setupDb()
+    const h = makeAgentService({
+      createHost: mock(async () => stubHostAgentSession()),
+    })
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedAgent(db, { id: "a-1", status: "running" })
-      seedAgent(db, { id: "a-2", status: "completed" })
-      const service = makeService(
-        db,
-        dir,
-        mock(async () => stubHostAgentSession())
-      )
-      await service.recoverOnBoot()
+      seedAgent(h.db, { id: "a-1", status: "running" })
+      seedAgent(h.db, { id: "a-2", status: "completed" })
+      await h.service.recoverOnBoot()
       expect(
-        db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
+        h.db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
       ).toBe("idle")
       expect(
-        db.select().from(agents).where(eq(agents.id, "a-2")).get()!.status
+        h.db.select().from(agents).where(eq(agents.id, "a-2")).get()!.status
       ).toBe("completed")
-      await service.close()
     } finally {
-      close()
+      await h.close()
     }
   })
 
   test("reopen reuses the agent row's systemPrompt/model snapshot (no re-render)", async () => {
-    const { db, dir, close } = setupDb()
+    const captured: AgentHostInput[] = []
+    const h = makeAgentService({
+      createHost: mock(async (input: AgentHostInput) => {
+        captured.push(input)
+        return stubHostFlipping(input.agentId)
+      }),
+    })
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedAgent(db, {
+      seedAgent(h.db, {
         id: "a-1",
         eventId: "evt-1",
         challengeId: "ch-1",
@@ -184,76 +150,63 @@ describe("agent lifecycle (v19)", () => {
         createdAt: now(),
         updatedAt: now(),
       })
-      const captured: AgentHostInput[] = []
-      const createHost = mock(async (input: AgentHostInput) => {
-        captured.push(input)
-        return stubHostFlipping(input.agentId)
-      })
-      const service = makeService(db, dir, createHost)
 
       // Messaging a terminal agent reopens it (onResume → resumeAgent), then
       // sends — the snapshot is reused verbatim, the edited prompt survives.
-      await service.sendMessage("a-1", { text: "ping" })
+      await h.service.sendMessage("a-1", { text: "ping" })
       await new Promise((r) => setTimeout(r, 5))
 
       expect(captured).toHaveLength(1)
       expect(captured[0].agentId).toBe("a-1")
       expect(captured[0].systemPrompt).toBe("EDITED-SNAPSHOT-PROMPT")
       expect(
-        db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
+        h.db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
       ).toBe("idle")
-      await service.close()
     } finally {
-      close()
+      await h.close()
     }
   })
 })
 
 describe("closeAgent bounded abort (solve-time sibling stop regression)", () => {
   test("closeAgent lands aborted even when session.abort never resolves", async () => {
-    const { db, dir, close } = setupDb()
+    const disposed: string[] = []
+    const h = makeAgentService({
+      closeAbortGraceMs: 10,
+      createHost: mock(async () => {
+        const stub = stubHostAgentSession("sess-1")
+        const sdk = refine<{
+          isStreaming: boolean
+          abort: () => Promise<void>
+        }>(stub.session)
+        sdk.isStreaming = true
+        sdk.abort = () => new Promise<void>(() => {})
+        stub.dispose = async () => {
+          disposed.push("sess-1")
+        }
+        return stub
+      }),
+    })
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       // A mid-tool turn: isStreaming stays true and abort() never settles —
       // the exact state that used to hang closeAgent past the deadline
       // reaper (the tsecbench a-13/a-14 siblings ran to timeout despite the
       // "stopped" notice).
-      const disposed: string[] = []
-      const service = makeService(
-        db,
-        dir,
-        mock(async () => {
-          const stub = stubHostAgentSession("sess-1")
-          const sdk = refine<{
-            isStreaming: boolean
-            abort: () => Promise<void>
-          }>(stub.session)
-          sdk.isStreaming = true
-          sdk.abort = () => new Promise<void>(() => {})
-          stub.dispose = async () => {
-            disposed.push("sess-1")
-          }
-          return stub
-        }),
-        { closeAbortGraceMs: 10 }
-      )
-      const agent = await service.spawn({
+      const agent = await h.service.spawn({
         eventId: "evt-1",
         challengeId: "ch-1",
       })
       await new Promise((r) => setTimeout(r, 5))
 
-      const closed = await service.closeAgent(agent.id)
+      const closed = await h.service.closeAgent(agent.id)
       expect(closed.status).toBe("aborted")
       expect(
-        db.select().from(agents).where(eq(agents.id, agent.id)).get()!.status
+        h.db.select().from(agents).where(eq(agents.id, agent.id)).get()!.status
       ).toBe("aborted")
       // The force half of the fallback: the streaming session is disposed.
       expect(disposed).toEqual(["sess-1"])
-      await service.close()
     } finally {
-      close()
+      await h.close()
     }
   })
 })

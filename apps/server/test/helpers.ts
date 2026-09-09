@@ -17,8 +17,14 @@ import type {
   ConfigStore,
   ProviderData,
 } from "../src/infrastructure/config-store"
+import type { createPlatformService } from "../src/platforms/service"
 import { builtinModelProfile } from "../src/providers/builtin-models"
 import type { ContainerManager } from "../src/run/container/container-manager"
+import {
+  createAgentService,
+  type AgentService,
+  type AgentServiceOptions,
+} from "../src/run/service"
 import { refine } from "./support"
 
 /** Fresh on-disk SQLite on a temp dir. FKs left on (tests seed real graphs). */
@@ -222,4 +228,130 @@ export function stubHostAgentSession(
     pipeline: { attach: () => () => {}, detach: () => {} },
     dispose: async () => {},
   })
+}
+
+type PlatformService = ReturnType<typeof createPlatformService>
+
+/** createHost stub that records every prompt text per agent id. With `hang`
+ * (default false) turns never settle, so spawned agents stay "running"; with
+ * hang off, turns settle and `agent.idle` fires. */
+export function promptRecordingHost(
+  promptLog: Map<string, string[]>,
+  opts: { hang?: boolean } = {}
+): AgentServiceOptions["createHost"] {
+  return async (input) => {
+    const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
+      hang: opts.hang ?? false,
+    })
+    const list: string[] = []
+    promptLog.set(input.agentId, list)
+    const sdk = refine<{ prompt: (text: string) => Promise<void> }>(
+      stub.session
+    )
+    sdk.prompt = async (text: string) => {
+      list.push(text)
+    }
+    return stub
+  }
+}
+
+/** One assembled agent service plus everything its tests assert on. */
+type AgentServiceHarness = {
+  service: AgentService
+  db: Database
+  /** Workspace data dir handed to the service (workspace trees land here). */
+  dir: string
+  /** Closes the service, then the db (unless an external `store` was injected —
+   * then only the service; the caller owns the store). */
+  close: () => Promise<void>
+  /** Captured calls of the default recording container manager (the same
+   * arrays `stubContainerManager()` returns). Meaningless when a custom
+   * `containerManager` was injected. */
+  stubs: { created: unknown[]; killed: string[]; removed: string[] }
+}
+
+/** Assemble the canonical test agent service: fresh on-disk SQLite + seeded
+ * event/challenge rows + recording container manager + no-op platform service
+ * + test provider. Every knob is overridable per member; tests pass only what
+ * makes them distinct. */
+export function makeAgentService(
+  opts: {
+    /** Seed the canonical event row (default "evt-1"; `false` skips). */
+    event?: string | false
+    /** Seed the canonical challenge row on the event (default "ch-1"; `false` skips). */
+    challenge?: string | false
+    /** Reuse an existing setupDb() store instead of a fresh one (multi-service
+     * tests); the caller owns closing it. */
+    store?: ReturnType<typeof setupDb>
+    /** Providers the config store exposes (default: one {@link makeProvider}). */
+    providers?: ProviderData[]
+    /** Settings seam (default: {@link flatSettingsWithDefaultModel}). */
+    getSettings?: AgentServiceOptions["getSettings"]
+    /** Per-member replacement on top of the no-op platformService defaults. */
+    platformService?: Partial<
+      Pick<PlatformService, "submitFlag" | "targetAction">
+    >
+    /** Replace the default recording container manager entirely. */
+    containerManager?: ContainerManager
+  } & Partial<
+    Pick<
+      AgentServiceOptions,
+      | "createHost"
+      | "timeoutGraceMs"
+      | "closeAbortGraceMs"
+      | "sweepIntervalMs"
+      | "idleTtlMs"
+      | "flushIntervalMs"
+      | "stallMs"
+      | "solvedWrapupMs"
+    >
+  >
+): AgentServiceHarness {
+  const store = opts.store ?? setupDb()
+  const ownsStore = opts.store === undefined
+  const event = opts.event === undefined ? "evt-1" : opts.event
+  const challenge = opts.challenge === undefined ? "ch-1" : opts.challenge
+  if (event) seedEvent(store.db, event)
+  if (challenge && event) {
+    seedChallenge(store.db, { id: challenge, eventId: event })
+  }
+
+  const { manager, created, killed, removed } = stubContainerManager()
+  const service = createAgentService({
+    db: store.db,
+    dataDir: store.dir,
+    containerManager: opts.containerManager ?? manager,
+    platformService: refine<PlatformService>({
+      submitFlag: async () => undefined,
+      targetAction: async () => ({
+        status: "running",
+        endpoints: [],
+        expiresAt: null,
+      }),
+      ...opts.platformService,
+    }),
+    configStore: stubConfigStore(opts.providers ?? [makeProvider()]),
+    getSettings: opts.getSettings ?? flatSettingsWithDefaultModel,
+    createHost: opts.createHost ?? (async () => stubHostAgentSession()),
+    timeoutGraceMs: opts.timeoutGraceMs,
+    closeAbortGraceMs: opts.closeAbortGraceMs,
+    sweepIntervalMs: opts.sweepIntervalMs,
+    idleTtlMs: opts.idleTtlMs,
+    flushIntervalMs: opts.flushIntervalMs,
+    stallMs: opts.stallMs,
+    solvedWrapupMs: opts.solvedWrapupMs,
+  })
+  let closed = false
+  return {
+    service,
+    db: store.db,
+    dir: store.dir,
+    close: async () => {
+      if (closed) return
+      closed = true
+      await service.close()
+      if (ownsStore) store.close()
+    },
+    stubs: { created, killed, removed },
+  }
 }

@@ -1,22 +1,15 @@
-import { describe, expect, mock, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
 import { agents, channelMessages } from "../../src/db/schema"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
-  makeProvider,
-  seedAgent,
-  seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
-  stubHostAgentSession,
+  makeAgentService,
   now,
+  promptRecordingHost,
+  seedAgent,
+  stubContainerManager,
 } from "../helpers"
-import { refine } from "../support"
 
 /** Container manager whose create is SLOW (simulates a real docker build) and
  * records calls — lets two concurrent reopens overlap and race the shared
@@ -36,11 +29,14 @@ function slowContainerManager(delayMs: number) {
 
 describe("reopen single-flight (v19)", () => {
   test("concurrent reopens of terminal agents on the same challenge restore the shared container exactly once", async () => {
-    const { db, dir, close } = setupDb()
+    const { manager, created, removed } = slowContainerManager(30)
+    const promptLog = new Map<string, string[]>()
+    const h = makeAgentService({
+      containerManager: manager,
+      createHost: promptRecordingHost(promptLog),
+    })
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedAgent(db, {
+      seedAgent(h.db, {
         id: "a-1",
         eventId: "evt-1",
         challengeId: "ch-1",
@@ -50,7 +46,7 @@ describe("reopen single-flight (v19)", () => {
         createdAt: now(),
         updatedAt: now(),
       })
-      seedAgent(db, {
+      seedAgent(h.db, {
         id: "a-2",
         eventId: "evt-1",
         challengeId: "ch-1",
@@ -61,43 +57,12 @@ describe("reopen single-flight (v19)", () => {
         updatedAt: now(),
       })
 
-      const provider = makeProvider()
-      const { manager, created, removed } = slowContainerManager(30)
-      const promptLog = new Map<string, string[]>()
-      const service = createAgentService({
-        db,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: refine({
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        }),
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-          const list: string[] = []
-          promptLog.set(input.agentId, list)
-          const sdk = refine<{
-            prompt: (text: string) => Promise<void>
-          }>(stub.session)
-          sdk.prompt = async (text: string) => {
-            list.push(text)
-          }
-          return stub
-        }),
-      })
-
       // Two agents woken at once — each takes its own agent lock, so both
       // reach prepareAgent concurrently and race the shared challenge
       // container build.
       await Promise.all([
-        service.sendMessage("a-1", { text: "wake 1" }),
-        service.sendMessage("a-2", { text: "wake 2" }),
+        h.service.sendMessage("a-1", { text: "wake 1" }),
+        h.service.sendMessage("a-2", { text: "wake 2" }),
       ])
 
       // The shared challenge container was built ONCE.
@@ -110,17 +75,16 @@ describe("reopen single-flight (v19)", () => {
       // No channel rows were produced by the direct messages (a reopen only
       // emits an agent.reopened orch notice, not a dm row).
       expect(
-        db
+        h.db
           .select()
           .from(channelMessages)
           .where(eq(channelMessages.channelKey, "dm:a-1"))
           .all()
       ).toHaveLength(0)
-      const rows = db.select().from(agents).all()
+      const rows = h.db.select().from(agents).all()
       expect(rows.every((a) => a.status === "idle")).toBe(true)
-      await service.close()
     } finally {
-      close()
+      await h.close()
     }
   })
 })

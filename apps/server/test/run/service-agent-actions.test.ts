@@ -4,16 +4,11 @@ import { eq } from "drizzle-orm"
 
 import { agents, spawnQueue } from "../../src/db/schema"
 import { builtinModelProfile } from "../../src/providers/builtin-models"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
+  makeAgentService,
   makeModel,
   makeProvider,
   seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
   stubHostAgentSession,
   TEST_MODEL_REF,
 } from "../helpers"
@@ -42,28 +37,11 @@ const MODEL_2_REF = "aegisx-prov-1/gpt-4o:high"
 /** Records host-session calls: which agents were prepared (createHost) and
  * which were aborted, and wires the real model runtime into the stub session
  * so applyModelSwitch can resolve pi models offline. */
-function makeService(
-  db: ReturnType<typeof setupDb>["db"],
-  dir: string,
-  providers: ReturnType<typeof makeProvider>[]
-) {
-  const { manager } = stubContainerManager()
+function makeService(providers: ReturnType<typeof makeProvider>[]) {
   const prepared: string[] = []
   const aborted: string[] = []
-  const service = createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore(providers),
-    getSettings: flatSettingsWithDefaultModel,
+  const h = makeAgentService({
+    providers,
     createHost: mock(
       async (input: { agentId: string; modelRuntime: unknown }) => {
         prepared.push(input.agentId)
@@ -88,7 +66,7 @@ function makeService(
       }
     ),
   })
-  return { service, prepared, aborted }
+  return { h, db: h.db, service: h.service, prepared, aborted }
 }
 
 async function spawnAgent(
@@ -100,13 +78,10 @@ async function spawnAgent(
 
 describe("per-agent actions (v19)", () => {
   test("sendMessage cold-reopens a terminal agent and drives a fresh turn", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = twoModelProvider()
+    const made = makeService([provider])
+    const { db, service, prepared } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { service, prepared } = makeService(db, dir, [provider])
-
       const agent = await spawnAgent(service)
       expect(prepared).toHaveLength(1)
 
@@ -125,73 +100,53 @@ describe("per-agent actions (v19)", () => {
       expect(resumed.status).toBe("running")
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.status).toBe("running")
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("a failed cold reopen keeps the terminal status (no ghost idle)", async () => {
-    const { db, dir, close } = setupDb()
+    let failPrepare = false
+    const h = makeAgentService({
+      createHost: mock(async (input: { agentId: string }) => {
+        if (failPrepare) throw new Error("docker down")
+        return stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
+          hang: true,
+        })
+      }),
+    })
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { manager } = stubContainerManager()
-      let failPrepare = false
-      const service = createAgentService({
-        db,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: refine({
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        }),
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          if (failPrepare) throw new Error("docker down")
-          return stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
-            hang: true,
-          })
-        }),
-      })
-
-      const agent = await service.spawn({
+      const agent = await h.service.spawn({
         eventId: "evt-1",
         challengeId: "ch-1",
         model: MODEL_1_REF,
       })
-      const closed = await service.closeAgent(agent.id)
+      const closed = await h.service.closeAgent(agent.id)
       expect(closed.status).toBe("aborted")
 
       // Restore fails (docker/model unavailable): the error rethrows and the
       // agent keeps its terminal state instead of flipping idle first.
       failPrepare = true
       await expect(
-        service.sendMessage(agent.id, { text: "cold ping" })
+        h.service.sendMessage(agent.id, { text: "cold ping" })
       ).rejects.toThrow("docker down")
-      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+      const row = h.db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .get()!
       expect(row.status).toBe("aborted")
       expect(row.completedAt).not.toBeNull()
-      await service.close()
     } finally {
-      close()
+      await h.close()
     }
   })
 
   test("switchAgentModel updates the named agent's own snapshot", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = twoModelProvider()
+    const made = makeService([provider])
+    const { db, service } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { service } = makeService(db, dir, [provider])
-
       const agent = await spawnAgent(service)
       expect(
         db.select().from(agents).where(eq(agents.id, agent.id)).get()!.model
@@ -203,40 +158,34 @@ describe("per-agent actions (v19)", () => {
       expect(switched.id).toBe(agent.id)
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.model).toBe(MODEL_2_REF)
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("stopAgent aborts the named agent's current turn", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = twoModelProvider()
+    const made = makeService([provider])
+    const { service, aborted } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { service, aborted } = makeService(db, dir, [provider])
-
       const agent = await spawnAgent(service)
       expect(agent.status).toBe("running") // prime hangs → turn in flight
 
       const stopped = await service.stopAgent(agent.id)
       expect(stopped.id).toBe(agent.id)
       expect(aborted).toContain(agent.id)
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("haltChallenge closes the challenge's live agents + cancels its pending items, scoped to one challenge", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = twoModelProvider()
+    const made = makeService([provider])
+    const { db, service } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      // ch-2 shares the event.
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { service } = makeService(db, dir, [provider])
       const queue = service.queue()
 
       const one = await spawnAgent(service)
@@ -271,20 +220,16 @@ describe("per-agent actions (v19)", () => {
         db.select().from(spawnQueue).where(eq(spawnQueue.id, item.id)).get()!
           .status
       ).toBe("cancelled")
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("unknown agentId rejects with not_found on all three actions", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = twoModelProvider()
+    const made = makeService([provider])
+    const { service } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { service } = makeService(db, dir, [provider])
-
       await expect(
         service.sendMessage("ghost", { text: "hi" })
       ).rejects.toThrow("Agent not found")
@@ -294,20 +239,16 @@ describe("per-agent actions (v19)", () => {
       await expect(service.stopAgent("ghost")).rejects.toThrow(
         "Agent not found"
       )
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("switchAgentModel lazy-refreshes the workspace runtime for providers added while live", async () => {
-    const { db, dir, close } = setupDb()
+    const providers = [twoModelProvider()]
+    const made = makeService(providers)
+    const { db, service, prepared } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const providers = [twoModelProvider()]
-      const { service, prepared } = makeService(db, dir, providers)
-
       const agent = await spawnAgent(service)
       expect(prepared).toHaveLength(1)
 
@@ -338,75 +279,61 @@ describe("per-agent actions (v19)", () => {
       })
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.model).toBe("aegisx-prov-2/new-model:off")
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("switchAgentModel persists the SDK-clamped thinking level", async () => {
-    const { db, dir, close } = setupDb()
-    try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { manager } = stubContainerManager()
-      const service = createAgentService({
-        db,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: refine({
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        }),
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(
-          async (input: { agentId: string; modelRuntime: unknown }) => {
-            const stub = stubHostAgentSession(
-              "sess-" + input.agentId.slice(0, 6),
-              { hang: true }
-            )
-            const sdk = refine<{
-              modelRuntime: unknown
-              thinkingLevel: string
-              setThinkingLevel: (level: string) => void
-              abort: () => Promise<void>
-            }>(stub.session)
-            sdk.modelRuntime = input.modelRuntime
-            sdk.thinkingLevel = "off"
-            // Simulate the SDK clamping: high → medium on the target model.
-            sdk.setThinkingLevel = (level: string) => {
-              sdk.thinkingLevel = level === "high" ? "medium" : level
-            }
-            sdk.abort = async () => {}
-            return stub
+    const provider = twoModelProvider()
+    const h = makeAgentService({
+      providers: [provider],
+      createHost: mock(
+        async (input: { agentId: string; modelRuntime: unknown }) => {
+          const stub = stubHostAgentSession(
+            "sess-" + input.agentId.slice(0, 6),
+            { hang: true }
+          )
+          const sdk = refine<{
+            modelRuntime: unknown
+            thinkingLevel: string
+            setThinkingLevel: (level: string) => void
+            abort: () => Promise<void>
+          }>(stub.session)
+          sdk.modelRuntime = input.modelRuntime
+          sdk.thinkingLevel = "off"
+          // Simulate the SDK clamping: high → medium on the target model.
+          sdk.setThinkingLevel = (level: string) => {
+            sdk.thinkingLevel = level === "high" ? "medium" : level
           }
-        ),
+          sdk.abort = async () => {}
+          return stub
+        }
+      ),
+    })
+    try {
+      const agent = await h.service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+        model: MODEL_1_REF,
       })
-
-      const agent = await spawnAgent(service)
-      await service.switchAgentModel(agent.id, { model: MODEL_2_REF })
-      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+      await h.service.switchAgentModel(agent.id, { model: MODEL_2_REF })
+      const row = h.db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, agent.id))
+        .get()!
       expect(row.model).toBe("aegisx-prov-1/gpt-4o:medium")
-      await service.close()
     } finally {
-      close()
+      await h.close()
     }
   })
 
   test("switchAgentModel surfaces diagnosable resolution errors", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = twoModelProvider()
+    const made = makeService([provider])
+    const { service } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = twoModelProvider()
-      const { service } = makeService(db, dir, [provider])
-
       const agent = await spawnAgent(service)
       await expect(
         service.switchAgentModel(agent.id, { model: "garbage" })
@@ -420,9 +347,8 @@ describe("per-agent actions (v19)", () => {
       await expect(
         service.switchAgentModel(agent.id, { model: "alias:nope" })
       ).rejects.toThrow("Invalid model ref")
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 })

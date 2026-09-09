@@ -1,47 +1,21 @@
 import { describe, expect, mock, test } from "bun:test"
 
 import { agents, sessionEntries, sessions } from "../../src/db/schema"
-import { createAgentService } from "../../src/run/service"
-import {
-  flatSettingsWithDefaultModel,
-  makeProvider,
-  seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
-  stubHostAgentSession,
-  now,
-} from "../helpers"
-import { refine } from "../support"
+import { makeAgentService, stubHostAgentSession, now } from "../helpers"
 
 /** A minimal service whose listMessages is the per-agent query under test. */
-function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
-  const provider = makeProvider()
-  const { manager } = stubContainerManager()
-  return createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore([provider]),
-    getSettings: flatSettingsWithDefaultModel,
+function makeService() {
+  const h = makeAgentService({
     createHost: mock(async () => stubHostAgentSession()),
   })
+  return { h, db: h.db, service: h.service }
 }
 
 let entryCounter = 0
 
 /** Insert one user-message session entry (renderable kind). */
 function insertMessage(
-  db: ReturnType<typeof setupDb>["db"],
+  db: ReturnType<typeof makeService>["db"],
   agentId: string,
   sessionId: string,
   seq: number
@@ -71,7 +45,7 @@ function insertMessage(
 }
 
 function seedAgentWithSession(
-  db: ReturnType<typeof setupDb>["db"],
+  db: ReturnType<typeof makeService>["db"],
   id: string,
   sessionId: string
 ) {
@@ -101,14 +75,11 @@ function seedAgentWithSession(
 
 describe("per-agent message cursor (v19)", () => {
   test("incremental pulls by per-session seq; agents never see each other", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { db, service } = made
       seedAgentWithSession(db, "a-1", "sess-a")
       seedAgentWithSession(db, "a-2", "sess-b")
-
-      const service = makeService(db, dir)
 
       // Interleaved writes across the two agents (seqs are per-session).
       insertMessage(db, "a-1", "sess-a", 1)
@@ -134,17 +105,15 @@ describe("per-agent message cursor (v19)", () => {
 
       // No session yet → empty list with the cursor preserved.
       expect(service.listMessages("ghost", { after: 7 }).items).toHaveLength(0)
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("sessionId override reads a non-active session", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { db, service } = made
       seedAgentWithSession(db, "a-1", "sess-active")
       db.insert(sessions)
         .values({
@@ -157,15 +126,13 @@ describe("per-agent message cursor (v19)", () => {
       insertMessage(db, "a-1", "sess-active", 1)
       insertMessage(db, "a-1", "sess-old", 1)
 
-      const service = makeService(db, dir)
       const active = service.listMessages("a-1", {})
       expect(active.items).toHaveLength(1)
       const old = service.listMessages("a-1", { sessionId: "sess-old" })
       expect(old.items).toHaveLength(1)
       expect(old.nextAfter).toBe(1)
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 })

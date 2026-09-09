@@ -4,15 +4,9 @@ import { eq } from "drizzle-orm"
 
 import { agents, channelMessages } from "../../src/db/schema"
 import { orchKey } from "../../src/run/channels"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
-  makeProvider,
+  makeAgentService,
   seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
 import { refine } from "../support"
@@ -20,10 +14,11 @@ import { refine } from "../support"
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-type Db = ReturnType<typeof setupDb>["db"]
-
 /** The event's orchestrator agent row. */
-function orchestratorOf(db: Db, eventId = "evt-1") {
+function orchestratorOf(
+  db: ReturnType<typeof makeService>["db"],
+  eventId = "evt-1"
+) {
   return db
     .select()
     .from(agents)
@@ -34,7 +29,7 @@ function orchestratorOf(db: Db, eventId = "evt-1") {
 }
 
 /** orch channel message rows (id order) for an event. */
-function orchRows(db: Db, eventId = "evt-1") {
+function orchRows(db: ReturnType<typeof makeService>["db"], eventId = "evt-1") {
   return db
     .select()
     .from(channelMessages)
@@ -47,28 +42,8 @@ function metaOf(row: { meta: string }): Record<string, unknown> {
 }
 
 /** Service whose scheduler createHost records prompt texts per agent. */
-function makeService(
-  db: Db,
-  dir: string,
-  promptLog: Map<string, string[]>,
-  failSolver = false
-) {
-  const provider = makeProvider()
-  const { manager } = stubContainerManager()
-  return createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore([provider]),
-    getSettings: flatSettingsWithDefaultModel,
+function makeService(promptLog: Map<string, string[]>, failSolver = false) {
+  const h = makeAgentService({
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
       const list: string[] = []
@@ -78,7 +53,7 @@ function makeService(
       }>(stub.session)
       sdk.prompt = async (text: string) => {
         if (failSolver) {
-          const row = db
+          const row = h.db
             .select()
             .from(agents)
             .where(eq(agents.id, input.agentId))
@@ -90,6 +65,7 @@ function makeService(
       return stub
     }),
   })
+  return { h, db: h.db, service: h.service }
 }
 
 const tagOf = (agentId: string) =>
@@ -97,13 +73,11 @@ const tagOf = (agentId: string) =>
 
 describe("agent lifecycle events → orch messages (v19)", () => {
   test("started/idle post as NON-urgent orch messages; the live scheduler is not woken until the tick", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
+      made = makeService(promptLog)
+      const { db, service } = made
 
       await service.startScheduler("evt-1")
       await settle()
@@ -148,21 +122,17 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       service.channels.runFlushTick()
       await settle()
       expect(promptLog.get(orch.id)?.length).toBe(primed + 1)
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("flagAccepted and finished post orch messages; a failed settle carries the idle(failed) marker", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
+      made = makeService(promptLog)
+      const { db, service } = made
 
       await service.startScheduler("evt-1")
       await settle()
@@ -193,21 +163,17 @@ describe("agent lifecycle events → orch messages (v19)", () => {
             metaOf(r).urgent !== true
         )
       ).toBe(true)
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("a failed solver turn posts idle(failed) so the scheduler can tell a dead solver from a pause", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog, true)
+      made = makeService(promptLog, true)
+      const { db, service } = made
 
       await service.startScheduler("evt-1")
       await settle()
@@ -225,21 +191,17 @@ describe("agent lifecycle events → orch messages (v19)", () => {
             metaOf(r).eventType === "agent.idle"
         )
       ).toBe(true)
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("a reopened agent posts agent.reopened", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
+      made = makeService(promptLog)
+      const { db, service } = made
 
       await service.startScheduler("evt-1")
       await settle()
@@ -265,22 +227,18 @@ describe("agent lifecycle events → orch messages (v19)", () => {
             metaOf(r).eventType === "agent.reopened"
         )
       ).toBe(true)
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("the queue-starved edge posts an URGENT orch message that wakes the live scheduler immediately", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      made = makeService(promptLog)
+      const { db, service } = made
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
 
       await service.startScheduler("evt-1")
       await settle()
@@ -312,21 +270,17 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const texts = promptLog.get(orch.id) ?? []
       expect(texts.length).toBe(primed + 1)
       expect(texts.at(-1)).toContain("队列不足")
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("W3 paused: agent events and queue urgent lines are dropped entirely; resume wakes with the re-sync message", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
+      made = makeService(promptLog)
+      const { db, service } = made
 
       await service.startScheduler("evt-1")
       await settle()
@@ -366,21 +320,17 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const texts = promptLog.get(orch.id) ?? []
       expect(texts.length).toBeGreaterThan(primed)
       expect(texts.some((t) => t.includes("重新同步"))).toBe(true)
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("a terminal scheduler stores events unread; a restart reopens the SAME agent and the tick catches up", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
+      made = makeService(promptLog)
+      const { db, service } = made
 
       const sched = await service.startScheduler("evt-1")
       await settle()
@@ -417,21 +367,17 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       expect(catchUp).toBeDefined()
       expect(catchUp).toContain("已空闲")
       expect(solver.id).toBeTruthy()
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("startScheduler reset recreates: the terminal scheduler is deleted, a fresh one made (W3.2)", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
+      made = makeService(promptLog)
+      const { service } = made
 
       const sched = await service.startScheduler("evt-1")
       await settle()
@@ -442,21 +388,17 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       expect(fresh.id).not.toBe(sched.id)
       expect(service.getAgent(sched.id)).toBeUndefined()
       expect(service.getAgent(fresh.id)?.status).toBe("idle")
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("scheduler-launched agents carry no manual marker in the orch message (W5)", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof createAgentService> | undefined
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const promptLog = new Map<string, string[]>()
-      service = makeService(db, dir, promptLog)
+      made = makeService(promptLog)
+      const { db, service } = made
 
       await service.startScheduler("evt-1")
       await settle()
@@ -475,10 +417,8 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       expect(started).toHaveLength(1)
       expect(started[0].body).toBe(`${tagOf(solver.id)}已启动`)
       expect(metaOf(started[0]).source).toBe("scheduler")
-      await service.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 })

@@ -3,42 +3,20 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents, sessionEntries, sessions } from "../../src/db/schema"
-import { builtinModelProfile } from "../../src/providers/builtin-models"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
+  makeAgentService,
+  makeModel,
   makeProvider,
-  seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
-import { refine } from "../support"
 
 /** Stub service: every createHost call records the prepared agent and returns
  * a stub session (no real pi / DbSessionManager). Session rows/entries are
  * seeded directly via the DB in the tests below. */
-function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
-  const { manager } = stubContainerManager()
+function makeService() {
   const prepared: string[] = []
-  const service = createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore([
-      makeProvider({ models: [createModel("model-1")] }),
-    ]),
-    getSettings: flatSettingsWithDefaultModel,
+  const h = makeAgentService({
+    providers: [makeProvider({ models: [makeModel()] })],
     createHost: mock(
       async (input: {
         agentId: string
@@ -52,20 +30,7 @@ function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
       }
     ),
   })
-  return { service, prepared }
-}
-
-function createModel(id: string) {
-  return {
-    id,
-    modelId: "gpt-4o-mini",
-    label: "Test Model",
-    enabled: true,
-    metadata: JSON.stringify(
-      builtinModelProfile("openai", "gpt-4o-mini")?.metadata ?? {}
-    ),
-    metadataSource: "pi:openai/gpt-4o-mini",
-  }
+  return { h, db: h.db, service: h.service, prepared }
 }
 
 /** A minimal message session_entries row (valid SessionEntry JSON). */
@@ -81,7 +46,7 @@ function entryData(role: string, text: string, id: string): string {
 
 /** Seed one session for the agent with `n` entries (seq 1..n). */
 function seedSession(
-  db: ReturnType<typeof setupDb>["db"],
+  db: ReturnType<typeof makeService>["db"],
   sessionId: string,
   agentId: string,
   n: number,
@@ -110,7 +75,7 @@ function seedSession(
 }
 
 function remainingSeqs(
-  db: ReturnType<typeof setupDb>["db"],
+  db: ReturnType<typeof makeService>["db"],
   sessionId: string
 ): number[] {
   return db
@@ -128,11 +93,9 @@ async function spawnAgent(service: ReturnType<typeof makeService>["service"]) {
 
 describe("multi-session + flat backtrack (v12)", () => {
   test("listAgentSessions returns sessions with counts + active flag", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, dir)
+      const { db, service } = made
       const agent = await spawnAgent(service)
 
       seedSession(db, "sess-1", agent.id, 3, "2025-01-01T00:00:00.000Z")
@@ -146,18 +109,15 @@ describe("multi-session + flat backtrack (v12)", () => {
       expect(list.map((s) => s.id)).toEqual(["sess-1", "sess-2"])
       expect(list[0]).toMatchObject({ messageCount: 3, isActive: false })
       expect(list[1]).toMatchObject({ messageCount: 1, isActive: true })
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("listMessages filters to the agent's active session", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, dir)
+      const { db, service } = made
       const agent = await spawnAgent(service)
 
       seedSession(db, "sess-1", agent.id, 3)
@@ -177,18 +137,15 @@ describe("multi-session + flat backtrack (v12)", () => {
       // Explicit session override can still reach the inactive session.
       const override = service.listMessages(agent.id, { sessionId: "sess-2" })
       expect(override.items).toHaveLength(2)
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("createAgentSession (/new) resets the pointer and rebuilds the live session", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service, prepared } = makeService(db, dir)
+      const { db, service, prepared } = made
       const agent = await spawnAgent(service)
       expect(prepared).toHaveLength(1)
 
@@ -204,18 +161,15 @@ describe("multi-session + flat backtrack (v12)", () => {
       expect(prepared).toHaveLength(2)
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.sessionFile).toBe(stubSessionId) // fresh stub id written back
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("activateAgentSession switches the pointer and rebuilds; no-op when already active", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service, prepared } = makeService(db, dir)
+      const { db, service, prepared } = made
       const agent = await spawnAgent(service)
 
       seedSession(db, "sess-1", agent.id, 1)
@@ -240,18 +194,15 @@ describe("multi-session + flat backtrack (v12)", () => {
       await expect(
         service.activateAgentSession(agent.id, "sess-ghost")
       ).rejects.toThrow("Session not found")
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("activating another session on a terminal agent reopens it (idle flip)", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service, prepared } = makeService(db, dir)
+      const { db, service, prepared } = made
       const agent = await spawnAgent(service)
 
       seedSession(db, "sess-1", agent.id, 1)
@@ -267,18 +218,15 @@ describe("multi-session + flat backtrack (v12)", () => {
       expect(
         db.select().from(agents).where(eq(agents.id, agent.id)).get()!.status
       ).toBe("idle")
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("backtrackAgent deletes entries after the target and rebuilds the live session", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service, prepared } = makeService(db, dir)
+      const { db, service, prepared } = made
       const agent = await spawnAgent(service)
 
       seedSession(db, "sess-1", agent.id, 4)
@@ -301,18 +249,15 @@ describe("multi-session + flat backtrack (v12)", () => {
         "Target message not found"
       )
       expect(remainingSeqs(db, "sess-1")).toEqual([1, 2])
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("backtrackAgent rejects legacy jsonl sessions", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, dir)
+      const { db, service } = made
       const agent = await spawnAgent(service)
 
       db.update(agents)
@@ -322,18 +267,15 @@ describe("multi-session + flat backtrack (v12)", () => {
       await expect(service.backtrackAgent(agent.id, 1)).rejects.toThrow(
         "Legacy jsonl sessions do not support backtracking"
       )
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("session ops reject unknown agents", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, dir)
+      const { service } = made
       await spawnAgent(service)
 
       // listAgentSessions is synchronous (read-only query).
@@ -349,9 +291,8 @@ describe("multi-session + flat backtrack (v12)", () => {
       await expect(service.backtrackAgent("ghost", 1)).rejects.toThrow(
         /not found|no session/
       )
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 })

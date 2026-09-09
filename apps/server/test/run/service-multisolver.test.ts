@@ -1,26 +1,20 @@
-import { describe, expect, mock, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 
 import { and, eq } from "drizzle-orm"
 
 import { agents, channelMessages, channelReads } from "../../src/db/schema"
 import { teamKey } from "../../src/run/channels"
-import { createAgentService } from "../../src/run/service"
+import type { AgentServiceOptions } from "../../src/run/service"
 import {
   flatSettingsWithDefaultModel,
+  makeAgentService,
   makeProvider,
+  promptRecordingHost,
   seedAgent,
-  seedChallenge,
-  seedEvent,
   setupDb,
-  stubConfigStore,
-  stubContainerManager,
-  stubHostAgentSession,
   TEST_MODEL_REF,
   now,
 } from "../helpers"
-import { refine } from "../support"
-
-type Db = ReturnType<typeof setupDb>
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -43,57 +37,27 @@ function seedChallengeHistory(
   })
 }
 
-/** Service whose createHost stub records every prompt text per agent id. */
+/** Service whose createHost stub records every prompt text per agent id
+ * (prompts resolve — turns settle idle). */
 function makeService(
-  db: Db["db"],
-  dir: string,
   provider: ReturnType<typeof makeProvider>,
-  opts: { hang?: boolean; getSettings?: () => Record<string, unknown> } = {}
+  opts: { getSettings?: AgentServiceOptions["getSettings"] } = {}
 ) {
-  const hang = opts.hang ?? true
-  const { manager } = stubContainerManager()
   const promptLog = new Map<string, string[]>()
-  const agentService = createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore([provider]),
-    getSettings: refine(opts.getSettings ?? flatSettingsWithDefaultModel),
-    createHost: mock(async (input: { agentId: string }) => {
-      const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
-        hang,
-      })
-      const list: string[] = []
-      promptLog.set(input.agentId, list)
-      const sdk = refine<{
-        prompt: (text: string) => Promise<void>
-      }>(stub.session)
-      sdk.prompt = async (text: string) => {
-        list.push(text)
-      }
-      return stub
-    }),
+  const h = makeAgentService({
+    providers: [provider],
+    getSettings: opts.getSettings,
+    createHost: promptRecordingHost(promptLog),
   })
-  return { agentService, promptLog }
+  return { h, db: h.db, agentService: h.service, promptLog }
 }
 
 describe("v19 multi-spawn on one challenge", () => {
   test("three spawns create 3 solver agents, each primed with its own initial", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const made = makeService(provider)
+    const { db, agentService, promptLog } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { agentService, promptLog } = makeService(db, dir, provider)
-
       const spawned = await Promise.all(
         [
           `${TEST_MODEL_REF}:off`,
@@ -130,18 +94,15 @@ describe("v19 multi-spawn on one challenge", () => {
         expect(list[0]).toContain("## Challenge")
       }
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("the system prompt carries the channel section for every solver", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const made = makeService(provider)
+    const { db, agentService } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { agentService } = makeService(db, dir, provider)
-
       await agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       await agentService.close()
 
@@ -154,18 +115,15 @@ describe("v19 multi-spawn on one challenge", () => {
       expect(row.systemPrompt).not.toContain("## Co-solvers")
       expect(row.systemPrompt).toContain("/opt/aegisx-sdk/GUIDE.md")
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("override mode primes the raw prompt; strategy mode appends the strategy section", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const made = makeService(provider)
+    const { agentService, promptLog } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { agentService, promptLog } = makeService(db, dir, provider)
-
       const [overrideAgent, strategyAgent] = await Promise.all([
         agentService.spawn({
           eventId: "evt-1",
@@ -190,21 +148,22 @@ describe("v19 multi-spawn on one challenge", () => {
       expect(strategyTexts).toContain("## Strategy")
       expect(strategyTexts).toContain("spawn strategy text")
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("no per-challenge cap: 5 spawns on one challenge under a raised global cap; unresolvable refs reject", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const store = setupDb()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { agentService } = makeService(db, dir, provider, {
+      const h = makeAgentService({
+        store,
+        providers: [provider],
         getSettings: () => ({
           ...flatSettingsWithDefaultModel(),
           "scheduler.maxConcurrentAgents": 6,
         }),
+        createHost: promptRecordingHost(new Map()),
       })
 
       // v19 decision: parallel attempts on one challenge are legal — with
@@ -212,35 +171,38 @@ describe("v19 multi-spawn on one challenge", () => {
       const spawned = []
       for (let i = 0; i < 5; i += 1) {
         spawned.push(
-          await agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+          await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
         )
       }
       expect(spawned).toHaveLength(5)
-      await agentService.close()
+      await h.close()
 
       // An unresolvable model ref fails the spawn with the ref in the error.
-      const fresh = makeService(db, dir, provider)
+      const fresh = makeAgentService({
+        store,
+        event: false,
+        challenge: false,
+        providers: [provider],
+        createHost: promptRecordingHost(new Map()),
+      })
       await expect(
-        fresh.agentService.spawn({
+        fresh.service.spawn({
           eventId: "evt-1",
           challengeId: "ch-1",
           model: "nope/hallucinated:off",
         })
       ).rejects.toThrow(/hallucinated/)
-      await fresh.agentService.close()
+      await fresh.close()
     } finally {
-      close()
+      store.close()
     }
   })
 
   test("no atomic flag: each spawned agent finishes independently with its own summary", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const made = makeService(provider)
+    const { agentService } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const { agentService } = makeService(db, dir, provider)
-
       const [a, b] = await Promise.all([
         agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }),
         agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }),
@@ -254,21 +216,15 @@ describe("v19 multi-spawn on one challenge", () => {
       expect(second.status).toBe("completed")
       expect(second.summary).toBe("summary B")
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("onboarding: a second spawn on the challenge sweeps the whole #team history into the first turn, exactly once", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["agentService"] | undefined
+    const provider = makeProvider()
+    const made = makeService(provider)
+    const { db, agentService, promptLog } = made
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const made = makeService(db, dir, provider)
-      const { agentService, promptLog } = made
-      service = agentService
-
       // A prior attempt leaves knowledge in the challenge's #team.
       const prior = await agentService.spawn({
         eventId: "evt-1",
@@ -325,21 +281,18 @@ describe("v19 multi-spawn on one challenge", () => {
             .map((r) => r.id)
         )
       )
-
-      await agentService.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made.h.close()
     }
   })
 
   test("cold reopen does NOT onboard: a direct wake delivers only the message; the #team backlog stays unread", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["agentService"] | undefined
+    const promptLog = new Map<string, string[]>()
+    const h = makeAgentService({
+      createHost: promptRecordingHost(promptLog),
+    })
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      seedAgent(db, {
+      seedAgent(h.db, {
         id: "a-1",
         eventId: "evt-1",
         challengeId: "ch-1",
@@ -350,48 +303,15 @@ describe("v19 multi-spawn on one challenge", () => {
         createdAt: now(),
         updatedAt: now(),
       })
-      // #team with unread history (another attempt's knowledge) — a reopen
-      // must NOT sweep it (§11.3 red line; user input is direct).
-      const provider = makeProvider()
-      const { manager } = stubContainerManager()
-      const promptLog = new Map<string, string[]>()
-      const agentService = createAgentService({
-        db,
-        dataDir: dir,
-        containerManager: manager,
-        platformService: refine({
-          submitFlag: async () => undefined,
-          targetAction: async () => ({
-            status: "running",
-            endpoints: [],
-            expiresAt: null,
-          }),
-        }),
-        configStore: stubConfigStore([provider]),
-        getSettings: flatSettingsWithDefaultModel,
-        createHost: mock(async (input: { agentId: string }) => {
-          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
-          const list: string[] = []
-          promptLog.set(input.agentId, list)
-          const sdk = refine<{
-            prompt: (text: string) => Promise<void>
-          }>(stub.session)
-          sdk.prompt = async (text: string) => {
-            list.push(text)
-          }
-          return stub
-        }),
-      })
-      service = agentService
 
       // Unread challenge history on the #team.
-      agentService.channels.post({
+      h.service.channels.post({
         channelKey: teamKey("ch-1"),
         author: { type: "system" },
         body: "old knowledge: libc 2.35",
       })
 
-      await agentService.sendMessage("a-1", { text: "wake" })
+      await h.service.sendMessage("a-1", { text: "wake" })
       await wait(100)
 
       // Exactly the direct message — no group-history sweep.
@@ -401,18 +321,14 @@ describe("v19 multi-spawn on one challenge", () => {
       expect(prompts[0]).not.toContain("libc 2.35")
       // The agent is live again (reopened) and the backlog stays unread.
       expect(
-        db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
+        h.db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
       ).toBe("idle")
       expect(
-        agentService.channels
-          .agentChannels("a-1")
-          .find((c) => c.kind === "team")!.unread
+        h.service.channels.agentChannels("a-1").find((c) => c.kind === "team")!
+          .unread
       ).toBe(1)
-
-      await agentService.close()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await h.close()
     }
   })
 })

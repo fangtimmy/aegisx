@@ -3,63 +3,34 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents } from "../../src/db/schema"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
-  makeProvider,
+  makeAgentService,
   seedAgent,
-  seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
   stubHostAgentSession,
   TEST_MODEL_REF,
   now,
 } from "../helpers"
 import { refine } from "../support"
 
-type Db = ReturnType<typeof setupDb>["db"]
-
 /** Service with a stubbed container + host session (no real Docker / LLM).
  * `grantedTools` (when passed) collects the native tool names handed to
  * createHost — used to assert what an agent is actually granted. */
-function makeService(
-  db: Db,
-  dir: string,
-  opts: { hang?: boolean; grantedTools?: string[] } = {}
-) {
+function makeService(opts: { hang?: boolean; grantedTools?: string[] } = {}) {
   const hang = opts.hang ?? true
-  const provider = makeProvider()
-  const { manager, created } = stubContainerManager()
-  const grantedTools = opts.grantedTools
-  const service = createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore([provider]),
-    getSettings: flatSettingsWithDefaultModel,
+  const h = makeAgentService({
     createHost: mock(
       async (input: {
         agentId: string
         extraTools?: Array<{ name: string }>
       }) => {
-        if (grantedTools) {
-          grantedTools.push(...(input.extraTools ?? []).map((t) => t.name))
+        if (opts.grantedTools) {
+          opts.grantedTools.push(...(input.extraTools ?? []).map((t) => t.name))
         }
         const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
           hang,
         })
         const sdk = refine<{
-          prompt: (text: string) => Promise<void>
+          prompt: () => Promise<void>
         }>(stub.session)
         sdk.prompt = async () => {
           if (hang) await new Promise(() => {})
@@ -68,7 +39,13 @@ function makeService(
       }
     ),
   })
-  return { service, created }
+  return {
+    h,
+    db: h.db,
+    dir: h.dir,
+    service: h.service,
+    created: h.stubs.created,
+  }
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 10))
@@ -80,10 +57,9 @@ const settle = () => new Promise((r) => setTimeout(r, 10))
  */
 describe("scheduler service behaviors (SDK backend)", () => {
   test("the orchestrator agent gets NO management tools (SDK replaces them)", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      const { service } = makeService(db, dir)
+      const { db, service } = made
 
       const sched = await service.startScheduler("evt-1")
 
@@ -92,16 +68,16 @@ describe("scheduler service behaviors (SDK backend)", () => {
       // SDK convergence: the snapshot grants no management tools; the
       // orchestrator manages via `aegisx` + the four file/bash tools.
       expect(JSON.parse(row.tools)).toEqual([])
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("reopening a legacy orchestrator grants NO management tools", async () => {
-    const { db, dir, close } = setupDb()
+    const granted: string[] = []
+    const made = makeService({ hang: false, grantedTools: granted })
     try {
-      seedEvent(db, "evt-1")
+      const { db, service } = made
       // Pre-SDK snapshot: the old 18 management tool names.
       seedAgent(db, {
         id: "legacy-orch",
@@ -137,28 +113,21 @@ describe("scheduler service behaviors (SDK backend)", () => {
         updatedAt: now(),
       })
 
-      const granted: string[] = []
-      const { service } = makeService(db, dir, {
-        hang: false,
-        grantedTools: granted,
-      })
       await service.sendMessage("legacy-orch", { text: "wake up" })
       await settle()
       // SDK convergence: the legacy snapshot is intersected with the (now
       // empty) ORCHESTRATOR_TOOLS — no management tool is resurrected.
       expect(granted).toEqual([])
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("containers default to the image SDK: event env, no bind mount, no ROLE", async () => {
-    const { db, dir, close } = setupDb()
+    delete process.env.AEGISX_SDK_PATH
+    const made = makeService({ hang: false })
     try {
-      delete process.env.AEGISX_SDK_PATH
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { db, dir, service, created } = made
       // Seed a terminal orchestrator agent so the first wake builds its
       // container; the solver is spawned fresh below.
       seedAgent(db, {
@@ -175,7 +144,6 @@ describe("scheduler service behaviors (SDK backend)", () => {
         updatedAt: now(),
       })
 
-      const { service, created } = makeService(db, dir, { hang: false })
       await service.sendMessage("orch-1", { text: "wake" })
       await settle()
       // A fresh solver spawn builds the challenge container.
@@ -215,18 +183,16 @@ describe("scheduler service behaviors (SDK backend)", () => {
         solverOpts.extraBinds?.some((b) => b.includes("/challenges:ro"))
       ).toBe(false)
       expect(solverOpts.env).toContain("AEGISX_EVENT_ID=evt-1")
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("AEGISX_SDK_PATH bind-mounts the SDK over /opt/aegisx-sdk (dev override)", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService({ hang: false })
     try {
+      const { db, dir, service, created } = made
       process.env.AEGISX_SDK_PATH = dir
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       seedAgent(db, {
         id: "orch-1",
         eventId: "evt-1",
@@ -241,7 +207,6 @@ describe("scheduler service behaviors (SDK backend)", () => {
         updatedAt: now(),
       })
 
-      const { service, created } = makeService(db, dir, { hang: false })
       await service.sendMessage("orch-1", { text: "wake" })
       await settle()
 
@@ -255,27 +220,23 @@ describe("scheduler service behaviors (SDK backend)", () => {
         schedOpts.extraBinds?.some((b) => b === `${dir}:/opt/aegisx-sdk:ro`)
       ).toBe(true)
       expect(schedOpts.env).toContain("PYTHONPATH=/opt/aegisx-sdk")
-      await service.close()
     } finally {
       delete process.env.AEGISX_SDK_PATH
-      close()
+      await made.h.close()
     }
   })
 
   test("assertModelsResolvable rejects a hallucinated model ref with the available list", async () => {
-    const { db, dir, close } = setupDb()
+    const made = makeService()
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const { service } = makeService(db, dir)
+      const { service } = made
 
       const bad = `nope/hallucinated:off`
       expect(() => service.assertModelsResolvable(bad)).toThrow(
         new RegExp(`Available models: .*${TEST_MODEL_REF}`)
       )
-      await service.close()
     } finally {
-      close()
+      await made.h.close()
     }
   })
 })

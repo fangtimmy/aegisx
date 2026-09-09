@@ -4,23 +4,16 @@ import { eq } from "drizzle-orm"
 
 import { agents, challengeRemote, challenges } from "../../src/db/schema"
 import { parseJson } from "../../src/lib/guards"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
+  makeAgentService,
   makeProvider,
-  seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
-import { refine } from "../support"
 
 /** Seed a challenge_remote row marking the challenge platform-integrated and
  * target-capable (drives isPlatformIntegrated / isTargetCapable). */
 function seedRemote(
-  db: ReturnType<typeof setupDb>["db"],
+  db: ReturnType<typeof makeService>["db"],
   challengeId: string,
   opts: {
     available?: boolean
@@ -49,41 +42,23 @@ function seedRemote(
     .run()
 }
 
-function makeService(
-  db: ReturnType<typeof setupDb>["db"],
-  dir: string,
-  provider: ReturnType<typeof makeProvider>
-) {
-  const { manager } = stubContainerManager()
-  return createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async () => ({
-        status: "running",
-        endpoints: [],
-        expiresAt: null,
-      }),
-    }),
-    configStore: stubConfigStore([provider]),
-    getSettings: flatSettingsWithDefaultModel,
+function makeService(provider: ReturnType<typeof makeProvider>) {
+  const h = makeAgentService({
+    providers: [provider],
     createHost: mock(async () =>
       stubHostAgentSession("sess-1", { hang: true })
     ),
   })
+  return { h, db: h.db, service: h.service }
 }
 
 describe("classic-parity: spawn on a challenge (v19 path)", () => {
   test("platform + target challenge → solver tools snapshot includes flag + target tools; systemPrompt rendered from builtin mainSystem", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const made = makeService(provider)
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { db, service } = made
       seedRemote(db, "ch-1")
-      const provider = makeProvider()
-      const service = makeService(db, dir, provider)
 
       await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       const agent = db
@@ -91,7 +66,6 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
         .from(agents)
         .where(eq(agents.role, "solver"))
         .get()!
-      await service.close()
 
       const tools = parseJson<string[]>(agent.tools)
       expect(tools).toEqual(
@@ -108,26 +82,22 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
       expect(agent.systemPrompt).toContain("CTF-solving agent")
       expect(agent.systemPrompt).toContain("submit_flag")
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("plain challenge (no platform/target) → submit_flag granted, no target tools", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const made = makeService(provider)
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { db, service } = made
       // no challenge_remote row
-      const provider = makeProvider()
-      const service = makeService(db, dir, provider)
-
       await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       const agent = db
         .select()
         .from(agents)
         .where(eq(agents.role, "solver"))
         .get()!
-      await service.close()
 
       const tools = parseJson<string[]>(agent.tools)
       expect(tools).toContain("finish_run")
@@ -140,26 +110,22 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
       expect(agent.systemPrompt).toContain("CTF-solving agent")
       expect(agent.systemPrompt).toContain("submit_flag")
     } finally {
-      close()
+      await made.h.close()
     }
   })
 
   test("spawn yields exactly one solver agent", async () => {
-    const { db, dir, close } = setupDb()
+    const provider = makeProvider()
+    const made = makeService(provider)
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const provider = makeProvider()
-      const service = makeService(db, dir, provider)
-
+      const { db, service } = made
       await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
-      await service.close()
 
       const all = db.select().from(agents).all()
       expect(all).toHaveLength(1)
       expect(all[0].role).toBe("solver")
     } finally {
-      close()
+      await made.h.close()
     }
   })
 })

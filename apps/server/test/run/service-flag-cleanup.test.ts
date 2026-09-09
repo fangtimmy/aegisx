@@ -13,15 +13,9 @@ import {
   spawnQueue,
 } from "../../src/db/schema"
 import { orchKey, teamKey } from "../../src/run/channels"
-import { createAgentService } from "../../src/run/service"
 import {
-  flatSettingsWithDefaultModel,
-  makeProvider,
+  makeAgentService,
   seedChallenge,
-  seedEvent,
-  setupDb,
-  stubConfigStore,
-  stubContainerManager,
   stubHostAgentSession,
 } from "../helpers"
 import { refine } from "../support"
@@ -29,35 +23,21 @@ import { refine } from "../support"
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-type Db = ReturnType<typeof setupDb>["db"]
-
 /** Service with per-agent prompt + abort recording (no hang: turns settle;
  * "streaming" targets are staged by flipping agent rows to running). */
 function makeService(
-  db: Db,
-  dir: string,
   opts: { targetCalls?: string[]; solvedWrapupMs?: number } = {}
 ) {
-  const provider = makeProvider()
-  const { manager } = stubContainerManager()
   const promptLog = new Map<string, string[]>()
   const abortLog: string[] = []
-  const service = createAgentService({
-    db,
-    dataDir: dir,
-    containerManager: manager,
-    platformService: refine({
-      submitFlag: async () => undefined,
-      targetAction: async (_challengeId: string, action: string) => {
+  const h = makeAgentService({
+    solvedWrapupMs: opts.solvedWrapupMs,
+    platformService: {
+      targetAction: async (_challengeId, action) => {
         opts.targetCalls?.push(action)
         return { status: "running", endpoints: [], expiresAt: null }
       },
-    }),
-    configStore: stubConfigStore([provider]),
-    getSettings: flatSettingsWithDefaultModel,
-    ...(opts.solvedWrapupMs !== undefined
-      ? { solvedWrapupMs: opts.solvedWrapupMs }
-      : {}),
+    },
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
       const list: string[] = []
@@ -75,19 +55,22 @@ function makeService(
       return stub
     }),
   })
-  return { service, promptLog, abortLog }
+  return { h, db: h.db, dir: h.dir, service: h.service, promptLog, abortLog }
 }
 
 /** Stage an agent as mid-turn (the cleanup paths target running solvers;
  * the stub session is idle, so the DB row is the truth). */
-function stageRunning(db: Db, agentId: string) {
+function stageRunning(
+  db: ReturnType<typeof makeService>["db"],
+  agentId: string
+) {
   db.update(agents)
     .set({ status: "running", updatedAt: new Date().toISOString() })
     .where(eq(agents.id, agentId))
     .run()
 }
 
-function orchRows(db: Db, eventId = "evt-1") {
+function orchRows(db: ReturnType<typeof makeService>["db"], eventId = "evt-1") {
   return db
     .select()
     .from(channelMessages)
@@ -100,14 +83,15 @@ const tagOf = (agentId: string) =>
 
 describe("solved-challenge cleanup (v19 flag hooks)", () => {
   test("full solve stops sibling agents, cancels pending items, stops the orphan target; the scheduler learns via orch messages", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const targetCalls: string[] = []
+      made = makeService({ targetCalls })
+      const { db, service } = made
+      // ch-2 shares the event.
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
       // ch-1 is target-capable → the full-solve orphan cleanup stops it.
-      db.insert(require("../../src/db/schema").challengeRemote)
+      db.insert(challengeRemote)
         .values({
           challengeId: "ch-1",
           eventId: "evt-1",
@@ -122,9 +106,6 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
           syncedAt: new Date().toISOString(),
         })
         .run()
-      const targetCalls: string[] = []
-      const made = makeService(db, dir, { targetCalls })
-      service = made.service
 
       await service.startScheduler("evt-1")
       await settle()
@@ -207,17 +188,15 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       expect(cleanup!.body).toContain("已停止 2 个同题 agent")
       expect(cleanup!.body).toContain("已取消 1 个排队项")
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("partial multi-flag solve posts ONE #team notice; the tick steers every live agent on the challenge", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      made = makeService()
+      const { db, service, promptLog } = made
       // Two accepted flags already recorded for the challenge (the spawn
       // gate must be off for agents to still run on it).
       const ts = new Date().toISOString()
@@ -242,9 +221,6 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
           })
           .run()
       }
-      const made = makeService(db, dir)
-      service = made.service
-      const { promptLog } = made
 
       await service.startScheduler("evt-1")
       await settle()
@@ -307,18 +283,17 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       expect(orchNotice).toBeDefined()
       expect(JSON.parse(orchNotice!.meta).urgent).toBeUndefined()
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("policy stop-siblings/stop-target off: teammates survive with a wrap-up #team notice, the target stays; queue items still cancel", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      db.insert(require("../../src/db/schema").challengeRemote)
+      const targetCalls: string[] = []
+      made = makeService({ targetCalls })
+      const { db, service } = made
+      db.insert(challengeRemote)
         .values({
           challengeId: "ch-1",
           eventId: "evt-1",
@@ -356,9 +331,6 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
           updatedAt: ts,
         })
         .run()
-      const targetCalls: string[] = []
-      const made = makeService(db, dir, { targetCalls })
-      service = made.service
 
       await service.startScheduler("evt-1")
       await settle()
@@ -410,17 +382,15 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       expect(cleanup).toBeDefined()
       expect(cleanup!.body).not.toContain("已停止")
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("policy notify off: no #team posts on acceptance; the cleanup still runs", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      made = makeService()
+      const { db, service } = made
       db.insert(schedulerConfig)
         .values({
           eventId: "evt-1",
@@ -429,8 +399,6 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
           updatedAt: new Date().toISOString(),
         })
         .run()
-      const made = makeService(db, dir)
-      service = made.service
 
       await service.startScheduler("evt-1")
       await settle()
@@ -461,22 +429,18 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
         db.select().from(agents).where(eq(agents.id, sibling.id)).get()!.status
       ).toBe("aborted")
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 })
 
 describe("acceptance outcome tiers (repeat / extra)", () => {
   test("repeat: a duplicate of an accepted value fires only the submitter event — no notice, no stops, no cancel", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
       const targetCalls: string[] = []
-      const made = makeService(db, dir, { targetCalls })
-      service = made.service
+      made = makeService({ targetCalls })
+      const { db, service } = made
       const submitter = await service.spawn({
         eventId: "evt-1",
         challengeId: "ch-1",
@@ -516,17 +480,16 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
       ).toBe("pending")
       expect(targetCalls).toHaveLength(0)
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("extra: a new flag value on a solved challenge posts ONE light notice; siblings survive, queue and target untouched", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const targetCalls: string[] = []
+      made = makeService({ targetCalls })
+      const { db, service } = made
       // The challenge is already solved (an accepted flag exists); the
       // reproduction switch lets agents still run on it.
       db.insert(challengeFlags)
@@ -551,9 +514,6 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
           updatedAt: new Date().toISOString(),
         })
         .run()
-      const targetCalls: string[] = []
-      const made = makeService(db, dir, { targetCalls })
-      service = made.service
       const finder = await service.spawn({
         eventId: "evt-1",
         challengeId: "ch-1",
@@ -595,18 +555,17 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
       ).toBe("pending")
       expect(targetCalls).toHaveLength(0)
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("last live agent terminal releases the challenge target (a closed run must not leak the instance)", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      db.insert(require("../../src/db/schema").challengeRemote)
+      const targetCalls: string[] = []
+      made = makeService({ targetCalls })
+      const { db, service } = made
+      db.insert(challengeRemote)
         .values({
           challengeId: "ch-1",
           eventId: "evt-1",
@@ -621,9 +580,6 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
           syncedAt: new Date().toISOString(),
         })
         .run()
-      const targetCalls: string[] = []
-      const made = makeService(db, dir, { targetCalls })
-      service = made.service
 
       const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
@@ -642,14 +598,17 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
       await wait(50)
       expect(targetCalls).toContain("stop")
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 })
 
 /** Seed a target-capable remote row (the fence's slot accounting). */
-function seedRemote(db: Db, challengeId: string, eventId = "evt-1") {
+function seedRemote(
+  db: ReturnType<typeof makeService>["db"],
+  challengeId: string,
+  eventId = "evt-1"
+) {
   db.insert(challengeRemote)
     .values({
       challengeId,
@@ -668,7 +627,7 @@ function seedRemote(db: Db, challengeId: string, eventId = "evt-1") {
 }
 
 function seedPolicy(
-  db: Db,
+  db: ReturnType<typeof makeService>["db"],
   patch: Partial<typeof schedulerConfig.$inferInsert>,
   eventId = "evt-1"
 ) {
@@ -680,15 +639,12 @@ function seedPolicy(
 
 describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drain", () => {
   test("self-exclusion: the submitter is not delivered its own full-solve notice; a live sibling still gets it", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      made = makeService()
+      const { db, service } = made
       // Siblings survive (stop off) so BOTH agents are live recipients.
       seedPolicy(db, { stopSiblingsOnSolve: false })
-      const made = makeService(db, dir)
-      service = made.service
 
       const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
@@ -712,20 +668,16 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
         .get()!
       expect(row.meta).toContain(a.id)
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("stopSubmitterOnSolve: a full solve terminates the submitter too (no wrap-up)", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      made = makeService()
+      const { db, service } = made
       seedPolicy(db, { stopSubmitterOnSolve: true })
-      const made = makeService(db, dir)
-      service = made.service
 
       const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       await settle()
@@ -735,20 +687,16 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
 
       expect(service.refresh(a.id)!.status).toBe("aborted")
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("multi-flag partial does not terminate the submitter (intermediate flags are not a solve)", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      made = makeService()
+      const { db, service } = made
       seedPolicy(db, { stopSubmitterOnSolve: true })
-      const made = makeService(db, dir)
-      service = made.service
 
       const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       await settle()
@@ -758,19 +706,15 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
 
       expect(service.refresh(a.id)!.status).toBe("idle")
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("full solve shortens the surviving submitter's deadline (write-up wrap-up bound)", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const made = makeService(db, dir, { solvedWrapupMs: 60_000 })
-      service = made.service
+      made = makeService({ solvedWrapupMs: 60_000 })
+      const { db, service } = made
 
       const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       await settle()
@@ -783,19 +727,15 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       // Spawn default is 1h out; the wrap-up bound must pull it inside 90s.
       expect(Date.parse(row.deadlineAt!)).toBeLessThan(Date.now() + 90_000)
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("terminal aborted/failed attempts recycle their workspace dir; completed attempts keep it", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
-      const made = makeService(db, dir)
-      service = made.service
+      made = makeService()
+      const { dir, service } = made
 
       const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
@@ -822,24 +762,20 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       await wait(50)
       expect(existsSync(dirOf(b.id))).toBe(true)
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 
   test("solved-challenge slot release wakes the drainer (pending item launches with no sibling closes)", async () => {
-    const { db, dir, close } = setupDb()
-    let service: ReturnType<typeof makeService>["service"] | undefined
+    let made: ReturnType<typeof makeService> | undefined
     try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      made = makeService()
+      const { db, service } = made
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
       seedRemote(db, "ch-1")
       seedRemote(db, "ch-2")
       // Submitter survives (no sibling closes → nothing else triggers a drain).
       seedPolicy(db, { stopSiblingsOnSolve: false })
-      const made = makeService(db, dir)
-      service = made.service
 
       const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
       await settle()
@@ -864,8 +800,7 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
         .find((i) => i.id === item.id)
       expect(after?.status).toBe("running")
     } finally {
-      await service?.close().catch(() => undefined)
-      close()
+      await made?.h.close().catch(() => undefined)
     }
   })
 })
