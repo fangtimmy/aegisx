@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test"
+import { PassThrough } from "node:stream"
+
+import Docker from "dockerode"
 
 import {
   collectSink,
+  createContainerManager,
   execTimeoutMs,
+  type DockerLike,
 } from "../../src/run/container/container-manager"
 
 /**
@@ -77,5 +82,206 @@ describe("collectSink", () => {
     ])
     expect(Buffer.concat(into).toString()).toBe("aaabbbcc")
     expect(bytes()).toBe(12)
+  })
+})
+
+/**
+ * One docker multiplexed protocol frame: 8-byte header (stream type — 1
+ * stdout, 2 stderr — plus BE payload length) followed by the payload. Feeding
+ * these through the hijacked stream exercises the real dockerode demuxer.
+ */
+function frame(streamType: 1 | 2, payload: string): Buffer {
+  const header = Buffer.alloc(8)
+  header.writeUInt8(streamType, 0)
+  header.writeUInt32BE(Buffer.byteLength(payload), 4)
+  return Buffer.concat([header, Buffer.from(payload)])
+}
+
+/** Real dockerode modem, so the tests exercise the actual demuxer. */
+const dockerModem = new Docker().modem
+
+/**
+ * Fake exec world for runHijacked: `exec.start` hands back a PassThrough the
+ * test drives (write frames, end, destroy), `inspect` is scripted per test,
+ * and demux delegates to the real dockerode modem so the frame protocol itself
+ * stays under test. Every test must `await hijacked` then yield once more so
+ * runHijacked has attached demux + end/close/error handlers before the stream
+ * is driven.
+ */
+function fakeDocker(
+  behavior: {
+    inspect?: () => { Running?: boolean; ExitCode?: number | null }
+  } = {}
+): {
+  manager: ReturnType<typeof createContainerManager>
+  stream: PassThrough
+  hijacked: Promise<void>
+} {
+  const stream = new PassThrough()
+  let hijack!: () => void
+  const hijacked = new Promise<void>((resolve) => (hijack = resolve))
+  const docker: DockerLike = {
+    getContainer: () => ({
+      exec: async () => ({
+        start: async () => {
+          hijack()
+          return stream
+        },
+        inspect: async () =>
+          behavior.inspect?.() ?? { Running: false, ExitCode: 0 },
+      }),
+      inspect: async () => ({ State: { Running: false } }),
+      remove: async () => undefined,
+      kill: async () => undefined,
+      putArchive: async () => undefined,
+    }),
+    createContainer: async () => ({ id: "fake", start: async () => undefined }),
+    modem: {
+      demuxStream: (source, out, err) =>
+        dockerModem.demuxStream(source, out, err),
+    },
+  }
+  return { manager: createContainerManager({ docker }), stream, hijacked }
+}
+
+/**
+ * Real AbortSignal with abort-listener counting patched on. Bun's AbortSignal
+ * exposes no listenerCount, and locking the listener-leak fix needs to observe
+ * that runHijacked removed its abort listener once the run finished.
+ */
+function countingSignal(): {
+  controller: AbortController
+  signal: AbortSignal
+  listenerCount: () => number
+} {
+  const controller = new AbortController()
+  let count = 0
+  const add = controller.signal.addEventListener.bind(controller.signal)
+  const remove = controller.signal.removeEventListener.bind(controller.signal)
+  controller.signal.addEventListener = (...args: Parameters<typeof add>) => {
+    if (args[0] === "abort") count++
+    add(...args)
+  }
+  controller.signal.removeEventListener = (
+    ...args: Parameters<typeof remove>
+  ) => {
+    if (args[0] === "abort") count--
+    remove(...args)
+  }
+  return { controller, signal: controller.signal, listenerCount: () => count }
+}
+
+describe("runHijacked", () => {
+  test("normal completion resolves exit code, delivers bytes, leaves no abort listener", async () => {
+    const { manager, stream, hijacked } = fakeDocker({
+      inspect: () => ({ Running: false, ExitCode: 7 }),
+    })
+    const chunks: Buffer[] = []
+    const { signal, listenerCount } = countingSignal()
+    const pending = manager.exec("box", "echo hi", {
+      onData: (chunk) => chunks.push(chunk),
+      signal,
+    })
+    await hijacked
+    await Bun.sleep(1)
+    stream.write(frame(1, "hello"))
+    stream.write(frame(2, " oops"))
+    stream.end()
+    expect(await pending).toEqual({
+      exitCode: 7,
+      timedOut: false,
+      aborted: false,
+    })
+    expect(Buffer.concat(chunks).toString()).toBe("hello oops")
+    expect(listenerCount()).toBe(0)
+  })
+
+  test("hijacked stream error mid-flight rejects the exec promise", async () => {
+    const { manager, stream, hijacked } = fakeDocker()
+    const pending = manager.exec("box", "echo hi", { onData: () => {} })
+    await hijacked
+    await Bun.sleep(1)
+    stream.destroy(new Error("hijack kaboom"))
+    await expect(pending).rejects.toThrow("hijack kaboom")
+  })
+
+  test("timeout while streaming resolves null exit code, keeps pre-timeout bytes, destroys stream", async () => {
+    const { manager, stream, hijacked } = fakeDocker({
+      inspect: () => ({ Running: false, ExitCode: 0 }),
+    })
+    const chunks: Buffer[] = []
+    const pending = manager.exec("box", "yes", {
+      onData: (chunk) => chunks.push(chunk),
+      timeout: 0.05,
+    })
+    await hijacked
+    await Bun.sleep(1)
+    stream.write(frame(1, "pre-timeout"))
+    expect(await pending).toEqual({
+      exitCode: null,
+      timedOut: true,
+      aborted: false,
+    })
+    expect(Buffer.concat(chunks).toString()).toBe("pre-timeout")
+    expect(stream.destroyed).toBe(true)
+  })
+
+  test("abort after start resolves aborted, destroys stream, removes abort listener", async () => {
+    const { manager, stream, hijacked } = fakeDocker({
+      inspect: () => ({ Running: false, ExitCode: 0 }),
+    })
+    const { controller, signal, listenerCount } = countingSignal()
+    const pending = manager.exec("box", "sleep 100", {
+      onData: () => {},
+      signal,
+    })
+    await hijacked
+    await Bun.sleep(1)
+    controller.abort()
+    expect(await pending).toEqual({
+      exitCode: 0,
+      timedOut: false,
+      aborted: true,
+    })
+    expect(stream.destroyed).toBe(true)
+    expect(listenerCount()).toBe(0)
+  })
+
+  test("pollExitCode falls back to final inspect ExitCode while daemon keeps reporting Running", async () => {
+    let inspectCalls = 0
+    const { manager, stream, hijacked } = fakeDocker({
+      inspect: () => {
+        inspectCalls++
+        return inspectCalls <= 10
+          ? { Running: true, ExitCode: null }
+          : { Running: true, ExitCode: 5 }
+      },
+    })
+    const pending = manager.exec("box", "true", { onData: () => {} })
+    await hijacked
+    await Bun.sleep(1)
+    stream.end()
+    const result = await pending
+    expect(result.exitCode).toBe(5)
+    expect(inspectCalls).toBe(11)
+  })
+})
+
+describe("capture", () => {
+  test("demuxes stdout and stderr frames into separate buffers", async () => {
+    const { manager, stream, hijacked } = fakeDocker({
+      inspect: () => ({ Running: false, ExitCode: 0 }),
+    })
+    const pending = manager.capture("box", "ls")
+    await hijacked
+    await Bun.sleep(1)
+    stream.write(frame(1, "OUT-"))
+    stream.write(frame(2, "ERR"))
+    stream.write(frame(1, "1"))
+    stream.end()
+    const result = await pending
+    expect(result.stdout.toString()).toBe("OUT-1")
+    expect(result.stderr).toBe("ERR")
+    expect(result.exitCode).toBe(0)
   })
 })

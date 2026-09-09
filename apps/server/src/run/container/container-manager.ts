@@ -87,6 +87,46 @@ export type ExecOptions = {
   env?: string[]
 }
 
+/**
+ * Structural slice of the dockerode client this manager touches. Exists as the
+ * test seam: passing a fake via {@link createContainerManager} options drives
+ * hijacked exec streams without a Docker daemon; when omitted the real client
+ * is constructed from the socket path exactly as before.
+ */
+export type DockerLike = {
+  getContainer(name: string): {
+    exec(opts: {
+      Cmd?: string[]
+      WorkingDir?: string
+      AttachStdout?: boolean
+      AttachStderr?: boolean
+      Tty?: boolean
+      Env?: string[]
+    }): Promise<{
+      start(opts: { Detach: boolean; Tty: boolean }): Promise<Readable>
+      inspect(): Promise<{ Running?: boolean; ExitCode?: number | null }>
+    }>
+    inspect(): Promise<{ State: { Running: boolean } }>
+    remove(opts?: { force?: boolean; v?: boolean }): Promise<unknown>
+    kill(opts?: { signal?: string }): Promise<unknown>
+    putArchive(
+      tar: Buffer | NodeJS.ReadableStream,
+      opts: { path: string }
+    ): Promise<unknown>
+  }
+  createContainer(opts: object): Promise<{
+    id: string
+    start(): Promise<unknown>
+  }>
+  modem: {
+    demuxStream(
+      stream: NodeJS.ReadableStream,
+      stdout: NodeJS.WritableStream,
+      stderr: NodeJS.WritableStream
+    ): void
+  }
+}
+
 export type ContainerManager = ReturnType<typeof createContainerManager>
 
 /**
@@ -129,12 +169,16 @@ async function pollExitCode(execInst: {
   return info.ExitCode ?? null
 }
 
-export function createContainerManager(options?: { socketPath?: string }) {
+export function createContainerManager(options?: {
+  socketPath?: string
+  /** Test seam: used in place of a daemon-backed dockerode client when given. */
+  docker?: DockerLike
+}) {
   const socketPath =
     options?.socketPath ?? process.env.DOCKER_SOCKET ?? "/var/run/docker.sock"
-  const docker = existsSync(socketPath)
-    ? new Docker({ socketPath })
-    : new Docker()
+  const docker: DockerLike =
+    options?.docker ??
+    (existsSync(socketPath) ? new Docker({ socketPath }) : new Docker())
 
   function get(name: string) {
     return docker.getContainer(name)
