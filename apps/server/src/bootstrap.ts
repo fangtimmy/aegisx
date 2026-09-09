@@ -28,7 +28,10 @@ import type { AgentService } from "./run/service"
  * resources are matched and only rewritten when env drift is detected, so a
  * container restart on a persistent data dir converges without duplicating
  * anything. Failures log and leave the server up (the UI stays usable for
- * manual repair).
+ * manual repair). The TSecBench hosted harness injects BENCHMARK_BASE_URL /
+ * BENCHMARK_TOKEN instead of the AEGISX_PLATFORM_* names — accepted as
+ * fallbacks (AEGISX_* wins), with the platform type defaulting to tsecbench
+ * when only BENCHMARK_BASE_URL is given.
  */
 
 /** Conservative metadata for models absent from pi's builtin catalog. */
@@ -176,15 +179,20 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
     }
   }
   if (env.AEGISX_EVENT_NAME) spec.eventName = env.AEGISX_EVENT_NAME
-  if (env.AEGISX_PLATFORM_TYPE && env.AEGISX_PLATFORM_BASE_URL) {
-    const type = env.AEGISX_PLATFORM_TYPE
-    if (!isPlatformType(type)) {
-      throw new Error(`AEGISX_PLATFORM_TYPE is not a platform type: ${type}`)
+  const platformType =
+    env.AEGISX_PLATFORM_TYPE ??
+    (env.BENCHMARK_BASE_URL ? "tsecbench" : undefined)
+  const platformBaseUrl = env.AEGISX_PLATFORM_BASE_URL ?? env.BENCHMARK_BASE_URL
+  if (platformType && platformBaseUrl) {
+    if (!isPlatformType(platformType)) {
+      throw new Error(
+        `AEGISX_PLATFORM_TYPE is not a platform type: ${platformType}`
+      )
     }
     spec.platform = {
-      type,
-      baseUrl: env.AEGISX_PLATFORM_BASE_URL,
-      credential: env.AEGISX_PLATFORM_CREDENTIAL ?? "",
+      type: platformType,
+      baseUrl: platformBaseUrl,
+      credential: env.AEGISX_PLATFORM_CREDENTIAL ?? env.BENCHMARK_TOKEN ?? "",
       ...(env.AEGISX_PLATFORM_REMOTE_EVENT_ID
         ? { remoteEventId: env.AEGISX_PLATFORM_REMOTE_EVENT_ID }
         : {}),

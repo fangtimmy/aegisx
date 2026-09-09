@@ -26,6 +26,10 @@ docker run -d --name aegisx-tsec \
   -e AEGISX_PLATFORM_BASE_URL=https://tsecbench.zc.tencent.com \
   -e AEGISX_PLATFORM_CREDENTIAL=<BENCHMARK_TOKEN> \
   aegisx/tsecbench:v7
+
+# TSecBench 托管环境兼容：harness 注入的 BENCHMARK_BASE_URL / BENCHMARK_TOKEN
+# 可直接替代 AEGISX_PLATFORM_BASE_URL / AEGISX_PLATFORM_CREDENTIAL
+# （平台类型自动判为 tsecbench；AEGISX_* 显式给出时优先）。
 ```
 
 镜像体积：未压缩 4.75GB，gzip 压缩后 **1.81GB**（上限 3GB）。
@@ -54,7 +58,7 @@ sed 改写源码——那种方式把提示词文本硬编码在 Dockerfile 里�
 
 | 项 | 值 | 依据 |
 |---|---|---|
-| 赛事 `promptHint` | TSecBench 平台简报：flag 格式、category=难度、靶机不过期、409=等槽退避、离线禁装包、**扫描限定靶机地址** | 68 个 accepted flag 格式恒定；230 次 409；实测出现过扫宿主内网的偏航 |
+| 赛事 `promptHint` | TSecBench 平台简报：flag 格式、category=难度、**6 小时总时长与截止感知**、靶机不过期、409=等槽退避、离线禁装包、**扫描限定靶机地址** | 68 个 accepted flag 格式恒定；230 次 409；实测出现过扫宿主内网的偏航 |
 | `scheduler.defaultRunTimeoutMs` | 30min | 59 题中位 1.8min 解出、agent 有效工作 p90≈20min；编排者仍按难度逐 spawn 覆盖（10-15/30-45/60-90min） |
 | `maxConcurrentTargets` | 3 | 平台实例硬上限 |
 | `stopSubmitterOnSolve` | true | 评测只看 flag，完全解出即停（省 5% 成本 + 2.9 agent-h） |

@@ -46,6 +46,41 @@ function fakeAgentService(applied: Array<Record<string, unknown>>) {
   })
 }
 
+describe("bootstrap env: hosted TSecBench benchmark variables", () => {
+  test("BENCHMARK_BASE_URL/TOKEN alone bind a tsecbench platform", () => {
+    const spec = readBootstrapSpec({
+      BENCHMARK_BASE_URL: "https://tsecbench.zc.tencent.com",
+      BENCHMARK_TOKEN: "bench-tok",
+    })
+    expect(spec.platform).toEqual({
+      type: "tsecbench",
+      baseUrl: "https://tsecbench.zc.tencent.com",
+      credential: "bench-tok",
+    })
+  })
+
+  test("AEGISX_PLATFORM_* wins over BENCHMARK_* on every field", () => {
+    const spec = readBootstrapSpec({
+      AEGISX_PLATFORM_TYPE: "ctfd",
+      AEGISX_PLATFORM_BASE_URL: "https://ctf.example.com",
+      AEGISX_PLATFORM_CREDENTIAL: "aegisx-tok",
+      BENCHMARK_BASE_URL: "https://tsecbench.zc.tencent.com",
+      BENCHMARK_TOKEN: "bench-tok",
+    })
+    expect(spec.platform).toEqual({
+      type: "ctfd",
+      baseUrl: "https://ctf.example.com",
+      credential: "aegisx-tok",
+    })
+  })
+
+  test("BENCHMARK_TOKEN without a base URL binds nothing", () => {
+    expect(
+      readBootstrapSpec({ BENCHMARK_TOKEN: "bench-tok" }).platform
+    ).toBeUndefined()
+  })
+})
+
 describe("bootstrap event preset", () => {
   const dir = mkdtempSync(join(tmpdir(), "aegisx-preset-test-"))
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
