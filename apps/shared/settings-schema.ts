@@ -2,7 +2,7 @@ import { isRecord } from "./agent"
 
 type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
 
-export type SettingGroup = "智能体" | "运行时" | "容器"
+type SettingGroup = "智能体" | "运行时" | "容器"
 
 type BaseDef = {
   key: SettingKey

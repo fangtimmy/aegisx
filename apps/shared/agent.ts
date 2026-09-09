@@ -77,25 +77,13 @@ export {
 } from "./domain"
 export type { AgentStatus } from "./domain"
 
-import type {
-  BranchSummaryEntry,
-  CompactionEntry,
-  SessionEntry,
-  SessionMessageEntry,
-} from "@earendil-works/pi-coding-agent"
+import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 
 export type {
   CompactionEntry,
   SessionEntry,
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
-
-/** Renderable session-entry kinds the timeline consumes. Other kinds
- * (model_change, label, session_info, ...) are persisted but not rendered. */
-export type RenderableEntry =
-  | SessionMessageEntry
-  | CompactionEntry
-  | BranchSummaryEntry
 
 /**
  * One persisted session entry projected for the wire, with its append position.

@@ -12,7 +12,8 @@
       "ignore": ["src/components/ui/**"]
     },
     "apps/shared": {
-      "project": ["*.ts"]
+      "project": ["*.ts"],
+      "includeEntryExports": true
     }
   }
 }

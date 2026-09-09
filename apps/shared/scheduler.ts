@@ -10,7 +10,7 @@ export type NextTaskPolicy = "eager" | "drained"
 
 /** Per-event orchestration policy (scheduler_config columns, camelCase wire
  * shape). Defaults live in the DB schema + run/scheduler-policy.ts. */
-export type SchedulerPolicyConfig = {
+type SchedulerPolicyConfig = {
   notifyTeamOnFlag: boolean
   stopSiblingsOnSolve: boolean
   stopTargetOnSolve: boolean

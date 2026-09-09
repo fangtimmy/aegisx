@@ -70,15 +70,6 @@ export type EventPlatform = {
   credentialConfigured: boolean
 }
 
-export type SubmissionStatus =
-  | "pending"
-  | "accepted"
-  | "rejected"
-  | "partial"
-  | "already_solved"
-  | "rate_limited"
-  | "error"
-
 /** Per-agent lifecycle. Solver + orchestrator agents use running|idle
  * (turn-by-turn); terminal states keep the DB session + files for reopen. */
 export type AgentStatus =
@@ -119,16 +110,6 @@ export type ThinkingLevel =
   | "xhigh"
   | "max"
 
-const THINKING_LEVELS: readonly ThinkingLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]
-
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
   return (
     value === "off" ||
@@ -139,14 +120,6 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
     value === "xhigh" ||
     value === "max"
   )
-}
-
-export function normalizeThinkingLevel(value: unknown): ThinkingLevel {
-  return isThinkingLevel(value) ? value : "off"
-}
-
-export function thinkingLevels(): readonly ThinkingLevel[] {
-  return THINKING_LEVELS
 }
 
 export type PiModelProfile = {
@@ -230,13 +203,7 @@ export type EventSummary = {
   activeAgentCount: number
   lastActivityAt: string
 }
-export type TargetEndpointProtocol =
-  | "http"
-  | "https"
-  | "ws"
-  | "wss"
-  | "tcp"
-  | "udp"
+type TargetEndpointProtocol = "http" | "https" | "ws" | "wss" | "tcp" | "udp"
 
 export type TargetEndpoint = {
   name: string
@@ -245,12 +212,7 @@ export type TargetEndpoint = {
   guidance?: string[]
 }
 
-export type TargetStatus =
-  | "absent"
-  | "starting"
-  | "running"
-  | "stopping"
-  | "failed"
+type TargetStatus = "absent" | "starting" | "running" | "stopping" | "failed"
 
 export type TargetState = {
   status: TargetStatus

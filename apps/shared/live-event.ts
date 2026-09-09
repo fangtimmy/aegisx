@@ -6,7 +6,7 @@ import type { ChannelFileMeta } from "./channels"
  * channel key). v19 attachments are shared/-tree paths (copied by the
  * server at post time); content is read directly from the workspace, not
  * fetched. */
-export type ChannelMessage = {
+type ChannelMessage = {
   id: number
   channelKey: string
   authorType: "system" | "user" | "agent"
@@ -123,8 +123,3 @@ export type LiveEvent =
       message: ChannelMessage
     }
 export type { ThinkingLevel } from "./domain"
-export {
-  isThinkingLevel,
-  normalizeThinkingLevel,
-  thinkingLevels,
-} from "./domain"

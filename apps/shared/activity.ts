@@ -2,7 +2,7 @@
  * each item is a timestamped fact already persisted in agents /
  * challenge_flags / spawn_queue. */
 
-export type ActivityKind =
+type ActivityKind =
   | "flag"
   | "agentSpawn"
   | "agentEnd"

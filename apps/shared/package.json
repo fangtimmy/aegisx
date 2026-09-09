@@ -12,7 +12,7 @@
     "check": "oxlint --type-check . && oxfmt --check .",
     "fmt": "oxlint --fix --type-check . && oxfmt ."
   },
-  "dependencies": {
+  "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2"
   }
 }

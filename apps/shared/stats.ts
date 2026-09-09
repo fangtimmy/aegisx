@@ -12,7 +12,7 @@ type EventStatsWindow = {
   end: string | null
 }
 
-export type EventStatsOverview = {
+type EventStatsOverview = {
   challengesTotal: number
   /** Any solve dimension (local accepted flag / manual override / remote). */
   challengesSolved: number

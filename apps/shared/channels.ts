@@ -9,7 +9,7 @@
  * channel "exist"; there is no directory table and no get-or-create. */
 
 /** The three derived-key shapes. */
-export type ChannelKind = "team" | "dm" | "orch"
+type ChannelKind = "team" | "dm" | "orch"
 
 /** One channel entry (GET /api/challenges/:id/channels etc.). `unread` is the
  * per-reader cursor delta (SDK list); UI trees pass a null reader and get 0. */
