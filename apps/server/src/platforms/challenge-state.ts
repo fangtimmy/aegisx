@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm"
+import { and, eq, ne, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challengeFlags, challengeRemote, challenges } from "../db/schema"
@@ -55,6 +55,13 @@ export function fullySolvedAsideFromFlag(
       .get() !== undefined
   )
 }
+
+/** The fully-solved rule as SQL over `challenges LEFT JOIN challenge_remote`,
+ * for read-side aggregations (event summaries): a remote verdict or the
+ * manual state settles it, and an accepted local flag counts only where no
+ * platform verdict exists — integrated challenges' accepted rows can be
+ * multi-flag partials. */
+export const fullySolvedSql = sql`(${challengeRemote.solved} = 1 or ${challenges.manualSolveState} != 'unsolved' or ((${challengeRemote.remoteId} is null or ${challengeRemote.available} = 0) and exists (select 1 from ${challengeFlags} where ${challengeFlags.challengeId} = ${challenges.id} and ${challengeFlags.status} = 'accepted')))`
 
 export function getChallengeRemote(
   db: Database,

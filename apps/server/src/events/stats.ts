@@ -23,6 +23,10 @@ import {
   sessionEntries,
   spawnQueue,
 } from "../db/schema"
+import {
+  isPlatformIntegrated,
+  type ChallengeRemote,
+} from "../platforms/challenge-state"
 
 /** Sum of one guarded usage field over entries joined to the event's agents,
  * grouped by a column of `agents`. Shares the JSON1 extractors with
@@ -129,27 +133,27 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
     values.push(flag)
     flagsByChallenge.set(flag.challengeId, values)
   }
+  // The fully-solved rule (see challenge-state): an accepted local flag only
+  // counts where no platform verdict exists — integrated accepted rows can
+  // be multi-flag partials.
   const solvedOf = (
     challengeId: string,
     manual: string,
-    remoteSolved: boolean
+    remote: ChallengeRemote | null
   ) =>
-    (flagsByChallenge.get(challengeId) ?? []).some(
-      (f) => f.status === "accepted"
-    ) ||
+    remote?.solved === true ||
     manual !== "unsolved" ||
-    remoteSolved
+    (!isPlatformIntegrated(remote) &&
+      (flagsByChallenge.get(challengeId) ?? []).some(
+        (f) => f.status === "accepted"
+      ))
   let challengesSolved = 0
   let pointsEarned = 0
   let pointsAvailable = 0
   const solvedByChallenge = new Map<string, boolean>()
   for (const { challenge, remote } of challengeRows) {
     if (challenge.points !== null) pointsAvailable += challenge.points
-    const solved = solvedOf(
-      challenge.id,
-      challenge.manualSolveState,
-      remote?.solved ?? false
-    )
+    const solved = solvedOf(challenge.id, challenge.manualSolveState, remote)
     solvedByChallenge.set(challenge.id, solved)
     if (solved) {
       challengesSolved += 1

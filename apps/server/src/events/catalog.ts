@@ -21,7 +21,10 @@ import {
 } from "../db/schema"
 import { parseJson } from "../lib/guards"
 import { RemoteTargetInfoSchema } from "../lib/schemas"
-import type { ChallengeRemote } from "../platforms/challenge-state"
+import {
+  fullySolvedSql,
+  type ChallengeRemote,
+} from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
 import { toFlagPublic } from "../run/public"
 import { collapseToAttempts } from "../run/queries"
@@ -55,7 +58,7 @@ export function createCatalogReader(
       .select({
         ...getTableColumns(events),
         challengeCount: count(challenges.id),
-        solvedCount: sql<number>`coalesce(sum(case when ${challengeRemote.solved} = 1 or ${challenges.manualSolveState} != 'unsolved' or exists (select 1 from ${challengeFlags} where ${challengeFlags.challengeId} = ${challenges.id} and ${challengeFlags.status} = 'accepted') then 1 else 0 end), 0)`,
+        solvedCount: sql<number>`coalesce(sum(case when ${fullySolvedSql} then 1 else 0 end), 0)`,
         lastChallengeAt: max(challenges.updatedAt),
         activeAgentCount: sql<number>`coalesce((select sum(case when a.status in ('running', 'idle') then 1 else 0 end) from agents a where a.event_id = events.id), 0)`,
         lastAgentAt: sql<

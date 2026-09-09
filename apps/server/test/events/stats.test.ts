@@ -549,4 +549,93 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
     expect(idleRow != null && idleRow.idleMs > 0).toBe(true)
     expect(runRow?.idleMs).toBe(0)
   })
+
+  test("an accepted flag solves only where no platform verdict exists", async () => {
+    const { app, dataDir } = createTestApp()
+    const event = await responseJson<{ id: string }>(
+      await app.request("/api/events", json("POST", { name: "Stats Event" }))
+    )
+    const db = seedDb(dataDir)
+
+    const integrated = [
+      { challengeId: "ch-partial", remoteId: "101", solved: false },
+      { challengeId: "ch-remote", remoteId: "102", solved: true },
+      { challengeId: "ch-manual", remoteId: "103", solved: false },
+    ]
+    for (const row of integrated) {
+      db.insert(challengeRemote)
+        .values({
+          challengeId: row.challengeId,
+          eventId: event.id,
+          sourceKey: "ctfd:test",
+          remoteId: row.remoteId,
+          available: true,
+          solved: row.solved,
+          syncedAt: "2025-01-01T00:10:00Z",
+        })
+        .run()
+    }
+    // Remote row present but unavailable — not integrated.
+    db.insert(challengeRemote)
+      .values({
+        challengeId: "ch-unavailable",
+        eventId: event.id,
+        sourceKey: "ctfd:test",
+        remoteId: "104",
+        available: false,
+        solved: false,
+        syncedAt: "2025-01-01T00:20:00Z",
+      })
+      .run()
+
+    seedChallenge(db, event.id, { id: "ch-partial", points: 100 })
+    seedChallenge(db, event.id, { id: "ch-remote", points: 200 })
+    seedChallenge(db, event.id, { id: "ch-local", points: 300 })
+    seedChallenge(db, event.id, {
+      id: "ch-manual",
+      points: 400,
+      manualSolveState: "solved",
+    })
+    seedChallenge(db, event.id, { id: "ch-unavailable", points: 500 })
+
+    for (const challengeId of ["ch-partial", "ch-local", "ch-unavailable"]) {
+      db.insert(challengeFlags)
+        .values({
+          id: `flag-${challengeId}`,
+          challengeId,
+          flag: `flag{${challengeId}}`,
+          status: "accepted",
+          source: "agent",
+          agentId: null,
+          createdAt: "2025-01-01T01:00:00Z",
+          updatedAt: "2025-01-01T01:00:00Z",
+        })
+        .run()
+    }
+
+    const response = await app.request(`/api/events/${event.id}/stats`)
+    expect(response.status).toBe(200)
+    const { stats } = await responseJson<{ stats: EventStats }>(response)
+    expect(stats.overview).toMatchObject({
+      challengesTotal: 5,
+      challengesSolved: 4,
+      pointsEarned: 1400,
+      pointsAvailable: 1500,
+    })
+    const solvedById = (id: string) =>
+      stats.challengeEfficiency.find((c) => c.challengeId === id)?.solved
+    // Integrated + partial accepted flag: the platform verdict owns the
+    // challenge, so this is NOT solved (the fence agrees).
+    expect(solvedById("ch-partial")).toBe(false)
+    expect(solvedById("ch-remote")).toBe(true)
+    expect(solvedById("ch-local")).toBe(true)
+    expect(solvedById("ch-manual")).toBe(true)
+    expect(solvedById("ch-unavailable")).toBe(true)
+
+    // The catalog summary reads the same rule.
+    const detail = await responseJson<{
+      event: { challengeCount: number; solvedCount: number }
+    }>(await app.request(`/api/events/${event.id}`))
+    expect(detail.event).toMatchObject({ challengeCount: 5, solvedCount: 4 })
+  })
 })
