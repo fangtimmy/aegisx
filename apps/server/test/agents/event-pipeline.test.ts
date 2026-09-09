@@ -3,9 +3,16 @@ import { describe, expect, setSystemTime, test } from "bun:test"
 import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent"
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
+import type {
+  AgentSession,
+  SessionEntry,
+} from "@earendil-works/pi-coding-agent"
 
-import { createAgentEventPipeline } from "../../src/agents/event-pipeline"
+import { accumulateEntryUsage } from "../../src/agents/entry-usage"
+import {
+  computeContextSample,
+  createAgentEventPipeline,
+} from "../../src/agents/event-pipeline"
 import type { LiveBus } from "../../src/agents/live"
 import { refine } from "../support"
 
@@ -512,5 +519,229 @@ describe("createAgentEventPipeline timing state machine", () => {
       durationMs: 1000,
     })
     setSystemTime()
+  })
+})
+
+// --- incremental context sampling (computeContextSample) --------------------
+// The sampler seeds a per-session accumulator from getEntries() once, then
+// advances from the tail as entries append (leaf id moves on every append).
+// Every sample must stay equal to a fresh full walk of the same entries.
+
+type FixtureUsage = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  cost: { total: number }
+}
+
+function fixtureUsage(over: Partial<FixtureUsage> = {}): FixtureUsage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: { total: 0 },
+    ...over,
+  }
+}
+
+function assistantUsageEntry(u: FixtureUsage, entryId: string): SessionEntry {
+  return refine<SessionEntry>({
+    type: "message",
+    id: entryId,
+    parentId: null,
+    timestamp: "t",
+    message: refine<AgentMessage>({ role: "assistant", content: [], usage: u }),
+  })
+}
+
+function toolResultUsageEntry(
+  u: FixtureUsage,
+  toolCallId: string,
+  entryId: string
+): SessionEntry {
+  return refine<SessionEntry>({
+    type: "message",
+    id: entryId,
+    parentId: null,
+    timestamp: "t",
+    message: refine<AgentMessage>({
+      role: "toolResult",
+      toolCallId,
+      content: [],
+      isError: false,
+      usage: u,
+    }),
+  })
+}
+
+function compactionUsageEntry(u: FixtureUsage, entryId: string): SessionEntry {
+  return refine<SessionEntry>({
+    type: "compaction",
+    id: entryId,
+    parentId: null,
+    timestamp: "t",
+    summary: "s",
+    firstKeptEntryId: "k",
+    tokensBefore: 1000,
+    usage: u,
+  })
+}
+
+/** A fake session: getEntries() copies (both managers are defensive) and the
+ * leaf id is mutable — an append moves it, a backtrack moves it to an
+ * ancestor. */
+function fakeSession(
+  entries: SessionEntry[],
+  leaf: { id: string | null }
+): AgentSession {
+  return refine<AgentSession>({
+    sessionManager: refine({
+      getEntries: () => [...entries],
+      getLeafId: () => leaf.id,
+    }),
+    getContextUsage: () => ({
+      tokens: 123,
+      contextWindow: 1000,
+      percent: 12.3,
+    }),
+  })
+}
+
+function leafOf(entries: SessionEntry[]): { id: string | null } {
+  return { id: entries.length > 0 ? entries[entries.length - 1].id : null }
+}
+
+/** The wire carries totals + cacheHitRate from the accumulator; a sample is
+ * correct iff they equal the full-walk reference. */
+function expectParity(session: AgentSession, entries: SessionEntry[]): void {
+  const sample = computeContextSample(session)
+  const ref = accumulateEntryUsage(entries)
+  expect(sample.totals).toEqual({
+    input: ref.input,
+    output: ref.output,
+    cacheRead: ref.cacheRead,
+    cacheWrite: ref.cacheWrite,
+    cost: ref.cost,
+  })
+  expect(sample.cacheHitRate).toBe(ref.cacheHitRate)
+}
+
+describe("computeContextSample incremental accumulator", () => {
+  test("live context part passes through from getContextUsage()", () => {
+    const entries = [messageEntry("user", 1000, "u1")]
+    const sample = computeContextSample(fakeSession(entries, leafOf(entries)))
+    expect(sample.tokens).toBe(123)
+    expect(sample.contextWindow).toBe(1000)
+    expect(sample.percent).toBe(12.3)
+  })
+
+  test("seed equals a full walk of the pre-existing entries", () => {
+    const entries = [
+      messageEntry("user", 1000, "u1"),
+      assistantUsageEntry(
+        fixtureUsage({
+          input: 100,
+          output: 50,
+          cacheRead: 200,
+          cost: { total: 0.01 },
+        }),
+        "a1"
+      ),
+      toolResultUsageEntry(fixtureUsage({ input: 10 }), "c1", "t1"),
+      compactionUsageEntry(
+        fixtureUsage({ input: 500, cost: { total: 0.05 } }),
+        "cp1"
+      ),
+    ]
+    expectParity(fakeSession(entries, leafOf(entries)), entries)
+  })
+
+  test("totals stay equal to a full walk after a series of appends", () => {
+    const entries = [messageEntry("user", 1000, "u1")]
+    const leaf = leafOf(entries)
+    const session = fakeSession(entries, leaf)
+    expectParity(session, entries)
+
+    const appends: SessionEntry[] = [
+      assistantUsageEntry(
+        fixtureUsage({
+          input: 100,
+          cacheRead: 30,
+          output: 20,
+          cost: { total: 0.01 },
+        }),
+        "a1"
+      ),
+      toolResultUsageEntry(fixtureUsage({ input: 5 }), "c1", "t1"),
+      assistantUsageEntry(
+        fixtureUsage({
+          input: 200,
+          cacheRead: 150,
+          output: 80,
+          cost: { total: 0.02 },
+        }),
+        "a2"
+      ),
+      compactionUsageEntry(
+        fixtureUsage({ input: 900, cost: { total: 0.1 } }),
+        "cp1"
+      ),
+      toolResultUsageEntry(fixtureUsage({ input: 1 }), "c2", "t2"),
+    ]
+    for (const entry of appends) {
+      entries.push(entry)
+      leaf.id = entry.id
+      expectParity(session, entries)
+    }
+  })
+
+  test("appends must move the leaf: an unchanged leaf keeps the cached totals", () => {
+    const entries = [
+      assistantUsageEntry(fixtureUsage({ input: 10 }), "a1"),
+      toolResultUsageEntry(fixtureUsage({ input: 1 }), "c1", "t1"),
+    ]
+    const leaf = leafOf(entries)
+    const session = fakeSession(entries, leaf)
+    const before = computeContextSample(session)
+    entries.push(assistantUsageEntry(fixtureUsage({ input: 999 }), "a2"))
+    const after = computeContextSample(session)
+    expect(after.totals).toEqual(before.totals)
+
+    // Moving the leaf (what a real append does) releases the advance.
+    leaf.id = "a2"
+    expectParity(session, entries)
+  })
+
+  test("a shrink (backtrack) rebuilds from the shorter history", () => {
+    const entries = [
+      messageEntry("user", 1000, "u1"),
+      assistantUsageEntry(fixtureUsage({ input: 100 }), "a1"),
+      assistantUsageEntry(fixtureUsage({ input: 200 }), "a2"),
+      toolResultUsageEntry(fixtureUsage({ input: 3 }), "c1", "t1"),
+    ]
+    const leaf = leafOf(entries)
+    const session = fakeSession(entries, leaf)
+    expectParity(session, entries)
+
+    // Backtrack to u1, then continue appending below the old leaf.
+    entries.splice(1)
+    leaf.id = "u1"
+    expectParity(session, entries)
+
+    entries.push(assistantUsageEntry(fixtureUsage({ input: 42 }), "a3"))
+    leaf.id = "a3"
+    expectParity(session, entries)
+  })
+
+  test("accumulator state is per session", () => {
+    const a = [assistantUsageEntry(fixtureUsage({ input: 100 }), "a1")]
+    const b = [assistantUsageEntry(fixtureUsage({ input: 700 }), "b1")]
+    const sessionA = fakeSession(a, leafOf(a))
+    const sessionB = fakeSession(b, leafOf(b))
+    expectParity(sessionA, a)
+    expectParity(sessionB, b)
+    expectParity(sessionA, a)
   })
 })

@@ -9,7 +9,8 @@ import type {
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
 
-import { accumulateEntryUsage } from "./entry-usage"
+import { createEntryUsageAccumulator } from "./entry-usage"
+import type { SessionUsageSample } from "./entry-usage"
 import type { LiveBus } from "./live"
 
 /** AssistantMessageEvent (from pi-ai) reached indirectly via the SDK union —
@@ -89,11 +90,56 @@ function isTerminalValue(value: unknown): value is ToolTerminal {
   return value === "timed_out" || value === "cancelled" || value === "failed"
 }
 
+/** Incremental per-session usage accumulator behind `computeContextSample`.
+ * Seeded once from the current entries on first sample, then advanced from
+ * the tail — entries are append-only in both session managers and the leaf id
+ * moves on every append (and on backtrack), so an unchanged leaf id means the
+ * cached totals are still exact. A shrink (backtrack / session switch) is the
+ * rare full-rebuild path. Keeps per-emit context sampling O(new entries)
+ * instead of O(all entries) on every stat-strip refresh. */
+type UsageState = {
+  acc: ReturnType<typeof createEntryUsageAccumulator>
+  lastSeenLength: number
+  lastLeafId: string | null
+}
+
+const usageStates = new WeakMap<AgentSession, UsageState>()
+
+function syncUsageState(session: AgentSession): SessionUsageSample {
+  const manager = session.sessionManager
+  let state = usageStates.get(session)
+  if (!state) {
+    const entries = manager.getEntries()
+    const acc = createEntryUsageAccumulator()
+    for (const entry of entries) acc.fold(entry)
+    state = {
+      acc,
+      lastSeenLength: entries.length,
+      lastLeafId: manager.getLeafId(),
+    }
+    usageStates.set(session, state)
+    return acc.snapshot()
+  }
+  const leafId = manager.getLeafId()
+  if (leafId === state.lastLeafId) return state.acc.snapshot()
+  const entries = manager.getEntries()
+  if (entries.length < state.lastSeenLength) {
+    state.acc = createEntryUsageAccumulator()
+    state.lastSeenLength = 0
+  }
+  for (let i = state.lastSeenLength; i < entries.length; i += 1) {
+    state.acc.fold(entries[i])
+  }
+  state.lastSeenLength = entries.length
+  state.lastLeafId = leafId
+  return state.acc.snapshot()
+}
+
 /** Per-agent context snapshot for the conversation stat strip (pi-TUI footer
  * parity: cumulative usage from session entries via the shared accumulator +
  * live context usage from `session.getContextUsage()`). */
 export function computeContextSample(session: AgentSession): ContextSnapshot {
-  const sample = accumulateEntryUsage(session.sessionManager.getEntries())
+  const sample = syncUsageState(session)
   const cu = session.getContextUsage()
   return {
     tokens: cu?.tokens ?? null,

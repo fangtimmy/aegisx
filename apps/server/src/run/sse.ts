@@ -5,12 +5,72 @@ import { streamSSE } from "hono/streaming"
 import { parseChannelKey } from "./channels"
 import type { AgentService } from "./service"
 
+/** The two streaming variants the pipeline stamps with a monotonic
+ * `revision`; everything else on the wire is a one-shot frame. */
+type ProgressEvent = Extract<LiveEvent, { revision: number }>
+
+function isProgressEvent(event: LiveEvent): event is ProgressEvent {
+  return event.type === "message.progress" || event.type === "tool.progress"
+}
+
+/** Identity of an in-flight stream: one agent's streaming message draft or
+ * one executing tool. A newer revision of the same identity supersedes all
+ * earlier ones (each frame carries the WHOLE accumulated message / latest
+ * tool state, so older copies are pure redundancy). */
+function coalesceKeyOf(event: ProgressEvent): string {
+  const id = event.type === "message.progress" ? event.key : event.toolCallId
+  return `${event.agentId}|${event.type}|${id}`
+}
+
+/**
+ * Bounded buffer for the SSE pump: `message.progress` / `tool.progress`
+ * frames collapse to the highest revision per identity (replacing in the
+ * arrival slot of the first frame, so relative order to other frames is
+ * preserved), while every other event passes through in order. A long
+ * streaming reply to a slow client therefore holds ONE frame per active
+ * identity instead of thousands of ever-growing copies.
+ */
+export function createProgressCoalescer() {
+  let pending: LiveEvent[] = []
+  const slots = new Map<string, number>()
+  return {
+    get size(): number {
+      return pending.length
+    },
+    push(event: LiveEvent): void {
+      if (!isProgressEvent(event)) {
+        pending.push(event)
+        return
+      }
+      const key = coalesceKeyOf(event)
+      const at = slots.get(key)
+      if (at === undefined) {
+        slots.set(key, pending.length)
+        pending.push(event)
+        return
+      }
+      const held = pending[at]
+      if (isProgressEvent(held) && event.revision > held.revision) {
+        pending[at] = event
+      }
+    },
+    /** Take everything buffered, in order, and reset for the next batch. */
+    drain(): LiveEvent[] {
+      const out = pending
+      pending = []
+      slots.clear()
+      return out
+    },
+  }
+}
+
 /** Shared SSE pump (EventSource): subscribe BEFORE seeding the snapshot so no
  * event between the snapshot read and the subscribe is missed — duplicates
  * (an event in both snapshot and queue) are harmless, the UI handles them
- * idempotently. `seed` returns false to close immediately (e.g. unknown
- * agent). onAbort wakes a pending idle wait so the loop exits and the
- * subscription never leaks. */
+ * idempotently (progress frames with equal revisions even coalesce away).
+ * `seed` returns false to close immediately (e.g. unknown agent). onAbort
+ * wakes a pending idle wait so the loop exits and the subscription never
+ * leaks. */
 function pumpLiveStream(
   c: Context,
   subscribe: (listener: (event: LiveEvent) => void) => () => void,
@@ -18,7 +78,7 @@ function pumpLiveStream(
 ): Response {
   return streamSSE(c, async (stream) => {
     let aborted = false
-    const queue: LiveEvent[] = []
+    const coalescer = createProgressCoalescer()
     let resolveNext: (() => void) | null = null
     const drain = () => {
       if (resolveNext) {
@@ -32,22 +92,20 @@ function pumpLiveStream(
       drain()
     })
     const unsubscribe = subscribe((event) => {
-      queue.push(event)
+      coalescer.push(event)
       drain()
     })
 
     try {
-      if (!seed((event) => queue.push(event))) return
+      if (!seed((event) => coalescer.push(event))) return
       for (;;) {
-        if (queue.length === 0) {
+        if (coalescer.size === 0) {
           await new Promise<void>((resolve) => {
             resolveNext = resolve
           })
           if (aborted) break
         }
-        while (queue.length > 0) {
-          const event = queue.shift()
-          if (!event) break
+        for (const event of coalescer.drain()) {
           await stream.writeSSE({ data: JSON.stringify(event) })
         }
         if (aborted) break

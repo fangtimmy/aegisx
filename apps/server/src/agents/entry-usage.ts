@@ -64,12 +64,14 @@ export function entryUsageOf(entry: SessionEntry): EntryUsage | undefined {
   return undefined
 }
 
-/** Walk ALL session entries (including history compacted away, plus
- * compaction/branch-summary usage) and accumulate tokens/cost + the latest
- * assistant cache-hit rate. */
-export function accumulateEntryUsage(
-  entries: readonly SessionEntry[]
-): SessionUsageSample {
+/** Incremental fold shared by the full walk (`accumulateEntryUsage`) and the
+ * live context sampler's session-keyed accumulator, so the two can never
+ * drift. `snapshot()` derives totalTokens per pi's getSessionStats formula —
+ * not the provider-reported `usage.totalTokens` field, which can diverge. */
+export function createEntryUsageAccumulator(): {
+  fold(entry: SessionEntry): void
+  snapshot(): SessionUsageSample
+} {
   const totals: SessionUsageSample = {
     input: 0,
     output: 0,
@@ -81,38 +83,53 @@ export function accumulateEntryUsage(
     turns: 0,
     cacheHitRate: null,
   }
-  for (const entry of entries) {
-    // pi getSessionStats counts EVERY assistant message as a turn, including
-    // aborted/error ones that carry no usage — count before the usage guard.
-    const isAssistant =
-      entry.type === "message" &&
-      (entry.message as { role?: string }).role === "assistant"
-    if (isAssistant) totals.turns += 1
+  return {
+    fold(entry) {
+      // pi getSessionStats counts EVERY assistant message as a turn, including
+      // aborted/error ones that carry no usage — count before the usage guard.
+      const isAssistant =
+        entry.type === "message" &&
+        (entry.message as { role?: string }).role === "assistant"
+      if (isAssistant) totals.turns += 1
 
-    const usage = entryUsageOf(entry)
-    if (!usage) continue
-    totals.input += toNum(usage.input)
-    totals.output += toNum(usage.output)
-    totals.cacheRead += toNum(usage.cacheRead)
-    totals.cacheWrite += toNum(usage.cacheWrite)
-    // reasoning is a SUBSET of output (see pi-ai `Usage`); tracked separately
-    // for the Overview breakdown only — it must NOT feed totalTokens, which
-    // follows pi's getSessionStats formula (input + output + cacheRead +
-    // cacheWrite) and so already includes it via output.
-    totals.reasoning += toNum(usage.reasoning)
-    totals.cost += toNum(usage.cost?.total)
+      const usage = entryUsageOf(entry)
+      if (!usage) return
+      totals.input += toNum(usage.input)
+      totals.output += toNum(usage.output)
+      totals.cacheRead += toNum(usage.cacheRead)
+      totals.cacheWrite += toNum(usage.cacheWrite)
+      // reasoning is a SUBSET of output (see pi-ai `Usage`); tracked separately
+      // for the Overview breakdown only — it must NOT feed totalTokens, which
+      // follows pi's getSessionStats formula (input + output + cacheRead +
+      // cacheWrite) and so already includes it via output.
+      totals.reasoning += toNum(usage.reasoning)
+      totals.cost += toNum(usage.cost?.total)
 
-    if (isAssistant) {
-      const prompt =
-        toNum(usage.input) + toNum(usage.cacheRead) + toNum(usage.cacheWrite)
-      if (prompt > 0) {
-        totals.cacheHitRate = (toNum(usage.cacheRead) / prompt) * 100
+      if (isAssistant) {
+        const prompt =
+          toNum(usage.input) + toNum(usage.cacheRead) + toNum(usage.cacheWrite)
+        if (prompt > 0) {
+          totals.cacheHitRate = (toNum(usage.cacheRead) / prompt) * 100
+        }
       }
-    }
+    },
+    snapshot(): SessionUsageSample {
+      return {
+        ...totals,
+        totalTokens:
+          totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
+      }
+    },
   }
-  // pi getSessionStats total — not the provider-reported `usage.totalTokens`
-  // field, which can diverge across providers.
-  totals.totalTokens =
-    totals.input + totals.output + totals.cacheRead + totals.cacheWrite
-  return totals
+}
+
+/** Walk ALL session entries (including history compacted away, plus
+ * compaction/branch-summary usage) and accumulate tokens/cost + the latest
+ * assistant cache-hit rate. */
+export function accumulateEntryUsage(
+  entries: readonly SessionEntry[]
+): SessionUsageSample {
+  const accumulator = createEntryUsageAccumulator()
+  for (const entry of entries) accumulator.fold(entry)
+  return accumulator.snapshot()
 }
