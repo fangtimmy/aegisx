@@ -1,14 +1,20 @@
-export type PlatformType =
-  | "ctfd"
-  | "ret2shell"
-  | "a1ctf"
-  | "tsecbench"
-  | "dasctf"
+/** Canonical platform / provider kind lists — the TS unions and the TypeBox
+ * wire schemas are both derived from these tuples. */
+export const PLATFORM_TYPES = [
+  "ctfd",
+  "ret2shell",
+  "a1ctf",
+  "tsecbench",
+  "dasctf",
+] as const
+export type PlatformType = (typeof PLATFORM_TYPES)[number]
 
-export type ProviderType =
-  | "openai-compatible"
-  | "openai-responses"
-  | "anthropic-messages"
+export const PROVIDER_TYPES = [
+  "openai-compatible",
+  "openai-responses",
+  "anthropic-messages",
+] as const
+export type ProviderType = (typeof PROVIDER_TYPES)[number]
 
 export type RemoteEvent = { id: string; name: string }
 

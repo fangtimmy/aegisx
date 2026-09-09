@@ -21,7 +21,7 @@ import {
   PlatformError,
   type RemoteAttachment,
   type RemoteChallenge,
-  type RemoteChallengeSummary,
+  type RemoteChallengeListItem,
 } from "./core"
 import { PlatformActionError, platformError } from "./errors"
 
@@ -237,7 +237,7 @@ export function createPlatformSync(
         "Event is not connected to a platform"
       )
     }
-    let remote: RemoteChallengeSummary[]
+    let remote: RemoteChallengeListItem[]
     try {
       remote = await adapter.listChallenges()
     } catch (error) {

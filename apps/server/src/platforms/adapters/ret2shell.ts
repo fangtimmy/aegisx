@@ -9,7 +9,7 @@ import {
   nullableString,
   type PlatformConfig,
   type PlatformRequestError,
-  type RemoteChallengeSummary,
+  type RemoteChallengeListItem,
   type RemoteEvent,
   type SubmissionResult,
   targetDefinitions,
@@ -61,7 +61,7 @@ export class Ret2ShellAdapter extends BaseAdapter {
   }
 
   async listChallenges() {
-    const items: RemoteChallengeSummary[] = []
+    const items: RemoteChallengeListItem[] = []
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       const body = await this.http.json<[JsonRecord[], number]>(
         `/api/game/${encodeURIComponent(this.config.remoteEventId)}/challenge?page=${page}&page_size=100`

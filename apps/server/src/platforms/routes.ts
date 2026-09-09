@@ -1,3 +1,4 @@
+import { PLATFORM_TYPES } from "@aegisx/shared"
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { Type } from "typebox"
@@ -9,13 +10,9 @@ import type { createPlatformService } from "./service"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 
-const platformType = Type.Union([
-  Type.Literal("ctfd"),
-  Type.Literal("ret2shell"),
-  Type.Literal("a1ctf"),
-  Type.Literal("tsecbench"),
-  Type.Literal("dasctf"),
-])
+const platformType = Type.Union(
+  PLATFORM_TYPES.map((type) => Type.Literal(type))
+)
 
 const connectionInput = Type.Object(
   {

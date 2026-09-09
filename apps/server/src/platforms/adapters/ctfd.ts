@@ -6,7 +6,7 @@ import {
   nullableString,
   type PlatformConfig,
   type PlatformRequestError,
-  type RemoteChallengeSummary,
+  type RemoteChallengeListItem,
   type SubmissionResult,
 } from "../core"
 
@@ -42,7 +42,7 @@ export class CtfdAdapter extends BaseAdapter {
   }
 
   async listChallenges() {
-    const items: RemoteChallengeSummary[] = []
+    const items: RemoteChallengeListItem[] = []
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       const body = await this.http.json<{
         data?: JsonRecord[]

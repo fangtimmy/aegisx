@@ -11,7 +11,7 @@ import { createStorage } from "../../src/infrastructure/storage"
 import type {
   CtfPlatformAdapter,
   RemoteChallenge,
-  RemoteChallengeSummary,
+  RemoteChallengeListItem,
 } from "../../src/platforms/core"
 import { createPlatformSync } from "../../src/platforms/sync"
 import { seedEvent, setupDb } from "../helpers"
@@ -20,7 +20,7 @@ import { refine } from "../support"
 const SOURCE_KEY = '["fake","https://fake.example","task"]'
 
 /** Minimal in-memory adapter: list/get only (sync's paths under test). */
-function fakeAdapter(catalog: Map<string, RemoteChallengeSummary>) {
+function fakeAdapter(catalog: Map<string, RemoteChallengeListItem>) {
   const adapter = {
     listChallenges: async () => [...catalog.values()],
     getChallenge: async (remoteId: string): Promise<RemoteChallenge> => {

@@ -1,4 +1,4 @@
-import { isRecord, modelAddress, parseModelRef } from "@aegisx/shared"
+import { modelAddress, parseModelRef } from "@aegisx/shared"
 import type { ModelOption } from "@aegisx/shared/domain"
 import type { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
@@ -17,26 +17,23 @@ import {
 } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
-import { optRecord, responseJson } from "../lib/guards"
+import { responseJson } from "../lib/guards"
+import { ProviderTypeSchema } from "../lib/schemas"
 import {
   builtinModelProfile,
   builtinModelProfiles,
   normalizeModelMetadata,
   parseModelMetadata,
+  providerApi,
   supportedThinkingLevels,
 } from "./builtin-models"
 import { getProviderConnections } from "./public"
-
-const providerType = Type.Union([
-  Type.Literal("openai-compatible"),
-  Type.Literal("openai-responses"),
-  Type.Literal("anthropic-messages"),
-])
+import { type UpstreamApi, pumpUpstreamSse } from "./upstream-sse"
 
 const providerInput = Type.Object(
   {
     label: Type.String({ minLength: 1, maxLength: 100 }),
-    type: providerType,
+    type: ProviderTypeSchema,
     baseUrl: Type.String({ minLength: 1, maxLength: 2_000 }),
     apiKey: Type.String({ maxLength: 10_000 }),
     enabled: Type.Boolean(),
@@ -90,6 +87,30 @@ function cloneProviders(store: ConfigStore): ProviderData[] {
     ...p,
     models: p.models.map((m) => ({ ...m })),
   }))
+}
+
+/** Field hygiene shared by provider create (POST) and update (PATCH): each
+ * cleaner returns the sanitized value or the error reply payload. */
+type ProviderFieldError = {
+  code: "invalid_provider" | "invalid_base_url"
+  message: string
+}
+
+function cleanApiKey(apiKey: string): { value: string } | ProviderFieldError {
+  return apiKey.startsWith("$")
+    ? {
+        code: "invalid_provider",
+        message: "apiKey must be a literal key (no $ENV references)",
+      }
+    : { value: apiKey }
+}
+
+function cleanBaseUrl(baseUrl: string): { value: string } | ProviderFieldError {
+  try {
+    return { value: normalizeHttpBaseUrl(baseUrl) }
+  } catch {
+    return { code: "invalid_base_url", message: "Invalid provider endpoint" }
+  }
 }
 
 function findProvider(providers: ProviderData[], id: string) {
@@ -183,42 +204,39 @@ export function registerProviderRoutes(
       c.req.param("providerId")
     )
     if (!provider) return notFound(c, "Provider not found")
+    // Only models speaking the provider's wire dialect are importable here —
+    // an anthropic-messages endpoint can't serve an openai-completions model.
+    const api = providerApi(provider.type)
     return c.json({
-      items: builtinModelProfiles().map((model) => ({
-        providerId: model.providerId,
-        modelId: model.modelId,
-        name: model.name,
-        metadata: model.metadata,
-      })),
+      items: builtinModelProfiles()
+        .filter((model) => model.api === api)
+        .map((model) => ({
+          providerId: model.providerId,
+          modelId: model.modelId,
+          name: model.name,
+          metadata: model.metadata,
+        })),
     })
   })
 
   app.post("/api/providers", validateJson(providerInput), (c) => {
     const input = c.req.valid("json")
-    if (input.apiKey.startsWith("$")) {
-      return badRequest(
-        c,
-        "invalid_provider",
-        "apiKey must be a literal key (no $ENV references)"
-      )
-    }
-    let baseUrl: string
-    try {
-      baseUrl = normalizeHttpBaseUrl(input.baseUrl)
-    } catch {
-      return badRequest(c, "invalid_base_url", "Invalid provider endpoint")
+    const apiKey = cleanApiKey(input.apiKey)
+    if ("code" in apiKey) return badRequest(c, apiKey.code, apiKey.message)
+    const baseUrl = cleanBaseUrl(input.baseUrl)
+    if ("code" in baseUrl) return badRequest(c, baseUrl.code, baseUrl.message)
+    const label = input.label.trim()
+    if (!label) {
+      return badRequest(c, "invalid_provider", "Provider name is required")
     }
     const provider: ProviderData = {
       id: crypto.randomUUID(),
-      label: input.label.trim(),
+      label,
       type: input.type,
-      baseUrl,
-      apiKey: input.apiKey,
+      baseUrl: baseUrl.value,
+      apiKey: apiKey.value,
       enabled: input.enabled,
       models: [],
-    }
-    if (!provider.label) {
-      return badRequest(c, "invalid_provider", "Provider name is required")
     }
     const providers = cloneProviders(configStore)
     providers.push(provider)
@@ -235,23 +253,20 @@ export function registerProviderRoutes(
       if (!existing) return notFound(c, "Provider not found")
       const input = c.req.valid("json")
       if (input.baseUrl !== undefined) {
-        try {
-          existing.baseUrl = normalizeHttpBaseUrl(input.baseUrl)
-        } catch {
-          return badRequest(c, "invalid_base_url", "Invalid provider endpoint")
+        const baseUrl = cleanBaseUrl(input.baseUrl)
+        if ("code" in baseUrl) {
+          return badRequest(c, baseUrl.code, baseUrl.message)
         }
+        existing.baseUrl = baseUrl.value
       }
       if (input.label !== undefined) existing.label = input.label.trim()
       if (input.type !== undefined) existing.type = input.type
       if (input.apiKey !== undefined) {
-        if (input.apiKey.startsWith("$")) {
-          return badRequest(
-            c,
-            "invalid_provider",
-            "apiKey must be a literal key (no $ENV references)"
-          )
+        const apiKey = cleanApiKey(input.apiKey)
+        if ("code" in apiKey) {
+          return badRequest(c, apiKey.code, apiKey.message)
         }
-        existing.apiKey = input.apiKey
+        existing.apiKey = apiKey.value
       }
       if (input.enabled !== undefined) existing.enabled = input.enabled
       if (!existing.label) {
@@ -553,7 +568,7 @@ export function registerProviderRoutes(
         )
       }
 
-      const api = isAnthropic
+      const api: UpstreamApi = isAnthropic
         ? "anthropic"
         : isResponses
           ? "responses"
@@ -609,162 +624,4 @@ function findProviderModel(
     if (model) return { provider, model }
   }
   return { provider: undefined, model: undefined }
-}
-
-type UpstreamApi = "anthropic" | "openai" | "responses"
-
-type TestUsage = {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-}
-
-function num(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
-}
-
-/** Merge a partial usage readout into the accumulator (later events refine
- * earlier ones, e.g. anthropic message_delta's final output_tokens). */
-function mergeUsage(
-  usage: TestUsage | undefined,
-  patch: Partial<TestUsage>
-): TestUsage {
-  return {
-    input: patch.input ?? usage?.input ?? 0,
-    output: patch.output ?? usage?.output ?? 0,
-    cacheRead: patch.cacheRead ?? usage?.cacheRead ?? 0,
-    cacheWrite: patch.cacheWrite ?? usage?.cacheWrite ?? 0,
-  }
-}
-
-/** Interpret one upstream SSE `data:` payload for the test proxy — return
- * the text delta (if any), the refined usage accumulator, and whether this
- * payload is a terminal frame (`[DONE]` handled by the caller). */
-function handleUpstreamEvent(
-  api: UpstreamApi,
-  raw: string,
-  usage: TestUsage | undefined
-): { usage: TestUsage | undefined; delta: string; stop?: boolean } {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return { usage, delta: "" }
-  }
-  if (!isRecord(parsed)) return { usage, delta: "" }
-  const event = parsed
-
-  if (api === "anthropic") {
-    if (event.type === "content_block_delta") {
-      const delta = optRecord(event.delta)
-      if (delta?.type === "text_delta" && typeof delta.text === "string") {
-        return { usage, delta: delta.text }
-      }
-    } else if (event.type === "message_stop") {
-      return { usage, delta: "", stop: true }
-    } else if (event.type === "message_start") {
-      const u = optRecord(optRecord(event.message)?.usage)
-      if (u) {
-        usage = mergeUsage(usage, {
-          input: num(u.input_tokens),
-          output: num(u.output_tokens),
-          cacheRead: num(u.cache_read_input_tokens),
-          cacheWrite: num(u.cache_creation_input_tokens),
-        })
-      }
-    } else if (event.type === "message_delta") {
-      const u = optRecord(event.usage)
-      if (u) usage = mergeUsage(usage, { output: num(u.output_tokens) })
-    }
-    return { usage, delta: "" }
-  }
-
-  if (api === "openai") {
-    const choices = Array.isArray(event.choices) ? event.choices : []
-    const delta = optRecord(optRecord(choices[0])?.delta)
-    const text =
-      typeof delta?.content === "string" && delta.content ? delta.content : ""
-    const u = optRecord(event.usage)
-    if (u) {
-      const details = optRecord(u.prompt_tokens_details)
-      usage = mergeUsage(usage, {
-        input: num(u.prompt_tokens),
-        output: num(u.completion_tokens),
-        cacheRead: num(details?.cached_tokens),
-      })
-    }
-    return { usage, delta: text }
-  }
-
-  if (event.type === "response.output_text.delta") {
-    if (typeof event.delta === "string" && event.delta)
-      return { usage, delta: event.delta }
-  } else if (event.type === "response.completed") {
-    const u = optRecord(optRecord(event.response)?.usage)
-    if (u) {
-      const details = optRecord(u.input_tokens_details)
-      usage = mergeUsage(usage, {
-        input: num(u.input_tokens),
-        output: num(u.output_tokens),
-        cacheRead: num(details?.cached_tokens),
-      })
-    }
-    return { usage, delta: "", stop: true }
-  }
-  return { usage, delta: "" }
-}
-
-/** Read an upstream SSE body (text/event-stream), invoking `onDelta` per
- * text chunk and returning the final token usage when the stream reports
- * one, plus whether a terminal frame was seen (OpenAI `[DONE]`, anthropic
- * `message_stop`, responses `response.completed`). Minimal framing: splits
- * events on blank lines, joins multi-line `data:` fields. */
-async function pumpUpstreamSse(
-  body: ReadableStream<Uint8Array>,
-  api: UpstreamApi,
-  onDelta: (text: string) => Promise<void> | void,
-  onChunk?: () => void
-): Promise<{ usage: TestUsage | undefined; terminated: boolean }> {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  let usage: TestUsage | undefined
-  let terminated = false
-
-  const drainBlock = async (block: string) => {
-    const data = block
-      .split("\n")
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n")
-      .trim()
-    if (!data) return
-    if (data === "[DONE]") {
-      terminated = true
-      return
-    }
-    const result = handleUpstreamEvent(api, data, usage)
-    usage = result.usage
-    if (result.stop) terminated = true
-    if (result.delta) await onDelta(result.delta)
-  }
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    onChunk?.()
-    buffer = (buffer + decoder.decode(value, { stream: true })).replace(
-      /\r\n/g,
-      "\n"
-    )
-    let index: number
-    while ((index = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, index)
-      buffer = buffer.slice(index + 2)
-      await drainBlock(block)
-    }
-  }
-  if (buffer.trim()) await drainBlock(buffer.replace(/\r/g, ""))
-  return { usage, terminated }
 }

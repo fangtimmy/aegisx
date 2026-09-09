@@ -33,7 +33,7 @@ export type RemoteAttachment = {
   authenticated?: boolean
 }
 
-export type RemoteChallengeSummary = {
+export type RemoteChallengeListItem = {
   id: string
   name: string
   category: string | null
@@ -41,7 +41,7 @@ export type RemoteChallengeSummary = {
   solved: boolean
 }
 
-export type RemoteChallenge = RemoteChallengeSummary & {
+export type RemoteChallenge = RemoteChallengeListItem & {
   description: string
   targetSupported: boolean
   targetCount: number
@@ -65,7 +65,7 @@ export type SubmissionResult = {
 export interface CtfPlatformAdapter {
   testConnection(): Promise<void>
   listEvents(): Promise<RemoteEvent[]>
-  listChallenges(): Promise<RemoteChallengeSummary[]>
+  listChallenges(): Promise<RemoteChallengeListItem[]>
   getChallenge(remoteId: string): Promise<RemoteChallenge>
   /**
    * Authoritative per-challenge solve verdict for single-challenge refresh.
@@ -294,7 +294,7 @@ export abstract class BaseAdapter implements CtfPlatformAdapter {
 
   abstract listEvents(): Promise<RemoteEvent[]>
   abstract testConnection(): Promise<void>
-  abstract listChallenges(): Promise<RemoteChallengeSummary[]>
+  abstract listChallenges(): Promise<RemoteChallengeListItem[]>
   abstract getChallenge(remoteId: string): Promise<RemoteChallenge>
   abstract getSolveState(remoteId: string): Promise<boolean>
   abstract submitFlag(

@@ -33,6 +33,9 @@ export type BuiltinModelProfile = {
   providerId: string
   modelId: string
   name: string
+  /** Upstream wire dialect (`Model["api"]`) — lets callers select only the
+   * models a provider of a given AegisX type can actually speak. */
+  api: string
   metadata: ModelMetadata
 }
 
@@ -272,20 +275,26 @@ function metadataFromModel(model: Model<Api>): ModelMetadata {
   })
 }
 
+// The catalog is static for the process lifetime (~1300 models); build the
+// profiles once on first use. Callers must treat the result as read-only.
+let catalogCache: BuiltinModelProfile[] | undefined
+
 /**
  * Read pi's built-in model catalog (read-only). Used by the settings UI to list
  * bindable pi built-in models and to source their metadata. v3 keeps pi-ai only
  * for this read-only metadata lookup; the agent loop runs inside the container.
  */
 export function builtinModelProfiles(): BuiltinModelProfile[] {
-  return getBuiltinProviders().flatMap((providerId) =>
+  catalogCache ??= getBuiltinProviders().flatMap((providerId) =>
     getBuiltinModels(providerId).map((model) => ({
       providerId,
       modelId: model.id,
       name: model.name,
+      api: model.api,
       metadata: metadataFromModel(model),
     }))
   )
+  return catalogCache
 }
 
 export function builtinModelProfile(providerId: string, modelId: string) {
