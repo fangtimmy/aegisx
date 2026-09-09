@@ -45,7 +45,9 @@ export function planDrainStep(decision: FenceDecision): DrainAction {
  * queue store; reads go through pendingItems). */
 type QueueDrainerStore = {
   pendingItems(): QueueRow[]
-  markRunning(itemId: string, agentId: string): void
+  /** Guarded pending→running flip; false = the item was no longer pending
+   * (cancelled/removed mid-launch), so the launched agent is superseded. */
+  markRunning(itemId: string, agentId: string): boolean
   markFailed(itemId: string, error: string): void
   markCancelled(itemId: string): void
 }
@@ -63,6 +65,11 @@ export type QueueDrainerDeps = {
    * failure. Posted as an urgent system message (immediate flush). Never
    * throws. */
   onEmergency(eventId: string, line: string): void
+  /** Settle a just-spawned agent whose queue item was cancelled/removed
+   * mid-launch (markRunning lost the race): the agent must not stay live on
+   * work nobody owns anymore. Fire-and-forget — the drainer never awaits or
+   * propagates its failure. */
+  onSupersededLaunch?: (agentId: string) => void | Promise<void>
   store: QueueDrainerStore
   /** Capacity-retry delay (test seam; default {@link CAPACITY_RETRY_MS}). */
   retryMs?: number
@@ -162,7 +169,20 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
         if (action.kind === "skip") continue
         try {
           const agentId = await deps.launch(item)
-          deps.store.markRunning(item.id, agentId)
+          if (deps.store.markRunning(item.id, agentId)) continue
+          // Lost race: the item was cancelled (e.g. full-solve cleanup) or
+          // removed while the launch ran. The agent just spawned live on
+          // abandoned work — settle it instead of letting it attack a solved
+          // challenge until its deadline. Fire-and-forget: a settle failure
+          // must not abort the pass or throw out of drainOnce.
+          void Promise.resolve(deps.onSupersededLaunch?.(agentId)).catch(
+            (error) => {
+              console.error("superseded launch settle failed", {
+                agentId,
+                error: error instanceof Error ? error.message : String(error),
+              })
+            }
+          )
         } catch (error) {
           if (isCapacity(error)) continue // race with another spawn; stay pending
           const message = error instanceof Error ? error.message : String(error)

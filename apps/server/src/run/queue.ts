@@ -74,6 +74,10 @@ export type QueueServiceDeps = {
   /** Ordinary notice line for the scheduler DM (queue pause/resume): a
    * non-urgent system message riding the next delivery. Never throws. */
   onQueueNotice(eventId: string, line: string): void
+  /** Settle a just-spawned agent whose queue item was cancelled/removed
+   * mid-launch (markRunning lost the race). Never throws; failures are
+   * logged by the drainer. */
+  onSupersededLaunch?: (agentId: string) => void | Promise<void>
 }
 
 function toPublic(db: Database, row: QueueRow): QueueItemPublic {
@@ -347,14 +351,21 @@ export function createQueueService(deps: QueueServiceDeps) {
     return rows.map((row) => row.item)
   }
 
-  /** Mark an item running once its agent spawned (back-fills agentId). */
-  function markRunning(itemId: string, agentId: string): void {
+  /** Mark an item running once its agent spawned (back-fills agentId).
+   * Returns false when the guarded update matched nothing — the item was
+   * cancelled/removed while the launch ran (e.g. full-solve cleanup won the
+   * race) — telling the drainer the just-spawned agent is superseded. */
+  function markRunning(itemId: string, agentId: string): boolean {
     const row = getRow(itemId)
-    db.update(spawnQueue)
-      .set({ status: "running", agentId, error: null, updatedAt: now() })
-      .where(and(eq(spawnQueue.id, itemId), eq(spawnQueue.status, "pending")))
-      .run()
+    const won =
+      db
+        .update(spawnQueue)
+        .set({ status: "running", agentId, error: null, updatedAt: now() })
+        .where(and(eq(spawnQueue.id, itemId), eq(spawnQueue.status, "pending")))
+        .returning({ id: spawnQueue.id })
+        .get() !== undefined
     if (row) checkStarved(row.eventId)
+    return won
   }
 
   /** Mark an item failed (launch error recorded). */
@@ -423,6 +434,9 @@ export function createQueueService(deps: QueueServiceDeps) {
     isDisposed: () => deps.isDisposed(),
     launch: (item) => deps.launch(item),
     onEmergency: (eventId, line) => deps.onQueueEmergency(eventId, line),
+    ...(deps.onSupersededLaunch
+      ? { onSupersededLaunch: deps.onSupersededLaunch }
+      : {}),
     store: { pendingItems, markRunning, markFailed, markCancelled },
   })
 

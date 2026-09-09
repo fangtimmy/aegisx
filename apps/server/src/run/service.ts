@@ -1289,6 +1289,11 @@ export function createAgentService(options: AgentServiceOptions) {
         queueItemId: item.id,
       })
     },
+    // The launch lost the cancel race (full-solve cleanup cancelled the item
+    // mid-launch): settle the just-spawned agent with the timeout-path
+    // semantics — no abort (the turn may be mid-flight), dispose and land
+    // aborted.
+    onSupersededLaunch: forceAbortAgent,
     onQueueEmergency: (eventId, line) => {
       if (schedulerAdmin.isSchedulerPaused(eventId)) return
       channels.post({

@@ -58,7 +58,15 @@ afterEach(() => {
 function makeDrainer(
   db: Db,
   launch: (item: QueueRow) => Promise<string>,
-  opts: { cap?: () => number; retryMs?: number; rows?: QueueRow[] } = {}
+  opts: {
+    cap?: () => number
+    retryMs?: number
+    rows?: QueueRow[]
+    /** Outcome of the guarded markRunning; the default wins and flips the
+     * row to running. Returning false models a cancel landing mid-launch. */
+    markRunning?: (itemId: string, agentId: string) => boolean
+    onSupersededLaunch?: (agentId: string) => void | Promise<void>
+  } = {}
 ) {
   const launches: string[] = []
   const emergencies: string[] = []
@@ -78,11 +86,18 @@ function makeDrainer(
       return launch(item)
     },
     onEmergency: (eventId, line) => emergencies.push(`${eventId}: ${line}`),
+    ...(opts.onSupersededLaunch
+      ? { onSupersededLaunch: opts.onSupersededLaunch }
+      : {}),
     store: {
       pendingItems: () => rows.filter((r) => r.status === "pending"),
-      markRunning: (itemId) => {
+      markRunning: (itemId, agentId) => {
+        if (opts.markRunning) return opts.markRunning(itemId, agentId)
         const r = rows.find((x) => x.id === itemId)
-        if (r) r.status = "running"
+        if (!r) return false
+        r.status = "running"
+        r.agentId = agentId
+        return true
       },
       markFailed: (itemId, error) => {
         const r = rows.find((x) => x.id === itemId)
@@ -199,6 +214,84 @@ describe("queue drainer capacity retry", () => {
       expect(r.status).toBe("running")
       await new Promise((r2) => setTimeout(r2, 60))
       expect(launches).toEqual(["q-1"]) // no repeat pass
+    } finally {
+      close()
+    }
+  })
+})
+
+describe("queue drainer superseded launches", () => {
+  test("markRunning losing the race settles the launched agent; drainOnce still resolves", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const r = row()
+      const superseded: string[] = []
+      const { drainer, launches } = makeDrainer(db, async () => "run-x", {
+        rows: [r],
+        markRunning: () => {
+          // cancelPendingForChallenge landed while the launch was in flight.
+          r.status = "cancelled"
+          return false
+        },
+        onSupersededLaunch: (agentId) => {
+          superseded.push(agentId)
+        },
+      })
+      await drainer.drainOnce()
+      expect(launches).toEqual(["q-1"])
+      expect(r.status).toBe("cancelled")
+      expect(superseded).toEqual(["run-x"])
+    } finally {
+      close()
+    }
+  })
+
+  test("a superseded-launch settle failure never rejects out of drainOnce", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const r = row()
+      let settled = false
+      const { drainer } = makeDrainer(db, async () => "run-x", {
+        rows: [r],
+        markRunning: () => {
+          r.status = "cancelled"
+          return false
+        },
+        onSupersededLaunch: async () => {
+          await new Promise((r2) => setTimeout(r2, 5))
+          settled = true
+          throw new Error("settle blew up")
+        },
+      })
+      await drainer.drainOnce() // resolved despite the pending settle rejection
+      await waitFor(() => settled)
+    } finally {
+      close()
+    }
+  })
+
+  test("markRunning winning the race never invokes the supersede path", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const r = row()
+      const superseded: string[] = []
+      const { drainer, launches } = makeDrainer(db, async () => "run-x", {
+        rows: [r],
+        onSupersededLaunch: (agentId) => {
+          superseded.push(agentId)
+        },
+      })
+      await drainer.drainOnce()
+      expect(launches).toEqual(["q-1"])
+      expect(r.status).toBe("running")
+      expect(r.agentId).toBe("run-x")
+      expect(superseded).toEqual([])
     } finally {
       close()
     }
