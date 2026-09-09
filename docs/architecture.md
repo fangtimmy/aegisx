@@ -55,7 +55,8 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 |---|---|
 | `service.ts` | agent 生命周期管理：spawn / 终态 / 刷新 / 删除 / 用量统计 |
 | `agent-factory.ts` | 一次 spawn 的完整组装（容器 → host session → 工具注入） |
-| `queue.ts` | FIFO 排水（200ms 去抖）；launch 失败 → item `failed` + 调度者 DM 紧急通知 |
+| `queue.ts` | spawn 队列存储与状态：条目 CRUD、pending→running→终态流转、每赛事暂停（`queue_state`）、队列不足边沿 |
+| `drainer.ts` | 排水循环（200ms 去抖单飞）：`planDrainStep` 把启动围栏判定翻译为 launch/skip/cancel/stop；`global_capacity` 停轮后按有界间隔自唤醒重试；launch 失败 → item `failed` + 调度者 DM 紧急通知 |
 | `fence.ts` | 启动围栏：全局存活 solver 上限（settings `scheduler.maxConcurrentAgents`）、每赛事 target 槽位（`maxConcurrentTargets`）、已解题封禁（`blockSpawnOnSolved`） |
 | `channels-*.ts` 五模块 | 协作层（见下），`channels.ts` 为组装壳 |
 | `container/container-manager.ts` | dockerode 封装：生命周期 + hijacked exec + putArchive 写入 |

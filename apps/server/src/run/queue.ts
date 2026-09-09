@@ -5,8 +5,8 @@ import { and, asc, count, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 import type { Database } from "../db"
 import { challenges, queueState, spawnQueue } from "../db/schema"
 import { parseJson } from "../lib/guards"
+import { createQueueDrainer } from "./drainer"
 import { RunActionError } from "./errors"
-import { checkSpawnFence } from "./fence"
 
 /** Public queue item shape (REST + tools). Canonical definition lives in
  * @aegisx/shared/queue; re-exported here for server-side importers. */
@@ -17,8 +17,6 @@ type QueueRow = typeof spawnQueue.$inferSelect
 /** Statuses visible in the queue view (actionable items; done/cancelled are
  * historical). */
 const VISIBLE_STATUSES = ["pending", "running", "failed"] as const
-
-const DRAIN_DEBOUNCE_MS = 200
 
 export type EnqueueInput = {
   eventId: string
@@ -159,18 +157,6 @@ export function createQueueService(deps: QueueServiceDeps) {
     }
   }
 
-  /** A launch permanently failed → urgent message for the scheduler DM. */
-  function launchFailureLine(item: QueueRow, error: string): string {
-    const name =
-      db
-        .select({ name: challenges.name })
-        .from(challenges)
-        .where(eq(challenges.id, item.challengeId))
-        .get()?.name ?? item.challengeId
-    const brief = error.length > 200 ? `${error.slice(0, 200)}…` : error
-    return `启动失败：「${name}」— ${brief}`
-  }
-
   /** Next ord value for an event (max + 1). */
   function nextOrd(eventId: string): number {
     const row = db
@@ -212,7 +198,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     // Enqueue only grows the count; ≥ 2 clears the starved edge so a later
     // 2→1 crossing re-fires.
     if (pendingCount(input.eventId) >= 2) starvedFired.set(input.eventId, false)
-    scheduleDrain()
+    drainer.scheduleDrain()
     return toPublic(db, getRow(id)!)
   }
 
@@ -427,88 +413,17 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   // --- drainer (single-flight, debounced) --------------------------------
+  // The drain loop lives in drainer.ts; the queue supplies its store half
+  // (the pending snapshot + the status writes it drives).
 
-  let drainTimer: ReturnType<typeof setTimeout> | null = null
-  let draining = false
-  let drainRequested = false
-
-  /** Debounced drain: collapses a burst of triggers (enqueue / agent
-   * terminal / boot) into one pass. A trigger arriving mid-pass only sets
-   * {@link drainRequested}; the running pass re-arms the debounce when it
-   * finishes so the trigger is not lost. */
-  function scheduleDrain(): void {
-    if (draining) {
-      drainRequested = true
-      return
-    }
-    if (drainTimer) return
-    drainTimer = setTimeout(() => {
-      drainTimer = null
-      void drainOnce().catch((error) => {
-        console.error("spawn queue drain failed", {
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
-    }, DRAIN_DEBOUNCE_MS)
-  }
-
-  /**
-   * One drain pass over pending items in FIFO order. For each item:
-   *  - fence ok → spawn; on success mark running; on a (racy) capacity
-   *    reject leave it pending; on other errors mark failed + notify.
-   *  - global_capacity → stop the pass (no later item can launch either).
-   *  - target_slots → skip (a different challenge may still launch).
-   * Single-flight: a trigger arriving mid-pass is recorded via
-   * scheduleDrain → drainRequested; the finished pass re-arms the debounce
-   * so the trailing trigger opens a fresh pass instead of being dropped.
-   */
-  async function drainOnce(): Promise<void> {
-    if (draining || deps.isDisposed()) return
-    draining = true
-    try {
-      for (const item of pendingItems()) {
-        const decision = checkSpawnFence(db, deps.getSettings(), {
-          eventId: item.eventId,
-          challengeId: item.challengeId,
-        })
-        if (!decision.ok) {
-          // Global cap is saturated for the whole pass; nothing else launches.
-          if (decision.code === "global_capacity") return
-          // Stale work for a solved challenge: drop it, try the rest.
-          if (decision.code === "challenge_solved") {
-            markCancelled(item.id)
-            continue
-          }
-          // Per-event target cap: only this item is blocked; try the rest.
-          continue
-        }
-        try {
-          const agentId = await deps.launch(item)
-          markRunning(item.id, agentId)
-        } catch (error) {
-          if (isCapacity(error)) continue // race with another spawn; stay pending
-          const message = error instanceof Error ? error.message : String(error)
-          markFailed(item.id, message)
-          deps.onQueueEmergency(item.eventId, launchFailureLine(item, message))
-        }
-      }
-    } finally {
-      draining = false
-      const rerun = drainRequested
-      drainRequested = false
-      if (rerun && !deps.isDisposed()) scheduleDrain()
-    }
-  }
-
-  /** Cancel any pending debounced drain (called from the service close so a
-   * draining timer does not fire against a disposed service/db). */
-  function cancelDrain(): void {
-    drainRequested = false
-    if (drainTimer) {
-      clearTimeout(drainTimer)
-      drainTimer = null
-    }
-  }
+  const drainer = createQueueDrainer({
+    db,
+    getSettings: () => deps.getSettings(),
+    isDisposed: () => deps.isDisposed(),
+    launch: (item) => deps.launch(item),
+    onEmergency: (eventId, line) => deps.onQueueEmergency(eventId, line),
+    store: { pendingItems, markRunning, markFailed, markCancelled },
+  })
 
   /** Drop per-event in-memory bookkeeping (starved edge memory). The DB rows
    * cascade away with the event; only this map would linger. */
@@ -571,9 +486,9 @@ export function createQueueService(deps: QueueServiceDeps) {
     reorder,
     markDone,
     resetRunning,
-    scheduleDrain,
-    drainOnce,
-    cancelDrain,
+    scheduleDrain: drainer.scheduleDrain,
+    drainOnce: drainer.drainOnce,
+    cancelDrain: drainer.cancelDrain,
     forget,
     pause,
     resume,
@@ -582,7 +497,3 @@ export function createQueueService(deps: QueueServiceDeps) {
 }
 
 export type QueueService = ReturnType<typeof createQueueService>
-
-function isCapacity(error: unknown): boolean {
-  return error instanceof RunActionError && error.code === "capacity"
-}
