@@ -2,12 +2,31 @@
 
 ## 状态：已构建并验证（2026-09-09）
 
-最终产物 `aegisx/tsecbench:v4`：**未压缩 2.78GB，gzip 压缩后 885MB**（达标 <1GB）。
+最终产物 `aegisx/tsecbench:v6`：**未压缩 3.06GB，gzip 压缩后 965MB**（达标 <1GB）。
 实现落在 `containers/tsecbench/`（Dockerfile + tuning.sed + README），使用方式见该
 README。以下计划正文保留作为决策记录。
 
 ## 关键实施记录
 
+- **v6（五方运行数据对比驱动，同日）**：相对 full 档的裁剪回摆——apt 补
+  `nuclei`/`chisel`/`whatweb`，内置 nuclei-templates（1.3 万 yaml，剪去
+  head/javascript/helpers 引擎目录，`~/nuclei-templates` symlink 供离线自动发现）。
+  依据：五份公开 run 全部有公网且已知产品 CVE+现成 PoC 是 c/b 系列主路径
+  （ComfyUI CVE-2025-67303、泛微 OA nuclei 模板 34 个）；断网下这层知识必须进镜像。
+- **v6 提示词特调**（仓库级 `prompt-defaults.ts`，通用打法不涉题面）：solver 加
+  通用打法块（先指纹后利用→本地 PoC 索引、内网横向默认口令、检测评分端点差分
+  还原+内核级绕过、自定义 VM 判 decoy 前必须写解码器、shell 后扫标准 flag 位置）；
+  编排者加按难度的 `timeout_ms` 预算分级（10-15/30-45/60-90min）。
+- **v6 tuning.sed 第四项**：settings 默认任务超时 60min→30min（59 题中位 1.8min
+  解出、agent 有效工作 p90≈20min；编排者逐 spawn 覆盖不受影响）。
+- **v5（对 v4 的评审修复）**：修复出厂缺陷 `PYTHONPATH=/opt/aegisx-sdk`
+  缺失——local backend 的 bash 继承 server 进程 env，v4 里 `import aegisx`
+  全体失败（solver:minimal 镜像有此 ENV，tsecbench 漏了）；venv 补
+  `Pillow`（上轮 8 次真实 import）与 `flask-unsign[wordlist]`（b-03 解题路径，
+  上轮靠运行时联网 pip）；apt 补 `sqlite3`/`time`，加 `fd` 别名。附带证据：
+  上轮 agent 容器有公网（c-02 克隆 ComfyUI-Manager 源码、c-04 克隆
+  jdwp-shellifier、b-03 pip 装包均成功），断网回放中 c-02 无法用镜像弥补。
+  v5 同时把提交晚于 v4 构建的队列排水器重构（b412605）带进 bundle。
 - 服务端以 bun bundle 打包（13MB 单文件替代 190MB node_modules），布局约束
   `/opt/aegisx/server/dist` + `/opt/aegisx/drizzle`（相对路径解析迁移文件）。
 - 调优不走 env：`tuning.sed` 在构建期改写源码后打包——promptHint（TSecBench 平台简报）、

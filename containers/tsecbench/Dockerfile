@@ -4,13 +4,15 @@
 # evaluation: no runtime network beyond the platform VPN, so every tool the
 # 2026-09-08 full run actually used ships in the image.
 #
-# Tuned defaults are applied at build time by rewriting two source files
+# Tuned defaults are applied at build time by rewriting three source files
 # (tuning.sed) before the server is bundled — no env/config plumbing needed:
 #   - bootstrap event promptHint → TSecBench platform brief
 #   - scheduler_config defaults → maxConcurrentTargets 3, stopSubmitterOnSolve true
+#   - settings default run timeout → 30min (most solves land in minutes; the
+#     orchestrator still sets per-spawn deadlines per difficulty)
 #
 #   docker buildx build -f containers/tsecbench/Dockerfile \
-#     --platform linux/amd64 -t aegisx/tsecbench:v2 .
+#     --platform linux/amd64 -t aegisx/tsecbench:v6 .
 
 # === web build (vite) ========================================================
 FROM oven/bun:1.4 AS web-builder
@@ -43,7 +45,8 @@ COPY apps/server/drizzle apps/server/drizzle
 COPY containers/tsecbench/tuning.sed /tmp/tuning.sed
 RUN sed -i -f /tmp/tuning.sed \
       apps/server/src/bootstrap.ts \
-      apps/server/src/run/scheduler-admin.ts
+      apps/server/src/run/scheduler-admin.ts \
+      apps/shared/settings-schema.ts
 # Optional native deps (cpu-features, ssh2) ship no prebuilt in a bare
 # container, and their install scripts can't run here — but bun build must
 # RESOLVE their `require('../build/Release/*.node')` to emit the asset.
@@ -63,12 +66,18 @@ RUN apt-get update -qq && apt-get -y install --no-install-recommends git ca-cert
     rm -rf /var/lib/apt/lists/*
 # Offline-relevant docs only: libc-database needs network to fetch libc files,
 # vulhub needs docker pulls — both useless disconnected, so they are dropped.
+# nuclei-templates is the offline CVE/PoC index (known-product attacks were the
+# main path on the 2026 runs); engines needing extra nuclei runtimes are pruned.
 RUN set -eux; \
     git clone --depth=1 https://github.com/swisskyrepo/PayloadsAllTheThings.git /opt/solver/knowledges/PayloadsAllTheThings; \
     git clone --depth=1 https://github.com/swisskyrepo/InternalAllTheThings.git /opt/solver/knowledges/InternalAllTheThings; \
     git clone --depth=1 https://github.com/HackTricks-wiki/hacktricks.git /opt/solver/knowledges/hacktricks; \
     git clone --depth=1 https://github.com/HackTricks-wiki/hacktricks-cloud.git /opt/solver/knowledges/hacktricks-cloud; \
+    git clone --depth=1 https://github.com/projectdiscovery/nuclei-templates.git /opt/nuclei-templates; \
     find /opt/solver/knowledges -name .git -type d -prune -exec rm -rf {} +; \
+    rm -rf /opt/nuclei-templates/.git /opt/nuclei-templates/.github \
+           /opt/nuclei-templates/head /opt/nuclei-templates/javascript \
+           /opt/nuclei-templates/helpers; \
     find /opt/solver/knowledges -type f \
       \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' \
          -o -name '*.webp' -o -name '*.svg' -o -name '*.mp4' -o -name '*.pdf' \) -delete
@@ -93,7 +102,7 @@ RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
       ca-certificates curl wget less binutils gdb strace ltrace file \
       procps psmisc ripgrep fd-find jq yq bc zip unzip p7zip-full unrar xxd \
       netcat-openbsd ncat socat sshpass openssh-client ftp telnet \
-      dnsutils iproute2 net-tools \
+      dnsutils iproute2 net-tools sqlite3 time \
       python3.13-venv && \
     rm -rf /var/lib/apt/lists/*
 
@@ -106,6 +115,7 @@ RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
     apt-get update -qq && \
     apt-get -y install --no-install-recommends \
       nmap masscan ffuf gobuster feroxbuster dirsearch wfuzz sqlmap hydra nikto \
+      chisel whatweb nuclei \
       radare2 binwalk upx-ucl checksec \
       default-mysql-client php-cli php-mysql php-curl php-xml \
       qemu-user-binfmt tesseract-ocr seclists wordlists && \
@@ -127,6 +137,7 @@ RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
       ! -name 'qemu-x86_64' ! -name 'qemu-i386' \
       ! -name 'qemu-aarch64' ! -name 'qemu-arm' \
       ! -name 'qemu-mips' ! -name 'qemu-mipsel' -delete; \
+    ln -sf "$(command -v fdfind)" /usr/local/bin/fd; \
     W=/usr/share/seclists/Discovery/Web-Content && \
     P=/usr/share/seclists/Passwords/Common-Credentials && \
     ln -sf "$W/DirBuster-2007_directory-list-2.3-small.txt"  "$W/directory-list-2.3-small.txt" && \
@@ -147,14 +158,17 @@ RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
 
 # Python venv: the pwn/crypto stack + symbolic execution (angr) + the client
 # libs the run missed (telnetlib was dropped from py3.13; AI-service targets
-# wanted gradio/ws/yaml).
+# wanted gradio/ws/yaml). Pillow backs image handling beside tesseract;
+# flask-unsign[wordlist] is the b-03 solve path — the run pip-installed it
+# at runtime while the box still had egress, which the offline eval won't.
 RUN --mount=type=cache,id=tsec-pip,target=/root/.cache/pip,sharing=locked \
     python3.13 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install \
       pwntools pycryptodome pycryptodomex gmpy2 z3-solver capstone pyelftools \
       scapy requests angr \
-      telnetlib3 gradio_client websockets pyyaml aiohttp pymysql
+      telnetlib3 gradio_client websockets pyyaml aiohttp pymysql \
+      Pillow 'flask-unsign[wordlist]'
 
 # App artifacts. Layout constraint: the bundled server resolves its migrations
 # at import.meta.dir/../../drizzle → /opt/aegisx/server/dist + /opt/aegisx/drizzle.
@@ -164,6 +178,7 @@ COPY --from=server-bundle /app/apps/server/drizzle /opt/aegisx/drizzle
 COPY --from=web-builder /app/apps/web/dist /opt/aegisx-web
 COPY apps/sdk/python /opt/aegisx-sdk
 COPY --from=knowledges /opt/solver/knowledges /opt/solver/knowledges
+COPY --from=knowledges /opt/nuclei-templates /usr/share/nuclei-templates
 
 # Environment doc: build-time self-introspection, then replace the networked
 # "install SOP" section — this image runs disconnected.
@@ -182,14 +197,21 @@ offline = """## 离线环境（重要）
 s = re.sub(r"## 缺工具时的安装 SOP.*?(?=\n## |\Z)", offline, s, flags=re.S)
 open(p, "w").write(s)
 PY
-RUN echo tsecbench > /opt/solver/VARIANT
+# nuclei auto-discovers ~/nuclei-templates — the symlink keeps it offline
+# (otherwise the first run tries to download templates and fails).
+RUN echo tsecbench > /opt/solver/VARIANT && \
+    ln -sf /usr/share/nuclei-templates /root/nuclei-templates
 
+# PYTHONPATH must point at the in-image SDK: solver bash execs inherit the
+# server process env (local backend has no container-ENV indirection), and
+# prompts promise `import aegisx` just works.
 ENV AEGISX_DATA_DIR=/data \
     AEGISX_EXEC_BACKEND=local \
     AEGISX_BOOTSTRAP=1 \
     AEGISX_ENQUEUE_ALL=1 \
     AEGISX_API_URL=http://127.0.0.1:3000 \
     AEGISX_WEB_DIR=/opt/aegisx-web \
+    PYTHONPATH=/opt/aegisx-sdk \
     HOST=0.0.0.0 \
     PORT=3000
 
