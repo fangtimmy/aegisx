@@ -6,9 +6,9 @@ import type {
 } from "./types"
 
 /** The challenge's channel tree: #team + one DM per agent that ever attacked
- * the challenge (the IM view's left rail). Unread is CLIENT-side session
- * state: the server's per-agent cursors are the functional state for
- * agents, not the UI. */
+ * the challenge (the IM view's left rail). Unread is CLIENT-side state
+ * (persisted seen markers, see `useChannelSeen`): the server's per-agent
+ * cursors are the functional state for agents, not the UI. */
 export function getChallengeChannels(challengeId: string) {
   return apiRequest<{ items: ChannelPublic[] }>(
     `/challenges/${challengeId}/channels`

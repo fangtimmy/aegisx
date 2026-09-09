@@ -6,7 +6,7 @@ import {
   MessageSquare,
   MessagesSquare,
 } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo } from "react"
 
 import { channelsApi, challengesApi, keys } from "@/api"
 import type { Challenge, FleetInfo, QueueItem, QueueState } from "@/api"
@@ -16,6 +16,7 @@ import { POLL_INTERVAL_MS } from "@/features/events/event-agents-shared"
 import { SchedulerDmTab } from "@/features/events/scheduler-dm-tab"
 import { ChannelsView } from "@/features/runs/channels-view"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
+import { useChannelSeen } from "@/features/runs/use-channel-seen"
 
 import { ConversationPane } from "./conversation-pane"
 import { OverviewPane } from "./overview-pane"
@@ -41,28 +42,11 @@ export function isTaskTab(value: string): value is TaskTab {
   return TASK_TAB_VALUES.some((tab) => tab === value)
 }
 
-const CHANNEL_SEEN_KEY = "aegisx:channel-seen"
-
-function readSeenMap(): Record<string, number> {
-  try {
-    const parsed: unknown = JSON.parse(
-      localStorage.getItem(CHANNEL_SEEN_KEY) ?? "{}"
-    )
-    if (typeof parsed !== "object" || parsed === null) return {}
-    const map: Record<string, number> = {}
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value === "number") map[key] = value
-    }
-    return map
-  } catch {
-    return {}
-  }
-}
-
 /** Unread marker on the 频道 tab: channels whose latest message postdates the
  * locally persisted seen marker (server cursors belong to agents, not the
- * human viewer). First sighting seeds a marker so history never counts as
- * unread; while the tab is open everything visible counts as seen. */
+ * human viewer). First sighting seeds a baseline so history never counts as
+ * unread; while the tab is open everything visible counts as seen. Same
+ * store as the channel rail — the two badges cannot disagree. */
 function ChannelsTabBadge({
   active,
   challengeId,
@@ -76,42 +60,17 @@ function ChannelsTabBadge({
     queryFn: () => channelsApi.getChallengeChannels(challengeId ?? ""),
     refetchInterval: POLL_INTERVAL_MS,
   })
-  const [seen, setSeen] = useState<Record<string, number>>(readSeenMap)
   const items = useMemo(() => channels.data?.items ?? [], [channels.data])
+  const { isUnread, markSeen } = useChannelSeen(items)
 
+  // markSeen no-ops while a marker already covers the activity, so polling
+  // with the tab open never write → render → writes.
   useEffect(() => {
-    if (items.length === 0) return
-    const isUnseen = (item: { key: string; lastMessageAt: string | null }) => {
-      const marker = seen[item.key]
-      if (marker === undefined) return true
-      return (
-        item.lastMessageAt !== null && Date.parse(item.lastMessageAt) > marker
-      )
-    }
-    // Open tab: only channels with genuinely newer messages need re-marking
-    // (marking unconditionally would write → setState → write, forever).
-    const missing = (
-      active
-        ? items.filter(isUnseen)
-        : items.filter((item) => seen[item.key] === undefined)
-    ).map((item) => item.key)
-    if (missing.length === 0) return
-    const now = Date.now()
-    const next = { ...seen }
-    for (const key of missing) next[key] = now
-    localStorage.setItem(CHANNEL_SEEN_KEY, JSON.stringify(next))
-    setSeen(next)
-  }, [active, items, seen])
+    if (!active) return
+    for (const item of items) markSeen(item)
+  }, [active, items, markSeen])
 
-  // Hidden until every channel carries a marker: the seeding render must not
-  // flash a full unread count.
-  const unread = items.every((item) => seen[item.key] !== undefined)
-    ? items.filter(
-        (item) =>
-          item.lastMessageAt !== null &&
-          Date.parse(item.lastMessageAt) > (seen[item.key] ?? 0)
-      ).length
-    : 0
+  const unread = items.filter(isUnread).length
   if (unread === 0) return null
   return (
     <Badge size="sm" variant="info">

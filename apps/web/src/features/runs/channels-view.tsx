@@ -31,6 +31,7 @@ import { parseLiveEvent } from "@/stream/parse-event"
 
 import { appendChannelMessage, mergeChannelMessages } from "./channel-tail"
 import { MessageComposer } from "./composer"
+import { useChannelSeen } from "./use-channel-seen"
 
 /** Timeline / rail reconciliation cadence — a 60s backstop against silent
  * SSE loss, not the primary delivery path (that is the channel stream). */
@@ -568,12 +569,12 @@ function RailItem({
   channel,
   active,
   onSelect,
-  unseenCount,
+  unread,
 }: {
   channel: ChannelPublic
   active: boolean
   onSelect: () => void
-  unseenCount: number
+  unread: boolean
 }) {
   return (
     <ListRow
@@ -597,13 +598,11 @@ function RailItem({
           {channel.liveAgentCount}
         </span>
       )}
-      {unseenCount > 0 && (
+      {unread && (
         <span
-          aria-label={`${unseenCount} 条未读`}
-          className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-2xs leading-none font-medium text-primary-foreground tabular-nums"
-        >
-          {unseenCount > 99 ? "99+" : unseenCount}
-        </span>
+          aria-label="有未读消息"
+          className="ml-auto inline-flex size-2 shrink-0 rounded-full bg-primary"
+        />
       )}
     </ListRow>
   )
@@ -613,13 +612,13 @@ function RailItem({
 function ChannelRail({
   channels,
   activeKey,
+  isUnread,
   onSelect,
-  unreadCounts,
 }: {
   channels: ChannelPublic[]
   activeKey: string | null
+  isUnread: (channel: ChannelPublic) => boolean
   onSelect: (key: string) => void
-  unreadCounts: Record<string, number>
 }) {
   const sections: Array<{ label: string; items: ChannelPublic[] }> = [
     { label: "频道", items: channels.filter((c) => c.kind !== "dm") },
@@ -638,7 +637,7 @@ function ChannelRail({
               channel={channel}
               key={channel.key}
               onSelect={() => onSelect(channel.key)}
-              unseenCount={unreadCounts[channel.key] ?? 0}
+              unread={isUnread(channel)}
             />
           ))}
         </div>
@@ -654,20 +653,11 @@ function ChannelRail({
  * with attachments + urgent switch. Anchored on a challenge (its channel
  * tree: #team + one DM per agent that ever attacked the challenge).
  * Channels are addressed by their derived `key` (team:<cid> / dm:<aid>).
- * UI unread is client-side session state — never persisted.
+ * Unread is the shared localStorage seen-marker store (`useChannelSeen`) —
+ * the same source the task tab badge reads, so the two never disagree.
  */
 export function ChannelsView({ challengeId }: { challengeId?: string }) {
   const [activeKey, setActiveKey] = useState<string | null>(null)
-  /** Session-local unread baseline (UI unread is client session state,
-   * never persisted): channel key → the last message timestamp this view has
-   * accounted for. */
-  const [seenAt, setSeenAt] = useState<Record<string, string | null>>({})
-  /** Per-channel unseen counts, keyed to the rail `lastMessageAt` they were
-   * computed for (one message-window fetch per channel per change — bounded
-   * by the 60s rail poll; SSE only covers the open channel). */
-  const [unread, setUnread] = useState<
-    Record<string, { at: string; count: number }>
-  >({})
 
   const channels = useQuery({
     queryKey: challengeId
@@ -680,86 +670,21 @@ export function ChannelsView({ challengeId }: { challengeId?: string }) {
 
   const list = channels.data?.items ?? NO_CHANNELS
   const active = list.find((channel) => channel.key === activeKey) ?? list[0]
+  const { isUnread, markSeen } = useChannelSeen(list)
 
-  // Baseline unseen channels on first load (0 unread at mount).
+  // Viewing a channel is reading it: whenever its rail-known activity
+  // advances, the marker follows (markSeen no-ops while covered).
   useEffect(() => {
-    setSeenAt((prev) => {
-      let changed = false
-      const next = { ...prev }
-      for (const channel of list) {
-        if (!(channel.key in next)) {
-          next[channel.key] = channel.lastMessageAt
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-  }, [list])
-
-  // The open channel is read: its latest rail-known message timestamp is
-  // the seen baseline (the rail poll carries lastMessageAt).
-  const activeKeyResolved = active?.key
-  const activeLastMessageAt = active?.lastMessageAt
-  useEffect(() => {
-    if (!activeKeyResolved) return
-    setSeenAt((prev) =>
-      prev[activeKeyResolved] === activeLastMessageAt
-        ? prev
-        : { ...prev, [activeKeyResolved]: activeLastMessageAt }
-    )
-    setUnread((prev) =>
-      activeKeyResolved in prev
-        ? Object.fromEntries(
-            Object.entries(prev).filter(([key]) => key !== activeKeyResolved)
-          )
-        : prev
-    )
-  }, [activeKeyResolved, activeLastMessageAt])
-
-  // A non-active channel whose lastMessageAt moved past its baseline: fetch
-  // its latest window once and count the messages newer than the baseline.
-  // The `at` watermark keeps each change to a single fetch.
-  useEffect(() => {
-    if (activeKeyResolved === undefined) return undefined
-    let cancelled = false
-    for (const channel of list) {
-      const last = channel.lastMessageAt
-      if (
-        !last ||
-        channel.key === activeKeyResolved ||
-        last === seenAt[channel.key] ||
-        unread[channel.key]?.at === last
-      ) {
-        continue
-      }
-      void channelsApi
-        .listChannelMessages(channel.key, 0, PAGE_SIZE)
-        .then((data) => {
-          if (cancelled) return
-          const since = new Date(seenAt[channel.key] ?? 0).getTime()
-          const count = data.items.filter(
-            (message) => new Date(message.createdAt).getTime() > since
-          ).length
-          setUnread((prev) => ({ ...prev, [channel.key]: { at: last, count } }))
-        })
-        .catch(() => undefined)
-    }
-    return () => {
-      cancelled = true
-    }
-  }, [list, activeKeyResolved, seenAt, unread])
-
-  const unreadCounts = Object.fromEntries(
-    Object.entries(unread).map(([key, entry]) => [key, entry.count])
-  )
+    if (active) markSeen(active)
+  }, [active, markSeen])
 
   return (
     <div className="flex h-full min-h-0 min-w-0">
       <ChannelRail
         activeKey={active?.key ?? null}
         channels={list}
+        isUnread={isUnread}
         onSelect={setActiveKey}
-        unreadCounts={unreadCounts}
       />
       {/* Timeline + composer */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
