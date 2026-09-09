@@ -435,14 +435,6 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return getSchedulerConfig(patch.eventId)
   }
 
-  /** Delete the event's scheduler agent row (reset semantics: cascade its
-   * sessions). The container removal + channel sweep are the caller's job. */
-  function deleteSchedulerAgent(eventId: string): void {
-    db.delete(agents)
-      .where(and(eq(agents.eventId, eventId), eq(agents.role, "orchestrator")))
-      .run()
-  }
-
   return {
     assertModelsResolvable,
     setAgentTimeout,
@@ -453,6 +445,5 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     upsertSchedulerConfig,
     setSchedulerPaused,
     isSchedulerPaused,
-    deleteSchedulerAgent,
   }
 }

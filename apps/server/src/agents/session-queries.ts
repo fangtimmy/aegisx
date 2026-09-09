@@ -6,7 +6,7 @@ import {
   type TimingMeta,
 } from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { and, asc, desc, eq, gt, sql, type SQL } from "drizzle-orm"
+import { and, asc, gt, sql, type SQL } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { sessionEntries } from "../db/schema"
@@ -23,33 +23,8 @@ const RENDERABLE_TYPES = new Set([
   "thinking_level_change",
 ])
 
-/** Parse committed session_entries.data rows (matching `where`) into entries.
- * Malformed rows are skipped. Shared by run (runId-scoped) and per-agent
- * queries — the caller supplies the scoping filter. */
-export function readSessionEntries(
-  db: Database,
-  where: SQL | undefined
-): SessionEntry[] {
-  const rows = db
-    .select({ data: sessionEntries.data })
-    .from(sessionEntries)
-    .where(where)
-    .all()
-  const entries: SessionEntry[] = []
-  for (const row of rows) {
-    try {
-      // Written by DbSessionManager (typed at commit time); parse only
-      // guards against corrupt/truncated rows.
-      entries.push(parseJson<SessionEntry>(row.data))
-    } catch {
-      // skip malformed
-    }
-  }
-  return entries
-}
-
 /** One usage field value, JSON-validity guarded: malformed `data` rows are
- * skipped (json_extract raises on invalid JSON; readSessionEntries skips
+ * skipped (json_extract raises on invalid JSON; the JS side parses and skips
  * them, so the SQL must contribute 0 the same way). Exported for aggregate
  * queries that join session_entries with agents (e.g. per-model billing). */
 export const usageField = (path: string) => sql<number>`
@@ -73,9 +48,9 @@ export const roleField = sql`json_extract(CASE WHEN json_valid(${sessionEntries.
  * for compaction/branch_summary); missing/malformed fields coalesce to 0,
  * matching the JS accumulator's toNum semantics for non-numeric values
  * (SQLite CAST of a non-numeric to REAL yields 0). Malformed `data` rows
- * contribute nothing on both sides (readSessionEntries skips them;
- * json_extract returns NULL). `totalTokens` stays a JS sum (pi formula:
- * input + output + cacheRead + cacheWrite). */
+ * contribute nothing on both sides (the JS reader skips them; json_extract
+ * returns NULL). `totalTokens` stays a JS sum (pi formula: input + output +
+ * cacheRead + cacheWrite). */
 export function usageTotalsSql(
   db: Database,
   where: SQL | undefined
@@ -125,38 +100,6 @@ export function usageTotalsSql(
   return totals
 }
 
-/** Latest assistant message with prompt tokens (input + cacheRead +
- * cacheWrite) drives the cache-hit rate (cacheRead / prompt * 100) — the
- * same walk accumulateEntryUsage does, in insertion (rowid) order. Kept
- * separate from usageTotalsSql: the run-level sum has no consumer for the
- * rate (only the parity test does), so the hot path skips this query. */
-export function cacheHitRateSql(
-  db: Database,
-  where: SQL | undefined
-): number | null {
-  const cacheRow = db
-    .select({
-      input: usageField("$.message.usage.input"),
-      cacheRead: usageField("$.message.usage.cacheRead"),
-      cacheWrite: usageField("$.message.usage.cacheWrite"),
-    })
-    .from(sessionEntries)
-    .where(
-      and(
-        where,
-        eq(sessionEntries.type, "message"),
-        sql`${roleField} = 'assistant'`,
-        sql`(${usageField("$.message.usage.input")} + ${usageField("$.message.usage.cacheRead")} + ${usageField("$.message.usage.cacheWrite")}) > 0`
-      )
-    )
-    .orderBy(desc(sql`rowid`))
-    .limit(1)
-    .get()
-  if (!cacheRow) return null
-  const prompt = cacheRow.input + cacheRow.cacheRead + cacheRow.cacheWrite
-  return prompt > 0 ? (cacheRow.cacheRead / prompt) * 100 : null
-}
-
 /** Sum token usage + cost across entries matching `where`. Returns undefined
  * when nothing was used (so callers can omit the field). Runs as a single
  * aggregate SQL query (JSON1) instead of an O(N) full-row JSON.parse per call
@@ -181,56 +124,38 @@ export function sumUsageTotals(
   }
 }
 
-/** List renderable entries after the given cursor, matching `scopeWhere`.
+/** List renderable entries after the given seq cursor, matching `scopeWhere`.
  * `scopeWhere` is the scoping condition WITHOUT the cursor filter (this adds
  * it). Every row carries its agent_id (v8: notNull).
  *
- * Cursor semantics (`opts.cursor`, default `seq`):
- *  - `seq` — per-session append position (`unique(sessionId, seq)`). Correct
- *    for single-session scopes (per-agent queries + backtrack's seq target);
- *    `nextAfter` is a seq.
- *  - `rowid` — SQLite rowid (monotonic on an append-only rowid table). Used
- *    for run-level queries that union several sessions' entries, where
- *    per-session seqs interleave and cannot order a single stream (a seq
- *    cursor there silently drops whole sessions' later entries). Items still
- *    carry their own `seq` (the per-agent pagination / backtrack key).
- *
- * Known boundary (accepted): flat backtrack deletes the tail of a session and
- * a later insert can reuse a freed rowid, so a client holding a stale rowid
- * cursor could theoretically skip new rows. Harmless in practice: backtrack
- * re-pulls via the store reset + full reload, and SSE `message.committed`
- * pushes new entries to live subscribers. */
+ * The cursor is the per-session append position (`unique(sessionId, seq)`);
+ * `nextAfter` echoes the highest SCANNED seq — renderable or not — so a
+ * session whose tail is non-renderable rows (label / session_info) does not
+ * pin clients into re-pulling them forever. */
 export function listRenderableEntries(
   db: Database,
   scopeWhere: SQL | undefined,
-  opts: { after: number; cursor?: { column: "seq" } | { column: "rowid" } }
+  opts: { after: number }
 ): MessageList {
-  const cursor = opts.cursor?.column ?? "seq"
   const rows = db
     .select({
       data: sessionEntries.data,
       meta: sessionEntries.meta,
       seq: sessionEntries.seq,
       agentId: sessionEntries.agentId,
-      rowid: sql<number>`rowid`,
     })
     .from(sessionEntries)
-    .where(
-      and(
-        scopeWhere,
-        cursor === "rowid"
-          ? gt(sql`rowid`, opts.after)
-          : gt(sessionEntries.seq, opts.after)
-      )
-    )
-    .orderBy(cursor === "rowid" ? asc(sql`rowid`) : asc(sessionEntries.seq))
+    .where(and(scopeWhere, gt(sessionEntries.seq, opts.after)))
+    .orderBy(asc(sessionEntries.seq))
     .all()
   const items: MessageListItem[] = []
-  let nextCursor = opts.after
+  let nextAfter = opts.after
   for (const row of rows) {
+    nextAfter = row.seq
     let entry: SessionEntry
     try {
-      // Same trust boundary as readSessionEntries above.
+      // Written by DbSessionManager (typed at commit time); parse only
+      // guards against corrupt/truncated rows.
       entry = parseJson<SessionEntry>(row.data)
     } catch {
       continue
@@ -251,10 +176,6 @@ export function listRenderableEntries(
       key: entryKeyOf(row.agentId, entry),
       ...(meta ? { meta } : {}),
     })
-    nextCursor = cursor === "rowid" ? row.rowid : row.seq
   }
-  return {
-    items,
-    nextAfter: items.length > 0 ? nextCursor : opts.after,
-  }
+  return { items, nextAfter }
 }

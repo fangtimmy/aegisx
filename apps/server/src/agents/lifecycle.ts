@@ -2,16 +2,15 @@ import { RunActionError } from "../run/errors"
 import type { HostAgentSession } from "./host-session"
 
 /**
- * Concurrency-safe turn-driving for a host-side agent session, shared by the
- * run service (solver main agent) and the orchestrator service. Both own N
- * independent sessions keyed by id (run id / event id); this core factors out
- * the mechanics that are identical between them:
+ * Concurrency-safe turn-driving for host-side agent sessions. The run service
+ * owns one lifecycle whose id-keyed map holds every live agent session
+ * (solvers and the event's scheduler agent alike); this core factors out the
+ * mechanics shared by all of them:
  *
  *  - per-id lock serialization (the caller's own `withLock`, so service-native
  *    action-error types survive),
  *  - a monotonic per-id turn generation so a stale turn's settle is a no-op
- *    when a newer turn has started (this is the guard the orchestrator was
- *    missing — it let two notifications double-drive one session),
+ *    when a newer turn has started,
  *  - drive → prompt → settle, with settle re-checking the generation and that
  *    the session wasn't replaced/closed mid-turn,
  *  - send (steer / followUp while streaming, else a fresh turn) and abort.
@@ -26,37 +25,26 @@ export type SessionLifecycleOptions = {
   /** The owning service's per-id lock. Reused (not duplicated) so bespoke
    * service ops (create / close / finish / ...) serialize against turns. */
   withLock<T>(id: string, op: () => T | Promise<T>): Promise<T>
-  /** A turn is starting (status → running). Run: mark run + main agent running
-   * and emit. Orchestrator: mark running. */
+  /** A turn is starting (status → running): mark the agent running. */
   onTurnStart?(id: string): void
-  /** The freshest turn settled. Run: consume pending finish/close or go idle.
-   * Orchestrator: go idle. `error` is the prompt error, if any (already logged
-   * by the core). */
+  /** The freshest turn settled: consume a pending finish (graceful
+   * self-termination) or mark the agent idle. `error` is the prompt error, if
+   * any (already logged by the core). */
   onTurnSettled(id: string, error: string | null): void
   /** Called just before driving a fresh turn from send() (run: clear pending). */
   onBeforeNewTurn?(id: string): void
-  /** Fresh-turn gate: awaited in send()'s non-streaming branch, BEFORE
-   * onBeforeNewTurn, inside the caller's lock. Throw = the turn is abandoned
-   * and send() propagates the error to its caller. steer/followUp (streaming
-   * branch) and drive() callers (deliverToParent, system prime) do NOT pass
-   * through this hook — internal dispatch must never be capacity-rejected. */
-  onTurnGate?(id: string): Promise<void>
-  /** Cold-resume a closed entity so send() can start a new turn (run:
-   * ensureWarm). Omit to reject sends to entities without a live session
-   * (orchestrator: sends require a running session). */
+  /** Cold-resume a closed agent so send() can start a new turn. Omit to
+   * reject sends to agents without a live session. */
   onResume?(id: string): Promise<void>
 }
 
 export type SessionLifecycle = {
-  /** Live session map (main agent per run / the single orchestrator session). */
+  /** Live session map (every agent the service has warmed: solvers + the
+   * event's scheduler agent). */
   get(id: string): HostAgentSession | undefined
   has(id: string): boolean
   set(id: string, session: HostAgentSession): void
   delete(id: string): void
-  /** Drive one prompt turn to completion, then settle. No-op without a live
-   * session. Called within the caller's lock (create / send); settle re-acquires
-   * it. Generation-guarded: a turn whose generation is superseded settles no-op. */
-  drive(id: string, text: string): void
   /** Deliver a message: steer / followUp while streaming, else a fresh turn.
    * Resolves false WITHOUT delivering when there is no live session and no
    * `onResume` can produce one, or `opts.assertLive` rejects the id inside
@@ -149,7 +137,6 @@ export function createSessionLifecycle(
         else await session.session.steer(text)
         return true
       }
-      await options.onTurnGate?.(id)
       options.onBeforeNewTurn?.(id)
       drive(id, text)
       return true
@@ -177,7 +164,6 @@ export function createSessionLifecycle(
     has: (id) => sessions.has(id),
     set: (id, session) => sessions.set(id, session),
     delete: (id) => sessions.delete(id),
-    drive,
     send,
     abort,
     closeAll,

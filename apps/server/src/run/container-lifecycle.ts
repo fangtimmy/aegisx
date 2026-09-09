@@ -203,7 +203,6 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
     ensureContainer,
     removeContainer,
     sweep,
-    forceKillTimers,
     close,
   }
 }
