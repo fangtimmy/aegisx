@@ -37,7 +37,7 @@ Your task list is the explicit queue. Build and maintain it with \`aegisx.queue.
 ## Channels：广播与定向的分工
 频道是派生键：每题一个 #team（同题全部 agent 共享），每 solver agent 一个 DM，以及你自己的 orch 频道（agent 事件/队列通知/solver 问询都落在这里）：
 - **FYI 广播 → \`aegisx.channels.announce(challenge_id, text)\`**（发到该题的 #team，非紧急——随周期合并投递）。方针、全局信息、优先级调整用广播；也可 \`aegisx.channels.post\` 直接发（频道键来自 \`aegisx.channels.list()\`）。
-- **定向指令 → \`aegisx.agents.message(agent_id, text)\`**（发到该 agent 的 DM，默认 urgent=True 立即投递并只唤醒它；terminal agent 会被重开——文件与记忆保留；urgent=False 随周期合并）。具体任务指派、纠偏、催促用 DM。
+- **定向指令 → \`aegisx.agents.message(agent_id, text)\`**（发到该 agent 的 DM，默认 urgent=True 立即投递并只唤醒它；urgent=False 随周期合并）。具体任务指派、纠偏、催促用 DM。
 - solver 的发现/死路/附件会出现在 #team —— \`aegisx.channels.read(键)\`（键来自 \`aegisx.channels.list()\`）随时回看。附件即 shared/ 路径：消息 📎 行给出 \`shared/from-<id8>/x.py\`，你的容器挂载了全部题工作区（只读），直接读 \`/challenges/<challenge_id>/workspace/shared/...\` 即可。
 - solver 可能 \`aegisx.ask()\` 你（决策/资源请求）；urgent=True 的问询会立即唤醒你，其余随周期合并。
 
@@ -140,7 +140,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
     aegisx.channels.post("#team", "angle/finding/dead end ...", urgent=False)
     PY
 
-精确签名：\`channels.read(channel, after=None, limit=50, mark_read=True)\`（按 id 升序返回）、\`channels.post(channel, text, tags=None, files=None, urgent=False)\`、\`ask(text, urgent=False)\`。完整参考（附件语义、频道键、错误码）：\`/opt/aegisx-sdk/GUIDE.md\`。行为纪律——把 #team 当作你的对外工作日志：你的 run 可能在任何时刻被超时终止、无预警，帖子就是接手者的起点：
+精确签名：\`channels.read(channel, after=None, limit=50, mark_read=True)\`（按 id 升序返回）、\`channels.post(channel, text, tags=None, files=None, urgent=False)\`、\`ask(text, urgent=False, files=None)\`。完整参考（附件语义、频道键、错误码）：\`/opt/aegisx-sdk/GUIDE.md\`。行为纪律——把 #team 当作你的对外工作日志：你的 run 可能在任何时刻被超时终止、无预警，帖子就是接手者的起点：
 - 开局：前几个工具调用内就 post 一条角度声明（你主攻什么思路、已知的入口/凭据/路径）。
 - 里程碑：每确认一个事实就发一条结论式更新——拿到某入口、排除一条主假设、权限升级、找到关键偏移、拿到部分 flag。一条消息一个结论。
 - 卡住：超过约 10 分钟无新结论，先 post 已试路径与下一步假设，再继续。
@@ -182,7 +182,9 @@ export const DEFAULT_INITIAL_PROMPT_TEMPLATE = `## Challenge
 {{/if}}{{#if challenge.points}}- Points: {{challenge.points}}
 {{/if}}
 
+"""
 {{challenge.description}}
+"""
 
 {{#if challenge.confirmedFlags.length}}
 ## Confirmed flags (already accepted — do not resubmit)
@@ -225,7 +227,7 @@ export const DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE = `You are the AegisX sch
 """
 {{instruction}}
 """
-Build your plan now with the Python SDK — FIRST \`cat /opt/aegisx-sdk/GUIDE.md\`, then run one bash heredoc script (\`python3 - <<'PY'\` … \`PY\`) calling \`aegisx.queue.enqueue(challenge_id, prompt=...)\` per task, then act on each wake-up.
+Build your plan now with the Python SDK — FIRST \`cat /opt/aegisx-sdk/GUIDE.md\`, then build the queue in ONE bash heredoc script (\`python3 - <<'PY'\` … \`PY\`) that calls \`aegisx.queue.enqueue(challenge_id, prompt=...)\` for each planned task, then act on each wake-up.
 {{else}}
 Wait for agent events (an agent went idle, a flag was accepted, an agent timed out) and act on each wake-up: assess with \`aegisx.snapshot()\` / \`aegisx.agents.read\`, act via the SDK.
 {{/if}}`

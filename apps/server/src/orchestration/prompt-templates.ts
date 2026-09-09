@@ -84,6 +84,7 @@ export const PROMPT_TEMPLATE_VARIABLES = [
   "event.id",
   "event.name",
   "event.platform",
+  "event.promptHint",
   "challenge.id",
   "challenge.name",
   "challenge.description",
@@ -279,17 +280,20 @@ export function renderSystemPrompt(
 export const ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES = [
   "event.id",
   "event.name",
+  "event.promptHint",
   "instruction",
 ] as const
 
 export type OrchestratorPromptContext = {
-  event: { id: string; name: string }
+  event: { id: string; name: string; promptHint: string }
   instruction: string
+  workspace: { root: string }
 }
 
 export const sampleOrchestratorPromptContext: OrchestratorPromptContext = {
-  event: { id: "sample-event", name: "Sample CTF" },
+  event: { id: "sample-event", name: "Sample CTF", promptHint: "" },
   instruction: "Hit crypto first; leave pwn for last.",
+  workspace: { root: "/workspace" },
 }
 
 export function previewSystemPrompt(

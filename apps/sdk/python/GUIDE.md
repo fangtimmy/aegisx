@@ -65,7 +65,7 @@ cursor advances):
     aegisx.agents.stop(id) / .close(id) / .finish(id, summary) / .compact(id) / .set_timeout(id, ms)
     aegisx.channels.list() / .read("#team" | "orch" | key) / .post("#team", text, tags=..., files=..., urgent=...)
     aegisx.channels.announce(challenge_id, text)       # FYI broadcast to the challenge's #team
-    aegisx.ask(text, urgent=False)                     # solver → scheduler question (orch channel)
+    aegisx.ask(text, urgent=False, files=None)         # solver → scheduler question (orch channel)
 
 Channel keys are derived: `#team` (one per challenge, shared by its agents),
 `dm:<agentId>` (directives to one agent), `orch` (solver asks + system

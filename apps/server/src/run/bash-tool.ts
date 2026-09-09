@@ -27,13 +27,15 @@ import { buildSingleFileTar, shellQuote } from "./workspace/backend"
  * `containerCwd` — while the container WorkingDir stays /workspace.
  */
 
-/** Foreground default. Applied when the agent omits `timeout`. */
-const DEFAULT_TIMEOUT_SEC = 600
+/** Foreground default. Applied when the agent omits `timeout`. Quoted as
+ * "~600s" in the mainSystem prompt — keep the two in sync. */
+export const DEFAULT_TIMEOUT_SEC = 600
 /** Hard ceiling. Even an explicit larger `timeout` is clamped to this. */
 const MAX_TIMEOUT_SEC = 1800
 /** Tail window shown to the model: last N lines or N bytes, whichever trips. */
 const MAX_LINES = 2000
-const MAX_BYTES = 64_000
+/** Quoted as "~64KB" in the orchestrator prompt — keep the two in sync. */
+export const MAX_BYTES = 64_000
 /** In-memory capture cap. Bounds RAM on pathological commands; output beyond
  *  this is dropped (the tail + total are still reported accurately). */
 const CAPTURE_CAP = 16 * 1024 * 1024

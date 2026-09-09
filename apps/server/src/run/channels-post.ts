@@ -23,10 +23,10 @@ import { schedulerPolicyFor } from "./scheduler-policy"
 
 /** Server-side message body cap (characters). */
 const MAX_MESSAGE_CHARS = 16_000
-/** Per-file attachment cap. */
-const MAX_FILE_BYTES = 64 * 1024 * 1024
-/** Per-message attachment caps. */
-const MAX_FILES_PER_MESSAGE = 8
+/** Per-file attachment cap. Quoted as "64MB" in the mainSystem prompt. */
+export const MAX_FILE_BYTES = 64 * 1024 * 1024
+/** Per-message attachment caps. Quoted as "最多 8 个" in the mainSystem prompt. */
+export const MAX_FILES_PER_MESSAGE = 8
 const MAX_MESSAGE_TOTAL_BYTES = 128 * 1024 * 1024
 
 function targetExists(path: string): boolean {
