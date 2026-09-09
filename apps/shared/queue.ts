@@ -6,10 +6,11 @@
  * appends — one challenge may hold several pending items (parallel attempts
  * are a legal plan). */
 
-/** The spawn specs a queue item carries (the parsed `params` JSON column). */
+/** The spawn specs a queue item carries (the parsed `params` JSON column).
+ * The prompt is not part of this JSON — it lives in the item's `prompt`
+ * column, the single source for launch. */
 export type SpawnQueueParams = {
   model?: string
-  prompt?: string
   promptMode?: "strategy" | "override"
 }
 
@@ -22,7 +23,8 @@ export type QueueItemPublic = {
   challengeName: string
   params: SpawnQueueParams
   timeoutMs: number | null
-  /** Display copy of params.prompt (the queue list's strategy column). */
+  /** The spawn prompt (the queue list's strategy column); single source of
+   * truth for launch. */
   prompt: string
   source: "manual" | "scheduler"
   status: "pending" | "running" | "done" | "cancelled" | "failed"

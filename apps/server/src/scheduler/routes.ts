@@ -162,7 +162,7 @@ export function registerSchedulerRoutes(
     const miss = requireEvent(c, eventId)
     if (miss) return miss
     try {
-      agentService.queue().remove(c.req.param("itemId"))
+      agentService.queue().remove(eventId, c.req.param("itemId"))
       return c.body(null, 204)
     } catch (error) {
       return runError(c, error)

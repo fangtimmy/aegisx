@@ -15,6 +15,7 @@ import {
 } from "../helpers"
 
 type Db = ReturnType<typeof setupDb>["db"]
+type QueueRow = typeof spawnQueue.$inferSelect
 
 function item(db: Db, id: string) {
   return db.select().from(spawnQueue).where(eq(spawnQueue.id, id)).get()!
@@ -41,8 +42,9 @@ afterEach(() => {
   for (const svc of createdQueues.splice(0)) svc.dispose()
 })
 
-function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
+function makeQueue(db: Db, launch: (row: QueueRow) => Promise<string>) {
   const launches: string[] = []
+  const launchedRows: QueueRow[] = []
   const emergencies: string[] = []
   const notices: string[] = []
   let n = 0
@@ -53,7 +55,8 @@ function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
     isDisposed: () => disposed,
     launch: async (row) => {
       launches.push(row.id)
-      const agentId = await launch(row.id)
+      launchedRows.push(row)
+      const agentId = await launch(row)
       n += 1
       seedAgent(db, {
         id: agentId === "run-x" ? `agent-${n}` : agentId,
@@ -72,7 +75,7 @@ function makeQueue(db: Db, launch: (id: string) => Promise<string>) {
       svc.cancelDrain()
     },
   })
-  return { svc, launches, emergencies, notices }
+  return { svc, launches, launchedRows, emergencies, notices }
 }
 
 function enqueue(
@@ -139,7 +142,7 @@ describe("queue CRUD", () => {
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       const pending = enqueue(svc, "evt-1", "ch-a", 1)
-      svc.remove(pending.id) // ok
+      svc.remove("evt-1", pending.id) // ok
       expect(item(db, pending.id)).toBeUndefined()
 
       const running = enqueue(svc, "evt-1", "ch-a", 2)
@@ -147,7 +150,37 @@ describe("queue CRUD", () => {
         .set({ status: "running", updatedAt: now() })
         .where(eq(spawnQueue.id, running.id))
         .run()
-      expect(() => svc.remove(running.id)).toThrow(RunActionError)
+      expect(() => svc.remove("evt-1", running.id)).toThrow(RunActionError)
+    } finally {
+      close()
+    }
+  })
+
+  test("remove is scoped to its event (cross-event / missing → not_found)", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedEvent(db, "evt-2")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const { svc } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      const a = enqueue(svc, "evt-1", "ch-1", 1)
+
+      const deny = (eventId: string): RunActionError | null => {
+        try {
+          svc.remove(eventId, a.id)
+          return null
+        } catch (error) {
+          if (error instanceof RunActionError) return error
+          throw error
+        }
+      }
+      expect(deny("evt-2")?.code).toBe("not_found")
+      expect(item(db, a.id)).toBeDefined() // the row survives
+      expect(deny("evt-missing")?.message).toBe("Queue item not found")
+
+      svc.remove("evt-1", a.id)
+      expect(item(db, a.id)).toBeUndefined()
     } finally {
       close()
     }
@@ -176,6 +209,28 @@ describe("queue CRUD", () => {
       expect(() => svc.update(running.id, { prompt: "x" })).toThrow(
         RunActionError
       )
+    } finally {
+      close()
+    }
+  })
+
+  // P0-7 regression: a prompt edit must reach the launch path. The prompt
+  // column is the single source — the params JSON never carries a copy that
+  // could shadow it.
+  test("a prompt edit reaches launch; the params JSON holds no prompt", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
+      const { svc, launchedRows } = makeQueue(db, async () => "run-x")
+      svc.cancelDrain()
+      const a = enqueue(svc, "evt-1", "ch-a", 1)
+      svc.update(a.id, { prompt: "EDITED" })
+      expect(svc.list("evt-1")[0].prompt).toBe("EDITED")
+
+      await svc.drainOnce()
+      expect(launchedRows.map((row) => row.prompt)).toEqual(["EDITED"])
+      expect(JSON.parse(item(db, a.id).params)).toEqual({})
     } finally {
       close()
     }
@@ -225,7 +280,7 @@ describe("queue CRUD", () => {
     }
   })
 
-  test("enqueue serializes the v19 spawn params; prompt mirrors params.prompt", async () => {
+  test("enqueue serializes the v19 spawn params; the prompt column is the only prompt home", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
@@ -243,7 +298,6 @@ describe("queue CRUD", () => {
       })
       expect(enqueued.prompt).toBe("spawn strategy text")
       expect(enqueued.params).toEqual({
-        prompt: "spawn strategy text",
         model: "aegisx-prov-1/gpt-4o-mini",
         promptMode: "override",
       })
@@ -259,18 +313,15 @@ describe("queue CRUD", () => {
     expect(parseSpawnQueueParams("not json")).toEqual({})
     expect(
       parseSpawnQueueParams(
-        JSON.stringify({
-          prompt: "s",
-          model: "m",
-          promptMode: "override",
-        })
+        JSON.stringify({ model: "m", promptMode: "override" })
       )
-    ).toEqual({ prompt: "s", model: "m", promptMode: "override" })
-    // Wrong shapes drop the affected key.
+    ).toEqual({ model: "m", promptMode: "override" })
+    // Wrong shapes drop the affected key; a stale prompt key (old rows) is
+    // ignored — the prompt column wins.
     expect(
       parseSpawnQueueParams(
         JSON.stringify({
-          prompt: 42,
+          prompt: "s",
           model: "",
           promptMode: "nonsense",
         })
@@ -392,7 +443,7 @@ describe("queue per-event state (W2.1)", () => {
       const updated = svc.update(a.id, { prompt: "edited" })
       expect(updated.prompt).toBe("edited")
       expect(svc.list("evt-1").map((i) => i.id)).toEqual([a.id])
-      svc.remove(a.id)
+      svc.remove("evt-1", a.id)
       expect(svc.list("evt-1")).toHaveLength(0)
     } finally {
       close()
@@ -547,17 +598,17 @@ describe("queue drainer", () => {
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       const b = enqueue(svc, "evt-1", "ch-b", 2)
       expect(emergencies).toHaveLength(0) // 2 pending — no edge yet
-      svc.remove(a.id) // 2 → 1: edge fires
+      svc.remove("evt-1", a.id) // 2 → 1: edge fires
       expect(emergencies).toHaveLength(1)
       expect(emergencies[0]).toContain("队列不足")
-      svc.remove(b.id) // 1 → 0: already ≤1, no repeat
+      svc.remove("evt-1", b.id) // 1 → 0: already ≤1, no repeat
       expect(emergencies).toHaveLength(1)
 
       // Refill to ≥2 re-arms; another 2→1 crossing fires again.
       enqueue(svc, "evt-1", "ch-c", 3)
       const d = enqueue(svc, "evt-1", "ch-b", 4)
       expect(emergencies).toHaveLength(1)
-      svc.remove(d.id)
+      svc.remove("evt-1", d.id)
       expect(emergencies).toHaveLength(2)
     } finally {
       close()
@@ -606,7 +657,7 @@ describe("queue drainer", () => {
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       enqueue(svc, "evt-1", "ch-b", 2)
       svc.pause("evt-1")
-      svc.remove(a.id) // 2→1 crossing while paused → silent
+      svc.remove("evt-1", a.id) // 2→1 crossing while paused → silent
       expect(emergencies).toHaveLength(0)
       expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
       expect(svc.stateOf("evt-1")).toBe("paused")

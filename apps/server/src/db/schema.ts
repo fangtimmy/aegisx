@@ -302,11 +302,11 @@ export const spawnQueue = sqliteTable(
     challengeId: text("challenge_id")
       .notNull()
       .references(() => challenges.id, { onDelete: "cascade" }),
-    /** Spawn options JSON ({ model?, prompt?, promptMode? }); the drainer
-     * passes them through to spawnAgent. */
+    /** Spawn options JSON ({ model?, promptMode? }); the drainer passes them
+     * through to spawnAgent. The prompt is the `prompt` column, not this. */
     params: text("params").notNull(),
     timeoutMs: integer("timeout_ms"),
-    /** Display copy of params.prompt. */
+    /** The spawn prompt — single source of truth for launch. */
     prompt: text("prompt").notNull(),
     source: text("source").$type<"manual" | "scheduler">().notNull(),
     status: text("status")

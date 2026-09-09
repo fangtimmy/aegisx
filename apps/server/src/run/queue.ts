@@ -21,8 +21,8 @@ const VISIBLE_STATUSES = ["pending", "running", "failed"] as const
 export type EnqueueInput = {
   eventId: string
   challengeId: string
-  /** The spawn prompt (strategy input for the agent's first turn). Stored in
-   * BOTH the `prompt` column (display) and the `params` JSON (launch). */
+  /** The spawn prompt (strategy input for the agent's first turn). The
+   * `prompt` column is its single home — the params JSON never carries it. */
   prompt?: string
   /** Spawn model ref override. */
   model?: string
@@ -33,10 +33,10 @@ export type EnqueueInput = {
   source: "manual" | "scheduler"
 }
 
-/** Serialize the spawn specs into the `params` JSON value. */
+/** Serialize the spawn specs into the `params` JSON value (prompt excluded —
+ * the `prompt` column owns it). */
 function launchParamsOf(input: EnqueueInput): Record<string, unknown> {
   const params: SpawnQueueParams = {}
-  if (input.prompt) params.prompt = input.prompt
   if (input.model) params.model = input.model
   if (input.promptMode) params.promptMode = input.promptMode
   return params
@@ -44,13 +44,11 @@ function launchParamsOf(input: EnqueueInput): Record<string, unknown> {
 
 /** Parse a queue row's `params` JSON into the typed spawn specs. Defensive:
  * malformed JSON / wrong shapes drop the affected key (the drainer must not
- * blow up on a hand-edited column). */
+ * blow up on a hand-edited column). A stale `prompt` key (pre-single-source
+ * rows) is ignored — the column wins. */
 export function parseSpawnQueueParams(raw: string): SpawnQueueParams {
   const parsed = safeParseObject(raw)
   const params: SpawnQueueParams = {}
-  if (typeof parsed.prompt === "string" && parsed.prompt) {
-    params.prompt = parsed.prompt
-  }
   if (typeof parsed.model === "string" && parsed.model) {
     params.model = parsed.model
   }
@@ -218,10 +216,13 @@ export function createQueueService(deps: QueueServiceDeps) {
       .map((row) => toPublic(db, row))
   }
 
-  /** Remove an item. Running items cannot be deleted. */
-  function remove(itemId: string): void {
+  /** Remove an item of `eventId`. Running items cannot be deleted; an item
+   * from another event is indistinguishable from a missing one. */
+  function remove(eventId: string, itemId: string): void {
     const row = getRow(itemId)
-    if (!row) throw new RunActionError("not_found", "Queue item not found")
+    if (!row || row.eventId !== eventId) {
+      throw new RunActionError("not_found", "Queue item not found")
+    }
     if (row.status === "running") {
       throw new RunActionError(
         "invalid_state",

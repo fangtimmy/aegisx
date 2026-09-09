@@ -1295,7 +1295,7 @@ export function createAgentService(options: AgentServiceOptions) {
         challengeId: item.challengeId,
         role: "solver",
         model: params.model,
-        prompt: params.prompt ?? (item.prompt || undefined),
+        prompt: item.prompt || undefined,
         promptMode: params.promptMode,
         timeoutMs: item.timeoutMs ?? undefined,
         source: item.source,

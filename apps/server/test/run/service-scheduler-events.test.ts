@@ -301,7 +301,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
         prompt: "p2",
       })
       queue.cancelDrain()
-      queue.remove(one.id)
+      queue.remove("evt-1", one.id)
       await settle()
 
       const urgent = orchRows(db).filter((r) => metaOf(r).urgent === true)
@@ -354,7 +354,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
         prompt: "q",
       })
       queue.cancelDrain()
-      queue.remove(one.id)
+      queue.remove("evt-1", one.id)
       await settle()
 
       // Silent: no orch rows at all while paused (dropped, not stored).
