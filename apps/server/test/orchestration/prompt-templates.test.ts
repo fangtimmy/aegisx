@@ -93,11 +93,16 @@ describe("prompt drift control (env facts live in ENVIRONMENT.md, not inline)", 
     expect(rendered).not.toContain("libc-database")
   })
 
-  test("mainSystem install guidance matches the ENVIRONMENT.md SOP (venv, not workspace)", () => {
+  test("mainSystem points tool availability at ENVIRONMENT.md, promising no install SOP", () => {
     expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).not.toContain(
       "install it into the workspace"
     )
-    expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain("install SOP")
+    // The offline appliance has no install path — the prompt must point at
+    // ENVIRONMENT.md for what exists and never promise an install procedure.
+    expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain(
+      "/opt/solver/ENVIRONMENT.md"
+    )
+    expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).not.toContain("install SOP")
   })
 
   test("initial gates submit/finish on capabilities and carries no promptHint duplicate", () => {
