@@ -136,6 +136,7 @@ export function registerRunRoutes(
             "Challenge does not belong to this event"
           )
         }
+        agentService.assertModelsResolvable(input.model)
         const queue = agentService.queue()
         const item = queue.enqueue({
           eventId,

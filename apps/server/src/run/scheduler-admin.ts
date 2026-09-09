@@ -21,6 +21,7 @@ import {
   spawnQueue,
 } from "../db/schema"
 import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
+import { RunActionError } from "./errors"
 import { fenceSnapshot } from "./fence"
 import type { ModelResolver } from "./model-resolver"
 import { collapseToAttempts, type AgentQueries } from "./queries"
@@ -70,7 +71,8 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
   function assertModelsResolvable(model: string | undefined): void {
     if (!model) return
     if (modelResolver.resolveModelTarget(model)) return
-    throw new Error(
+    throw new RunActionError(
+      "invalid",
       `Model "${model}" is not available. Available models: ${
         availableModelRefs().join(", ") || "(none)"
       }`

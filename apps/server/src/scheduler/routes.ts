@@ -202,6 +202,12 @@ export function registerSchedulerRoutes(
       if (miss) return miss
       try {
         const body = c.req.valid("json")
+        // params.model is the only model ref a queue-item edit can carry
+        // (non-string junk is dropped by the params parser at launch).
+        const model = body.params?.model
+        if (typeof model === "string") {
+          agentService.assertModelsResolvable(model)
+        }
         return c.json(
           agentService.queue().update(c.req.param("itemId"), {
             ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),

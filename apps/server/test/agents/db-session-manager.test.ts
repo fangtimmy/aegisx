@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { SessionManager } from "@earendil-works/pi-coding-agent"
-import { eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
 
 import { DbSessionManager } from "../../src/agents/db-session-manager"
 import { createDatabase } from "../../src/db"
@@ -257,6 +257,75 @@ describe("DbSessionManager", () => {
         .getTree()
         .flatMap((n) => (n.label ? [n.label] : []))
       expect(labeled).toContain("important")
+    } finally {
+      close()
+    }
+  })
+
+  test("close() rejects later appends and writes nothing", () => {
+    const { db, close } = setup()
+    try {
+      const sm = DbSessionManager.create({
+        cwd: "/ws",
+        agentId: "a1",
+        db,
+      })
+      sm.appendMessage(userMsg("a"))
+      sm.close()
+      expect(() => sm.appendMessage(userMsg("late"))).toThrow(
+        `DbSessionManager: message append on closed session ${sm.getSessionId()}`
+      )
+      const rows = db.select().from(sessionEntries).all()
+      expect(rows).toHaveLength(1)
+      expect(JSON.parse(rows[0].data).message.content).toBe("a")
+    } finally {
+      close()
+    }
+  })
+
+  test("open rejects a session owned by another agent", () => {
+    const { db, close } = setup()
+    try {
+      const sm = DbSessionManager.create({
+        cwd: "/ws",
+        agentId: "a1",
+        db,
+      })
+      expect(() =>
+        DbSessionManager.open(sm.getSessionId(), { agentId: "a2", db })
+      ).toThrow(
+        `DbSessionManager: session ${sm.getSessionId()} belongs to agent a1, not a2`
+      )
+    } finally {
+      close()
+    }
+  })
+
+  test("reopen after close appends with a continuing seq", () => {
+    const { db, close } = setup()
+    try {
+      const sm = DbSessionManager.create({
+        cwd: "/ws",
+        agentId: "a1",
+        db,
+      })
+      sm.appendMessage(userMsg("a"))
+      sm.appendMessage(assistantMsg("b"))
+      sm.close()
+
+      const reopened = DbSessionManager.open(sm.getSessionId(), {
+        agentId: "a1",
+        db,
+      })
+      expect(reopened.getEntries()).toHaveLength(2)
+      reopened.appendMessage(userMsg("c"))
+
+      const rows = db
+        .select()
+        .from(sessionEntries)
+        .orderBy(asc(sessionEntries.seq))
+        .all()
+      expect(rows.map((r) => r.seq)).toEqual([1, 2, 3])
     } finally {
       close()
     }

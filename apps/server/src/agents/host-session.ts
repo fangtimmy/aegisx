@@ -245,6 +245,10 @@ export async function createHostAgentSession(
     async dispose() {
       unsubscribe()
       session.dispose()
+      // pi's abort does not interrupt an in-flight tool call; a late
+      // message_end must not append through the retired manager and fork the
+      // session tree against the reopened one.
+      dbSession?.close()
     },
   }
 }

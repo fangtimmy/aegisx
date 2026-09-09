@@ -61,6 +61,12 @@ export class DbSessionManager {
   private readonly fileEntries: SessionEntry[] = []
   private readonly byId = new Map<string, SessionEntry>()
   private leafId: string | null = null
+  /** Set by close(): a disposed host session must never write again. pi's
+   * abort does not interrupt an in-flight tool call, so a late
+   * message_end can reach this manager after dispose — appending here would
+   * fork the seq sequence against the reopened session's manager
+   * (UNIQUE(sessionId, seq)). */
+  private closed = false
   /** Fired at the end of commit() for every persisted entry (with its seq).
    * The event pipeline uses this as the authoritative "entry just persisted"
    * signal — pi emits no such event for regular messages, so the storage layer
@@ -120,12 +126,21 @@ export class DbSessionManager {
     opts: { agentId: string; db: Database }
   ): DbSessionManager {
     const row = opts.db
-      .select({ cwd: sessions.cwd, createdAt: sessions.createdAt })
+      .select({
+        agentId: sessions.agentId,
+        cwd: sessions.cwd,
+        createdAt: sessions.createdAt,
+      })
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .get()
     if (!row) {
       throw new Error(`DbSessionManager: session ${sessionId} not found`)
+    }
+    if (row.agentId !== opts.agentId) {
+      throw new Error(
+        `DbSessionManager: session ${sessionId} belongs to agent ${row.agentId}, not ${opts.agentId}`
+      )
     }
     const sm = new DbSessionManager({
       sessionId,
@@ -136,6 +151,15 @@ export class DbSessionManager {
     })
     sm.load()
     return sm
+  }
+
+  /** Retire this manager (wired from HostAgentSession.dispose). Idempotent.
+   * Appends afterwards throw: the session's rows are owned by whichever
+   * manager a later open() builds, and a late write from the disposed one
+   * must fail loudly instead of corrupting the (sessionId, seq) sequence.
+   * Reads stay legal — pi touches them freely during teardown. */
+  close(): void {
+    this.closed = true
   }
 
   /** Rebuild in-memory indices from persisted entries (resume path). */
@@ -172,6 +196,11 @@ export class DbSessionManager {
 
   /** Append an entry: assign id/parentId/timestamp, update memory, persist. */
   private commit(type: string, payload: Record<string, unknown>): SessionEntry {
+    if (this.closed) {
+      throw new Error(
+        `DbSessionManager: ${type} append on closed session ${this.sessionId}`
+      )
+    }
     // Payload pieces are typed at each append* call site; the union cannot be
     // expressed as a single spread parameter.
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion
