@@ -32,6 +32,18 @@ docker run -d --name aegisx-tsec \
 # （平台类型自动判为 tsecbench；AEGISX_* 显式给出时优先）。
 ```
 
+非内置目录模型（如 glm-5.3-flash 这类网关变体 id）的元数据由 bootstrap 保守兜底；
+`AEGISX_MODEL_EFFORT` 会推断 `reasoning:true` 使思考档位生效。更好的做法是绑定
+同家族的内置目录条目（含 compat 行为）：
+
+```sh
+-e AEGISX_MODEL_PROFILE=zai/glm-5.3   # 继承 ctx=1M / maxTokens=131k / zai compat
+```
+
+个别字段再微调用 `AEGISX_MODEL_METADATA` 逐字段合并（schema 同设置页，如
+`{"maxTokens":65536}`）。优先级：metadata 字段 > profile 绑定 > 内置目录按
+model id 匹配 > 保守默认值。
+
 镜像体积：未压缩 4.75GB，gzip 压缩后 **1.81GB**（上限 3GB）。
 
 启动后 Bootstrap 自动执行：provider/模型 → 读取 preset → 建赛事（带 TSecBench 平台

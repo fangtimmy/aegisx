@@ -17,8 +17,14 @@ import {
   schedulerConfig,
 } from "./db/schema"
 import type { ConfigStore, ProviderData } from "./infrastructure/config-store"
+import { parseJson } from "./lib/guards"
 import type { createPlatformService } from "./platforms/service"
-import { builtinModelProfiles } from "./providers/builtin-models"
+import {
+  builtinModelProfile,
+  builtinModelProfiles,
+  type ModelMetadata,
+  normalizeModelMetadata,
+} from "./providers/builtin-models"
 import type { AgentService } from "./run/service"
 
 /**
@@ -35,16 +41,65 @@ import type { AgentService } from "./run/service"
  * when only BENCHMARK_BASE_URL is given.
  */
 
-/** Conservative metadata for models absent from pi's builtin catalog. */
-const FALLBACK_MODEL_METADATA = JSON.stringify({
-  reasoning: false,
-  thinkingLevelMap: {},
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  costKnown: false,
-  contextWindow: 128_000,
-  maxTokens: 16_384,
-})
+/** Metadata layers for a bootstrap model, most specific first:
+ * AEGISX_MODEL_PROFILE (explicit pi catalog binding — the deployed model id
+ * may be a gateway-specific variant) > pi catalog match by model id >
+ * conservative fallback. AEGISX_MODEL_METADATA fields merge over whichever
+ * base wins. AEGISX_MODEL_EFFORT infers reasoning only on the fallback layer
+ * (an empty thinkingLevelMap passes the level through), so the effort suffix
+ * is not a silent no-op. */
+function metadataFor(
+  modelId: string,
+  want?: {
+    effort?: string
+    profile?: string
+    overrides?: Record<string, unknown>
+  }
+): { metadata: ModelMetadata; source: string } {
+  const base = want?.profile
+    ? resolveBuiltinProfile(want.profile)
+    : builtinModelProfiles().find((p) => p.modelId === modelId)
+  if (base) {
+    return {
+      metadata: want?.overrides
+        ? normalizeModelMetadata({ ...base.metadata, ...want.overrides })
+        : base.metadata,
+      source: want?.overrides ? "env" : `pi:${base.providerId}/${base.modelId}`,
+    }
+  }
+  return {
+    metadata: normalizeModelMetadata({
+      ...(want?.effort ? { reasoning: true } : {}),
+      ...want?.overrides,
+    }),
+    source: want?.overrides ? "env" : "bootstrap",
+  }
+}
+
+/** Resolve AEGISX_MODEL_PROFILE as "providerId/modelId" — the first slash
+ * splits, catalog model ids may themselves contain slashes. */
+function resolveBuiltinProfile(ref: string) {
+  const sep = ref.indexOf("/")
+  const profile =
+    sep > 0
+      ? builtinModelProfile(ref.slice(0, sep), ref.slice(sep + 1))
+      : undefined
+  if (!profile) {
+    throw new Error(`AEGISX_MODEL_PROFILE is not a builtin model: ${ref}`)
+  }
+  return profile
+}
+
+/** Parse AEGISX_MODEL_METADATA into a record mergeable over the metadata
+ * base. Throws on malformed JSON or a non-object payload — the caller treats
+ * env validation errors as bootstrap failures. */
+function modelMetadataInput(raw: string): Record<string, unknown> {
+  const parsed: unknown = parseJson(raw)
+  if (!isRecord(parsed)) {
+    throw new Error("AEGISX_MODEL_METADATA must be a JSON object")
+  }
+  return parsed
+}
 
 const PROTOCOL = /^https?:\/\//
 
@@ -68,6 +123,9 @@ export type BootstrapSpec = {
     apiKey: string
     modelId: string
     effort?: string
+    /** Resolved metadata (AEGISX_MODEL_PROFILE / AEGISX_MODEL_METADATA) —
+     * wins over pi's builtin catalog and the conservative fallback. */
+    modelMetadata?: { metadata: ModelMetadata; source: string }
   }
   eventName?: string
   platform?: {
@@ -177,6 +235,17 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
       apiKey: env.AEGISX_PROVIDER_API_KEY ?? "",
       modelId: env.AEGISX_MODEL_ID,
       ...(env.AEGISX_MODEL_EFFORT ? { effort: env.AEGISX_MODEL_EFFORT } : {}),
+      ...(env.AEGISX_MODEL_PROFILE || env.AEGISX_MODEL_METADATA
+        ? {
+            modelMetadata: metadataFor(env.AEGISX_MODEL_ID, {
+              effort: env.AEGISX_MODEL_EFFORT,
+              profile: env.AEGISX_MODEL_PROFILE,
+              overrides: env.AEGISX_MODEL_METADATA
+                ? modelMetadataInput(env.AEGISX_MODEL_METADATA)
+                : undefined,
+            }),
+          }
+        : {}),
     }
   }
   if (env.AEGISX_EVENT_NAME) spec.eventName = env.AEGISX_EVENT_NAME
@@ -212,19 +281,6 @@ export type BootstrapDeps = {
   agentService: AgentService
   /** Override for EVENT_PRESET_PATH (tests). */
   presetPath?: string
-}
-
-/** Metadata for the configured model: pi's builtin catalog when the model id
- * matches a known entry, else the conservative fallback. */
-function metadataFor(modelId: string): { metadata: string; source: string } {
-  const profile = builtinModelProfiles().find((p) => p.modelId === modelId)
-  if (profile) {
-    return {
-      metadata: JSON.stringify(profile.metadata),
-      source: `pi:${profile.providerId}/${profile.modelId}`,
-    }
-  }
-  return { metadata: FALLBACK_MODEL_METADATA, source: "bootstrap" }
 }
 
 /** Ensure the bootstrap provider + model exist. Merge, never clobber: env
@@ -286,7 +342,8 @@ export function ensureProvider(
     }
   } else {
     changed = true
-    const meta = metadataFor(want.modelId)
+    const meta =
+      want.modelMetadata ?? metadataFor(want.modelId, { effort: want.effort })
     provider = {
       ...provider,
       models: [
@@ -296,7 +353,7 @@ export function ensureProvider(
           modelId: want.modelId,
           label: want.modelId,
           enabled: true,
-          metadata: meta.metadata,
+          metadata: JSON.stringify(meta.metadata),
           metadataSource: meta.source,
         },
       ],

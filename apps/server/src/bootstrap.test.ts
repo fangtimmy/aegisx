@@ -68,12 +68,13 @@ describe("readBootstrapSpec", () => {
   })
 
   test("rejects unknown provider and platform types and non-http URLs", () => {
-    expect(() =>
-      specFrom({
-        AEGISX_PROVIDER_BASE_URL: "https://x",
-        AEGISX_MODEL_ID: "m",
-        AEGISX_PROVIDER_TYPE: "bogus",
-      })
+    expect(
+      () =>
+        specFrom({
+          AEGISX_PROVIDER_BASE_URL: "https://x",
+          AEGISX_MODEL_ID: "m",
+          AEGISX_PROVIDER_TYPE: "bogus",
+        }).provider
     ).toThrow(/provider type/)
     expect(() =>
       specFrom({
@@ -87,6 +88,85 @@ describe("readBootstrapSpec", () => {
         AEGISX_PLATFORM_BASE_URL: "https://x",
       })
     ).toThrow(/platform type/)
+  })
+
+  test("AEGISX_MODEL_METADATA merges over the effort inference", () => {
+    const { provider } = specFrom({
+      AEGISX_PROVIDER_BASE_URL: "https://api.example.com/v1",
+      AEGISX_MODEL_ID: "m",
+      AEGISX_MODEL_EFFORT: "high",
+      AEGISX_MODEL_METADATA:
+        '{"contextWindow": 200000, "maxTokens": 65536, "input": ["text", "image"]}',
+    })
+    expect(provider?.modelMetadata).toEqual({
+      source: "env",
+      metadata: {
+        reasoning: true,
+        thinkingLevelMap: {},
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        costKnown: false,
+        contextWindow: 200_000,
+        maxTokens: 65_536,
+      },
+    })
+  })
+
+  test("AEGISX_MODEL_PROFILE binds catalog metadata regardless of model id", () => {
+    const { provider } = specFrom({
+      AEGISX_PROVIDER_BASE_URL: "https://api.example.com/v1",
+      AEGISX_MODEL_ID: "glm-5.3-flash",
+      AEGISX_MODEL_EFFORT: "high",
+      AEGISX_MODEL_PROFILE: "zai/glm-5.3",
+    })
+    expect(provider?.modelMetadata?.source).toBe("pi:zai/glm-5.3")
+    expect(provider?.modelMetadata?.metadata.reasoning).toBe(true)
+    expect(provider?.modelMetadata?.metadata.contextWindow).toBe(1_000_000)
+    expect(provider?.modelMetadata?.metadata.compat).toBeDefined()
+  })
+
+  test("metadata fields merge over the bound profile", () => {
+    const { provider } = specFrom({
+      AEGISX_PROVIDER_BASE_URL: "https://api.example.com/v1",
+      AEGISX_MODEL_ID: "glm-5.3-flash",
+      AEGISX_MODEL_PROFILE: "zai/glm-5.3",
+      AEGISX_MODEL_METADATA: '{"maxTokens": 65536}',
+    })
+    expect(provider?.modelMetadata?.source).toBe("env")
+    expect(provider?.modelMetadata?.metadata.maxTokens).toBe(65_536)
+    expect(provider?.modelMetadata?.metadata.contextWindow).toBe(1_000_000)
+  })
+
+  test("explicit metadata fields win over the effort inference", () => {
+    const { provider } = specFrom({
+      AEGISX_PROVIDER_BASE_URL: "https://api.example.com/v1",
+      AEGISX_MODEL_ID: "m",
+      AEGISX_MODEL_EFFORT: "high",
+      AEGISX_MODEL_METADATA: '{"reasoning": false}',
+    })
+    expect(provider?.modelMetadata?.metadata.reasoning).toBe(false)
+  })
+
+  test("rejects malformed metadata and unknown model profiles", () => {
+    const base = {
+      AEGISX_PROVIDER_BASE_URL: "https://api.example.com/v1",
+      AEGISX_MODEL_ID: "m",
+    }
+    expect(() =>
+      specFrom({ ...base, AEGISX_MODEL_METADATA: "{oops" })
+    ).toThrow()
+    expect(() => specFrom({ ...base, AEGISX_MODEL_METADATA: '"x"' })).toThrow(
+      /JSON object/
+    )
+    expect(() =>
+      specFrom({ ...base, AEGISX_MODEL_METADATA: '{"bogus": 1}' })
+    ).toThrow(/Unknown metadata field/)
+    expect(() =>
+      specFrom({ ...base, AEGISX_MODEL_PROFILE: "no-such/model" })
+    ).toThrow(/not a builtin model/)
+    expect(() =>
+      specFrom({ ...base, AEGISX_MODEL_PROFILE: "noslash" })
+    ).toThrow(/not a builtin model/)
   })
 })
 
@@ -144,6 +224,54 @@ describe("ensureProvider", () => {
       expect(provider?.models[0]?.metadataSource).toBe(
         "pi:anthropic/claude-sonnet-4-5"
       )
+    } finally {
+      t.cleanup()
+    }
+  })
+
+  test("effort infers a reasoning fallback; resolved metadata wins", () => {
+    const t = store()
+    try {
+      ensureProvider(t.configStore, {
+        enqueueAll: false,
+        provider: {
+          label: "Bootstrap",
+          type: "openai-compatible",
+          baseUrl: "http://gw:8080/v1",
+          apiKey: "sk-1",
+          modelId: "my-model",
+          effort: "high",
+        },
+      })
+      let provider = t.configStore
+        .getProviders()
+        .find((p) => p.label === "Bootstrap")
+      const inferred = JSON.parse(provider?.models[0]?.metadata ?? "{}")
+      expect(inferred.reasoning).toBe(true)
+      expect(inferred.thinkingLevelMap).toEqual({})
+      expect(provider?.models[0]?.metadataSource).toBe("bootstrap")
+
+      ensureProvider(t.configStore, {
+        enqueueAll: false,
+        provider: {
+          label: "Override",
+          type: "openai-compatible",
+          baseUrl: "http://gw:8080/v1",
+          apiKey: "sk-1",
+          modelId: "other-model",
+          modelMetadata: {
+            metadata: { ...inferred, contextWindow: 200_000 },
+            source: "custom",
+          },
+        },
+      })
+      provider = t.configStore
+        .getProviders()
+        .find((p) => p.label === "Override")
+      expect(provider?.models[0]?.metadataSource).toBe("custom")
+      expect(
+        JSON.parse(provider?.models[0]?.metadata ?? "{}").contextWindow
+      ).toBe(200_000)
     } finally {
       t.cleanup()
     }

@@ -44,7 +44,9 @@ docker run -d --name aegisx \
 | `AEGISX_PROVIDER_TYPE` | 否 | `openai-compatible`（默认）/ `openai-responses` / `anthropic-messages` |
 | `AEGISX_PROVIDER_API_KEY` | 否 | LLM API key |
 | `AEGISX_PROVIDER_LABEL` | 否 | provider 显示名，默认 `Bootstrap` |
-| `AEGISX_MODEL_EFFORT` | 否 | 思考档位（如 `high`），拼进默认模型引用 |
+| `AEGISX_MODEL_EFFORT` | 否 | 思考档位（如 `high`），拼进默认模型引用；非内置目录模型据此推断 `reasoning:true` |
+| `AEGISX_MODEL_PROFILE` | 否 | 绑定 pi 内置模型元数据（`<providerId>/<modelId>`，如 `zai/glm-5.3`）——部署的模型 id 是网关变体时直接继承同家族条目的上下文窗口/思考档位/compat |
+| `AEGISX_MODEL_METADATA` | 否 | 模型元数据 JSON（`reasoning` / `contextWindow` / `maxTokens` 等，schema 同设置页），逐字段合并到 `AEGISX_MODEL_PROFILE` / 内置目录匹配 / 保守默认值之上 |
 | `AEGISX_EVENT_NAME` | 推荐 | 赛事名（不存在则创建，重启用同名赛事） |
 | `AEGISX_PLATFORM_TYPE` | 否 | 平台类型：`ctfd` / `a1ctf` / `dasctf` / `ret2shell` / `tsecbench` |
 | `AEGISX_PLATFORM_BASE_URL` | 否 | 平台地址 |
