@@ -135,6 +135,9 @@ function headerRecord(init?: HeadersInit): Record<string, string> {
   return init
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+const MAX_REDIRECTS = 5
+
 export class PlatformHttp {
   readonly origin: string
   private readonly baseUrl: string
@@ -156,42 +159,58 @@ export class PlatformHttp {
   }
 
   async request(path: string, init: RequestInit = {}, authenticated = true) {
-    const url = new URL(path, `${this.baseUrl}/`)
-    const sameOrigin = url.origin === this.origin
     const method = init.method ?? "GET"
-    const requestHeaders: Record<string, string> = {
-      Accept: "application/json",
-      ...(authenticated && sameOrigin ? this.headers : {}),
-      ...headerRecord(init.headers),
-    }
+    const extraHeaders = headerRecord(init.headers)
     const requestBody = typeof init.body === "string" ? init.body : null
 
-    let response: Response
-    try {
+    const mergedHeaders = (url: URL): Record<string, string> => ({
+      Accept: "application/json",
+      // Platform credentials never cross origins, including via redirects.
+      ...(authenticated && url.origin === this.origin ? this.headers : {}),
+      ...extraHeaders,
+    })
+
+    let url = new URL(path, `${this.baseUrl}/`)
+    let requestHeaders!: Record<string, string>
+    let response!: Response
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      requestHeaders = mergedHeaders(url)
       const timeout = AbortSignal.timeout(this.timeoutMs)
-      response = await fetch(url, {
-        ...init,
-        headers: requestHeaders,
-        redirect: "follow",
-        signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout,
-      })
-    } catch (rawError) {
-      // Network-layer failure: DNS, connection refused, timeout, abort.
-      // No HTTP response exists; record what failed and rethrow.
-      const error =
-        rawError instanceof Error ? rawError.message : String(rawError)
-      this.onError?.({
-        method,
-        url: url.toString(),
-        requestHeaders,
-        requestBody,
-        status: null,
-        responseHeaders: null,
-        responseBody: null,
-        error,
-      })
-      throw rawError
+      try {
+        response = await fetch(url, {
+          ...init,
+          headers: requestHeaders,
+          redirect: "manual",
+          signal: init.signal
+            ? AbortSignal.any([init.signal, timeout])
+            : timeout,
+        })
+      } catch (rawError) {
+        // Network-layer failure: DNS, connection refused, timeout, abort.
+        // No HTTP response exists; record what failed and rethrow.
+        const error =
+          rawError instanceof Error ? rawError.message : String(rawError)
+        this.onError?.({
+          method,
+          url: url.toString(),
+          requestHeaders,
+          requestBody,
+          status: null,
+          responseHeaders: null,
+          responseBody: null,
+          error,
+        })
+        throw rawError
+      }
+      const location = response.headers.get("location")
+      if (!REDIRECT_STATUSES.has(response.status) || !location) break
+      const next = new URL(location, url)
+      // Cross-origin redirects are surfaced as a non-ok response below; the
+      // credentials were only ever attached to same-origin hops.
+      if (next.origin !== this.origin) break
+      url = next
     }
+
     this.onResponse?.(response)
     if (!response.ok) {
       let responseBody: string | null = null
