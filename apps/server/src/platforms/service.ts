@@ -150,20 +150,39 @@ export function createPlatformService(
       : undefined
   }
 
+  // Adapters are stateful (TSecBench keeps a short-lived list cache), so each
+  // event reuses one instance; the memo is dropped whenever its inputs change
+  // — the binding row (bind/detach), a renewed credential, or the timeout.
+  const adapters = new Map<
+    string,
+    { adapter: CtfPlatformAdapter; timeoutMs: number | undefined }
+  >()
+
   function adapterForEvent(eventId: string) {
     const config = configForEvent(eventId)
     if (!config) return undefined
-    return createPlatformAdapter(
+    const timeoutMs = get(
+      configStore.getSettings(),
+      "runtime.platformRequestTimeoutMs"
+    )
+    const cached = adapters.get(eventId)
+    if (cached && cached.timeoutMs === timeoutMs) return cached.adapter
+    const adapter = createPlatformAdapter(
       config,
       (credential) => {
         db.update(eventPlatforms)
           .set({ credential, updatedAt: new Date().toISOString() })
           .where(eq(eventPlatforms.eventId, eventId))
           .run()
+        // Renewal ran inside the cached adapter, which still carries the old
+        // credential in its headers — drop it so the next call rebuilds.
+        adapters.delete(eventId)
       },
       logPlatformRequest,
-      get(configStore.getSettings(), "runtime.platformRequestTimeoutMs")
+      timeoutMs
     )
+    adapters.set(eventId, { adapter, timeoutMs })
+    return adapter
   }
 
   const platformSync = createPlatformSync(
@@ -270,6 +289,7 @@ export function createPlatformService(
     } else {
       db.insert(eventPlatforms).values(values).run()
     }
+    adapters.delete(eventId)
     return publicPlatform(eventId)
   }
 
@@ -310,6 +330,7 @@ export function createPlatformService(
         .run()
       tx.delete(eventPlatforms).where(eq(eventPlatforms.eventId, eventId)).run()
     })
+    adapters.delete(eventId)
   }
 
   async function listRemoteEvents(input: {
