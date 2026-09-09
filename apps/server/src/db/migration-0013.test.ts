@@ -1,52 +1,21 @@
-import { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
 import {
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 
-import { drizzle } from "drizzle-orm/bun-sqlite"
-import { migrate } from "drizzle-orm/bun-sqlite/migrator"
-
-import { parseJson } from "../lib/guards"
 import { createDatabase } from "./index"
+import { buildLegacyDatabase } from "./migration-fixtures"
 import { SCHEMA_VERSION } from "./schema"
 
-/** The real migrations folder (14 entries incl. 0013). */
-const realFolder = resolve(import.meta.dir, "../../drizzle")
-
-/** Build a v18 database in `dir`: apply migrations 0000–0012 from a
- * truncated journal copy (the exact runtime migrator path, minus 0013). */
-function buildV18Database(dir: string) {
-  const sqlite = new Database(join(dir, "aegisx.sqlite"), { create: true })
-  sqlite.run("PRAGMA journal_mode = WAL")
-  // FK ON matches the production boot (createDatabase enables it before
-  // migrating): RENAME TABLE rewrites FK references only with FK ON.
-  sqlite.run("PRAGMA foreign_keys = ON")
-  const folder = join(dir, "mig-v18")
-  mkdirSync(join(folder, "meta"), { recursive: true })
-  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
-    readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  )
-  journal.entries = journal.entries.slice(0, 13) // 0000–0012 = v18
-  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
-  for (const entry of journal.entries) {
-    cpSync(
-      join(realFolder, `${entry.tag}.sql`),
-      join(folder, `${entry.tag}.sql`)
-    )
-  }
-  migrate(drizzle(sqlite), { migrationsFolder: folder })
-  sqlite.run("PRAGMA user_version = 18")
-  return sqlite
-}
+/** The v18 state that 0013's destructive rebuild starts from. */
+const buildV18Database = (dir: string) =>
+  buildLegacyDatabase(dir, { entries: 13, version: 18 })
 
 describe("migration 0013 — v19 challenge-centric (destructive; old execution data dropped)", () => {
   test("runs/agents/queue/channel tables rebuilt empty; spawn_queue append shape; preserved tables untouched; legacy dirs swept", () => {

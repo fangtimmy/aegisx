@@ -1,66 +1,21 @@
-import { Database } from "bun:sqlite"
+import type { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 
-import { drizzle } from "drizzle-orm/bun-sqlite"
-import { migrate } from "drizzle-orm/bun-sqlite/migrator"
+import {
+  buildLegacyDatabase,
+  upgradeLegacyDatabase,
+} from "./migration-fixtures"
 
-import { parseJson } from "../lib/guards"
+/** The v17 → v18 upgrade: 0012 maps v17 channel rows onto derived keys. */
 
-/** The real migrations folder (14 entries incl. 0013). */
-const realFolder = resolve(import.meta.dir, "../../drizzle")
+const buildV17Database = (dir: string) =>
+  buildLegacyDatabase(dir, { entries: 12, version: 17 })
 
-/** Build a v17 database in `dir`: apply migrations 0000–0011 from a
- * truncated journal copy (the exact runtime migrator path). */
-function buildV17Database(dir: string) {
-  const sqlite = new Database(join(dir, "aegisx.sqlite"), { create: true })
-  sqlite.run("PRAGMA journal_mode = WAL")
-  // FK ON matches the production boot (createDatabase enables it before
-  // migrating): RENAME TABLE rewrites FK references only with FK ON.
-  sqlite.run("PRAGMA foreign_keys = ON")
-  const folder = join(dir, "mig-v17")
-  mkdirSync(join(folder, "meta"), { recursive: true })
-  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
-    readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  )
-  journal.entries = journal.entries.slice(0, 12) // 0000–0011 = v17
-  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
-  for (const entry of journal.entries) {
-    cpSync(
-      join(realFolder, `${entry.tag}.sql`),
-      join(folder, `${entry.tag}.sql`)
-    )
-  }
-  migrate(drizzle(sqlite), { migrationsFolder: folder })
-  sqlite.run("PRAGMA user_version = 17")
-  return sqlite
-}
-
-/** Apply 0012 to a seeded v17 database in place (the journal copy grows by
- * one entry; the migrator replays the same path the runtime takes). */
-function applyV18(dir: string, sqlite: Database) {
-  const folder = join(dir, "mig-v17")
-  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
-    readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  )
-  journal.entries = journal.entries.slice(0, 13) // +0012 = v18
-  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
-  cpSync(
-    join(realFolder, "0012_derived_channel_keys.sql"),
-    join(folder, "0012_derived_channel_keys.sql")
-  )
-  migrate(drizzle(sqlite), { migrationsFolder: folder })
-  sqlite.run("PRAGMA user_version = 18")
-}
+const applyV18 = (dir: string, sqlite: Database) =>
+  upgradeLegacyDatabase(dir, sqlite, { entries: 13, copyFrom: 12, version: 18 })
 
 describe("migration 0012 — v18 derived channel keys", () => {
   test("v17 channels map onto derived keys with merge order, cursors and files intact; recap dropped; channels table gone", () => {

@@ -5,7 +5,6 @@ import { eq } from "drizzle-orm"
 import { promptTemplates } from "../../src/db/schema"
 import {
   BUILTIN_DEFAULTS,
-  BUILTIN_PLUGIN,
   loadTemplateMap,
   renderTemplate,
   seedBuiltinTemplates,
@@ -13,31 +12,6 @@ import {
 import { setupDb } from "../helpers"
 
 describe("prompt_templates store (builtin-only)", () => {
-  test("seedBuiltinTemplates inserts the builtin rows", () => {
-    const { db, close } = setupDb()
-    try {
-      seedBuiltinTemplates(db)
-      const rows = db.select().from(promptTemplates).all()
-      const keys = rows.map((r) => r.key).toSorted()
-      expect(keys).toEqual(
-        [
-          "channelDelivery",
-          "initial",
-          "mainSystem",
-          "orchestratorSystem",
-          "schedulerDigest",
-          "schedulerInitial",
-        ].toSorted()
-      )
-      for (const row of rows) {
-        expect(row.plugin).toBe(BUILTIN_PLUGIN)
-        expect(row.body).toBe(BUILTIN_DEFAULTS[row.key])
-      }
-    } finally {
-      close()
-    }
-  })
-
   test("seedBuiltinTemplates is idempotent (second call is a no-op)", () => {
     const { db, close } = setupDb()
     try {

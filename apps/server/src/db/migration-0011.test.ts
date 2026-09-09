@@ -1,20 +1,13 @@
-import { Database } from "bun:sqlite"
+import type { Database } from "bun:sqlite"
 import { describe, expect, test } from "bun:test"
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 
-import { drizzle } from "drizzle-orm/bun-sqlite"
-import { migrate } from "drizzle-orm/bun-sqlite/migrator"
-
-import { parseJson } from "../lib/guards"
+import {
+  buildLegacyDatabase,
+  upgradeLegacyDatabase,
+} from "./migration-fixtures"
 
 /**
  * The historical chain (v16 → v17 → v18) through the real migrator.
@@ -24,50 +17,14 @@ import { parseJson } from "../lib/guards"
  * The chain stops at v18 (a truncated journal — the production boot now
  * continues into 0013's destructive rebuild, covered separately).
  */
-const realFolder = resolve(import.meta.dir, "../../drizzle")
 
-/** Build a v16 database in `dir`: apply migrations 0000–0010 from a
- * truncated journal copy (the exact runtime migrator path). The caller
- * seeds v16 state, then `upgradeToV18` applies 0011+0012. */
-function buildV16Database(dir: string) {
-  const sqlite = new Database(join(dir, "aegisx.sqlite"), { create: true })
-  sqlite.run("PRAGMA journal_mode = WAL")
-  const folder = join(dir, "mig-v16")
-  mkdirSync(join(folder, "meta"), { recursive: true })
-  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
-    readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  )
-  journal.entries = journal.entries.slice(0, 11) // 0000–0010 = v16
-  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
-  for (const entry of journal.entries) {
-    cpSync(
-      join(realFolder, `${entry.tag}.sql`),
-      join(folder, `${entry.tag}.sql`)
-    )
-  }
-  migrate(drizzle(sqlite), { migrationsFolder: folder })
-  sqlite.run("PRAGMA user_version = 16")
-  return sqlite
-}
+// The v16 migrator ran without FK enforcement; the test enables it before
+// seeding (matching the legacy daemon's own boot order).
+const buildV16Database = (dir: string) =>
+  buildLegacyDatabase(dir, { entries: 11, version: 16, foreignKeys: false })
 
-/** Upgrade a seeded v16 database to v18 in place: extend the journal copy
- * with 0011+0012 and re-run the migrator (same path the runtime takes). */
-function upgradeToV18(dir: string, sqlite: Database) {
-  const folder = join(dir, "mig-v16")
-  const journal = parseJson<{ entries: Array<{ tag: string }> }>(
-    readFileSync(join(realFolder, "meta", "_journal.json"), "utf8")
-  )
-  journal.entries = journal.entries.slice(0, 13) // 0000–0012 = v18
-  writeFileSync(join(folder, "meta", "_journal.json"), JSON.stringify(journal))
-  for (const entry of journal.entries.slice(11)) {
-    cpSync(
-      join(realFolder, `${entry.tag}.sql`),
-      join(folder, `${entry.tag}.sql`)
-    )
-  }
-  migrate(drizzle(sqlite), { migrationsFolder: folder })
-  sqlite.run("PRAGMA user_version = 18")
-}
+const upgradeToV18 = (dir: string, sqlite: Database) =>
+  upgradeLegacyDatabase(dir, sqlite, { entries: 13, copyFrom: 11, version: 18 })
 
 describe("migration 0011+0012 — v16 run-scope channels map onto v18 derived keys", () => {
   test("per-run team/announce merge (order, suffixes, cursors) then re-key onto derived keys", () => {

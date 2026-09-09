@@ -1,9 +1,11 @@
 /**
- * SDK contract test runner (docs/sdk-refactor.md W5): boots a real app on a
- * temp data dir, seeds fixtures straight into the DB (event + challenge +
- * scheduler/solver agent rows with tokens + three solver session entries),
- * serves it on an ephemeral port, then runs apps/sdk/python/contract.py via
- * uv against the live server. Exit 0 = the SDK and the server agree.
+ * SDK test runner (design notes in docs/archive/sdk-refactor.md): boots a real
+ * app on a temp data dir, seeds fixtures straight into the DB (event +
+ * challenge + scheduler/solver agent rows with tokens + three solver session
+ * entries), serves it on an ephemeral port, then runs apps/sdk/python via uv
+ * against the live server — contract.py (HTTP contract) plus test_models.py
+ * (wire mapping / time visibility, stdlib unittest). Exit 0 = the SDK and the
+ * server agree.
  *
  * Not part of `bun test` (deliberately — it needs uv); run via
  * `bun run test:sdk` from the repo root.
@@ -124,13 +126,47 @@ seed(db)
 const server = Bun.serve({ port: 0, fetch: app.fetch })
 const baseUrl = `http://127.0.0.1:${server.port}`
 
-const proc = Bun.spawn(
+const uv = ["uv", "run", "--project", "apps/sdk/python", "python"]
+
+async function run(
+  cmd: string[],
+  cwd: string
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" })
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  process.stdout.write(stdout)
+  if (stderr) process.stderr.write(stderr)
+  return { stdout, stderr, code }
+}
+
+async function shutdown(failed: boolean, message: string): Promise<never> {
+  void server.stop(true)
+  await close()
+  if (failed) {
+    console.error(message)
+    process.exit(1)
+  }
+  console.log("SDK contract test passed")
+  process.exit(0)
+}
+
+// Wire mapping / time visibility unit tests (stdlib unittest, no server).
+// cwd is the SDK project so uv discovers its pyproject and the module resolves.
+const models = await run(
+  ["uv", "run", "python", "-m", "unittest", "test_models", "-v"],
+  join(repoRoot, "apps/sdk/python")
+)
+if (models.code !== 0) {
+  await shutdown(true, `SDK model tests FAILED (exit ${models.code})`)
+}
+
+const contract = await run(
   [
-    "uv",
-    "run",
-    "--project",
-    "apps/sdk/python",
-    "python",
+    ...uv,
     "apps/sdk/python/contract.py",
     `--base-url=${baseUrl}`,
     `--event-id=${eventId}`,
@@ -141,23 +177,9 @@ const proc = Bun.spawn(
     `--solver-id=${solverId}`,
     `--solver2-id=${solver2Id}`,
   ],
-  { cwd: repoRoot, stdout: "pipe", stderr: "pipe" }
+  repoRoot
 )
-
-const [stdout, stderr, code] = await Promise.all([
-  new Response(proc.stdout).text(),
-  new Response(proc.stderr).text(),
-  proc.exited,
-])
-process.stdout.write(stdout)
-if (stderr) process.stderr.write(stderr)
-
-void server.stop(true)
-await close()
-
-if (code !== 0) {
-  console.error(`SDK contract test FAILED (exit ${code})`)
-  process.exit(1)
+if (contract.code !== 0) {
+  await shutdown(true, `SDK contract test FAILED (exit ${contract.code})`)
 }
-console.log("SDK contract test passed")
-process.exit(0)
+await shutdown(false, "")
