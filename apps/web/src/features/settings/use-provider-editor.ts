@@ -37,8 +37,12 @@ export function useProviderEditor(provider: ProviderConnection) {
   const save = useMutation({
     mutationFn: (input: ProviderUpdate) =>
       providersApi.updateProvider(provider.id, input),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: keys.providers.all }),
+    onSuccess: () => {
+      // Provider edits reach the model list too (label grouping, enabled /
+      // api-key availability), so models must follow providers.
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
+    },
   })
   const discover = useMutation({
     mutationFn: () => providersApi.discoverModels(provider.id),
@@ -61,13 +65,16 @@ export function useProviderEditor(provider: ProviderConnection) {
       setSelected([])
       setAddOpen(false)
       void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
     },
   })
   const modelMutation = useMutation({
     mutationFn: ({ modelId, body }: { modelId: string; body: object }) =>
       providersApi.updateProviderModel(modelId, body),
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: keys.providers.all }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
+    },
   })
   const editModel = useMutation({
     mutationFn: ({
@@ -82,6 +89,7 @@ export function useProviderEditor(provider: ProviderConnection) {
     onSuccess: () => {
       setEditingModel(null)
       void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
     },
   })
   /** Open the edit dialog on a model: snapshot its current values into the
@@ -118,12 +126,14 @@ export function useProviderEditor(provider: ProviderConnection) {
         metadata: JSON.stringify(updated.metadata, null, 2),
       })
       void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
     },
   })
   const removeModel = useMutation({
     mutationFn: (id: string) => providersApi.deleteProviderModel(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
       void queryClient.invalidateQueries({ queryKey: keys.settings.all })
     },
   })

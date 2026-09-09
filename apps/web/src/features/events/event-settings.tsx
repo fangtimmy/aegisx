@@ -5,11 +5,12 @@ import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
 
 import {
+  agentsApi,
   type EventSummary,
   eventsApi,
+  type FleetInfo,
   keys,
   schedulerApi,
-  type SchedulerInfo,
 } from "@/api"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -283,11 +284,12 @@ export function EventSettings({ event }: { event: EventSummary }) {
 
 /** 调度策略 card: the scheduler's per-event policy — instruction (snapshotted
  * at scheduler start) + concurrent-target cap (live, read by the spawn fence).
- * The model choice lives in the start dialog. */
+ * The model choice lives in the start dialog. Config comes from the fleet
+ * endpoint (the scheduler config's canonical carrier). */
 function SchedulerPolicyCard({ eventId }: { eventId: string }) {
-  const scheduler = useQuery({
-    queryKey: keys.scheduler.detail(eventId),
-    queryFn: () => schedulerApi.getScheduler(eventId),
+  const fleet = useQuery({
+    queryKey: keys.agents.fleet(eventId),
+    queryFn: () => agentsApi.getFleet(eventId),
   })
 
   return (
@@ -300,16 +302,13 @@ function SchedulerPolicyCard({ eventId }: { eventId: string }) {
       </CardFrameHeader>
       <Card>
         <CardPanel>
-          {scheduler.error ? (
+          {fleet.error ? (
             <ErrorState
-              error={scheduler.error}
-              retry={() => void scheduler.refetch()}
+              error={fleet.error}
+              retry={() => void fleet.refetch()}
             />
-          ) : scheduler.data?.config ? (
-            <SchedulerPolicyForm
-              config={scheduler.data.config}
-              eventId={eventId}
-            />
+          ) : fleet.data?.config ? (
+            <SchedulerPolicyForm config={fleet.data.config} eventId={eventId} />
           ) : (
             <output className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner aria-hidden="true" /> 正在加载调度策略…
@@ -338,7 +337,7 @@ function SchedulerPolicyForm({
   config,
 }: {
   eventId: string
-  config: SchedulerInfo["config"]
+  config: FleetInfo["config"]
 }) {
   const queryClient = useQueryClient()
   const form = useForm<PolicyFormValues>({

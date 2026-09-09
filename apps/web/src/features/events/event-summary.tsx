@@ -11,7 +11,6 @@ import {
   keys,
   type QueueItem,
   schedulerApi,
-  type SchedulerInfo,
 } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -39,9 +38,6 @@ import {
 } from "./event-agents-shared"
 import { ErrorState, isChallengeSolved } from "./event-shared"
 
-/** Scheduler endpoint payload (the scheduler agent is `agent`). */
-type SchedulerData = SchedulerInfo
-
 /** Event-wide overview: challenge progress, fleet stats, token usage. */
 export function EventSummary({
   eventId,
@@ -58,13 +54,6 @@ export function EventSummary({
     queryFn: () => agentsApi.getFleet(eventId),
     refetchInterval: POLL_INTERVAL_MS,
   })
-  // Scheduler endpoint (config + the scheduler agent + status).
-  const scheduler = useQuery({
-    queryKey: keys.scheduler.detail(eventId),
-    queryFn: async (): Promise<SchedulerData> =>
-      schedulerApi.getScheduler(eventId),
-    refetchInterval: POLL_INTERVAL_MS,
-  })
   // The queue snapshot.
   const queue = useQuery({
     queryKey: keys.scheduler.queue(eventId),
@@ -79,10 +68,9 @@ export function EventSummary({
   })
 
   const agentsByChallenge = fleet.data?.agentsByChallenge ?? {}
-  const schedulerAgent =
-    fleet.data?.schedulerAgent ?? scheduler.data?.agent ?? null
+  const schedulerAgent = fleet.data?.schedulerAgent ?? null
 
-  if (fleet.isPending || scheduler.isPending) {
+  if (fleet.isPending) {
     return (
       <output className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
         <Spinner aria-hidden="true" />

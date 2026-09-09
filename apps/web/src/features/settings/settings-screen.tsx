@@ -91,14 +91,17 @@ export function SettingsScreen() {
     onSuccess: () => {
       setSelectedId(null)
       void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
     },
     onError: (error) => toast.error("删除供应商失败", error.message),
   })
   const toggleProvider = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       providersApi.updateProvider(id, { enabled }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: keys.providers.all }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.providers.all })
+      void queryClient.invalidateQueries({ queryKey: keys.models.all })
+    },
     onError: (error) => toast.error("切换供应商失败", error.message),
   })
 

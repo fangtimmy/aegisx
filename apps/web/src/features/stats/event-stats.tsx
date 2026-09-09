@@ -252,6 +252,16 @@ function integerTicks(max: number): number[] {
   return [0, Math.round(max / 2), max]
 }
 
+/** Spread-free max/min: `Math.max(...arr)` throws RangeError once a series
+ * outgrows the engine's argument limit; stats series are unbounded. */
+function maxOf(values: number[], initial = -Infinity): number {
+  return values.reduce((max, value) => (value > max ? value : max), initial)
+}
+
+function minOf(values: number[], initial = Infinity): number {
+  return values.reduce((min, value) => (value < min ? value : min), initial)
+}
+
 /** Custom score tooltip: recharts' default would only show the cumulative
  * value — the solved challenge name (already computed per point) is what a
  * reviewer actually wants at hover time. */
@@ -298,7 +308,10 @@ function ScoreChart({ data }: { data: EventStats }) {
       label: `${point.challengeName} +${point.points}`,
     })),
   ]
-  const maxCumulative = Math.max(...points.map((p) => p.cumulative), 1)
+  const maxCumulative = maxOf(
+    points.map((p) => p.cumulative),
+    1
+  )
   return (
     <CardFrame>
       <CardFrameHeader>
@@ -444,12 +457,12 @@ function AgentTimeline({ data }: { data: EventStats }) {
   if (spans.length === 0) return null
   const starts = spans.map((span) => Date.parse(span.start))
   const ends = spans.map((span) => Date.parse(span.end))
-  const domainStart = Math.min(
-    ...starts,
+  const domainStart = minOf(
+    starts,
     data.window.start ? Date.parse(data.window.start) : Infinity
   )
-  const domainEnd = Math.max(
-    ...ends,
+  const domainEnd = maxOf(
+    ends,
     data.window.end ? Date.parse(data.window.end) : -Infinity
   )
   const spanMs = Math.max(1, domainEnd - domainStart)
@@ -568,7 +581,10 @@ function ConcurrencyChart({ data }: { data: EventStats }) {
     last ? last.t : first.t
   )
   const axis = timeAxis(startMs, endMs)
-  const maxRunning = Math.max(...points.map((p) => p.running), 1)
+  const maxRunning = maxOf(
+    points.map((p) => p.running),
+    1
+  )
   return (
     <CardFrame>
       <CardFrameHeader>
@@ -715,7 +731,14 @@ function AgentEfficiency({ data }: { data: EventStats }) {
                   <TableCell className="max-w-44 truncate font-mono text-xs">
                     {row.model}
                   </TableCell>
-                  <TableCell>{statusBadge(row.status)}</TableCell>
+                  <TableCell>
+                    <Badge
+                      size="sm"
+                      variant={agentStatusVisual[row.status].badge}
+                    >
+                      {agentStatusLabel(row.status)}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="text-right font-mono text-xs tabular-nums">
                     {formatTokens(row.input + row.output)}
                   </TableCell>
@@ -741,32 +764,6 @@ function AgentEfficiency({ data }: { data: EventStats }) {
         </CardPanel>
       </Card>
     </CardFrame>
-  )
-}
-
-function statusBadge(status: EventAgentEfficiency["status"]) {
-  const variant =
-    status === "running"
-      ? "success"
-      : status === "idle"
-        ? "warning"
-        : status === "aborted" || status === "failed"
-          ? "destructive"
-          : "secondary"
-  const label =
-    status === "running"
-      ? "运行"
-      : status === "idle"
-        ? "空闲"
-        : status === "aborted"
-          ? "中止"
-          : status === "failed"
-            ? "失败"
-            : "完成"
-  return (
-    <Badge size="sm" variant={variant}>
-      {label}
-    </Badge>
   )
 }
 
@@ -1019,8 +1016,14 @@ function CollaborationCards({ data }: { data: EventStats }) {
   ) {
     return null
   }
-  const maxMessages = Math.max(...data.messageActivity.map((b) => b.count), 1)
-  const maxCalls = Math.max(...data.toolUsage.map((t) => t.calls), 1)
+  const maxMessages = maxOf(
+    data.messageActivity.map((b) => b.count),
+    1
+  )
+  const maxCalls = maxOf(
+    data.toolUsage.map((t) => t.calls),
+    1
+  )
   const toolCallsTotal =
     data.toolUsage.reduce((sum, tool) => sum + tool.calls, 0) || 1
   return (

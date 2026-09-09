@@ -1,4 +1,4 @@
-import type { ActivityItem } from "@aegisx/shared"
+import { isAgentStatus, type ActivityItem } from "@aegisx/shared"
 import { useQuery } from "@tanstack/react-query"
 import {
   Archive,
@@ -17,6 +17,7 @@ import { ListRow } from "@/components/list-row"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverPopup, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { agentStatusLabel } from "@/features/runs/agent-overview"
 import { formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -84,12 +85,6 @@ const KIND_META: Record<
   },
 }
 
-const END_LABELS: Record<string, string> = {
-  completed: "已完成",
-  aborted: "已中断",
-  failed: "已失败",
-}
-
 function rowDetail(item: ActivityItem): string {
   const scope = [item.eventName, item.challengeName ?? "调度者"]
   switch (item.kind) {
@@ -103,7 +98,9 @@ function rowDetail(item: ActivityItem): string {
     case "agentEnd":
       return [
         ...scope,
-        END_LABELS[item.agentStatus ?? ""] ?? item.agentStatus ?? "",
+        item.agentStatus !== null && isAgentStatus(item.agentStatus)
+          ? agentStatusLabel(item.agentStatus)
+          : (item.agentStatus ?? ""),
         item.summary ?? "",
       ]
         .filter(Boolean)

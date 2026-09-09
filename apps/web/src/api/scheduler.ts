@@ -7,10 +7,6 @@ import type {
 import { apiRequest, jsonRequest } from "./client"
 import type { QueueItem, QueueSnapshot, SchedulerInfo } from "./types"
 
-export function getScheduler(eventId: string) {
-  return apiRequest<SchedulerInfo>(`/events/${eventId}/scheduler`)
-}
-
 /** PATCH the event-level scheduler config (model / instruction / target cap /
  * orchestration policy). Model + instruction affect the scheduler agent at
  * next start; policy toggles apply live. */
