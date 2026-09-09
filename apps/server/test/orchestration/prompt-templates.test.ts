@@ -286,6 +286,16 @@ describe("SDK signature sync (GUIDE.md exact-signature block ↔ mainSystem inli
       expect(params).toBeTruthy()
       expect(main).toContain(`channels.${fn}(${params})`)
     }
+    // read returns the full page (MessageList), not a bare list — both
+    // surfaces must name the paging fields so agents page forward instead
+    // of losing backlog.
+    expect(guide.match(/aegisx\.channels\.read\([^)]*\) -> (\w+)/)?.[1]).toBe(
+      "MessageList"
+    )
+    for (const surface of [guide, main]) {
+      expect(surface).toContain(".messages")
+      expect(surface).toContain(".has_more")
+    }
     // Anchor on the trailing comment: the GUIDE quick-start examples also
     // contain aegisx.ask(...) calls with sample arguments.
     const ask = guide.match(/aegisx\.ask\(([^)]*)\)\s+#/)?.[1]

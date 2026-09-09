@@ -33,13 +33,12 @@ from typing import Any
 
 from .client import get_client
 from .errors import AegisxError
-from .models import Channel, ChannelMessage, from_dict
+from .models import Channel, ChannelMessage, MessageList, from_dict
 
 #: Type aliases hoisted above `def list` — the module-level name `list`
 #: shadows the builtin for every later annotation, so annotations must not
 #: subscript `list` directly.
 ChannelList = list[Channel]
-MessageList = list[ChannelMessage]
 StrList = list[str]
 
 
@@ -71,9 +70,12 @@ def read(
     limit: int = 50,
     mark_read: bool = True,
 ) -> MessageList:
-    """Pull a channel's messages (ascending id). Pull = read: the caller's
-    cursor advances, so already-read messages are never re-delivered.
-    `channel` is "#team" / "orch" / a raw channel key from list()."""
+    """Pull a page of a channel's messages: the OLDEST window above `after`
+    (ascending id). Pull = read: the caller's cursor advances onto the page's
+    last id, so page forward (`after=page.next_after`) while `page.has_more`
+    to drain a backlog — a short page leaves the OLDER messages for the next
+    pull instead of skipping them. `channel` is "#team" / "orch" / a raw
+    channel key from list()."""
     caller = _caller()
     query: dict[str, Any] = {"limit": limit}
     if after is not None and after > 0:
@@ -83,12 +85,16 @@ def read(
     data = get_client().request(
         "GET", f"/api/channels/{_sel(channel)}/messages", query=query
     )
-    items = []
+    messages: list[ChannelMessage] = []
     for item in data.get("items", []):
         message = from_dict(ChannelMessage, item)
         if message is not None:
-            items.append(message)
-    return items
+            messages.append(message)
+    return MessageList(
+        messages=messages,
+        has_more=bool(data.get("hasMore", False)),
+        next_after=int(data.get("nextAfter", 0)),
+    )
 
 
 def post(

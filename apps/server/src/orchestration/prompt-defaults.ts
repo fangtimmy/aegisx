@@ -135,12 +135,12 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 
     python3 - <<'PY'
     import aegisx
-    for m in aegisx.channels.read("#team"):
+    for m in aegisx.channels.read("#team").messages:
         print(m.created_at, m.author_name, m.body[:200])
     aegisx.channels.post("#team", "angle/finding/dead end ...", urgent=False)
     PY
 
-精确签名：\`channels.read(channel, after=None, limit=50, mark_read=True)\`（按 id 升序返回）、\`channels.post(channel, text, tags=None, files=None, urgent=False)\`、\`ask(text, urgent=False, files=None)\`。完整参考（附件语义、频道键、错误码）：\`/opt/aegisx-sdk/GUIDE.md\`。行为纪律——把 #team 当作你的对外工作日志：你的 run 可能在任何时刻被超时终止、无预警，帖子就是接手者的起点：
+精确签名：\`channels.read(channel, after=None, limit=50, mark_read=True)\`（返回 \`MessageList\`：\`.messages\` 按 id 升序、\`.has_more\`/\`.next_after\` 向前翻页直到读尽）、\`channels.post(channel, text, tags=None, files=None, urgent=False)\`、\`ask(text, urgent=False, files=None)\`。完整参考（附件语义、频道键、错误码）：\`/opt/aegisx-sdk/GUIDE.md\`。行为纪律——把 #team 当作你的对外工作日志：你的 run 可能在任何时刻被超时终止、无预警，帖子就是接手者的起点：
 - 开局：前几个工具调用内就 post 一条角度声明（你主攻什么思路、已知的入口/凭据/路径）。
 - 里程碑：每确认一个事实就发一条结论式更新——拿到某入口、排除一条主假设、权限升级、找到关键偏移、拿到部分 flag。一条消息一个结论。
 - 卡住：超过约 10 分钟无新结论，先 post 已试路径与下一步假设，再继续。

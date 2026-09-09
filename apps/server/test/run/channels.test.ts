@@ -947,6 +947,91 @@ describe("read cursors — three progression points (§3.5)", () => {
   })
 })
 
+describe("SDK pull paging (forward window)", () => {
+  test("default pull returns the OLDEST unconsumed window; the cursor lands on its last id only", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, "a1")
+      disableUrgentTeam(db)
+      const { channels } = makeService(db, dir)
+      for (let i = 1; i <= 55; i += 1) {
+        channels.post({
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: `m${i}`,
+        })
+      }
+
+      const page = channels.readForAgent("a1", "#team")
+      expect(page.items).toHaveLength(50)
+      expect(page.items[0].body).toBe("m1")
+      expect(page.items[49].body).toBe("m50")
+      expect(page.hasMore).toBe(true)
+      expect(page.nextAfter).toBe(page.items[49].id)
+      // The cursor advanced onto exactly the consumed frontier — nothing
+      // above it was skipped (the old newest-window jump lost the head).
+      expect(channels.readCursor(teamKey("ch-1"), "a1")).toBe(page.nextAfter)
+      expect(channels.unreadCount(teamKey("ch-1"), "a1")).toBe(5)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("paging forward drains the backlog with no gaps; the final cursor equals the newest id", () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedAgent(db, "a1")
+      disableUrgentTeam(db)
+      const { channels } = makeService(db, dir)
+      for (let i = 1; i <= 55; i += 1) {
+        channels.post({
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: `m${i}`,
+        })
+      }
+
+      const seen: number[] = []
+      let after = 0
+      let pages = 0
+      for (;;) {
+        const page = channels.readForAgent("a1", "#team", { after })
+        seen.push(...page.items.map((m) => m.id))
+        pages += 1
+        after = page.nextAfter
+        if (!page.hasMore) break
+      }
+      expect(pages).toBe(2)
+      // No gaps, no repeats: the pulls reconstructed the channel's rows
+      // in order.
+      const channelIds = db
+        .select({ id: channelMessages.id })
+        .from(channelMessages)
+        .where(eq(channelMessages.channelKey, teamKey("ch-1")))
+        .all()
+        .map((r) => r.id)
+      expect(seen).toEqual(channelIds)
+      // The drained cursor sits on the newest message.
+      expect(channels.readCursor(teamKey("ch-1"), "a1")).toBe(
+        channelIds[channelIds.length - 1]
+      )
+      // A re-pull past the frontier returns nothing new.
+      const tail = channels.readForAgent("a1", "#team", { after })
+      expect(tail.items).toHaveLength(0)
+      expect(tail.hasMore).toBe(false)
+      expect(tail.nextAfter).toBe(after)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+})
+
 describe("renderMerged", () => {
   test("header + per-message lines + ⚠ urgent + 📎 metadata (never content)", () => {
     const text = renderMerged([

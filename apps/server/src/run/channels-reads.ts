@@ -100,7 +100,9 @@ export function createReadsService(ctx: ChannelContext) {
   }
 
   /** SDK read: pull = read (marks the cursor). `selector` is "#team" (or
-   * "team"), "orch", or a raw channel key; visibility enforced. */
+   * "team"), "orch", or a raw channel key; visibility enforced. Pages FORWARD
+   * from the cursor — the OLDEST `limit` messages above `after`, so a backlog
+   * larger than one page is drained across pulls instead of truncated. */
   function readForAgent(
     agentId: string,
     selector: string,
@@ -114,10 +116,30 @@ export function createReadsService(ctx: ChannelContext) {
     const agent = ctx.agentRow(agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
     const key = resolveSelector(agent, selector)
-    const result = listMessages(key, opts)
+    const after = opts.after ?? 0
+    const limit = Math.min(Math.max(opts.limit ?? DEFAULT_PAGE, 1), 200)
+    const rows = db
+      .select()
+      .from(channelMessages)
+      .where(
+        and(eq(channelMessages.channelKey, key), gt(channelMessages.id, after))
+      )
+      .orderBy(asc(channelMessages.id))
+      .limit(limit + 1)
+      .all()
+    const hasMore = rows.length > limit
+    const shown = hasMore ? rows.slice(0, limit) : rows
+    const result = {
+      items: shown.map(ctx.toPublic),
+      nextAfter: shown.length > 0 ? shown[shown.length - 1].id : after,
+      hasMore,
+    }
     const readerKey =
       agent.role === "orchestrator" ? SCHEDULER_READ_KEY : agent.id
     if (opts.markRead !== false && result.items.length > 0) {
+      // Safe to jump to items[last]: the forward window makes it the
+      // contiguous consumed frontier — the cursor only ever crosses messages
+      // this pull actually returned.
       ctx.markRead(key, readerKey, result.items[result.items.length - 1].id)
     }
     return {

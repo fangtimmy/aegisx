@@ -139,13 +139,30 @@ ok("agents close (terminal aborted)")
 team_key = f"team:{CHALLENGE_ID}"
 msg = aegisx.channels.announce(CHALLENGE_ID, "contract announce")
 assert msg.channel_key == team_key
-seen = [m.body for m in aegisx.channels.read(team_key, mark_read=False)]
+seen = [m.body for m in aegisx.channels.read(team_key, mark_read=False).messages]
 assert "contract announce" in seen
 ok("channels announce + read (scheduler)")
 
-orch_msgs = aegisx.channels.read("orch", mark_read=False)
-assert isinstance(orch_msgs, list)
+orch_page = aegisx.channels.read("orch", mark_read=False)
+assert isinstance(orch_page, aegisx.MessageList)
 ok("channels read orch (scheduler)")
+
+# Paging: a page is the OLDEST window above `after` and reports truncation
+# (has_more + next_after) — paging forward must reconstruct the channel
+# exactly (no overlap, no gap).
+for i in range(3):
+    aegisx.channels.post(team_key, f"contract paging {i}")
+whole = [
+    m.id for m in aegisx.channels.read(team_key, mark_read=False).messages
+]
+page1 = aegisx.channels.read(team_key, limit=2, mark_read=False)
+assert len(page1.messages) == 2 and page1.has_more, "truncation not surfaced"
+page2 = aegisx.channels.read(
+    team_key, after=page1.next_after, limit=2, mark_read=False
+)
+assert [m.id for m in page2.messages] == whole[2:4], "paging skipped/overlapped"
+assert page2.has_more is False
+ok("channels read paging (has_more/next_after)")
 
 # Pull = read: a mark_read pull advances the reader's cursor, so the
 # unread backlog drains (the delivery layer will not re-inject consumed
@@ -168,7 +185,7 @@ ok("solver channels list")
 # author's own post also advances their cursor (channels.ts), which would
 # mask the effect.
 unread_before = next(c.unread for c in aegisx.channels.list() if c.key == team_key)
-pulled = [m.id for m in aegisx.channels.read(team_key)]
+pulled = [m.id for m in aegisx.channels.read(team_key).messages]
 assert probe.id in pulled, "posted probe missing from the pull"
 unread_after = next(c.unread for c in aegisx.channels.list() if c.key == team_key)
 assert unread_before > 0 and unread_after < unread_before, (

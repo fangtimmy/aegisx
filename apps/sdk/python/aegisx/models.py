@@ -311,6 +311,18 @@ class ChannelMessage:
 
 
 @dataclass
+class MessageList:
+    """One page of `channels.read`: the OLDEST window above the caller's
+    cursor, ascending id. `has_more` = messages exist above `next_after` (the
+    page's last id) — page forward with `read(channel, after=next_after)`
+    until it goes False to drain a backlog."""
+
+    messages: list[ChannelMessage]
+    has_more: bool
+    next_after: int
+
+
+@dataclass
 class SchedulerStatus:
     """Concurrency / target-slot usage snapshot for the event (v19). The
     scheduler agent never counts toward the live-agent cap.

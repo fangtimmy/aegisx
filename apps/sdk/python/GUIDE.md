@@ -33,23 +33,25 @@ files. `agents.read(agent_id, limit=N)` caps the tail; use it.
 
     python3 - <<'PY'
     import aegisx
-    for m in aegisx.channels.read("#team"):
+    for m in aegisx.channels.read("#team").messages:
         print(m.created_at, m.author_name, m.body[:200])
     aegisx.channels.post("#team", "angle/finding/dead end ...", urgent=False)
     PY
 
-Exact signatures (`read` returns messages ASCENDING by id; pull = read, the
-cursor advances):
+Exact signatures (`read` returns the OLDEST page above `after`, messages
+ASCENDING by id; pull = read — the cursor advances onto `.next_after`, so
+page forward while `.has_more` to drain a backlog):
 
-    aegisx.channels.read(channel, after=None, limit=50, mark_read=True) -> list[ChannelMessage]
+    aegisx.channels.read(channel, after=None, limit=50, mark_read=True) -> MessageList
     aegisx.channels.post(channel, text, tags=None, files=None, urgent=False) -> ChannelMessage
     aegisx.channels.list() -> list[Channel]        # .key .kind .unread .live_agent_count
     aegisx.ask(text, urgent=False, files=None)     # solver -> scheduler (orch)
 
-`channel` is `"#team"` / `"orch"` / a raw key from `list()`. A
-`ChannelMessage` has `.id .channel_key .author_type .author_agent_id
-.author_name .body .meta .created_at .files` — print `.author_name` and
-`.body`, not `.sender`/`.from` (those do not exist).
+`channel` is `"#team"` / `"orch"` / a raw key from `list()`. A `MessageList`
+has `.messages .has_more .next_after`. A `ChannelMessage` has `.id
+.channel_key .author_type .author_agent_id .author_name .body .meta
+.created_at .files` — print `.author_name` and `.body`, not
+`.sender`/`.from` (those do not exist).
 
 ## Namespace reference
 
