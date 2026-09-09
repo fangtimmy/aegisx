@@ -7,10 +7,8 @@ import {
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
 } from "../../src/orchestration/prompt-defaults"
 import {
-  previewInitialPrompt,
   previewOrchestratorSystemPrompt,
-  previewSystemPrompt,
-  renderSystemPrompt,
+  previewPromptTemplate,
   renderTemplateBody,
   sampleOrchestratorPromptContext,
   samplePromptContext,
@@ -56,7 +54,7 @@ describe("W1 prompt fixes", () => {
     expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain(
       "/opt/solver/ENVIRONMENT.md"
     )
-    const main = renderSystemPrompt(
+    const main = renderTemplateBody(
       DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       samplePromptContext
     )
@@ -65,7 +63,7 @@ describe("W1 prompt fixes", () => {
   })
 
   test("mainSystem renders the Channels section for every solver agent (v19)", () => {
-    const main = renderSystemPrompt(
+    const main = renderTemplateBody(
       DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
       samplePromptContext
     )
@@ -145,7 +143,7 @@ describe("prompt drift control (env facts live in ENVIRONMENT.md, not inline)", 
 
 describe("prompt preview", () => {
   test("highlights interpolated variable values", () => {
-    const segments = previewSystemPrompt(
+    const segments = previewPromptTemplate(
       "Solve {{challenge.name}} ({{challenge.category}})",
       samplePromptContext
     )
@@ -154,7 +152,7 @@ describe("prompt preview", () => {
   })
 
   test("marks bare true/false tokens as highlighted even outside variables", () => {
-    const segments = previewSystemPrompt(
+    const segments = previewPromptTemplate(
       "Submit: {{capabilities.canSubmitFlag}} finish: {{capabilities.canFinish}}",
       samplePromptContext
     )
@@ -164,13 +162,13 @@ describe("prompt preview", () => {
   })
 
   test("returns a single non-highlighted segment for static text", () => {
-    const segments = previewSystemPrompt("Static text", samplePromptContext)
+    const segments = previewPromptTemplate("Static text", samplePromptContext)
     expect(segments).toHaveLength(1)
     expect(segments[0].highlighted).toBe(false)
   })
 
   test("initial prompt preview mirrors system prompt segmentation", () => {
-    const segments = previewInitialPrompt(
+    const segments = previewPromptTemplate(
       "Begin {{challenge.name}}",
       samplePromptContext
     )
@@ -182,8 +180,8 @@ describe("prompt preview", () => {
   test("preview and plain render agree on the non-marker text", () => {
     const template =
       "Task: {{challenge.name}} @ {{workspace.root}}/{{workspace.agentDir}}"
-    const plain = renderSystemPrompt(template, samplePromptContext)
-    const joined = previewSystemPrompt(template, samplePromptContext)
+    const plain = renderTemplateBody(template, samplePromptContext)
+    const joined = previewPromptTemplate(template, samplePromptContext)
       .map((s) => s.text)
       .join("")
     expect(joined).toBe(plain)

@@ -8,6 +8,7 @@ import {
 import { asc } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
+import { Value } from "typebox/value"
 
 import type { createDatabase } from "../db"
 import { promptTemplates } from "../db/schema"
@@ -19,6 +20,7 @@ import type {
 import { badRequest, notFound } from "../infrastructure/http-errors"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
+import { ProviderTypeSchema } from "../lib/schemas"
 import {
   DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
@@ -33,10 +35,9 @@ import {
   PROMPT_TEMPLATE_VARIABLES,
   SCHEDULER_DIGEST_TEMPLATE_VARIABLES,
   previewChannelDelivery,
-  previewInitialPrompt,
   previewOrchestratorSystemPrompt,
+  previewPromptTemplate,
   previewSchedulerDigest,
-  previewSystemPrompt,
   sampleOrchestratorPromptContext,
   samplePromptContext,
 } from "../orchestration/prompt-templates"
@@ -100,9 +101,6 @@ function previewPrompt(
     | "schedulerDigestPrompt",
   template: string
 ) {
-  if (kind === "mainSystemPrompt") {
-    return previewSystemPrompt(template, samplePromptContext)
-  }
   if (kind === "orchestratorSystemPrompt") {
     return previewOrchestratorSystemPrompt(
       template,
@@ -115,7 +113,9 @@ function previewPrompt(
   if (kind === "schedulerDigestPrompt") {
     return previewSchedulerDigest(template)
   }
-  return previewInitialPrompt(template, samplePromptContext)
+  // mainSystemPrompt and initialPrompt render against the same full run
+  // context through the same template renderer.
+  return previewPromptTemplate(template, samplePromptContext)
 }
 
 const transferModel = (model: ProviderModelData) => ({
@@ -302,11 +302,7 @@ export function registerSettingsRoutes(
         if (typeof provider.label !== "string" || !provider.label.trim()) {
           throw new Error("Provider name is required")
         }
-        if (
-          provider.type !== "openai-compatible" &&
-          provider.type !== "openai-responses" &&
-          provider.type !== "anthropic-messages"
-        ) {
+        if (!Value.Check(ProviderTypeSchema, provider.type)) {
           throw new Error("Invalid provider type")
         }
         if (typeof provider.baseUrl !== "string") {

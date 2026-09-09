@@ -170,15 +170,6 @@ export const samplePromptContext: PromptTemplateContext = {
   },
 }
 
-function render(template: string, context: PromptTemplateContext) {
-  return handlebars
-    .compile(template, { noEscape: true, strict: true })(context, {
-      allowProtoMethodsByDefault: false,
-      allowProtoPropertiesByDefault: false,
-    })
-    .trim()
-}
-
 /** Render an arbitrary template body with the shared configured handlebars
  * instance (noEscape, strict, `join` helper). Used by {@link renderTemplate}
  * and the preview paths so all rendering goes through one handlebars
@@ -187,17 +178,12 @@ function render(template: string, context: PromptTemplateContext) {
  * optional, capabilities optional), and the built-in templates only reference
  * fields that the caller has populated. */
 export function renderTemplateBody(template: string, context: unknown): string {
-  return render(template, asTemplateContext(context))
-}
-
-/**
- * Single seam for re-narrowing loosely-typed template contexts (deep-copied
- * through unknown by markPreviewValues, or supplied as a documented superset
- * by callers). Shape preservation is locked by the preview tests.
- */
-function asTemplateContext(value: unknown): PromptTemplateContext {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  return value as PromptTemplateContext
+  return handlebars
+    .compile(template, { noEscape: true, strict: true })(context, {
+      allowProtoMethodsByDefault: false,
+      allowProtoPropertiesByDefault: false,
+    })
+    .trim()
 }
 
 const HIGHLIGHT_START = "\uE000"
@@ -267,14 +253,6 @@ function previewSegments(value: string): PromptPreviewSegment[] {
     .map((segment, id) => ({ ...segment, id }))
 }
 
-/** Render a system/initial prompt body against the full run context. */
-export function renderSystemPrompt(
-  template: string,
-  context: PromptTemplateContext
-) {
-  return render(template, context)
-}
-
 /** Variables available to the orchestrator system-prompt template. The
  * orchestrator has no challenge/run/agent context — only the owning event and
  * the user's natural-language instruction. */
@@ -298,12 +276,16 @@ export const sampleOrchestratorPromptContext: OrchestratorPromptContext = {
   workspace: { root: "/workspace" },
 }
 
-export function previewSystemPrompt(
+/** Render a system/initial prompt template against the full run context and
+ * split the result into highlighted preview segments. Shared by the
+ * mainSystemPrompt and initialPrompt preview kinds — both render the same
+ * body against the same context shape. */
+export function previewPromptTemplate(
   template: string,
   context: PromptTemplateContext
 ) {
   return previewSegments(
-    renderSystemPrompt(template, asTemplateContext(markPreviewValues(context)))
+    renderTemplateBody(template, markPreviewValues(context))
   )
 }
 
@@ -313,15 +295,6 @@ export function previewOrchestratorSystemPrompt(
 ) {
   return previewSegments(
     renderTemplateBody(template, markPreviewValues(context))
-  )
-}
-
-export function previewInitialPrompt(
-  template: string,
-  context: PromptTemplateContext
-) {
-  return previewSegments(
-    renderSystemPrompt(template, asTemplateContext(markPreviewValues(context)))
   )
 }
 
