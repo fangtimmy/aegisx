@@ -13,12 +13,14 @@
   （promptHint / settings / scheduler 三段），bootstrap 首启时读取落库——settings
   漂移收敛、promptHint 建赛事时写入（已非空不覆盖）、scheduler 策略仅首建应用；
   文件缺失/损坏仅记日志跳过。回归测试 `test/bootstrap.test.ts`。
-- **v7（提示词审查）**：修复通用/特调双场景的自相矛盾——solver 的「缺工具→安装
-  SOP」指向在离线镜像不成立，改为指向 ENVIRONMENT.md 的可用性说明（漂移守卫测试
-  同步更新）；编排者模板补 `{{event.promptHint}}` 渲染（此前 promptHint 传了上下文
-  却无处渲染）；「两次失败换假设」与「VM 判 decoy 须穷举解码」的边界写明；ENQUEUE_ALL
-  预填队列与「勿超并发入队」的张力显式化；解出清理文案不再与解出即停冲突。
-  solver 通用打法新增**扫描纪律**条（实测出现过扫宿主内网的偏航）。
+- **v7（提示词审查）**：修复通用/特调双场景的自相矛盾——solver 的「缺工具」条改写为
+  环境无关表述：ENVIRONMENT.md 在可联网环境携带安装 SOP，在离线环境声明禁装并换路线
+  （离线约束由 tsec 的 ENVIRONMENT.md 离线化替换 + preset promptHint 声明，通用部署
+  照常可装包；漂移守卫测试断言两个分支都在场）；编排者模板补 `{{event.promptHint}}`
+  渲染（此前 promptHint 传了上下文却无处渲染）；「两次失败换假设」与「VM 判 decoy
+  须穷举解码」的边界写明；ENQUEUE_ALL 预填队列与「勿超并发入队」的张力显式化；
+  解出清理文案不再与解出即停冲突。solver 通用打法新增**扫描纪律**条
+  （实测出现过扫宿主内网的偏航）。
 - **v7（体积预算放宽至 3GB 压缩）**：恢复 exploitdb/searchsploit 与 ghidra
   （kali 官方包，`ghidra-analyze` symlink 对齐 agent 的肌肉记忆）——两者都是
   2026-09-08 跑批中的真实解题尝试路径。

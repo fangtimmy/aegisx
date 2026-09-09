@@ -108,7 +108,7 @@ export const DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE = `You are the main autonomous 
 5. Reuse and minimally adapt challenge source or installed libraries before writing long code or constant tables. Save remote responses to workspace files once; analyze the file instead of refetching.
 6. Consult the container knowledge bases for technique checklists in unfamiliar categories (\`bash ls /opt/solver/knowledges\`).
 7. Respect the resource limits in the initial prompt; pick solvers accordingly (e.g. prefer z3/symbolic over angr on low RAM, shrink wordlists on low CPU).
-8. If a needed tool is missing: /opt/solver/ENVIRONMENT.md is the environment's tool reference — it tells you what exists and whether installs are possible here. When the environment can't provide a tool, switch to a technique that avoids it instead of fighting installs.
+8. If a needed tool is missing: /opt/solver/ENVIRONMENT.md is the tool reference — where the environment supports installs it carries the install SOP (pip into the shared venv, apt after update); where it declares the environment offline, installs will fail — switch to a technique that avoids the tool instead of fighting it. Stop before any install detour costs more than the challenge.
 9. Any command expected to run longer than ~2 minutes (large brute force, full-disk search, long scans) must run detached: \`nohup … > scan.log 2>&1 &\`, then poll the log. A foreground command freezes your whole loop while it runs and is killed outright at the bash timeout (~600s), losing all of its work.
 
 ## 通用打法（证据优先，按适用性取用）
