@@ -1,6 +1,6 @@
 # AegisX 架构概览
 
-活文档：描述当前（schema v19）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)。
+活文档：描述当前（schema v20）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)。
 
 ## 总览
 
@@ -31,7 +31,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 - **`channel_messages` + `channel_reads`** — 全部 agent 间通信的唯一账本。频道是派生键（见下），无频道表；`channel_reads` 记 (channelKey, readerKey) → lastReadMsgId，是投递去重锚点。
 - **`challenge_flags`** — 一题多解；`agentId` 无 FK（解题史须活得比 agent 行久），`source` 区分 agent 提交 / 手工录入。
 - **`scheduler_config`** — 每赛事调度策略（模型、自然语言指令、target 槽位、flag 处置开关等）。
-- 其余：`events` / `event_platforms`（平台绑定）、`challenges` / `challenge_remote`（远程镜像状态）、`attachments`、`prompt_templates`、`platform_request_log`（平台请求审计）。
+- 其余：`events` / `event_platforms`（平台绑定）、`challenges` / `challenge_remote`（远程镜像状态）、`attachments`、`prompt_templates`、`platform_request_log`（失败的平台请求审计：请求头脱敏、保留 7 天）。
 
 ## Agent 生命周期
 
@@ -84,7 +84,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 ## 平台适配（`apps/server/src/platforms/`）
 
-`core.ts` 定义统一接口，`adapters/` 内置五类：CTFd、A1CTF、DASCTF、Ret2Shell、TSecBench。能力面：题目同步（`sync.ts`）、远程 flag 判定（`flags.ts`）、靶机实例启动/续期（`targets.ts`）；远程状态镜像进 `challenge_remote` 表，全程请求落 `platform_request_log`。flag 被平台接受的回调（`app.ts` 的 agentHooks）会刷新提交 agent 的视图、通知调度者，并按策略停掉同题其余存活 agent。
+`core.ts` 定义统一接口，`adapters/` 内置五类：CTFd、A1CTF、DASCTF、Ret2Shell、TSecBench。能力面：题目同步（`sync.ts`）、远程 flag 判定（`flags.ts`）、靶机实例启动/续期（`targets.ts`）；远程状态镜像进 `challenge_remote` 表，失败请求落 `platform_request_log`（请求头脱敏，保留 7 天）。flag 被平台接受的回调（`app.ts` 的 agentHooks）会刷新提交 agent 的视图、通知调度者，并按策略停掉同题其余存活 agent。
 
 ## LLM 接入
 

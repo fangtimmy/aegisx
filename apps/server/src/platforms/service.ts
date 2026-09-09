@@ -1,5 +1,5 @@
 import { type EventPlatform, get, LIVE_AGENT_STATUSES } from "@aegisx/shared"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq, inArray, lt } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
@@ -48,12 +48,50 @@ function createPlatformAdapter(
 
 type Storage = ReturnType<typeof createStorage>
 
+/** Request headers persisted verbatim would leak credentials into the audit
+ * log — these keys keep their name but store a fixed placeholder. */
+const REDACTED_HEADER_KEYS = new Set([
+  "authorization",
+  "cookie",
+  "x-agent-accesskey",
+  "benchmark-token",
+])
+const REDACTED = "[redacted]"
+/** Per-body storage cap (characters) for logged request/response bodies. */
+const LOG_BODY_CAP = 8_000
+/** Retention window for the request log. */
+const LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+
+export function redactHeaders(headers: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      REDACTED_HEADER_KEYS.has(key.toLowerCase()) ? REDACTED : value,
+    ])
+  )
+}
+
+export function clipBody(body: string | null) {
+  return body === null ? null : body.slice(0, LOG_BODY_CAP)
+}
+
 export function createPlatformService(
   db: Database,
   storage: Storage,
   maxAttachmentBytes: () => number,
   configStore: ConfigStore
 ) {
+  // Retention sweep: drop log rows older than the window (ISO strings
+  // compare lexicographically).
+  db.delete(platformRequestLog)
+    .where(
+      lt(
+        platformRequestLog.createdAt,
+        new Date(Date.now() - LOG_RETENTION_MS).toISOString()
+      )
+    )
+    .run()
+
   let onAgentFlagAccepted:
     | ((
         challengeId: string,
@@ -72,13 +110,13 @@ export function createPlatformService(
         createdAt: now,
         method: info.method,
         url: info.url,
-        requestHeaders: JSON.stringify(info.requestHeaders),
-        requestBody: info.requestBody,
+        requestHeaders: JSON.stringify(redactHeaders(info.requestHeaders)),
+        requestBody: clipBody(info.requestBody),
         status: info.status,
         responseHeaders: info.responseHeaders
           ? JSON.stringify(info.responseHeaders)
           : null,
-        responseBody: info.responseBody,
+        responseBody: clipBody(info.responseBody),
         error: info.error,
       })
       .run()

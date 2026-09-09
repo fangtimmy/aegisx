@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { and, eq, ne } from "drizzle-orm"
 import type { Context, MiddlewareHandler } from "hono"
 
 import type { Database } from "../db"
@@ -149,7 +149,11 @@ export function agentAuth(db: Database): MiddlewareHandler {
             role: agents.role,
           })
           .from(agents)
-          .where(eq(agents.token, token))
+          // The redundant token != '' term is load-bearing: the partial index
+          // agents_token_unique only covers non-empty tokens, and SQLite will
+          // not use a partial index unless the query implies its WHERE clause
+          // (an empty bearer already short-circuits above).
+          .where(and(eq(agents.token, token), ne(agents.token, "")))
           .get()
       : undefined
     if (!row) {

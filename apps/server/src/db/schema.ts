@@ -12,7 +12,7 @@ import {
 } from "drizzle-orm/sqlite-core"
 
 /** Schema major version stored in SQLite user_version. */
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -196,6 +196,12 @@ export const agents = sqliteTable(
     uniqueIndex("agents_event_orchestrator_unique")
       .on(table.eventId)
       .where(sql`${table.role} = 'orchestrator'`),
+    // Agent-token lookup (agent-auth runs on every tokenized request).
+    // Partial: the column's default '' is not unique — several historical or
+    // pre-spawn rows may hold it; spawn always writes a real token.
+    uniqueIndex("agents_token_unique")
+      .on(table.token)
+      .where(sql`${table.token} != ''`),
     check(
       "agents_role_check",
       sql`${table.role} in ('solver', 'orchestrator')`
