@@ -655,6 +655,13 @@ export function registerRunRoutes(
     const contentType = c.req.header("content-type")?.split(";", 1)[0]
     try {
       if (contentType === "multipart/form-data") {
+        if (principalOf(c)) {
+          return badRequest(
+            c,
+            "invalid",
+            "multipart posts are the user face; agents post JSON (files = workspace paths)"
+          )
+        }
         const form = await c.req.formData()
         const textEntry = form.get("text")
         const text = (typeof textEntry === "string" ? textEntry : "").trim()
