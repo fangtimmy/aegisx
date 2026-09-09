@@ -328,7 +328,13 @@ export function Composer({
               type="submit"
             >
               <Send />
-              {running ? (deliverAs === "steer" ? "引导" : "追问") : "发送"}
+              {running
+                ? deliverAs === "steer"
+                  ? "引导"
+                  : "追问"
+                : closed && closedReopenable
+                  ? "重新打开"
+                  : "发送"}
             </Button>
             {running && (
               <Menu>

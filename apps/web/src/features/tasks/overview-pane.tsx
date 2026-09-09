@@ -37,6 +37,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { FlagHistory } from "@/features/events/challenge-flags"
 import { POLL_INTERVAL_MS } from "@/features/events/event-agents-shared"
 import { overallSolved } from "@/features/events/event-shared"
 import { AgentStatusIcon } from "@/features/runs/agent-status-icon"
@@ -204,7 +205,7 @@ function ChallengeOverview({
 
         <p className="flex items-center gap-3 text-xs text-muted-foreground">
           <span className="tabular-nums">
-            {liveCount} live · {agents.length} 尝试
+            {liveCount} 活跃 · {agents.length} 次尝试
           </span>
           {challenge && challenge.attachments.length > 0 && (
             <span className="tabular-nums">
@@ -214,6 +215,26 @@ function ChallengeOverview({
         </p>
 
         <TargetPanel challengeId={lite.id} />
+
+        {challenge && challenge.flags.length > 0 && (
+          <CardFrame>
+            <CardFrameHeader>
+              <CardFrameTitle>
+                <span className="flex items-center gap-2">
+                  Flag 记录
+                  <Badge size="sm" variant="secondary">
+                    {challenge.flags.length}
+                  </Badge>
+                </span>
+              </CardFrameTitle>
+            </CardFrameHeader>
+            <Card>
+              <CardPanel>
+                <FlagHistory flags={challenge.flags} />
+              </CardPanel>
+            </Card>
+          </CardFrame>
+        )}
 
         <Roster agents={agents} onSelectAgent={onSelectAgent} />
       </div>
@@ -386,18 +407,22 @@ function RosterRow({
             {shortModel(agent.model)}
           </code>
         </div>
-        <p className="mt-0.5 truncate text-xs text-muted-foreground">
-          {agent.summary ?? agent.error ?? "—"}
-        </p>
+        {(agent.summary ?? agent.error) && (
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {agent.summary ?? agent.error}
+          </p>
+        )}
       </div>
       <div className="shrink-0 text-right text-2xs text-muted-foreground">
-        <div>{formatTime(agent.createdAt)} 创建</div>
+        <div>创建 {formatTime(agent.createdAt)}</div>
         {deadline ? (
           <div className={cn("tabular-nums", deadline.className)}>
             {deadline.text}
           </div>
         ) : terminal ? (
-          <div>{agent.completedAt ? formatTime(agent.completedAt) : "—"}</div>
+          <div>
+            结束 {agent.completedAt ? formatTime(agent.completedAt) : "—"}
+          </div>
         ) : null}
       </div>
     </ListRow>

@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react"
 
+import { IconTooltip } from "@/components/shell/icon-tooltip"
 import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
 
@@ -80,37 +81,40 @@ export function ContextRing({
     <span
       aria-label={`上下文占用 ${percent === null ? "未知" : `${Math.round(percent)}%`}`}
       className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground"
-      title={statParts(snapshot)
-        .map((part) => part.label)
-        .join("  ")}
     >
-      <svg aria-hidden="true" className="size-3.5" viewBox="0 0 14 14">
-        <circle
-          className="fill-none stroke-input"
-          cx="7"
-          cy="7"
-          r={RING_RADIUS}
-          strokeWidth="2"
-        />
-        <circle
-          className={cn(
-            "fill-none transition-[stroke-dashoffset] duration-500",
-            tone === "danger"
-              ? "stroke-destructive"
-              : tone === "warn"
-                ? "stroke-warning"
-                : "stroke-primary"
-          )}
-          cx="7"
-          cy="7"
-          r={RING_RADIUS}
-          strokeDasharray={RING_CIRCUMFERENCE}
-          strokeDashoffset={RING_CIRCUMFERENCE * (1 - (percent ?? 0) / 100)}
-          strokeLinecap="round"
-          strokeWidth="2"
-          transform="rotate(-90 7 7)"
-        />
-      </svg>
+      <IconTooltip
+        label={statParts(snapshot)
+          .map((part) => part.label)
+          .join("  ")}
+      >
+        <svg aria-hidden="true" className="size-3.5" viewBox="0 0 14 14">
+          <circle
+            className="fill-none stroke-input"
+            cx="7"
+            cy="7"
+            r={RING_RADIUS}
+            strokeWidth="2"
+          />
+          <circle
+            className={cn(
+              "fill-none transition-[stroke-dashoffset] duration-500",
+              tone === "danger"
+                ? "stroke-destructive"
+                : tone === "warn"
+                  ? "stroke-warning"
+                  : "stroke-primary"
+            )}
+            cx="7"
+            cy="7"
+            r={RING_RADIUS}
+            strokeDasharray={RING_CIRCUMFERENCE}
+            strokeDashoffset={RING_CIRCUMFERENCE * (1 - (percent ?? 0) / 100)}
+            strokeLinecap="round"
+            strokeWidth="2"
+            transform="rotate(-90 7 7)"
+          />
+        </svg>
+      </IconTooltip>
       <span
         className={cn(
           tone === "danger" && "text-destructive",

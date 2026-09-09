@@ -236,6 +236,7 @@ export function ModelRefPicker({
           value={effort}
         >
           <SelectTrigger
+            aria-label="推理力度"
             className={cn(sm ? "h-8 w-[7.5rem]" : "h-9 w-[8.5rem]", "text-xs")}
             size={sm ? "sm" : "default"}
           >

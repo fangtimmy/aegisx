@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query"
 import {
   Files,
   LayoutPanelTop,
@@ -5,10 +6,13 @@ import {
   MessageSquare,
   MessagesSquare,
 } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
 
+import { channelsApi, challengesApi, keys } from "@/api"
 import type { Challenge, FleetInfo, QueueItem, QueueState } from "@/api"
-import { challengesApi, keys } from "@/api"
+import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
+import { POLL_INTERVAL_MS } from "@/features/events/event-agents-shared"
 import { SchedulerDmTab } from "@/features/events/scheduler-dm-tab"
 import { ChannelsView } from "@/features/runs/channels-view"
 import { FilesWorkspace } from "@/features/runs/files-workspace"
@@ -35,6 +39,85 @@ const TASK_TAB_VALUES = [
 
 export function isTaskTab(value: string): value is TaskTab {
   return TASK_TAB_VALUES.some((tab) => tab === value)
+}
+
+const CHANNEL_SEEN_KEY = "aegisx:channel-seen"
+
+function readSeenMap(): Record<string, number> {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(CHANNEL_SEEN_KEY) ?? "{}"
+    )
+    if (typeof parsed !== "object" || parsed === null) return {}
+    const map: Record<string, number> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "number") map[key] = value
+    }
+    return map
+  } catch {
+    return {}
+  }
+}
+
+/** Unread marker on the 频道 tab: channels whose latest message postdates the
+ * locally persisted seen marker (server cursors belong to agents, not the
+ * human viewer). First sighting seeds a marker so history never counts as
+ * unread; while the tab is open everything visible counts as seen. */
+function ChannelsTabBadge({
+  active,
+  challengeId,
+}: {
+  active: boolean
+  challengeId: string | null
+}) {
+  const channels = useQuery({
+    enabled: challengeId !== null,
+    queryKey: keys.challenges.channels(challengeId ?? ""),
+    queryFn: () => channelsApi.getChallengeChannels(challengeId ?? ""),
+    refetchInterval: POLL_INTERVAL_MS,
+  })
+  const [seen, setSeen] = useState<Record<string, number>>(readSeenMap)
+  const items = useMemo(() => channels.data?.items ?? [], [channels.data])
+
+  useEffect(() => {
+    if (items.length === 0) return
+    const isUnseen = (item: { key: string; lastMessageAt: string | null }) => {
+      const marker = seen[item.key]
+      if (marker === undefined) return true
+      return (
+        item.lastMessageAt !== null && Date.parse(item.lastMessageAt) > marker
+      )
+    }
+    // Open tab: only channels with genuinely newer messages need re-marking
+    // (marking unconditionally would write → setState → write, forever).
+    const missing = (
+      active
+        ? items.filter(isUnseen)
+        : items.filter((item) => seen[item.key] === undefined)
+    ).map((item) => item.key)
+    if (missing.length === 0) return
+    const now = Date.now()
+    const next = { ...seen }
+    for (const key of missing) next[key] = now
+    localStorage.setItem(CHANNEL_SEEN_KEY, JSON.stringify(next))
+    setSeen(next)
+  }, [active, items, seen])
+
+  // Hidden until every channel carries a marker: the seeding render must not
+  // flash a full unread count.
+  const unread = items.every((item) => seen[item.key] !== undefined)
+    ? items.filter(
+        (item) =>
+          item.lastMessageAt !== null &&
+          Date.parse(item.lastMessageAt) > (seen[item.key] ?? 0)
+      ).length
+    : 0
+  if (unread === 0) return null
+  return (
+    <Badge size="sm" variant="info">
+      {unread}
+    </Badge>
+  )
 }
 
 /** The right pane: one tab container per selection. The tab set switches
@@ -96,6 +179,10 @@ export function TaskDetail({
         </TabsTab>
         <TabsTab className="gap-2" value="channels">
           <MessagesSquare /> 频道
+          <ChannelsTabBadge
+            active={tab === "channels"}
+            challengeId={isScheduler ? null : selection.c}
+          />
         </TabsTab>
         <TabsTab className="gap-2" value="files">
           <Files /> 文件

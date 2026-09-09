@@ -49,8 +49,12 @@ export function TargetPanel({ challengeId }: { challengeId: string }) {
   // on "加载中" forever; hide it instead.
   if (target.error instanceof ApiError && target.error.code === "not_bound")
     return null
-  const statusLabel =
-    value?.status === "running"
+  // The adapter reports a reclaimed platform target as an explained absent
+  // state (status "absent" + message) — the event-over norm, not a fault.
+  const recycled = value?.status === "absent" && Boolean(value.message)
+  const statusLabel = recycled
+    ? "已回收"
+    : value?.status === "running"
       ? "运行中"
       : value?.status === "absent"
         ? "未启动"
@@ -60,6 +64,7 @@ export function TargetPanel({ challengeId }: { challengeId: string }) {
 
   const hasBody =
     Boolean(value && value.endpoints.length > 0) ||
+    Boolean(value?.message) ||
     Boolean(value?.expiresAt) ||
     Boolean(target.error || action.error)
 
@@ -88,7 +93,7 @@ export function TargetPanel({ challengeId }: { challengeId: string }) {
           >
             <RefreshCw />
           </Button>
-          {value?.status === "absent" && (
+          {value?.status === "absent" && !recycled && (
             <Button
               loading={action.isPending}
               onClick={() => action.mutate("start")}
@@ -140,6 +145,9 @@ export function TargetPanel({ challengeId }: { challengeId: string }) {
                   </div>
                 ))}
               </div>
+            )}
+            {value?.message && (
+              <p className="text-xs text-muted-foreground">{value.message}</p>
             )}
             {value?.expiresAt && (
               <p className="text-xs text-muted-foreground">

@@ -123,12 +123,25 @@ export function FlagsSection({
   )
 }
 
+/** Read-only flag history (overview surfaces): status + source per row, with
+ * copy but no management actions. */
+export function FlagHistory({ flags }: { flags: ChallengeFlag[] }) {
+  if (flags.length === 0) return null
+  return (
+    <ul className="border-y">
+      {flags.map((flag) => (
+        <FlagRow flag={flag} key={flag.id} />
+      ))}
+    </ul>
+  )
+}
+
 function FlagRow({
   flag,
   onDelete,
 }: {
   flag: ChallengeFlag
-  onDelete: () => void
+  onDelete?: () => void
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   return (
@@ -156,49 +169,51 @@ function FlagRow({
           <Copy />
         </Button>
       </IconTooltip>
-      <IconTooltip label="删除 flag">
-        <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
-          <AlertDialogTrigger
-            render={
-              <Button
-                aria-label="删除 flag"
-                size="icon-sm"
-                type="button"
-                variant="ghost"
-              />
-            }
-          >
-            <Trash2 />
-          </AlertDialogTrigger>
-          <AlertDialogPopup>
-            <AlertDialogHeader>
-              <AlertDialogTitle>删除该 flag？</AlertDialogTitle>
-              <AlertDialogDescription>
-                <span className="font-mono break-all">{flag.flag}</span>
-                <br />
-                删除后无法恢复。
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogClose
-                render={<Button type="button" variant="ghost" />}
-              >
-                取消
-              </AlertDialogClose>
-              <Button
-                onClick={() => {
-                  onDelete()
-                  setConfirmOpen(false)
-                }}
-                type="button"
-                variant="destructive"
-              >
-                删除
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogPopup>
-        </AlertDialog>
-      </IconTooltip>
+      {onDelete && (
+        <IconTooltip label="删除 flag">
+          <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
+            <AlertDialogTrigger
+              render={
+                <Button
+                  aria-label="删除 flag"
+                  size="icon-sm"
+                  type="button"
+                  variant="ghost"
+                />
+              }
+            >
+              <Trash2 />
+            </AlertDialogTrigger>
+            <AlertDialogPopup>
+              <AlertDialogHeader>
+                <AlertDialogTitle>删除该 flag？</AlertDialogTitle>
+                <AlertDialogDescription>
+                  <span className="font-mono break-all">{flag.flag}</span>
+                  <br />
+                  删除后无法恢复。
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogClose
+                  render={<Button type="button" variant="ghost" />}
+                >
+                  取消
+                </AlertDialogClose>
+                <Button
+                  onClick={() => {
+                    onDelete()
+                    setConfirmOpen(false)
+                  }}
+                  type="button"
+                  variant="destructive"
+                >
+                  删除
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogPopup>
+          </AlertDialog>
+        </IconTooltip>
+      )}
     </li>
   )
 }

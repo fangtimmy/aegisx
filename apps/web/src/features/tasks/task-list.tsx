@@ -201,7 +201,10 @@ export function TaskList({
               className={cn("size-2 shrink-0 rounded-full", schedDotClass)}
             />
             <span className="shrink-0 text-sm font-medium">调度者</span>
-            <span className="truncate text-xs text-muted-foreground">
+            <span
+              className="truncate text-xs text-muted-foreground"
+              title={schedulerAgent?.model ?? fleet.config.modelId ?? undefined}
+            >
               {shortModel(schedulerAgent?.model ?? fleet.config.modelId)}
             </span>
             <span className={cn("ml-auto shrink-0 text-xs", schedTextClass)}>

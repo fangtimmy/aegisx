@@ -46,6 +46,16 @@ const containerStatusMap: Record<string, TargetState["status"]> = {
   stopped: "absent",
 }
 
+/** The platform rejects every challenge-scoped call once its task is
+ * finished — the event is over and all containers are reclaimed. */
+const TASK_FINISHED_MESSAGE = "平台任务已结束，靶机已回收"
+
+function isTaskFinishedError(error: unknown): boolean {
+  return (
+    error instanceof PlatformError && /already finished/i.test(error.message)
+  )
+}
+
 /** Read-path list cache window (agents poll get_target every few seconds
  * while an instance transitions; each poll must not re-pull all 63 rows). */
 const LIST_CACHE_TTL_MS = 3_000
@@ -216,19 +226,33 @@ export class TsecBenchAdapter extends BaseAdapter {
     remoteId: string,
     signal?: AbortSignal
   ): Promise<TargetState> {
-    const list = await this.fetchList(signal, LIST_CACHE_TTL_MS)
-    const challenge = list.find((item) => item.unique_code === remoteId)
-    if (!challenge) return absentTarget()
-    const status = containerStatusMap[challenge.container_status] ?? "failed"
-    return {
-      status,
-      endpoints:
-        status === "running"
-          ? challenge.container_addr.map((address, index) =>
-              targetEndpoint(`endpoint ${index + 1}`, address)
-            )
-          : [],
-      expiresAt: null,
+    try {
+      const list = await this.fetchList(signal, LIST_CACHE_TTL_MS)
+      const challenge = list.find((item) => item.unique_code === remoteId)
+      if (!challenge) return absentTarget()
+      const status = containerStatusMap[challenge.container_status] ?? "failed"
+      return {
+        status,
+        endpoints:
+          status === "running"
+            ? challenge.container_addr.map((address, index) =>
+                targetEndpoint(`endpoint ${index + 1}`, address)
+              )
+            : [],
+        expiresAt: null,
+      }
+    } catch (error) {
+      // Once the platform task is finished every challenge-scoped call fails;
+      // that is the event-over norm, not a fault — report the reclaimed
+      // target as an explained absent state instead of a permanent error.
+      if (isTaskFinishedError(error))
+        return {
+          status: "absent",
+          endpoints: [],
+          expiresAt: null,
+          message: TASK_FINISHED_MESSAGE,
+        }
+      throw error
     }
   }
 
