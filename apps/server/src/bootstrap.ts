@@ -1,5 +1,8 @@
+import { existsSync, readFileSync } from "node:fs"
+
 import {
   isActiveAgentStatus,
+  isRecord,
   modelAddress,
   type PlatformType,
   type ProviderType,
@@ -73,6 +76,81 @@ export type BootstrapSpec = {
   enqueueAll: boolean
 }
 
+/** Path convention for appliance event presets. A preset bakes deployment
+ * tuning (platform brief, settings, scheduler policy) as DATA instead of
+ * build-time source rewrites; absent file = no-op, so non-appliance
+ * deployments are unaffected. */
+const EVENT_PRESET_PATH = "/opt/aegisx-preset/preset.json"
+
+export type EventPreset = {
+  /** Event-level platform brief, injected into agent prompts verbatim. */
+  promptHint?: string
+  /** Global settings overrides (flat `key` → scalar). */
+  settings?: Record<string, string | number | boolean>
+  /** First-boot scheduler policy (the event's 调度设置). */
+  scheduler?: {
+    maxConcurrentTargets?: number
+    notifyTeamOnFlag?: boolean
+    stopSiblingsOnSolve?: boolean
+    stopTargetOnSolve?: boolean
+    stopSubmitterOnSolve?: boolean
+    nextTaskPolicy?: "eager" | "drained"
+    urgentTeamMessages?: boolean
+    blockSpawnOnSolved?: boolean
+  }
+}
+
+/** Top-level shape check; deep fields are validated by their consumers
+ * (patchSettings for settings, upsertSchedulerConfig for the policy). */
+function isEventPreset(doc: unknown): doc is EventPreset {
+  if (!isRecord(doc)) return false
+  if (doc.promptHint !== undefined && typeof doc.promptHint !== "string")
+    return false
+  if (doc.settings !== undefined && !isRecord(doc.settings)) return false
+  if (doc.scheduler !== undefined && !isRecord(doc.scheduler)) return false
+  return true
+}
+
+/** Read the appliance preset. A missing file is normal (no preset); an
+ * unreadable one is logged and skipped — bootstrap stays up, same as every
+ * other bootstrap failure. */
+export function readEventPreset(
+  path: string = EVENT_PRESET_PATH
+): EventPreset | null {
+  if (!existsSync(path)) return null
+  try {
+    const doc: unknown = JSON.parse(readFileSync(path, "utf8"))
+    if (!isEventPreset(doc)) throw new Error("preset root is not an object")
+    return doc
+  } catch (error) {
+    console.error("bootstrap: event preset unreadable — ignoring", {
+      path,
+      error,
+    })
+    return null
+  }
+}
+
+/** Converge global settings onto the preset values — drift-only writes, the
+ * same idempotent semantics as ensureProvider. */
+export function ensurePresetSettings(
+  configStore: ConfigStore,
+  preset: EventPreset | null
+): void {
+  if (!preset?.settings) return
+  const current: Record<string, unknown> = configStore.getSettings()
+  const patch: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(preset.settings)) {
+    if (current[key] !== value) patch[key] = value
+  }
+  if (Object.keys(patch).length > 0) {
+    configStore.updateSettings(patch)
+    console.log("bootstrap: preset settings applied", {
+      keys: Object.keys(patch),
+    })
+  }
+}
+
 export function readBootstrapSpec(env: Record<string, string | undefined>) {
   const spec: BootstrapSpec = { enqueueAll: env.AEGISX_ENQUEUE_ALL === "1" }
   if (env.AEGISX_PROVIDER_BASE_URL && env.AEGISX_MODEL_ID) {
@@ -123,6 +201,8 @@ export type BootstrapDeps = {
   configStore: ConfigStore
   platformService: ReturnType<typeof createPlatformService>
   agentService: AgentService
+  /** Override for EVENT_PRESET_PATH (tests). */
+  presetPath?: string
 }
 
 /** Metadata for the configured model: pi's builtin catalog when the model id
@@ -219,7 +299,8 @@ export function ensureProvider(
  * no binding exists yet. Returns the event id (null when no event name). */
 async function ensureEventAndPlatform(
   deps: BootstrapDeps,
-  spec: BootstrapSpec
+  spec: BootstrapSpec,
+  preset: EventPreset | null
 ): Promise<string | null> {
   if (!spec.eventName) return null
   const { db } = deps
@@ -235,10 +316,18 @@ async function ensureEventAndPlatform(
       .values({
         id: eventId,
         name: spec.eventName,
-        promptHint: "",
+        promptHint: preset?.promptHint ?? "",
         createdAt: now,
         updatedAt: now,
       })
+      .run()
+  } else if (preset?.promptHint && !existing.promptHint) {
+    // Backfill an empty hint on re-bootstrap; a set hint is the user's —
+    // preset updates ship with a fresh data dir, not over edits.
+    const now = new Date().toISOString()
+    db.update(events)
+      .set({ promptHint: preset.promptHint, updatedAt: now })
+      .where(eq(events.id, eventId))
       .run()
   }
   if (spec.platform) {
@@ -287,7 +376,8 @@ async function ensureScheduler(
   deps: BootstrapDeps,
   spec: BootstrapSpec,
   eventId: string,
-  defaultModelRef: string | null
+  defaultModelRef: string | null,
+  preset: EventPreset | null
 ): Promise<void> {
   const { agentService, db } = deps
   const configured = db
@@ -302,6 +392,7 @@ async function ensureScheduler(
       ...(spec.schedulerInstruction
         ? { instruction: spec.schedulerInstruction }
         : {}),
+      ...preset?.scheduler,
     })
   } else if (
     spec.schedulerInstruction &&
@@ -352,10 +443,12 @@ export async function runBootstrap(
   spec: BootstrapSpec
 ): Promise<void> {
   if (!spec.provider && !spec.eventName) return
+  const preset = readEventPreset(deps.presetPath)
+  ensurePresetSettings(deps.configStore, preset)
   const defaultModelRef = ensureProvider(deps.configStore, spec)
-  const eventId = await ensureEventAndPlatform(deps, spec)
+  const eventId = await ensureEventAndPlatform(deps, spec, preset)
   if (!eventId) return
   await syncChallenges(deps, eventId)
-  await ensureScheduler(deps, spec, eventId, defaultModelRef)
+  await ensureScheduler(deps, spec, eventId, defaultModelRef, preset)
   console.log("bootstrap: complete", { eventId })
 }
