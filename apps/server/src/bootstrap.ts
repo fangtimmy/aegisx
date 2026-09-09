@@ -10,12 +10,7 @@ import {
 import { eq } from "drizzle-orm"
 
 import type { Database } from "./db"
-import {
-  challenges,
-  events,
-  eventPlatforms,
-  schedulerConfig,
-} from "./db/schema"
+import { events, eventPlatforms, schedulerConfig } from "./db/schema"
 import type { ConfigStore, ProviderData } from "./infrastructure/config-store"
 import { parseJson } from "./lib/guards"
 import type { createPlatformService } from "./platforms/service"
@@ -135,7 +130,6 @@ export type BootstrapSpec = {
     remoteEventId?: string
   }
   schedulerInstruction?: string
-  enqueueAll: boolean
 }
 
 /** Path convention for appliance event presets. A preset bakes deployment
@@ -214,7 +208,7 @@ export function ensurePresetSettings(
 }
 
 export function readBootstrapSpec(env: Record<string, string | undefined>) {
-  const spec: BootstrapSpec = { enqueueAll: env.AEGISX_ENQUEUE_ALL === "1" }
+  const spec: BootstrapSpec = {}
   if (env.AEGISX_PROVIDER_BASE_URL && env.AEGISX_MODEL_ID) {
     const type = env.AEGISX_PROVIDER_TYPE ?? "openai-compatible"
     if (
@@ -492,32 +486,6 @@ async function ensureScheduler(
   if (!agent || !isActiveAgentStatus(agent.status)) {
     await agentService.startScheduler(eventId)
     console.log("bootstrap: scheduler started", { eventId })
-  }
-
-  if (spec.enqueueAll) {
-    const queue = agentService.queue()
-    queue.resume(eventId)
-    const rows = db
-      .select({ id: challenges.id })
-      .from(challenges)
-      .where(eq(challenges.eventId, eventId))
-      .all()
-    const planned = new Set(
-      queue
-        .list(eventId)
-        .filter(
-          (item) => item.status === "pending" || item.status === "running"
-        )
-        .map((item) => item.challengeId)
-    )
-    let enqueued = 0
-    for (const row of rows) {
-      if (planned.has(row.id)) continue
-      queue.enqueue({ eventId, challengeId: row.id, source: "manual" })
-      enqueued++
-    }
-    if (enqueued > 0) await queue.drainOnce()
-    console.log("bootstrap: solvers enqueued", { eventId, enqueued })
   }
 }
 

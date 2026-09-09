@@ -26,7 +26,6 @@ describe("readBootstrapSpec", () => {
       AEGISX_PLATFORM_CREDENTIAL: "tok",
       AEGISX_PLATFORM_REMOTE_EVENT_ID: "7",
       AEGISX_SCHEDULER_INSTRUCTION: "go wide",
-      AEGISX_ENQUEUE_ALL: "1",
     })
     expect(spec.provider).toEqual({
       label: "Gateway",
@@ -44,7 +43,6 @@ describe("readBootstrapSpec", () => {
       remoteEventId: "7",
     })
     expect(spec.schedulerInstruction).toBe("go wide")
-    expect(spec.enqueueAll).toBe(true)
   })
 
   test("defaults: openai-compatible, no effort, no platform, no enqueue", () => {
@@ -57,7 +55,6 @@ describe("readBootstrapSpec", () => {
     expect(spec.provider?.effort).toBeUndefined()
     expect(spec.platform).toBeUndefined()
     expect(spec.eventName).toBeUndefined()
-    expect(spec.enqueueAll).toBe(false)
   })
 
   test("provider requires both base URL and model id", () => {
@@ -183,7 +180,6 @@ describe("ensureProvider", () => {
     const t = store()
     try {
       const ref = ensureProvider(t.configStore, {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "openai-compatible",
@@ -209,7 +205,6 @@ describe("ensureProvider", () => {
     const t = store()
     try {
       ensureProvider(t.configStore, {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "anthropic-messages",
@@ -233,7 +228,6 @@ describe("ensureProvider", () => {
     const t = store()
     try {
       ensureProvider(t.configStore, {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "openai-compatible",
@@ -252,7 +246,6 @@ describe("ensureProvider", () => {
       expect(provider?.models[0]?.metadataSource).toBe("bootstrap")
 
       ensureProvider(t.configStore, {
-        enqueueAll: false,
         provider: {
           label: "Override",
           type: "openai-compatible",
@@ -281,7 +274,6 @@ describe("ensureProvider", () => {
     const t = store()
     try {
       const spec = {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "openai-compatible" as const,
@@ -331,7 +323,6 @@ describe("ensureProvider", () => {
         },
       ])
       const ref = ensureProvider(t.configStore, {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "openai-compatible",
@@ -358,7 +349,6 @@ describe("ensureProvider", () => {
     const t = store()
     try {
       const spec = {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "openai-compatible" as const,
@@ -382,7 +372,6 @@ describe("ensureProvider", () => {
     const t = store()
     try {
       const base = {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "openai-compatible" as const,
@@ -418,7 +407,6 @@ describe("ensureProvider", () => {
     const t = store()
     try {
       const ref = ensureProvider(t.configStore, {
-        enqueueAll: false,
         provider: {
           label: "Bootstrap",
           type: "openai-compatible",

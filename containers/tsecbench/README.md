@@ -47,7 +47,7 @@ model id 匹配 > 保守默认值。
 镜像体积：未压缩 4.75GB，gzip 压缩后 **1.81GB**（上限 3GB）。
 
 启动后 Bootstrap 自动执行：provider/模型 → 读取 preset → 建赛事（带 TSecBench 平台
-提示词与调度策略）→ 拉题 → 启动调度者并为全部题目入队（`AEGISX_ENQUEUE_ALL=1` 已内置）。
+提示词与调度策略）→ 拉题 → 启动调度者（由调度者按策略逐题简报并入队）。
 
 > 注意 `--network container:tsec-vpn` 模式下端口映射不生效——需要另配或改用
 > host network + 路由。评测场景建议 Web UI 经 SSH 隧道访问，或临时启动独立容器查看。

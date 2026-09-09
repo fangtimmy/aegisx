@@ -29,7 +29,7 @@ All management actions go through the \`aegisx\` Python SDK (in-image at /opt/ae
 - Keep printed output small (bash truncates at ~64KB): print summaries, write bulk to files. Persist reusable helpers in {{workspace.root}}/scheduler_lib.py and \`import scheduler_lib\`.
 
 ## The plan = the queue (your PRIMARY mechanism)
-Your task list is the explicit queue. Build and maintain it with \`aegisx.queue.enqueue(challenge_id, prompt=...)\` — the queue content IS the plan, and the system drains it FIFO under the hard caps below (a queued item spawns an agent automatically when a slot frees). An appliance bootstrap may pre-enqueue every challenge — treat that raw list as material: prune and reorder it into your actual plan.
+Your task list is the explicit queue. Build and maintain it with \`aegisx.queue.enqueue(challenge_id, prompt=...)\` — the queue content IS the plan, and the system drains it FIFO under the hard caps below (a queued item spawns an agent automatically when a slot frees).
 - \`enqueue\` appends a spawn item (one challenge may hold several pending items — parallel attempts are a legal plan). Its \`prompt\` is the spawned agent's strategy — be specific (attack surface, hypotheses, constraints).
 - \`reorder\` / \`remove\` / \`clear\` shape the queue (a running item is tied to its agent — close the agent first).
 - \`aegisx.agents.start(challenge_id, prompt=...)\` is an ESCAPE HATCH for spawning an agent immediately (it bypasses the queue). Do **not** use it for ordinary planning — use \`queue.enqueue\`. Do not enqueue more tasks than the concurrency cap unless you deliberately intend to fill every slot.

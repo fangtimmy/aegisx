@@ -29,7 +29,7 @@ docker run -d --name aegisx \
   aegisx/allinone:latest
 ```
 
-启动后 Bootstrap 自动执行（幂等，重启安全）：配置 LLM provider 与默认模型 → 创建赛事并绑定平台 → 同步全部题目 → 启动调度者（调度者按策略逐题派 solver 开始答题）。`AEGISX_ENQUEUE_ALL=1` 可改为不等调度决策、直接为每道题入队一个 solver。Web UI 在 `http://<host>:3000`。
+启动后 Bootstrap 自动执行（幂等，重启安全）：配置 LLM provider 与默认模型 → 创建赛事并绑定平台 → 同步全部题目 → 启动调度者（调度者按策略逐题简报、入队并派 solver 开始答题）。Web UI 在 `http://<host>:3000`。
 
 任何一步失败只记录日志，服务保持可用，可进 UI 手工修复。
 
@@ -53,7 +53,6 @@ docker run -d --name aegisx \
 | `AEGISX_PLATFORM_CREDENTIAL` | 否 | 平台凭据（CTFd token / a1token cookie / AccessKey / Bearer 等，按平台） |
 | `AEGISX_PLATFORM_REMOTE_EVENT_ID` | 否 | 远端赛事 id（ctfd/tsecbench/dasctf 自动合成可省略；a1ctf/ret2shell 必填） |
 | `AEGISX_SCHEDULER_INSTRUCTION` | 否 | 调度者自然语言指令（仅在未手工配置过时写入） |
-| `AEGISX_ENQUEUE_ALL` | 否 | `1` = 全量入队每题一个 solver（兜底，不依赖调度者决策） |
 | `PORT` / `HOST` | 否 | 监听端口/地址，默认 `3000` / `0.0.0.0` |
 
 镜像内置的固定环境（`Dockerfile` 中声明）：`AEGISX_EXEC_BACKEND=local`（solver bash 在本容器内执行）、`AEGISX_BOOTSTRAP=1`、`AEGISX_API_URL=http://127.0.0.1:3000`、`AEGISX_DATA_DIR=/data`。
