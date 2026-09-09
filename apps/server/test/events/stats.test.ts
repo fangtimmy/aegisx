@@ -146,6 +146,21 @@ function seedToolResult(
     .run()
 }
 
+/** Usage row token total as the stats module computes it (the four summed
+ * usage fields, cache included). */
+function tokensOf(row: {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}) {
+  return row.input + row.output + row.cacheRead + row.cacheWrite
+}
+
+function sum(values: number[]) {
+  return values.reduce((a, b) => a + b, 0)
+}
+
 describe("event stats (GET /api/events/:eventId/stats)", () => {
   test("an event without data returns zeroed stats and null window", async () => {
     const { app } = createTestApp()
@@ -637,5 +652,68 @@ describe("event stats (GET /api/events/:eventId/stats)", () => {
       event: { challengeCount: number; solvedCount: number }
     }>(await app.request(`/api/events/${event.id}`))
     expect(detail.event).toMatchObject({ challengeCount: 5, solvedCount: 4 })
+  })
+
+  test("per-model, per-challenge and per-agent usage rollups agree", async () => {
+    const { app, dataDir } = createTestApp()
+    const event = await responseJson<{ id: string }>(
+      await app.request("/api/events", json("POST", { name: "Stats Event" }))
+    )
+    const db = seedDb(dataDir)
+
+    seedChallenge(db, event.id, { id: "ch-a" })
+    seedChallenge(db, event.id, { id: "ch-b" })
+    seedAgent(db, {
+      id: "agent-1",
+      eventId: event.id,
+      challengeId: "ch-a",
+      model: "prov-1/model-1:off",
+    })
+    seedAgent(db, {
+      id: "agent-2",
+      eventId: event.id,
+      challengeId: "ch-a",
+      model: "prov-1/model-2:off",
+    })
+    seedAgent(db, {
+      id: "agent-3",
+      eventId: event.id,
+      challengeId: "ch-b",
+      model: "prov-1/model-2:off",
+    })
+    seedUsage(db, "agent-1", 1, 100, 50, 1)
+    seedUsage(db, "agent-2", 1, 200, 25, 2)
+    seedUsage(db, "agent-3", 1, 40, 10, 0.5)
+
+    const response = await app.request(`/api/events/${event.id}/stats`)
+    expect(response.status).toBe(200)
+    const { stats } = await responseJson<{ stats: EventStats }>(response)
+
+    const overviewTokens =
+      stats.overview.inputTokens +
+      stats.overview.outputTokens +
+      stats.overview.cacheReadTokens +
+      stats.overview.cacheWriteTokens
+
+    // Sum by model == sum by challenge == sum by agent == overview total.
+    expect(sum(stats.modelBilling.map(tokensOf))).toBe(overviewTokens)
+    expect(sum(stats.agentEfficiency.map(tokensOf))).toBe(overviewTokens)
+    expect(sum(stats.challengeEfficiency.map((c) => c.tokens))).toBe(
+      overviewTokens
+    )
+    expect(sum(stats.modelBilling.map((m) => m.cost))).toBeCloseTo(
+      stats.overview.cost
+    )
+    expect(sum(stats.challengeEfficiency.map((c) => c.cost))).toBeCloseTo(
+      stats.overview.cost
+    )
+    expect(sum(stats.agentEfficiency.map((a) => a.cost))).toBeCloseTo(
+      stats.overview.cost
+    )
+    // Both rollups actually split across 2 models and 2 challenges.
+    expect(stats.modelBilling).toHaveLength(2)
+    expect(stats.challengeEfficiency.filter((c) => c.tokens > 0)).toHaveLength(
+      2
+    )
   })
 })

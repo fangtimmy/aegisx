@@ -28,9 +28,18 @@ import {
   type ChallengeRemote,
 } from "../platforms/challenge-state"
 
-/** Sum of one guarded usage field over entries joined to the event's agents,
- * grouped by a column of `agents`. Shares the JSON1 extractors with
- * sumUsageTotals (agents/session-queries). */
+/** Per-group usage rollup bucket (tokens carried without toolCalls). */
+type UsageTotals = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  cost: number
+  turns: number
+}
+
+/** Sum of one guarded usage field over entries joined to the event's agents.
+ * Shares the JSON1 extractors with sumUsageTotals (agents/session-queries). */
 const sumUsageField = (msgPath: string, entryPath: string) => sql<number>`
     SUM(
       CASE
@@ -44,14 +53,15 @@ const sumUsageField = (msgPath: string, entryPath: string) => sql<number>`
     )
   `
 
-function usageByAgentGroup(
-  db: Database,
-  eventId: string,
-  group: typeof agents.model | typeof agents.challengeId | typeof agents.id
-) {
+/** The single aggregate pass over the event's session_entries, grouped by
+ * agent: per-model and per-challenge usage roll up from these rows in JS
+ * (agentRows carry model/challengeId) instead of re-scanning the largest
+ * table. Shares the JSON1 extractors with sumUsageTotals
+ * (agents/session-queries). */
+function usageByAgentRows(db: Database, eventId: string) {
   return db
     .select({
-      key: group,
+      key: agents.id,
       input: sumUsageField("$.message.usage.input", "$.usage.input"),
       output: sumUsageField("$.message.usage.output", "$.usage.output"),
       cacheRead: sumUsageField(
@@ -69,7 +79,7 @@ function usageByAgentGroup(
     .from(sessionEntries)
     .innerJoin(agents, eq(sessionEntries.agentId, agents.id))
     .where(eq(agents.eventId, eventId))
-    .groupBy(group)
+    .groupBy(agents.id)
     .all()
 }
 
@@ -161,7 +171,9 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
     }
   }
 
-  // Usage: total + per-model + per-challenge + per-agent (aggregate passes).
+  // Usage: total + per-model + per-challenge + per-agent from ONE aggregate
+  // pass over session_entries (grouped by agent); the model and challengeId
+  // groupings roll up in JS from agentRows, which carry both.
   let total = {
     input: 0,
     output: 0,
@@ -170,21 +182,46 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
     cost: 0,
     turns: 0,
   }
-  const usageByAgent = new Map<
-    string,
-    {
-      input: number
-      output: number
-      cacheRead: number
-      cacheWrite: number
-      cost: number
-      turns: number
-      toolCalls: number
-    }
-  >()
-  for (const row of usageByAgentGroup(db, eventId, agents.id)) {
-    if (row.key === null) continue
+  const usageByAgent = new Map<string, UsageTotals & { toolCalls: number }>()
+  for (const row of usageByAgentRows(db, eventId)) {
     usageByAgent.set(row.key, row)
+  }
+  const usageByModel = new Map<string, UsageTotals>()
+  const usageByChallenge = new Map<string, { tokens: number; cost: number }>()
+  for (const agent of agentRows) {
+    const usage = usageByAgent.get(agent.id)
+    if (!usage) continue
+    total.input += usage.input
+    total.output += usage.output
+    total.cacheRead += usage.cacheRead
+    total.cacheWrite += usage.cacheWrite
+    total.cost += usage.cost
+    total.turns += usage.turns
+    const model = usageByModel.get(agent.model) ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      turns: 0,
+    }
+    model.input += usage.input
+    model.output += usage.output
+    model.cacheRead += usage.cacheRead
+    model.cacheWrite += usage.cacheWrite
+    model.cost += usage.cost
+    model.turns += usage.turns
+    usageByModel.set(agent.model, model)
+    if (agent.challengeId !== null) {
+      const bucket = usageByChallenge.get(agent.challengeId) ?? {
+        tokens: 0,
+        cost: 0,
+      }
+      bucket.tokens +=
+        usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+      bucket.cost += usage.cost
+      usageByChallenge.set(agent.challengeId, bucket)
+    }
   }
   const solverAgentsByModel = new Map<string, number>()
   for (const row of solverRows) {
@@ -202,36 +239,20 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
     solvesByModel.set(model, (solvesByModel.get(model) ?? 0) + 1)
   }
   const modelBilling: EventModelBillingItem[] = []
-  for (const row of usageByAgentGroup(db, eventId, agents.model)) {
-    if (row.key === null) continue
-    total.input += row.input
-    total.output += row.output
-    total.cacheRead += row.cacheRead
-    total.cacheWrite += row.cacheWrite
-    total.cost += row.cost
-    total.turns += row.turns
+  for (const [model, agg] of usageByModel) {
     modelBilling.push({
-      model: row.key,
-      requests: row.turns,
-      input: row.input,
-      output: row.output,
-      cacheRead: row.cacheRead,
-      cacheWrite: row.cacheWrite,
-      cost: row.cost,
-      solverAgents: solverAgentsByModel.get(row.key) ?? 0,
-      solves: solvesByModel.get(row.key) ?? 0,
+      model,
+      requests: agg.turns,
+      input: agg.input,
+      output: agg.output,
+      cacheRead: agg.cacheRead,
+      cacheWrite: agg.cacheWrite,
+      cost: agg.cost,
+      solverAgents: solverAgentsByModel.get(model) ?? 0,
+      solves: solvesByModel.get(model) ?? 0,
     })
   }
   modelBilling.sort((a, b) => b.cost - a.cost || b.requests - a.requests)
-
-  const usageByChallenge = new Map<string, { tokens: number; cost: number }>()
-  for (const row of usageByAgentGroup(db, eventId, agents.challengeId)) {
-    if (row.key === null) continue
-    usageByChallenge.set(row.key, {
-      tokens: row.input + row.output + row.cacheRead + row.cacheWrite,
-      cost: row.cost,
-    })
-  }
 
   // --- Score timeline ---------------------------------------------------
   const scoreTimeline: EventScorePoint[] = []
