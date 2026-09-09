@@ -239,6 +239,30 @@ describe("ConversationStore", () => {
     expect(store.get("a1")).toHaveLength(0)
   })
 
+  test("message.committed before the first snapshot is kept by it", () => {
+    const store = new ConversationStore()
+    store.applyEvent({
+      type: "message.committed",
+      agentId: "a1",
+      item: userItem("hello", 1, "u1"),
+    })
+    store.applySnapshot("a1", [])
+    expect(store.get("a1")).toHaveLength(1)
+  })
+
+  test("message.committed landing in the reset window is still dropped", () => {
+    const store = new ConversationStore()
+    store.applySnapshot("a1", [userItem("old", 1, "u1")])
+    store.reset("a1")
+    store.applyEvent({
+      type: "message.committed",
+      agentId: "a1",
+      item: userItem("ghost", 2, "u2"),
+    })
+    store.applySnapshot("a1", [])
+    expect(store.get("a1")).toHaveLength(0)
+  })
+
   test("agent.updated updates store state and notifies listeners", async () => {
     const store = new ConversationStore()
     let notified = 0

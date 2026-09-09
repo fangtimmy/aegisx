@@ -313,13 +313,14 @@ export class ConversationStore {
       return
     }
     if (event.type === "message.committed") {
-      // Between reset() and the next snapshot the committed map was truncated
-      // server-side; a commit landing in that window predates the truncation
-      // (the agent is idle, new turns need an explicit send) and would ghost
-      // as a row no later snapshot will ever contain.
-      if (
-        this.snapshotEpochs.get(event.agentId) !== this.epochOf(event.agentId)
-      ) {
+      // A commit predating an APPLIED snapshot of an OLDER generation belongs
+      // to the pre-reset world (the committed map was truncated server-side)
+      // and would ghost as a row no later snapshot contains — drop it. Commits
+      // arriving before the FIRST snapshot belong to the current generation
+      // and must be kept; reset() leaves the stale snapshotEpochs entry in
+      // place, so the reset-window guard still fires after it.
+      const applied = this.snapshotEpochs.get(event.agentId)
+      if (applied !== undefined && applied !== this.epochOf(event.agentId)) {
         return
       }
       const stored = this.messages.get(event.agentId) ?? new Map()
