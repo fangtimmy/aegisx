@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises"
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challengeRemote, challenges, type eventPlatforms } from "../db/schema"
@@ -39,7 +39,12 @@ export function createPlatformTargets(
     const rows = db
       .select()
       .from(challengeRemote)
-      .where(eq(challengeRemote.sourceKey, platform.sourceKey))
+      .where(
+        and(
+          eq(challengeRemote.eventId, eventId),
+          eq(challengeRemote.sourceKey, platform.sourceKey)
+        )
+      )
       .all()
       .filter(isTargetCapable)
     for (const target of rows) {

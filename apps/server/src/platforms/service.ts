@@ -263,7 +263,12 @@ export function createPlatformService(
     db.transaction((tx) => {
       tx.update(challengeRemote)
         .set({ available: false })
-        .where(eq(challengeRemote.sourceKey, platform.sourceKey))
+        .where(
+          and(
+            eq(challengeRemote.eventId, eventId),
+            eq(challengeRemote.sourceKey, platform.sourceKey)
+          )
+        )
         .run()
       tx.delete(eventPlatforms).where(eq(eventPlatforms.eventId, eventId)).run()
     })
