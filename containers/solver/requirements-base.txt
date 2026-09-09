@@ -1,0 +1,15 @@
+# base-stage venv (shared by minimal/essential/full). Consumed by the base
+# stage of containers/solver/Dockerfile.
+# Pins freeze latest stable as of 2026-09; bumping is deliberate.
+pwntools==4.15.0
+requests==2.34.2
+pycryptodome==3.23.0
+pycryptodomex==3.23.0
+gmpy2==2.3.1
+sympy==1.14.0
+z3-solver==5.1.0.0
+capstone==5.0.9
+ropper==1.13.13
+ropgadget==7.7
+pyelftools==0.33
+scapy==2.7.0

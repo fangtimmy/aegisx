@@ -1,0 +1,14 @@
+# full-tier heavy venv additions. Consumed by the full stage of
+# containers/solver/Dockerfile.
+# Pins freeze latest stable as of 2026-09; bumping is deliberate.
+numpy==2.5.3
+scipy==1.18.1
+opencv-python-headless==5.0.0.93
+angr==9.3.4
+playwright==1.62.0
+volatility3==2.28.0
+pyshark==0.6
+bloodyAD==2.5.5
+certipy-ad==5.1.0
+coercer==2.4.3
+pypykatz==0.6.13

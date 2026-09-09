@@ -45,11 +45,10 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     ln -sf /usr/bin/fdfind /usr/local/bin/fd
 
 RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
+    --mount=type=bind,src=containers/solver/requirements-base.txt,target=/tmp/requirements.txt \
     python3.13 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip && \
-    /opt/venv/bin/pip install \
-      pwntools requests pycryptodome pycryptodomex gmpy2 sympy z3-solver \
-      capstone ropper ropgadget pyelftools scapy && \
+    /opt/venv/bin/pip install -r /tmp/requirements.txt && \
     ln -sfn /opt/venv/bin/python3 /usr/local/bin/python3 && \
     ln -sfn /opt/venv/bin/python /usr/local/bin/python && \
     mkdir -p /opt/solver/knowledges /opt/solver/tools
@@ -99,8 +98,9 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     rm -rf /usr/share/seclists/Fuzzing && \
     rm -rf /usr/share/seclists/Passwords /usr/share/seclists/Miscellaneous /usr/share/seclists/Usernames
 
+# gem versions pinned to latest stable as of 2026-09; bumping is deliberate.
 RUN gem sources --add https://mirrors.ustc.edu.cn/rubygems/ --remove https://rubygems.org/ && \
-    gem install --no-document one_gadget zsteg
+    gem install --no-document one_gadget:2.1.1 zsteg:0.2.14
 
 # wsrx · katana · naabu · dalfox · cloudfox · kerbrute · bkcrack · dddd · fscan · pwninit
 RUN --mount=type=cache,id=solver-downloads,target=/var/cache/solver/downloads,sharing=locked \
@@ -130,11 +130,8 @@ RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked
 
 # === Python venv additions ===
 RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
-    /opt/venv/bin/pip install \
-      pillow pefile lief fpylll uncompyle6 pyzbar pypdf pdfminer.six \
-      mnemonic base58 eth-account pysmx gmssl mido \
-      impacket ldap3 git-dumper mitmproxy \
-      cryptography pyOpenSSL pyjwt flask-unsign cysignals setuptools yara-x
+    --mount=type=bind,src=containers/solver/requirements-essential.txt,target=/tmp/requirements.txt \
+    /opt/venv/bin/pip install -r /tmp/requirements.txt
 
 # === pycdc (py3.9+ bytecode decompiler; uncompyle6 tops out at 3.8) ===
 RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked \
@@ -199,10 +196,8 @@ RUN PWNDBG_GDBINIT=$(find / -name "gdbinit.py" -path "*pwndbg*" 2>/dev/null | he
 
 # === Python venv additions (heavy) ===
 RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
-    /opt/venv/bin/pip install \
-      numpy scipy opencv-python-headless \
-      angr playwright volatility3 pyshark \
-      bloodyAD certipy-ad coercer pypykatz
+    --mount=type=bind,src=containers/solver/requirements-full.txt,target=/tmp/requirements.txt \
+    /opt/venv/bin/pip install -r /tmp/requirements.txt
 
 # === Playwright Chromium ===
 # Browsers download into the cache mount (network skip on rebuilds) and are
@@ -248,8 +243,8 @@ RUN --mount=type=cache,id=solver-apt,target=/var/cache/apt,sharing=locked \
     apt-get -y install --no-install-recommends time
 
 RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
-    /opt/venv/bin/pip install \
-      telnetlib3 gradio_client websockets pyyaml aiohttp pymysql
+    --mount=type=bind,src=containers/solver/requirements-full-extras.txt,target=/tmp/requirements.txt \
+    /opt/venv/bin/pip install -r /tmp/requirements.txt
 
 # Wordlist name aliases: agents consistently ask for the seclists canonical
 # names, while the image ships the DirBuster-2007_* / xato-net-* variants.

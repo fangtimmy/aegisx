@@ -34,17 +34,16 @@ COPY package.json bun.lock ./
 COPY apps/shared/package.json apps/shared/
 COPY apps/web/package.json apps/web/
 COPY apps/server/package.json apps/server/
-# --trust: cpu-features/ssh2 postinstall must run so their native bindings
-# exist for bun build to pick up as assets (host installs get them, bare
-# containers do not). Mutually exclusive with --frozen-lockfile; bun.lock
-# still pins the versions.
-RUN bun install --trust
+# --frozen-lockfile installs exactly the bun.lock versions — required for the
+# offline-eval image to be reproducible (a plain install would re-resolve the
+# semver ranges at build time).
+RUN bun install --frozen-lockfile
 COPY apps/shared apps/shared
 COPY apps/server/src apps/server/src
 COPY apps/server/drizzle apps/server/drizzle
-# Optional native deps (cpu-features, ssh2) ship no prebuilt in a bare
-# container, and their install scripts can't run here — but bun build must
-# RESOLVE their `require('../build/Release/*.node')` to emit the asset.
+# cpu-features/ssh2 (optional native deps of docker-modem) normally build their
+# build/Release/*.node bindings in postinstall scripts, which --frozen-lockfile
+# skips — but bun build must RESOLVE those require() paths to emit the asset.
 # Placeholder files keep resolution happy; at runtime these code paths are
 # never hit (same as the allinone image, which also ships without them).
 RUN set -eux; \
