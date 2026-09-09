@@ -4,15 +4,16 @@
 # evaluation: no runtime network beyond the platform VPN, so every tool the
 # 2026-09-08 full run actually used ships in the image.
 #
-# Tuned defaults are applied at build time by rewriting three source files
-# (tuning.sed) before the server is bundled — no env/config plumbing needed:
-#   - bootstrap event promptHint → TSecBench platform brief
-#   - scheduler_config defaults → maxConcurrentTargets 3, stopSubmitterOnSolve true
-#   - settings default run timeout → 30min (most solves land in minutes; the
+# Tuning ships as DATA, not build-time source rewrites: preset.json is copied
+# to /opt/aegisx-preset/preset.json and applied by bootstrap on first boot —
+#   - promptHint: TSecBench platform brief (flag format, category=difficulty,
+#     target semantics, 409 backoff, offline discipline, scan scoping)
+#   - settings: default run timeout 30min (most solves land in minutes; the
 #     orchestrator still sets per-spawn deadlines per difficulty)
+#   - scheduler: maxConcurrentTargets 3, stopSubmitterOnSolve true
 #
 #   docker buildx build -f containers/tsecbench/Dockerfile \
-#     --platform linux/amd64 -t aegisx/tsecbench:v6 .
+#     --platform linux/amd64 -t aegisx/tsecbench:v7 .
 
 # === web build (vite) ========================================================
 FROM oven/bun:1.4 AS web-builder
@@ -41,12 +42,6 @@ RUN bun install --trust
 COPY apps/shared apps/shared
 COPY apps/server/src apps/server/src
 COPY apps/server/drizzle apps/server/drizzle
-# TSecBench tuning: rewrite before bundling (see file header).
-COPY containers/tsecbench/tuning.sed /tmp/tuning.sed
-RUN sed -i -f /tmp/tuning.sed \
-      apps/server/src/bootstrap.ts \
-      apps/server/src/run/scheduler-admin.ts \
-      apps/shared/settings-schema.ts
 # Optional native deps (cpu-features, ssh2) ship no prebuilt in a bare
 # container, and their install scripts can't run here — but bun build must
 # RESOLVE their `require('../build/Release/*.node')` to emit the asset.
@@ -110,12 +105,15 @@ RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
 # whole (text, compresses well, breadth beats curation when offline) plus the
 # referenced password lists; prune the rest. qemu-user ships ~20 emulators at
 # ~15MB each; keep x86/i386/arm/aarch64 plus mips/mipsel (embedded firmware).
+# exploitdb/ghidra: cut in v4-v6 on the <1GB budget, restored on the 3GB one —
+# both were real solve-path attempts on the 2026-09-08 run (searchsploit on
+# c-01/b-02/c-09, ghidra-analyze on f2-05's custom-VM binary).
 RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=tsec-apt-lists,target=/var/lib/apt/lists,sharing=locked \
     apt-get update -qq && \
     apt-get -y install --no-install-recommends \
       nmap masscan ffuf gobuster feroxbuster dirsearch wfuzz sqlmap hydra nikto \
-      chisel whatweb nuclei \
+      chisel whatweb nuclei exploitdb \
       radare2 binwalk upx-ucl checksec \
       default-mysql-client php-cli php-mysql php-curl php-xml \
       qemu-user-binfmt tesseract-ocr seclists wordlists && \
@@ -149,12 +147,16 @@ RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
     rm -rf /var/lib/apt/lists/*
 
 # Offline rev helper: jdb needs a full JDK (c-04's solve path attaches to a
-# Java debug port).
+# Java debug port); ghidra covers the headless-decompile path (custom VM
+# binaries), exposed as ghidra-analyze — the name agents actually reach for.
 RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=tsec-apt-lists,target=/var/lib/apt/lists,sharing=locked \
     apt-get update -qq && \
-    apt-get -y install --no-install-recommends openjdk-21-jdk-headless && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get -y install --no-install-recommends openjdk-21-jdk-headless ghidra && \
+    A=$(find /usr/share/ghidra -name analyzeHeadless 2>/dev/null | head -1) && \
+    ln -sf "$A" /usr/local/bin/ghidra-analyze && \
+    rm -rf /var/lib/apt/lists/* && \
+    test -x /usr/local/bin/ghidra-analyze
 
 # Python venv: the pwn/crypto stack + symbolic execution (angr) + the client
 # libs the run missed (telnetlib was dropped from py3.13; AI-service targets
@@ -179,6 +181,7 @@ COPY --from=web-builder /app/apps/web/dist /opt/aegisx-web
 COPY apps/sdk/python /opt/aegisx-sdk
 COPY --from=knowledges /opt/solver/knowledges /opt/solver/knowledges
 COPY --from=knowledges /opt/nuclei-templates /usr/share/nuclei-templates
+COPY containers/tsecbench/preset.json /opt/aegisx-preset/preset.json
 
 # Environment doc: build-time self-introspection, then replace the networked
 # "install SOP" section — this image runs disconnected.

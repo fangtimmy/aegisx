@@ -2,13 +2,27 @@
 
 ## 状态：已构建并验证（2026-09-09）
 
-最终产物 `aegisx/tsecbench:v6`：**未压缩 3.06GB，gzip 压缩后 965MB**（达标 <1GB）。
-实现落在 `containers/tsecbench/`（Dockerfile + tuning.sed + README），使用方式见该
-README。以下计划正文保留作为决策记录。
+最终产物 `aegisx/tsecbench:v7`（体积上限放宽到 3GB 压缩）。实现落在
+`containers/tsecbench/`（Dockerfile + preset.json + README），使用方式见该 README。
+以下计划正文保留作为决策记录。
 
 ## 关键实施记录
 
-- **v6（五方运行数据对比驱动，同日）**：相对 full 档的裁剪回摆——apt 补
+- **v7（注入机制重构）**：废弃 tuning.sed（构建期 sed 改写源码把提示词文本硬编码在
+  Dockerfile 里）。调优改为 **JSON preset**：镜像带 `/opt/aegisx-preset/preset.json`
+  （promptHint / settings / scheduler 三段），bootstrap 首启时读取落库——settings
+  漂移收敛、promptHint 建赛事时写入（已非空不覆盖）、scheduler 策略仅首建应用；
+  文件缺失/损坏仅记日志跳过。回归测试 `test/bootstrap.test.ts`。
+- **v7（提示词审查）**：修复通用/特调双场景的自相矛盾——solver 的「缺工具→安装
+  SOP」指向在离线镜像不成立，改为指向 ENVIRONMENT.md 的可用性说明（漂移守卫测试
+  同步更新）；编排者模板补 `{{event.promptHint}}` 渲染（此前 promptHint 传了上下文
+  却无处渲染）；「两次失败换假设」与「VM 判 decoy 须穷举解码」的边界写明；ENQUEUE_ALL
+  预填队列与「勿超并发入队」的张力显式化；解出清理文案不再与解出即停冲突。
+  solver 通用打法新增**扫描纪律**条（实测出现过扫宿主内网的偏航）。
+- **v7（体积预算放宽至 3GB 压缩）**：恢复 exploitdb/searchsploit 与 ghidra
+  （kali 官方包，`ghidra-analyze` symlink 对齐 agent 的肌肉记忆）——两者都是
+  2026-09-08 跑批中的真实解题尝试路径。
+- **v6（五方运行数据对比驱动）**：相对 full 档的裁剪回摆——apt 补
   `nuclei`/`chisel`/`whatweb`，内置 nuclei-templates（1.3 万 yaml，剪去
   head/javascript/helpers 引擎目录，`~/nuclei-templates` symlink 供离线自动发现）。
   依据：五份公开 run 全部有公网且已知产品 CVE+现成 PoC 是 c/b 系列主路径
@@ -17,8 +31,8 @@ README。以下计划正文保留作为决策记录。
   通用打法块（先指纹后利用→本地 PoC 索引、内网横向默认口令、检测评分端点差分
   还原+内核级绕过、自定义 VM 判 decoy 前必须写解码器、shell 后扫标准 flag 位置）；
   编排者加按难度的 `timeout_ms` 预算分级（10-15/30-45/60-90min）。
-- **v6 tuning.sed 第四项**：settings 默认任务超时 60min→30min（59 题中位 1.8min
-  解出、agent 有效工作 p90≈20min；编排者逐 spawn 覆盖不受影响）。
+- **v6 tuning.sed 第四项**（已被 v7 preset 取代）：settings 默认任务超时 60min→30min
+  （59 题中位 1.8min 解出、agent 有效工作 p90≈20min；编排者逐 spawn 覆盖不受影响）。
 - **v5（对 v4 的评审修复）**：修复出厂缺陷 `PYTHONPATH=/opt/aegisx-sdk`
   缺失——local backend 的 bash 继承 server 进程 env，v4 里 `import aegisx`
   全体失败（solver:minimal 镜像有此 ENV，tsecbench 漏了）；venv 补
