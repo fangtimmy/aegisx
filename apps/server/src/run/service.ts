@@ -14,6 +14,7 @@ import {
   formatModelRef,
   get,
   isActiveAgentStatus,
+  isTerminalAgentStatus,
   LIVE_AGENT_STATUSES,
 } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
@@ -302,16 +303,45 @@ export function createAgentService(options: AgentServiceOptions) {
   let schedulerAdmin!: SchedulerAdmin
   let queue: QueueService | undefined
 
-  /** Force terminal after a timeout grace: dispose the stuck session and
-   * mark the agent aborted (the shared container is NEVER killed). */
-  function forceAbortAgent(agentId: string): void {
+  /** The ONE terminal-settle path (timeout force-abort, finish_run
+   * self-termination, close, finish, delete): abort (only when the caller
+   * is a user-driven close — the timeout and self-termination paths have a
+   * turn that is already dead), dispose the session, drop the deadline
+   * timers + finish bookkeeping, land the terminal status (the status core
+   * forgets the agent's bus snapshots), then run any delete-only teardown. */
+  async function settleAgent(
+    agentId: string,
+    opts: {
+      abort: boolean
+      status: "completed" | "aborted" | "failed"
+      summary?: string
+      event?: "agent.finished"
+      actor?: "user" | "scheduler"
+      afterSettle?: () => void
+    }
+  ): Promise<void> {
     const session = lifecycle.get(agentId)
+    if (opts.abort) await abortSessionBounded(session)
     if (session) {
       void session.dispose()
       lifecycle.delete(agentId)
     }
-    status.terminalizeAgent(agentId, { status: "aborted" })
-    bus.forget([agentId])
+    deadlines.clearAgentTimers(agentId)
+    pendingFinish.delete(agentId)
+    finishFlagWarned.delete(agentId)
+    status.terminalizeAgent(agentId, {
+      status: opts.status,
+      summary: opts.summary,
+      event: opts.event,
+      actor: opts.actor,
+    })
+    opts.afterSettle?.()
+  }
+
+  /** Force terminal after a timeout grace: dispose the stuck session and
+   * mark the agent aborted (the shared container is NEVER killed). */
+  function forceAbortAgent(agentId: string): void {
+    void settleAgent(agentId, { abort: false, status: "aborted" })
   }
 
   /** Close paths must never hang on `session.abort()`: pi's abort does not
@@ -341,15 +371,8 @@ export function createAgentService(options: AgentServiceOptions) {
       if (pending !== undefined) {
         // finish_run's graceful self-termination: dispose the session and
         // land the agent terminal with its summary.
-        pendingFinish.delete(agentId)
-        finishFlagWarned.delete(agentId)
-        const session = lifecycle.get(agentId)
-        if (session) {
-          void session.dispose()
-          lifecycle.delete(agentId)
-        }
-        deadlines.clearAgentTimers(agentId)
-        status.terminalizeAgent(agentId, {
+        void settleAgent(agentId, {
+          abort: false,
           status: "completed",
           summary: pending,
           event: "agent.finished",
@@ -451,34 +474,15 @@ export function createAgentService(options: AgentServiceOptions) {
    * aborted. Files and the DB session survive (reopen on demand). */
   async function closeAgent(agentId: string): Promise<AgentSummary> {
     const agent = requireAgent(agentId)
-    if (
-      agent.status === "completed" ||
-      agent.status === "aborted" ||
-      agent.status === "failed"
-    ) {
+    if (isTerminalAgentStatus(agent.status)) {
       throw new RunActionError("invalid_state", "Agent is already closed")
     }
     await withLock(agentId, async () => {
       const current = queries.getAgentRow(agentId)
-      if (
-        current &&
-        (current.status === "completed" ||
-          current.status === "aborted" ||
-          current.status === "failed")
-      ) {
+      if (current && isTerminalAgentStatus(current.status)) {
         throw new RunActionError("invalid_state", "Agent is already closed")
       }
-      const session = lifecycle.get(agentId)
-      await abortSessionBounded(session)
-      if (session) {
-        void session.dispose()
-        lifecycle.delete(agentId)
-      }
-      deadlines.clearAgentTimers(agentId)
-      pendingFinish.delete(agentId)
-      finishFlagWarned.delete(agentId)
-      status.terminalizeAgent(agentId, { status: "aborted" })
-      bus.forget([agentId])
+      await settleAgent(agentId, { abort: true, status: "aborted" })
     })
     return requireAgent(agentId)
   }
@@ -493,34 +497,22 @@ export function createAgentService(options: AgentServiceOptions) {
   ): Promise<AgentSummary> {
     const agent = requireAgent(agentId)
     if (agent.status === "completed") return agent
-    if (agent.status === "aborted" || agent.status === "failed") {
+    if (isTerminalAgentStatus(agent.status)) {
       throw new RunActionError("invalid_state", "Agent is already closed")
     }
     return withLock(agentId, async () => {
       const current = queries.getAgentRow(agentId)
       if (current?.status === "completed") return requireAgent(agentId)
-      if (
-        current &&
-        (current.status === "aborted" || current.status === "failed")
-      ) {
+      if (current && isTerminalAgentStatus(current.status)) {
         throw new RunActionError("invalid_state", "Agent is already closed")
       }
-      const session = lifecycle.get(agentId)
-      await abortSessionBounded(session)
-      if (session) {
-        void session.dispose()
-        lifecycle.delete(agentId)
-      }
-      deadlines.clearAgentTimers(agentId)
-      pendingFinish.delete(agentId)
-      finishFlagWarned.delete(agentId)
-      status.terminalizeAgent(agentId, {
+      await settleAgent(agentId, {
+        abort: true,
         status: "completed",
         summary,
         event: "agent.finished",
         actor,
       })
-      bus.forget([agentId])
       return requireAgent(agentId)
     })
   }
@@ -819,22 +811,17 @@ export function createAgentService(options: AgentServiceOptions) {
     await withLock(agentId, async () => {
       const row = queries.getAgentRow(agentId)
       if (!row) throw new RunActionError("not_found", "Agent not found")
-      const session = lifecycle.get(agentId)
-      await abortSessionBounded(session)
-      if (session) {
-        void session.dispose()
-        lifecycle.delete(agentId)
-      }
-      deadlines.clearAgentTimers(agentId)
-      pendingFinish.delete(agentId)
-      finishFlagWarned.delete(agentId)
-      status.terminalizeAgent(agentId, { status: "aborted" })
-      channels.cleanupAgentChannels(agentId)
-      bus.forget([agentId])
-      if (row.role === "orchestrator") {
-        containerLifecycle.removeContainer(orchestratorKey(row.eventId))
-      }
-      db.delete(agents).where(eq(agents.id, agentId)).run()
+      await settleAgent(agentId, {
+        abort: true,
+        status: "aborted",
+        afterSettle: () => {
+          channels.cleanupAgentChannels(agentId)
+          if (row.role === "orchestrator") {
+            containerLifecycle.removeContainer(orchestratorKey(row.eventId))
+          }
+          db.delete(agents).where(eq(agents.id, agentId)).run()
+        },
+      })
     })
   }
 
@@ -1335,20 +1322,25 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Remove a challenge's workspace tree (agents/ shared/ attachments/
-   * sessions/ runtime/) — called on challenge deletion. Idempotent. */
+   * sessions/ runtime/) — called on challenge deletion. The deletion routes
+   * refuse while live agents exist on the challenge, so evicting the cached
+   * workspace context + shared container alongside the tree is safe. */
   function deleteChallengeWorkspace(
     eventId: string,
     challengeId: string
   ): void {
+    factory.forgetWorkspace({ eventId, challengeId })
+    containerLifecycle.removeContainer(challengeId)
     rmSync(challengeRoot(dataDir, eventId, challengeId), {
       recursive: true,
       force: true,
     })
   }
 
-  /** Remove the orchestrator workspace tree — called on event deletion /
-   * scheduler reset. Idempotent. */
+  /** Remove the orchestrator workspace tree — called on event deletion. */
   function deleteSchedulerWorkspace(eventId: string): void {
+    factory.forgetWorkspace({ eventId, challengeId: null })
+    containerLifecycle.removeContainer(orchestratorKey(eventId))
     rmSync(orchestratorRoot(dataDir, eventId), {
       recursive: true,
       force: true,
@@ -1364,10 +1356,7 @@ export function createAgentService(options: AgentServiceOptions) {
       .where(eq(challenges.eventId, eventId))
       .all()
     for (const { id } of challengeRows) {
-      rmSync(challengeRoot(dataDir, eventId, id), {
-        recursive: true,
-        force: true,
-      })
+      deleteChallengeWorkspace(eventId, id)
     }
     deleteSchedulerWorkspace(eventId)
   }

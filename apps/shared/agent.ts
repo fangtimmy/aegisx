@@ -72,6 +72,7 @@ export type AgentDetail = {
 export {
   isAgentStatus,
   isActiveAgentStatus,
+  isTerminalAgentStatus,
   LIVE_AGENT_STATUSES,
 } from "./domain"
 export type { AgentStatus } from "./domain"

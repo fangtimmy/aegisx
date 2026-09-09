@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 import type { FlatSettings, ModelRef } from "@aegisx/shared"
-import { get, isActiveAgentStatus } from "@aegisx/shared"
+import { get, isActiveAgentStatus, isTerminalAgentStatus } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { and, eq, inArray, ne } from "drizzle-orm"
@@ -395,6 +395,20 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       return Promise.resolve()
     }
     return refreshWorkspaceRuntime(workspaceKey)
+  }
+
+  /** Evict a deleted workspace's in-memory state (challenge / event
+   * deletion): the cached WorkspaceContext holds a live ModelRuntime
+   * pointing at the removed rootDir, and a pending build/refresh would
+   * resurrect it. A later spawn on the workspace rebuilds from scratch. */
+  function forgetWorkspace(row: {
+    eventId: string
+    challengeId: string | null
+  }): void {
+    const key = workspaceKeyOf(row)
+    contexts.delete(key)
+    building.delete(key)
+    runtimeRefreshes.delete(key)
   }
 
   /** Get-or-create the workspace's container (registry + isRunning check
@@ -845,10 +859,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
   async function resumeAgent(agentId: string): Promise<void> {
     const row = queries.getAgentRow(agentId)
     if (!row) throw new RunActionError("not_found", "Agent not found")
-    const reopen =
-      row.status === "completed" ||
-      row.status === "aborted" ||
-      row.status === "failed"
+    const reopen = isTerminalAgentStatus(row.status)
     await prepareAgent(agentId)
     if (reopen) {
       updateAgent(agentId, { status: "idle", updatedAt: now() })
@@ -918,6 +929,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     ensureContainerFor,
     refreshWorkspaceRuntime,
     ensureWorkspaceRuntimeFresh,
+    forgetWorkspace,
     workspaceKeyOf,
     rootDirOf,
   }

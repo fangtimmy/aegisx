@@ -126,9 +126,11 @@ export function createAgentStatus(deps: AgentStatusDeps) {
   }
 
   /** Terminal transition shared by finish_run (settle path), the HTTP
-   * finish, close, and the timeout force-abort: stamp the row, release the
-   * queue item, emit. The caller handles session disposal/abort before
-   * this. */
+   * finish, close, the timeout force-abort, and the spawn-failure landing:
+   * stamp the row, release the queue item, emit, and forget the agent's
+   * live-bus snapshots (context/queue/activity/running tools — a terminal
+   * agent has nothing in flight to replay). The caller handles session
+   * disposal/abort before this. */
   function terminalizeAgent(
     agentId: string,
     opts: {
@@ -149,6 +151,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
     if (opts.summary !== undefined) patch.summary = opts.summary
     updateAgent(agentId, patch)
     emitAgent(agentId)
+    bus.forget([agentId])
     const row = queries.getAgentRow(agentId)
     deps.queue()?.markDone(row?.queueItemId, agentId)
     deps.queue()?.scheduleDrain()

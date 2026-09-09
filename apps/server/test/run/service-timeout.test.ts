@@ -125,6 +125,14 @@ describe("agent timeout", () => {
         dir,
         false
       )
+      // A connected SSE tab's replay snapshots exist before the fire…
+      agentService.bus.emit(agent.id, {
+        type: "queue.updated",
+        agentId: agent.id,
+        steering: ["x"],
+        followUp: [],
+      })
+      expect(agentService.bus.getQueue(agent.id)).toBeDefined()
       await wait(150)
 
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
@@ -134,6 +142,9 @@ describe("agent timeout", () => {
       // v19 red line: the agent is terminal, but the challenge's shared
       // container survives (only the idle sweep may reclaim it).
       expect(killed).toEqual([])
+      // …and the force-abort settle forgot them (no terminal agent keeps
+      // live-bus state around).
+      expect(agentService.bus.getQueue(agent.id)).toBeUndefined()
       await agentService.close()
     } finally {
       close()

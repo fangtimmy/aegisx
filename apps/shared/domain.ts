@@ -106,6 +106,10 @@ export function isActiveAgentStatus(status: string): boolean {
   return LIVE_AGENT_STATUSES.some((live) => live === status)
 }
 
+export function isTerminalAgentStatus(status: string): boolean {
+  return status === "completed" || status === "aborted" || status === "failed"
+}
+
 export type ThinkingLevel =
   | "off"
   | "minimal"

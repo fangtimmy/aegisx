@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
+import type { AgentHostInput } from "../../src/agents/host"
 import { agents } from "../../src/db/schema"
 import { createAgentService } from "../../src/run/service"
 import {
@@ -131,6 +132,94 @@ describe("terminal lifecycle + pendingFinish (v19, no atomic flag)", () => {
       const finished = await service.finishAgent(agent.id, "final summary")
       expect(finished.status).toBe("completed")
       expect(finished.summary).toBe("final summary")
+      await service.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a finish_run self-settle forgets the agent's live-bus snapshots", async () => {
+    const { db, dir, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
+      const provider = makeProvider()
+      const { manager } = stubContainerManager()
+      // The stub turn executes finish_run (call 1 warns — no accepted flag
+      // yet; call 2 sets the pendingFinish intent), then parks until the
+      // test releases it so the settle lands deterministically after the
+      // snapshot assertions below.
+      let releaseTurn!: () => void
+      const turnReleased = new Promise<void>((r) => (releaseTurn = r))
+      const service = createAgentService({
+        db,
+        dataDir: dir,
+        containerManager: manager,
+        platformService: refine({
+          submitFlag: async () => undefined,
+          targetAction: async () => ({
+            status: "running",
+            endpoints: [],
+            expiresAt: null,
+          }),
+        }),
+        configStore: stubConfigStore([provider]),
+        getSettings: flatSettingsWithDefaultModel,
+        createHost: mock(async (input: AgentHostInput) => {
+          const finish = input.extraTools?.find(
+            (tool) => tool.name === "finish_run"
+          )
+          if (!finish) throw new Error("finish_run tool missing")
+          const execute = refine<{
+            execute: (
+              id: string,
+              params: { summary: string }
+            ) => Promise<unknown>
+          }>(finish).execute
+          const stub = stubHostAgentSession("sess-finish")
+          const sdk = refine<{ prompt: (text: string) => Promise<void> }>(
+            stub.session
+          )
+          sdk.prompt = async () => {
+            await execute("call", { summary: "first" })
+            await execute("call", { summary: "solved it" })
+            await turnReleased
+          }
+          return stub
+        }),
+      })
+      const agent = await service.spawn({
+        eventId: "evt-1",
+        challengeId: "ch-1",
+      })
+      // Replay snapshots a freshly connected SSE tab would receive…
+      service.bus.emit(agent.id, {
+        type: "context.updated",
+        agentId: agent.id,
+        tokens: 1,
+        contextWindow: 128_000,
+        percent: 0,
+        cacheHitRate: null,
+        totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      })
+      service.bus.emit(agent.id, {
+        type: "queue.updated",
+        agentId: agent.id,
+        steering: ["x"],
+        followUp: [],
+      })
+      expect(service.bus.getContext(agent.id)).toBeDefined()
+      expect(service.bus.getQueue(agent.id)).toBeDefined()
+      releaseTurn()
+
+      // …the self-settle lands completed with its summary AND the snapshots
+      // are forgotten — a terminal agent leaves nothing on the live bus.
+      await new Promise((r) => setTimeout(r, 20))
+      const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
+      expect(row.status).toBe("completed")
+      expect(row.summary).toBe("solved it")
+      expect(service.bus.getContext(agent.id)).toBeUndefined()
+      expect(service.bus.getQueue(agent.id)).toBeUndefined()
       await service.close()
     } finally {
       close()
