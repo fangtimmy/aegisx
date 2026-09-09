@@ -1,5 +1,4 @@
 import type { AgentUsage, ChallengeFlag, MessageList } from "@aegisx/shared"
-import { isActiveAgentStatus } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
 
@@ -16,60 +15,28 @@ import {
   sessionEntries,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
-import { type ChallengeMeta, toAgentSummary, toFlagPublic } from "./public"
+import { collapseToAttempts, toFlagPublic } from "../platforms/wire"
+import { type ChallengeMeta, toAgentSummary } from "./public"
 
 export type AgentQueries = ReturnType<typeof createAgentQueries>
-
-/** Collapse raw agent rows into real dispatch attempts: every agent row a
- * queue item spawned shares that item's queueItemId (a re-launch after a
- * crash-recovery reset, or a ghost replay), and to a scheduler reading
- * "prior attempts" those extra rows read as independent failures. One
- * representative per queue item (running > live > newest); direct spawns
- * (no queue item) each count as their own attempt. */
-export function collapseToAttempts(
-  rows: Array<typeof agents.$inferSelect>
-): Array<typeof agents.$inferSelect> {
-  const byItem = new Map<string, Array<typeof agents.$inferSelect>>()
-  const direct: Array<typeof agents.$inferSelect> = []
-  for (const row of rows) {
-    if (row.queueItemId) {
-      const group = byItem.get(row.queueItemId)
-      if (group) group.push(row)
-      else byItem.set(row.queueItemId, [row])
-    } else {
-      direct.push(row)
-    }
-  }
-  const representatives = [...byItem.values()].map(
-    (group) =>
-      group.toSorted(
-        (a, b) =>
-          attemptRank(b) - attemptRank(a) ||
-          (a.createdAt < b.createdAt ? 1 : -1)
-      )[0]
-  )
-  return [...representatives, ...direct].toSorted((a, b) =>
-    a.createdAt === b.createdAt
-      ? a.id < b.id
-        ? -1
-        : 1
-      : a.createdAt < b.createdAt
-        ? -1
-        : 1
-  )
-}
-
-/** Representative preference within one queue item's rows. */
-function attemptRank(row: typeof agents.$inferSelect): number {
-  if (row.status === "running") return 3
-  return isActiveAgentStatus(row.status) ? 2 : 1
-}
 
 export function createAgentQueries(options: { db: Database }) {
   const { db } = options
 
   function getAgentRow(agentId: string) {
     return db.select().from(agents).where(eq(agents.id, agentId)).get()
+  }
+
+  /** Single-challenge metadata ({eventId, name}) for run-side orchestration
+   * lookups (flag notices, solve cleanup, halt). */
+  function getChallengeMeta(
+    challengeId: string
+  ): { eventId: string; name: string } | undefined {
+    return db
+      .select({ eventId: challenges.eventId, name: challenges.name })
+      .from(challenges)
+      .where(eq(challenges.id, challengeId))
+      .get()
   }
 
   function challengeMeta(
@@ -237,6 +204,7 @@ export function createAgentQueries(options: { db: Database }) {
 
   return {
     getAgentRow,
+    getChallengeMeta,
     getAgent,
     listAgents,
     schedulerAgentRow,

@@ -21,10 +21,11 @@ import {
   spawnQueue,
 } from "../db/schema"
 import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
+import { collapseToAttempts } from "../platforms/wire"
 import { RunActionError } from "./errors"
 import { fenceSnapshot } from "./fence"
 import type { ModelResolver } from "./model-resolver"
-import { collapseToAttempts, type AgentQueries } from "./queries"
+import type { AgentQueries } from "./queries"
 import {
   type NextTaskPolicy,
   type SchedulerPolicy,

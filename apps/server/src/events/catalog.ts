@@ -26,8 +26,7 @@ import {
   type ChallengeRemote,
 } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
-import { toFlagPublic } from "../run/public"
-import { collapseToAttempts } from "../run/queries"
+import { collapseToAttempts, toFlagPublic } from "../platforms/wire"
 
 type PlatformService = ReturnType<typeof createPlatformService>
 

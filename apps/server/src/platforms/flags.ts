@@ -22,6 +22,7 @@ import {
   type SubmissionResult,
 } from "./core"
 import { PlatformActionError, platformError } from "./errors"
+import { toFlagPublic } from "./wire"
 
 type StoredPlatform = typeof eventPlatforms.$inferSelect
 
@@ -45,21 +46,6 @@ export type FlagAcceptOutcome =
   /** A fresh flag value on an already-solved challenge (一题多解 / dynamic
    * flags): record + a light notice, no cleanup round. */
   | "extra"
-
-function toPublic(row: typeof challengeFlags.$inferSelect): ChallengeFlag {
-  return {
-    id: row.id,
-    challengeId: row.challengeId,
-    flag: row.flag,
-    status: row.status,
-    source: row.source,
-    agentId: row.agentId,
-    remoteId: row.remoteId,
-    message: row.message,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  }
-}
 
 /** Collapse an adapter verdict into a challenge_flags status. The adapter may
  * distinguish accepted/already_solved/partial, but at the flag level all three
@@ -123,7 +109,7 @@ export function createPlatformFlags(
       .where(eq(challengeFlags.challengeId, challengeId))
       .orderBy(asc(challengeFlags.createdAt), asc(challengeFlags.id))
       .all()
-      .map(toPublic)
+      .map(toFlagPublic)
   }
 
   function addManualFlag(challengeId: string, flag: string): ChallengeFlag {
@@ -138,7 +124,7 @@ export function createPlatformFlags(
           .run()
       }
       return {
-        ...toPublic(existing),
+        ...toFlagPublic(existing),
         status: "accepted",
         source: "manual",
         updatedAt: now,
@@ -158,7 +144,7 @@ export function createPlatformFlags(
       updatedAt: now,
     }
     db.insert(challengeFlags).values(row).run()
-    return toPublic({ ...row })
+    return toFlagPublic({ ...row })
   }
 
   function deleteFlag(challengeId: string, flagId: string): boolean {

@@ -1,7 +1,6 @@
-import type { ChallengeFlag } from "@aegisx/shared"
 import type { AgentSummary, ToolDefinitionSnapshot } from "@aegisx/shared/agent"
 
-import type { agents, challengeFlags } from "../db/schema"
+import type { agents } from "../db/schema"
 
 export type AgentRow = typeof agents.$inferSelect
 
@@ -11,23 +10,6 @@ export type ChallengeMeta = {
   name: string
   eventId: string
   targetSupported: boolean
-}
-
-export function toFlagPublic(
-  row: typeof challengeFlags.$inferSelect
-): ChallengeFlag {
-  return {
-    id: row.id,
-    challengeId: row.challengeId,
-    flag: row.flag,
-    status: row.status,
-    source: row.source,
-    agentId: row.agentId,
-    remoteId: row.remoteId,
-    message: row.message,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  }
 }
 
 export function toAgentSummary(

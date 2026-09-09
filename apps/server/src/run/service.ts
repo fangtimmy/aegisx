@@ -525,15 +525,7 @@ export function createAgentService(options: AgentServiceOptions) {
     closed: number
     cancelled: number
   }> {
-    const challenge = db
-      .select({
-        id: challenges.id,
-        eventId: challenges.eventId,
-        name: challenges.name,
-      })
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()
+    const challenge = queries.getChallengeMeta(challengeId)
     if (!challenge) throw new RunActionError("not_found", "Challenge not found")
     const live = db
       .select({ id: agents.id })
@@ -871,11 +863,7 @@ export function createAgentService(options: AgentServiceOptions) {
       })
     }
     if (outcome === "repeat") return
-    const eventId = db
-      .select({ eventId: challenges.eventId })
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()?.eventId
+    const eventId = queries.getChallengeMeta(challengeId)?.eventId
     if (!eventId) return
     const policy = schedulerPolicyFor(db, eventId)
     if (outcome === "extra") {
@@ -897,12 +885,7 @@ export function createAgentService(options: AgentServiceOptions) {
     challengeId: string,
     submitterAgentId: string | undefined
   ): void {
-    const name =
-      db
-        .select({ name: challenges.name })
-        .from(challenges)
-        .where(eq(challenges.id, challengeId))
-        .get()?.name ?? challengeId
+    const name = queries.getChallengeMeta(challengeId)?.name ?? challengeId
     const flag = latestAcceptedFlag(challengeId)
     const by = submitterAgentId
       ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
@@ -941,12 +924,7 @@ export function createAgentService(options: AgentServiceOptions) {
     submitterAgentId: string | undefined,
     policy: SchedulerPolicy
   ): void {
-    const name =
-      db
-        .select({ name: challenges.name })
-        .from(challenges)
-        .where(eq(challenges.id, challengeId))
-        .get()?.name ?? challengeId
+    const name = queries.getChallengeMeta(challengeId)?.name ?? challengeId
     const flag = latestAcceptedFlag(challengeId)
     const by = submitterAgentId
       ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
@@ -975,12 +953,8 @@ export function createAgentService(options: AgentServiceOptions) {
     message: string | null,
     submitterAgentId?: string
   ): void {
-    const name =
-      db
-        .select({ name: challenges.name })
-        .from(challenges)
-        .where(eq(challenges.id, challengeId))
-        .get()?.name ?? challengeId
+    const meta = queries.getChallengeMeta(challengeId)
+    const name = meta?.name ?? challengeId
     const confirmed = db
       .select({ flag: challengeFlags.flag })
       .from(challengeFlags)
@@ -996,12 +970,7 @@ export function createAgentService(options: AgentServiceOptions) {
       `多 flag 进度：「${name}」部分解出${message ? `（${message}）` : ""}。` +
       `已确认：${confirmed.join("、") || "（无）"}。` +
       `请专注剩余 flag；已确认的无需重复提交。`
-    const eventId = db
-      .select({ eventId: challenges.eventId })
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()?.eventId
-    if (eventId && schedulerPolicyFor(db, eventId).notifyTeamOnFlag) {
+    if (meta && schedulerPolicyFor(db, meta.eventId).notifyTeamOnFlag) {
       channels.post({
         channelKey: teamKey(challengeId),
         author: { type: "system" },
@@ -1012,9 +981,9 @@ export function createAgentService(options: AgentServiceOptions) {
         },
       })
     }
-    if (eventId) {
+    if (meta?.eventId) {
       postOrchNotice(
-        eventId,
+        meta.eventId,
         `部分解出：「${name}」${message ?? "多 flag 未集齐"}`
       )
     }
@@ -1044,18 +1013,9 @@ export function createAgentService(options: AgentServiceOptions) {
     submitterAgentId: string | undefined,
     policy: SchedulerPolicy
   ): void {
-    const eventId = db
-      .select({ eventId: challenges.eventId })
-      .from(challenges)
-      .where(eq(challenges.id, challengeId))
-      .get()?.eventId
-    if (!eventId) return
-    const name =
-      db
-        .select({ name: challenges.name })
-        .from(challenges)
-        .where(eq(challenges.id, challengeId))
-        .get()?.name ?? challengeId
+    const meta = queries.getChallengeMeta(challengeId)
+    if (!meta) return
+    const { eventId, name } = meta
     // Live agents on the challenge to close: siblings (policy) and, in
     // evaluation mode (stopSubmitterOnSolve), the submitter itself — no
     // write-up wrap-up. Otherwise the submitter keeps its session to
