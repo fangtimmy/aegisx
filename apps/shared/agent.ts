@@ -1,8 +1,6 @@
 import type { AgentStatus } from "./domain"
 import type { AgentUsage, WorkspaceInfo } from "./workspace"
 
-/** One active tool's definition snapshot (for the timeline 工具定义 panel).
- * `parameters` is the tool's TypeBox schema serialized to JSON Schema. */
 /** One session of an agent (multi-session v12): a `sessions` row + its message
  * count + the active flag (whether it is the agent's current sessionFile
  * pointer). Sessions are per-agent conversation threads; exactly one is active
@@ -14,6 +12,8 @@ export type AgentSessionSummary = {
   isActive: boolean
 }
 
+/** One active tool's definition snapshot (for the timeline 工具定义 panel).
+ * `parameters` is the tool's TypeBox schema serialized to JSON Schema. */
 export type ToolDefinitionSnapshot = {
   name: string
   description: string
@@ -84,7 +84,6 @@ import type {
 } from "@earendil-works/pi-coding-agent"
 
 export type {
-  BranchSummaryEntry,
   CompactionEntry,
   SessionEntry,
   SessionMessageEntry,
@@ -215,25 +214,4 @@ export function isSessionEntry(value: unknown): value is SessionEntry {
   const type = value.type
   if (typeof type !== "string" || !ENTRY_TYPES.has(type)) return false
   return typeof value.id === "string" && typeof value.timestamp === "string"
-}
-
-/** Narrow to a message entry (the only kind carrying a renderable message). */
-export function isMessageEntry(
-  entry: SessionEntry
-): entry is SessionMessageEntry {
-  return entry.type === "message"
-}
-
-/** Narrow to a compaction entry (rendered as a centered timeline marker). */
-export function isCompactionEntry(
-  entry: SessionEntry
-): entry is CompactionEntry {
-  return entry.type === "compaction"
-}
-
-/** Narrow to a branch-summary entry (rendered as a centered timeline marker). */
-export function isBranchSummaryEntry(
-  entry: SessionEntry
-): entry is BranchSummaryEntry {
-  return entry.type === "branch_summary"
 }

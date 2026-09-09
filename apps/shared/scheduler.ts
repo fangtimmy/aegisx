@@ -54,7 +54,7 @@ export type InboxSnapshot = {
 }
 
 /** Light challenge shape for the fleet view. */
-export type ChallengeLite = {
+type ChallengeLite = {
   id: string
   name: string
   category: string | null

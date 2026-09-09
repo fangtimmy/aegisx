@@ -1,4 +1,4 @@
-/** Channel-layer wire types (docs/model-v19-challenge-centric.md §三).
+/** Channel-layer wire types (design rationale in docs/archive/model-v19-challenge-centric.md).
  * Canonical definition — the server's channel service and the web UI both
  * import from here.
  *

@@ -1,6 +1,6 @@
 import { isRecord } from "./agent"
 
-export type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
+type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
 
 export type SettingGroup = "智能体" | "运行时" | "容器"
 
@@ -264,15 +264,13 @@ export const SETTINGS_DEFS: SettingDef[] = [
 
 const DEF_BY_KEY = new Map(SETTINGS_DEFS.map((def) => [def.key, def] as const))
 
-export const SETTING_KEYS = SETTINGS_DEFS.map((def) => def.key)
-
 const DEF_KEYS = new Set<string>(SETTINGS_DEFS.map((def) => def.key))
 
-export function isSettingKey(value: string): value is SettingKey {
+function isSettingKey(value: string): value is SettingKey {
   return DEF_KEYS.has(value)
 }
 
-export function settingDef(key: SettingKey): SettingDef {
+function settingDef(key: SettingKey): SettingDef {
   const def = DEF_BY_KEY.get(key)
   if (!def) throw new Error(`Unknown setting key: ${key}`)
   return def
@@ -292,65 +290,6 @@ export function isSettingModified(
   key: SettingKey
 ): boolean {
   return !Object.is(get(settings, key), settingDef(key).default)
-}
-
-export function modifiedSettingKeys(settings: FlatSettings): SettingKey[] {
-  return SETTING_KEYS.filter((key) => isSettingModified(settings, key))
-}
-
-/** Rename retired flat setting keys in a raw settings object. Applied when
- * loading version-1 config docs written before a key rename (the rename drops
- * out of parseSettings otherwise, which only keeps known keys). Pure. */
-export function migrateSettingKeys(raw: unknown): unknown {
-  if (!isRecord(raw)) return raw
-  const source = raw
-  if (
-    "agent.defaultModelId" in source &&
-    !("agent.defaultModelRef" in source)
-  ) {
-    const { "agent.defaultModelId": value, ...rest } = source
-    return { ...rest, "agent.defaultModelRef": value }
-  }
-  return raw
-}
-
-/** Map pre-flat / unversioned config.json settings into flat keys. */
-export function migrateLegacySettings(raw: unknown): FlatSettings {
-  const source0 = migrateSettingKeys(raw)
-  const source = isRecord(source0) ? source0 : {}
-
-  // Already flat (has at least one known flat key)
-  if (SETTING_KEYS.some((key) => key in source)) {
-    return parseSettings(source)
-  }
-
-  const flat: Record<string, unknown> = {}
-  const map: Record<string, SettingKey> = {
-    defaultModelId: "agent.defaultModelRef",
-    maxAttachmentMb: "runtime.maxAttachmentMb",
-    platformRequestTimeoutMs: "runtime.platformRequestTimeoutMs",
-    providerDiscoverTimeoutMs: "runtime.providerDiscoverTimeoutMs",
-    containerImage: "container.image",
-    cpus: "container.cpus",
-    memoryMb: "container.memoryMb",
-    pidsLimit: "container.pidsLimit",
-    containerWorkspace: "container.workspace",
-    tmpfsSize: "container.tmpfsSize",
-  }
-  for (const [from, to] of Object.entries(map)) {
-    if (from in source) flat[to] = source[from]
-  }
-
-  // cpuLimit millicores → cpus
-  if (
-    typeof source.cpuLimit === "number" &&
-    Number.isFinite(source.cpuLimit) &&
-    flat["container.cpus"] === undefined
-  ) {
-    flat["container.cpus"] = source.cpuLimit / 1000
-  }
-
-  return parseSettings(flat)
 }
 
 export function get<K extends SettingKey>(
@@ -439,45 +378,7 @@ export function patchSettings(
   return out
 }
 
-/**
- * Pre-v8 prompt templates lived in FlatSettings (`prompts.*`) and, before
- * flattening, as `*PromptTemplate` keys. v8 keeps them in the prompt_templates
- * table; boot reads a raw config document with this helper so user
- * edits carry across. Values are keyed by template key (mainSystem / …).
- */
-const LEGACY_PROMPT_TEMPLATE_KEYS: Record<string, string> = {
-  "prompts.mainSystem": "mainSystem",
-  "prompts.initial": "initial",
-  "prompts.orchestratorSystem": "orchestratorSystem",
-  mainSystemPromptTemplate: "mainSystem",
-  initialPromptTemplate: "initial",
-}
-
-/** Extract user-edited prompt templates from a raw settings object (pre-v8
- * FlatSettings / unversioned config shapes), keyed by template key. Returns
- * undefined when no legacy prompt keys are present. */
-export function extractLegacyPromptTemplates(
-  raw: unknown
-): Record<string, string> | undefined {
-  if (!isRecord(raw)) return undefined
-  const source = raw
-  const found: Record<string, string> = {}
-  for (const [legacyKey, templateKey] of Object.entries(
-    LEGACY_PROMPT_TEMPLATE_KEYS
-  )) {
-    const value = source[legacyKey]
-    if (typeof value === "string") found[templateKey] = value
-  }
-  return Object.keys(found).length > 0 ? found : undefined
-}
-
 export const CONFIG_DOCUMENT_VERSION = 1 as const
-
-export type ConfigDocumentV1 = {
-  version: typeof CONFIG_DOCUMENT_VERSION
-  settings: FlatSettings
-  providers: unknown[]
-}
 
 export function isConfigDocumentV1(raw: unknown): raw is {
   version: 1

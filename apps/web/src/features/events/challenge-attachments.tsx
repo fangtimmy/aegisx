@@ -1,3 +1,4 @@
+import { formatSize } from "@aegisx/shared"
 import { Download, FileArchive, Trash2 } from "lucide-react"
 
 import { type Attachment } from "@/api"
@@ -13,7 +14,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { formatBytes } from "@/lib/format"
 
 export function AttachmentRow({
   attachment,
@@ -32,7 +32,7 @@ export function AttachmentRow({
           {attachment.originalName}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {formatBytes(attachment.size)}
+          {formatSize(attachment.size)}
         </p>
       </div>
       <IconTooltip label={`下载 ${attachment.originalName}`}>
@@ -107,7 +107,7 @@ export function PendingFileRow({
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{file.name}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {formatBytes(file.size)} · 保存时上传
+          {formatSize(file.size)} · 保存时上传
         </p>
       </div>
       <IconTooltip label={`移除 ${file.name}`}>

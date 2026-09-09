@@ -4,7 +4,7 @@ import type { AgentStatus } from "./agent"
  * derived view over existing rows — agents / challenge_flags / spawn_queue /
  * channel_messages / session_entries — no dedicated storage. */
 
-export type EventStatsWindow = {
+type EventStatsWindow = {
   /** Derived activity bounds: start = first agent start (fallback: first
    * challenge creation), end = last agent/flag/message/challenge activity.
    * Both null for an event with no data. */

@@ -122,12 +122,6 @@ export function resolveModelRef<M extends ProviderModel>(
   return null
 }
 
-/** Human-readable summary of a ref for display where a full resolve isn't
- * available (logs, fallbacks). Returns the input verbatim. */
-export function describeModelRef(ref: ModelRef | null | undefined): string {
-  return ref ?? ""
-}
-
 /**
  * Body for a runtime model switch (run entry agent + per-agent + event
  * orchestrator). `model` is a canonical model ref string

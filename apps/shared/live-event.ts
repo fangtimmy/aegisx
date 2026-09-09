@@ -18,14 +18,14 @@ export type ChannelMessage = {
   files: ChannelFileMeta[]
 }
 
-export type TransientActivity = "retrying" | "compacting"
+type TransientActivity = "retrying" | "compacting"
 
-export type ToolProgressStatus = "running" | "done" | "error"
+type ToolProgressStatus = "running" | "done" | "error"
 
 export type ToolTerminal = "timed_out" | "cancelled" | "failed"
 
 /** Compaction trigger reason (mirrors the SDK compaction event). */
-export type CompactionReason = "manual" | "threshold" | "overflow"
+type CompactionReason = "manual" | "threshold" | "overflow"
 
 /** Per-agent context snapshot for the conversation stat strip (pi-TUI footer
  * parity: cumulative usage from session entries + live context usage + latest
@@ -116,9 +116,9 @@ export type LiveEvent =
       item: EntryItem
     }
   | {
-      /** Unified message layer push (docs/im-channels.md §5.1): a new channel
-       * message landed. Emitted on the run's channel (run-scope channels) or
-       * the event's channel (the scheduler DM). */
+      /** Unified message layer push: a new channel message landed. Emitted on
+       * the run's channel (run-scope channels) or the event's channel (the
+       * scheduler DM). */
       type: "channel.message"
       message: ChannelMessage
     }

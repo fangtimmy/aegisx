@@ -12,13 +12,10 @@ import {
   defaultSettings,
   type FlatSettings,
   isRecord,
-  migrateLegacySettings,
-  migrateSettingKeys,
   type ProviderType,
   parseSettings,
   patchSettings,
 } from "@aegisx/shared"
-import { modelAddress } from "@aegisx/shared"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 
@@ -179,33 +176,6 @@ function isCurrentDocument(raw: unknown): raw is {
   return raw.version === CONFIG_DOCUMENT_VERSION
 }
 
-/** Rewrite a default-model ref that still points at a pre-provenance pi-bound
- * address (e.g. "anthropic/claude-sonnet-4-5:high") to the owning provider's
- * canonical aegisx-* address, via the metadataSource provenance left by the
- * binding migration. Pure; returns the input verbatim when nothing matches. */
-function rewriteLegacyModelRefs(
-  raw: unknown,
-  providers: ProviderData[]
-): unknown {
-  if (!isRecord(raw)) return raw
-  const ref = raw["agent.defaultModelRef"]
-  if (typeof ref !== "string" || !ref) return raw
-  for (const provider of providers) {
-    for (const model of provider.models) {
-      const origin = model.metadataSource
-      if (!origin?.startsWith("pi:")) continue
-      const legacy = origin.slice(3)
-      if (ref === legacy || ref.startsWith(`${legacy}:`)) {
-        return {
-          ...raw,
-          "agent.defaultModelRef": `${modelAddress(provider, model)}${ref.slice(legacy.length)}`,
-        }
-      }
-    }
-  }
-  return raw
-}
-
 export function createConfigStore(dataDir: string) {
   const path = join(dataDir, "config.json")
   mkdirSync(dataDir, { recursive: true })
@@ -245,33 +215,13 @@ export function createConfigStore(dataDir: string) {
         const providers = normalizeProviders(doc.providers)
         return {
           version: CONFIG_DOCUMENT_VERSION,
-          settings: parseSettings(
-            rewriteLegacyModelRefs(migrateSettingKeys(doc.settings), providers)
-          ),
+          settings: parseSettings(doc.settings),
           providers,
           updatedAt:
             typeof doc.updatedAt === "string" && doc.updatedAt
               ? doc.updatedAt
               : now(),
         }
-      }
-
-      // Legacy unversioned { settings, providers } — migrate in place
-      if (doc.settings !== undefined && Array.isArray(doc.providers)) {
-        const providers = normalizeProviders(doc.providers)
-        const migrated: ConfigData = {
-          version: CONFIG_DOCUMENT_VERSION,
-          settings: parseSettings(
-            rewriteLegacyModelRefs(
-              migrateLegacySettings(doc.settings),
-              providers
-            )
-          ),
-          providers,
-          updatedAt: now(),
-        }
-        save(migrated)
-        return migrated
       }
 
       throw new Error("unsupported config shape")
