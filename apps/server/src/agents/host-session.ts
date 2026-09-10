@@ -30,19 +30,11 @@ export type SessionOwner = {
 }
 
 /**
- * Resume strategy for an existing session (cold-restore / reopen). Omit for a
+ * Resume an existing DB session (cold-restore / reopen). Omit for a
  * brand-new session.
- *
- *  - DB sessions resume via `DbSessionManager.open(sessionId, ...)`.
- *  - Legacy pre-migration `.jsonl` sessions resume via pi's file
- *    `SessionManager.open` (not migrated to the DB by design).
  */
 export type SessionResume = {
   sessionId: string
-  /** When true, `sessionId` is a jsonl path resumed via pi's file manager. */
-  isJsonl: boolean
-  /** Sessions dir for the jsonl resume path (ignored for DB resumes). */
-  sessionsDir?: string
 }
 
 /** SDK agent-loop settings resolved from AegisX settings (compaction/retry). */
@@ -56,7 +48,7 @@ export type AgentLoopSettings = {
  * the orchestrator — they differ only in owner / tools / system prompt. */
 export type HostAgentSession = {
   session: AgentSession
-  /** DB session id (or legacy jsonl path) — persists as `agents.sessionFile`. */
+  /** DB session id — persists as `agents.sessionFile`. */
   sessionId: string | undefined
   pipeline: AgentEventPipeline
   dispose(): Promise<void>
@@ -164,30 +156,17 @@ export async function createHostAgentSession(
     bus,
   } = input
 
-  // --- Session backend selection -------------------------------------------
-  //  - new session                              -> DbSessionManager.create
-  //  - resume, isJsonl                          -> pi file SessionManager.open
-  //    (pre-migration runs keep their jsonl; not migrated per design)
-  //  - resume, DB                               -> DbSessionManager.open
+  // --- Session backend: the DB is the single backend ------------------------
+  //  - new session  -> DbSessionManager.create
+  //  - resume       -> DbSessionManager.open
   const resume = input.resumeFrom
-  let dbSession: DbSessionManager | undefined
-  let sessionManager: SessionManager
-  if (resume?.isJsonl) {
-    sessionManager = SessionManager.open(
-      resume.sessionId,
-      resume.sessionsDir ?? "",
-      cwd
-    )
-  } else if (resume) {
-    dbSession = DbSessionManager.open(resume.sessionId, {
-      ...ownerManagerOpts(owner),
-      db,
-    })
-    sessionManager = asSdkSessionManager(dbSession)
-  } else {
-    dbSession = DbSessionManager.create({ ...ownerManagerOpts(owner), cwd, db })
-    sessionManager = asSdkSessionManager(dbSession)
-  }
+  const dbSession = resume
+    ? DbSessionManager.open(resume.sessionId, {
+        ...ownerManagerOpts(owner),
+        db,
+      })
+    : DbSessionManager.create({ ...ownerManagerOpts(owner), cwd, db })
+  const sessionManager = asSdkSessionManager(dbSession)
 
   const settingsManager = SettingsManager.inMemory({
     // Long CTF runs / orchestrator strategy loops need compaction to survive
@@ -215,14 +194,10 @@ export async function createHostAgentSession(
     onUsageMaybeChanged: input.onUsageMaybeChanged,
   })
 
-  // Legacy jsonl backends have no onAppend/metaProvider; their runs have no
-  // session_entries rows either (the pipeline only carries ephemeral SSE).
   // metaProvider is pre-commit (writes the meta column); onAppend stays
   // post-insert (SSE notification only).
-  if (dbSession) {
-    dbSession.metaProvider = (entry) => pipeline.metaFor(entry)
-    dbSession.onAppend = (entry, seq) => pipeline.commitEntry(entry, seq)
-  }
+  dbSession.metaProvider = (entry) => pipeline.metaFor(entry)
+  dbSession.onAppend = (entry, seq) => pipeline.commitEntry(entry, seq)
 
   const { session } = await createAgentSession({
     cwd,

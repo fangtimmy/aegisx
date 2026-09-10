@@ -254,24 +254,6 @@ describe("multi-session + flat backtrack (v12)", () => {
     }
   })
 
-  test("backtrackAgent rejects legacy jsonl sessions", async () => {
-    const made = makeService()
-    try {
-      const { db, service } = made
-      const agent = await spawnAgent(service)
-
-      db.update(agents)
-        .set({ sessionFile: "legacy.jsonl" })
-        .where(eq(agents.id, agent.id))
-        .run()
-      await expect(service.backtrackAgent(agent.id, 1)).rejects.toThrow(
-        "Legacy jsonl sessions do not support backtracking"
-      )
-    } finally {
-      await made.h.close()
-    }
-  })
-
   test("session ops reject unknown agents", async () => {
     const made = makeService()
     try {

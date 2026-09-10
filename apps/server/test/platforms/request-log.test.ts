@@ -35,7 +35,6 @@ function makeService(db: ReturnType<typeof setupDb>["db"], dir: string) {
     () => 1024 * 1024,
     refine<ConfigStore>({
       getProviders: () => [],
-      getLegacyPromptTemplates: () => undefined,
       getSettings: flatSettings,
     })
   )

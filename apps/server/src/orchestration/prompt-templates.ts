@@ -174,9 +174,9 @@ export const samplePromptContext: PromptTemplateContext = {
  * instance (noEscape, strict, `join` helper). Used by {@link renderTemplate}
  * and the preview paths so all rendering goes through one handlebars
  * configuration. The context is loosely typed — orchestration PromptContext is
- * a superset of the legacy {@link PromptTemplateContext} shape (challenge
- * optional, capabilities optional), and the built-in templates only reference
- * fields that the caller has populated. */
+ * a superset of {@link PromptTemplateContext} (challenge optional,
+ * capabilities optional), and the built-in templates only reference fields
+ * that the caller has populated. */
 export function renderTemplateBody(template: string, context: unknown): string {
   return handlebars
     .compile(template, { noEscape: true, strict: true })(context, {

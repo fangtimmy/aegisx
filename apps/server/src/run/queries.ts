@@ -186,11 +186,7 @@ export function createAgentQueries(options: { db: Database }) {
       .from(agents)
       .where(eq(agents.id, agentId))
       .get()
-    const sessionId =
-      opts.sessionId ??
-      (agent?.sessionFile && !agent.sessionFile.endsWith(".jsonl")
-        ? agent.sessionFile
-        : undefined)
+    const sessionId = opts.sessionId ?? agent?.sessionFile ?? undefined
     if (!sessionId) return { items: [], nextAfter: after }
     return listRenderableEntries(
       db,

@@ -115,28 +115,14 @@ function defaultConfig(): ConfigData {
 
 function normalizeModel(raw: unknown): ProviderModelData | undefined {
   if (!Value.Check(ProviderModelSchema, raw)) return undefined
-  const legacy = raw as Record<string, unknown>
-  // Pre-provenance docs stored a pi builtin binding (piProviderId/piModelId)
-  // that locked metadata to the catalog entry. Migrate it to metadataSource
-  // provenance — the metadata itself was already kept in sync with the
-  // binding, so nothing else to carry over.
-  const piProviderId =
-    typeof legacy.piProviderId === "string" ? legacy.piProviderId : null
-  const piModelId =
-    typeof legacy.piModelId === "string" ? legacy.piModelId : null
-  const metadataSource =
-    piProviderId && piModelId
-      ? `pi:${piProviderId}/${piModelId}`
-      : typeof legacy.metadataSource === "string"
-        ? legacy.metadataSource
-        : null
   return {
     id: raw.id,
     modelId: typeof raw.modelId === "string" ? raw.modelId : "",
     label: typeof raw.label === "string" ? raw.label : "",
     enabled: raw.enabled !== false,
     metadata: typeof raw.metadata === "string" ? raw.metadata : "{}",
-    metadataSource,
+    metadataSource:
+      typeof raw.metadataSource === "string" ? raw.metadataSource : null,
   }
 }
 

@@ -243,7 +243,8 @@ function ToolActivity({
       return undefined
     }
     // W6: prefer the server-known start (true elapsed, incl. time before the
-    // dialog opened); fall back to first-seen local time for legacy data.
+    // dialog opened); fall back to first-seen local time when only an
+    // update/end frame (no startedAt) has been seen.
     startedRef.current = tool.startedAt ?? Date.now()
     setElapsed(Date.now() - startedRef.current)
     const id = setInterval(() => {

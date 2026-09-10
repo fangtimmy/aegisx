@@ -158,7 +158,6 @@ export function makeModel(
 export function stubConfigStore(providers: ProviderData[]): ConfigStore {
   return refine<ConfigStore>({
     getProviders: () => providers,
-    getLegacyPromptTemplates: () => undefined,
   })
 }
 

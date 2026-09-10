@@ -5,7 +5,7 @@ import { join } from "node:path"
  * workspace is a DERIVED PATH, not a row: every challenge of an event owns a
  * directory tree under data/events/<eventId>/challenges/<challengeId>/, the
  * scheduler owns data/events/<eventId>/orchestrator/. Each holds workspace/
- * (container bind → /workspace), sessions/, and runtime/ subdirectories.
+ * (container bind → /workspace) and runtime/ subdirectories.
  *
  * Container identity: one container per challenge workspace (shared by every
  * agent attacking the challenge), one for the scheduler workspace. Keyed by
@@ -37,10 +37,6 @@ export function orchestratorRoot(dataDir: string, eventId: string): string {
 
 export function workspaceDir(root: string): string {
   return join(root, "workspace")
-}
-
-export function sessionsDir(root: string): string {
-  return join(root, "sessions")
 }
 
 export function runtimeDir(root: string): string {

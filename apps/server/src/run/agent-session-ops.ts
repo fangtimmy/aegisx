@@ -175,8 +175,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
    * removed, so the next turn continues from the truncated history. The live
    * session is rebuilt so pi re-derives its in-memory context (pi caches
    * `agent.state.messages` at session creation; a bare DB delete would not
-   * take effect). Requires an idle agent; legacy jsonl sessions are
-   * rejected. */
+   * take effect). Requires an idle agent. */
   async function backtrackAgent(
     agentId: string,
     seq: number
@@ -190,12 +189,6 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         .get()
       if (!agentRow?.sessionFile) {
         throw new RunActionError("invalid_state", "Agent has no session")
-      }
-      if (agentRow.sessionFile.endsWith(".jsonl")) {
-        throw new RunActionError(
-          "invalid_state",
-          "Legacy jsonl sessions do not support backtracking"
-        )
       }
       const sessionId = agentRow.sessionFile
       const target = db

@@ -103,7 +103,6 @@ describe("platform adapter memoization", () => {
         () => 1024 * 1024,
         refine<ConfigStore>({
           getProviders: () => [],
-          getLegacyPromptTemplates: () => undefined,
           getSettings: flatSettings,
         })
       )

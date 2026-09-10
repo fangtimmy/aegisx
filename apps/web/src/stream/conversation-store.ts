@@ -28,7 +28,8 @@ type ToolProgress = {
   revision: number
   toolName: string
   /** Server-side execution start (epoch ms) — true elapsed time even when the
-   * dialog opened mid-execution. Absent on legacy data. */
+   * dialog opened mid-execution. Only the tool_execution_start frame carries
+   * it; update/end frames supersede this entry without one. */
   startedAt?: number
   args?: unknown
   result?: unknown

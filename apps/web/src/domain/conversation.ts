@@ -107,7 +107,8 @@ export type LiveEntry =
       args: unknown
       result?: unknown
       /** Server-side execution start (epoch ms) — true elapsed time for a
-       * dialog opened mid-execution. Absent on legacy data. */
+       * dialog opened mid-execution. Only the tool_execution_start frame
+       * carries it. */
       startedAt?: number
       isError: boolean
       status: "running" | "done"

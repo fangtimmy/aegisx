@@ -12,32 +12,22 @@ import {
 } from "../helpers"
 import { refine } from "../support"
 
-/** Service with a stubbed container + host session (no real Docker / LLM).
- * `grantedTools` (when passed) collects the native tool names handed to
- * createHost — used to assert what an agent is actually granted. */
-function makeService(opts: { hang?: boolean; grantedTools?: string[] } = {}) {
+/** Service with a stubbed container + host session (no real Docker / LLM). */
+function makeService(opts: { hang?: boolean } = {}) {
   const hang = opts.hang ?? true
   const h = makeAgentService({
-    createHost: mock(
-      async (input: {
-        agentId: string
-        extraTools?: Array<{ name: string }>
-      }) => {
-        if (opts.grantedTools) {
-          opts.grantedTools.push(...(input.extraTools ?? []).map((t) => t.name))
-        }
-        const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
-          hang,
-        })
-        const sdk = refine<{
-          prompt: () => Promise<void>
-        }>(stub.session)
-        sdk.prompt = async () => {
-          if (hang) await new Promise(() => {})
-        }
-        return stub
+    createHost: mock(async (input: { agentId: string }) => {
+      const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
+        hang,
+      })
+      const sdk = refine<{
+        prompt: () => Promise<void>
+      }>(stub.session)
+      sdk.prompt = async () => {
+        if (hang) await new Promise(() => {})
       }
-    ),
+      return stub
+    }),
   })
   return {
     h,
@@ -68,56 +58,6 @@ describe("scheduler service behaviors (SDK backend)", () => {
       // SDK convergence: the snapshot grants no management tools; the
       // orchestrator manages via `aegisx` + the four file/bash tools.
       expect(JSON.parse(row.tools)).toEqual([])
-    } finally {
-      await made.h.close()
-    }
-  })
-
-  test("reopening a legacy orchestrator grants NO management tools", async () => {
-    const granted: string[] = []
-    const made = makeService({ hang: false, grantedTools: granted })
-    try {
-      const { db, service } = made
-      // Pre-SDK snapshot: the old 18 management tool names.
-      seedAgent(db, {
-        id: "legacy-orch",
-        eventId: "evt-1",
-        challengeId: null,
-        role: "orchestrator",
-        status: "completed",
-        sessionFile: "sess-legacy",
-        model: `${TEST_MODEL_REF}:off`,
-        systemPrompt: "sp",
-        tools: JSON.stringify([
-          "enqueue_run",
-          "list_queue",
-          "remove_queue",
-          "clear_queue",
-          "reorder_queue",
-          "start_run",
-          "stop_run",
-          "message_run",
-          "close_run",
-          "read_run",
-          "set_run_timeout",
-          "list_challenges",
-          "get_challenge",
-          "list_runs",
-          "get_status",
-          "list_agents",
-          "add_agent",
-          "message_agent",
-        ]),
-        name: "Scheduler",
-        createdAt: now(),
-        updatedAt: now(),
-      })
-
-      await service.sendMessage("legacy-orch", { text: "wake up" })
-      await settle()
-      // SDK convergence: the legacy snapshot is intersected with the (now
-      // empty) ORCHESTRATOR_TOOLS — no management tool is resurrected.
-      expect(granted).toEqual([])
     } finally {
       await made.h.close()
     }

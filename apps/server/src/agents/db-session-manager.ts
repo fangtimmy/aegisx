@@ -74,8 +74,8 @@ export class DbSessionManager {
   onAppend?: (entry: SessionEntry, seq: number) => void
   /** Pre-commit timing provider (v10): called inside commit() BEFORE db.insert
    * to compute the `meta` column for the row. Returns null for rows with no
-   * timing (non-message kinds, or messages the pipeline didn't time — e.g.
-   * legacy resumes). Injected by the agent-session wiring (the event pipeline). */
+   * timing (non-message kinds, or messages the pipeline didn't time).
+   * Injected by the agent-session wiring (the event pipeline). */
   metaProvider?: (entry: SessionEntry) => TimingMeta | null
 
   private constructor(opts: {

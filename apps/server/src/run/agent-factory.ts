@@ -66,7 +66,6 @@ import {
   orchestratorKey,
   orchestratorRoot,
   runtimeDir,
-  sessionsDir,
   workspaceDir,
 } from "./workspace-resolver"
 
@@ -324,7 +323,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         ? localContainerWorkspace(key)
         : get(settings, "container.workspace")
       mkdirSync(workspaceDir(root), { recursive: true })
-      mkdirSync(sessionsDir(root), { recursive: true })
       mkdirSync(runtimeDir(root), { recursive: true })
       const modelRuntime = await createRunModelRuntime({
         runtimeDir: runtimeDir(root),
@@ -828,13 +826,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         // per-exec env of the bash tool.
         execEnv: [`AEGISX_AGENT_ID=${agentId}`, `AEGISX_TOKEN=${row.token}`],
         ...(row.sessionFile
-          ? {
-              resumeFrom: {
-                sessionId: row.sessionFile,
-                isJsonl: row.sessionFile.endsWith(".jsonl"),
-                sessionsDir: sessionsDir(ctx.rootDir),
-              },
-            }
+          ? { resumeFrom: { sessionId: row.sessionFile } }
           : {}),
         onUsageMaybeChanged: () => status.emitAgent(agentId),
         db,
