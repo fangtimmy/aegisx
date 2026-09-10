@@ -71,6 +71,7 @@ import { createLiveBus, type LiveBus } from "./host/live"
 import { chainLock } from "./locks"
 import { createModelResolver } from "./model-resolver"
 import { createNoticePublisher } from "./orch-notices"
+import { createRunPort } from "./ports"
 import {
   assertMayTouchAgent,
   assertMayTouchChallenge,
@@ -207,6 +208,14 @@ export function createAgentService(options: AgentServiceOptions) {
     return chainLock(fenceLocks, "global-fence", op)
   }
 
+  // Late-bound sibling modules (run/ports.ts): the factories below reference
+  // each other, so construction is a cyclic graph that cannot be closed with
+  // plain consts. Each port is bound exactly once, in the construction order
+  // at the bottom of this function, and read only after the service is wired.
+  const factoryPort = createRunPort<AgentFactory>("factory")
+  const schedulerAdminPort = createRunPort<SchedulerAdmin>("schedulerAdmin")
+  const queuePort = createRunPort<QueueService>("queue")
+
   const challengeWorkspaceRoot = (eventId: string, challengeId: string) =>
     workspaceDirOf(challengeRoot(dataDir, eventId, challengeId))
 
@@ -246,7 +255,7 @@ export function createAgentService(options: AgentServiceOptions) {
           DEFAULT_SCHEDULER_DIGEST_TEMPLATE
         return renderTemplateBody(
           body,
-          schedulerAdmin.getDigestContext(eventId)
+          schedulerAdminPort.get().getDigestContext(eventId)
         )
       } catch {
         return ""
@@ -264,7 +273,8 @@ export function createAgentService(options: AgentServiceOptions) {
     templateBody: (key) =>
       loadTemplateMap(db).get(key) ?? NOTICE_TEMPLATE_DEFAULTS[key],
     post: (input, principal) => channels.post(input, principal),
-    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    isSchedulerPaused: (eventId) =>
+      schedulerAdminPort.get().isSchedulerPaused(eventId),
   })
 
   const status: AgentStatus = createAgentStatus({
@@ -272,7 +282,8 @@ export function createAgentService(options: AgentServiceOptions) {
     queries,
     bus,
     channels,
-    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    isSchedulerPaused: (eventId) =>
+      schedulerAdminPort.get().isSchedulerPaused(eventId),
     // The target-slot fence counts a challenge as occupying a slot while it
     // has a live agent; the platform counts a running instance. Release the
     // instance when the last live agent leaves, or the two views diverge and
@@ -313,15 +324,8 @@ export function createAgentService(options: AgentServiceOptions) {
     },
     now,
     updateAgent,
-    queue: () => queue,
+    queue: queuePort,
   })
-
-  // Late-bound module refs: the factories below reference each other. None
-  // of the closures run during construction — they are all assigned before
-  // the service is usable.
-  let factory!: AgentFactory
-  let schedulerAdmin!: SchedulerAdmin
-  let queue: QueueService | undefined
 
   /** The runtime deps are per-agent-invariant: every runtime shares them,
    * only the agentId differs (passed to createAgentRuntime). */
@@ -335,13 +339,14 @@ export function createAgentService(options: AgentServiceOptions) {
       ? { timeoutGraceMs: options.timeoutGraceMs }
       : {}),
     ...(options.stallMs !== undefined ? { stallMs: options.stallMs } : {}),
-    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    isSchedulerPaused: (eventId) =>
+      schedulerAdminPort.get().isSchedulerPaused(eventId),
     withLock,
     updateAgent,
     now,
     getAgentStatus: (agentId) => queries.getAgentRow(agentId)?.status ?? null,
     forget: (agentId) => runtimes.delete(agentId),
-    resumeAgent: (agentId) => factory.resumeAgent(agentId),
+    resumeAgent: (agentId) => factoryPort.get().resumeAgent(agentId),
   }
 
   /** Get-or-create the agent's runtime — created on first touch (session
@@ -423,8 +428,8 @@ export function createAgentService(options: AgentServiceOptions) {
       runtimes.get(agentId)?.unmountSession()
     },
     withLock,
-    prepareAgent: (agentId) => factory.prepareAgent(agentId),
-    resumeAgent: (agentId) => factory.resumeAgent(agentId),
+    prepareAgent: (agentId) => factoryPort.get().prepareAgent(agentId),
+    resumeAgent: (agentId) => factoryPort.get().resumeAgent(agentId),
     updateAgent,
     emitAgent: status.emitAgent,
     requireAgent,
@@ -448,7 +453,7 @@ export function createAgentService(options: AgentServiceOptions) {
     principal: Principal
   ): Promise<AgentSummary> {
     assertMayTouchChallenge(db, principal, input.challengeId)
-    const agentId = await factory.spawnAgent({
+    const agentId = await factoryPort.get().spawnAgent({
       eventId: input.eventId,
       challengeId: input.challengeId,
       role: "solver",
@@ -556,9 +561,9 @@ export function createAgentService(options: AgentServiceOptions) {
         })
         .catch(() => undefined)
     }
-    const cancelled = queue
-      ? queue.cancelPendingForChallenge(challenge.eventId, challengeId)
-      : 0
+    const cancelled = queuePort
+      .get()
+      .cancelPendingForChallenge(challenge.eventId, challengeId)
     if (isTargetCapable(getChallengeRemote(db, challengeId))) {
       void platformService
         .targetAction(challengeId, "stop")
@@ -611,9 +616,13 @@ export function createAgentService(options: AgentServiceOptions) {
       // the current provider/apiKey/metadata — not a frozen snapshot. (This
       // also makes models added while live resolvable, so there is no longer
       // a miss-then-retry fallback.)
-      await factory.ensureWorkspaceRuntimeFresh(
-        factory.workspaceKeyOf(agentRow ?? { eventId: "", challengeId: null })
-      )
+      await factoryPort
+        .get()
+        .ensureWorkspaceRuntimeFresh(
+          factoryPort
+            .get()
+            .workspaceKeyOf(agentRow ?? { eventId: "", challengeId: null })
+        )
       let result: Awaited<ReturnType<typeof applyModelSwitch>>
       try {
         result = await applyModelSwitch(
@@ -700,11 +709,9 @@ export function createAgentService(options: AgentServiceOptions) {
     principal: Principal
   ): AgentSummary {
     assertMayTouchAgent(principal, requireAgent(agentId))
-    const agent = schedulerAdmin.setAgentTimeout(
-      agentId,
-      timeoutMs,
-      updateAgent
-    )
+    const agent = schedulerAdminPort
+      .get()
+      .setAgentTimeout(agentId, timeoutMs, updateAgent)
     const row = queries.getAgentRow(agentId)
     if (row && isActiveAgentStatus(row.status)) {
       runtimeOf(agentId).armDeadline(row.deadlineAt)
@@ -809,12 +816,13 @@ export function createAgentService(options: AgentServiceOptions) {
       list.push(agent)
       agentsByChallenge[agent.challengeId] = list
     }
+    const scheduler = schedulerAdminPort.get()
     return {
       challenges: challengeRows,
       agentsByChallenge,
-      schedulerAgent: schedulerAdmin.getSchedulerAgent(eventId) ?? null,
-      config: schedulerAdmin.getSchedulerConfig(eventId),
-      status: schedulerAdmin.getStatusSnapshot(eventId),
+      schedulerAgent: scheduler.getSchedulerAgent(eventId) ?? null,
+      config: scheduler.getSchedulerConfig(eventId),
+      status: scheduler.getStatusSnapshot(eventId),
     }
   }
 
@@ -1042,9 +1050,9 @@ export function createAgentService(options: AgentServiceOptions) {
           )
           .all()
       : []
-    const cancelled = queue
-      ? queue.cancelPendingForChallenge(eventId, challengeId)
-      : 0
+    const cancelled = queuePort
+      .get()
+      .cancelPendingForChallenge(eventId, challengeId)
     if (submitterAgentId && !stopSubmitter) {
       armSolvedWrapup(submitterAgentId)
     }
@@ -1075,7 +1083,7 @@ export function createAgentService(options: AgentServiceOptions) {
       ).reduce<number>((sum, stopped_) => sum + stopped_, 0)
       // The freed target slot may admit a queued item even when no sibling
       // closed — wake the drainer explicitly (nothing else would).
-      queue?.scheduleDrain()
+      queuePort.get().scheduleDrain()
       if (stopped > 0 || cancelled > 0) {
         notices.publish({
           type: "solveCleanup",
@@ -1126,8 +1134,9 @@ export function createAgentService(options: AgentServiceOptions) {
     // which only serializes quick DB ops, not container builds). The
     // existing/config checks rerun inside the critical section.
     return chainLock(locks, `start:${eventId}`, async () => {
-      const config = schedulerAdmin.getSchedulerConfig(eventId)
-      const existing = schedulerAdmin.getSchedulerAgent(eventId)
+      const admin = schedulerAdminPort.get()
+      const config = admin.getSchedulerConfig(eventId)
+      const existing = admin.getSchedulerAgent(eventId)
       if (existing && isActiveAgentStatus(existing.status)) {
         if (config.paused) {
           await resumeScheduler(eventId)
@@ -1141,7 +1150,7 @@ export function createAgentService(options: AgentServiceOptions) {
       if (existing && !opts.reset) {
         // Reopen keeps memory — wake the orchestrator (onResume → resumeAgent:
         // container + session rebuilt, session kept).
-        schedulerAdmin.setSchedulerPaused(eventId, false)
+        admin.setSchedulerPaused(eventId, false)
         await sendMessage(
           existing.id,
           { text: SCHEDULER_RESUME_MESSAGE },
@@ -1154,8 +1163,8 @@ export function createAgentService(options: AgentServiceOptions) {
       if (existing && opts.reset) {
         await deleteAgent(existing.id, { kind: "system" })
       }
-      schedulerAdmin.setSchedulerPaused(eventId, false)
-      const agentId = await factory.spawnAgent({
+      admin.setSchedulerPaused(eventId, false)
+      const agentId = await factoryPort.get().spawnAgent({
         eventId,
         challengeId: null,
         role: "orchestrator",
@@ -1169,8 +1178,9 @@ export function createAgentService(options: AgentServiceOptions) {
    * agent-lifecycle notifications) + abort the current turn (the container
    * stays warm — scheduler containers are lifecycle-managed, never swept). */
   async function pauseScheduler(eventId: string): Promise<AgentSummary | null> {
-    schedulerAdmin.setSchedulerPaused(eventId, true)
-    const sched = schedulerAdmin.getSchedulerAgent(eventId)
+    const admin = schedulerAdminPort.get()
+    admin.setSchedulerPaused(eventId, true)
+    const sched = admin.getSchedulerAgent(eventId)
     if (sched && isActiveAgentStatus(sched.status)) {
       await stopAgent(sched.id, { kind: "system" })
       return requireAgent(sched.id)
@@ -1184,8 +1194,9 @@ export function createAgentService(options: AgentServiceOptions) {
   async function resumeScheduler(
     eventId: string
   ): Promise<AgentSummary | null> {
-    schedulerAdmin.setSchedulerPaused(eventId, false)
-    const sched = schedulerAdmin.getSchedulerAgent(eventId)
+    const admin = schedulerAdminPort.get()
+    admin.setSchedulerPaused(eventId, false)
+    const sched = admin.getSchedulerAgent(eventId)
     if (sched && isActiveAgentStatus(sched.status)) {
       await sendMessage(
         sched.id,
@@ -1201,7 +1212,7 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** Close the scheduler agent (terminal aborted) + remove its container. */
   async function closeScheduler(eventId: string): Promise<AgentSummary> {
-    const sched = schedulerAdmin.getSchedulerAgent(eventId)
+    const sched = schedulerAdminPort.get().getSchedulerAgent(eventId)
     if (!sched) throw new RunActionError("not_found", "No scheduler agent")
     const result = await closeAgent(sched.id, { kind: "system" })
     containerLifecycle.removeContainer(orchestratorKey(eventId))
@@ -1210,7 +1221,7 @@ export function createAgentService(options: AgentServiceOptions) {
 
   // --- construction of the factory + queue -------------------------------------
 
-  factory = createAgentFactory({
+  const factory = createAgentFactory({
     db,
     dataDir,
     containerManager,
@@ -1227,10 +1238,13 @@ export function createAgentService(options: AgentServiceOptions) {
     now,
     updateAgent,
     status,
-    queue: () => queue,
+    queue: queuePort,
     agentSettings,
     createHost,
-    getSchedulerConfig: (eventId) => schedulerAdmin.getSchedulerConfig(eventId),
+    settleFailedSpawn: (agentId) =>
+      settleAgent(agentId, { abort: false, status: "failed" }),
+    getSchedulerConfig: (eventId) =>
+      schedulerAdminPort.get().getSchedulerConfig(eventId),
     hasLiveSession: (agentId) => runtimes.get(agentId)?.hasSession() ?? false,
     mountSession: (agentId, session) =>
       runtimeOf(agentId).mountSession(session),
@@ -1244,8 +1258,9 @@ export function createAgentService(options: AgentServiceOptions) {
     markFinishFlagWarned: (agentId) =>
       runtimeOf(agentId).markFinishFlagWarned(),
   })
+  factoryPort.bind(factory)
 
-  schedulerAdmin = createSchedulerAdmin({
+  const schedulerAdmin = createSchedulerAdmin({
     db,
     queries,
     getSettings,
@@ -1253,9 +1268,10 @@ export function createAgentService(options: AgentServiceOptions) {
     providers,
     modelResolver,
   })
+  schedulerAdminPort.bind(schedulerAdmin)
 
   // The queue's drainer spawns one agent per item from the item's snapshot.
-  queue = createQueueService({
+  const queue = createQueueService({
     db,
     getSettings,
     isDisposed: () => closed,
@@ -1284,6 +1300,7 @@ export function createAgentService(options: AgentServiceOptions) {
     onQueueEmergency: (event) => notices.publish(event),
     onQueueNotice: (event) => notices.publish(event),
   })
+  queuePort.bind(queue)
 
   // Event-level vital signs: pending work with no live solver and no drain
   // progress → ONE urgent orch notice per episode (which also wakes the
@@ -1311,7 +1328,7 @@ export function createAgentService(options: AgentServiceOptions) {
     containerLifecycle.close()
     fleetWatchdog.close()
     sessionRetention.close()
-    queue?.cancelDrain()
+    queue.cancelDrain()
     // Each runtime owns its agent's timers (deadline/grace/stall), finish
     // bookkeeping and session: disposing them releases every per-agent
     // resource in one sweep — there is no other registry to clear.

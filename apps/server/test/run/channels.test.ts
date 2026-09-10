@@ -23,7 +23,7 @@ import {
   teamKey,
   type ChannelService,
 } from "../../src/run/channels"
-import { createLiveBus } from "../../src/run/host/live"
+import { createLiveBus, type LiveBus } from "../../src/run/host/live"
 import {
   agentPrincipal,
   now,
@@ -64,13 +64,15 @@ function makeService(
   dir: Dir,
   deps: {
     renderSchedulerDigest?: (eventId: string) => string
+    bus?: LiveBus
   } = {}
 ) {
   const sent: SentEntry[] = []
+  const bus = deps.bus ?? createLiveBus()
   const channels: ChannelService = createChannelService({
     db,
     dataDir: dir,
-    bus: createLiveBus(),
+    bus,
     // Recorded runtime send (the service wires the same seam through its
     // agents' runtimes).
     send: async (agentId: string, text: string) => {
@@ -84,7 +86,7 @@ function makeService(
       ? { renderSchedulerDigest: deps.renderSchedulerDigest }
       : {}),
   })
-  return { channels, sent }
+  return { channels, sent, bus }
 }
 
 function seedAgent(
@@ -312,6 +314,52 @@ describe("channel trees (§2.2 / §9.1)", () => {
         orchKey("evt-1"),
       ])
       channels.close()
+    } finally {
+      close()
+    }
+  })
+})
+
+describe("live fan-out (§二)", () => {
+  function setup() {
+    const lite = setupDbLite()
+    seedEvent(lite.db)
+    seedChallenge(lite.db, { id: "ch-1" })
+    seedAgent(lite.db, "a1", { challengeId: "ch-1" })
+    const bus = createLiveBus()
+    return { ...lite, bus, made: makeService(lite.db, lite.dir, { bus }) }
+  }
+
+  test("every message emits ONE frame: #team keyed by challenge, dm by agent, orch by event", () => {
+    const { close, bus, made } = setup()
+    try {
+      const frames: { channel: string; body: string; channelKey: string }[] = []
+      const realEmit = bus.emit
+      bus.emit = (channel, event) => {
+        if (event.type === "channel.message") {
+          frames.push({
+            channel,
+            body: event.message.body,
+            channelKey: event.message.channelKey,
+          })
+        }
+        realEmit(channel, event)
+      }
+      const post = (channelKey: string, body: string) =>
+        made.channels.post({ channelKey, author: { type: "user" }, body }, USER)
+      post(teamKey("ch-1"), "team-1")
+      post(teamKey("ch-1"), "team-2")
+      post(dmKey("a1"), "dm-1")
+      post(orchKey("evt-1"), "orch-1")
+
+      // Two team messages → two frames (not the old event + challenge pair).
+      expect(frames).toEqual([
+        { channel: "ch-1", body: "team-1", channelKey: teamKey("ch-1") },
+        { channel: "ch-1", body: "team-2", channelKey: teamKey("ch-1") },
+        { channel: "a1", body: "dm-1", channelKey: dmKey("a1") },
+        { channel: "evt-1", body: "orch-1", channelKey: orchKey("evt-1") },
+      ])
+      made.channels.close()
     } finally {
       close()
     }

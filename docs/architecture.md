@@ -49,7 +49,9 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 **所有权根**：一个存活 agent 的全部进程内资源（挂载的 host session、turn generation、finish_run 簿记、deadline/grace 定时器、停滞 watchdog 定时器）都挂在 `run/agent-runtime.ts` 的 `AgentRuntime` 上；service 持有唯一的按 agentId 索引的注册表 `Map<agentId, AgentRuntime>`，首次触达（session 挂载 / 布防 deadline / finish 簿记 / send）时创建。冷恢复语义不变：idle/terminal agent 无 runtime（DB 行即状态），dm 冷唤醒 → send → resume → prepareAgent 重建 runtime。
 
-**终态单一路径**：所有终态（timeout force-abort、finish_run 自终止、close、finish、delete、superseded launch）收敛到 `runtime.settle`：有界 abort（仅用户驱动的 close）→ dispose session → 清定时器与簿记 → 出注册表 → terminalize（含 LiveBus forget）→ delete-only 收尾；无 runtime 的 agent（从未 prepare）直接落终态。service.close() 对每个 runtime `dispose()`（仅释放进程内资源，不动 DB 状态）即为全部善后——不存在第二份需要记得清的注册表。
+**终态单一路径**：所有终态（timeout force-abort、finish_run 自终止、close、finish、delete、superseded launch，以及 spawn 过程中失败）收敛到 `runtime.settle`：有界 abort（仅用户驱动的 close）→ dispose session → 清定时器与簿记 → 出注册表 → terminalize（含 LiveBus forget）→ delete-only 收尾；无 runtime 的 agent（从未 prepare）直接落终态。service.close() 对每个 runtime `dispose()`（仅释放进程内资源，不动 DB 状态）即为全部善后——不存在第二份需要记得清的注册表。
+
+LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus 自持有；`run/host/live.ts` 属 host 内层，不认识 runtime 与终态。淘汰只由上述唯一终态路径经 status core 的 terminalize 通知（`bus.forget`）触发——settle 先同步 detach session pipeline（此后不再有新事件），再 forget，故不存在终态后写入；除 `close()` 的整体清空外无第二条淘汰路径。
 
 ## run/ 核心模块
 
@@ -58,6 +60,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 | 模块 | 职责 |
 |---|---|
 | `service.ts` | agent 生命周期管理：spawn / 终态 / 刷新 / 删除 / 用量统计；持有唯一的 per-agent 注册表 `Map<agentId, AgentRuntime>` |
+| `ports.ts` | 组装根的后绑定端口：`createRunPort` 提供写一次、读取前必须 bind 的类型化槽位，表达 service 内部循环装配的初始化契约（替代 `let x!` 与隐式声明顺序陷阱） |
 | `agent-runtime.ts` | 单个存活 agent 的所有权根：挂载的 host session、turn generation（send → drive → 代际校验的 settle）、finish_run 簿记、deadline/grace 定时器、停滞 watchdog 定时器、`settle()`（唯一终态路径）与 `dispose()` |
 | `locks.ts` | `chainLock`：按 key 串接的 promise 锁原语（withLock / fence / start 锁共用） |
 | `clock.ts` | 统一时间层：`Clock`（时间源 + 定时器工厂，默认 `systemClock`，测试注入 fake clock）+ `TimerHub`（定时器注册表，`clear` / `disposeAll`）；运行期定时器一律经它 |
@@ -91,6 +94,8 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 - `orch:<eventId>` — 汇聚面：solver 的 `ask`、系统事件（flag 被接受、超时、停滞）。
 
 写路径（`channels-post.ts`）：消息入账本，附件拷入该题工作区 `shared/` 树（路径存 `meta` JSON，容器内直读，无取回步骤）。投递引擎（`channels-delivery.ts`）是唯一的推送出口：按读游标取增量、按 agent 的投递面（solver = 本题 #team + 自身 dm；调度者 = orch）渲染成投递提示，全局 flush tick 批量冲刷；事件先落账、再聚合唤醒，调度者不会被逐条事件牵引。dm 支持 urgent 冷唤醒（终态 agent 也可被重新叫起）；team/orch 只向存活 agent 投递，终态后仅存档。
+
+实时扇出（`channels-context.ts` → LiveBus）：每条消息**只 emit 一次**，bus 键取频道自身 id（#team = challengeId，dm = agentId，orch = eventId）；LiveBus 只有全局订阅（`subscribeAll`）一个出口，web 端按载荷里的 `message.channelKey` 分发，因此不存在 per-channel 订阅方，也不需要有第二把事件级键。
 
 **系统通知 = 类型化事件 + 模板**（`run/orch-notices.ts`）：系统侧的调用点（service 的 flag 处置/解出清理/手动停止、queue 的队列边沿与暂停恢复）不再拼中文散文，只构造类型化事件并 `publish`；事件决定投递面（`team:<challengeId>` 或 `orch:<eventId>`）、`meta`（`eventType` / `noticeType` / 提交者 `agentId`）与紧急度，文本由模板渲染——默认值即 `NOTICE_TEMPLATE_DEFAULTS`，随 builtin 行落 `prompt_templates`（用户可编辑，下次通知生效）。投递面、urgent 语义、paused 门与 `meta.agentId`（跳过提交者自身通知）等契约全部留在 channels 层不变；`launchFailed` 的事件载荷当前仍携带 drainer 已渲染的原因行（该行由 `drainer.ts` 组装，未在本批所有权内）。
 

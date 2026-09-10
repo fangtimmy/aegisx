@@ -10,7 +10,6 @@ import {
   SCHEDULER_READ_KEY,
   teamKey,
   type ChannelServiceDeps,
-  type ParsedChannelKey,
 } from "./channels-context"
 import { createDeliveryEngine } from "./channels-delivery"
 import { createPostService } from "./channels-post"
@@ -27,7 +26,6 @@ export {
   parseChannelKey,
   teamKey,
   type ChannelServiceDeps,
-  type ParsedChannelKey,
 } from "./channels-context"
 
 export type ChannelService = ReturnType<typeof createChannelService>
@@ -134,9 +132,6 @@ export function createChannelService(deps: ChannelServiceDeps) {
     dmKey,
     orchKey,
     parseChannelKey,
-    // bus fan-out keys of a parsed channel (dm → agentId, orch → eventId,
-    // team → eventId + challengeId)
-    emitChannelsOf: (parsed: ParsedChannelKey) => ctx.emitChannelsOf(parsed),
     // write paths
     post: writes.post,
     postWithUpload: writes.postWithUpload,

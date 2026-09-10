@@ -45,6 +45,7 @@ import {
   type RunModelRuntime,
   resolveRunModel,
 } from "./model-runtime"
+import type { RunPort } from "./ports"
 import {
   buildSchedulerPromptContext,
   buildSolverPromptContext,
@@ -207,8 +208,13 @@ export type AgentFactoryDeps = {
     patch: Partial<typeof agents.$inferInsert>
   ) => void
   status: AgentStatus
-  /** Late-bound queue (boot recovery resets running items). */
-  queue: () => QueueService | undefined
+  /** Late-bound queue port (boot recovery resets running items); bound by the
+   * assembly root before any spawn runs. */
+  queue: RunPort<QueueService>
+  /** Land a failed spawn through the runtime's single terminal path (disposes
+   * a session that a late failure already mounted; forgets the runtime).
+   * Without a runtime the agent terminalizes straight to `failed`. */
+  settleFailedSpawn(agentId: string): Promise<void>
   agentSettings: () => AgentLoopSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost: typeof createAgentHost
@@ -734,7 +740,11 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       channels.deliver(agentId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      status.terminalizeAgent(agentId, { status: "failed" })
+      // Land through the runtime's single terminal path. A failure after the
+      // session was mounted (send / delivery) otherwise strands a runtime
+      // entry holding a live session; settling disposes that session and
+      // forgets the runtime. Without a runtime this is the plain terminalize.
+      await deps.settleFailedSpawn(agentId)
       updateAgent(agentId, {
         error: `Failed to start agent: ${message}`,
         completedAt: null,
@@ -885,7 +895,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       await containerManager.remove(name).catch(() => undefined)
       if (row.queueItemId && !seenQueueEvents.has(row.eventId)) {
         seenQueueEvents.add(row.eventId)
-        deps.queue()?.resetRunning(row.eventId, ts)
+        deps.queue.get().resetRunning(row.eventId, ts)
       }
     }
     // Boot leaves every queue paused: events with visible items (pending /

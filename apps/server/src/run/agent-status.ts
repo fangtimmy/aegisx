@@ -6,6 +6,7 @@ import { logEvent } from "../lib/log"
 import type { EventScopePayload } from "../orchestration/types"
 import { orchKey, type ChannelService } from "./channels"
 import type { LiveBus } from "./host/live"
+import type { RunPort } from "./ports"
 import type { AgentQueries } from "./queries"
 import type { QueueService } from "./queue"
 
@@ -26,8 +27,9 @@ export type AgentStatusDeps = {
     agentId: string,
     patch: Partial<typeof agents.$inferInsert>
   ) => void
-  /** Late-bound queue (agent terminal → item done + re-drain). */
-  queue(): QueueService | undefined
+  /** Late-bound queue port (agent terminal → item done + re-drain); bound by
+   * the assembly root before any agent can terminalize. */
+  queue: RunPort<QueueService>
 }
 
 export type AgentStatus = ReturnType<typeof createAgentStatus>
@@ -176,8 +178,8 @@ export function createAgentStatus(deps: AgentStatusDeps) {
     emitAgent(agentId)
     bus.forget([agentId])
     const row = queries.getAgentRow(agentId)
-    deps.queue()?.markDone(row?.queueItemId, agentId)
-    deps.queue()?.scheduleDrain()
+    deps.queue.get().markDone(row?.queueItemId, agentId)
+    deps.queue.get().scheduleDrain()
     deps.onAgentTerminal(agentId)
     if (opts.event) {
       emitAgentEvent(agentId, {

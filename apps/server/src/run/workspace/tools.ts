@@ -155,7 +155,7 @@ export function createWorkspaceTools(
     task: () => Promise<T>
   ): Promise<T> {
     const previous = fileMutationQueues.get(key) ?? Promise.resolve()
-    let release!: () => void
+    let release: (() => void) | undefined
     const gate = new Promise<void>((resolveGate) => {
       release = resolveGate
     })
@@ -165,7 +165,7 @@ export function createWorkspaceTools(
     try {
       return await task()
     } finally {
-      release()
+      release?.()
       if (fileMutationQueues.get(key) === chain) fileMutationQueues.delete(key)
     }
   }

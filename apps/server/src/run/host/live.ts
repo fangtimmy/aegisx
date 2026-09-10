@@ -18,13 +18,20 @@ type Listener = (event: LiveEvent) => void
  * immediately, instead of only catching events that arrive after connect.
  * Snapshots are cleared the moment their event goes terminal (tool
  * done/error, activity null), so they never leak stale state.
+ *
+ * Ownership: the bus owns these snapshot caches outright and knows nothing
+ * about AgentRuntime or agent terminal status — it sits in the host layer and
+ * must not reach up into the run orchestration. The runtime's single terminal
+ * path owns eviction: it detaches the session pipeline (so no further event
+ * can be emitted) and only then calls {@link forget}. `close()` is the only
+ * other wipe, for whole-service shutdown.
  */
 export function createLiveBus() {
-  const subscribers = new Map<string, Set<Listener>>()
-  /** Every emit regardless of channel — the multiplexed stream subscribes
+  /** Every emit, regardless of channel — the multiplexed stream subscribes
    * here instead of enumerating channel keys (an agent/challenge created
-   * after connect would never be enumerated, so per-channel subscription is
-   * not a correct way to build a global stream). */
+   * after connect would never be enumerated, so per-channel subscription
+   * could not build a correct global stream). The emitted key stays in the
+   * event payload for identity/diagnostics; routing is global-only. */
   const allSubscribers = new Set<Listener>()
   const lastContext = new Map<string, LiveEvent>()
   const lastQueue = new Map<string, LiveEvent>()
@@ -34,21 +41,7 @@ export function createLiveBus() {
    * done/error so only genuinely in-flight tools are replayed on connect. */
   const runningTools = new Map<string, Map<string, LiveEvent>>()
 
-  function subscribe(channel: string, listener: Listener): () => void {
-    let set = subscribers.get(channel)
-    if (!set) {
-      set = new Set()
-      subscribers.set(channel, set)
-    }
-    set.add(listener)
-    return () => {
-      set?.delete(listener)
-      if (set && set.size === 0) subscribers.delete(channel)
-    }
-  }
-
-  /** Global subscription: every channel's events, in emit order. Returns the
-   * unsubscribe for symmetry with {@link subscribe}. */
+  /** Global subscription: every emitted event, in emit order. */
   function subscribeAll(listener: Listener): () => void {
     allSubscribers.add(listener)
     return () => {
@@ -87,8 +80,6 @@ export function createLiveBus() {
         })
       }
     }
-    const set = subscribers.get(channel)
-    if (set) for (const listener of set) deliver(listener)
     for (const listener of allSubscribers) deliver(listener)
   }
 
@@ -128,7 +119,6 @@ export function createLiveBus() {
   }
 
   function close() {
-    subscribers.clear()
     allSubscribers.clear()
     lastContext.clear()
     lastQueue.clear()
@@ -137,7 +127,6 @@ export function createLiveBus() {
   }
 
   return {
-    subscribe,
     subscribeAll,
     emit,
     getContext,

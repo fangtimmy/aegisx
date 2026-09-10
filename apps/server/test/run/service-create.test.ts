@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents } from "../../src/db/schema"
+import type { HostAgentSession } from "../../src/run/host/host-session"
 import { makeAgentService, stubHostAgentSession, USER } from "../helpers"
 import { refine } from "../support"
 
@@ -75,6 +76,51 @@ describe("agentService.spawn", () => {
       const row = h.db.select().from(agents).all()[0]
       expect(row.status).toBe("failed")
       expect(row.error).toContain("agent session boom")
+    } finally {
+      await h.close()
+    }
+  })
+
+  test("failure after the session is mounted: settles through the runtime (no stranded session/runtime)", async () => {
+    let hostCalls = 0
+    let disposed = 0
+    const createHost = mock(async () => {
+      hostCalls += 1
+      const stub = stubHostAgentSession(`sess-${hostCalls}`, { hang: true })
+      if (hostCalls > 1) return stub
+      // The first host fails on the send path (after prepare mounted it):
+      // reading the streaming flag throws, which rejects the runtime send.
+      const session = refine<HostAgentSession>({
+        ...stub,
+        dispose: async () => {
+          disposed += 1
+        },
+      })
+      Object.defineProperty(session.session, "isStreaming", {
+        get() {
+          throw new Error("send path boom")
+        },
+      })
+      return session
+    })
+    const h = makeAgentService({ createHost })
+    try {
+      await expect(
+        h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
+      ).rejects.toThrow("send path boom")
+
+      const row = h.db.select().from(agents).all()[0]
+      expect(row.status).toBe("failed")
+      expect(row.error).toContain("send path boom")
+      expect(row.completedAt).toBeNull()
+      // The mounted session was disposed by the terminal settle.
+      expect(disposed).toBe(1)
+
+      // No runtime/session survived the failure: a message reopens the agent
+      // (a fresh host session is built) instead of reusing the dead one.
+      await h.service.sendMessage(row.id, { text: "ping" }, USER)
+      expect(hostCalls).toBe(2)
+      expect(disposed).toBe(1)
     } finally {
       await h.close()
     }

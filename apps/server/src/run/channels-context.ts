@@ -297,24 +297,16 @@ export function createChannelContext(
 
   // --- SSE fan-out ----------------------------------------------------------
 
-  /** SSE split: dm → the target agent's channel; orch → the event's channel;
-   * team → the event's channel AND the challenge's channel (the challenge IM
-   * view). */
+  /** One emit per message, keyed by the channel's own id (the challenge id
+   * for #team, the agent id for a DM, the event id for orch). The bus is
+   * global-only — every frame reaches the multiplexed stream once — so a
+   * second event-scoped key for #team would only duplicate the frame. The
+   * payload's `channelKey` is what consumers dispatch on. */
   function emitChannelMessage(
     parsed: ParsedChannelKey,
     message: ChannelMessagePublic
   ): void {
-    for (const channel of emitChannelsOf(parsed)) {
-      bus.emit(channel, { type: "channel.message", message })
-    }
-  }
-
-  function emitChannelsOf(parsed: ParsedChannelKey): string[] {
-    if (parsed.kind === "dm") return [parsed.id]
-    if (parsed.kind === "orch") return [parsed.id]
-    // team: the event channel + the challenge channel (the challenge IM).
-    const eventId = challengeRow(parsed.id)?.eventId
-    return eventId ? [eventId, parsed.id] : [parsed.id]
+    bus.emit(parsed.id, { type: "channel.message", message })
   }
 
   // --- hold (deliveryPaused, per event) --------------------------------
@@ -341,7 +333,6 @@ export function createChannelContext(
     markRead,
     toPublic,
     emitChannelMessage,
-    emitChannelsOf,
     setDeliveryPaused(eventId: string, paused: boolean): void {
       if (paused) deliveryPausedEvents.add(eventId)
       else deliveryPausedEvents.delete(eventId)
