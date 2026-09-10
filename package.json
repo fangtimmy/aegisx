@@ -1,9 +1,16 @@
 {
   "name": "aegisx",
   "private": true,
-  "workspaces": [
-    "apps/*"
-  ],
+  "workspaces": {
+    "packages": [
+      "apps/*"
+    ],
+    "catalog": {
+      "@earendil-works/pi-agent-core": "0.85.1",
+      "@earendil-works/pi-ai": "0.85.1",
+      "@earendil-works/pi-coding-agent": "0.85.1"
+    }
+  },
   "scripts": {
     "dev": "bun run dev:server & bun run dev:web & wait",
     "dev:server": "bun run --filter @aegisx/server dev",

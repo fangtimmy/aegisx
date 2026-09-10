@@ -39,7 +39,7 @@ knip 会卡未使用的导出：新增导出若无消费方，`bun run check` �
 
 ## 架构边界
 
-- agent loop 在宿主 server 进程内运行（`@earendil-works/pi-coding-agent`，版本由根 package.json `overrides` 统一钉住，升级须多处同步）；bash 与文件工具不落宿主进程——每题一个长寿 Kali 容器，命令经 dockerode `exec` 送入，工作区双向 bind mount。
+- agent loop 在宿主 server 进程内运行（`@earendil-works/pi-coding-agent`，版本由根 package.json 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）；bash 与文件工具不落宿主进程——每题一个长寿 Kali 容器，命令经 dockerode `exec` 送入，工作区双向 bind mount。
 - `apps/server/src/run/` 是运行时心脏：`service.ts` 组装根与策略，`agent-factory.ts` 单次 spawn 组装（容器 → host session → 工具注入），`agent-runtime.ts` 是每个存活 agent 的所有权根与唯一终态路径，`run/host/` 是 pi 会话宿主子层（不得反向依赖编排层，oxlint 强制），`run/clock.ts` 是所有运行时定时器的唯一来源，`fence.ts` 强制并发上限与槽位——系统约束在启动侧强制校验，不依赖调度者自觉。
 - 授权分两层：中间件每请求解析 `Principal`（user / agent / system），数据层作用域由 `run/principal-scope.ts` 的断言在 service 内强制——路由层不拼 scope 条件。
 - 调度者是 agent 而非代码循环：消费 `orch` 频道事件，用 Python SDK 产出计划，`run/queue.ts` 排水落地；系统→调度者的通知是类型化事件 + 可编辑模板（`run/orch-notices.ts`）。

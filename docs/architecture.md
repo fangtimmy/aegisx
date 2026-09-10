@@ -15,7 +15,7 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 | `containers/solver` | Kali 解题镜像，minimal / essential / full 三档共用一个 Dockerfile |
 | `containers/allinone` | 单镜像整机（server + web + 解题工具链，local 执行后端） |
 
-进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `overrides` 统一钉住）。bash 与 CTF 工具链不在进程内执行：每道题一个长寿 Kali 容器（主进程 `sleep infinity`，纯工具箱）承载执行，命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。网络边界：solver 容器在默认 bridge 上持有 `NET_RAW`，出站不受限，宿主局域网亦可达（也可经 `container.networkMode` 共享 VPN 容器的网络命名空间）；系统强制的隔离是 solver↔宿主数据与 solver↔其他题目，不含 solver↔局域网，有需要时通过 `container.networkMode` 收紧。
+进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）。bash 与 CTF 工具链不在进程内执行：每道题一个长寿 Kali 容器（主进程 `sleep infinity`，纯工具箱）承载执行，命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。网络边界：solver 容器在默认 bridge 上持有 `NET_RAW`，出站不受限，宿主局域网亦可达（也可经 `container.networkMode` 共享 VPN 容器的网络命名空间）；系统强制的隔离是 solver↔宿主数据与 solver↔其他题目，不含 solver↔局域网，有需要时通过 `container.networkMode` 收紧。
 
 数据全部落在 `data/`（可用 `AEGISX_DATA_DIR` 改址）：`aegisx.sqlite`（库）、`attachments/`（附件，按赛事/题目分目录）、`events/<eventId>/challenges/<challengeId>/workspace`（求解者工作区，内含 `agents/<id8>` 与 `shared/`）、`events/<eventId>/orchestrator`（调度者工作区）。
 

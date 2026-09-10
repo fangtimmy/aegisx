@@ -16,9 +16,9 @@
       "name": "@aegisx/server",
       "dependencies": {
         "@aegisx/shared": "workspace:*",
-        "@earendil-works/pi-agent-core": "0.85.1",
-        "@earendil-works/pi-ai": "0.85.1",
-        "@earendil-works/pi-coding-agent": "0.85.1",
+        "@earendil-works/pi-agent-core": "catalog:",
+        "@earendil-works/pi-ai": "catalog:",
+        "@earendil-works/pi-coding-agent": "catalog:",
         "@hono/typebox-validator": "^1.1.0",
         "dockerode": "^5.0.1",
         "drizzle-orm": "^0.45.2",
@@ -38,7 +38,7 @@
     "apps/shared": {
       "name": "@aegisx/shared",
       "devDependencies": {
-        "@earendil-works/pi-coding-agent": "0.84.2",
+        "@earendil-works/pi-coding-agent": "catalog:",
       },
     },
     "apps/web": {
@@ -79,6 +79,11 @@
     },
   },
   "overrides": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+  },
+  "catalog": {
+    "@earendil-works/pi-agent-core": "0.85.1",
     "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-coding-agent": "0.85.1",
   },
