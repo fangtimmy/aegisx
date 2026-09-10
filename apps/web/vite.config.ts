@@ -23,4 +23,16 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ["@aegisx/shared"],
   },
+  build: {
+    // The warning targets apps that should split; here one file is the point.
+    chunkSizeWarningLimit: 12_000,
+    rollupOptions: {
+      output: {
+        // Single-machine deployment: ship one JS file instead of ~320 chunks
+        // (shiki alone emits one sub-10KB chunk per language grammar). Route
+        // lazy-loading disappears, which costs nothing on localhost.
+        inlineDynamicImports: true,
+      },
+    },
+  },
 })
