@@ -1,5 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises"
-
 import type { ChallengeFlag } from "@aegisx/shared"
 import { and, asc, eq } from "drizzle-orm"
 
@@ -11,6 +9,7 @@ import {
   type eventPlatforms,
 } from "../db/schema"
 import { logEvent } from "../lib/log"
+import { type Clock, systemClock } from "../run/clock"
 import {
   fullySolved,
   fullySolvedAsideFromFlag,
@@ -70,6 +69,9 @@ export function createPlatformFlags(
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
   adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined,
   options?: {
+    /** Time source for the async-judge poll (`SUBMISSION_POLL_INTERVAL_MS`).
+     * Defaults to the system clock; tests inject a fake clock. */
+    clock?: Clock
     /** Notify the agent layer after a flag becomes platform-accepted. The
      * outcome tier shapes the response: "first" = the challenge's initial
      * solve (agent event + full-solve cleanup), "extra" = a new flag value on
@@ -90,6 +92,8 @@ export function createPlatformFlags(
     ): void
   }
 ) {
+  const clock = options?.clock ?? systemClock
+
   function lookup(challengeId: string, flag: string) {
     return db
       .select()
@@ -370,7 +374,7 @@ export function createPlatformFlags(
         attempt += 1
       ) {
         if (!result.remoteId || !adapter.getSubmission) break
-        await sleep(SUBMISSION_POLL_INTERVAL_MS, undefined, { signal })
+        await clock.sleep(SUBMISSION_POLL_INTERVAL_MS, signal)
         result = await adapter.getSubmission(
           remote!.remoteId,
           result.remoteId,

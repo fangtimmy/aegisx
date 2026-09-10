@@ -7,9 +7,11 @@ import {
   NOTICE_TEMPLATE_DEFAULTS,
 } from "../../src/orchestration/prompt-defaults"
 import {
+  NOTICE_TEMPLATE_VARIABLES,
   previewOrchestratorSystemPrompt,
   previewPromptTemplate,
   renderTemplateBody,
+  sampleNoticeContext,
   sampleOrchestratorPromptContext,
   samplePromptContext,
 } from "../../src/orchestration/prompt-templates"
@@ -330,5 +332,37 @@ describe("SDK signature sync (GUIDE.md exact-signature block ↔ mainSystem inli
     expect(ask).toBeTruthy()
     expect(main).toContain(`ask(${ask})`)
     expect(guide).toContain("~64KB")
+  })
+})
+
+describe("notice variable list sync (NOTICE_TEMPLATE_VARIABLES ↔ defaults ↔ preview context)", () => {
+  const HANDLEBARS_KEYWORDS = new Set(["if", "unless", "each", "else", "with"])
+
+  function referencedVariables(template: string): Set<string> {
+    const names = new Set<string>()
+    for (const match of template.matchAll(/\{\{([^}]*)\}\}/g)) {
+      const token = match[1]
+        .trim()
+        .replace(/^[#/~]*(if|unless|each|with|else)\s*/, "")
+      const root = token.split(/[\s.()]+/)[0]
+      if (root && !HANDLEBARS_KEYWORDS.has(root)) names.add(root)
+    }
+    return names
+  }
+
+  test("the list is exactly the union of variables the defaults reference", () => {
+    const referenced = new Set<string>()
+    for (const body of Object.values(NOTICE_TEMPLATE_DEFAULTS)) {
+      for (const name of referencedVariables(body)) referenced.add(name)
+    }
+    expect([...referenced].toSorted()).toEqual(
+      [...NOTICE_TEMPLATE_VARIABLES].toSorted()
+    )
+  })
+
+  test("every listed variable exists in the preview sample context", () => {
+    for (const variable of NOTICE_TEMPLATE_VARIABLES) {
+      expect(Object.hasOwn(sampleNoticeContext, variable)).toBe(true)
+    }
   })
 })

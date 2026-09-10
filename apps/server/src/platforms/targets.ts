@@ -1,9 +1,8 @@
-import { setTimeout as sleep } from "node:timers/promises"
-
 import { and, eq } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challengeRemote, challenges, type eventPlatforms } from "../db/schema"
+import { type Clock, systemClock } from "../run/clock"
 import { getChallengeRemote, isTargetCapable } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
@@ -21,8 +20,15 @@ const TARGET_READY_POLL_MAX_ATTEMPTS = 60
 export function createPlatformTargets(
   db: Database,
   storedPlatform: (eventId: string) => StoredPlatform | undefined,
-  adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined
+  adapterForEvent: (eventId: string) => CtfPlatformAdapter | undefined,
+  options?: {
+    /** Time source for the starting → running poll
+     * (`TARGET_READY_POLL_INTERVAL_MS`). Defaults to the system clock; tests
+     * inject a fake clock. */
+    clock?: Clock
+  }
 ) {
+  const clock = options?.clock ?? systemClock
   function platformForChallenge(challengeId: string) {
     const challenge = db
       .select({ eventId: challenges.eventId })
@@ -106,7 +112,7 @@ export function createPlatformTargets(
     try {
       const target = await method.call(adapter, remote.remoteId, signal)
       return action === "start"
-        ? await waitForTarget(adapter, remote.remoteId, target, signal)
+        ? await waitForTarget(adapter, clock, remote.remoteId, target, signal)
         : target
     } catch (error) {
       throw platformError(error)
@@ -158,6 +164,7 @@ export function createPlatformTargets(
 
 async function waitForTarget(
   adapter: CtfPlatformAdapter,
+  clock: Clock,
   remoteId: string,
   initial: TargetState,
   signal?: AbortSignal
@@ -168,7 +175,7 @@ async function waitForTarget(
     target.status === "starting" && attempt < TARGET_READY_POLL_MAX_ATTEMPTS;
     attempt += 1
   ) {
-    await sleep(TARGET_READY_POLL_INTERVAL_MS, undefined, { signal })
+    await clock.sleep(TARGET_READY_POLL_INTERVAL_MS, signal)
     target = (await adapter.getTarget?.(remoteId, signal)) ?? target
   }
   if (target.status !== "running") {

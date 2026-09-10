@@ -5,6 +5,11 @@ import { join } from "node:path"
 
 import { createApp } from "../../src/app"
 import { responseJson } from "../../src/lib/guards"
+import { NOTICE_TEMPLATE_DEFAULTS } from "../../src/orchestration/prompt-defaults"
+import {
+  NOTICE_TEMPLATE_VARIABLES,
+  sampleNoticeContext,
+} from "../../src/orchestration/prompt-templates"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -24,6 +29,20 @@ function createTestApp() {
   closeDatabases.push(instance.close)
   return instance.app
 }
+
+type PreviewResponse = {
+  segments: Array<{ id: number; text: string; highlighted: boolean }>
+}
+
+function preview(app: ReturnType<typeof createTestApp>, body: unknown) {
+  return app.request("/api/settings/prompts/preview", json("POST", body))
+}
+
+const joined = (segments: PreviewResponse["segments"]) =>
+  segments.map((segment) => segment.text).join("")
+
+const highlighted = (segments: PreviewResponse["segments"]) =>
+  segments.filter((segment) => segment.highlighted).map((s) => s.text)
 
 describe("prompt template store API", () => {
   test("GET lists the seeded builtin templates", async () => {
@@ -108,5 +127,79 @@ describe("prompt template store API", () => {
       )
       expect(response.status).toBe(400)
     }
+  })
+})
+
+describe("settings meta notice contract", () => {
+  test("meta carries all 10 notice defaults and the notice variable list", async () => {
+    const app = createTestApp()
+    const response = await app.request("/api/settings")
+    expect(response.status).toBe(200)
+    const { meta } = await responseJson<{
+      meta: {
+        promptTemplateDefaults: Record<string, string | undefined>
+        noticePromptVariables: string[]
+      }
+    }>(response)
+    expect(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).toHaveLength(10)
+    for (const [key, body] of Object.entries(NOTICE_TEMPLATE_DEFAULTS)) {
+      expect(meta.promptTemplateDefaults[key]).toBe(body)
+    }
+    expect(meta.noticePromptVariables).toEqual([...NOTICE_TEMPLATE_VARIABLES])
+    // The palette must be a subset of the preview sample context keys.
+    for (const variable of meta.noticePromptVariables) {
+      expect(Object.hasOwn(sampleNoticeContext, variable)).toBe(true)
+    }
+  })
+
+  test('every shipped notice default previews through kind "notice"', async () => {
+    const app = createTestApp()
+    for (const body of Object.values(NOTICE_TEMPLATE_DEFAULTS)) {
+      const response = await preview(app, { kind: "notice", template: body })
+      expect(response.status).toBe(200)
+      const { segments } = await responseJson<PreviewResponse>(response)
+      expect(joined(segments)).not.toContain("{{")
+    }
+  })
+})
+
+describe("prompt preview API", () => {
+  test('kind "notice" renders any notice* template against the sample context', async () => {
+    const app = createTestApp()
+    const response = await preview(app, {
+      kind: "notice",
+      template: NOTICE_TEMPLATE_DEFAULTS.noticeLaunchFailed,
+    })
+    expect(response.status).toBe(200)
+    const { segments } = await responseJson<PreviewResponse>(response)
+    const text = joined(segments)
+    expect(text).toContain("启动失败：「web1」")
+    expect(text).toContain("container start failed")
+    expect(text).not.toContain("{{")
+    // Interpolated values are highlighted (sample context, not the raw body).
+    expect(highlighted(segments)).toContain("web1")
+  })
+
+  test('kind "notice" covers guarded notice variables (partial / stalled)', async () => {
+    const app = createTestApp()
+    for (const [template, fragment] of [
+      [NOTICE_TEMPLATE_DEFAULTS.noticeFlagPartial, "已确认：flag{sample}"],
+      [NOTICE_TEMPLATE_DEFAULTS.noticeEventStalled, "排水已 5m 无进展"],
+    ] as const) {
+      const response = await preview(app, { kind: "notice", template })
+      expect(response.status).toBe(200)
+      const { segments } = await responseJson<PreviewResponse>(response)
+      expect(joined(segments)).toContain(fragment)
+      expect(joined(segments)).not.toContain("{{")
+    }
+  })
+
+  test("unknown preview kind is still rejected", async () => {
+    const app = createTestApp()
+    const response = await preview(app, {
+      kind: "noticeSomething",
+      template: "x",
+    })
+    expect(response.status).toBe(400)
   })
 })

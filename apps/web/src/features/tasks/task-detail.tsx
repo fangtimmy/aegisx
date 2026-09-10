@@ -8,7 +8,7 @@ import {
 } from "lucide-react"
 import { useEffect, useMemo } from "react"
 
-import { channelsApi, challengesApi, keys } from "@/api"
+import { apiUrl, channelsApi, challengesApi, keys } from "@/api"
 import type { Challenge, FleetInfo, QueueItem, QueueState } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
@@ -193,7 +193,9 @@ export function TaskDetail({
               key: (path) => keys.challenges.files(challengeId, path),
               get: (path) => challengesApi.getChallengeFiles(challengeId, path),
               downloadUrl: (path) =>
-                `/api/challenges/${challengeId}/files/download?path=${encodeURIComponent(path)}`,
+                apiUrl(
+                  `/challenges/${challengeId}/files/download?path=${encodeURIComponent(path)}`
+                ),
             }}
             key={challengeId}
           />

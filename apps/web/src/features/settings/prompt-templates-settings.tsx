@@ -41,6 +41,22 @@ const TEMPLATE_KEYS = [
   "schedulerDigest",
 ] as const
 
+/** System→scheduler notice templates (orch-notices): seeded into the same
+ * builtin namespace, so the settings page lists/edits them alongside the
+ * prompts. Previewed through the server's shared `notice` sample context. */
+const NOTICE_TEMPLATE_KEYS = [
+  "noticeFlagAccepted",
+  "noticeFlagExtra",
+  "noticeFlagPartial",
+  "noticeFlagPartialProgress",
+  "noticeSolveCleanup",
+  "noticeChallengeHalt",
+  "noticeQueueStarved",
+  "noticeLaunchFailed",
+  "noticeQueueState",
+  "noticeEventStalled",
+] as const
+
 const TEMPLATE_META: Record<string, { title: string; description: string }> = {
   mainSystem: {
     title: "主系统提示词",
@@ -69,6 +85,46 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
     description:
       "追加到调度者每次投递尾部的 fleet 状态摘要（槽位、队列、每题 agent 概况）。",
   },
+  noticeFlagAccepted: {
+    title: "通知 · 首次解出",
+    description: "题目首次完全解出时发到团队频道的通知。",
+  },
+  noticeFlagExtra: {
+    title: "通知 · 额外 flag",
+    description: "已解出题目上再确认一个 flag 时的通知。",
+  },
+  noticeFlagPartial: {
+    title: "通知 · 部分解出（团队）",
+    description: "多 flag 题部分解出时发到团队频道的通知。",
+  },
+  noticeFlagPartialProgress: {
+    title: "通知 · 部分解出（调度）",
+    description: "同一部分解出事件在调度频道的进度行。",
+  },
+  noticeSolveCleanup: {
+    title: "通知 · 解出清理",
+    description: "解出后自动停止同题 agent、取消排队项的摘要。",
+  },
+  noticeChallengeHalt: {
+    title: "通知 · 手动停止",
+    description: "操作员手动停止题目时关闭 agent、取消排队项的摘要。",
+  },
+  noticeQueueStarved: {
+    title: "通知 · 队列不足（紧急）",
+    description: "待发队列降到阈值时的紧急通知。",
+  },
+  noticeLaunchFailed: {
+    title: "通知 · 启动失败（紧急）",
+    description: "队列项永久启动失败时的紧急通知。",
+  },
+  noticeQueueState: {
+    title: "通知 · 队列暂停/恢复",
+    description: "队列暂停或恢复时发到调度频道的通知。",
+  },
+  noticeEventStalled: {
+    title: "通知 · 赛事停滞（紧急）",
+    description: "队列有待发项但无存活 solver 排水时的紧急通知。",
+  },
 }
 
 /** Preview kinds the server has a sample context for; schedulerInitial has
@@ -92,9 +148,9 @@ const ORCHESTRATOR_CONTEXT_KEYS = new Set([
 const CHANNEL_DELIVERY_KEYS = new Set(["channelDelivery"])
 const SCHEDULER_DIGEST_KEYS = new Set(["schedulerDigest"])
 
-/** Settings-page prompt-templates panel (v9: flat four builtin keys — no
- * plugin grouping). Each row opens an editor dialog with debounced save +
- * reset-to-default. */
+/** Settings-page prompt-templates panel (flat builtin keys — no plugin
+ * grouping): the run/scheduler prompts plus the system→scheduler notices.
+ * Each row opens an editor dialog with debounced save + reset-to-default. */
 export function PromptTemplatesSettings() {
   const templates = useQuery({
     queryKey: keys.promptTemplates.all,
@@ -142,18 +198,25 @@ export function PromptTemplatesSettings() {
       <Card>
         <CardPanel className="p-0">
           <div className="divide-y">
-            {TEMPLATE_KEYS.map((key) => (
-              <PromptTemplateRow
-                defaultBody={defaults[key] ?? ""}
-                key={key}
-                orchestratorVars={variables.orchestratorPromptVariables}
-                promptVars={variables.promptVariables}
-                deliveryVars={variables.deliveryPromptVariables}
-                digestVars={variables.schedulerDigestVariables}
-                row={rows.find((r) => r.plugin === "builtin" && r.key === key)}
-                templateKey={key}
-              />
-            ))}
+            {[...TEMPLATE_KEYS, ...NOTICE_TEMPLATE_KEYS].map((key) => {
+              const row = rows.find(
+                (candidate) =>
+                  candidate.plugin === "builtin" && candidate.key === key
+              )
+              return (
+                <PromptTemplateRow
+                  defaultBody={defaults[key] ?? row?.body ?? ""}
+                  key={key}
+                  orchestratorVars={variables.orchestratorPromptVariables}
+                  promptVars={variables.promptVariables}
+                  deliveryVars={variables.deliveryPromptVariables}
+                  digestVars={variables.schedulerDigestVariables}
+                  noticeVars={variables.noticePromptVariables}
+                  row={row}
+                  templateKey={key}
+                />
+              )
+            })}
           </div>
         </CardPanel>
       </Card>
@@ -173,6 +236,7 @@ function PromptTemplateRow({
   orchestratorVars,
   deliveryVars,
   digestVars,
+  noticeVars,
 }: {
   row: PromptTemplateRow | undefined
   templateKey: string
@@ -181,6 +245,7 @@ function PromptTemplateRow({
   orchestratorVars: string[]
   deliveryVars: string[]
   digestVars: string[]
+  noticeVars: string[]
 }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -237,11 +302,19 @@ function PromptTemplateRow({
   }
 
   const vars = useMemo(() => {
+    if (templateKey.startsWith("notice")) return noticeVars
     if (ORCHESTRATOR_CONTEXT_KEYS.has(templateKey)) return orchestratorVars
     if (CHANNEL_DELIVERY_KEYS.has(templateKey)) return deliveryVars
     if (SCHEDULER_DIGEST_KEYS.has(templateKey)) return digestVars
     return promptVars
-  }, [templateKey, orchestratorVars, promptVars, deliveryVars, digestVars])
+  }, [
+    templateKey,
+    orchestratorVars,
+    promptVars,
+    deliveryVars,
+    digestVars,
+    noticeVars,
+  ])
   const modified = row !== undefined && row.body !== defaultBody
 
   return (
@@ -287,7 +360,11 @@ function PromptTemplateRow({
           </DialogHeader>
           <DialogPanel>
             <PromptEditor
-              kind={BUILTIN_PREVIEW_KIND[templateKey]}
+              kind={
+                templateKey.startsWith("notice")
+                  ? "notice"
+                  : BUILTIN_PREVIEW_KIND[templateKey]
+              }
               onChange={(next) => {
                 setValue(next)
                 requestSave(next)

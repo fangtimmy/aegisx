@@ -56,7 +56,7 @@ import {
   formatCost,
   formatTokens,
 } from "@/features/runs/agent-overview"
-import { formatDurationClock, formatTime } from "@/lib/format"
+import { formatDurationClock, formatHourMinute, formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 /** Statistics tab: derived per-event analytics (score / billing / efficiency /
@@ -1198,10 +1198,7 @@ function axisTickTime(ms: number): string {
   const date = new Date(ms)
   const now = new Date()
   if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-    })
+    return formatHourMinute(ms) ?? formatTime(date.toISOString())
   }
   return formatTime(date.toISOString())
 }

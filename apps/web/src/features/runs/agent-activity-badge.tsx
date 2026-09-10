@@ -1,9 +1,10 @@
 import { LoaderCircle } from "lucide-react"
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useState } from "react"
 
 import type { AgentStatus } from "@/api"
 import { formatDuration } from "@/lib/format"
 import type { ConversationStore } from "@/stream/conversation-store"
+import { useStoreValue } from "@/stream/use-store-value"
 
 /** Epoch ms of the last user message (the "time since your last message"
  * anchor for the running-turn footer). */
@@ -40,17 +41,16 @@ export function AgentActivityBadge({
   agentId: string
   agentStatus: AgentStatus
 }) {
-  const subscribe = useCallback(
-    (listener: () => void) => stream.subscribe(agentId, listener),
-    [stream, agentId]
+  const getSignature = useCallback(
+    (store: ConversationStore, id: string) => {
+      const activity = store.getActivity(id)
+      const running = store.getRunningTool(id)
+      const anchor = lastUserMs(store, id)
+      return `${agentStatus}|${activity?.activity ?? ""}|${activity?.attempt ?? ""}|${activity?.maxAttempts ?? ""}|${activity?.reason ?? ""}|${running ? 1 : 0}|${anchor ?? ""}`
+    },
+    [agentStatus]
   )
-  const getSignature = useCallback(() => {
-    const activity = stream.getActivity(agentId)
-    const running = stream.getRunningTool(agentId)
-    const anchor = lastUserMs(stream, agentId)
-    return `${agentStatus}|${activity?.activity ?? ""}|${activity?.attempt ?? ""}|${activity?.maxAttempts ?? ""}|${activity?.reason ?? ""}|${running ? 1 : 0}|${anchor ?? ""}`
-  }, [stream, agentId, agentStatus])
-  useSyncExternalStore(subscribe, getSignature, getSignature)
+  useStoreValue(stream, agentId, getSignature)
 
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

@@ -2,6 +2,7 @@ import { isRecord } from "@aegisx/shared"
 import { fetchEventSource } from "@microsoft/fetch-event-source"
 
 import {
+  apiUrl,
   type ChallengeSyncItem,
   type ChallengeSyncProgress,
   type ChallengeSyncResult,
@@ -167,7 +168,7 @@ export async function syncChallengeStream(
   }
 
   await fetchEventSource(
-    `/api/events/${eventId}/platform/challenges/sync/stream`,
+    apiUrl(`/events/${eventId}/platform/challenges/sync/stream`),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

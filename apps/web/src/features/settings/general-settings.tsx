@@ -2,7 +2,7 @@ import { isRecord } from "@aegisx/shared"
 import { Download, Monitor, Moon, Sun, Upload } from "lucide-react"
 import { useRef, useState } from "react"
 
-import { settingsApi } from "@/api"
+import { apiUrl, settingsApi } from "@/api"
 import { useTheme } from "@/components/shell/theme-provider"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -191,7 +191,7 @@ function SettingsTransfer({
     setError(null)
     setMessage(null)
     try {
-      const response = await fetch("/api/settings/export")
+      const response = await fetch(apiUrl("/settings/export"))
       if (!response.ok) throw new Error("无法导出设置")
       const data = await response.json()
       const content = JSON.stringify(

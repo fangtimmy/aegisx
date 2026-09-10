@@ -11,6 +11,12 @@ export class ApiError extends Error {
   }
 }
 
+/** Prefix a server path with the API mount (`/api`). The single place that
+ * knows the mount point, so no caller hand-writes `/api/...`. */
+export function apiUrl(path: string): string {
+  return `/api${path}`
+}
+
 function readErrorBody(body: unknown): { message?: string; code?: string } {
   if (!isRecord(body) || !isRecord(body.error)) return {}
   return {
@@ -24,7 +30,7 @@ export async function apiRequest<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const response = await fetch(`/api${path}`, init)
+  const response = await fetch(apiUrl(path), init)
 
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`

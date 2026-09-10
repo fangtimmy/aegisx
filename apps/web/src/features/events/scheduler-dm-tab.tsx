@@ -5,17 +5,10 @@ import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ChannelComposer, ChannelTimeline } from "@/features/runs/channels-view"
+import { formatDurationClock } from "@/lib/format"
 import { toast } from "@/lib/toast"
 
 import { POLL_INTERVAL_MS } from "./event-agents-shared"
-
-/** mm:ss countdown from epoch ms (negative clamps to 0). */
-function countdown(ms: number): string {
-  const total = Math.max(0, Math.round(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${String(s).padStart(2, "0")}`
-}
 
 /**
  * The scheduler agent dialog's DM tab (v18 派生键频道): a status header
@@ -84,7 +77,7 @@ export function SchedulerDmTab({
               </Badge>
             ) : snap.nextFlushAt !== null ? (
               <Badge size="sm" variant="info">
-                合并投递 {countdown(snap.nextFlushAt - nowMs)}
+                合并投递 {formatDurationClock(snap.nextFlushAt - nowMs)}
               </Badge>
             ) : (
               <Badge size="sm" variant="secondary">

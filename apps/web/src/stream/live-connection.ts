@@ -1,4 +1,5 @@
 import type { LiveEvent } from "@/api"
+import { apiUrl } from "@/api/client"
 
 import { parseLiveEvent } from "./parse-event"
 
@@ -8,7 +9,7 @@ type LiveListener = (event: LiveEvent) => void
 type ReconnectListener = () => void
 type StatusListener = (disconnected: boolean) => void
 
-const DEFAULT_PATH = "/api/stream"
+const DEFAULT_PATH = apiUrl("/stream")
 
 /**
  * The one process-level EventSource. `GET /api/stream` multiplexes every

@@ -1,8 +1,7 @@
-import { useCallback, useSyncExternalStore } from "react"
-
 import { IconTooltip } from "@/components/shell/icon-tooltip"
 import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
+import { useStoreValue } from "@/stream/use-store-value"
 
 /** Format token counts for the context readout, matching the pi-TUI footer
  * rules. */
@@ -44,17 +43,8 @@ function statParts(snapshot: NonNullable<ContextSnapshot>) {
   return parts
 }
 
-function useContextSnapshot(stream: ConversationStore, agentId: string) {
-  const subscribe = useCallback(
-    (listener: () => void) => stream.subscribe(agentId, listener),
-    [stream, agentId]
-  )
-  return useSyncExternalStore(
-    subscribe,
-    () => stream.getContext(agentId),
-    () => stream.getContext(agentId)
-  )
-}
+const selectContext = (store: ConversationStore, agentId: string) =>
+  store.getContext(agentId)
 
 const RING_RADIUS = 5.5
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
@@ -68,7 +58,7 @@ export function ContextRing({
   agentId: string
   stream: ConversationStore
 }) {
-  const snapshot = useContextSnapshot(stream, agentId)
+  const snapshot = useStoreValue(stream, agentId, selectContext)
   if (!snapshot) return null
   const percent = snapshot.percent
   const tone =

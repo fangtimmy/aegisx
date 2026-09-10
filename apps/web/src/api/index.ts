@@ -1,4 +1,4 @@
-export { ApiError } from "./client"
+export { ApiError, apiUrl } from "./client"
 export * as activityApi from "./activity"
 export * as challengesApi from "./challenges"
 export * as channelsApi from "./channels"

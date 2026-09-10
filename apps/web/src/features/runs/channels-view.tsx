@@ -12,9 +12,17 @@ import {
   Users,
   X,
 } from "lucide-react"
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react"
+import {
+  Fragment,
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
 
 import {
+  apiUrl,
   channelsApi,
   keys,
   type ChannelMessageList,
@@ -26,6 +34,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
+import { formatTimeWithSeconds } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { liveConnection } from "@/stream/live-connection"
 
@@ -45,10 +54,6 @@ const NO_CHANNELS: ChannelPublic[] = []
  * group (Discord-style): only the group head shows avatar + author + time. */
 const GROUP_WINDOW_MS = 5 * 60_000
 
-function timeOf(iso: string): string {
-  return new Date(iso).toLocaleTimeString("zh-CN", { hour12: false })
-}
-
 function dayOf(iso: string): string {
   return new Date(iso).toDateString()
 }
@@ -66,7 +71,9 @@ function AttachmentChip({
   file: ChannelMessagePublic["files"][number]
   message: ChannelMessagePublic
 }) {
-  const url = `/api/channels/${message.channelKey}/files/download?message=${message.id}&path=${encodeURIComponent(file.path)}`
+  const url = apiUrl(
+    `/channels/${message.channelKey}/files/download?message=${message.id}&path=${encodeURIComponent(file.path)}`
+  )
   return (
     <a
       className="inline-flex max-w-full items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-0.5 font-mono text-xs transition-colors hover:bg-accent"
@@ -115,7 +122,7 @@ function MessageAvatar({ message }: { message: ChannelMessagePublic }) {
 
 /** One message row: group head carries avatar + author + time (+ ⚠ 紧急);
  * continuation rows only show the body, with the timestamp on hover. */
-function MessageRow({
+const MessageRow = memo(function MessageRow({
   message,
   first,
 }: {
@@ -128,7 +135,7 @@ function MessageRow({
         <MessageAvatar message={message} />
       ) : (
         <span className="top-0.5 left-3 hidden w-9 text-right text-2xs leading-6 text-muted-foreground group-hover/row:block">
-          {timeOf(message.createdAt)}
+          {formatTimeWithSeconds(message.createdAt)}
         </span>
       )}
       {first && (
@@ -137,7 +144,7 @@ function MessageRow({
             {message.authorName}
           </span>
           <span className="text-xs text-muted-foreground">
-            {timeOf(message.createdAt)}
+            {formatTimeWithSeconds(message.createdAt)}
           </span>
           {message.meta.urgent === true && (
             <Badge size="sm" variant="warning">
@@ -163,7 +170,7 @@ function MessageRow({
       )}
     </div>
   )
-}
+})
 
 function DayDivider({ iso }: { iso: string }) {
   const label = new Date(iso).toLocaleDateString("zh-CN", {

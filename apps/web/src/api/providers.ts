@@ -1,7 +1,7 @@
 import { isRecord } from "@aegisx/shared"
 import { fetchEventSource } from "@microsoft/fetch-event-source"
 
-import { apiRequest, jsonRequest } from "./client"
+import { apiRequest, apiUrl, jsonRequest } from "./client"
 import type {
   ModelMetadata,
   ModelOption,
@@ -106,7 +106,7 @@ export async function streamProviderTest(
   onEvent: (event: ProviderTestEvent) => void,
   signal?: AbortSignal
 ): Promise<void> {
-  await fetchEventSource(`/api/providers/${providerId}/test`, {
+  await fetchEventSource(apiUrl(`/providers/${providerId}/test`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

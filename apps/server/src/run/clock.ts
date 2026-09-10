@@ -19,8 +19,10 @@ export type Clock = {
   now(): number
   setTimeout(callback: () => void, ms: number): ClockTimer
   setInterval(callback: () => void, ms: number): ClockTimer
-  /** Promise resolved after `ms` (the promise-side of setTimeout). */
-  sleep(ms: number): Promise<void>
+  /** Promise resolved after `ms` (the promise-side of setTimeout). An optional
+   * `signal` mirrors `node:timers/promises` setTimeout: aborting rejects with
+   * `signal.reason` and cancels the wait. */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>
 }
 
 /** The production clock: a thin wrapper over the global Date.now /
@@ -36,7 +38,23 @@ export const systemClock: Clock = {
     const id = setInterval(callback, ms)
     return { clear: () => clearInterval(id) }
   },
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason)
+        return
+      }
+      function onAbort() {
+        clearTimeout(id)
+        reject(signal?.reason)
+      }
+      const id = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort)
+        resolve()
+      }, ms)
+      signal?.addEventListener("abort", onAbort, { once: true })
+    })
+  },
 }
 
 /**
@@ -148,9 +166,21 @@ export function createFakeClock(startMs = Date.now()): FakeClock {
       const step = Math.max(1, ms)
       return schedule(nowMs + step, step, callback)
     },
-    sleep(ms) {
-      return new Promise((resolve) => {
-        clock.setTimeout(resolve, ms)
+    sleep(ms, signal) {
+      return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(signal.reason)
+          return
+        }
+        function onAbort() {
+          timer.clear()
+          reject(signal?.reason)
+        }
+        const timer = clock.setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort)
+          resolve()
+        }, ms)
+        signal?.addEventListener("abort", onAbort, { once: true })
       })
     },
     advance(ms) {

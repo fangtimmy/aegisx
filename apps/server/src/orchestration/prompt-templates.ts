@@ -452,3 +452,67 @@ export function previewSchedulerDigest(template: string) {
     )
   )
 }
+
+// --- notice templates -------------------------------------------------------
+
+/** Sample context for the notice templates (`NOTICE_TEMPLATE_DEFAULTS`,
+ * rendered by `run/orch-notices.ts`). One context covers every `notice*` key:
+ * the shipped defaults reference an `{{#if}}`-guarded subset of the typed
+ * notice-event fields below, and a single superset avoids one sample per
+ * event kind. Variables, checked against the actual defaults:
+ * `challengeName`, `flag`, `submitter`, `stopSiblings` (flagAccepted),
+ * `message`, `confirmed` (flagPartial), `progress` (flagPartialProgress),
+ * `stopped`, `cancelled` (solveCleanup), `closed`, `cancelled`
+ * (challengeHalt), `pending` (queueStarved / eventStalled), `error`
+ * (launchFailed), `action`, `manual` (queueStateChanged), `stalled`
+ * (eventStalled). */
+export const sampleNoticeContext = {
+  challengeName: "web1",
+  flag: "flag{sample}",
+  submitter: "agent-a3f1c2d9",
+  stopSiblings: false,
+  message: "flag 2/3 已确认",
+  confirmed: "flag{sample}、flag{sample2}",
+  progress: "2/3",
+  stopped: 2,
+  cancelled: 1,
+  closed: 2,
+  pending: 1,
+  error: "container start failed",
+  action: "暂停",
+  manual: true,
+  stalled: "5m",
+}
+
+/** Variables referenced by the shipped notice templates, one entry per
+ * `NOTICE_TEMPLATE_DEFAULTS` key (the settings variable palette). Must stay
+ * exactly in sync with {@link sampleNoticeContext}: the preview renders the
+ * defaults against that context in strict Handlebars, so a variable added to a
+ * default but missing from the sample context would make the preview throw.
+ * Exposed through the settings meta as `noticePromptVariables`. */
+export const NOTICE_TEMPLATE_VARIABLES = [
+  "challengeName",
+  "flag",
+  "submitter",
+  "stopSiblings",
+  "message",
+  "confirmed",
+  "progress",
+  "stopped",
+  "cancelled",
+  "closed",
+  "pending",
+  "error",
+  "action",
+  "manual",
+  "stalled",
+] as const
+
+/** Render an arbitrary notice template body against the sample notice context.
+ * Backs the settings preview's single `notice` kind — the frontend sends
+ * `kind: "notice"` for every `notice*` template key. */
+export function previewNotice(template: string) {
+  return previewSegments(
+    renderTemplateBody(template, markPreviewValues(sampleNoticeContext))
+  )
+}

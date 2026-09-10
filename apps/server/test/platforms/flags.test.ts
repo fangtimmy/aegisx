@@ -15,6 +15,7 @@ import {
 } from "../../src/platforms/core"
 import { createPlatformFlags } from "../../src/platforms/flags"
 import { createPlatformService } from "../../src/platforms/service"
+import { type Clock, createFakeClock } from "../../src/run/clock"
 import {
   seedAgent,
   seedChallenge,
@@ -126,7 +127,8 @@ function flagRows(db: ReturnType<typeof setupDb>["db"]) {
 function makeFlags(
   db: Database,
   adapter: Partial<CtfPlatformAdapter>,
-  hooks: {
+  options: {
+    clock?: Clock
     onAgentFlagAccepted?: (
       challengeId: string,
       agentId?: string,
@@ -143,8 +145,14 @@ function makeFlags(
         .where(eq(eventPlatforms.eventId, "evt-1"))
         .get(),
     () => refine<CtfPlatformAdapter>(adapter),
-    hooks
+    options
   )
+}
+
+/** Drain all pending microtasks (a macrotask boundary flushes the whole
+ * microtask queue), letting a submitFlag call run up to its poll timer. */
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
 }
 
 describe("platform flags → async judge + concurrent submissions", () => {
@@ -234,16 +242,27 @@ describe("platform flags → async judge + concurrent submissions", () => {
       seedChallenge(db, { id: "ch-1" })
       seedAgent(db, { id: "a-1", challengeId: "ch-1" })
       integratedFixture(db)
-      const flags = makeFlags(db, {
-        submitFlag: async () => ({ status: "pending", remoteId: "sub-1" }),
-        getSubmission: async () => ({
-          status: "accepted",
-          remoteId: "sub-1",
-          message: "Correct!",
-        }),
-      })
+      const clock = createFakeClock()
+      const flags = makeFlags(
+        db,
+        {
+          submitFlag: async () => ({ status: "pending", remoteId: "sub-1" }),
+          getSubmission: async () => ({
+            status: "accepted",
+            remoteId: "sub-1",
+            message: "Correct!",
+          }),
+        },
+        { clock }
+      )
 
-      const result = await flags.submitFlag("ch-1", "a-1", "flag{ok}")
+      const pending = flags.submitFlag("ch-1", "a-1", "flag{ok}")
+      // The submit settles and arms the 1s poll timer; advance past it
+      // deterministically instead of sleeping for real.
+      await flushMicrotasks()
+      expect(clock.pendingCount()).toBe(1)
+      clock.advance(1_000)
+      const result = await pending
       expect(result.status).toBe("accepted")
       const rows = flagRows(db)
       expect(rows).toHaveLength(1)
@@ -263,25 +282,41 @@ describe("platform flags → async judge + concurrent submissions", () => {
       seedAgent(db, { id: "a-1", challengeId: "ch-1" })
       seedAgent(db, { id: "a-2", challengeId: "ch-1" })
       integratedFixture(db)
+      const clock = createFakeClock()
       let calls = 0
-      const flags = makeFlags(db, {
-        submitFlag: async () => {
-          calls += 1
-          await new Promise((resolve) => setTimeout(resolve, 20))
-          return { status: "pending", remoteId: `sub-${calls}` }
-        },
-        getSubmission: async () => ({
-          status: "accepted",
-          message: "Correct!",
-        }),
+      // Park both submits on one gate so they overlap deterministically (the
+      // real-time 20ms race window is not needed under a fake clock).
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
       })
+      const flags = makeFlags(
+        db,
+        {
+          submitFlag: async () => {
+            calls += 1
+            await gate
+            return { status: "pending", remoteId: `sub-${calls}` }
+          },
+          getSubmission: async () => ({
+            status: "accepted",
+            message: "Correct!",
+          }),
+        },
+        { clock }
+      )
 
-      const [first, second] = await Promise.all([
-        flags.submitFlag("ch-1", "a-1", "flag{race}"),
-        flags.submitFlag("ch-1", "a-2", "flag{race}"),
-      ])
-      expect(first.status).toBe("accepted")
-      expect(second.status).toBe("accepted")
+      const first = flags.submitFlag("ch-1", "a-1", "flag{race}")
+      const second = flags.submitFlag("ch-1", "a-2", "flag{race}")
+      await flushMicrotasks()
+      release()
+      await flushMicrotasks()
+      // Both pending submissions were persisted and armed a poll timer.
+      expect(clock.pendingCount()).toBe(2)
+      clock.advance(1_000)
+      const [a, b] = await Promise.all([first, second])
+      expect(a.status).toBe("accepted")
+      expect(b.status).toBe("accepted")
       const rows = flagRows(db)
       expect(rows).toHaveLength(1)
       expect(rows[0].status).toBe("accepted")

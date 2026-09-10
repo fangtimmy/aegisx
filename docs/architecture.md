@@ -97,7 +97,7 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 
 实时扇出（`channels-context.ts` → LiveBus）：每条消息**只 emit 一次**，bus 键取频道自身 id（#team = challengeId，dm = agentId，orch = eventId）；LiveBus 只有全局订阅（`subscribeAll`）一个出口，web 端按载荷里的 `message.channelKey` 分发，因此不存在 per-channel 订阅方，也不需要有第二把事件级键。
 
-**系统通知 = 类型化事件 + 模板**（`run/orch-notices.ts`）：系统侧的调用点（service 的 flag 处置/解出清理/手动停止、queue 的队列边沿与暂停恢复）不再拼中文散文，只构造类型化事件并 `publish`；事件决定投递面（`team:<challengeId>` 或 `orch:<eventId>`）、`meta`（`eventType` / `noticeType` / 提交者 `agentId`）与紧急度，文本由模板渲染——默认值即 `NOTICE_TEMPLATE_DEFAULTS`，随 builtin 行落 `prompt_templates`（用户可编辑，下次通知生效）。投递面、urgent 语义、paused 门与 `meta.agentId`（跳过提交者自身通知）等契约全部留在 channels 层不变；`launchFailed` 的事件载荷当前仍携带 drainer 已渲染的原因行（该行由 `drainer.ts` 组装，未在本批所有权内）。
+**系统通知 = 类型化事件 + 模板**（`run/orch-notices.ts`）：系统侧的调用点（service 的 flag 处置/解出清理/手动停止、queue 的队列边沿与暂停恢复）不再拼中文散文，只构造类型化事件并 `publish`；事件决定投递面（`team:<challengeId>` 或 `orch:<eventId>`）、`meta`（`eventType` / `noticeType` / 提交者 `agentId`）与紧急度，文本由模板渲染——默认值即 `NOTICE_TEMPLATE_DEFAULTS`，随 builtin 行落 `prompt_templates`（用户可编辑，下次通知生效）。投递面、urgent 语义、paused 门与 `meta.agentId`（跳过提交者自身通知）等契约全部留在 channels 层不变；`launchFailed` 的事件载荷当前仍携带 drainer 已渲染的原因行（该行由 `drainer.ts` 组装，未在本批所有权内）。9 个通知模板与其余内置模板一样在设置页预览：`POST /api/settings/prompts/preview` 对全部 `notice*` 键统一收 `kind: "notice"`，用一个覆盖全部通知变量的示例上下文渲染（前端无需按事件分派）。
 
 ## 调度
 
@@ -107,7 +107,7 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 
 ## 平台适配（`apps/server/src/platforms/`）
 
-`core.ts` 定义统一接口，`adapters/` 内置五类：CTFd、A1CTF、DASCTF、Ret2Shell、TSecBench。能力面：题目同步（`sync.ts`）、远程 flag 判定（`flags.ts`）、靶机实例启动/续期（`targets.ts`）；远程状态镜像进 `challenge_remote` 表，失败请求落 `platform_request_log`（请求头脱敏，保留 7 天）。flag 被平台接受的回调（`app.ts` 的 agentHooks）会刷新提交 agent 的视图、通知调度者，并按策略停掉同题其余存活 agent。
+`core.ts` 定义统一接口，`adapters/` 内置五类：CTFd、A1CTF、DASCTF、Ret2Shell、TSecBench。能力面：题目同步（`sync.ts`）、远程 flag 判定（`flags.ts`）、靶机实例启动/续期（`targets.ts`）；远程状态镜像进 `challenge_remote` 表，失败请求落 `platform_request_log`（请求头脱敏，保留 7 天）。异步判定轮询（`flags.ts`）与靶机就绪轮询（`targets.ts`）的等待也走统一时间层 `run/clock.ts`——`createPlatformService` 接受可选 `clock`（默认 `systemClock`，组装点 `app.ts` 不传）并下传给两个模块，间隔/超时/重试次数语义不变，测试注入 `createFakeClock` 消除真实等待。flag 被平台接受的回调（`app.ts` 的 agentHooks）会刷新提交 agent 的视图、通知调度者，并按策略停掉同题其余存活 agent。
 
 ## LLM 接入
 

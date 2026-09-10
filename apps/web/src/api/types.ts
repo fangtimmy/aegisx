@@ -91,7 +91,8 @@ export type SettingsResponse = {
   settings: FlatSettings
   updatedAt: string
   meta: {
-    /** Builtin template defaults, keyed by template key (reset source). */
+    /** Builtin template defaults, keyed by template key (reset source) — the
+     * six system prompts plus the ten notice templates. */
     promptTemplateDefaults: {
       mainSystem: string
       initial: string
@@ -99,10 +100,12 @@ export type SettingsResponse = {
       schedulerInitial: string
       channelDelivery: string
       schedulerDigest: string
+      [key: string]: string | undefined
     }
     promptVariables: string[]
     orchestratorPromptVariables: string[]
     deliveryPromptVariables: string[]
     schedulerDigestVariables: string[]
+    noticePromptVariables: string[]
   }
 }

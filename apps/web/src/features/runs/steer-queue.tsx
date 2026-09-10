@@ -1,13 +1,17 @@
 import { useMutation } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import { useEffect, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import { ConversationStore } from "@/stream/conversation-store"
+import { useStoreValue } from "@/stream/use-store-value"
 
 type QueueRow = { role: "steering" | "followUp"; index: number; text: string }
+
+const selectQueue = (store: ConversationStore, agentId: string) =>
+  store.getQueue(agentId)
 
 /** Editable list of queued steer / follow-up messages above the input. Owns
  * its visibility: renders nothing unless the agent is mid-turn, queue editing
@@ -31,15 +35,7 @@ export function SteerQueue({
   ) => Promise<unknown>
   stream: ConversationStore
 }) {
-  const subscribe = useCallback(
-    (listener: () => void) => stream.subscribe(agentId, listener),
-    [stream, agentId]
-  )
-  const queue = useSyncExternalStore(
-    subscribe,
-    () => stream.getQueue(agentId),
-    () => stream.getQueue(agentId)
-  )
+  const queue = useStoreValue(stream, agentId, selectQueue)
   const [edit, setEdit] = useState<QueueRow | null>(null)
   const put = useMutation({
     mutationFn: (body: { steering: string[]; followUp: string[] }) =>

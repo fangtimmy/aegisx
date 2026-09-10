@@ -28,13 +28,16 @@ import {
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
   DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
+  NOTICE_TEMPLATE_DEFAULTS,
 } from "../orchestration/prompt-defaults"
 import {
   DELIVERY_TEMPLATE_VARIABLES,
+  NOTICE_TEMPLATE_VARIABLES,
   ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES,
   PROMPT_TEMPLATE_VARIABLES,
   SCHEDULER_DIGEST_TEMPLATE_VARIABLES,
   previewChannelDelivery,
+  previewNotice,
   previewOrchestratorSystemPrompt,
   previewPromptTemplate,
   previewSchedulerDigest,
@@ -55,6 +58,9 @@ const promptPreviewInput = Type.Object(
       Type.Literal("orchestratorSystemPrompt"),
       Type.Literal("channelDeliveryPrompt"),
       Type.Literal("schedulerDigestPrompt"),
+      // Every `notice*` key (10 notification templates) previews through this
+      // one kind — they share a single sample notice context.
+      Type.Literal("notice"),
     ]),
     template: Type.String({ maxLength: 100_000 }),
   },
@@ -83,11 +89,13 @@ function settingsResponse(configStore: ConfigStore) {
         schedulerInitial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
         channelDelivery: DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
         schedulerDigest: DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
+        ...NOTICE_TEMPLATE_DEFAULTS,
       },
       promptVariables: [...PROMPT_TEMPLATE_VARIABLES],
       orchestratorPromptVariables: [...ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES],
       deliveryPromptVariables: [...DELIVERY_TEMPLATE_VARIABLES],
       schedulerDigestVariables: [...SCHEDULER_DIGEST_TEMPLATE_VARIABLES],
+      noticePromptVariables: [...NOTICE_TEMPLATE_VARIABLES],
     },
   }
 }
@@ -98,7 +106,8 @@ function previewPrompt(
     | "initialPrompt"
     | "orchestratorSystemPrompt"
     | "channelDeliveryPrompt"
-    | "schedulerDigestPrompt",
+    | "schedulerDigestPrompt"
+    | "notice",
   template: string
 ) {
   if (kind === "orchestratorSystemPrompt") {
@@ -112,6 +121,11 @@ function previewPrompt(
   }
   if (kind === "schedulerDigestPrompt") {
     return previewSchedulerDigest(template)
+  }
+  // All 10 notice* keys (flagAccepted/launchFailed/queueStarved/eventStalled/
+  // ...) share one sample notice context; the frontend sends kind: "notice".
+  if (kind === "notice") {
+    return previewNotice(template)
   }
   // mainSystemPrompt and initialPrompt render against the same full run
   // context through the same template renderer.

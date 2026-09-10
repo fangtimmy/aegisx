@@ -270,8 +270,10 @@ function applyUser(
   })
 }
 
-/** Format a token count like the pi-TUI compaction marker. */
-export function formatTokens(count: number): string {
+/** Format a token count like the pi-TUI compaction marker (1500 → "2k").
+ * Deliberately distinct from agent-overview's general `formatTokens`
+ * (1500 → "1.5k"): this one matches pi's footer/compaction readout. */
+export function formatTokensPiAligned(count: number): string {
   if (count < 1000) return String(count)
   if (count < 1_000_000) return `${Math.round(count / 1000)}k`
   return `${(count / 1_000_000).toFixed(1)}M`
@@ -283,7 +285,7 @@ function applyCompaction(
   stableKey: string,
   seq?: number
 ) {
-  const title = `已压缩 ${formatTokens(entry.tokensBefore)} token`
+  const title = `已压缩 ${formatTokensPiAligned(entry.tokensBefore)} token`
   items.push({
     key: stableKey,
     type: "system",

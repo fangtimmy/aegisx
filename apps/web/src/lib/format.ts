@@ -10,6 +10,25 @@ export function formatTime(value: string | null | undefined): string {
   return formatter.format(new Date(value))
 }
 
+/** HH:mm (24-hour) for a timestamp; null when unset or invalid. */
+export function formatHourMinute(
+  value: string | number | undefined
+): string | null {
+  if (value === undefined) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+/** HH:mm:ss (24-hour) — channel timeline timestamps. */
+export function formatTimeWithSeconds(value: string | number): string {
+  return new Date(value).toLocaleTimeString("zh-CN", { hour12: false })
+}
+
 export function formatDuration(durationMs: number): string {
   const seconds = durationMs / 1000
   if (seconds < 10) return `${Math.max(0.1, seconds).toFixed(1)}s`

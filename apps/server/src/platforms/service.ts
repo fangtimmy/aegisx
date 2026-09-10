@@ -13,6 +13,7 @@ import {
 import type { ConfigStore } from "../infrastructure/config-store"
 import type { createStorage } from "../infrastructure/storage"
 import { normalizeHttpBaseUrl } from "../infrastructure/urls"
+import type { Clock } from "../run/clock"
 import { A1CtfAdapter } from "./adapters/a1ctf"
 import { CtfdAdapter } from "./adapters/ctfd"
 import { DasCtfAdapter } from "./adapters/dasctf"
@@ -80,8 +81,14 @@ export function createPlatformService(
   db: Database,
   storage: Storage,
   maxAttachmentBytes: () => number,
-  configStore: ConfigStore
+  configStore: ConfigStore,
+  options?: {
+    /** Injected time source for the async-judge / target-ready polling done by
+     * flags.ts and targets.ts. Omitted in production (system clock). */
+    clock?: Clock
+  }
 ) {
+  const clock = options?.clock
   // Retention sweep: drop log rows older than the window (ISO strings
   // compare lexicographically).
   db.delete(platformRequestLog)
@@ -198,6 +205,7 @@ export function createPlatformService(
     storedPlatform,
     adapterForEvent,
     {
+      clock,
       onAgentFlagAccepted: (challengeId, agentId, outcome) =>
         onAgentFlagAccepted?.(challengeId, agentId, outcome),
       onAgentFlagPartial: (challengeId, message, agentId) =>
@@ -207,7 +215,8 @@ export function createPlatformService(
   const platformTargets = createPlatformTargets(
     db,
     storedPlatform,
-    adapterForEvent
+    adapterForEvent,
+    { clock }
   )
 
   function publicPlatform(eventId: string): EventPlatform | null {

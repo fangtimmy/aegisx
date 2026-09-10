@@ -27,12 +27,10 @@ import {
 } from "lucide-react"
 import {
   memo,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react"
 import { createPortal } from "react-dom"
@@ -54,35 +52,28 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   type ConversationItem,
-  formatTokens,
+  formatTokensPiAligned,
   type SystemVariant,
   type ToolBlock,
   toolStatusLabel,
 } from "@/domain/conversation"
-import { formatDuration } from "@/lib/format"
+import { formatDuration, formatHourMinute } from "@/lib/format"
 import { useMarkdownPrefs } from "@/lib/markdown-prefs"
 import { toast } from "@/lib/toast"
 import { cn } from "@/lib/utils"
 import type { ConversationStore } from "@/stream/conversation-store"
+import { useStoreValue } from "@/stream/use-store-value"
 
 import { ToolCustomBody, usesCustomToolBody } from "./tool-render"
-
-function formatClock(value: string | number | undefined) {
-  if (value === undefined) return null
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
-  return date.toLocaleTimeString("zh-CN", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
 
 function tsMs(value: string | number | undefined): number | undefined {
   if (value === undefined) return undefined
   const ms = typeof value === "number" ? value : Date.parse(value)
   return Number.isFinite(ms) ? ms : undefined
 }
+
+const selectItems = (store: ConversationStore, agentId: string) =>
+  store.get(agentId)
 
 function copyText(value: string) {
   void navigator.clipboard.writeText(value).then(
@@ -441,9 +432,9 @@ const ConversationRow = memo(function ConversationRow({
           <MessageBody markdown={prefs.user}>{item.body}</MessageBody>
         </div>
         <div className="mt-1 flex items-center gap-0.5 text-xs text-muted-foreground">
-          {formatClock(item.timestamp) && (
+          {formatHourMinute(item.timestamp) && (
             <span className="mr-1 tabular-nums">
-              {formatClock(item.timestamp)}
+              {formatHourMinute(item.timestamp)}
             </span>
           )}
           <MetaIconButton
@@ -555,16 +546,18 @@ const ConversationRow = memo(function ConversationRow({
       </div>
       {isTurnEnd && (
         <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-          {formatClock(item.timestamp) && (
-            <span className="tabular-nums">{formatClock(item.timestamp)}</span>
+          {formatHourMinute(item.timestamp) && (
+            <span className="tabular-nums">
+              {formatHourMinute(item.timestamp)}
+            </span>
           )}
           {turnMs !== undefined && (
             <span className="tabular-nums">本轮 {formatDuration(turnMs)}</span>
           )}
           {usage && (
             <span className="font-mono tabular-nums">
-              ↑{formatTokens(usage.input + usage.cacheRead)} ↓
-              {formatTokens(usage.output)}
+              ↑{formatTokensPiAligned(usage.input + usage.cacheRead)} ↓
+              {formatTokensPiAligned(usage.output)}
               {usage.cost > 0 && ` · $${usage.cost.toFixed(3)}`}
             </span>
           )}
@@ -726,14 +719,7 @@ export function Timeline({
   const [scrollContainer, setScrollContainer] = useState<HTMLElement | null>(
     null
   )
-  const items = useSyncExternalStore(
-    useCallback(
-      (listener) => stream.subscribe(agentId, listener),
-      [agentId, stream]
-    ),
-    useCallback(() => stream.get(agentId), [agentId, stream]),
-    useCallback(() => stream.get(agentId), [agentId, stream])
-  )
+  const items = useStoreValue(stream, agentId, selectItems)
   const hasConversation = items.length > 0
   const latestItem = items.at(-1)
   const showJumpToLatest = hasOverflow && !atBottom

@@ -164,6 +164,28 @@ describe("createFakeClock", () => {
     await pending
   })
 
+  test("sleep rejects on abort and cancels the wait", async () => {
+    const clock = createFakeClock()
+    const controller = new AbortController()
+    const pending = clock.sleep(500, controller.signal)
+    expect(clock.pendingCount()).toBe(1)
+    controller.abort()
+    await expect(pending).rejects.toBe(controller.signal.reason)
+    expect(clock.pendingCount()).toBe(0)
+    // A later advance must not resolve a cancelled wait.
+    clock.advance(1_000)
+  })
+
+  test("sleep rejects immediately when the signal is already aborted", async () => {
+    const clock = createFakeClock()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(clock.sleep(500, controller.signal)).rejects.toBe(
+      controller.signal.reason
+    )
+    expect(clock.pendingCount()).toBe(0)
+  })
+
   test("advance fires nothing when no timer is due", () => {
     const clock = createFakeClock(0)
     clock.advance(10_000)
