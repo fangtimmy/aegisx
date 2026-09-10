@@ -13,7 +13,7 @@
 #   - scheduler: maxConcurrentTargets 3, stopSubmitterOnSolve true
 #
 #   docker buildx build -f containers/tsecbench/Dockerfile \
-#     --platform linux/amd64 -t aegisx/tsecbench:v9 .
+#     --platform linux/amd64 -t aegisx/tsecbench:v10 .
 
 # === web build (vite) ========================================================
 FROM oven/bun:1.4 AS web-builder
