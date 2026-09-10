@@ -57,6 +57,57 @@ model id 匹配 > 保守默认值。
 > **升级镜像请用全新 /data 卷**：内置提示词模板行是「已存在则不覆盖」语义，
 > 旧卷会保住旧版本模板，新镜像的提示词更新不会生效。
 
+## 托管在线评测（操作手册）
+
+平台在受控沙箱里拉起镜像并自动运行，**沙箱无法访问公网**——大模型与答题 API 都走
+平台网关。契约以平台「接入指引」为准，本节是经实测校准的操作步骤。
+
+**0) 前置**：先在本地模式完整跑通（上一节），平台也明确要求托管前先完成本地评测。
+
+**1) 导出并上传镜像**（平台「制作并上传 Docker 镜像」步骤）：
+
+```sh
+docker buildx build -f containers/tsecbench/Dockerfile \
+  --platform linux/amd64 -t aegisx/tsecbench:vN .
+docker save aegisx/tsecbench:vN | gzip > /tmp/aegisx-tsecbench-vN.tar.gz
+shasum -a 256 /tmp/aegisx-tsecbench-vN.tar.gz   # 上传前记录，平台侧核对
+```
+
+接受 `.tar / .tar.gz / .tgz`，上限 3GB（本镜像 gzip 后约 1.8GB）。传错版本的
+tarball 及时删除，避免同 tag 多份产物混淆。
+
+**2) 配置「运行时环境变量」**（页面第 3 步，逐条添加；`BENCHMARK_BASE_URL` /
+`BENCHMARK_TOKEN` 由平台自动注入，**不要手动填**）：
+
+```sh
+AEGISX_PROVIDER_BASE_URL = http://open.bigmodel.cn.tsecbench.gw/api/coding/paas/v4
+AEGISX_PROVIDER_TYPE     = openai-compatible
+AEGISX_PROVIDER_API_KEY  = <智谱 key>
+AEGISX_MODEL_ID          = glm-5.3-flash
+AEGISX_MODEL_EFFORT      = high
+AEGISX_MODEL_PROFILE     = zai-coding-cn/glm-5.3-flash
+```
+
+规则与原因：
+
+- LLM 地址**必须**是网关形态：原域名加 `.tsecbench.gw` 后缀、`https` 改 `http`
+  （沙箱无公网，公网地址不可达；`open.bigmodel.cn` 在平台白名单内）。
+- `AEGISX_MODEL_PROFILE` 必填：目录里有 4 个 provider 同名 `glm-5.3-flash`，
+  自动按 id 匹配会命中 `opencode/` 的泛化条目（无思考控制 compat，effort 静默
+  失效）；显式绑定智谱条目才拿到完整 zai compat 与真实计价。
+- 赛事名不用填：配置了平台时自动派生为 `tsecbench`（v11 起；v9/v10 会因缺失
+  赛事名**静默跳过**全部 bootstrap，日志只有 preset 一行——直接作废，勿用）。
+
+**3) 提交并观察**：提交后进运行队列，平台「部署 / 运行日志」实时可看。正常启动
+的时间线依次为：`Started development server` → `preset settings applied` →
+`platform bound` → `challenges synced` → `scheduler started` → 随后是 agent 与
+flag 的逐条日志（`agent.started` / `agent.finished` 带 `durSec`、
+`flag: rejected`、`queue: enqueued` 带 `promptLen`）。若停在 preset 之后不动，
+按 v9/v10 教训先核对镜像版本与环境变量。
+
+**平台契约备忘**：8核16G 资源、360min 时限、沙箱一次性（结束即销毁）、
+运行期流量与对话记录被审计；Agent 不得内置针对题目的历史记忆（作弊处置）。
+
 ## 调优注入：preset（`/opt/aegisx-preset/preset.json`）
 
 调优以 **JSON 数据**随镜像分发，bootstrap 首启时读取并落库（v5 及以前是构建期

@@ -17,4 +17,4 @@
 - [apps/sdk/python/GUIDE.md](../apps/sdk/python/GUIDE.md) — Python SDK 参考；运行时资产，随镜像分发到 `/opt/aegisx-sdk`，位置固定不可移动
 - [containers/solver/README.md](../containers/solver/README.md) — 解题镜像三档（minimal / essential / full）的构建与内容
 - [containers/allinone/README.md](../containers/allinone/README.md) — 单镜像整机（local 执行后端，无独立工具箱容器）
-- [containers/tsecbench/README.md](../containers/tsecbench/README.md) — TSecBench 断网评测 all-in-one 镜像：工具集、烘焙调优与运行方式
+- [containers/tsecbench/README.md](../containers/tsecbench/README.md) — TSecBench 断网评测 all-in-one 镜像：工具集、烘焙调优、本地与托管在线评测的操作手册
