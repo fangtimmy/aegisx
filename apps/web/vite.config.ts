@@ -24,14 +24,36 @@ export default defineConfig({
     exclude: ["@aegisx/shared"],
   },
   build: {
-    // The warning targets apps that should split; here one file is the point.
-    chunkSizeWarningLimit: 12_000,
-    rollupOptions: {
+    // rolldown's advancedChunks takes FULL control of splitting: modules not
+    // matched by any group are inlined into their importer, so these groups
+    // cover everything that should be a chunk of its own.
+    chunkSizeWarningLimit: 8_000,
+    rolldownOptions: {
       output: {
-        // Single-machine deployment: ship one JS file instead of ~320 chunks
-        // (shiki alone emits one sub-10KB chunk per language grammar). Route
-        // lazy-loading disappears, which costs nothing on localhost.
-        inlineDynamicImports: true,
+        advancedChunks: {
+          includeDependenciesRecursively: true,
+          groups: [
+            // Shiki loads each language grammar via its own dynamic import,
+            // which otherwise emits ~120 sub-10KB chunks; keep them in one
+            // lazy chunk fetched on the first highlighted block.
+            {
+              name: "shiki-langs",
+              test: /[\\/]@shikijs[\\/]langs[\\/]/,
+              priority: 30,
+            },
+            {
+              name: "event-page",
+              test: /[\\/]features[\\/]events[\\/]event-page[\\/]/,
+              priority: 20,
+            },
+            {
+              name: "settings-page",
+              test: /[\\/]features[\\/]settings[\\/]settings-page[\\/]/,
+              priority: 20,
+            },
+            { name: "vendor", test: /[\\/]node_modules[\\/]/, priority: 10 },
+          ],
+        },
       },
     },
   },
