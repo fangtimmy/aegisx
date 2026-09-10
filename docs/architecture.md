@@ -26,7 +26,7 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径，无表行；容器是按题惰性管理的资源，跟随该题的存活 agent。schema 演进是基线制（`drizzle/` 只有一份从空库建出当前 schema 的基线迁移），开机按 `user_version` 三态协商：fresh 建库、current 直开、其余版本一律拒绝——旧库无升级路径，详见 [migrations.md](migrations.md)。
 
 - **`agents`** — 执行单元，一次解题尝试一行。`challengeId` 为 null 即该赛事的调度者（orchestrator；每赛事至多一个，唯一索引强制）。model / systemPrompt / tools 在 spawn 时快照，冷恢复原样复用。`token` 为注入凭据（运行时以 `AEGISX_TOKEN` 注入，中间件据此还原 agent 主体）。
-- **`sessions` + `session_entries`** — DB 会话树，唯一的会话存储后端：一条 entry 逐字节对应 pi 的一个 jsonl 行，`seq` 为会话内单调序。`session_entries` 是全库最大的表（每条消息一行），由 `run/session-retention.ts` 保留清理：只删终态 agent 的非活跃旧会话（窗口为代码常量 `SESSION_RETENTION_MS` = 14 天，开机 + 每 6h 一次，按会话成批限量）。语义代价：终态 agent 在窗口外冷重开会丢失窗口外的对话历史（agent 行、工作区文件与 WRITEUP 不受影响）。
+- **`sessions` + `session_entries`** — DB 会话树，唯一的会话存储后端：一条 entry 逐字节对应 pi 的一个 jsonl 行，`seq` 为会话内单调序。`session_entries` 是全库最大的表（每条消息一行），**没有自动保留/清理**：会话数据只在显式删除时消失（删 agent / session 走级联，回溯裁剪该会话尾部），因此长赛事下会持续增长。
 - **`spawn_queue`** — 调度计划表。一项 = 「在题 X 上派一个 agent」，enqueue 恒为 append（同题多项是合法的并行计划）。生命周期 pending → running（回填 agentId）→ done / failed；`queue_state` 按赛事暂停排水。
 - **`channel_messages` + `channel_reads`** — 全部 agent 间通信的唯一账本。频道是派生键（见下），无频道表；`channel_reads` 记 (channelKey, readerKey) → lastReadMsgId，是投递去重锚点。
 - **`challenge_flags`** — 一题多解；`agentId` 无 FK（解题史须活得比 agent 行久），`source` 区分 agent 提交 / 手工录入。
@@ -45,7 +45,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 - 赛事级生命体征看门狗 `run/fleet-watchdog.ts`（每 2 分钟）：某赛事未暂停、`spawn_queue` 有 pending 项、无任何存活 solver、且排水窗口内无进展（无 launch / 队列变化）时，发一条 urgent `eventStalled` orch 通知——既告警又唤醒调度者；每 episode 至多一次，有存活 solver 或 pending 清零后重置。触发条件刻意收窄，已完工的空闲赛事不会误报。
 - 冷启动恢复 `recoverOnBoot`（`app.ts`）— 存活 agent 标记为 idle，不自动续跑；随后 `run/boot-reentry.ts` 对每个仍有非终态调度者的赛事发一条重启重入提示（复用调度者 resume 的直发唤醒语义），由调度者重新同步并决定是否续派——不给 solver 单独发唤醒，避免多 agent 赛事的 token 冲量。调度者不存在或已终态时跳过（由 bootstrap / 用户启动）。
 
-运行期的全部定时器（投递 flush tick、容器 sweep 与 SIGKILL 宽限、drainer 去抖与容量重试、per-agent deadline/grace、停滞 watchdog、赛事级看门狗、session_entries 保留清理、exec 超时与 `pollExitCode` 退避）统一经时间层 `run/clock.ts` 创建与登记（`Clock` + `TimerHub`），子系统 close 即注册表 `disposeAll()`；测试可注入 fake clock 确定性推进时间。
+运行期的全部定时器（投递 flush tick、容器 sweep 与 SIGKILL 宽限、drainer 去抖与容量重试、per-agent deadline/grace、停滞 watchdog、赛事级看门狗、exec 超时与 `pollExitCode` 退避）统一经时间层 `run/clock.ts` 创建与登记（`Clock` + `TimerHub`），子系统 close 即注册表 `disposeAll()`；测试可注入 fake clock 确定性推进时间。
 
 **所有权根**：一个存活 agent 的全部进程内资源（挂载的 host session、turn generation、finish_run 簿记、deadline/grace 定时器、停滞 watchdog 定时器）都挂在 `run/agent-runtime.ts` 的 `AgentRuntime` 上；service 持有唯一的按 agentId 索引的注册表 `Map<agentId, AgentRuntime>`，首次触达（session 挂载 / 布防 deadline / finish 簿记 / send）时创建。冷恢复语义不变：idle/terminal agent 无 runtime（DB 行即状态），dm 冷唤醒 → send → resume → prepareAgent 重建 runtime。
 
@@ -68,7 +68,6 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 | `queue.ts` | spawn 队列存储与状态：条目 CRUD、pending→running→终态流转、每赛事暂停（`queue_state`）、队列不足边沿 |
 | `drainer.ts` | 排水循环（200ms 去抖单飞）：`planDrainStep` 把启动围栏判定翻译为 launch/skip/cancel/stop；`global_capacity` 停轮后按有界间隔自唤醒重试；launch 失败 → item `failed` + 调度者 DM 紧急通知 |
 | `fleet-watchdog.ts` | 赛事级生命体征看门狗：pending 无 solver 且排水停滞 → urgent `eventStalled` orch 通知（去重、状态恢复重置） |
-| `session-retention.ts` | `session_entries` 保留清理：终态 agent 的非活跃旧会话按窗口成批删除（开机 + 每 6h） |
 | `boot-reentry.ts` | 重启重入提示：对仍有非终态调度者的赛事直发一条 resume 风格唤醒，由调度者决定续派 |
 | `fence.ts` | 启动围栏：全局存活 solver 上限（settings `scheduler.maxConcurrentAgents`）、每赛事 target 槽位（`maxConcurrentTargets`）、已解题封禁（`blockSpawnOnSolved`） |
 | `channels-*.ts` 五模块 | 协作层（见下），`channels.ts` 为组装壳 |

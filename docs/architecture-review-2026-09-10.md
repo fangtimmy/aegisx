@@ -78,14 +78,14 @@ P0-1（multipart 越权）、P0-2（跨赛事 available 翻转）、P0-8（跨�
 
 | 批次 | 内容 | 提交 |
 |---|---|---|
-| R1 · 无人值守可靠性 | `session_entries` 保留清理（`run/session-retention.ts`，14 天窗口、只删终态 agent 的非活跃旧会话、成批限量）；赛事级生命体征看门狗（`run/fleet-watchdog.ts`，pending 有活却无存活 solver 且排水无进展 → urgent `eventStalled` 通知，兼作调度者唤醒）；重启重入提示（`run/boot-reentry.ts`，对仍有非终态调度者的赛事直发一条 resume 唤醒，不逐个唤醒 solver 以免 token 冲量） | `1352617` |
+| R1 · 无人值守可靠性 | 赛事级生命体征看门狗（`run/fleet-watchdog.ts`，pending 有活却无存活 solver 且排水无进展 → urgent `eventStalled` 通知，兼作调度者唤醒）；重启重入提示（`run/boot-reentry.ts`，对仍有非终态调度者的赛事直发一条 resume 唤醒，不逐个唤醒 solver 以免 token 冲量）。原同批的 `session_entries` 保留清理（`run/session-retention.ts`，14 天窗口）**实施后经决定撤销**（`7814f84`）：保留全部会话数据，不做自动清理 | `1352617` |
 | R2 · 门禁与速度 | 稳固化 `clock.test.ts` 的挂钟脆弱断言后，**解除 `bun test --max-concurrency 1`**（默认并发连跑 7 次全绿）；分层 lint 覆盖扩到组合根（`app`/`bootstrap`/`index`）与 `run/sse`、`run/public`；新增 `bun run test:all`（test + test:sdk，后者仍需 uv，故不并入 `test`） | `0569f65` |
 | R3 · 结构收口 | 组装根后绑定反转为类型化端口（`run/ports.ts`，run/ 下 `let x!` 归零）；spawn 失败并入唯一终态路径（不再泄漏 runtime/session）；LiveBus 快照所有权边界厘清（见下方说明）；team 消息单次 emit，并删除已无消费方的 per-channel `bus.subscribe` | `ba51cee` |
 | R4 · 打磨 | 平台 flag/目标轮询接入 `run/clock.ts`（flags 测试 ~2.5s → ~0.4s）；通知模板可在设置页编辑/预览/恢复默认（10 个键全部可见，默认值与变量清单由服务端 meta 下发，前端不再镜像）；前端 P2 清单（`apiUrl` 收敛、`formatTokens` 改名、时间格式化入 `lib/format.ts`、`MessageRow` memo、`useStoreValue` 收敛样板） | `9a5fa75` |
 
 **与原文的偏差（有意）**：提案 1 曾把「LiveBus 快照」列为 runtime 应持有的资源，但 `run/host/live.ts` 是 host 内层，按分层规则不得反向依赖 run 外层的 runtime——因此改为**厘清边界**：bus 自持快照缓存并在终态路径接受 runtime 的淘汰通知，而非搬迁 Map。另有两处定时器**有意不接入 clock**：`app.ts` 的 bootstrap 重试退避（一次性启动延迟，虚拟时间无收益）与 `providers/routes.ts` 的上游 fetch 超时（网络截止时间必须真实计量）。
 
-**R1 引入的语义代价**（已在 [architecture.md](architecture.md) 的数据模型段落记录）：终态 agent 在 14 天窗口外被冷重开时，只保留活跃会话，窗口外的对话历史已被清理；agent 行、工作区文件与 WRITEUP 不受影响。
+**会话数据不清理（撤销决定）**：R1 曾实施 14 天窗口的 `session_entries` 自动清理，实施后经决定**整体撤销**——会话数据只在显式删除 agent/session 时消失。代价是 `session_entries`（全库最大的表）在长赛事下持续增长，需自行留意库体积；这是明确接受的取舍，不要再引入自动清理。
 
 ## 明确不动清单
 

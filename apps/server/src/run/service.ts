@@ -86,7 +86,6 @@ import {
 } from "./queue"
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
 import { type SchedulerPolicy, schedulerPolicyFor } from "./scheduler-policy"
-import { createSessionRetention } from "./session-retention"
 import {
   agentId8,
   challengeRoot,
@@ -1316,18 +1315,12 @@ export function createAgentService(options: AgentServiceOptions) {
   })
   fleetWatchdog.start()
 
-  // session_entries retention: terminal agents' non-active sessions older
-  // than the window are pruned (once at boot, then every 6h).
-  const sessionRetention = createSessionRetention({ db, clock })
-  sessionRetention.start()
-
   async function close(): Promise<void> {
     closed = true
     await Promise.allSettled(locks.values())
     locks.clear()
     containerLifecycle.close()
     fleetWatchdog.close()
-    sessionRetention.close()
     queue.cancelDrain()
     // Each runtime owns its agent's timers (deadline/grace/stall), finish
     // bookkeeping and session: disposing them releases every per-agent
