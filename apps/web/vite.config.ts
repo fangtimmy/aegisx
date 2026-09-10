@@ -41,20 +41,29 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         codeSplitting: {
+          // Explicit groups only — NO `maxSize`. Size-based splitting cuts
+          // wherever the byte budget runs out, which does not respect a
+          // dependency cycle: vendored graphs are full of them (shiki's
+          // `class Registry extends Registry$1` landed in a different chunk
+          // from its base and evaluated to `undefined`, a hard page-load
+          // crash). Each group is one chunk, so a cycle inside a group stays
+          // inside it. Lazy routes and dynamic imports still split on their
+          // own boundaries, which are cycle-safe by construction.
           groups: [
-            // One module per language grammar (~200); maxSize buckets them
-            // into mid-size chunks fetched on first use of any grammar inside.
+            // One module per language grammar (~200), reached only through the
+            // code-preview dynamic import. No `maxSize`: bucketing by size was
+            // VERIFIED to make every lang chunk cyclic (the grammars reference
+            // each other), which is the same crash one lazy route later. One
+            // lazy chunk, fetched on first code block.
             {
               name: "shiki-langs",
               test: /[\\/]@shikijs[\\/]langs[\\/]/,
               priority: 30,
-              maxSize: 1_500_000,
             },
             {
               name: (id) => (vizOnly.test(id) ? null : "vendor"),
               test: /[\\/]node_modules[\\/]/,
               priority: 10,
-              maxSize: 2_000_000,
             },
           ],
         },
