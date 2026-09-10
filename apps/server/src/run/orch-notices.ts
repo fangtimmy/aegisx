@@ -3,6 +3,7 @@ import type { ChannelMessageMeta } from "@aegisx/shared/channels"
 import type { Principal } from "../infrastructure/agent-auth"
 import { NOTICE_TEMPLATE_DEFAULTS } from "../orchestration/prompt-defaults"
 import { renderTemplateBody } from "../orchestration/prompt-templates"
+import { fmtMs } from "./agent-runtime"
 import { orchKey, teamKey, type PostInput } from "./channels-context"
 
 /** The system → scheduler/team notification protocol, as typed events.
@@ -92,6 +93,17 @@ export type NoticeEvent =
       eventId: string
       action: "paused" | "resumed"
       source: "manual" | "scheduler"
+    }
+  /** Fleet vital signs: the event has pending work, no live solver, and the
+   * drain has made no progress for the stall window (urgent — also wakes the
+   * scheduler, which is the point). */
+  | {
+      type: "eventStalled"
+      eventId: string
+      /** Pending spawn_queue items awaiting a launch. */
+      pending: number
+      /** No-progress duration (see run/fleet-watchdog.ts). */
+      stalledMs: number
     }
 
 /** One channel post derived from a notice event. */
@@ -245,6 +257,19 @@ export function noticeDeliveries(event: NoticeEvent): NoticeDelivery[] {
             manual: event.source === "manual",
           },
           meta: { noticeType: "notice" },
+        },
+      ]
+    case "eventStalled":
+      return [
+        {
+          ...notice,
+          template: "noticeEventStalled",
+          context: {
+            pending: event.pending,
+            stalled: fmtMs(event.stalledMs),
+          },
+          meta: { noticeType: "emergency" },
+          urgent: true,
         },
       ]
   }

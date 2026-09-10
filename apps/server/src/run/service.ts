@@ -27,6 +27,7 @@ import {
   readWorkspacePath,
   workspaceDownload,
 } from "../infrastructure/workspace-files"
+import { logEvent } from "../lib/log"
 import {
   DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
   NOTICE_TEMPLATE_DEFAULTS,
@@ -52,6 +53,7 @@ import {
 } from "./agent-runtime"
 import { createAgentSessionOps } from "./agent-session-ops"
 import { createAgentStatus, type AgentStatus } from "./agent-status"
+import { notifyBootReentry } from "./boot-reentry"
 import { createChannelService, type ChannelService } from "./channels"
 import type { Clock } from "./clock"
 import { systemClock } from "./clock"
@@ -61,6 +63,7 @@ import {
 } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
 import { RunActionError } from "./errors"
+import { createFleetWatchdog } from "./fleet-watchdog"
 import { applyModelSwitch } from "./host/agent-ops"
 import { createAgentHost } from "./host/host"
 import type { AgentLoopSettings } from "./host/host-session"
@@ -82,6 +85,7 @@ import {
 } from "./queue"
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
 import { type SchedulerPolicy, schedulerPolicyFor } from "./scheduler-policy"
+import { createSessionRetention } from "./session-retention"
 import {
   agentId8,
   challengeRoot,
@@ -1281,11 +1285,32 @@ export function createAgentService(options: AgentServiceOptions) {
     onQueueNotice: (event) => notices.publish(event),
   })
 
+  // Event-level vital signs: pending work with no live solver and no drain
+  // progress → ONE urgent orch notice per episode (which also wakes the
+  // scheduler). Deliberately narrow trigger; see run/fleet-watchdog.ts.
+  const fleetWatchdog = createFleetWatchdog({
+    db,
+    clock,
+    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    onStalled: (stall) => {
+      logEvent("fleet", "event_stalled", { ...stall })
+      notices.publish({ type: "eventStalled", ...stall })
+    },
+  })
+  fleetWatchdog.start()
+
+  // session_entries retention: terminal agents' non-active sessions older
+  // than the window are pruned (once at boot, then every 6h).
+  const sessionRetention = createSessionRetention({ db, clock })
+  sessionRetention.start()
+
   async function close(): Promise<void> {
     closed = true
     await Promise.allSettled(locks.values())
     locks.clear()
     containerLifecycle.close()
+    fleetWatchdog.close()
+    sessionRetention.close()
     queue?.cancelDrain()
     // Each runtime owns its agent's timers (deadline/grace/stall), finish
     // bookkeeping and session: disposing them releases every per-agent
@@ -1294,6 +1319,22 @@ export function createAgentService(options: AgentServiceOptions) {
     runtimes.clear()
     channels.close()
     bus.close()
+  }
+
+  /** Boot recovery + restart re-entry. `factory.recoverOnBoot` flips every
+   * live agent idle (no auto-resume); each event whose scheduler survived
+   * non-terminal then gets ONE direct wake to re-sync and decide whether to
+   * re-dispatch (run/boot-reentry.ts). Events without a scheduler are left
+   * to bootstrap / the user. */
+  async function recoverOnBoot(): Promise<void> {
+    await factory.recoverOnBoot()
+    await notifyBootReentry({
+      db,
+      send: async (agentId, text) => {
+        await sendMessage(agentId, { text }, { kind: "system" })
+      },
+      isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    })
   }
 
   /** Remove a challenge's workspace tree (agents/ shared/ attachments/
@@ -1380,7 +1421,7 @@ export function createAgentService(options: AgentServiceOptions) {
     closeScheduler,
     queue: () => queue,
     refresh: queries.getAgent,
-    recoverOnBoot: factory.recoverOnBoot,
+    recoverOnBoot,
     close,
     listMessages,
     usageOfAgent: queries.usageOfAgent,

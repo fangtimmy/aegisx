@@ -215,6 +215,19 @@ describe("notice events render the shipped wording (byte-level)", () => {
     ])
     expect(text(queueState("resumed", "scheduler"))).toEqual(["队列已恢复"])
   })
+
+  test("eventStalled: pending + no-progress duration", () => {
+    expect(
+      text({
+        type: "eventStalled",
+        eventId: "evt-1",
+        pending: 3,
+        stalledMs: 600_000,
+      })
+    ).toEqual([
+      "赛事停滞：3 项排队待发但无存活 solver，排水已 10m 无进展。请检查围栏/队列状态并重新续派。",
+    ])
+  })
 })
 
 describe("notice delivery contract (channel / meta / urgent)", () => {
@@ -299,6 +312,12 @@ describe("notice delivery contract (channel / meta / urgent)", () => {
         eventId: "evt-1",
         challengeName: "web1",
         error: "x",
+      },
+      {
+        type: "eventStalled",
+        eventId: "evt-1",
+        pending: 2,
+        stalledMs: 600_000,
       },
     ]
     for (const event of emergencies) {

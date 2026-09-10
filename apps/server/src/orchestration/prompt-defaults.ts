@@ -252,7 +252,8 @@ export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[频道消息]
  * Variables are the event's own fields (plus pre-derived display values):
  * `challengeName`, `flag` ("" when absent), `submitterAgentId`, `submitter`
  * (agent-<id8>, "" when absent), `stopSiblings`, `message`, `confirmed`,
- * `progress`, `stopped`, `cancelled`, `closed`, `pending`, `line`, `action`. */
+ * `progress`, `stopped`, `cancelled`, `closed`, `pending`, `stalled`, `line`,
+ * `action`. */
 export const NOTICE_TEMPLATE_DEFAULTS = {
   /** flagAccepted / first — the challenge's initial solve. */
   noticeFlagAccepted: `「{{challengeName}}」已完全解出{{#if flag}}：{{flag}}{{/if}}{{#if submitter}}（{{submitter}} 提交）{{/if}}，平台已接受。{{#unless stopSiblings}} 本题无需继续攻击，请整理 writeup 并尽快 finish_run 收尾。{{/unless}}`,
@@ -272,6 +273,8 @@ export const NOTICE_TEMPLATE_DEFAULTS = {
   noticeLaunchFailed: `启动失败：「{{challengeName}}」— {{error}}`,
   /** queueStateChanged — queue pause/resume. */
   noticeQueueState: `队列已{{action}}{{#if manual}}（用户手动）{{/if}}`,
+  /** eventStalled — no solver is draining pending work (urgent). */
+  noticeEventStalled: `赛事停滞：{{pending}} 项排队待发但无存活 solver，排水已 {{stalled}} 无进展。请检查围栏/队列状态并重新续派。`,
 } as const
 
 /** The fleet snapshot appended to every scheduler delivery (orch only).
