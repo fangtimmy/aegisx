@@ -35,6 +35,7 @@ const providerInput = Type.Object(
     label: Type.String({ minLength: 1, maxLength: 100 }),
     type: ProviderTypeSchema,
     baseUrl: Type.String({ minLength: 1, maxLength: 2_000 }),
+    exactEndpoint: Type.Optional(Type.Boolean()),
     apiKey: Type.String({ maxLength: 10_000 }),
     enabled: Type.Boolean(),
   },
@@ -117,6 +118,16 @@ function findProvider(providers: ProviderData[], id: string) {
   return providers.find((p) => p.id === id)
 }
 
+/** Wire address for a provider-side call (discover / test dialogue). An
+ * exact-endpoint gateway's baseUrl already IS the complete upstream URL, so
+ * the standard API suffix must not be appended — the request goes there
+ * verbatim, the same way /api/llm-relay forwards agent traffic. */
+function wireUrl(provider: ProviderData, suffix: string): string {
+  return provider.exactEndpoint
+    ? provider.baseUrl
+    : `${provider.baseUrl}${suffix}`
+}
+
 function findModel(provider: ProviderData, modelId: string) {
   return provider.models.find((m) => m.id === modelId)
 }
@@ -158,6 +169,7 @@ function publicProvider(provider: ProviderData) {
     label: provider.label,
     type: provider.type,
     baseUrl: provider.baseUrl,
+    exactEndpoint: provider.exactEndpoint,
     apiKey: provider.apiKey,
     enabled: provider.enabled,
     models: provider.models.map((m) => ({
@@ -234,6 +246,7 @@ export function registerProviderRoutes(
       label,
       type: input.type,
       baseUrl: baseUrl.value,
+      exactEndpoint: input.exactEndpoint === true,
       apiKey: apiKey.value,
       enabled: input.enabled,
       models: [],
@@ -258,6 +271,9 @@ export function registerProviderRoutes(
           return badRequest(c, baseUrl.code, baseUrl.message)
         }
         existing.baseUrl = baseUrl.value
+      }
+      if (input.exactEndpoint !== undefined) {
+        existing.exactEndpoint = input.exactEndpoint
       }
       if (input.label !== undefined) existing.label = input.label.trim()
       if (input.type !== undefined) existing.type = input.type
@@ -420,8 +436,8 @@ export function registerProviderRoutes(
           : { Authorization: `Bearer ${provider.apiKey}` }
       const url =
         provider.type === "anthropic-messages"
-          ? `${provider.baseUrl}/v1/models`
-          : `${provider.baseUrl}/models`
+          ? wireUrl(provider, "/v1/models")
+          : wireUrl(provider, "/models")
       const response = await fetch(url, {
         headers,
         signal: AbortSignal.timeout(timeout),
@@ -485,7 +501,7 @@ export function registerProviderRoutes(
         : { Authorization: `Bearer ${provider.apiKey}` }
       const [url, body] = isAnthropic
         ? [
-            `${provider.baseUrl}/v1/messages`,
+            wireUrl(provider, "/v1/messages"),
             {
               model: input.modelId,
               stream: true,
@@ -495,11 +511,11 @@ export function registerProviderRoutes(
           ]
         : isResponses
           ? [
-              `${provider.baseUrl}/responses`,
+              wireUrl(provider, "/responses"),
               { model: input.modelId, stream: true, input: input.prompt },
             ]
           : [
-              `${provider.baseUrl}/chat/completions`,
+              wireUrl(provider, "/chat/completions"),
               {
                 model: input.modelId,
                 stream: true,

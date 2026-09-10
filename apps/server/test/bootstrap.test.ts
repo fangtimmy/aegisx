@@ -412,6 +412,7 @@ describe("ensureProvider", () => {
           label: "Bootstrap",
           type: "openai-compatible",
           baseUrl: "",
+          exactEndpoint: false,
           apiKey: "",
           enabled: true,
           models: [],

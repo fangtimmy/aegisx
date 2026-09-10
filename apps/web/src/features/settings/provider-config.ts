@@ -19,6 +19,7 @@ export type ProviderInput = {
   label: string
   type: ProviderType
   baseUrl: string
+  exactEndpoint: boolean
   apiKey: string
   enabled: boolean
 }

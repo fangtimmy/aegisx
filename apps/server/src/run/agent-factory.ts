@@ -176,6 +176,9 @@ export type AgentFactoryDeps = {
   containerLifecycle: ContainerLifecycle
   platformService: PlatformService
   providers: () => ProviderConnection[]
+  /** Loopback origin of this server — exact-endpoint gateway providers route
+   * their models.json baseUrl through /api/llm-relay here. */
+  relayOrigin: string
   /** Monotonic config-store version (bumped on every providers/settings
    * mutation). Used to detect whether a workspace's cached ModelRuntime
    * is stale before resolving a model. */
@@ -283,6 +286,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     containerLifecycle,
     platformService,
     providers,
+    relayOrigin,
     configVersion,
     modelResolver,
     queries,
@@ -335,6 +339,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       const modelRuntime = await createRunModelRuntime({
         runtimeDir: runtimeDir(root),
         providers: providers(),
+        relayOrigin,
       })
       const ctx: WorkspaceContext = {
         key,
@@ -380,7 +385,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       mkdirSync(rtDir, { recursive: true })
       writeFileSync(
         join(rtDir, "models.json"),
-        `${JSON.stringify(generateModelsJson(providers()), null, 2)}\n`
+        `${JSON.stringify(generateModelsJson(providers(), relayOrigin), null, 2)}\n`
       )
       await ctx.modelRuntime.refresh({ allowNetwork: false })
       ctx.lastRefreshVersion = configVersion()

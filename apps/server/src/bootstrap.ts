@@ -307,6 +307,7 @@ export function ensureProvider(
       label: want.label,
       type: want.type,
       baseUrl: want.baseUrl,
+      exactEndpoint: false,
       apiKey: want.apiKey,
       enabled: true,
       models: [],

@@ -19,13 +19,20 @@ export type RunModelRuntime = ModelRuntime
 export async function createRunModelRuntime(options: {
   runtimeDir: string
   providers: ProviderConnection[]
+  /** Loopback origin of this server — exact-endpoint gateway providers
+   * route their models.json baseUrl through /api/llm-relay here. */
+  relayOrigin: string
 }): Promise<RunModelRuntime> {
   mkdirSync(options.runtimeDir, { recursive: true })
   const modelsPath = join(options.runtimeDir, "models.json")
   const authPath = join(options.runtimeDir, "auth.json")
   writeFileSync(
     modelsPath,
-    `${JSON.stringify(generateModelsJson(options.providers), null, 2)}\n`
+    `${JSON.stringify(
+      generateModelsJson(options.providers, options.relayOrigin),
+      null,
+      2
+    )}\n`
   )
   // apiKey is authoritative in models.json (single-user; no redaction).
   writeFileSync(authPath, "{}\n")

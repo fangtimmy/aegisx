@@ -16,7 +16,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 
 import {
   providerTypeDefaults,
@@ -36,6 +37,7 @@ type ProviderFormValues = {
   type: ProviderType
   label: string
   baseUrl: string
+  exactEndpoint: boolean
   apiKey: string
 }
 
@@ -50,6 +52,7 @@ export function ProviderDialog({
       type: "openai-compatible",
       label: "",
       baseUrl: providerTypeDefaults["openai-compatible"],
+      exactEndpoint: false,
       apiKey: "",
     },
   })
@@ -59,6 +62,7 @@ export function ProviderDialog({
         label: values.label.trim(),
         type: values.type,
         baseUrl: values.baseUrl.trim(),
+        exactEndpoint: values.exactEndpoint,
         apiKey: values.apiKey,
         enabled: true,
       }),
@@ -137,6 +141,29 @@ export function ProviderDialog({
                 )}
                 rules={{ required: true }}
               />
+            </Field>
+            <Field>
+              <div className="flex items-center justify-between">
+                <FieldLabel htmlFor="provider-exact-endpoint">
+                  完整端点网关
+                </FieldLabel>
+                <Controller
+                  control={form.control}
+                  name="exactEndpoint"
+                  render={({ field }) => (
+                    <Switch
+                      aria-label="完整端点网关"
+                      checked={field.value}
+                      id="provider-exact-endpoint"
+                      onCheckedChange={field.onChange}
+                    />
+                  )}
+                />
+              </div>
+              <FieldDescription className="text-sm">
+                网关 URL 已包含完整 API 路径（如赛事 LLM 网关）时开启：请求将
+                原样转发到该地址，不再追加 /chat/completions 等后缀。
+              </FieldDescription>
             </Field>
             <Field>
               <FieldLabel htmlFor="provider-api-key">API key</FieldLabel>

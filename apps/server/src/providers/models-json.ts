@@ -66,9 +66,13 @@ function modelToPiModel(model: ProviderModel): PiModel {
   return piModel
 }
 
-/** Build pi models.json from enabled AegisX providers/models. */
+/** Build pi models.json from enabled AegisX providers/models. Exact-endpoint
+ * gateway providers get the server's /api/llm-relay address as baseUrl: the
+ * SDK appends its API suffix there, and the relay forwards to the real
+ * (suffix-less) gateway URL. */
 export function generateModelsJson(
-  providers: ProviderConnection[]
+  providers: ProviderConnection[],
+  relayOrigin: string
 ): PiModelsJson {
   const json: PiModelsJson = { providers: {} }
 
@@ -79,7 +83,9 @@ export function generateModelsJson(
       .map(modelToPiModel)
     if (models.length === 0) continue
     json.providers[modelProviderKey(provider)] = {
-      baseUrl: provider.baseUrl,
+      baseUrl: provider.exactEndpoint
+        ? `${relayOrigin}/api/llm-relay/${provider.id}`
+        : provider.baseUrl,
       api: providerApi(provider.type),
       apiKey: provider.apiKey,
       models,

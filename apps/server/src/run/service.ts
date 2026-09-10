@@ -107,6 +107,10 @@ export type AgentServiceOptions = {
   containerManager: ContainerManager
   platformService: PlatformService
   configStore: ConfigStore
+  /** Loopback origin of this server (computed from HOST/PORT) — exact-endpoint
+   * gateway providers route their models.json baseUrl through the server's
+   * /api/llm-relay route. */
+  relayOrigin: string
   getSettings(): import("@aegisx/shared").FlatSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost?: typeof createAgentHost
@@ -145,8 +149,14 @@ export type SendMessageInput = {
 export type AgentService = ReturnType<typeof createAgentService>
 
 export function createAgentService(options: AgentServiceOptions) {
-  const { db, dataDir, containerManager, platformService, configStore } =
-    options
+  const {
+    db,
+    dataDir,
+    containerManager,
+    platformService,
+    configStore,
+    relayOrigin,
+  } = options
   const createHost = options.createHost ?? createAgentHost
   const getSettings = () => options.getSettings()
   const closeAbortGraceMs = options.closeAbortGraceMs ?? 5_000
@@ -1234,6 +1244,7 @@ export function createAgentService(options: AgentServiceOptions) {
     containerLifecycle,
     platformService,
     providers,
+    relayOrigin,
     configVersion: () => configStore.configVersion,
     modelResolver,
     queries,

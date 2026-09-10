@@ -26,6 +26,7 @@ function mapProviderConnection(provider: ProviderData): ProviderConnection {
     label: provider.label,
     type: provider.type,
     baseUrl: provider.baseUrl,
+    exactEndpoint: provider.exactEndpoint,
     apiKey: provider.apiKey,
     enabled: provider.enabled,
     models: provider.models.map((model) =>

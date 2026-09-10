@@ -180,6 +180,11 @@ export type ProviderConnection = {
   label: string
   type: ProviderType
   baseUrl: string
+  /** Exact-endpoint gateway: baseUrl already carries the full upstream path
+   * (e.g. a CTF LLM gateway whose token encodes the complete URL), so no API
+   * suffix (/responses, /chat/completions, /v1/messages) may be appended —
+   * traffic rides the server's /api/llm-relay route instead. */
+  exactEndpoint: boolean
   apiKey: string
   enabled: boolean
   models: ProviderModel[]

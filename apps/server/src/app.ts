@@ -18,6 +18,7 @@ import { createStorage } from "./infrastructure/storage"
 import { registerWebApp } from "./infrastructure/web-static"
 import { registerPlatformRoutes } from "./platforms/routes"
 import { createPlatformService } from "./platforms/service"
+import { registerProviderRelayRoutes } from "./providers/relay"
 import { registerProviderRoutes } from "./providers/routes"
 import { createContainerManager } from "./run/container/container-manager"
 import {
@@ -39,6 +40,14 @@ export function createApp(options: { dataDir: string }) {
     (existsSync(embeddedWebDir) ? embeddedWebDir : undefined)
   const configStore = createConfigStore(options.dataDir)
   const { db, sqlite, releaseLock } = createDatabase(options.dataDir)
+
+  // Loopback mirror of the serve defaults in index.ts (HOST/PORT): exact-
+  // endpoint gateway providers route their models.json baseUrl through this
+  // server's own /api/llm-relay route, which needs an absolute origin.
+  const bindHost = process.env.HOST ?? "127.0.0.1"
+  const relayOrigin = `http://${
+    bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bindHost
+  }:${Number(process.env.PORT ?? 3000)}`
 
   const storage = createStorage(options.dataDir)
   const getSettings = () => configStore.getSettings()
@@ -63,6 +72,7 @@ export function createApp(options: { dataDir: string }) {
     platformService,
     configStore,
     getSettings,
+    relayOrigin,
     // Appliance/eval builds run without a human: boot recovery must not strand
     // the queues behind a pause nobody can clear (see AgentServiceOptions).
     unattended: process.env.AEGISX_UNATTENDED === "1",
@@ -122,6 +132,12 @@ export function createApp(options: { dataDir: string }) {
 
   const app = new Hono()
   const catalog = createCatalogReader(db, platformService)
+
+  // Exact-endpoint gateway relay: user-face (the loopback caller carries the
+  // provider's gateway key as its Bearer token — not an agent token), so it
+  // registers BEFORE the auth gate; returning the upstream response
+  // short-circuits the chain.
+  registerProviderRelayRoutes(app, { configStore })
 
   // Agent identity gate: Bearer-token requests resolve to an agent principal
   // and are confined to the agent API surface; tokenless requests (user/UI)

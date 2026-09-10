@@ -160,6 +160,7 @@ export function makeProvider(
     label: "Test Provider",
     type: "openai-compatible",
     baseUrl: "https://api.test.invalid/v1",
+    exactEndpoint: false,
     apiKey: "test-key",
     enabled: true,
     models: [makeModel()],
@@ -368,6 +369,7 @@ export function makeAgentService(
     db: store.db,
     dataDir: store.dir,
     containerManager: opts.containerManager ?? manager,
+    relayOrigin: "http://127.0.0.1:3000",
     platformService: refine<PlatformService>({
       submitFlag: async () => undefined,
       targetAction: async () => ({

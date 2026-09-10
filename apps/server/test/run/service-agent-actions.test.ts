@@ -276,6 +276,7 @@ describe("per-agent actions (v19)", () => {
         label: "New Provider",
         type: "openai-compatible",
         baseUrl: "https://new.example.com/v1",
+        exactEndpoint: false,
         apiKey: "new-key",
         enabled: true,
         models: [

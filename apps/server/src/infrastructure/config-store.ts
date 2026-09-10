@@ -38,6 +38,9 @@ export type ProviderData = {
   label: string
   type: ProviderType
   baseUrl: string
+  /** baseUrl is a complete endpoint (no API suffix appended; traffic rides
+   * the /api/llm-relay route). See ProviderConnection.exactEndpoint. */
+  exactEndpoint: boolean
   apiKey: string
   enabled: boolean
   models: ProviderModelData[]
@@ -70,6 +73,7 @@ const ProviderSchema = Type.Object(
     label: Type.Optional(Type.String()),
     type: ProviderTypeSchema,
     baseUrl: Type.Optional(Type.String()),
+    exactEndpoint: Type.Optional(Type.Boolean()),
     apiKey: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
     models: Type.Optional(Type.Array(ProviderModelSchema)),
@@ -87,6 +91,7 @@ function defaultProviders(): ProviderData[] {
       label: "Anthropic",
       type: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
+      exactEndpoint: false,
       apiKey: "",
       enabled: true,
       models: [
@@ -138,6 +143,7 @@ function normalizeProvider(raw: unknown): ProviderData | undefined {
     label: typeof raw.label === "string" ? raw.label : "",
     type: raw.type,
     baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl : "",
+    exactEndpoint: raw.exactEndpoint === true,
     apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
     enabled: raw.enabled !== false,
     models,

@@ -31,7 +31,7 @@ import {
   CardFrameTitle,
   CardPanel,
 } from "@/components/ui/card"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   InputGroup,
@@ -50,6 +50,7 @@ type ProviderFormValues = {
   label: string
   type: ProviderConnection["type"]
   baseUrl: string
+  exactEndpoint: boolean
   apiKey: string
 }
 
@@ -72,6 +73,7 @@ export function ProviderDetail({
       label: provider.label,
       type: provider.type,
       baseUrl: provider.baseUrl,
+      exactEndpoint: provider.exactEndpoint,
       apiKey: provider.apiKey,
     },
   })
@@ -94,6 +96,7 @@ export function ProviderDetail({
                   label: form.getValues("label"),
                   type: form.getValues("type"),
                   baseUrl: form.getValues("baseUrl"),
+                  exactEndpoint: form.getValues("exactEndpoint"),
                   apiKey: form.getValues("apiKey").trim() || undefined,
                   enabled: enabled,
                 })
@@ -109,6 +112,7 @@ export function ProviderDetail({
                   label: values.label.trim(),
                   type: values.type,
                   baseUrl: values.baseUrl.trim(),
+                  exactEndpoint: values.exactEndpoint,
                   apiKey: values.apiKey.trim() || undefined,
                   enabled: provider.enabled,
                 })
@@ -163,6 +167,31 @@ export function ProviderDetail({
                   />
                 )}
                 rules={{ required: true }}
+              />
+            </Field>
+            <Field className="col-span-2 flex-row items-center justify-between gap-4">
+              <div className="flex flex-col gap-1">
+                <FieldLabel htmlFor="selected-provider-exact-endpoint">
+                  完整端点网关
+                </FieldLabel>
+                <FieldDescription className="text-sm">
+                  网关 URL 已包含完整 API 路径（如赛事 LLM
+                  网关）时开启：请求将原样转发到该地址，不再追加
+                  /chat/completions 等后缀。
+                </FieldDescription>
+              </div>
+              <Controller
+                control={form.control}
+                name="exactEndpoint"
+                render={({ field }) => (
+                  <Switch
+                    aria-label="完整端点网关"
+                    checked={field.value}
+                    disabled={save.isPending}
+                    id="selected-provider-exact-endpoint"
+                    onCheckedChange={field.onChange}
+                  />
+                )}
               />
             </Field>
             <Field>

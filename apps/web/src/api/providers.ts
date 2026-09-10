@@ -15,6 +15,7 @@ export type CreateProviderInput = {
   label: string
   type: ProviderType
   baseUrl: string
+  exactEndpoint?: boolean
   apiKey: string
   enabled?: boolean
 }
@@ -23,6 +24,7 @@ export type PatchProviderInput = Partial<{
   label: string
   type: ProviderType
   baseUrl: string
+  exactEndpoint: boolean
   apiKey: string
   enabled: boolean
 }>
