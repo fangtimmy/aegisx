@@ -18,7 +18,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 21
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -97,6 +97,11 @@ export const challengeRemote = sqliteTable(
       .default(false),
     targetCount: integer("target_count").notNull().default(0),
     targetInfo: text("target_info").notNull().default("[]"),
+    /** Flags the challenge requires, as the platform reports it. Null means
+     * single-flag or unknown (the digest reads it as 1). Part of the yield
+     * model: per-flag value = points / flagCount is what makes a multi-flag
+     * chain comparable to an independent single-flag challenge. */
+    flagCount: integer("flag_count"),
     syncedAt: text("synced_at").notNull(),
   },
   (table) => [

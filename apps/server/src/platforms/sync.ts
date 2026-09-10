@@ -132,6 +132,7 @@ export function createPlatformSync(
       targetIgnored: existing?.targetIgnored ?? false,
       targetCount: remote.targetCount,
       targetInfo: JSON.stringify(remote.targets),
+      flagCount: remote.flagCount ?? null,
       syncedAt: now,
     }
     await onProgress?.({

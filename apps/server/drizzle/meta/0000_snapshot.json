@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "9c7363e9-4899-49a4-84c3-833f05621ba8",
+  "id": "37097bbd-ff5b-435b-9639-d929428a10c3",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -570,6 +570,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'[]'"
+        },
+        "flag_count": {
+          "name": "flag_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "synced_at": {
           "name": "synced_at",

@@ -39,6 +39,9 @@ export type RemoteChallengeListItem = {
   category: string | null
   points: number | null
   solved: boolean
+  /** Flags the challenge requires, when the platform reports a count.
+   * Absent = single-flag or not exposed. */
+  flagCount?: number
 }
 
 export type RemoteChallenge = RemoteChallengeListItem & {

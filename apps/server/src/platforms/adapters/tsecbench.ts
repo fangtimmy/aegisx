@@ -140,6 +140,7 @@ export class TsecBenchAdapter extends BaseAdapter {
       category: nullableString(challenge.difficulty),
       points: nullableNumber(challenge.total_score),
       solved: challenge.is_completed,
+      flagCount: challenge.flag_count,
     }))
   }
 
@@ -156,6 +157,7 @@ export class TsecBenchAdapter extends BaseAdapter {
       category: nullableString(challenge.difficulty),
       points: nullableNumber(challenge.total_score),
       solved: challenge.is_completed,
+      flagCount: challenge.flag_count,
       targetSupported: true,
       targetCount: 1,
       targets: [{ name: challenge.unique_code, services: [] }],
