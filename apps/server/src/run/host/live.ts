@@ -4,9 +4,10 @@ type Listener = (event: LiveEvent) => void
 
 /**
  * In-memory SSE fan-out. One bus per server; subscribers per channel (browser
- * tabs). A channel is the LiveBus key — the agent id for the per-agent SSE
- * streams (plus the event/challenge ids the channel layer pushes to).
- * Events are ephemeral; durable history lives in session_entries and is
+ * tabs) plus global subscribers that take every channel (the multiplexed
+ * `/api/stream` face). A channel is the LiveBus key — the agent id for
+ * agent-scoped events (plus the event/challenge ids the channel layer pushes
+ * to). Events are ephemeral; durable history lives in session_entries and is
  * served by the messages API.
  *
  * Reconnect correctness: the bus snapshots the latest `context` / `queue`
@@ -20,6 +21,11 @@ type Listener = (event: LiveEvent) => void
  */
 export function createLiveBus() {
   const subscribers = new Map<string, Set<Listener>>()
+  /** Every emit regardless of channel — the multiplexed stream subscribes
+   * here instead of enumerating channel keys (an agent/challenge created
+   * after connect would never be enumerated, so per-channel subscription is
+   * not a correct way to build a global stream). */
+  const allSubscribers = new Set<Listener>()
   const lastContext = new Map<string, LiveEvent>()
   const lastQueue = new Map<string, LiveEvent>()
   /** Latest non-null activity per agent (transient badge state). */
@@ -38,6 +44,15 @@ export function createLiveBus() {
     return () => {
       set?.delete(listener)
       if (set && set.size === 0) subscribers.delete(channel)
+    }
+  }
+
+  /** Global subscription: every channel's events, in emit order. Returns the
+   * unsubscribe for symmetry with {@link subscribe}. */
+  function subscribeAll(listener: Listener): () => void {
+    allSubscribers.add(listener)
+    return () => {
+      allSubscribers.delete(listener)
     }
   }
 
@@ -62,9 +77,7 @@ export function createLiveBus() {
         if (perAgent.size === 0) runningTools.delete(event.agentId)
       }
     }
-    const set = subscribers.get(channel)
-    if (!set) return
-    for (const listener of set) {
+    const deliver = (listener: Listener) => {
       try {
         listener(event)
       } catch (error) {
@@ -74,6 +87,9 @@ export function createLiveBus() {
         })
       }
     }
+    const set = subscribers.get(channel)
+    if (set) for (const listener of set) deliver(listener)
+    for (const listener of allSubscribers) deliver(listener)
   }
 
   /** Latest context snapshot for an agent (for SSE initial replay). */
@@ -113,6 +129,7 @@ export function createLiveBus() {
 
   function close() {
     subscribers.clear()
+    allSubscribers.clear()
     lastContext.clear()
     lastQueue.clear()
     lastActivity.clear()
@@ -121,6 +138,7 @@ export function createLiveBus() {
 
   return {
     subscribe,
+    subscribeAll,
     emit,
     getContext,
     getQueue,

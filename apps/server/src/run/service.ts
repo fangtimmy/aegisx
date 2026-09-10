@@ -27,7 +27,10 @@ import {
   readWorkspacePath,
   workspaceDownload,
 } from "../infrastructure/workspace-files"
-import { DEFAULT_SCHEDULER_DIGEST_TEMPLATE } from "../orchestration/prompt-defaults"
+import {
+  DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
+  NOTICE_TEMPLATE_DEFAULTS,
+} from "../orchestration/prompt-defaults"
 import {
   loadTemplateMap,
   renderTemplateBody,
@@ -49,12 +52,7 @@ import {
 } from "./agent-runtime"
 import { createAgentSessionOps } from "./agent-session-ops"
 import { createAgentStatus, type AgentStatus } from "./agent-status"
-import {
-  createChannelService,
-  orchKey,
-  teamKey,
-  type ChannelService,
-} from "./channels"
+import { createChannelService, type ChannelService } from "./channels"
 import type { Clock } from "./clock"
 import { systemClock } from "./clock"
 import {
@@ -69,6 +67,7 @@ import type { AgentLoopSettings } from "./host/host-session"
 import { createLiveBus, type LiveBus } from "./host/live"
 import { chainLock } from "./locks"
 import { createModelResolver } from "./model-resolver"
+import { createNoticePublisher } from "./orch-notices"
 import {
   assertMayTouchAgent,
   assertMayTouchChallenge,
@@ -252,6 +251,16 @@ export function createAgentService(options: AgentServiceOptions) {
     ...(options.flushIntervalMs !== undefined
       ? { flushIntervalMs: options.flushIntervalMs }
       : {}),
+  })
+
+  // Every system→scheduler/team notice is a typed event (run/orch-notices)
+  // rendered through its (user-editable) template. Templates read per publish,
+  // like the delivery templates — a few local rows, no cache to invalidate.
+  const notices = createNoticePublisher({
+    templateBody: (key) =>
+      loadTemplateMap(db).get(key) ?? NOTICE_TEMPLATE_DEFAULTS[key],
+    post: (input, principal) => channels.post(input, principal),
+    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
   })
 
   const status: AgentStatus = createAgentStatus({
@@ -551,14 +560,14 @@ export function createAgentService(options: AgentServiceOptions) {
         .targetAction(challengeId, "stop")
         .catch(() => undefined)
     }
-    const parts: string[] = []
-    if (closedCount > 0) parts.push(`已关闭 ${closedCount} 个 agent`)
-    if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
-    if (parts.length > 0) {
-      postOrchNotice(
-        challenge.eventId,
-        `「${challenge.name}」已被操作员手动停止：${parts.join("；")}`
-      )
+    if (closedCount > 0 || cancelled > 0) {
+      notices.publish({
+        type: "challengeHalt",
+        eventId: challenge.eventId,
+        challengeName: challenge.name,
+        closed: closedCount,
+        cancelled,
+      })
     }
     return { closed: closedCount, cancelled }
   }
@@ -897,45 +906,37 @@ export function createAgentService(options: AgentServiceOptions) {
       })
     }
     if (outcome === "repeat") return
-    const eventId = queries.getChallengeMeta(challengeId)?.eventId
-    if (!eventId) return
+    const meta = queries.getChallengeMeta(challengeId)
+    if (!meta) return
+    const { eventId, name } = meta
     const policy = schedulerPolicyFor(db, eventId)
     if (outcome === "extra") {
       if (policy.notifyTeamOnFlag) {
-        postExtraFlagNotice(challengeId, submitterAgentId)
+        notices.publish({
+          type: "flagAccepted",
+          tier: "extra",
+          eventId,
+          challengeId,
+          challengeName: name,
+          flag: latestAcceptedFlag(challengeId),
+          submitterAgentId,
+        })
       }
       return
     }
     if (policy.notifyTeamOnFlag) {
-      postFullSolveTeamNotice(challengeId, submitterAgentId, policy)
+      notices.publish({
+        type: "flagAccepted",
+        tier: "first",
+        eventId,
+        challengeId,
+        challengeName: name,
+        flag: latestAcceptedFlag(challengeId),
+        submitterAgentId,
+        stopSiblings: policy.stopSiblingsOnSolve,
+      })
     }
     stopOthersOnSolved(challengeId, submitterAgentId, policy)
-  }
-
-  /** Light #team notice for an extra flag value on a solved challenge:
-   * recorded provenance, no cleanup round (the solve orchestration already
-   * ran at the first acceptance). */
-  function postExtraFlagNotice(
-    challengeId: string,
-    submitterAgentId: string | undefined
-  ): void {
-    const name = queries.getChallengeMeta(challengeId)?.name ?? challengeId
-    const flag = latestAcceptedFlag(challengeId)
-    const by = submitterAgentId
-      ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
-      : ""
-    channels.post(
-      {
-        channelKey: teamKey(challengeId),
-        author: { type: "system" },
-        body: `「${name}」再解出一个 flag${flag ? `：${flag}` : ""}${by}。`,
-        meta: {
-          eventType: "flagAccepted",
-          ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
-        },
-      },
-      { kind: "system" }
-    )
   }
 
   /** The challenge's most recently updated accepted flag, if any. */
@@ -953,34 +954,19 @@ export function createAgentService(options: AgentServiceOptions) {
       .get()?.flag
   }
 
-  /** Full-solve #team notice (policy notifyTeamOnFlag). Urgency follows the
-   * urgent-team policy via the channels post path (no explicit urgent here);
-   * when siblings survive (stop off) the body tells them to wrap up. */
-  function postFullSolveTeamNotice(
-    challengeId: string,
-    submitterAgentId: string | undefined,
-    policy: SchedulerPolicy
-  ): void {
-    const name = queries.getChallengeMeta(challengeId)?.name ?? challengeId
-    const flag = latestAcceptedFlag(challengeId)
-    const by = submitterAgentId
-      ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
-      : ""
-    const tail = policy.stopSiblingsOnSolve
-      ? ""
-      : " 本题无需继续攻击，请整理 writeup 并尽快 finish_run 收尾。"
-    channels.post(
-      {
-        channelKey: teamKey(challengeId),
-        author: { type: "system" },
-        body: `「${name}」已完全解出${flag ? `：${flag}` : ""}${by}，平台已接受。${tail}`,
-        meta: {
-          eventType: "flagAccepted",
-          ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
-        },
-      },
-      { kind: "system" }
-    )
+  /** The challenge's accepted flag values (the partial-solve progress list). */
+  function acceptedFlagsOf(challengeId: string): string[] {
+    return db
+      .select({ flag: challengeFlags.flag })
+      .from(challengeFlags)
+      .where(
+        and(
+          eq(challengeFlags.challengeId, challengeId),
+          eq(challengeFlags.status, "accepted")
+        )
+      )
+      .all()
+      .map((f) => f.flag)
   }
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
@@ -994,57 +980,25 @@ export function createAgentService(options: AgentServiceOptions) {
     submitterAgentId?: string
   ): void {
     const meta = queries.getChallengeMeta(challengeId)
-    const name = meta?.name ?? challengeId
-    const confirmed = db
-      .select({ flag: challengeFlags.flag })
-      .from(challengeFlags)
-      .where(
-        and(
-          eq(challengeFlags.challengeId, challengeId),
-          eq(challengeFlags.status, "accepted")
-        )
-      )
-      .all()
-      .map((f) => f.flag)
-    const text =
-      `多 flag 进度：「${name}」部分解出${message ? `（${message}）` : ""}。` +
-      `已确认：${confirmed.join("、") || "（无）"}。` +
-      `请专注剩余 flag；已确认的无需重复提交。`
-    if (meta && schedulerPolicyFor(db, meta.eventId).notifyTeamOnFlag) {
-      channels.post(
-        {
-          channelKey: teamKey(challengeId),
-          author: { type: "system" },
-          body: text,
-          meta: {
-            eventType: "flagPartial",
-            ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
-          },
-        },
-        { kind: "system" }
-      )
+    if (!meta) return
+    if (schedulerPolicyFor(db, meta.eventId).notifyTeamOnFlag) {
+      notices.publish({
+        type: "flagAccepted",
+        tier: "partial",
+        eventId: meta.eventId,
+        challengeId,
+        challengeName: meta.name,
+        message,
+        confirmedFlags: acceptedFlagsOf(challengeId),
+        submitterAgentId,
+      })
     }
-    if (meta?.eventId) {
-      postOrchNotice(
-        meta.eventId,
-        `部分解出：「${name}」${message ?? "多 flag 未集齐"}`
-      )
-    }
-  }
-
-  /** Non-urgent system notice into orch:<eventId> (rides the next flush;
-   * paused → silently dropped). */
-  function postOrchNotice(eventId: string, line: string): void {
-    if (schedulerAdmin.isSchedulerPaused(eventId)) return
-    channels.post(
-      {
-        channelKey: orchKey(eventId),
-        author: { type: "system" },
-        body: line,
-        meta: { noticeType: "notice" },
-      },
-      { kind: "system" }
-    )
+    notices.publish({
+      type: "flagPartialProgress",
+      eventId: meta.eventId,
+      challengeName: meta.name,
+      message,
+    })
   }
 
   /** Full-solve cleanup (see notifyFlagAccepted), shaped by the event's
@@ -1118,11 +1072,14 @@ export function createAgentService(options: AgentServiceOptions) {
       // The freed target slot may admit a queued item even when no sibling
       // closed — wake the drainer explicitly (nothing else would).
       queue?.scheduleDrain()
-      const parts: string[] = []
-      if (stopped > 0) parts.push(`已停止 ${stopped} 个同题 agent`)
-      if (cancelled > 0) parts.push(`已取消 ${cancelled} 个排队项`)
-      if (parts.length > 0) {
-        postOrchNotice(eventId, `「${name}」已完全解出：${parts.join("；")}`)
+      if (stopped > 0 || cancelled > 0) {
+        notices.publish({
+          type: "solveCleanup",
+          eventId,
+          challengeName: name,
+          stopped,
+          cancelled,
+        })
       }
     })()
   }
@@ -1320,20 +1277,8 @@ export function createAgentService(options: AgentServiceOptions) {
     onSupersededLaunch: (agentId) => {
       void settleAgent(agentId, { abort: false, status: "aborted" })
     },
-    onQueueEmergency: (eventId, line) => {
-      if (schedulerAdmin.isSchedulerPaused(eventId)) return
-      channels.post(
-        {
-          channelKey: orchKey(eventId),
-          author: { type: "system" },
-          body: line,
-          meta: { noticeType: "emergency" },
-          urgent: true,
-        },
-        { kind: "system" }
-      )
-    },
-    onQueueNotice: (eventId, line) => postOrchNotice(eventId, line),
+    onQueueEmergency: (event) => notices.publish(event),
+    onQueueNotice: (event) => notices.publish(event),
   })
 
   async function close(): Promise<void> {

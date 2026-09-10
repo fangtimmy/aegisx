@@ -63,10 +63,10 @@ export type QueueDrainerDeps = {
    * success; rejects with {@link RunActionError} (capacity /
    * launch_failed) or other errors. */
   launch(item: QueueRow): Promise<string>
-  /** Emergency line for the event's scheduler DM: a permanent launch
+  /** Emergency info for the event's scheduler DM: a permanent launch
    * failure. Posted as an urgent system message (immediate flush). Never
    * throws. */
-  onEmergency(eventId: string, line: string): void
+  onEmergency(eventId: string, failure: LaunchFailureInfo): void
   /** Settle a just-spawned agent whose queue item was cancelled/removed
    * mid-launch (markRunning lost the race): the agent must not stay live on
    * work nobody owns anymore. Fire-and-forget — the drainer never awaits or
@@ -80,19 +80,26 @@ export type QueueDrainerDeps = {
   clock?: Clock
 }
 
-function launchFailureLine(
+/** Structured launch-failure facts for the notice event: the wording lives
+ * in the notice template, the drainer only resolves the challenge name and
+ * bounds the error text. */
+export type LaunchFailureInfo = { challengeName: string; error: string }
+
+function launchFailureInfo(
   db: Database,
   item: QueueRow,
   error: string
-): string {
+): LaunchFailureInfo {
   const name =
     db
       .select({ name: challenges.name })
       .from(challenges)
       .where(eq(challenges.id, item.challengeId))
       .get()?.name ?? item.challengeId
-  const brief = error.length > 200 ? `${error.slice(0, 200)}…` : error
-  return `启动失败：「${name}」— ${brief}`
+  return {
+    challengeName: name,
+    error: error.length > 200 ? `${error.slice(0, 200)}…` : error,
+  }
 }
 
 function isCapacity(error: unknown): boolean {
@@ -195,7 +202,7 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
           deps.store.markFailed(item.id, message)
           deps.onEmergency(
             item.eventId,
-            launchFailureLine(deps.db, item, message)
+            launchFailureInfo(deps.db, item, message)
           )
         }
       }

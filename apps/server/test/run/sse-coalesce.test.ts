@@ -165,7 +165,7 @@ describe("createProgressCoalescer", () => {
   test("seed then live interleaving: seed frames survive, progress supersede", () => {
     const coalescer = createProgressCoalescer()
     // Seed (subscribe happened before, snapshot replay).
-    coalescer.push(refine<LiveEvent>({ type: "ready", agentId: "agent-1" }))
+    coalescer.push(committed(9))
     coalescer.push(tp("t1", 4)) // in-flight tool replay
     coalescer.push(activity("compacting"))
     // Live.
@@ -173,7 +173,7 @@ describe("createProgressCoalescer", () => {
     coalescer.push(tp("t1", 5))
     coalescer.push(mp("m1", 2))
     expect(outline(coalescer.drain())).toEqual([
-      "ready",
+      "message.committed",
       "tp:t1#5",
       "agent.activity",
       "mp:m1#2",

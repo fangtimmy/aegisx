@@ -16,14 +16,6 @@ function validMessageEntry(overrides: Record<string, unknown> = {}) {
 }
 
 describe("parseLiveEvent", () => {
-  test("ready requires agentId", () => {
-    expect(parseLiveEvent({ type: "ready", agentId: "a1" })).toEqual({
-      type: "ready",
-      agentId: "a1",
-    })
-    expect(parseLiveEvent({ type: "ready" })).toBeUndefined()
-  })
-
   test("channel.message passes the payload through", () => {
     const message = {
       id: 7,
@@ -173,7 +165,7 @@ describe("parseLiveEvent", () => {
   test("unknown types and non-objects are rejected", () => {
     expect(parseLiveEvent({ type: "wat" })).toBeUndefined()
     expect(parseLiveEvent(null)).toBeUndefined()
-    expect(parseLiveEvent("ready")).toBeUndefined()
+    expect(parseLiveEvent("channel.message")).toBeUndefined()
     expect(parseLiveEvent([1, 2])).toBeUndefined()
   })
 })

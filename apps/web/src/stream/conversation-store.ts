@@ -11,7 +11,7 @@ import {
   type LiveEntry,
 } from "@/domain/conversation"
 
-import { parseLiveEvent } from "./parse-event"
+import { liveConnection } from "./live-connection"
 
 type Listener = () => void
 
@@ -75,8 +75,9 @@ function toolCallIdOf(entry: SessionEntry): string | null {
 }
 
 /**
- * Merges durable committed entries (from GET /messages) with ephemeral live
- * progress (from the SSE stream) into ConversationItem[] snapshots.
+ * Per-agent conversation state, keyed by agentId, fed by the multiplexed
+ * live connection ({@link ingest}) and by REST snapshots
+ * ({@link applySnapshot}); consumers subscribe per agent and read selectors.
  *
  * Optimization: the committed history is split at the last user-turn boundary.
  * Everything up to that boundary is memoized ("stable") and only the tail
@@ -100,14 +101,26 @@ export class ConversationStore {
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly pendingNotifications = new Set<string>()
   private notificationFrame: number | null = null
-  private notificationIsTimeout = false
-  private source: EventSource | null = null
   private agents = new Map<string, AgentSummary>()
+  /** Agents whose durable history the UI is rendering (see {@link retain}).
+   * Only their message frames are ingested: on the multiplexed stream every
+   * agent's frames arrive, so without this the browser would accumulate the
+   * whole fleet's history. */
+  private retained = new Set<string>()
   /** Generation per agent, bumped by reset(). Async reloads capture it up
    * front and applySnapshot rejects responses from older generations. */
   private readonly epochs = new Map<string, number>()
   /** Epoch of the last applied snapshot per agent. */
   private readonly snapshotEpochs = new Map<string, number>()
+
+  constructor() {
+    // Queued notifications drain on rAF, which hidden tabs suspend; the
+    // visibility handler force-drains on restore (see notify). No DOM in unit
+    // tests — there the store is pure state.
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange)
+    }
+  }
 
   /** Queued notifications drain here; rAF stalls in hidden tabs, so the
    * visibility handler force-drains on restore (see notify). */
@@ -311,7 +324,6 @@ export class ConversationStore {
   }
 
   applyEvent(event: LiveEvent) {
-    if (event.type === "ready") return
     if (event.type === "agent.updated") {
       this.agents.set(event.agent.id, event.agent)
       for (const listeners of this.listeners.values()) {
@@ -419,13 +431,11 @@ export class ConversationStore {
     // tab the user cannot see). The visibility handler drains on restore.
     const hidden = typeof document !== "undefined" && document.hidden
     if (hidden) {
-      this.notificationIsTimeout = true
       this.notificationFrame = window.setTimeout(
         () => this.flushNotifications(),
         0
       )
     } else {
-      this.notificationIsTimeout = false
       this.notificationFrame = window.requestAnimationFrame(() =>
         this.flushNotifications()
       )
@@ -442,67 +452,81 @@ export class ConversationStore {
   }
 
   /**
-   * Connect the SSE stream for an agent. On (re)connect, `onReconnect` is
-   * called so the caller can re-fetch durable committed entries from the API.
+   * Ingest one frame from the multiplexed live connection.
+   *
+   * Fleet-wide, bounded state (agent status, context, queue, activity,
+   * in-flight tools) is kept for every agent — that is what makes the
+   * connection's replay visible the moment an agent is selected, instead of
+   * only from the next live event. Message frames are the unbounded part, so
+   * they are kept only for retained agents (see {@link retain}); the REST
+   * snapshot of a newly selected agent covers everything before its frame.
+   * Channel messages are not conversation state — the channel view consumes
+   * them straight off the connection.
    */
-  connect(
-    agentId: string,
-    onReconnect: () => void,
-    onDisconnectedChange: (disconnected: boolean) => void,
-    streamPath?: string
-  ) {
-    this.close()
-    document.addEventListener("visibilitychange", this.handleVisibilityChange)
-    const source = new EventSource(
-      streamPath ?? `/api/agents/${agentId}/stream`
-    )
-    this.source = source
-    let opened = false
-    source.addEventListener("open", () => {
-      if (this.source !== source) return
-      const reconnecting = opened
-      opened = true
-      onDisconnectedChange(false)
-      if (reconnecting) {
-        this.resetForReconnect()
-        onReconnect()
-      }
-    })
-    source.addEventListener("error", () => {
-      if (this.source !== source) return
-      onDisconnectedChange(true)
-    })
-    source.addEventListener("message", (message) => {
-      if (this.source !== source) return
-      let payload: unknown
-      try {
-        payload = JSON.parse(message.data)
-      } catch {
+  ingest(event: LiveEvent) {
+    switch (event.type) {
+      case "agent.updated":
+      case "context.updated":
+      case "queue.updated":
+      case "agent.activity":
+      case "tool.progress":
+        this.applyEvent(event)
         return
-      }
-      const event = parseLiveEvent(payload)
-      if (event) this.applyEvent(event)
-    })
-    return () => this.close()
+      case "message.progress":
+      case "message.committed":
+        if (this.retained.has(event.agentId)) this.applyEvent(event)
+        return
+      default:
+        return
+    }
   }
 
-  close() {
-    if (this.source) {
-      this.source.close()
-    }
-    this.source = null
-    document.removeEventListener(
-      "visibilitychange",
-      this.handleVisibilityChange
-    )
-    if (this.notificationFrame !== null) {
-      if (this.notificationIsTimeout) {
-        window.clearTimeout(this.notificationFrame)
-      } else {
-        window.cancelAnimationFrame(this.notificationFrame)
+  /**
+   * Declare which agents' durable history stays materialized. The UI passes
+   * the agent(s) it renders; evicted agents keep their bounded state (context
+   * / queue / activity / tools) so switching back shows the live picture
+   * without a per-agent reconnect, and their epoch is bumped so an in-flight
+   * reload cannot merge truncated rows back in.
+   */
+  retain(agentIds: Iterable<string>) {
+    this.retained = new Set(agentIds)
+    const evicted = new Set<string>()
+    for (const map of [
+      this.messages,
+      this.messageProgress,
+      this.views,
+      this.snapshots,
+    ]) {
+      for (const agentId of map.keys()) {
+        if (!this.retained.has(agentId)) evicted.add(agentId)
       }
-      this.notificationFrame = null
-      this.pendingNotifications.clear()
+    }
+    for (const agentId of evicted) {
+      this.messages.delete(agentId)
+      this.messageProgress.delete(agentId)
+      this.views.delete(agentId)
+      this.snapshots.delete(agentId)
+      this.completedTools.delete(agentId)
+      this.epochs.set(agentId, this.epochOf(agentId) + 1)
+      this.notify(agentId)
     }
   }
+}
+
+/** The process-level conversation state: one live connection feeds every
+ * agent's state, and any number of components can subscribe to any agent. */
+export const conversationStore = new ConversationStore()
+
+let conversationStreamStarted = false
+
+/** Wire the singleton store to the multiplexed live connection, exactly once.
+ * Called from the app root: idempotent so StrictMode double-effects and HMR
+ * remounts cannot double-subscribe. A reconnect drops the ephemeral state,
+ * which the connection's replay then re-establishes from the server's bus
+ * snapshot; durable history is the caller's to re-read. */
+export function startConversationStream(): void {
+  if (conversationStreamStarted) return
+  conversationStreamStarted = true
+  liveConnection.subscribe((event) => conversationStore.ingest(event))
+  liveConnection.onReconnect(() => conversationStore.resetForReconnect())
 }

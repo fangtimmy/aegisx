@@ -63,11 +63,6 @@ function isChannelMessage(value: unknown): value is ChannelMessagePublic {
 /** Parse one SSE data payload into a typed LiveEvent, or undefined if malformed. */
 export function parseLiveEvent(value: unknown): LiveEvent | undefined {
   if (!isRecord(value) || typeof value.type !== "string") return undefined
-  if (value.type === "ready") {
-    return typeof value.agentId === "string"
-      ? { type: "ready", agentId: value.agentId }
-      : undefined
-  }
   if (value.type === "channel.message") {
     if (!isChannelMessage(value.message)) return undefined
     return { type: "channel.message", message: value.message }

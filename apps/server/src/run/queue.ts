@@ -10,6 +10,7 @@ import { logEvent } from "../lib/log"
 import type { Clock } from "./clock"
 import { createQueueDrainer } from "./drainer"
 import { RunActionError } from "./errors"
+import type { NoticeEvent } from "./orch-notices"
 import { assertMayTouchEvent } from "./principal-scope"
 
 /** Public queue item shape (REST + tools). Canonical definition lives in
@@ -71,13 +72,13 @@ export type QueueServiceDeps = {
    * success; rejects with {@link RunActionError} (capacity /
    * launch_failed) or other errors. */
   launch(item: QueueRow): Promise<string>
-  /** Emergency line for the event's scheduler DM: a permanent launch
-   * failure, or the queue-starved edge (pending 2→1). Posted as an urgent
-   * system message (immediate flush). Never throws. */
-  onQueueEmergency(eventId: string, line: string): void
-  /** Ordinary notice line for the scheduler DM (queue pause/resume): a
-   * non-urgent system message riding the next delivery. Never throws. */
-  onQueueNotice(eventId: string, line: string): void
+  /** Emergency notice for the event's scheduler: a permanent launch failure,
+   * or the queue-starved edge (pending 2→1). Posted urgent (immediate wake).
+   * Never throws. */
+  onQueueEmergency(event: NoticeEvent): void
+  /** Ordinary notice for the event's scheduler (queue pause/resume): a
+   * non-urgent message riding the next delivery. Never throws. */
+  onQueueNotice(event: NoticeEvent): void
   /** Settle a just-spawned agent whose queue item was cancelled/removed
    * mid-launch (markRunning lost the race). Never throws; failures are
    * logged by the drainer. */
@@ -121,12 +122,6 @@ function safeParseObject(raw: string): Record<string, unknown> {
 
 const now = () => new Date().toISOString()
 
-/** Notice line for a state flip; `manual` marks a user-driven flip so the
- * scheduler can tell its own actions from user intervention. */
-function stateNotice(action: string, source: "manual" | "scheduler"): string {
-  return source === "manual" ? `队列已${action}（用户手动）` : `队列已${action}`
-}
-
 export function createQueueService(deps: QueueServiceDeps) {
   const { db } = deps
 
@@ -164,7 +159,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       // of charge; the assertion only gates external (route) callers.
       if (stateOf(eventId, { kind: "system" }) === "paused") return
       logEvent("queue", "starved", { pending })
-      deps.onQueueEmergency(eventId, "队列不足：仅剩 1 项排队")
+      deps.onQueueEmergency({ type: "queueStarved", eventId, pending })
     }
   }
 
@@ -492,7 +487,8 @@ export function createQueueService(deps: QueueServiceDeps) {
     getSettings: () => deps.getSettings(),
     isDisposed: () => deps.isDisposed(),
     launch: (item) => deps.launch(item),
-    onEmergency: (eventId, line) => deps.onQueueEmergency(eventId, line),
+    onEmergency: (eventId, failure) =>
+      deps.onQueueEmergency({ type: "launchFailed", eventId, ...failure }),
     ...(deps.onSupersededLaunch
       ? { onSupersededLaunch: deps.onSupersededLaunch }
       : {}),
@@ -544,7 +540,12 @@ export function createQueueService(deps: QueueServiceDeps) {
     // Idempotent: a repeat flip keeps silent (no duplicate notice lines).
     if (stateOf(eventId, principal) === "paused") return
     setState(eventId, "paused")
-    deps.onQueueNotice(eventId, stateNotice("暂停", source))
+    deps.onQueueNotice({
+      type: "queueStateChanged",
+      eventId,
+      action: "paused",
+      source,
+    })
   }
 
   function resume(
@@ -555,7 +556,12 @@ export function createQueueService(deps: QueueServiceDeps) {
     assertMayTouchEvent(principal, eventId)
     if (stateOf(eventId, principal) === "running") return
     setState(eventId, "running")
-    deps.onQueueNotice(eventId, stateNotice("恢复", source))
+    deps.onQueueNotice({
+      type: "queueStateChanged",
+      eventId,
+      action: "resumed",
+      source,
+    })
   }
 
   return {

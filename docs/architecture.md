@@ -65,11 +65,12 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 | `drainer.ts` | 排水循环（200ms 去抖单飞）：`planDrainStep` 把启动围栏判定翻译为 launch/skip/cancel/stop；`global_capacity` 停轮后按有界间隔自唤醒重试；launch 失败 → item `failed` + 调度者 DM 紧急通知 |
 | `fence.ts` | 启动围栏：全局存活 solver 上限（settings `scheduler.maxConcurrentAgents`）、每赛事 target 槽位（`maxConcurrentTargets`）、已解题封禁（`blockSpawnOnSolved`） |
 | `channels-*.ts` 五模块 | 协作层（见下），`channels.ts` 为组装壳 |
+| `orch-notices.ts` | 系统→调度者/团队通知的类型化事件协议：事件（`flagAccepted` first/extra/partial、`flagPartialProgress`、`solveCleanup`、`challengeHalt`、`queueStarved`、`launchFailed`、`queueStateChanged`）→ 投递契约（频道 / meta / 紧急度）→ 模板渲染；文本默认值在 `orchestration/prompt-defaults.ts`（builtin 行，可编辑） |
 | `container/container-manager.ts` | dockerode 封装：生命周期 + hijacked exec + putArchive 写入 |
 | `workspace/` | 文件工具实现与 docker exec 后端 |
 | `bash-tool.ts` | 容器内 bash 工具 |
 | `model-resolver.ts` / `model-runtime.ts` | canonical 模型引用 `aegisx-<providerId>/<modelId>:<effort>` 的解析与运行时模型表（新 provider 惰性刷新） |
-| `sse.ts` | 每 agent 的实时流出口（LiveBus → SSE） |
+| `sse.ts` | 唯一的实时流出口：`GET /api/stream` 一条 SSE 连接承载全部 agent 事件与频道消息（LiveBus → SSE，走 bus 全局订阅；载荷自带 `agentId` / `message.channelKey`，由客户端分发）。保留慢客户端背压合并（每 streaming 身份只留最高 revision）与 seed-before-subscribe |
 | `principal-scope.ts` | 数据层作用域断言：`assertMayTouchEvent` / `assertMayTouchChallenge` / `assertMayTouchAgent`（授权的数据层，见下） |
 | `routes.ts` / `scheduler-admin.ts` / `queries.ts` / `public.ts` | 用户面路由、调度管理面、查询与对外形状 |
 
@@ -87,9 +88,13 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 写路径（`channels-post.ts`）：消息入账本，附件拷入该题工作区 `shared/` 树（路径存 `meta` JSON，容器内直读，无取回步骤）。投递引擎（`channels-delivery.ts`）是唯一的推送出口：按读游标取增量、按 agent 的投递面（solver = 本题 #team + 自身 dm；调度者 = orch）渲染成投递提示，全局 flush tick 批量冲刷；事件先落账、再聚合唤醒，调度者不会被逐条事件牵引。dm 支持 urgent 冷唤醒（终态 agent 也可被重新叫起）；team/orch 只向存活 agent 投递，终态后仅存档。
 
+**系统通知 = 类型化事件 + 模板**（`run/orch-notices.ts`）：系统侧的调用点（service 的 flag 处置/解出清理/手动停止、queue 的队列边沿与暂停恢复）不再拼中文散文，只构造类型化事件并 `publish`；事件决定投递面（`team:<challengeId>` 或 `orch:<eventId>`）、`meta`（`eventType` / `noticeType` / 提交者 `agentId`）与紧急度，文本由模板渲染——默认值即 `NOTICE_TEMPLATE_DEFAULTS`，随 builtin 行落 `prompt_templates`（用户可编辑，下次通知生效）。投递面、urgent 语义、paused 门与 `meta.agentId`（跳过提交者自身通知）等契约全部留在 channels 层不变；`launchFailed` 的事件载荷当前仍携带 drainer 已渲染的原因行（该行由 `drainer.ts` 组装，未在本批所有权内）。
+
 ## 调度
 
 调度者不是代码里的循环，而是**一个 agent**：消费 `orch` 频道的事件投递，用 Python SDK（`queue.enqueue` / `agents.*`）产出计划，由 `queue.ts` 排水落地。系统侧的约束都在 `fence.ts` 与 `run/scheduler-policy.ts`（读侧合并 `scheduler_config`：flag 通知、解出后停兄弟、槽位释放时机 eager/drained 等）。并发与槽位在启动侧强制校验，不依赖调度者自觉；事件批处理与阈值触发由投递引擎的 flush tick 承担。
+
+系统→调度者的方向是类型化事件 + 可编辑模板：`orch` 频道里的系统消息全部由 `run/orch-notices.ts` 的事件渲染（flag 接受、部分解出、解出清理、手动停止、队列不足/启动失败、队列暂停恢复），事件的结构字段决定 meta 与紧急度，散文只在模板里；调度者→系统的方向由容器内 Python SDK 类型化，两侧协议都不再依赖隐式约定。
 
 ## 平台适配（`apps/server/src/platforms/`）
 
@@ -102,7 +107,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 ## Web 前端（`apps/web/src/`）
 
 - `api/` — REST 客户端，类型直接取自 `@aegisx/shared`。
-- `stream/` — SSE 消费：`conversation-store.ts` 持有单个 agent 的会话状态（stable/tail 记忆化 + rAF 批量通知 + 断线重连；**单流约束**——同时只订阅一个 agent），`parse-event.ts` 解析 LiveEvent。
+- `stream/` — SSE 消费：`live-connection.ts` 是**进程级唯一** EventSource（应用根部接线；按 `agentId` / `message.channelKey` 自行分发，断线由 EventSource 原生重连，`onReconnect` / `onStatus` 供上层刷新与提示），`conversation-store.ts` 是按 agentId 键控的会话状态 + selector（stable/tail 记忆化 + rAF 批量通知；`retain()` 决定哪些 agent 的持久历史留在内存，其余只保留有界的实时状态），`parse-event.ts` 解析 LiveEvent。频道视图与对话视图共用这一条连接。
 - `features/` — 页面域：events（赛事/题目/平台）、runs（agent 会话时间线与频道视图）、tasks（题中心任务视图 / 队列）、stats（统计）、activity（全局活动日志）、settings。
 - `domain/` / `components/` — 前端本地领域与 coss UI 组件库（只读）。
 

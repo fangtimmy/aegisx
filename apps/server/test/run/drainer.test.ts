@@ -85,7 +85,10 @@ function makeDrainer(
       launches.push(item.id)
       return launch(item)
     },
-    onEmergency: (eventId, line) => emergencies.push(`${eventId}: ${line}`),
+    onEmergency: (eventId, failure) =>
+      emergencies.push(
+        `${eventId}: ${failure.challengeName} — ${failure.error}`
+      ),
     ...(opts.onSupersededLaunch
       ? { onSupersededLaunch: opts.onSupersededLaunch }
       : {}),

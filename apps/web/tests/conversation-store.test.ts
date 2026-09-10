@@ -299,6 +299,88 @@ describe("ConversationStore", () => {
     expect(store.getAgent("a1")).toBe(updated)
   })
 
+  test("interleaved events for two agents keep their state isolated", () => {
+    const store = new ConversationStore()
+    // Both agents are on screen (the multiplexed stream carries both).
+    store.retain(["a1", "a2"])
+    store.applySnapshot("a1", [userItem("ask one")])
+    store.applySnapshot("a2", [userItem("ask two")])
+
+    const draft = (text: string) => ({
+      type: "message",
+      id: "draft",
+      timestamp: "2025-01-01T00:00:01Z",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    })
+    store.ingest(progressEvent("a1", "draft", 1, draft("one…")))
+    store.ingest(progressEvent("a2", "draft", 1, draft("two…")))
+    store.ingest(toolEvent("a1", "tc-1", "running", 1))
+    store.ingest(toolEvent("a2", "tc-2", "done", 2, { result: "two done" }))
+    store.ingest(committedEvent("a1", "draft", 2, draft("one done")))
+    store.ingest(contextUpdatedEvent("a1"))
+
+    const agentA = store.get("a1")
+    const agentB = store.get("a2")
+    expect(agentA).toHaveLength(2)
+    expect(agentB).toHaveLength(2)
+    const bodyOf = (items: typeof agentA) =>
+      items.flatMap((item) =>
+        item.type === "user"
+          ? [item.body]
+          : item.type === "agent"
+            ? item.blocks.flatMap((block) =>
+                block.type === "text" ? [block.body] : []
+              )
+            : []
+      )
+    expect(bodyOf(agentA)).toEqual(["ask one", "one done"])
+    expect(bodyOf(agentB)).toEqual(["ask two", "two…"])
+    expect(store.getRunningTool("a1")).toMatchObject({ toolName: "bash" })
+    expect(store.getRunningTool("a2")).toBeNull()
+    expect(store.getContext("a1")).toMatchObject({ tokens: 1200 })
+    expect(store.getContext("a2")).toBeNull()
+  })
+
+  test("ingest keeps bounded live state for every agent, messages only for retained ones", () => {
+    const store = new ConversationStore()
+    store.retain(["a1"])
+    store.ingest(
+      progressEvent("a2", "draft", 1, {
+        type: "message",
+        id: "draft",
+        timestamp: "2025-01-01T00:00:01Z",
+        message: { role: "assistant", content: [{ type: "text", text: "x" }] },
+      })
+    )
+    store.ingest(committedEvent("a2", "draft", 2, userItem("late").entry))
+    expect(store.get("a2")).toHaveLength(0)
+
+    store.ingest(toolEvent("a2", "tc-2", "running", 1))
+    store.ingest(contextUpdatedEvent("a2"))
+    store.ingest(agentUpdatedEvent({ id: "a2", role: "solver" }))
+    expect(store.getRunningTool("a2")).toMatchObject({ toolName: "bash" })
+    expect(store.getContext("a2")).toMatchObject({ tokens: 1200 })
+    expect(store.getAgent("a2")).not.toBeNull()
+  })
+
+  test("retain evicts other agents' durable history and keeps their live state", () => {
+    const store = new ConversationStore()
+    store.retain(["a1", "a2"])
+    store.applySnapshot("a1", [userItem("one")])
+    store.applySnapshot("a2", [userItem("two")])
+    store.ingest(contextUpdatedEvent("a2"))
+
+    store.retain(["a1"])
+    expect(store.get("a1")).toHaveLength(1)
+    expect(store.get("a2")).toHaveLength(0)
+    expect(store.getContext("a2")).toMatchObject({ tokens: 1200 })
+
+    // A commit for the evicted agent no longer lands; the REST snapshot when
+    // it is selected again is the durable source.
+    store.ingest(committedEvent("a2", "later", 9, userItem("later").entry))
+    expect(store.get("a2")).toHaveLength(0)
+  })
+
   test("context.updated notifies only the event's own agent listeners", async () => {
     const store = new ConversationStore()
     let currentAgentNotifications = 0

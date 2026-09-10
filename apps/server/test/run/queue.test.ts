@@ -3,7 +3,13 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { queueState, spawnQueue, challengeFlags } from "../../src/db/schema"
+import { NOTICE_TEMPLATE_DEFAULTS } from "../../src/orchestration/prompt-defaults"
 import { RunActionError } from "../../src/run/errors"
+import {
+  noticeDeliveries,
+  renderNotice,
+  type NoticeEvent,
+} from "../../src/run/orch-notices"
 import { createQueueService, parseSpawnQueueParams } from "../../src/run/queue"
 import {
   flatSettings,
@@ -43,6 +49,16 @@ afterEach(() => {
   for (const svc of createdQueues.splice(0)) svc.dispose()
 })
 
+/** Default-template render of a notice event — the harness records the same
+ * text the service posts. */
+function noticeText(event: NoticeEvent): string {
+  return noticeDeliveries(event)
+    .map((delivery) =>
+      renderNotice(delivery, NOTICE_TEMPLATE_DEFAULTS[delivery.template])
+    )
+    .join("\n")
+}
+
 function makeQueue(db: Db, launch: (row: QueueRow) => Promise<string>) {
   const launches: string[] = []
   const launchedRows: QueueRow[] = []
@@ -66,9 +82,10 @@ function makeQueue(db: Db, launch: (row: QueueRow) => Promise<string>) {
       })
       return agentId === "run-x" ? `agent-${n}` : agentId
     },
-    onQueueEmergency: (eventId, line) =>
-      emergencies.push(`${eventId}: ${line}`),
-    onQueueNotice: (eventId, line) => notices.push(`${eventId}: ${line}`),
+    onQueueEmergency: (event) =>
+      emergencies.push(`${event.eventId}: ${noticeText(event)}`),
+    onQueueNotice: (event) =>
+      notices.push(`${event.eventId}: ${noticeText(event)}`),
   })
   createdQueues.push({
     dispose: () => {

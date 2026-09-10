@@ -18,7 +18,7 @@ import { EmptyInputSchema } from "../lib/schemas"
 import { platformActionHttpError } from "../platforms/errors"
 import { RunActionError, runActionError as runError } from "./errors"
 import type { AgentService } from "./service"
-import { streamAgent, streamChannel } from "./sse"
+import { streamLive } from "./sse"
 
 /** Enqueue a spawn item (POST /api/events/:eventId/queue): body carries the
  * challenge + spawn params. Models resolve at launch; the prompt shapes the
@@ -327,16 +327,14 @@ export function registerRunRoutes(
     }
   })
 
-  // Live event stream (EventSource). Ephemeral progress; reconnect re-reads
-  // committed messages via GET .../messages. 404 for a missing agent — a
-  // 200+EOF would leave the browser retrying a dead id forever.
-  app.get("/api/agents/:agentId/stream", (c) => {
-    const agentId = c.req.param("agentId")
-    if (!agentService.getAgent(agentId)) {
-      return notFound(c, "Agent not found")
-    }
+  // The single multiplexed live event stream (EventSource): every agent's
+  // events plus every channel message over ONE connection, dispatched client
+  // side by the identity in the payload. Ephemeral; reconnect re-reads
+  // committed messages via GET .../messages. No agent id in the path, so
+  // there is no per-agent 404 to special-case.
+  app.get("/api/stream", (c) => {
     try {
-      return streamAgent(c, agentService, agentId, principalOf(c))
+      return streamLive(c, agentService, principalOf(c))
     } catch (error) {
       return runError(c, error)
     }
@@ -590,18 +588,6 @@ export function registerRunRoutes(
   })
 
   // --- unified message layer ---------------------
-
-  /** Channel message SSE (IM view): initial latest-window snapshot, then live
-   * `channel.message` pushes for the derived key. No agent identity — the UI
-   * timeline view, not the SDK read path. ':' in the key is a legal path
-   * character. */
-  app.get("/api/channels/:channelKey/stream", (c) => {
-    const channelKey = c.req.param("channelKey")
-    if (!agentService.channels.parseChannelKey(channelKey)) {
-      return badRequest(c, "invalid", `非法频道键：${channelKey}`)
-    }
-    return streamChannel(c, agentService, channelKey)
-  })
 
   /** The challenge's channel tree: #team + one DM per agent of the
    * challenge (derived keys — the tree exists as long as the agent rows

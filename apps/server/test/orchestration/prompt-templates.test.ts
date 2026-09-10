@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
 
 import {
   DEFAULT_INITIAL_PROMPT_TEMPLATE,
   DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
+  NOTICE_TEMPLATE_DEFAULTS,
 } from "../../src/orchestration/prompt-defaults"
 import {
   previewOrchestratorSystemPrompt,
@@ -20,6 +20,11 @@ import {
   MAX_FILE_BYTES,
   MAX_FILES_PER_MESSAGE,
 } from "../../src/run/channels-post"
+import {
+  noticeDeliveries,
+  renderNotice,
+  type NoticeEvent,
+} from "../../src/run/orch-notices"
 
 const highlightedText = (segments: { highlighted: boolean; text: string }[]) =>
   segments.filter((s) => s.highlighted).map((s) => s.text)
@@ -230,36 +235,61 @@ describe("numeric contracts (prompt wording ↔ runtime constants)", () => {
   })
 })
 
-describe("notice wording sync (service/queue emission ↔ orchestrator template quotes)", () => {
-  // The orchestrator template explains scheduler wake-ups by quoting the
-  // literal notice wording emitted in service.ts / queue.ts. Either side
-  // rewording must sync the other, or the scheduler misreads its events.
-  const serviceSrc = readFileSync(
-    new URL("../../src/run/service.ts", import.meta.url),
-    "utf8"
-  )
-  const queueSrc = readFileSync(
-    new URL("../../src/run/queue.ts", import.meta.url),
-    "utf8"
-  )
+/** Default-template render of a notice event (the shipped wording). */
+function renderNoticeText(event: NoticeEvent): string {
+  return noticeDeliveries(event)
+    .map((delivery) =>
+      renderNotice(delivery, NOTICE_TEMPLATE_DEFAULTS[delivery.template])
+    )
+    .join("\n")
+}
 
+describe("notice wording sync (typed notice templates ↔ orchestrator template quotes)", () => {
+  // The orchestrator template explains scheduler wake-ups by quoting the
+  // literal wording the typed notice events render. Either side rewording
+  // must sync the other, or the scheduler misreads its events.
   test("solved-challenge cleanup fragments", () => {
+    const cleanup = renderNoticeText({
+      type: "solveCleanup",
+      eventId: "evt-1",
+      challengeName: "web1",
+      stopped: 2,
+      cancelled: 1,
+    })
     for (const frag of ["已完全解出", "已停止", "已取消"]) {
-      expect(serviceSrc).toContain(frag)
+      expect(cleanup).toContain(frag)
       expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(frag)
     }
   })
 
   test("partial multi-flag confirm fragment", () => {
-    expect(serviceSrc).toContain("已确认：")
+    const partial = renderNoticeText({
+      type: "flagAccepted",
+      tier: "partial",
+      eventId: "evt-1",
+      challengeId: "ch-1",
+      challengeName: "web1",
+      message: null,
+      confirmedFlags: ["flag{a}"],
+    })
+    expect(partial).toContain("已确认：")
     expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain("已确认：")
   })
 
   test("queue pause/resume and the manual-flip marker", () => {
-    // queue.ts composes 队列已{暂停|恢复}（用户手动）; the template spells
-    // both forms out for the scheduler.
+    const flip = (action: "paused" | "resumed") =>
+      renderNoticeText({
+        type: "queueStateChanged",
+        eventId: "evt-1",
+        action,
+        source: "manual",
+      })
+    const paused = flip("paused")
+    const resumed = flip("resumed")
+    // The notice templates spell 队列已{暂停|恢复}（用户手动）; the scheduler
+    // template spells both forms out.
     for (const frag of ["队列已", "暂停", "恢复", "（用户手动）"]) {
-      expect(queueSrc).toContain(frag)
+      expect(`${paused}\n${resumed}`).toContain(frag)
     }
     expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
       "队列已暂停/已恢复"

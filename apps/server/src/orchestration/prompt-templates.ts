@@ -11,6 +11,7 @@ import {
   DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
   DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
   DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
+  NOTICE_TEMPLATE_DEFAULTS,
 } from "./prompt-defaults"
 
 /** Namespace id for the built-in template rows. */
@@ -25,10 +26,11 @@ export const BUILTIN_DEFAULTS: Record<string, string> = {
   schedulerInitial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
   channelDelivery: DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
   schedulerDigest: DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
+  ...NOTICE_TEMPLATE_DEFAULTS,
 }
 
 /**
- * Seed the four built-in prompt template rows. Idempotent: inserts defaults
+ * Seed the built-in prompt template rows. Idempotent: inserts defaults
  * only where no row exists (ON CONFLICT DO NOTHING via unique(plugin,key)), so
  * a user's edit (an UPDATE) always survives reboots. Called once at app boot,
  * before any agent is created.

@@ -45,15 +45,13 @@ export type ContextSnapshot = {
 }
 
 /**
- * Live-only SSE events pushed over `GET /api/agents/:id/stream` (EventSource).
- * Ephemeral: reconnect re-fetches durable entries from `GET .../messages` and
- * re-applies progress from the current stream.
+ * Live-only SSE events pushed over the multiplexed `GET /api/stream`
+ * (EventSource). Ephemeral: reconnect re-fetches durable entries from
+ * `GET .../messages` and re-applies progress from the current stream. Every
+ * frame carries its own identity (agent events an `agentId`, channel
+ * messages a `message.channelKey`); consumers dispatch on it.
  */
 export type LiveEvent =
-  | {
-      type: "ready"
-      agentId: string
-    }
   | {
       type: "agent.updated"
       agent: AgentSummary
@@ -98,7 +96,8 @@ export type LiveEvent =
       toolName: string
       /** Server-side execution start (epoch ms) — the tool's TRUE start, so a
        * dialog opened mid-execution shows the real elapsed time instead of
-       * counting from the dialog open. Absent on old snapshots/replays. */
+       * counting from the dialog open. Only the start frame carries it, so
+       * update/end frames omit it. */
       startedAt?: number
       /** Omitted on the terminal (tool_execution_end) event — the SDK's
        * tool_execution_end carries no args, so the store keeps the args from

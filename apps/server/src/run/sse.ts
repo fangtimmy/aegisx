@@ -3,8 +3,7 @@ import type { Context } from "hono"
 import { streamSSE } from "hono/streaming"
 
 import type { Principal } from "../infrastructure/agent-auth"
-import { parseChannelKey } from "./channels"
-import { assertMayTouchAgent } from "./principal-scope"
+import { RunActionError } from "./errors"
 import type { AgentService } from "./service"
 
 /** The two streaming variants the pipeline stamps with a monotonic
@@ -120,91 +119,66 @@ function pumpLiveStream(
   })
 }
 
+/** The multiplexed live stream is the browser's face: one connection carries
+ * every agent of every event. Agent tokens are already refused at the endpoint
+ * level (agent-auth's verdict does not list `/api/stream`), so this repeats
+ * the rule at the service layer — an in-process caller cannot bypass the
+ * endpoint gate, and agents have no SSE consumer anyway (the SDK's read path
+ * is REST). */
+function assertMayWatchLive(principal: Principal): void {
+  if (principal.kind === "agent") {
+    throw new RunActionError(
+      "forbidden",
+      "实时流是用户界面专用面，agent 不消费全局 SSE"
+    )
+  }
+}
+
 /**
- * Live agent event stream (EventSource). Emits an initial snapshot (ready +
- * the agent + its bus state: context / queue / activity / in-flight tools)
- * so a fresh connection sees current state immediately, then forwards bus
- * events on the agent's channel until the client disconnects. Reconnect
- * re-reads durable messages via GET .../messages.
+ * The single live event stream (EventSource) for the whole app: one
+ * connection carries every agent's events plus every channel message, and
+ * subscribers dispatch by the identity already in the payload (`agentId`,
+ * `message.channelKey`). It replaces the per-agent and per-channel streams —
+ * the bus is a global singleton, so there was never a reason for the browser
+ * to hold one connection per agent.
+ *
+ * The initial snapshot replays each live agent's status + bus state (context /
+ * queue / activity / in-flight tools) so a fresh connection — including a
+ * reconnect — sees current state immediately, for every agent; the client
+ * keeps it keyed by agentId and only renders what is on screen. There is no
+ * `ready` frame any more: the EventSource's own `open` event is the readiness
+ * signal, and a global ready had no id to carry. Channel timelines need no
+ * snapshot: their REST window + polling is the durable source, live frames
+ * are the accelerator.
+ *
+ * Reconnect does not replay durable messages: the client re-reads them via
+ * GET .../messages and de-duplicates by message id.
  */
-export function streamAgent(
+export function streamLive(
   c: Context,
   service: AgentService,
-  agentId: string,
   principal: Principal
 ): Response {
-  // Existence (404) is the route's business; the scope check is here so the
-  // stream face is guarded at the same layer as every other agent op.
-  const agent = service.getAgent(agentId)
-  if (agent) assertMayTouchAgent(principal, agent)
+  assertMayWatchLive(principal)
   const bus = service.bus
 
   return pumpLiveStream(
     c,
-    (listener) => bus.subscribe(agentId, listener),
+    (listener) => bus.subscribeAll(listener),
     (push) => {
       // Fresh snapshot (re-read after subscribe, not before).
-      const detail = service.getAgentDetail(agentId, principal)
-      if (!detail) return false
-      push({ type: "ready", agentId })
-      push({ type: "agent.updated", agent: detail.agent })
-      const context = bus.getContext(agentId)
-      if (context) push(context)
-      const queueState = bus.getQueue(agentId)
-      if (queueState) push(queueState)
-      const activity = bus.getActivity(agentId)
-      if (activity) push(activity)
-      // Replay in-flight tools (with their latest partial result) so a fresh
-      // connection sees an executing bash command's streamed output right away.
-      for (const tool of bus.getToolProgress(agentId)) push(tool)
-      return true
-    }
-  )
-}
-
-/**
- * Live channel message stream (IM view). Initial snapshot = the channel's
- * latest message window, then live `channel.message` pushes only. The bus
- * channel(s) of a derived key differ from the key itself (dm → agentId,
- * orch → eventId, team → eventId + challengeId — `emitChannelsOf` is the
- * single mapping source). Reconnect replays the snapshot; the client
- * de-duplicates by message id.
- */
-export function streamChannel(
-  c: Context,
-  service: AgentService,
-  channelKey: string
-): Response {
-  const parsed = parseChannelKey(channelKey)!
-  const busChannels = service.channels.emitChannelsOf(parsed)
-
-  return pumpLiveStream(
-    c,
-    (listener) => {
-      const unsubscribers = busChannels.map((channel) =>
-        service.bus.subscribe(channel, (event) => {
-          // Server-side filter parity with the snapshot: a bus channel fans
-          // out several channel keys (a #team post also rides the event
-          // channel) — forward only messages of THIS request's key.
-          if (
-            event.type === "channel.message" &&
-            event.message.channelKey === channelKey
-          ) {
-            listener(event)
-          }
-        })
-      )
-      return () => {
-        for (const unsubscribe of unsubscribers) unsubscribe()
-      }
-    },
-    (push) => {
-      const snapshot = service.channels.listMessages(channelKey, {
-        after: 0,
-        limit: 50,
-      })
-      for (const message of snapshot.items) {
-        push({ type: "channel.message", message })
+      for (const agent of service.listAgents()) {
+        push({ type: "agent.updated", agent })
+        const context = bus.getContext(agent.id)
+        if (context) push(context)
+        const queueState = bus.getQueue(agent.id)
+        if (queueState) push(queueState)
+        const activity = bus.getActivity(agent.id)
+        if (activity) push(activity)
+        // Replay in-flight tools (with their latest partial result) so a
+        // fresh connection sees an executing bash command's streamed output
+        // right away.
+        for (const tool of bus.getToolProgress(agent.id)) push(tool)
       }
       return true
     }

@@ -38,14 +38,17 @@ describe("prompt template store API", () => {
       .filter((item) => item.plugin === "builtin")
       .map((item) => item.key)
       .toSorted()
-    expect(builtinKeys).toEqual([
-      "channelDelivery",
-      "initial",
-      "mainSystem",
-      "orchestratorSystem",
-      "schedulerDigest",
-      "schedulerInitial",
-    ])
+    // The core templates must be seeded; the notice templates may grow.
+    expect(builtinKeys).toEqual(
+      expect.arrayContaining([
+        "channelDelivery",
+        "initial",
+        "mainSystem",
+        "orchestratorSystem",
+        "schedulerDigest",
+        "schedulerInitial",
+      ])
+    )
   })
 
   test("PATCH upserts a (plugin, key) row and is readable on GET", async () => {

@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import {
   createBrowserRouter,
   isRouteErrorResponse,
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { HomePage } from "@/features/events/home-page"
+import { startConversationStream } from "@/stream/conversation-store"
 
 const settingsSections = ["general", "models", "prompts", "settings"] as const
 const eventTabs = [
@@ -84,11 +86,19 @@ const router = createBrowserRouter([
   },
 ])
 
+/** The app's single live connection (see conversation-store): mounted at the
+ * root so every view shares one EventSource, whichever page is up. */
+function LiveStream() {
+  useEffect(() => startConversationStream(), [])
+  return null
+}
+
 function App() {
   return (
     <ToastProvider>
       <AnchoredToastProvider>
         <TooltipProvider>
+          <LiveStream />
           <RouterProvider router={router} />
         </TooltipProvider>
       </AnchoredToastProvider>

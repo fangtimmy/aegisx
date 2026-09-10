@@ -27,7 +27,7 @@ import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
-import { parseLiveEvent } from "@/stream/parse-event"
+import { liveConnection } from "@/stream/live-connection"
 
 import { appendChannelMessage, mergeChannelMessages } from "./channel-tail"
 import { MessageComposer } from "./composer"
@@ -400,31 +400,37 @@ export function ChannelTimeline({
     gcTime: 0,
   })
 
-  // Live channel pushes (SSE): append into the tail cache and advance the
-  // after cursor so the reconciliation poll never re-fetches what the stream
-  // delivered. EventSource reconnects natively; the server's snapshot replay
-  // de-duplicates through mergeChannelMessages.
+  // Live channel pushes ride the app's multiplexed connection: append into the
+  // tail cache and advance the after cursor so the reconciliation poll never
+  // re-fetches what the stream delivered. Duplicates are idempotent
+  // (appendChannelMessage de-duplicates by id); a reconnect invalidates the
+  // tail so the window is re-read instead of trusting a gap.
   useEffect(() => {
     if (!active) return undefined
-    const source = new EventSource(`/api/channels/${channelKey}/stream`)
-    source.addEventListener("open", () => setDisconnected(false))
-    source.addEventListener("error", () => setDisconnected(true))
-    source.addEventListener("message", (message) => {
-      let payload: unknown
-      try {
-        payload = JSON.parse(message.data)
-      } catch {
+    const unsubscribe = liveConnection.subscribe((event) => {
+      if (
+        event.type !== "channel.message" ||
+        event.message.channelKey !== channelKey
+      ) {
         return
       }
-      const event = parseLiveEvent(payload)
-      if (event?.type !== "channel.message") return
       queryClient.setQueryData<ChannelMessageList>(
         keys.channels.messages(channelKey),
         (prev) => appendChannelMessage(prev, event.message)
       )
       newestId.current = Math.max(newestId.current, event.message.id)
     })
-    return () => source.close()
+    const offStatus = liveConnection.onStatus(setDisconnected)
+    const offReconnect = liveConnection.onReconnect(() => {
+      void queryClient.invalidateQueries({
+        queryKey: keys.channels.messages(channelKey),
+      })
+    })
+    return () => {
+      unsubscribe()
+      offStatus()
+      offReconnect()
+    }
   }, [active, channelKey, queryClient])
 
   useEffect(() => {

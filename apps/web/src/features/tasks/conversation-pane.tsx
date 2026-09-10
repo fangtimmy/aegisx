@@ -400,7 +400,6 @@ function AgentConversation({
             : "closed"
       }
       stopAgent={stopAgent}
-      streamPath={`/api/agents/${agentId}/stream`}
       switchModel={switchModel}
     />
   )

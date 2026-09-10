@@ -244,6 +244,36 @@ export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[频道消息]
 {{#each files}}📎 {{filename}} · {{size}} · {{path}}
 {{/each}}{{/each}}`
 
+/** System→scheduler/team notice templates: one per typed notice event
+ * (`run/orch-notices.ts`), rendering the delivery text from the event's
+ * structural fields. Seeded as builtin rows like the prompts above, so a user
+ * edit to any of them takes effect on the next notice.
+ *
+ * Variables are the event's own fields (plus pre-derived display values):
+ * `challengeName`, `flag` ("" when absent), `submitterAgentId`, `submitter`
+ * (agent-<id8>, "" when absent), `stopSiblings`, `message`, `confirmed`,
+ * `progress`, `stopped`, `cancelled`, `closed`, `pending`, `line`, `action`. */
+export const NOTICE_TEMPLATE_DEFAULTS = {
+  /** flagAccepted / first — the challenge's initial solve. */
+  noticeFlagAccepted: `「{{challengeName}}」已完全解出{{#if flag}}：{{flag}}{{/if}}{{#if submitter}}（{{submitter}} 提交）{{/if}}，平台已接受。{{#unless stopSiblings}} 本题无需继续攻击，请整理 writeup 并尽快 finish_run 收尾。{{/unless}}`,
+  /** flagAccepted / extra — a new flag value on an already-solved challenge. */
+  noticeFlagExtra: `「{{challengeName}}」再解出一个 flag{{#if flag}}：{{flag}}{{/if}}{{#if submitter}}（{{submitter}} 提交）{{/if}}。`,
+  /** flagAccepted / partial — the #team face of a partial multi-flag solve. */
+  noticeFlagPartial: `多 flag 进度：「{{challengeName}}」部分解出{{#if message}}（{{message}}）{{/if}}。已确认：{{confirmed}}。请专注剩余 flag；已确认的无需重复提交。`,
+  /** flagPartialProgress — the same partial solve, on the orch face. */
+  noticeFlagPartialProgress: `部分解出：「{{challengeName}}」{{progress}}`,
+  /** solveCleanup — the automatic post-solve teardown summary. */
+  noticeSolveCleanup: `「{{challengeName}}」已完全解出：{{#if stopped}}已停止 {{stopped}} 个同题 agent{{/if}}{{#if cancelled}}{{#if stopped}}；{{/if}}已取消 {{cancelled}} 个排队项{{/if}}`,
+  /** challengeHalt — the operator's manual challenge stop. */
+  noticeChallengeHalt: `「{{challengeName}}」已被操作员手动停止：{{#if closed}}已关闭 {{closed}} 个 agent{{/if}}{{#if cancelled}}{{#if closed}}；{{/if}}已取消 {{cancelled}} 个排队项{{/if}}`,
+  /** queueStarved — the pending 2→1 edge (urgent). */
+  noticeQueueStarved: `队列不足：仅剩 {{pending}} 项排队`,
+  /** launchFailed — a permanent queue launch failure (urgent). */
+  noticeLaunchFailed: `启动失败：「{{challengeName}}」— {{error}}`,
+  /** queueStateChanged — queue pause/resume. */
+  noticeQueueState: `队列已{{action}}{{#if manual}}（用户手动）{{/if}}`,
+} as const
+
 /** The fleet snapshot appended to every scheduler delivery (orch only).
  * Self-describing: the head states it is a delivery-time snapshot, the
  * tail points to `aegisx.snapshot()` for detail — no system-prompt

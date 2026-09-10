@@ -24,7 +24,8 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Toggle } from "@/components/ui/toggle"
 import { toast } from "@/lib/toast"
-import { ConversationStore } from "@/stream/conversation-store"
+import { conversationStore } from "@/stream/conversation-store"
+import { liveConnection } from "@/stream/live-connection"
 
 import { AgentActivityBadge } from "./agent-activity-badge"
 import { Composer } from "./composer"
@@ -37,11 +38,9 @@ import { Timeline } from "./timeline"
  * Data + lifecycle adapter for {@link Conversation}. The per-event
  * orchestrator (orchestrator-view) and any agent-level consumer implement
  * this; Conversation itself is agent-agnostic. The callbacks should be stable
- * (useCallback) so the SSE connection effect does not reconnect on re-render.
+ * (useCallback) so the effects do not re-run on every render.
  */
 export type ConversationProps = {
-  /** SSE endpoint path. */
-  streamPath: string
   /** The agent for this conversation (single). */
   agent: AgentSummary
   /** Optional agent detail (system prompt + tool definitions) for the
@@ -95,7 +94,6 @@ type SessionOps = {
 
 export function Conversation(props: ConversationProps) {
   const {
-    streamPath,
     agent,
     detail,
     status,
@@ -109,10 +107,9 @@ export function Conversation(props: ConversationProps) {
     onAgentUpdated,
   } = props
 
-  const storeRef = useRef<ConversationStore | null>(null)
-  if (storeRef.current === null) storeRef.current = new ConversationStore()
-  const store = storeRef.current
-
+  // Process-level state fed by the multiplexed live connection; switching
+  // agent is switching the selector, not the transport.
+  const store = conversationStore
   const agentId = agent.id
   const [disconnected, setDisconnected] = useState(false)
   const [draft, setDraft] = useState("")
@@ -170,14 +167,12 @@ export function Conversation(props: ConversationProps) {
     return () => flushDraft()
   }, [flushDraft])
 
-  // Evict the previous agent's committed + live state on switch (never on
-  // unmount: hidden tabs unmount and remount the same agent and must keep
-  // their live state). Without this, browsing N agents retains N histories.
-  const previousAgentIdRef = useRef(agentId)
+  // Materialize only the on-screen agent's durable history: the connection
+  // carries every agent's frames, so without this the browser would retain the
+  // whole fleet's. Live state survives the switch (bounded per agent), never
+  // evicted on unmount — a hidden tab remounting must keep it.
   useEffect(() => {
-    const previousAgentId = previousAgentIdRef.current
-    previousAgentIdRef.current = agentId
-    if (previousAgentId !== agentId) store.reset(previousAgentId)
+    store.retain([agentId])
   }, [agentId, store])
 
   // The steer/followUp picker is only meaningful mid-turn; once the turn
@@ -239,16 +234,17 @@ export function Conversation(props: ConversationProps) {
     }
   }, [store, loadMessagesFn, agentId])
 
+  // Durable history is REST-owned: load it when the agent changes and re-read
+  // it after a reconnect (the socket was away; the connection's own replay
+  // re-establishes the ephemeral side).
   useEffect(() => {
-    const disconnect = store.connect(
-      agentId,
-      loadMessages,
-      setDisconnected,
-      streamPath
-    )
     void loadMessages()
-    return disconnect
-  }, [agentId, streamPath, store, loadMessages])
+    return liveConnection.onReconnect(() => {
+      void loadMessages()
+    })
+  }, [loadMessages])
+
+  useEffect(() => liveConnection.onStatus(setDisconnected), [])
 
   const send = useMutation({
     mutationFn: () => sendMessageFn(draft.trim(), deliverAs),
