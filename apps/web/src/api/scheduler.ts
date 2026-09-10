@@ -1,5 +1,6 @@
 import type {
   AgentSummary,
+  FleetInfo,
   InboxSnapshot,
   SpawnQueueParams,
 } from "@aegisx/shared"
@@ -12,18 +13,7 @@ import type { QueueItem, QueueSnapshot, SchedulerInfo } from "./types"
  * next start; policy toggles apply live. */
 export function updateSchedulerConfig(
   eventId: string,
-  patch: {
-    modelId?: string | null
-    instruction?: string
-    maxConcurrentTargets?: number
-    notifyTeamOnFlag?: boolean
-    stopSiblingsOnSolve?: boolean
-    stopTargetOnSolve?: boolean
-    stopSubmitterOnSolve?: boolean
-    nextTaskPolicy?: "eager" | "drained"
-    urgentTeamMessages?: boolean
-    blockSpawnOnSolved?: boolean
-  }
+  patch: Partial<Omit<FleetInfo["config"], "eventId" | "paused">>
 ) {
   return apiRequest<SchedulerInfo>(
     `/events/${eventId}/scheduler`,
