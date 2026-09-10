@@ -11,8 +11,9 @@
 docker buildx build -f containers/tsecbench/Dockerfile \
   --platform linux/amd64 -t aegisx/tsecbench:v11 .
 
-# 运行（tsec-vpn 为常驻 VPN 容器；LLM/平台凭据走环境变量——仅运行时密钥走 env，
-# 所有策略/提示词调优通过 preset 在首启时落库）
+# 运行（tsec-vpn 为常驻 VPN 容器——本地模式专用，用于连接靶机网段；托管模式不需要
+# VPN。LLM/平台凭据走环境变量——仅运行时密钥走 env，所有策略/提示词调优通过 preset
+# 在首启时落库）
 docker run -d --name aegisx-tsec \
   --network container:tsec-vpn \
   -v aegisx-tsec-data:/data \
@@ -60,7 +61,9 @@ model id 匹配 > 保守默认值。
 ## 托管在线评测（操作手册）
 
 平台在受控沙箱里拉起镜像并自动运行，**沙箱无法访问公网**——大模型与答题 API 都走
-平台网关。契约以平台「接入指引」为准，本节是经实测校准的操作步骤。
+平台网关。**托管模式不需要 VPN**：靶机与答题 API 均由平台内网提供，沙箱直接可达；
+VPN（tsec-vpn + 任务 ovpn）只在本地模式需要，用途是连接靶机网段。契约以平台
+「接入指引」为准，本节是经实测校准的操作步骤。
 
 **0) 前置**：先在本地模式完整跑通（上一节），平台也明确要求托管前先完成本地评测。
 
