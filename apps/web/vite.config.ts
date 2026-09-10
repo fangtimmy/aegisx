@@ -4,6 +4,16 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
+// Packages only reachable from the lazy /events route (graphs & charts and
+// their private stacks). Returned as null from the vendor name() below so
+// they fall through to automatic chunking, which places them inside the lazy
+// event-page chunk — the vendor catch-all would otherwise hoist them into the
+// eager graph. bun's store layout (`node_modules/.bun/x@h/node_modules/x/`)
+// has two node_modules segments, so a negative lookahead on the vendor test
+// cannot express this exclusion.
+const vizOnly =
+  /[\\/](recharts|@reduxjs|react-redux|reselect|immer|victory-vendor|d3-[a-z-]+|@xyflow|zustand|classcat|@dagrejs)[\\/]/
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -24,34 +34,28 @@ export default defineConfig({
     exclude: ["@aegisx/shared"],
   },
   build: {
-    // rolldown's advancedChunks takes FULL control of splitting: modules not
-    // matched by any group are inlined into their importer, so these groups
-    // cover everything that should be a chunk of its own.
-    chunkSizeWarningLimit: 8_000,
+    // Chunk budget: 500 kB – 2 MB per chunk (uncompressed). Groups only pin
+    // down module sets whose default placement would be wrong; maxSize makes
+    // rolldown split anything over budget automatically.
+    chunkSizeWarningLimit: 2_000,
     rolldownOptions: {
       output: {
-        advancedChunks: {
-          includeDependenciesRecursively: true,
+        codeSplitting: {
           groups: [
-            // Shiki loads each language grammar via its own dynamic import,
-            // which otherwise emits ~120 sub-10KB chunks; keep them in one
-            // lazy chunk fetched on the first highlighted block.
+            // One module per language grammar (~200); maxSize buckets them
+            // into mid-size chunks fetched on first use of any grammar inside.
             {
               name: "shiki-langs",
               test: /[\\/]@shikijs[\\/]langs[\\/]/,
               priority: 30,
+              maxSize: 1_500_000,
             },
             {
-              name: "event-page",
-              test: /[\\/]features[\\/]events[\\/]event-page[\\/]/,
-              priority: 20,
+              name: (id) => (vizOnly.test(id) ? null : "vendor"),
+              test: /[\\/]node_modules[\\/]/,
+              priority: 10,
+              maxSize: 2_000_000,
             },
-            {
-              name: "settings-page",
-              test: /[\\/]features[\\/]settings[\\/]settings-page[\\/]/,
-              priority: 20,
-            },
-            { name: "vendor", test: /[\\/]node_modules[\\/]/, priority: 10 },
           ],
         },
       },
