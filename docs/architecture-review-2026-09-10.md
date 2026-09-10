@@ -1,6 +1,6 @@
 # AegisX 架构评审与重设计提案（2026-09-10）
 
-> **状态：评估记录，未立项、未排期。** 本文回答两个问题：现有架构的痛点在哪里；若重新设计会怎么改。所有提案均未实施，采纳与否待定。与 [audit-2026-09-09.md](audit-2026-09-09.md) 的关系：那轮审计修的是**实例**（settleAgent 收敛、wire 映射下沉等），本文讨论的是**生成这些实例的结构**——其主题 3（资源生命周期无人收敛）与主题 5（同一机制的副本并存）在实例修复后依然成立。
+> **状态：提案 1–7 已全部实施（2026-09-10，七个提交），提案 8 经决定不做。** 本文保留评估原文（痛点清单与量化附录是重构前的证据快照，其中的行号/路径指向旧树）；每项提案的落地提交见下表。与 [audit-2026-09-09.md](audit-2026-09-09.md) 的关系：那轮审计修的是**实例**（settleAgent 收敛、wire 映射下沉等），本轮改的是**生成这些实例的结构**——其主题 3（资源生命周期无人收敛）与主题 5（同一机制的副本并存）的根因由本轮处理。
 
 评审方式：通读 [architecture.md](architecture.md)、两轮审计文档与运行时核心（`run/service.ts`、`run/agent-factory.ts`、`agents/lifecycle.ts`、`run/channels-delivery.ts`、`run/drainer.ts`），辅以全仓证据扫描（体量 / 依赖方向 / 定时器族 / 技术债标记 / 测试形态 / schema 演进）。引用的行号以 2026-09-10 的 main 为准。
 
@@ -59,31 +59,31 @@ P0-1（multipart 越权）、P0-2（跨赛事 available 翻转）、P0-8（跨�
 
 仍然单进程、仍然 SQLite、仍然调度者即 agent。改的是承重结构：
 
-| # | 提案 | 针对痛点 | 备注 |
-|---|---|---|---|
-| 1 | **`AgentRuntime` 作为所有权根**：一个存活 agent 的全部运行时资源（session、deadline timer、watchdog 句柄、finish 簱记、bus 注册、容器引用票、queue 绑定）收进一个对象，spawn 一处创建、`dispose()` 一处释放；service 退化为 `Map<agentId, AgentRuntime>` + 策略 | 1、2 | 「漏清一个定时器/Map」这类 bug 从结构上不可能发生。**收益/成本比最高，与提案 2 互为表里** |
-| 2 | **统一时间层**：所有定时器进一个可注入的 clock + 定时器注册表；事件驱动唤醒优先于周期 tick（消息落账→唤醒投递，agent 终态→唤醒 drainer 与容器回收检查；容器 idle sweep 可为唯一保留的周期任务） | 3 | 测试获得 fake time，串行约束与真实 sleep 消失大半 |
-| 3 | **合并 `run/` 与 `agents/` 为一个运行时层**，依赖方向用 lint 规则强制（routes → service → spawn/delivery/policy → host → container/platform/db） | 1 | 边界已只是命名，不如承认它并用工具守住真边界 |
-| 4 | **principal 贯穿 service API**：授权在中间件解析一次成 principal + 允许的 (event, challenge) 集合，service 方法签名收 principal | 6 | P0-1/2/8 整类 bug 的结构性修复，比逐处补条件便宜 |
-| 5 | **调度接口显式化**：系统→调度者的通知改为类型化事件信封（结构化 orch 事件 + 渲染模板分离），把 channels 模块里「为 LLM 渲染服务的那半」与「账本正确性的那半」拆开；调度者→系统方向已类型化（SDK），不动 | 5 | 保留调度者即 agent，只改协议 |
-| 6 | **服务端多路复用 SSE**：一个全局 `/api/stream`（订阅控制走 REST），web 持进程级单 EventSource，conversation-store 退化为纯状态 Map + selector | 4、7 | 改动小、收益直接；单流约束消失，两套手写 SSE 客户端自然收敛 |
-| 7 | **砍掉 jsonl 双后端**（一次性迁移早已存在，legacy 分支只剩风险无收益）；迁移纪律减负——仅含 DROP/RENAME/类型变更的迁移走手写回填 + compat 测试，加列类生成即用 | 4、8 | 与自家「不留兼容层」原则对齐 |
-| 8 | **（可选，需权衡）容器内 exec sidecar**：用 solver 镜像内一个小 HTTP exec 代理替代 dockerode hijacked exec | 3 及容器层 | 去掉 Bun#29012 的 putArchive workaround（`container-manager.ts:14-16,401-408`）、demuxStream、`pollExitCode` 轮询与字符串匹配容错（:191,:241），换来结构化输出与天然背压；代价是每容器多一进程与一跳鉴权。exec 层现有测试兜底，不紧急；若 Bun 的 exec 缺陷长期不修，这是根治方向 |
+| # | 提案 | 针对痛点 | 状态（提交） | 备注 |
+|---|---|---|---|---|
+| 1 | **`AgentRuntime` 作为所有权根**：一个存活 agent 的全部运行时资源收进一个对象，spawn 一处创建、`dispose()` 一处释放；service 退化为 `Map<agentId, AgentRuntime>` + 策略 | 1、2 | ✅ `10bf5b9` | 落地形态：`run/agent-runtime.ts`（settle 唯一终态路径），`deadlines.ts` / `stall-watchdog.ts` / `host/lifecycle.ts` 并入后删除，`chainLock` 移入 `run/locks.ts`；`service.ts` 1,389 → 1,365 行 |
+| 2 | **统一时间层**：所有定时器进一个可注入的 clock + 定时器注册表；事件驱动唤醒优先于周期 tick | 3 | ✅ `7c19c7e` | `run/clock.ts`（Clock + TimerHub + FakeClock）；run/ 下裸 `setTimeout/setInterval` 归零，stall-watchdog 与 container-manager 超时测试改为确定性推进 |
+| 3 | **合并 `run/` 与 `agents/` 为一个运行时层**，依赖方向用 lint 规则强制 | 1 | ✅ `1f4b7b9` | `agents/` → `run/host/`（含公共出口 `index.ts`）；两条 oxlint `no-restricted-imports` 规则守方向（host 不反向依赖编排层；路由层只经出口进 host） |
+| 4 | **principal 贯穿 service API**：授权在中间件解析一次，service 方法签名收 principal | 6 | ✅ `dce7188` | `Principal`（user/agent/system）+ `run/principal-scope.ts` 断言；路由层不再拼 scope 条件；新增 4 条绕过路由直调 service 的越权拒绝测试；`test:sdk` 契约保持通过 |
+| 5 | **调度接口显式化**：系统→调度者的通知改为类型化事件 + 渲染模板 | 5 | ✅ `0758557` | `run/orch-notices.ts`（9 类事件 + 投递契约纯函数）；文本默认值入 `prompt_templates`（可编辑）；`launchFailed` 的措辞由 drainer 移交模板 |
+| 6 | **服务端多路复用 SSE**：全局 `/api/stream` + web 进程级单 EventSource | 4、7 | ✅ `0758557` | 旧的 per-agent / per-channel 端点删除；`web/stream/live-connection.ts` 为唯一连接，`conversation-store` 退化为按 agentId 键控状态 + selector，单流约束消失；两套手写 SSE 客户端收敛；死变体 `ready` 移除 |
+| 7 | **砍掉 jsonl 双后端**；迁移纪律减负 | 4、8 | ✅ `c5e1299` + `b907ad5` | **执行强于提案**：决策为「不再兼容旧 schema」，19 个迁移压缩为单一基线（同时修复断裂的 drizzle 快照链），开机三态（fresh / current / stale 硬失败），v1–v19 旧库无升级路径；jsonl 会话双后端路径全部删除 |
+| 8 | **（可选）容器内 exec sidecar** | 3 及容器层 | ⛔ 不做（决定） | 保持 dockerode hijacked exec 现状 |
 
-**优先级建议**：1 + 2（一起做，拿下「终态善后靠记得」与「测试只能串行」两个长期税）→ 4 → 6。3、5、7 可随相邻改动渐进推进；8 独立评估。
+**实施顺序**：B1 迁移与 legacy（7）→ B2 目录合并（3）→ B3 时间层（2）→ B4 AgentRuntime（1）→ B5 principal（4）→ B6 并行（5 ∥ 6）。每批次完成后 `bun run check` + `bun run test`（+ 涉及 agent API 时 `bun run test:sdk`）全绿再提交；B6 的两个方向在同一批并行落地。
 
 ## 明确不动清单
 
 以下选型经评审确认正确，重设计亦不触碰（与 audit-2026-09-09 的「明确不动清单」互补，该清单中面向具体文件的条目继续有效）：
 
 - **单进程进程模型** —— 冷恢复 + 按需重开已把崩溃代价压到可接受（存活 agent 转 idle，不自动续跑）；
-- **同步 SQLite + chainLock 并发模型** —— 简单且与单进程自洽（`agents/lifecycle.ts:178-189`）；
+- **同步 SQLite + chainLock 并发模型** —— 简单且与单进程自洽（`run/locks.ts`）；
 - **channels 单一账本 + 派生键**（无频道表）；
 - **调度者即 agent** —— 产品灵魂；问题只在接口隐式（见提案 5），不在理念；
 - **agent loop 在宿主进程内**（pi）+ 每题一个长寿工具箱容器；
 - **monorepo 形态**与 `apps/shared` 作为 wire 类型 canonical 来源。
 
-## 量化附录（证据快照，2026-09-10）
+## 量化附录（证据快照，2026-09-10 —— 重构前）
 
 | 指标 | 值 |
 |---|---|
