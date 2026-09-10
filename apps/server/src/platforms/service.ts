@@ -417,6 +417,8 @@ export function createPlatformService(
     getPublic: publicPlatform,
     getPublicMany: publicPlatformMany,
     ignoreTarget: platformTargets.ignoreTarget,
+    listEventTargets: platformTargets.listEventTargets,
+    stopEventTargets: platformTargets.stopEventTargets,
     listRemoteEvents,
     assertNoActiveTargets: platformTargets.assertNoActiveTargets,
     setAgentHooks(hooks: {
@@ -441,6 +443,8 @@ export function createPlatformService(
     addManualFlag: platformFlags.addManualFlag,
     deleteFlag: platformFlags.deleteFlag,
     listFlags: platformFlags.listFlags,
+    resetChallengeProgress: platformFlags.resetChallengeProgress,
+    resetEventProgress: platformFlags.resetEventProgress,
     refreshChallengeRemote: platformSync.refreshChallengeRemote,
     submitFlag: platformFlags.submitFlag,
     syncChallenges: platformSync.syncChallenges,

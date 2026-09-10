@@ -75,6 +75,21 @@ export function deleteManualFlag(challengeId: string, flagId: string) {
   })
 }
 
+/** Reset solve progress: drop the flag history + manual override + cached
+ * platform verdict; progress re-derives to unsolved. */
+export function resetChallengeFlags(challengeId: string) {
+  return apiRequest<void>(`/challenges/${challengeId}/flags`, {
+    method: "DELETE",
+  })
+}
+
+/** Purge the challenge's team-channel messages and read cursors. */
+export function clearChallengeChannels(challengeId: string) {
+  return apiRequest<void>(`/challenges/${challengeId}/channels`, {
+    method: "DELETE",
+  })
+}
+
 export function refreshChallengeRemote(challengeId: string) {
   return apiRequest<Challenge>(
     `/challenges/${challengeId}/remote/refresh`,

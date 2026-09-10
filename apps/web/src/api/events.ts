@@ -6,6 +6,7 @@ import type {
   EventInput,
   EventStats,
   EventSummary,
+  EventTargetRow,
 } from "./types"
 
 export function listEvents() {
@@ -45,6 +46,58 @@ export function deleteEventAgents(
 ) {
   const query = scope === "all" ? "?scope=all" : ""
   return apiRequest<void>(`/events/${eventId}/agents${query}`, {
+    method: "DELETE",
+  })
+}
+
+/** Event emergency halt: freeze the queue + pause the scheduler + hold the
+ * inbox + close all live solvers + stop all targets. Reversible. */
+export function haltEvent(eventId: string) {
+  return apiRequest<{
+    closed: number
+    targetsStopped: number
+    targetFailures: number
+  }>(`/events/${eventId}/halt`, jsonRequest("POST", {}))
+}
+
+/** Release a halt: inbox backlog flushes, scheduler re-syncs, queue drains. */
+export function resumeEvent(eventId: string) {
+  return apiRequest<{ state: "running" }>(
+    `/events/${eventId}/resume`,
+    jsonRequest("POST", {})
+  )
+}
+
+/** Close every live solver agent (aborted, reopenable); queue and scheduler
+ * untouched. */
+export function closeEventAgents(eventId: string) {
+  return apiRequest<{ closed: number }>(
+    `/events/${eventId}/agents/close`,
+    jsonRequest("POST", {})
+  )
+}
+
+export function listEventTargets(eventId: string) {
+  return apiRequest<{ items: EventTargetRow[] }>(`/events/${eventId}/targets`)
+}
+
+/** Stop every active target of the event (best-effort per row). */
+export function stopEventTargets(eventId: string) {
+  return apiRequest<{
+    stopped: number
+    failures: Array<{ challengeId: string; name: string; error: string }>
+  }>(`/events/${eventId}/targets/stop-all`, jsonRequest("POST", {}))
+}
+
+/** Purge ALL channel data of the event (orch + team + dm). */
+export function clearEventChannels(eventId: string) {
+  return apiRequest<void>(`/events/${eventId}/channels`, { method: "DELETE" })
+}
+
+/** Reset every challenge's solve progress (drop flag histories + overrides
+ * + cached verdicts). */
+export function resetEventFlags(eventId: string) {
+  return apiRequest<{ reset: number }>(`/events/${eventId}/flags`, {
     method: "DELETE",
   })
 }

@@ -1,3 +1,4 @@
+import type { EventTargetRow } from "@aegisx/shared"
 import { and, eq } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -16,6 +17,36 @@ type StoredPlatform = typeof eventPlatforms.$inferSelect
 /** Polling cadence while a target transitions starting → running. */
 const TARGET_READY_POLL_INTERVAL_MS = 1000
 const TARGET_READY_POLL_MAX_ATTEMPTS = 60
+
+/** Concurrent platform calls for event-wide target scans. Each row is one
+ * adapter round-trip; a small pool keeps a 50-challenge event responsive
+ * without hammering the platform. */
+const TARGET_SCAN_CONCURRENCY = 5
+
+/** Run `fn` over `items` with at most `limit` in flight; results keep order. */
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = []
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (true) {
+        const index = next
+        next += 1
+        if (index >= items.length) return
+        results[index] = await fn(items[index])
+      }
+    })
+  )
+  return results
+}
+
+function errorText(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 300)
+}
 
 export function createPlatformTargets(
   db: Database,
@@ -159,7 +190,97 @@ export function createPlatformTargets(
       .run()
   }
 
-  return { assertNoActiveTargets, ignoreTarget, targetAction }
+  /** Every target-capable, non-ignored challenge of the event. */
+  function eventTargetChallenges(eventId: string) {
+    return db
+      .select({ id: challenges.id, name: challenges.name })
+      .from(challenges)
+      .innerJoin(
+        challengeRemote,
+        eq(challengeRemote.challengeId, challenges.id)
+      )
+      .where(
+        and(
+          eq(challenges.eventId, eventId),
+          eq(challengeRemote.available, true),
+          eq(challengeRemote.targetSupported, true),
+          eq(challengeRemote.targetIgnored, false)
+        )
+      )
+      .all()
+  }
+
+  /** Event-wide target snapshot: one live adapter get per target-capable
+   * challenge. Per-row failures degrade to an error row — a single stale
+   * challenge must not blank the whole view. */
+  async function listEventTargets(eventId: string): Promise<EventTargetRow[]> {
+    return mapPool(
+      eventTargetChallenges(eventId),
+      TARGET_SCAN_CONCURRENCY,
+      async (row) => {
+        try {
+          const target = await targetAction(row.id, "get")
+          return {
+            challengeId: row.id,
+            name: row.name,
+            ok: true as const,
+            status: target.status,
+            endpoints: target.endpoints,
+            expiresAt: target.expiresAt,
+            message: target.message ?? null,
+          }
+        } catch (error) {
+          return {
+            challengeId: row.id,
+            name: row.name,
+            ok: false as const,
+            error: errorText(error),
+          }
+        }
+      }
+    )
+  }
+
+  /** Stop every active target of the event (get → stop-if-active, so absent
+   * targets cost nothing and don't report failures). Best-effort per row. */
+  async function stopEventTargets(eventId: string): Promise<{
+    stopped: number
+    failures: Array<{ challengeId: string; name: string; error: string }>
+  }> {
+    let stopped = 0
+    const failures: Array<{
+      challengeId: string
+      name: string
+      error: string
+    }> = []
+    await mapPool(
+      eventTargetChallenges(eventId),
+      TARGET_SCAN_CONCURRENCY,
+      async (row) => {
+        try {
+          const target = await targetAction(row.id, "get")
+          if (!isActiveTarget(target)) return
+          await targetAction(row.id, "stop")
+          stopped += 1
+        } catch (error) {
+          failures.push({
+            challengeId: row.id,
+            name: row.name,
+            error: errorText(error),
+          })
+        }
+      }
+    )
+    return { stopped, failures }
+  }
+
+  return {
+    assertNoActiveTargets,
+    ignoreTarget,
+    targetAction,
+    listEventTargets,
+    stopEventTargets,
+  }
 }
 
 async function waitForTarget(

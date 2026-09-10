@@ -314,6 +314,108 @@ export function registerEventRoutes(
     return c.body(null, 204)
   })
 
+  // Event-settings danger zone: purge ALL channel data of the event (orch +
+  // every team + every dm). Live agents would lose their knowledge base
+  // mid-run, so they must be closed first.
+  app.delete("/api/events/:eventId/channels", (c) => {
+    const eventId = c.req.param("eventId")
+    if (!requireEventRow(eventId)) return notFound(c, "Event not found")
+    const liveAgent = db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.eventId, eventId),
+          inArray(agents.status, LIVE_AGENT_STATUSES)
+        )
+      )
+      .get()
+    if (liveAgent) {
+      return conflict(
+        c,
+        "active_agent",
+        "Close live agents before clearing channels"
+      )
+    }
+    options.cleanupEventChannels(eventId)
+    return c.body(null, 204)
+  })
+
+  // Challenge-level variant: the team:<cid> knowledge base only.
+  app.delete("/api/challenges/:challengeId/channels", (c) => {
+    const challengeId = c.req.param("challengeId")
+    if (!getChallenge(challengeId)) return notFound(c, "Challenge not found")
+    const liveAgent = db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.challengeId, challengeId),
+          inArray(agents.status, LIVE_AGENT_STATUSES)
+        )
+      )
+      .get()
+    if (liveAgent) {
+      return conflict(
+        c,
+        "active_agent",
+        "Close the challenge's live agents before clearing channels"
+      )
+    }
+    options.cleanupChallengeChannels(challengeId)
+    return c.body(null, 204)
+  })
+
+  // Progress reset: drop the flag history + manual override + cached
+  // platform verdict — the progress machine re-derives to unsolved. Guarded
+  // like the purges: the spawn fence reads progress, so no live agents.
+  app.delete("/api/events/:eventId/flags", (c) => {
+    const eventId = c.req.param("eventId")
+    if (!requireEventRow(eventId)) return notFound(c, "Event not found")
+    const liveAgent = db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.eventId, eventId),
+          inArray(agents.status, LIVE_AGENT_STATUSES)
+        )
+      )
+      .get()
+    if (liveAgent) {
+      return conflict(
+        c,
+        "active_agent",
+        "Close live agents before resetting solve progress"
+      )
+    }
+    return c.json({ reset: platformService.resetEventProgress(eventId) })
+  })
+
+  app.delete("/api/challenges/:challengeId/flags", (c) => {
+    const challengeId = c.req.param("challengeId")
+    if (!getChallenge(challengeId)) return notFound(c, "Challenge not found")
+    const liveAgent = db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.challengeId, challengeId),
+          inArray(agents.status, LIVE_AGENT_STATUSES)
+        )
+      )
+      .get()
+    if (liveAgent) {
+      return conflict(
+        c,
+        "active_agent",
+        "Close the challenge's live agents before resetting solve progress"
+      )
+    }
+    platformService.resetChallengeProgress(challengeId)
+    return c.body(null, 204)
+  })
+
   app.post(
     "/api/events/:eventId/challenges",
     validateJson(challengeInput),

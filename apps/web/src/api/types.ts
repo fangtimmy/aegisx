@@ -23,6 +23,7 @@ export type {
   EventStats,
   EventStatsAgentSpan,
   EventSummary,
+  EventTargetRow,
   FleetInfo,
   LiveEvent,
   MessageList,

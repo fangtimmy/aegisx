@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Trash2, TriangleAlert } from "lucide-react"
+import {
+  Play,
+  Server,
+  Square,
+  Trash2,
+  TriangleAlert,
+  Users,
+} from "lucide-react"
 import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { useNavigate } from "react-router"
@@ -55,6 +62,7 @@ import { toast } from "@/lib/toast"
 
 import { ErrorState } from "./event-shared"
 import { PlatformBinding } from "./platform-binding"
+import { TargetsDialog } from "./targets-dialog"
 
 export function EventSettings({ event }: { event: EventSummary }) {
   const queryClient = useQueryClient()
@@ -128,6 +136,22 @@ export function EventSettings({ event }: { event: EventSummary }) {
       toast.success("运行历史已清空")
     },
     onError: (error) => toast.error("清空运行历史失败", error.message),
+  })
+  const clearChannels = useMutation({
+    mutationFn: () => eventsApi.clearEventChannels(event.id),
+    onSuccess: async () => {
+      await invalidateEventCaches()
+      toast.success("频道消息已清空")
+    },
+    onError: (error) => toast.error("清空频道失败", error.message),
+  })
+  const resetFlags = useMutation({
+    mutationFn: () => eventsApi.resetEventFlags(event.id),
+    onSuccess: async ({ reset }) => {
+      await invalidateEventCaches()
+      toast.success(`已重置 ${reset} 道题的解题进度`)
+    },
+    onError: (error) => toast.error("重置解题进度失败", error.message),
   })
 
   return (
@@ -237,6 +261,11 @@ export function EventSettings({ event }: { event: EventSummary }) {
 
       <SchedulerPolicyCard eventId={event.id} />
 
+      <RuntimeControlCard
+        event={event}
+        invalidateEventCaches={invalidateEventCaches}
+      />
+
       <CardFrame>
         <CardFrameHeader>
           <CardFrameTitle>CTF 平台</CardFrameTitle>
@@ -257,6 +286,18 @@ export function EventSettings({ event }: { event: EventSummary }) {
         </CardFrameHeader>
         <Card>
           <CardPanel className="space-y-8">
+            <DangerAction
+              buttonLabel="清空全部频道"
+              description="永久删除本赛事全部频道消息（#team 知识库、调度者通知、私信）及已读游标。需先关闭 live agent。"
+              dialogTitle={`清空 ${event.name} 的全部频道消息？`}
+              onConfirm={() => clearChannels.mutate()}
+            />
+            <DangerAction
+              buttonLabel="重置解题进度"
+              description="清空全部 flag 记录并复位解题状态（含缓存的平台判定）——所有题目回到未解出。需先关闭 live agent。"
+              dialogTitle={`重置 ${event.name} 的全部解题进度？`}
+              onConfirm={() => resetFlags.mutate()}
+            />
             <DangerAction
               buttonLabel="清空题目"
               description="永久删除全部题目、附件及题目级运行记录。"
@@ -330,6 +371,191 @@ type PolicyFormValues = {
   nextTaskPolicy: "eager" | "drained"
   urgentTeamMessages: boolean
   blockSpawnOnSolved: boolean
+}
+
+/** Event-level runtime controls: the halt/resume combo (queue + scheduler +
+ * inbox + agents + targets), the atomic close-all-agents, and the aggregated
+ * remote-target manager. All reversible — the danger zone below is not. */
+function RuntimeControlCard({
+  event,
+  invalidateEventCaches,
+}: {
+  event: EventSummary
+  invalidateEventCaches: () => Promise<void>
+}) {
+  const queryClient = useQueryClient()
+  const [haltOpen, setHaltOpen] = useState(false)
+  const [closeOpen, setCloseOpen] = useState(false)
+  const [targetsOpen, setTargetsOpen] = useState(false)
+  const fleet = useQuery({
+    queryKey: keys.agents.fleet(event.id),
+    queryFn: () => agentsApi.getFleet(event.id),
+  })
+  const queue = useQuery({
+    queryKey: keys.scheduler.queue(event.id),
+    queryFn: () => schedulerApi.listQueue(event.id),
+  })
+  const liveCount = Object.values(fleet.data?.agentsByChallenge ?? {})
+    .flat()
+    .filter(
+      (agent) => agent.status === "running" || agent.status === "idle"
+    ).length
+  const halted = queue.data?.state === "paused"
+  const afterMutation = async () => {
+    await Promise.all([
+      invalidateEventCaches(),
+      queryClient.invalidateQueries({
+        queryKey: keys.scheduler.queue(event.id),
+      }),
+    ])
+  }
+  const halt = useMutation({
+    mutationFn: () => eventsApi.haltEvent(event.id),
+    onSuccess: async (result) => {
+      await afterMutation()
+      toast.success(
+        `已急停：关闭 ${result.closed} 个 agent、停止 ${result.targetsStopped} 台靶机`
+      )
+    },
+    onError: (error) => toast.error("急停失败", error.message),
+  })
+  const resume = useMutation({
+    mutationFn: () => eventsApi.resumeEvent(event.id),
+    onSuccess: async () => {
+      await afterMutation()
+      toast.success("已恢复运行：调度者将重新同步，队列继续排水")
+    },
+    onError: (error) => toast.error("恢复运行失败", error.message),
+  })
+  const closeAll = useMutation({
+    mutationFn: () => eventsApi.closeEventAgents(event.id),
+    onSuccess: async ({ closed }) => {
+      await afterMutation()
+      toast.success(`已关闭 ${closed} 个 agent`)
+    },
+    onError: (error) => toast.error("关闭 agent 失败", error.message),
+  })
+
+  return (
+    <CardFrame>
+      <CardFrameHeader>
+        <CardFrameTitle>运行控制</CardFrameTitle>
+        <CardFrameDescription>
+          赛事级运行操作，全部可逆；不可逆的清除在下方危险区域。
+        </CardFrameDescription>
+      </CardFrameHeader>
+      <Card>
+        <CardPanel>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() => setHaltOpen(true)}
+              type="button"
+              variant="destructive"
+            >
+              <Square /> 急停
+            </Button>
+            {halted && (
+              <Button
+                loading={resume.isPending}
+                onClick={() => resume.mutate()}
+                type="button"
+                variant="outline"
+              >
+                <Play /> 恢复运行
+              </Button>
+            )}
+            <Button
+              disabled={liveCount === 0}
+              onClick={() => setCloseOpen(true)}
+              type="button"
+              variant="destructive-outline"
+            >
+              <Users /> 关闭全部 Agent
+            </Button>
+            <Button
+              onClick={() => setTargetsOpen(true)}
+              type="button"
+              variant="outline"
+            >
+              <Server /> 靶机
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              {liveCount} 个 live agent · {halted ? "队列已暂停" : "队列运行中"}
+            </span>
+          </div>
+          {halt.error && (
+            <Alert className="mt-3" variant="error">
+              <TriangleAlert />
+              <AlertDescription>{halt.error.message}</AlertDescription>
+            </Alert>
+          )}
+        </CardPanel>
+      </Card>
+      <AlertDialog onOpenChange={setHaltOpen} open={haltOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              急停「{event.name}」的全部活动？
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              将关闭 {liveCount} 个 live agent（终态
+              aborted，可随时唤醒）、暂停队列与调度者、停止全部靶机。排队任务保留，恢复运行后继续。此操作可逆。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+              取消
+            </AlertDialogClose>
+            <Button
+              loading={halt.isPending}
+              onClick={() => {
+                halt.mutate()
+                setHaltOpen(false)
+              }}
+              type="button"
+              variant="destructive"
+            >
+              急停
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      <AlertDialog onOpenChange={setCloseOpen} open={closeOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              关闭「{event.name}」的全部 live agent？
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              将关闭 {liveCount} 个 live agent（终态
+              aborted，文件与会话保留，可随时唤醒）。队列与调度者不受影响。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+              取消
+            </AlertDialogClose>
+            <Button
+              loading={closeAll.isPending}
+              onClick={() => {
+                closeAll.mutate()
+                setCloseOpen(false)
+              }}
+              type="button"
+              variant="destructive"
+            >
+              关闭全部 Agent
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      <TargetsDialog
+        eventId={event.id}
+        onOpenChange={setTargetsOpen}
+        open={targetsOpen}
+      />
+    </CardFrame>
+  )
 }
 
 function SchedulerPolicyForm({

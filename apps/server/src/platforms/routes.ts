@@ -214,4 +214,30 @@ export function registerPlatformRoutes(app: Hono, service: PlatformService) {
       }
     )
   }
+
+  /** Event-wide target snapshot: one live adapter get per target-capable
+   * challenge (manual refresh — no polling; each row costs a platform
+   * round-trip). */
+  app.get("/api/events/:eventId/targets", async (c) => {
+    try {
+      return c.json({
+        items: await service.listEventTargets(c.req.param("eventId")),
+      })
+    } catch (error) {
+      return platformActionHttpError(c, error)
+    }
+  })
+
+  /** Stop every active target of the event (best-effort per row). */
+  app.post(
+    "/api/events/:eventId/targets/stop-all",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        return c.json(await service.stopEventTargets(c.req.param("eventId")))
+      } catch (error) {
+        return platformActionHttpError(c, error)
+      }
+    }
+  )
 }

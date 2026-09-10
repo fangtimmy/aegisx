@@ -225,6 +225,52 @@ export function registerRunRoutes(
     }
   )
 
+  /** Event-level emergency halt: freeze the queue + pause the scheduler +
+   * hold the inbox + close all live solvers + stop all targets. Reversible
+   * via /resume. */
+  app.post("/api/events/:eventId/halt", validateJson(emptyInput), async (c) => {
+    try {
+      return c.json(
+        await agentService.haltEvent(c.req.param("eventId"), principalOf(c))
+      )
+    } catch (error) {
+      return runError(c, error)
+    }
+  })
+
+  /** Release an event halt: inbox backlog flushes, scheduler re-syncs, the
+   * queue drains again. */
+  app.post(
+    "/api/events/:eventId/resume",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        await agentService.resumeEvent(c.req.param("eventId"), principalOf(c))
+        return c.json({ state: "running" })
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
+  /** Close every live solver agent of the event (aborted, reopenable) —
+   * queue and scheduler untouched. */
+  app.post(
+    "/api/events/:eventId/agents/close",
+    validateJson(emptyInput),
+    async (c) => {
+      try {
+        const closed = await agentService.closeEventAgents(
+          c.req.param("eventId"),
+          principalOf(c)
+        )
+        return c.json({ closed })
+      } catch (error) {
+        return runError(c, error)
+      }
+    }
+  )
+
   // --- fleet ----------------------------------------------------------------
 
   /** The event overview's single poll: challenges + per-challenge agents +

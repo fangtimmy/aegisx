@@ -5,6 +5,7 @@ import {
   CircleDot,
   CircleDashed,
   EllipsisVertical,
+  Eraser,
   Paperclip,
   Play,
   Server,
@@ -155,7 +156,8 @@ function DeleteChallengeDialogContent({
   )
 }
 
-/** Three-dot menu: modify solve state + (non-managed only) delete. */
+/** Three-dot menu: modify solve state, per-challenge maintenance (flag
+ * reset / channel purge), (non-managed only) delete. */
 function ChallengeActionsMenu({
   challenge,
   eventId,
@@ -167,6 +169,8 @@ function ChallengeActionsMenu({
 }) {
   const [statusOpen, setStatusOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [flagsOpen, setFlagsOpen] = useState(false)
+  const [channelsOpen, setChannelsOpen] = useState(false)
   return (
     <>
       <Menu>
@@ -191,6 +195,22 @@ function ChallengeActionsMenu({
             <CircleDot />
             修改状态
           </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setFlagsOpen(true)
+            }}
+          >
+            <Archive />
+            清空 flag 记录
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setChannelsOpen(true)
+            }}
+          >
+            <Eraser />
+            清理本题频道
+          </MenuItem>
           {!managed && (
             <>
               <MenuSeparator />
@@ -213,6 +233,22 @@ function ChallengeActionsMenu({
           onClose={() => setStatusOpen(false)}
         />
       ) : null}
+      {flagsOpen ? (
+        <ChallengeMaintenanceDialog
+          challenge={challenge}
+          eventId={eventId}
+          kind="flags"
+          onClose={() => setFlagsOpen(false)}
+        />
+      ) : null}
+      {channelsOpen ? (
+        <ChallengeMaintenanceDialog
+          challenge={challenge}
+          eventId={eventId}
+          kind="channels"
+          onClose={() => setChannelsOpen(false)}
+        />
+      ) : null}
       {!managed && deleteOpen ? (
         <DeleteChallengeAlertDialog
           challenge={challenge}
@@ -222,6 +258,89 @@ function ChallengeActionsMenu({
         />
       ) : null}
     </>
+  )
+}
+
+const MAINTENANCE_ACTIONS = {
+  flags: {
+    title: (name: string) => `清空 ${name} 的 flag 记录？`,
+    description:
+      "删除全部 flag 记录并复位解题状态（含缓存的平台判定）——本题回到未解出。需先关闭本题 live agent。",
+    buttonLabel: "清空记录",
+    success: "flag 记录已清空，进度已复位",
+  },
+  channels: {
+    title: (name: string) => `清理 ${name} 的频道消息？`,
+    description:
+      "永久删除本题 #team 频道的全部消息与已读游标（agent 的知识库）。需先关闭本题 live agent。",
+    buttonLabel: "清理频道",
+    success: "本题频道消息已清空",
+  },
+} as const
+
+function ChallengeMaintenanceDialog({
+  eventId,
+  challenge,
+  kind,
+  onClose,
+}: {
+  eventId: string
+  challenge: Challenge
+  kind: "flags" | "channels"
+  onClose: () => void
+}) {
+  const queryClient = useQueryClient()
+  const copy = MAINTENANCE_ACTIONS[kind]
+  const mutation = useMutation({
+    mutationFn: () =>
+      kind === "flags"
+        ? challengesApi.resetChallengeFlags(challenge.id)
+        : challengesApi.clearChallengeChannels(challenge.id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: keys.events.detail(eventId),
+        }),
+        queryClient.invalidateQueries({ queryKey: ["channels"] }),
+      ])
+      toast.success(copy.success)
+      onClose()
+    },
+    onError: (error) => toast.error(`${copy.buttonLabel}失败`, error.message),
+  })
+  return (
+    <AlertDialog
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+      open
+    >
+      <AlertDialogPopup>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{copy.title(challenge.name)}</AlertDialogTitle>
+          <AlertDialogDescription>{copy.description}</AlertDialogDescription>
+          {mutation.error && (
+            <Alert variant="error">
+              <TriangleAlert />
+              <AlertDescription>{mutation.error.message}</AlertDescription>
+            </Alert>
+          )}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+            取消
+          </AlertDialogClose>
+          <Button
+            loading={mutation.isPending}
+            onClick={() => mutation.mutate()}
+            type="button"
+            variant="destructive"
+          >
+            {copy.buttonLabel}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogPopup>
+    </AlertDialog>
   )
 }
 

@@ -20,7 +20,7 @@ import type { ProviderConnection } from "@aegisx/shared/domain"
 import { and, desc, eq, inArray, ne } from "drizzle-orm"
 
 import type { Database } from "../db"
-import { agents, challengeFlags, challenges } from "../db/schema"
+import { agents, challengeFlags, challenges, events } from "../db/schema"
 import type { Principal } from "../infrastructure/agent-auth"
 import type { ConfigStore } from "../infrastructure/config-store"
 import {
@@ -595,6 +595,88 @@ export function createAgentService(options: AgentServiceOptions) {
       })
     }
     return { closed: closedCount, cancelled }
+  }
+
+  /** Close every live solver agent of the event (terminal aborted — rows,
+   * sessions and files survive). The scheduler agent is untouched: pausing,
+   * not closing, is how the scheduler is held (resume stays one click and
+   * its memory stays warm). */
+  async function closeEventAgents(
+    eventId: string,
+    principal: Principal
+  ): Promise<number> {
+    assertMayTouchEvent(principal, eventId)
+    const live = db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.eventId, eventId),
+          eq(agents.role, "solver"),
+          inArray(agents.status, LIVE_AGENT_STATUSES)
+        )
+      )
+      .all()
+    let closedCount = 0
+    for (const row of live) {
+      await closeAgent(row.id, { kind: "system" })
+        .then(() => {
+          closedCount += 1
+        })
+        .catch(() => undefined)
+    }
+    return closedCount
+  }
+
+  /** Event-level emergency halt — every lever, one click, all reversible:
+   * freeze the queue (pending items kept, the watchdog honours paused),
+   * pause the scheduler (emit gate: no new notices), hold the inbox
+   * (delivery gate: stockpiled unread stays undelivered), close all live
+   * solvers and stop all platform targets. Without the inbox hold the
+   * delivery engine would wake the scheduler with the pre-halt backlog. */
+  async function haltEvent(
+    eventId: string,
+    principal: Principal
+  ): Promise<{
+    closed: number
+    targetsStopped: number
+    targetFailures: number
+  }> {
+    const event = db
+      .select({ id: events.id })
+      .from(events)
+      .where(eq(events.id, eventId))
+      .get()
+    if (!event) throw new RunActionError("not_found", "Event not found")
+    queuePort.get().pause(eventId, "manual", principal)
+    await pauseScheduler(eventId)
+    channels.setDeliveryPaused(eventId, true)
+    const solverClosed = await closeEventAgents(eventId, principal)
+    const targets = await platformService.stopEventTargets(eventId)
+    return {
+      closed: solverClosed,
+      targetsStopped: targets.stopped,
+      targetFailures: targets.failures.length,
+    }
+  }
+
+  /** Counterpart of {@link haltEvent}: release the inbox hold (the backlog
+   * flushes as one digest), resume the scheduler (re-sync notice) and
+   * unfreeze the queue. */
+  async function resumeEvent(
+    eventId: string,
+    principal: Principal
+  ): Promise<void> {
+    const event = db
+      .select({ id: events.id })
+      .from(events)
+      .where(eq(events.id, eventId))
+      .get()
+    if (!event) throw new RunActionError("not_found", "Event not found")
+    channels.setDeliveryPaused(eventId, false)
+    await resumeScheduler(eventId)
+    queuePort.get().resume(eventId, "manual", principal)
+    queuePort.get().scheduleDrain()
   }
 
   /** Per-agent message — a DIRECT runtime send (no channel row, no double
@@ -1416,6 +1498,9 @@ export function createAgentService(options: AgentServiceOptions) {
     stopAgent,
     closeAgent,
     haltChallenge,
+    closeEventAgents,
+    haltEvent,
+    resumeEvent,
     finishAgent,
     sendMessage,
     switchAgentModel,

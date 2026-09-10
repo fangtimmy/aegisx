@@ -242,6 +242,21 @@ export function isActiveTarget(target: TargetState): boolean {
   )
 }
 
+/** One aggregated row of GET /api/events/:eventId/targets — a live adapter
+ * get per target-capable challenge; per-challenge failures degrade to an
+ * error row so one stale challenge can't blank the view. */
+export type EventTargetRow =
+  | {
+      challengeId: string
+      name: string
+      ok: true
+      status: TargetState["status"]
+      endpoints: TargetEndpoint[]
+      expiresAt: string | null
+      message: string | null
+    }
+  | { challengeId: string; name: string; ok: false; error: string }
+
 export type RemoteTargetInfo = {
   name: string
   services: string[]

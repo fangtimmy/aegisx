@@ -1,5 +1,5 @@
 import type { ChallengeFlag } from "@aegisx/shared"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
@@ -175,6 +175,48 @@ export function createPlatformFlags(
       )
       .run()
     return true
+  }
+
+  /** Reset one challenge's solve progress to unsolved: drop the flag history,
+   * the manual override and the first-solved stamp, and clear the cached
+   * platform verdict. Progress is derived (challenge-state.ts), so emptying
+   * the facts IS the reset — no state-machine surgery. */
+  function resetChallengeProgress(challengeId: string): void {
+    db.delete(challengeFlags)
+      .where(eq(challengeFlags.challengeId, challengeId))
+      .run()
+    db.update(challenges)
+      .set({ manualSolveState: "unsolved", solvedAt: null })
+      .where(eq(challenges.id, challengeId))
+      .run()
+    db.update(challengeRemote)
+      .set({ solved: false })
+      .where(eq(challengeRemote.challengeId, challengeId))
+      .run()
+  }
+
+  /** {@link resetChallengeProgress} for every challenge of the event;
+   * set-based (single statements per table). Returns the challenge count. */
+  function resetEventProgress(eventId: string): number {
+    const ids = db
+      .select({ id: challenges.id })
+      .from(challenges)
+      .where(eq(challenges.eventId, eventId))
+      .all()
+      .map((row) => row.id)
+    if (ids.length === 0) return 0
+    db.delete(challengeFlags)
+      .where(inArray(challengeFlags.challengeId, ids))
+      .run()
+    db.update(challenges)
+      .set({ manualSolveState: "unsolved", solvedAt: null })
+      .where(eq(challenges.eventId, eventId))
+      .run()
+    db.update(challengeRemote)
+      .set({ solved: false })
+      .where(eq(challengeRemote.eventId, eventId))
+      .run()
+    return ids.length
   }
 
   async function submitFlag(
@@ -420,7 +462,14 @@ export function createPlatformFlags(
     }
   }
 
-  return { submitFlag, listFlags, addManualFlag, deleteFlag }
+  return {
+    submitFlag,
+    listFlags,
+    addManualFlag,
+    deleteFlag,
+    resetChallengeProgress,
+    resetEventProgress,
+  }
 }
 
 function submissionErrorMessage(error: unknown) {
