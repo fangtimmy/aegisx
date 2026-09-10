@@ -13,6 +13,7 @@ import type { Database } from "./db"
 import { events, eventPlatforms, schedulerConfig } from "./db/schema"
 import type { ConfigStore, ProviderData } from "./infrastructure/config-store"
 import { parseJson } from "./lib/guards"
+import { logEvent } from "./lib/log"
 import type { createPlatformService } from "./platforms/service"
 import {
   builtinModelProfile,
@@ -253,6 +254,9 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
         `AEGISX_PLATFORM_TYPE is not a platform type: ${platformType}`
       )
     }
+    // Hosted harnesses inject only BENCHMARK_* — an appliance bound to a
+    // platform is unambiguous enough to name its own event.
+    spec.eventName ??= "tsecbench"
     spec.platform = {
       type: platformType,
       baseUrl: platformBaseUrl,
@@ -379,7 +383,12 @@ async function ensureEventAndPlatform(
   spec: BootstrapSpec,
   preset: EventPreset | null
 ): Promise<string | null> {
-  if (!spec.eventName) return null
+  if (!spec.eventName) {
+    // No platform configured either — an appliance with nothing to do.
+    // (Platform present but nameless cannot happen: the name is derived.)
+    logEvent("bootstrap", "no event name and no platform configured — skip")
+    return null
+  }
   const { db } = deps
   const existing = db
     .select()

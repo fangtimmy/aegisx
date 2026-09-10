@@ -22,7 +22,7 @@ event preset（`/opt/aegisx-preset/preset.json`，见 `containers/tsecbench/READ
 | `AEGISX_MODEL_EFFORT` | 否 | 思考档位（`low`/`medium`/`high` 等），拼进默认模型引用（`model:effort`）；模型元数据未命中目录时据此推断 `reasoning:true` |
 | `AEGISX_MODEL_PROFILE` | 否 | 绑定 pi 内置模型元数据，格式 `<providerId>/<modelId>`（如 `zai/glm-5.3`）。部署的模型 id 是网关变体时，直接继承同家族条目的上下文窗口/思考档位表/compat。不存在时 bootstrap 报错（记日志，不影响启动） |
 | `AEGISX_MODEL_METADATA` | 否 | 模型元数据 JSON（schema 同设置页：`reasoning`/`thinkingLevelMap`/`input`/`cost`/`contextWindow`/`maxTokens`/`headers`/`compat`），逐字段合并到 PROFILE / 目录匹配 / fallback 之上。坏 JSON 或未知字段在启动时报错 |
-| `AEGISX_EVENT_NAME` | 否 | 赛事名（不存在则创建，重启复用同名赛事） |
+| `AEGISX_EVENT_NAME` | 否 | 赛事名（不存在则创建，重启复用同名赛事）；未设置但配置了平台时自动派生为 `tsecbench` |
 | `AEGISX_PLATFORM_TYPE` | 否 | `ctfd` / `a1ctf` / `dasctf` / `ret2shell` / `tsecbench`；仅给 `BENCHMARK_BASE_URL` 时自动判 `tsecbench` |
 | `AEGISX_PLATFORM_BASE_URL` | 否 | 平台地址；与 `AEGISX_PLATFORM_TYPE`（或 BENCHMARK 回退）齐备才绑定 |
 | `AEGISX_PLATFORM_CREDENTIAL` | 否 | 平台凭据（CTFd token / a1token cookie / AccessKey / Bearer 等，按平台） |

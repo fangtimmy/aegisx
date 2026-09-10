@@ -57,6 +57,24 @@ describe("readBootstrapSpec", () => {
     expect(spec.eventName).toBeUndefined()
   })
 
+  test("a platform binding without an event name derives one", () => {
+    // Hosted harnesses inject only BENCHMARK_*; the appliance must not
+    // silently skip event/platform/scheduler for a missing name.
+    const { spec } = specFrom({
+      BENCHMARK_BASE_URL: "https://bench.example.com",
+      BENCHMARK_TOKEN: "tok",
+    })
+    expect(spec.eventName).toBe("tsecbench")
+    expect(spec.platform?.type).toBe("tsecbench")
+    expect(spec.platform?.credential).toBe("tok")
+    const explicit = specFrom({
+      AEGISX_EVENT_NAME: "my-event",
+      BENCHMARK_BASE_URL: "https://bench.example.com",
+      BENCHMARK_TOKEN: "tok",
+    })
+    expect(explicit.spec.eventName).toBe("my-event")
+  })
+
   test("provider requires both base URL and model id", () => {
     expect(
       specFrom({ AEGISX_PROVIDER_BASE_URL: "https://x" }).provider
