@@ -218,6 +218,10 @@ export type AgentFactoryDeps = {
   agentSettings: () => AgentLoopSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost: typeof createAgentHost
+  /** Unattended appliance mode: boot recovery must not force the event queues
+   * into `paused` (no human exists to resume them) — a surviving queue_state
+   * row is honoured as-is and draining resumes. */
+  unattended: boolean
   /** Read the event's scheduler policy (scheduler-admin). */
   getSchedulerConfig(eventId: string): {
     eventId: string
@@ -875,7 +879,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
    * agents flip to idle (files persist; a message reopens on demand and
    * rebuilds the container). Orphan containers under our naming scheme are
    * removed best-effort; running queue items reset to pending; queues with
-   * visible items start paused. */
+   * visible items start paused (interactive only — see below). */
   async function recoverOnBoot(): Promise<void> {
     const rows = db.select().from(agents).all()
     const ts = now()
@@ -898,16 +902,24 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         deps.queue.get().resetRunning(row.eventId, ts)
       }
     }
-    // Boot leaves every queue paused: events with visible items (pending /
-    // running / failed) get queue_state='paused' and nothing drains until
-    // the user resumes. No scheduleDrain here — boot never auto-drains.
-    const pausedEvents = db
+    // Events with visible queue items. Interactive: every queue starts paused
+    // so the human reviews what the crash left behind before it re-fires —
+    // boot never auto-drains. Unattended: nobody can resume, so forcing a
+    // pause would strand the queue (and every pending item) for the rest of
+    // the run — skip the write and let the surviving queue_state stand: a
+    // queue that was running resumes, a queue the scheduler deliberately
+    // paused stays paused (drainOnce skips paused events).
+    const pendingEvents = db
       .select({ eventId: spawnQueue.eventId })
       .from(spawnQueue)
       .where(inArray(spawnQueue.status, ["pending", "running", "failed"]))
       .groupBy(spawnQueue.eventId)
       .all()
-    for (const { eventId } of pausedEvents) {
+    if (deps.unattended) {
+      if (pendingEvents.length > 0) deps.queue.get().scheduleDrain()
+      return
+    }
+    for (const { eventId } of pendingEvents) {
       db.insert(queueState)
         .values({ eventId, status: "paused", updatedAt: ts })
         .onConflictDoUpdate({

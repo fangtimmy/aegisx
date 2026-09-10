@@ -350,6 +350,7 @@ export function makeAgentService(
       | "stallMs"
       | "solvedWrapupMs"
       | "clock"
+      | "unattended"
     >
   >
 ): AgentServiceHarness {
@@ -386,6 +387,7 @@ export function makeAgentService(
     flushIntervalMs: opts.flushIntervalMs,
     stallMs: opts.stallMs,
     solvedWrapupMs: opts.solvedWrapupMs,
+    unattended: opts.unattended ?? false,
     ...(opts.clock ? { clock: opts.clock } : {}),
   })
   let closed = false

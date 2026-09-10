@@ -54,6 +54,7 @@ event preset（`/opt/aegisx-preset/preset.json`，见 `containers/tsecbench/READ
 |---|---|---|
 | `AEGISX_BOOTSTRAP` | `1` | tsecbench / allinone 镜像：启用 appliance 自动装配 |
 | `AEGISX_EXEC_BACKEND` | `local` | tsecbench / allinone 镜像：单容器模式 |
+| `AEGISX_UNATTENDED` | `1` | tsecbench 镜像：无人值守模式。开机恢复**不**把有可见队列项的赛事置为 `paused`（没有人能把它 resume 回来），改为续排水；`fleet-watchdog` 同步收紧——只有 running 的 solver 才算进展，全部 solver 被重启parking 成 idle 且队列无进展时告警。allinone 不设，保留「重启后先人工复核」的交互语义 |
 | `AEGISX_DATA_DIR` | `/data` | 同上，数据卷挂载点 |
 | `AEGISX_API_URL` | `http://127.0.0.1:3000` | 同上，local 后端回环地址 |
 | `AEGISX_WEB_DIR` | `/opt/aegisx-web` | 同上，Web 静态产物位置 |

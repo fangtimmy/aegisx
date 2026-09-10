@@ -210,6 +210,7 @@ RUN echo tsecbench > /opt/solver/VARIANT && \
 ENV AEGISX_DATA_DIR=/data \
     AEGISX_EXEC_BACKEND=local \
     AEGISX_BOOTSTRAP=1 \
+    AEGISX_UNATTENDED=1 \
     AEGISX_API_URL=http://127.0.0.1:3000 \
     AEGISX_WEB_DIR=/opt/aegisx-web \
     PYTHONPATH=/opt/aegisx-sdk \

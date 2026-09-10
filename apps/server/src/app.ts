@@ -63,6 +63,9 @@ export function createApp(options: { dataDir: string }) {
     platformService,
     configStore,
     getSettings,
+    // Appliance/eval builds run without a human: boot recovery must not strand
+    // the queues behind a pause nobody can clear (see AgentServiceOptions).
+    unattended: process.env.AEGISX_UNATTENDED === "1",
   })
 
   // Flag writes are a side path (platform → DB); refresh the submitting

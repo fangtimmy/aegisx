@@ -29,6 +29,12 @@ type FleetWatchdogDeps = {
   onStalled(event: FleetStall): void
   /** A disabled scheduler cannot act on the notice — skip it silently. */
   isSchedulerPaused(eventId: string): boolean
+  /** Unattended mode: a parked (idle) solver is not progress. An event whose
+   * solvers are all idle, whose queue is quiet and which has pending work has
+   * nobody running it — the restart case, where every live agent was flipped
+   * idle and only the scheduler can re-dispatch. Off by default: interactive
+   * keeps the wider "any live solver suppresses the alarm" gate. */
+  unattended?: boolean
   /** Time layer (default: system clock); tests inject a fake clock. */
   clock?: Clock
   intervalMs?: number
@@ -65,6 +71,7 @@ export function createFleetWatchdog(deps: FleetWatchdogDeps) {
   const hub = createTimerHub(clock)
   const intervalMs = deps.intervalMs ?? FLEET_WATCHDOG_INTERVAL_MS
   const stallMs = deps.stallMs ?? FLEET_STALL_MS
+  const unattended = deps.unattended ?? false
   const state = new Map<string, ProgressState>()
   let timer: ClockTimer | undefined
 
@@ -80,7 +87,7 @@ export function createFleetWatchdog(deps: FleetWatchdogDeps) {
     )
   }
 
-  /** Events with at least one live solver. */
+  /** Events with at least one live solver (running or idle). */
   function eventsWithLiveSolver(): Set<string> {
     return new Set(
       deps.db
@@ -91,6 +98,36 @@ export function createFleetWatchdog(deps: FleetWatchdogDeps) {
             eq(agents.role, "solver"),
             inArray(agents.status, [...LIVE_AGENT_STATUSES])
           )
+        )
+        .all()
+        .map((row) => row.eventId)
+    )
+  }
+
+  /** Events whose solvers are ALL parked (no running solver). Live-but-idle
+   * solvers hold their slots yet make no progress — after a restart they are
+   * exactly the stranded work only the scheduler can re-dispatch. */
+  function eventsWithRunningSolver(): Set<string> {
+    return new Set(
+      deps.db
+        .select({ eventId: agents.eventId })
+        .from(agents)
+        .where(and(eq(agents.role, "solver"), eq(agents.status, "running")))
+        .all()
+        .map((row) => row.eventId)
+    )
+  }
+
+  /** Events whose scheduler is mid-turn. A planning scheduler is legitimate
+   * activity, so it suppresses the unattended alarm (the notice would only
+   * interrupt the very decision it is asking for). */
+  function eventsWithRunningScheduler(): Set<string> {
+    return new Set(
+      deps.db
+        .select({ eventId: agents.eventId })
+        .from(agents)
+        .where(
+          and(eq(agents.role, "orchestrator"), eq(agents.status, "running"))
         )
         .all()
         .map((row) => row.eventId)
@@ -115,7 +152,12 @@ export function createFleetWatchdog(deps: FleetWatchdogDeps) {
       list.push(row)
       pendingByEvent.set(row.eventId, list)
     }
-    const liveEvents = eventsWithLiveSolver()
+    // Activity that suppresses the alarm. Interactive: any live solver.
+    // Unattended: only a RUNNING solver counts (a parked one is stranded), and
+    // a running scheduler suppresses too — it is planning, not stalled.
+    const activeEvents = unattended
+      ? new Set([...eventsWithRunningSolver(), ...eventsWithRunningScheduler()])
+      : eventsWithLiveSolver()
     const paused = pausedEvents()
     const eventIds = new Set([...pendingByEvent.keys(), ...state.keys()])
     for (const eventId of eventIds) {
@@ -123,7 +165,7 @@ export function createFleetWatchdog(deps: FleetWatchdogDeps) {
       const previous = state.get(eventId)
       if (
         rows.length === 0 ||
-        liveEvents.has(eventId) ||
+        activeEvents.has(eventId) ||
         paused.has(eventId) ||
         deps.isSchedulerPaused(eventId)
       ) {

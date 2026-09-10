@@ -128,6 +128,12 @@ export type AgentServiceOptions = {
    * tick, sweep, drainer, deadlines, watchdog) reads and schedules through
    * it; tests inject a fake clock for deterministic time. */
   clock?: Clock
+  /** Unattended appliance mode (`AEGISX_UNATTENDED=1`): there is no human to
+   * review a restart or resume a paused queue, so boot recovery must not pause
+   * the event queues and the fleet watchdog must treat parked (idle) solvers
+   * as no progress. Off by default — the interactive flow keeps its
+   * review-before-refire gate. */
+  unattended?: boolean
 }
 
 export type SendMessageInput = {
@@ -145,6 +151,7 @@ export function createAgentService(options: AgentServiceOptions) {
   const getSettings = () => options.getSettings()
   const closeAbortGraceMs = options.closeAbortGraceMs ?? 5_000
   const clock = options.clock ?? systemClock
+  const unattended = options.unattended ?? false
 
   function providers(): ProviderConnection[] {
     return getProviderConnections(configStore)
@@ -1240,6 +1247,7 @@ export function createAgentService(options: AgentServiceOptions) {
     queue: queuePort,
     agentSettings,
     createHost,
+    unattended,
     settleFailedSpawn: (agentId) =>
       settleAgent(agentId, { abort: false, status: "failed" }),
     getSchedulerConfig: (eventId) =>
@@ -1307,6 +1315,7 @@ export function createAgentService(options: AgentServiceOptions) {
   const fleetWatchdog = createFleetWatchdog({
     db,
     clock,
+    unattended,
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
     onStalled: (stall) => {
       logEvent("fleet", "event_stalled", { ...stall })
