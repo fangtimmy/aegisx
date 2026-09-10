@@ -78,7 +78,7 @@ P0-1（multipart 越权）、P0-2（跨赛事 available 翻转）、P0-8（跨�
 
 | 批次 | 内容 | 提交 |
 |---|---|---|
-| R1 · 无人值守可靠性 | 赛事级生命体征看门狗（`run/fleet-watchdog.ts`，pending 有活却无存活 solver 且排水无进展 → urgent `eventStalled` 通知，兼作调度者唤醒）；重启重入提示（`run/boot-reentry.ts`，对仍有非终态调度者的赛事直发一条 resume 唤醒，不逐个唤醒 solver 以免 token 冲量）。原同批的 `session_entries` 保留清理（`run/session-retention.ts`，14 天窗口）**实施后经决定撤销**（`7814f84`）：保留全部会话数据，不做自动清理 | `1352617` |
+| R1 · 无人值守可靠性 | 赛事级生命体征看门狗（`run/fleet-watchdog.ts`，pending 有活却无存活 solver 且排水无进展 → urgent `eventStalled` 通知，兼作调度者唤醒）；重启重入提示（`run/boot-reentry.ts`，对仍有非终态调度者的赛事直发一条 resume 唤醒，不逐个唤醒 solver 以免 token 冲量）。原同批的 `session_entries` 保留清理（`run/session-retention.ts`，14 天窗口）**实施后经决定撤销**（`f7e9be2`）：保留全部会话数据，不做自动清理 | `1352617` |
 | R2 · 门禁与速度 | 稳固化 `clock.test.ts` 的挂钟脆弱断言后，**解除 `bun test --max-concurrency 1`**（默认并发连跑 7 次全绿）；分层 lint 覆盖扩到组合根（`app`/`bootstrap`/`index`）与 `run/sse`、`run/public`；新增 `bun run test:all`（test + test:sdk，后者仍需 uv，故不并入 `test`） | `0569f65` |
 | R3 · 结构收口 | 组装根后绑定反转为类型化端口（`run/ports.ts`，run/ 下 `let x!` 归零）；spawn 失败并入唯一终态路径（不再泄漏 runtime/session）；LiveBus 快照所有权边界厘清（见下方说明）；team 消息单次 emit，并删除已无消费方的 per-channel `bus.subscribe` | `ba51cee` |
 | R4 · 打磨 | 平台 flag/目标轮询接入 `run/clock.ts`（flags 测试 ~2.5s → ~0.4s）；通知模板可在设置页编辑/预览/恢复默认（10 个键全部可见，默认值与变量清单由服务端 meta 下发，前端不再镜像）；前端 P2 清单（`apiUrl` 收敛、`formatTokens` 改名、时间格式化入 `lib/format.ts`、`MessageRow` memo、`useStoreValue` 收敛样板） | `9a5fa75` |
