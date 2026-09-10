@@ -65,7 +65,7 @@ sed 改写源码——那种方式把提示词文本硬编码在 Dockerfile 里�
 ```json
 {
   "promptHint": "平台：TSecBench。flag 格式恒为 flag{<uuid>}（f2 系列为 FLAG{...}）……",
-  "settings": { "scheduler.defaultRunTimeoutMs": 1800000 },
+  "settings": { "scheduler.defaultRunTimeoutMs": 1800000, "scheduler.maxConcurrentAgents": 5 },
   "scheduler": { "maxConcurrentTargets": 3, "stopSubmitterOnSolve": true }
 }
 ```
@@ -74,6 +74,7 @@ sed 改写源码——那种方式把提示词文本硬编码在 Dockerfile 里�
 |---|---|---|
 | 赛事 `promptHint` | TSecBench 平台简报：flag 格式、category=难度、**6 小时总时长与截止感知**、靶机不过期、409=等槽退避、离线禁装包、**扫描限定靶机地址** | 68 个 accepted flag 格式恒定；230 次 409；实测出现过扫宿主内网的偏航 |
 | `scheduler.defaultRunTimeoutMs` | 30min | 59 题中位 1.8min 解出、agent 有效工作 p90≈20min；编排者仍按难度逐 spawn 覆盖（10-15/30-45/60-90min） |
+| `scheduler.maxConcurrentAgents` | 5 | 托管沙箱 8核16G；靶机槽 3 必然占满后，剩余 2 个 agent 槽供编排者在已占靶机上做同题多角度分工（上轮实测有效） |
 | `maxConcurrentTargets` | 3 | 平台实例硬上限 |
 | `stopSubmitterOnSolve` | true | 评测只看 flag，完全解出即停（省 5% 成本 + 2.9 agent-h） |
 
