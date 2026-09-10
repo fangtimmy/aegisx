@@ -9,7 +9,7 @@
 ```sh
 # 构建（amd64；构建机需可访问 kali/pypi 镜像与 github）
 docker buildx build -f containers/tsecbench/Dockerfile \
-  --platform linux/amd64 -t aegisx/tsecbench:v10 .
+  --platform linux/amd64 -t aegisx/tsecbench:v11 .
 
 # 运行（tsec-vpn 为常驻 VPN 容器；LLM/平台凭据走环境变量——仅运行时密钥走 env，
 # 所有策略/提示词调优通过 preset 在首启时落库）
@@ -25,7 +25,7 @@ docker run -d --name aegisx-tsec \
   -e AEGISX_PLATFORM_TYPE=tsecbench \
   -e AEGISX_PLATFORM_BASE_URL=https://tsecbench.zc.tencent.com \
   -e AEGISX_PLATFORM_CREDENTIAL=<BENCHMARK_TOKEN> \
-  aegisx/tsecbench:v10
+  aegisx/tsecbench:v11
 
 # TSecBench 托管环境兼容：harness 注入的 BENCHMARK_BASE_URL / BENCHMARK_TOKEN
 # 可直接替代 AEGISX_PLATFORM_BASE_URL / AEGISX_PLATFORM_CREDENTIAL
@@ -126,7 +126,7 @@ preset 文件缺失或损坏只记日志跳过，服务器照常启动。
 （local backend 的 bash 继承 server 进程 env）导致全部 agent 的 SDK 调用失败：
 
 ```sh
-docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/tsecbench:v10 -c '
+docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/tsecbench:v11 -c '
   set -e
   python3 -c "import aegisx"
   python3 -c "import pwn, z3, capstone, angr, PIL, flask_unsign"
