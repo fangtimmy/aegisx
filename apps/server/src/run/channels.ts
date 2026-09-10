@@ -15,6 +15,7 @@ import {
 import { createDeliveryEngine } from "./channels-delivery"
 import { createPostService } from "./channels-post"
 import { createReadsService } from "./channels-reads"
+import { systemClock } from "./clock"
 
 export { renderMerged } from "./channels-render"
 
@@ -63,7 +64,7 @@ export type ChannelService = ReturnType<typeof createChannelService>
  */
 export function createChannelService(deps: ChannelServiceDeps) {
   const intervalMs = deps.flushIntervalMs ?? FLUSH_INTERVAL_MS
-  const ctx = createChannelContext(deps, intervalMs)
+  const ctx = createChannelContext(deps, intervalMs, deps.clock ?? systemClock)
   const reads = createReadsService(ctx)
   const delivery = createDeliveryEngine(ctx)
   const writes = createPostService(

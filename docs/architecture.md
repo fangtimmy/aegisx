@@ -45,6 +45,8 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 - `run/stall-watchdog.ts` — 停滞看门狗（长时间无进展的存活 agent）。
 - 冷启动恢复 `recoverOnBoot`（`app.ts`）— 存活 agent 标记为 idle，不自动续跑。
 
+运行期的全部定时器（投递 flush tick、容器 sweep 与 SIGKILL 宽限、drainer 去抖与容量重试、per-agent deadline/grace、停滞 watchdog、exec 超时与 `pollExitCode` 退避）统一经时间层 `run/clock.ts` 创建与登记（`Clock` + `TimerHub`），子系统 close 即注册表 `disposeAll()`；测试可注入 fake clock 确定性推进时间。
+
 终态善后收敛在 `run/service.ts`：abort → dispose → lifecycle 删除 → 清定时器 → terminalize → LiveBus forget。
 
 ## run/ 核心模块
@@ -54,6 +56,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 | 模块 | 职责 |
 |---|---|
 | `service.ts` | agent 生命周期管理：spawn / 终态 / 刷新 / 删除 / 用量统计 |
+| `clock.ts` | 统一时间层：`Clock`（时间源 + 定时器工厂，默认 `systemClock`，测试注入 fake clock）+ `TimerHub`（定时器注册表，`clear` / `disposeAll`）；运行期定时器一律经它 |
 | `agent-factory.ts` | 一次 spawn 的完整组装（容器 → host session → 工具注入） |
 | `queue.ts` | spawn 队列存储与状态：条目 CRUD、pending→running→终态流转、每赛事暂停（`queue_state`）、队列不足边沿 |
 | `drainer.ts` | 排水循环（200ms 去抖单飞）：`planDrainStep` 把启动围栏判定翻译为 launch/skip/cancel/stop；`global_capacity` 停轮后按有界间隔自唤醒重试；launch 失败 → item `failed` + 调度者 DM 紧急通知 |

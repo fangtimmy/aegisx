@@ -3,6 +3,8 @@ import { and, inArray, isNotNull } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { agents } from "../db/schema"
+import type { Clock, ClockTimer } from "./clock"
+import { createTimerHub, systemClock } from "./clock"
 import type { ContainerManager } from "./container/container-manager"
 
 /** Idle-sweep cadence for challenge containers. */
@@ -36,6 +38,9 @@ export type ContainerLifecycleDeps = {
   /** Test seam: sweep cadence + idle TTL. */
   sweepIntervalMs?: number
   idleTtlMs?: number
+  /** Time layer (default: the system clock); drives the sweep interval, the
+   * SIGKILL grace timers and the idle clock. */
+  clock?: Clock
 }
 
 export type ContainerLifecycle = ReturnType<typeof createContainerLifecycle>
@@ -53,13 +58,15 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
   const { db, containerManager } = deps
   const sweepIntervalMs = deps.sweepIntervalMs ?? SWEEP_INTERVAL_MS
   const idleTtlMs = deps.idleTtlMs ?? CONTAINER_IDLE_TTL_MS
+  const clock = deps.clock ?? systemClock
+  const hub = createTimerHub(clock)
   const registry = new Map<string, WorkspaceContainerState>()
   /** In-flight ensure builds per key (single-flight: a concurrent ensure
    * waits for the first build instead of racing a second one). */
   const building = new Map<string, Promise<void>>()
-  /** SIGTERM→SIGKILL grace timers per container key. */
-  const forceKillTimers = new Map<string, NodeJS.Timeout>()
-  let sweepTimer: ReturnType<typeof setInterval> | null = null
+  /** SIGTERM→SIGKILL grace timer per container key (hub-registered). */
+  const forceKillTimers = new Map<string, ClockTimer>()
+  let sweepTimer: ClockTimer | null = null
 
   function registered(key: string): boolean {
     return registry.has(key)
@@ -106,7 +113,7 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
   function clearForceKill(key: string): void {
     const timer = forceKillTimers.get(key)
     if (timer) {
-      clearTimeout(timer)
+      hub.clear(timer)
       forceKillTimers.delete(key)
     }
   }
@@ -120,7 +127,7 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
     clearForceKill(key)
     if (!state) return
     void containerManager.kill(state.name, "SIGTERM").catch(() => undefined)
-    const timer = setTimeout(() => {
+    const timer = hub.setTimeout(() => {
       forceKillTimers.delete(key)
       void containerManager
         .isRunning(state.name)
@@ -161,7 +168,7 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
   function sweep(): void {
     try {
       const live = liveSolverChallengeIds()
-      const now = Date.now()
+      const now = clock.now()
       for (const [key, state] of registry) {
         if (!state.sweepable) continue
         if (live.has(key)) {
@@ -183,15 +190,13 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
 
   function start(): void {
     if (sweepTimer) return
-    sweepTimer = setInterval(() => sweep(), sweepIntervalMs)
+    sweepTimer = hub.setInterval(() => sweep(), sweepIntervalMs)
   }
 
   function close(): void {
-    if (sweepTimer) {
-      clearInterval(sweepTimer)
-      sweepTimer = null
-    }
-    for (const timer of forceKillTimers.values()) clearTimeout(timer)
+    // The sweep interval + every pending SIGKILL grace timer, one call.
+    hub.disposeAll()
+    sweepTimer = null
     forceKillTimers.clear()
   }
 

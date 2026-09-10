@@ -3,6 +3,9 @@ import { type Readable, Writable } from "node:stream"
 
 import Docker from "dockerode"
 
+import type { Clock, ClockTimer } from "../clock"
+import { createTimerHub, systemClock } from "../clock"
+
 /**
  * dockerode-backed container lifecycle + execution for v4 runs. The container
  * is a long-lived tool box (Cmd `sleep infinity`); bash and the workspace file
@@ -155,15 +158,18 @@ function onDataSink(onData: (chunk: Buffer) => void): NodeJS.WritableStream {
  * Resolve an exec's ExitCode after its hijacked stream closed. The daemon may
  * briefly keep Running:true, so poll a few times.
  */
-async function pollExitCode(execInst: {
-  inspect(): Promise<{ Running?: boolean; ExitCode?: number | null }>
-}): Promise<number | null> {
+async function pollExitCode(
+  clock: Clock,
+  execInst: {
+    inspect(): Promise<{ Running?: boolean; ExitCode?: number | null }>
+  }
+): Promise<number | null> {
   for (let i = 0; i < 10; i++) {
     const info = await execInst.inspect()
     if (info.Running === false && info.ExitCode != null) {
       return info.ExitCode
     }
-    await new Promise((r) => setTimeout(r, 30))
+    await clock.sleep(30)
   }
   const info = await execInst.inspect()
   return info.ExitCode ?? null
@@ -173,12 +179,19 @@ export function createContainerManager(options?: {
   socketPath?: string
   /** Test seam: used in place of a daemon-backed dockerode client when given. */
   docker?: DockerLike
+  /** Time layer (default: the system clock); drives the exec timeout and the
+   * pollExitCode backoff. */
+  clock?: Clock
 }) {
   const socketPath =
     options?.socketPath ?? process.env.DOCKER_SOCKET ?? "/var/run/docker.sock"
   const docker: DockerLike =
     options?.docker ??
     (existsSync(socketPath) ? new Docker({ socketPath }) : new Docker())
+  const clock = options?.clock ?? systemClock
+  // Exec timeouts are per-call and cleared in each call's finally, but they
+  // still live in a hub so timer creation stays registry-owned.
+  const timers = createTimerHub(clock)
 
   function get(name: string) {
     return docker.getContainer(name)
@@ -300,10 +313,10 @@ export function createContainerManager(options?: {
     if (opts.signal && !aborted) {
       opts.signal.addEventListener("abort", onAbort, { once: true })
     }
-    let timer: ReturnType<typeof setTimeout> | undefined
+    let timer: ClockTimer | undefined
     const ms = execTimeoutMs(opts.timeout)
     if (ms !== undefined) {
-      timer = setTimeout(() => {
+      timer = timers.setTimeout(() => {
         timedOut = true
         destroyStream()
       }, ms)
@@ -318,10 +331,10 @@ export function createContainerManager(options?: {
         stream.on("close", resolve)
         stream.on("error", reject)
       })
-      const exitCode = await pollExitCode(execInst)
+      const exitCode = await pollExitCode(clock, execInst)
       return { exitCode: timedOut ? null : exitCode, timedOut, aborted }
     } finally {
-      if (timer) clearTimeout(timer)
+      if (timer) timers.clear(timer)
       if (opts.signal) opts.signal.removeEventListener("abort", onAbort)
     }
   }

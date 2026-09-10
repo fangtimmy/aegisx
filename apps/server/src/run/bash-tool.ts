@@ -7,6 +7,8 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 
+import type { Clock, ClockTimer } from "./clock"
+import { createTimerHub, systemClock } from "./clock"
 import type { ContainerManager } from "./container/container-manager"
 import { buildSingleFileTar, shellQuote } from "./workspace/backend"
 
@@ -230,8 +232,15 @@ export function createBashTool(
   /** Per-call exec env ("KEY=value" entries) — per-agent identity for the
    * container-side aegisx SDK (AEGISX_AGENT_ID) on shared solver
    * containers. */
-  execEnv?: string[]
+  execEnv?: string[],
+  /** Time layer for the streaming-partial debounce (default: the system
+   * clock). Not threaded through host/ on purpose — the host layer stays
+   * clock-free; tests inject a fake here directly. */
+  clock: Clock = systemClock
 ): ToolDefinition {
+  // The 120ms partial-update debounce (per exec call, cleared in its
+  // finally) — registry-owned like every runtime timer.
+  const timers = createTimerHub(clock)
   const overflowDirAbs =
     `${containerCwd.replace(/\/+$/, "")}/${OVERFLOW_DIR_REL}`.replace(
       /\/{2,}/g,
@@ -255,7 +264,7 @@ export function createBashTool(
     async execute(_toolCallId, params, signal, onUpdate) {
       const timeout = clampTimeout(params.timeout)
       const acc = makeAccumulator()
-      let updateTimer: ReturnType<typeof setTimeout> | undefined
+      let updateTimer: ClockTimer | undefined
       let dirty = false
 
       const flush = () => {
@@ -270,7 +279,7 @@ export function createBashTool(
       const schedule = () => {
         dirty = true
         if (updateTimer) return
-        updateTimer = setTimeout(() => {
+        updateTimer = timers.setTimeout(() => {
           updateTimer = undefined
           flush()
         }, 120)
@@ -299,7 +308,7 @@ export function createBashTool(
           timedOut = res.timedOut
           aborted = res.aborted
         } finally {
-          if (updateTimer) clearTimeout(updateTimer)
+          if (updateTimer) timers.clear(updateTimer)
         }
       }
 

@@ -303,6 +303,7 @@ export function makeAgentService(
       | "flushIntervalMs"
       | "stallMs"
       | "solvedWrapupMs"
+      | "clock"
     >
   >
 ): AgentServiceHarness {
@@ -339,6 +340,7 @@ export function makeAgentService(
     flushIntervalMs: opts.flushIntervalMs,
     stallMs: opts.stallMs,
     solvedWrapupMs: opts.solvedWrapupMs,
+    ...(opts.clock ? { clock: opts.clock } : {}),
   })
   let closed = false
   return {

@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { systemClock } from "../clock"
 import { buildSingleFileTar } from "../workspace/backend"
 import { createLocalContainerManager } from "./local-manager"
 
@@ -48,7 +49,7 @@ const challenges = join(root, "host-challenges")
 // real appliance runs as root inside its container).
 const containerWorkspace = join(root, "container", "workspace")
 const containerChallenges = join(root, "container", "challenges")
-const manager = createLocalContainerManager()
+const manager = createLocalContainerManager({ clock: systemClock })
 
 async function setup(): Promise<string> {
   await manager.create({
@@ -122,7 +123,7 @@ await step("exec abort signal kills the process group", async () => {
     signal: controller.signal,
     onData: () => undefined,
   })
-  setTimeout(() => controller.abort(), 100)
+  systemClock.setTimeout(() => controller.abort(), 100)
   const result = await pending
   assert(result.aborted && result.exitCode === null, `exit ${result.exitCode}`)
 })

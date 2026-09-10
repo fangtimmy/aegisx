@@ -1,6 +1,5 @@
 import { rmSync } from "node:fs"
 import { join } from "node:path"
-import { setTimeout as sleep } from "node:timers/promises"
 
 import type {
   AgentDetail,
@@ -49,6 +48,8 @@ import {
   teamKey,
   type ChannelService,
 } from "./channels"
+import type { Clock } from "./clock"
+import { systemClock } from "./clock"
 import {
   createContainerLifecycle,
   type ContainerLifecycle,
@@ -114,6 +115,10 @@ export type AgentServiceOptions = {
   stallMs?: number
   /** Test seam: solved write-up wrap-up bound (default SOLVED_WRAPUP_MS). */
   solvedWrapupMs?: number
+  /** Time layer (default: the system clock) — every runtime timer (flush
+   * tick, sweep, drainer, deadlines, watchdog) reads and schedules through
+   * it; tests inject a fake clock for deterministic time. */
+  clock?: Clock
 }
 
 export type SendMessageInput = {
@@ -130,6 +135,7 @@ export function createAgentService(options: AgentServiceOptions) {
   const createHost = options.createHost ?? createAgentHost
   const getSettings = () => options.getSettings()
   const closeAbortGraceMs = options.closeAbortGraceMs ?? 5_000
+  const clock = options.clock ?? systemClock
 
   function providers(): ProviderConnection[] {
     return getProviderConnections(configStore)
@@ -164,7 +170,7 @@ export function createAgentService(options: AgentServiceOptions) {
    * declared within one millisecond still get a strictly-ordered `createdAt`. */
   let lastNowMs = 0
   const now = () => {
-    let ms = Date.now()
+    let ms = clock.now()
     if (ms <= lastNowMs) ms = lastNowMs + 1
     lastNowMs = ms
     return new Date(ms).toISOString()
@@ -215,6 +221,7 @@ export function createAgentService(options: AgentServiceOptions) {
     lifecycle: () => lifecycle,
     now,
     challengeWorkspaceRoot,
+    clock,
     // Fleet digest appended to scheduler deliveries: rendered per delivery
     // against the current DB state (advisory — a render failure just skips
     // the digest, delivery itself must not fail).
@@ -240,6 +247,7 @@ export function createAgentService(options: AgentServiceOptions) {
     db,
     channels,
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    clock,
     ...(options.stallMs !== undefined ? { stallMs: options.stallMs } : {}),
   })
 
@@ -342,7 +350,7 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Close paths must never hang on `session.abort()`: pi's abort does not
-   * interrupt an in-flight tool call, so a streaming turn can outwait the
+   * interrupt an in-flight tool call, so a streaming turn can outlive the
    * awaiter indefinitely — the deadline path carries the same
    * abort-then-force-dispose fallback for exactly this reason. Bound the
    * wait; the caller disposes regardless, which is the sanctioned force
@@ -353,7 +361,7 @@ export function createAgentService(options: AgentServiceOptions) {
     if (!session?.session.isStreaming) return
     await Promise.race([
       session.session.abort().catch(() => undefined),
-      sleep(closeAbortGraceMs),
+      clock.sleep(closeAbortGraceMs),
     ])
   }
 
@@ -406,6 +414,7 @@ export function createAgentService(options: AgentServiceOptions) {
     forceTerminal: forceAbortAgent,
     emitAgentEvent: status.emitAgentEvent,
     timeoutGraceMs: options.timeoutGraceMs,
+    clock,
   })
 
   // Per-challenge container lifecycle (lazy create + idle TTL sweep; the
@@ -413,6 +422,7 @@ export function createAgentService(options: AgentServiceOptions) {
   const containerLifecycle: ContainerLifecycle = createContainerLifecycle({
     db,
     containerManager,
+    clock,
     ...(options.sweepIntervalMs !== undefined
       ? { sweepIntervalMs: options.sweepIntervalMs }
       : {}),
@@ -1085,7 +1095,7 @@ export function createAgentService(options: AgentServiceOptions) {
     const row = queries.getAgentRow(agentId)
     if (!row || !isActiveAgentStatus(row.status)) return
     const ms = options.solvedWrapupMs ?? SOLVED_WRAPUP_MS
-    const horizon = Date.now() + ms
+    const horizon = clock.now() + ms
     if (row.deadlineAt && Date.parse(row.deadlineAt) <= horizon) return
     const iso = new Date(horizon).toISOString()
     updateAgent(agentId, { deadlineAt: iso, updatedAt: now() })
@@ -1232,6 +1242,7 @@ export function createAgentService(options: AgentServiceOptions) {
     db,
     getSettings,
     isDisposed: () => closed,
+    clock,
     launch: async (item) => {
       const params = parseSpawnQueueParams(item.params)
       return factory.spawnAgent({
@@ -1268,11 +1279,9 @@ export function createAgentService(options: AgentServiceOptions) {
     closed = true
     await Promise.allSettled(locks.values())
     locks.clear()
-    for (const timer of deadlines.timeoutTimers.values()) {
-      if (timer.deadline) clearTimeout(timer.deadline)
-      if (timer.grace) clearTimeout(timer.grace)
-    }
-    deadlines.timeoutTimers.clear()
+    // Every subsystem owns a timer hub: closing them disposes their timers
+    // (deadlines' per-agent deadline/grace timers included) in one call each.
+    deadlines.clearAllTimers()
     containerLifecycle.close()
     queue?.cancelDrain()
     await lifecycle.closeAll()

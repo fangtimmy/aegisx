@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, type spawnQueue } from "../db/schema"
+import type { Clock, ClockTimer } from "./clock"
+import { createTimerHub, systemClock } from "./clock"
 import { RunActionError } from "./errors"
 import { checkSpawnFence, type FenceDecision } from "./fence"
 
@@ -73,6 +75,9 @@ export type QueueDrainerDeps = {
   store: QueueDrainerStore
   /** Capacity-retry delay (test seam; default {@link CAPACITY_RETRY_MS}). */
   retryMs?: number
+  /** Time layer (default: the system clock); schedules the debounce and the
+   * capacity retry. */
+  clock?: Clock
 }
 
 function launchFailureLine(
@@ -96,11 +101,12 @@ function isCapacity(error: unknown): boolean {
 
 export function createQueueDrainer(deps: QueueDrainerDeps) {
   const retryMs = deps.retryMs ?? CAPACITY_RETRY_MS
+  const hub = createTimerHub(deps.clock ?? systemClock)
 
-  let drainTimer: ReturnType<typeof setTimeout> | null = null
+  let drainTimer: ClockTimer | null = null
   let draining = false
   let drainRequested = false
-  let capacityRetry: ReturnType<typeof setTimeout> | null = null
+  let capacityRetry: ClockTimer | null = null
 
   function runPass(): void {
     void drainOnce().catch((error) => {
@@ -113,7 +119,7 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
   /** Re-arm the bounded capacity retry (at most one pending). */
   function armCapacityRetry(): void {
     if (capacityRetry || deps.isDisposed()) return
-    capacityRetry = setTimeout(() => {
+    capacityRetry = hub.setTimeout(() => {
       capacityRetry = null
       runPass()
     }, retryMs)
@@ -126,7 +132,7 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
    * pending capacity retry — the pass it opens covers the same need. */
   function scheduleDrain(): void {
     if (capacityRetry) {
-      clearTimeout(capacityRetry)
+      hub.clear(capacityRetry)
       capacityRetry = null
     }
     if (draining) {
@@ -134,7 +140,7 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
       return
     }
     if (drainTimer) return
-    drainTimer = setTimeout(() => {
+    drainTimer = hub.setTimeout(() => {
       drainTimer = null
       runPass()
     }, DRAIN_DEBOUNCE_MS)
@@ -205,14 +211,9 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
    * service close so no timer fires against a disposed service/db). */
   function cancelDrain(): void {
     drainRequested = false
-    if (drainTimer) {
-      clearTimeout(drainTimer)
-      drainTimer = null
-    }
-    if (capacityRetry) {
-      clearTimeout(capacityRetry)
-      capacityRetry = null
-    }
+    hub.disposeAll()
+    drainTimer = null
+    capacityRetry = null
   }
 
   return { scheduleDrain, drainOnce, cancelDrain }

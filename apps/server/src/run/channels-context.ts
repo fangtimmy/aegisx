@@ -8,6 +8,7 @@ import { and, eq, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { agents, challenges, channelMessages, channelReads } from "../db/schema"
+import type { Clock } from "./clock"
 import { RunActionError } from "./errors"
 import type { SessionLifecycle } from "./host/lifecycle"
 import type { LiveBus } from "./host/live"
@@ -94,6 +95,9 @@ export type ChannelServiceDeps = {
   renderSchedulerDigest?(eventId: string): string
   /** Test seam: flush tick interval. */
   flushIntervalMs?: number
+  /** Time layer (default: the system clock). The flush tick reads time and
+   * schedules itself through it; tests inject a fake clock. */
+  clock?: Clock
 }
 
 /** Server-stamped meta for stored messages: agent posts always carry
@@ -174,7 +178,8 @@ export function isUrgent(row: ChannelMessageRow): boolean {
  * close over one context instead of one 1500-line factory closure. */
 export function createChannelContext(
   deps: ChannelServiceDeps,
-  intervalMs: number
+  intervalMs: number,
+  clock: Clock
 ) {
   const { db, dataDir, bus } = deps
 
@@ -319,6 +324,7 @@ export function createChannelContext(
     dataDir,
     bus,
     deps,
+    clock,
     intervalMs,
     agentRow,
     challengeRow,

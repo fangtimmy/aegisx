@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream"
 
 import Docker from "dockerode"
 
+import { type Clock, createFakeClock } from "../../src/run/clock"
 import {
   collectSink,
   createContainerManager,
@@ -40,6 +41,10 @@ async function drainSink(sink: NodeJS.WritableStream, writes: Buffer[]) {
     sink.end(resolve)
   })
 }
+
+/** Event-loop yield with no timed wait (lets stream handlers attach / data
+ * flow before the next step). */
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 
 /**
  * Memory-bound contract for capture(): output beyond `maxCapture` must be
@@ -111,7 +116,10 @@ const dockerModem = new Docker().modem
 function fakeDocker(
   behavior: {
     inspect?: () => { Running?: boolean; ExitCode?: number | null }
-  } = {}
+  } = {},
+  /** Inject a fake clock to drive exec timeouts / poll backoffs
+   * deterministically (see the timeout + pollExitCode tests). */
+  clock?: Clock
 ): {
   manager: ReturnType<typeof createContainerManager>
   stream: PassThrough
@@ -141,7 +149,11 @@ function fakeDocker(
         dockerModem.demuxStream(source, out, err),
     },
   }
-  return { manager: createContainerManager({ docker }), stream, hijacked }
+  return {
+    manager: createContainerManager({ ...(clock ? { clock } : {}), docker }),
+    stream,
+    hijacked,
+  }
 }
 
 /**
@@ -206,17 +218,24 @@ describe("runHijacked", () => {
   })
 
   test("timeout while streaming resolves null exit code, keeps pre-timeout bytes, destroys stream", async () => {
-    const { manager, stream, hijacked } = fakeDocker({
-      inspect: () => ({ Running: false, ExitCode: 0 }),
-    })
+    const clock = createFakeClock()
+    const { manager, stream, hijacked } = fakeDocker(
+      {
+        inspect: () => ({ Running: false, ExitCode: 0 }),
+      },
+      clock
+    )
     const chunks: Buffer[] = []
     const pending = manager.exec("box", "yes", {
       onData: (chunk) => chunks.push(chunk),
       timeout: 0.05,
     })
     await hijacked
-    await Bun.sleep(1)
+    await tick()
     stream.write(frame(1, "pre-timeout"))
+    await tick()
+    // The 50ms exec timeout fires by advancing the fake clock — no real wait.
+    clock.advance(50)
     expect(await pending).toEqual({
       exitCode: null,
       timedOut: true,
@@ -249,18 +268,32 @@ describe("runHijacked", () => {
 
   test("pollExitCode falls back to final inspect ExitCode while daemon keeps reporting Running", async () => {
     let inspectCalls = 0
-    const { manager, stream, hijacked } = fakeDocker({
-      inspect: () => {
-        inspectCalls++
-        return inspectCalls <= 10
-          ? { Running: true, ExitCode: null }
-          : { Running: true, ExitCode: 5 }
+    const clock = createFakeClock()
+    const { manager, stream, hijacked } = fakeDocker(
+      {
+        inspect: () => {
+          inspectCalls++
+          return inspectCalls <= 10
+            ? { Running: true, ExitCode: null }
+            : { Running: true, ExitCode: 5 }
+        },
       },
-    })
+      clock
+    )
     const pending = manager.exec("box", "true", { onData: () => {} })
     await hijacked
-    await Bun.sleep(1)
+    await tick()
     stream.end()
+    // Let the stream 'end' reach runHijacked so the first poll inspect ran
+    // and armed its 30ms backoff.
+    await tick()
+    // Release each poll backoff by advancing the fake clock — ten virtual
+    // backoffs instead of 300ms real time. The loop ends when the poll
+    // chain stops scheduling backoffs (final inspect reached).
+    while (clock.pendingCount() > 0) {
+      clock.advance(30)
+      await tick()
+    }
     const result = await pending
     expect(result.exitCode).toBe(5)
     expect(inspectCalls).toBe(11)

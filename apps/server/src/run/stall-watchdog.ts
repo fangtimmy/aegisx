@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents } from "../db/schema"
 import { orchKey, type ChannelService } from "./channels"
+import type { Clock, ClockTimer } from "./clock"
+import { createTimerHub, systemClock } from "./clock"
 
 /** agent 停滞判定：turn settle 后超过该时长仍 idle/failed → urgent orch
  * 消息（§五）。 */
@@ -31,6 +33,9 @@ export type StallWatchdogDeps = {
   isSchedulerPaused(eventId: string): boolean
   /** Test seam: stall threshold. */
   stallMs?: number
+  /** Time layer (default: the system clock); arms the per-agent timers and
+   * reads the stall age. */
+  clock?: Clock
 }
 
 export type StallWatchdog = ReturnType<typeof createStallWatchdog>
@@ -44,10 +49,9 @@ export type StallWatchdog = ReturnType<typeof createStallWatchdog>
 export function createStallWatchdog(deps: StallWatchdogDeps) {
   const { db, channels } = deps
   const stallMs = deps.stallMs ?? AGENT_STALL_MS
-  const timers = new Map<
-    string,
-    { timer: ReturnType<typeof setTimeout>; dueAt: number }
-  >()
+  const clock = deps.clock ?? systemClock
+  const hub = createTimerHub(clock)
+  const timers = new Map<string, { timer: ClockTimer; dueAt: number }>()
 
   /** Agent turn settled (idle/failed): arm the agent's stall check. The
    * fire time re-checks the DB, so a mid-timer resume/finish is judged from
@@ -65,8 +69,8 @@ export function createStallWatchdog(deps: StallWatchdogDeps) {
     if (!row || row.role !== "solver") return
     if (deps.isSchedulerPaused(row.eventId)) return
     clearStallTimer(agentId)
-    const dueAt = Date.now() + stallMs
-    const timer = setTimeout(() => {
+    const dueAt = clock.now() + stallMs
+    const timer = hub.setTimeout(() => {
       timers.delete(agentId)
       checkStall(agentId)
     }, stallMs)
@@ -76,7 +80,7 @@ export function createStallWatchdog(deps: StallWatchdogDeps) {
   function clearStallTimer(agentId: string): void {
     const entry = timers.get(agentId)
     if (entry) {
-      clearTimeout(entry.timer)
+      hub.clear(entry.timer)
       timers.delete(agentId)
     }
   }
@@ -91,7 +95,7 @@ export function createStallWatchdog(deps: StallWatchdogDeps) {
       return
     }
     if (deps.isSchedulerPaused(row.eventId)) return
-    const nowMs = Date.now()
+    const nowMs = clock.now()
     if (nowMs - Date.parse(row.updatedAt) < stallMs) return
     channels.post({
       channelKey: orchKey(row.eventId),
@@ -104,7 +108,7 @@ export function createStallWatchdog(deps: StallWatchdogDeps) {
 
   /** Clear every timer (service close). Messages already posted persist. */
   function close(): void {
-    for (const { timer } of timers.values()) clearTimeout(timer)
+    hub.disposeAll()
     timers.clear()
   }
 

@@ -1,5 +1,7 @@
 import { agents } from "../db/schema"
 import type { EventScopePayload } from "../orchestration/types"
+import type { Clock, ClockTimer } from "./clock"
+import { createTimerHub, systemClock } from "./clock"
 import type { SessionLifecycle } from "./host/lifecycle"
 
 /** Grace between deadline-abort and a forced session dispose. */
@@ -19,6 +21,9 @@ export type AgentDeadlinesDeps = {
   emitAgentEvent: (agentId: string, payload: EventScopePayload) => void
   /** Test seam: grace between deadline-abort and a forced dispose. */
   timeoutGraceMs?: number
+  /** Time layer (default: the system clock); arms the deadline + grace
+   * timers and reads the current time against `deadlineAt`. */
+  clock?: Clock
 }
 
 export type AgentDeadlines = ReturnType<typeof createAgentDeadlines>
@@ -32,15 +37,17 @@ export type AgentDeadlines = ReturnType<typeof createAgentDeadlines>
  * and a reopen never re-arms a stale deadline. */
 export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
   const { lifecycle, updateAgent, now, emitAgentEvent } = deps
+  const clock = deps.clock ?? systemClock
+  const hub = createTimerHub(clock)
   const timeoutTimers = new Map<
     string,
-    { deadline?: NodeJS.Timeout; grace?: NodeJS.Timeout }
+    { deadline?: ClockTimer; grace?: ClockTimer }
   >()
 
   function clearAgentTimers(agentId: string): void {
     const t = timeoutTimers.get(agentId)
-    if (t?.deadline) clearTimeout(t.deadline)
-    if (t?.grace) clearTimeout(t.grace)
+    if (t?.deadline) hub.clear(t.deadline)
+    if (t?.grace) hub.clear(t.grace)
     timeoutTimers.delete(agentId)
   }
 
@@ -54,10 +61,10 @@ export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
   function armAgentTimers(agentId: string, deadlineAt: string | null): void {
     clearAgentTimers(agentId)
     if (!deadlineAt) return
-    const delay = new Date(deadlineAt).getTime() - Date.now()
+    const delay = new Date(deadlineAt).getTime() - clock.now()
     if (delay <= 0) return
-    const entry: { deadline?: NodeJS.Timeout; grace?: NodeJS.Timeout } = {}
-    entry.deadline = setTimeout(() => {
+    const entry: { deadline?: ClockTimer; grace?: ClockTimer } = {}
+    entry.deadline = hub.setTimeout(() => {
       // One-shot: consume the deadline so warm reuse / reopen stays unbounded
       // instead of silently re-arming a stale one.
       updateAgent(agentId, { lastTimeoutAt: now(), deadlineAt: null })
@@ -69,7 +76,7 @@ export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
         deps.getAgentStatus(agentId) === "running" || isStreaming(agentId)
       if (!live) return
       void lifecycle.abort(agentId).catch(() => undefined)
-      entry.grace = setTimeout(() => {
+      entry.grace = hub.setTimeout(() => {
         // Still streaming after grace → force-dispose the session →
         // aborted. A clean settle already landed idle.
         const stillStreaming = isStreaming(agentId)
@@ -84,5 +91,12 @@ export function createAgentDeadlines(deps: AgentDeadlinesDeps) {
     timeoutTimers.set(agentId, entry)
   }
 
-  return { clearAgentTimers, armAgentTimers, timeoutTimers }
+  /** Drop every timer (service close) — one registry disposal instead of a
+   * manual sweep of the per-agent entries. */
+  function clearAllTimers(): void {
+    hub.disposeAll()
+    timeoutTimers.clear()
+  }
+
+  return { clearAgentTimers, armAgentTimers, clearAllTimers }
 }

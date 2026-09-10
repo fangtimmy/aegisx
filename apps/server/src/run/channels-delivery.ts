@@ -16,6 +16,8 @@ import {
   type ChannelContext,
 } from "./channels-context"
 import { MAX_DELIVER_CHARS, renderDelivery } from "./channels-render"
+import type { ClockTimer } from "./clock"
+import { createTimerHub } from "./clock"
 
 function isActive(agent: AgentRow): boolean {
   return isActiveAgentStatus(agent.status)
@@ -226,21 +228,23 @@ export function createDeliveryEngine(ctx: ChannelContext) {
 
   // --- flush tick -----------------------------------------------------------
 
-  let flushTimer: ReturnType<typeof setInterval> | null = null
+  const clock = ctx.clock
+  const hub = createTimerHub(clock)
+  let flushTimer: ClockTimer | null = null
   let nextFlushAt: number | null = null
 
   /** One global interval; no per-event objects, no catch-up code — messages
    * are persisted, so a missed tick's backlog settles on the next one. */
   function startFlushLoop(): void {
     if (flushTimer) return
-    nextFlushAt = Date.now() + ctx.intervalMs
-    flushTimer = setInterval(() => runFlushTick(), ctx.intervalMs)
+    nextFlushAt = clock.now() + ctx.intervalMs
+    flushTimer = hub.setInterval(() => runFlushTick(), ctx.intervalMs)
   }
 
   /** The tick: every live agent delivers its unread backlog (one single
    * query). Hold skips the whole event. */
   function runFlushTick(): void {
-    nextFlushAt = Date.now() + ctx.intervalMs
+    nextFlushAt = clock.now() + ctx.intervalMs
     try {
       const live = db
         .select({ id: agents.id, eventId: agents.eventId })
@@ -260,7 +264,7 @@ export function createDeliveryEngine(ctx: ChannelContext) {
 
   function stopFlushLoop(): void {
     if (flushTimer) {
-      clearInterval(flushTimer)
+      hub.clear(flushTimer)
       flushTimer = null
     }
     nextFlushAt = null

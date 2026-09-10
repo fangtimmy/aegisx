@@ -6,6 +6,7 @@ import type { Database } from "../db"
 import { challenges, queueState, spawnQueue } from "../db/schema"
 import { parseJson } from "../lib/guards"
 import { logEvent } from "../lib/log"
+import type { Clock } from "./clock"
 import { createQueueDrainer } from "./drainer"
 import { RunActionError } from "./errors"
 
@@ -79,6 +80,8 @@ export type QueueServiceDeps = {
    * mid-launch (markRunning lost the race). Never throws; failures are
    * logged by the drainer. */
   onSupersededLaunch?: (agentId: string) => void | Promise<void>
+  /** Time layer for the drainer (default: the system clock). */
+  clock?: Clock
 }
 
 function toPublic(db: Database, row: QueueRow): QueueItemPublic {
@@ -457,6 +460,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     ...(deps.onSupersededLaunch
       ? { onSupersededLaunch: deps.onSupersededLaunch }
       : {}),
+    ...(deps.clock ? { clock: deps.clock } : {}),
     store: { pendingItems, markRunning, markFailed, markCancelled },
   })
 

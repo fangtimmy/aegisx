@@ -17,6 +17,8 @@ declare module "node:child_process" {
   interface ChildProcess extends NodeJS.EventEmitter {}
 }
 
+import type { Clock, TimerHub } from "../clock"
+import { createTimerHub, systemClock } from "../clock"
 import {
   collectSink,
   type CreateOptions,
@@ -127,6 +129,7 @@ type RunResult = {
 
 function runLocal(
   ws: LocalWorkspace,
+  timers: TimerHub,
   command: string,
   opts: RunOptions
 ): Promise<RunResult> {
@@ -178,7 +181,7 @@ function runLocal(
     const ms = execTimeoutMs(opts.timeout)
     const timer =
       ms !== undefined
-        ? setTimeout(() => {
+        ? timers.setTimeout(() => {
             timedOut = true
             killGroup()
           }, ms)
@@ -187,7 +190,7 @@ function runLocal(
     const finish = (result: RunResult) => {
       if (settled) return
       settled = true
-      if (timer) clearTimeout(timer)
+      if (timer) timers.clear(timer)
       opts.signal?.removeEventListener("abort", onAbort)
       untrack()
       resolve(result)
@@ -209,7 +212,11 @@ function runLocal(
   })
 }
 
-export function createLocalContainerManager() {
+export function createLocalContainerManager(options?: {
+  /** Time layer (default: the system clock); drives the per-exec timeout. */
+  clock?: Clock
+}) {
+  const timers = createTimerHub(options?.clock ?? systemClock)
   const workspaces = new Map<string, LocalWorkspace>()
 
   function requireWorkspace(name: string): LocalWorkspace {
@@ -283,7 +290,7 @@ export function createLocalContainerManager() {
         cb()
       },
     })
-    return runLocal(ws, command, {
+    return runLocal(ws, timers, command, {
       ...opts,
       stdoutSink: sink,
       stderrSink: sink,
@@ -306,7 +313,7 @@ export function createLocalContainerManager() {
     const errChunks: Buffer[] = []
     const stdout = collectSink(outChunks, opts?.maxCapture)
     const stderr = collectSink(errChunks, opts?.maxCapture)
-    const { exitCode } = await runLocal(ws, command, {
+    const { exitCode } = await runLocal(ws, timers, command, {
       workdir: opts?.workdir,
       signal: opts?.signal,
       timeout: opts?.timeout,
