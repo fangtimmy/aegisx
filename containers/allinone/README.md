@@ -37,6 +37,8 @@ docker run -d --name aegisx \
 
 ## 环境变量
 
+完整清单（含镜像内置项与 exec 注入项）见 [docs/env.md](../../docs/env.md)。
+
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `AEGISX_PROVIDER_BASE_URL` | 推荐 | LLM API base URL（http/https），与 `AEGISX_MODEL_ID` 成对生效 |

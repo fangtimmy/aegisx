@@ -46,6 +46,8 @@ model id 匹配 > 保守默认值。
 
 镜像体积：未压缩 4.75GB，gzip 压缩后 **1.81GB**（上限 3GB）。
 
+环境变量完整清单见 [docs/env.md](../../docs/env.md)。
+
 启动后 Bootstrap 自动执行：provider/模型 → 读取 preset → 建赛事（带 TSecBench 平台
 提示词与调度策略）→ 拉题 → 启动调度者（由调度者按策略逐题简报并入队）。
 
