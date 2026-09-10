@@ -44,8 +44,13 @@
     },
     {
       "files": [
+        "src/app.ts",
+        "src/bootstrap.ts",
+        "src/index.ts",
         "src/run/routes.ts",
         "src/run/scheduler-admin.ts",
+        "src/run/sse.ts",
+        "src/run/public.ts",
         "src/events/**",
         "src/scheduler/**",
         "src/platforms/**",
@@ -58,7 +63,7 @@
           {
             "patterns": [
               {
-                "group": ["./host/**", "../run/host/**"],
+                "group": ["./host/**", "../run/host/**", "./run/host/**"],
                 "message": "Route layers must not reach into run/host/* internals; go through the service or the public outlet (run/host/index.ts)."
               }
             ]

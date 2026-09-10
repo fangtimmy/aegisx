@@ -28,8 +28,9 @@ bun install         # 仓库根目录，一次装全部 workspace
 bun run dev         # server + web 并行（dev:server / dev:web 可单独启）
 bun run check       # oxfmt --check + knip + oxlint --type-check（全部 workspace；无 tsc 脚本，类型检查走 oxlint）
 bun run fmt         # oxlint --fix + oxfmt
-bun run test        # 全部测试；server 侧脚本是 bun test --max-concurrency 1，勿绕过并发限制
-bun run test:sdk    # Python SDK 契约测试（apps/server/scripts/sdk-contract.ts）
+bun run test        # 全部测试；server 侧脚本是 bun test（默认并发，历史串行约束已随定时器测试稳固化解除）
+bun run test:sdk    # Python SDK 契约测试（apps/server/scripts/sdk-contract.ts，需要 uv）
+bun run test:all    # 完整门禁：bun run test && bun run test:sdk（发布/交付前校验，需 uv 环境）
 bun run build       # web 生产构建
 bun run db:generate # drizzle 迁移生成（在 apps/server 下执行）
 ```

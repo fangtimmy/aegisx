@@ -6,9 +6,19 @@ import {
   systemClock,
 } from "../../src/run/clock"
 
-/** Macrotask yield: lets the real clock's timer callbacks run before the
- * assertions (fake-clock paths fire synchronously and need no yield). */
-const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+/** Polls until `predicate` holds or `timeoutMs` elapses (5ms granularity).
+ * Real timers drift under parallel test load, so callback-count assertions
+ * wait for the expected state instead of relying on a fixed wall-clock
+ * budget. A hung timer still fails through the assertion that follows. */
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = 300
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
 
 describe("systemClock (real)", () => {
   test("now() reads the wall clock", () => {
@@ -25,15 +35,14 @@ describe("systemClock (real)", () => {
     clock.setTimeout(() => fired++, 5)
     const cancelled = clock.setTimeout(() => fired++, 5)
     cancelled.clear()
-    await tick()
-    await new Promise((resolve) => setTimeout(resolve, 15))
+    await waitUntil(() => fired > 0)
     expect(fired).toBe(1)
   })
 
   test("setInterval repeats until cleared", async () => {
     let fired = 0
     const timer = systemClock.setInterval(() => fired++, 5)
-    await new Promise((resolve) => setTimeout(resolve, 18))
+    await waitUntil(() => fired >= 2)
     timer.clear()
     const afterClear = fired
     expect(afterClear).toBeGreaterThanOrEqual(2)
