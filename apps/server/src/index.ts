@@ -2,9 +2,24 @@ import { resolve } from "node:path"
 
 import { createApp } from "./app"
 
+/**
+ * Default data root when AEGISX_DATA_DIR is unset. A source run resolves the
+ * repo-relative `data/` (src → <repo>/data). A compiled single-file binary
+ * runs under Bun's virtual root (`/$bunfs/root`), where that same arithmetic
+ * lands on `/data` — unwritable on macOS and unrelated to the invocation — so
+ * it falls back to `./data` beside the working directory. Appliance images set
+ * AEGISX_DATA_DIR explicitly and never reach either branch.
+ */
+function defaultDataDir(): string {
+  if (import.meta.dir.includes("$bunfs")) {
+    return resolve(process.cwd(), "data")
+  }
+  return resolve(import.meta.dir, "../../../data")
+}
+
 const dataDir = process.env.AEGISX_DATA_DIR
   ? resolve(process.env.AEGISX_DATA_DIR)
-  : resolve(import.meta.dir, "../../../data")
+  : defaultDataDir()
 const instance = createApp({ dataDir })
 let closing = false
 
