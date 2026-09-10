@@ -17,6 +17,7 @@ import {
 import type { createStorage } from "../infrastructure/storage"
 import { isSafeFilename, StorageLimitError } from "../infrastructure/storage"
 import { validateJson } from "../infrastructure/validation"
+import { stampChallengeSolvedAt } from "../platforms/challenge-state"
 import { platformActionHttpError } from "../platforms/errors"
 import type { createPlatformService } from "../platforms/service"
 import type { createCatalogReader } from "./catalog"
@@ -394,10 +395,14 @@ export function registerEventRoutes(
         return notFound(c, "Challenge not found")
       }
       const { state } = c.req.valid("json")
+      const now = new Date().toISOString()
       db.update(challenges)
-        .set({ manualSolveState: state, updatedAt: new Date().toISOString() })
+        .set({ manualSolveState: state, updatedAt: now })
         .where(eq(challenges.id, challengeId))
         .run()
+      // An operator marking a challenge solved is a first-solve transition too
+      // (the cleanup gate and the digest anchor both key on it).
+      stampChallengeSolvedAt(db, challengeId, now)
       return c.json(getChallenge(challengeId))
     }
   )

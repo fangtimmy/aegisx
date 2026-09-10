@@ -7,6 +7,7 @@ import type {
   EventSummary,
   RemoteTargetInfo,
 } from "@aegisx/shared"
+import { progressOf } from "@aegisx/shared"
 import { asc, count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
 import { Value } from "typebox/value"
 
@@ -22,7 +23,8 @@ import {
 import { parseJson } from "../lib/guards"
 import { RemoteTargetInfoSchema } from "../lib/schemas"
 import {
-  fullySolvedSql,
+  isPlatformIntegrated,
+  solvedChallengeSql,
   type ChallengeRemote,
 } from "../platforms/challenge-state"
 import type { createPlatformService } from "../platforms/service"
@@ -57,7 +59,7 @@ export function createCatalogReader(
       .select({
         ...getTableColumns(events),
         challengeCount: count(challenges.id),
-        solvedCount: sql<number>`coalesce(sum(case when ${fullySolvedSql} then 1 else 0 end), 0)`,
+        solvedCount: sql<number>`coalesce(sum(case when ${solvedChallengeSql} then 1 else 0 end), 0)`,
         lastChallengeAt: max(challenges.updatedAt),
         activeAgentCount: sql<number>`coalesce((select sum(case when a.status in ('running', 'idle') then 1 else 0 end) from agents a where a.event_id = events.id), 0)`,
         lastAgentAt: sql<
@@ -131,9 +133,31 @@ export function createCatalogReader(
     agentSummary?: AgentStatusSummary
   ): ChallengePublic => {
     const ignored = remote?.targetIgnored ?? false
-    const hasAcceptedFlag = flags.some((flag) => flag.status === "accepted")
+    // One rule, one place. `progress` is the state machine's verdict; the
+    // `solved` dimensions are projections of the same inputs, with `local` =
+    // what the local flag record ALONE proves (remote verdict and manual
+    // override nulled) — on a platform-integrated challenge still owing flags
+    // that is `partial`, never `solved`, so a 1/N chain cannot read as done.
+    const integrated = isPlatformIntegrated(remote)
+    const acceptedCount = flags.filter(
+      (flag) => flag.status === "accepted"
+    ).length
+    const progress = progressOf({
+      accepted: acceptedCount,
+      requiredFlags: challenge.requiredFlags,
+      remoteSolved: remote?.solved === true,
+      integrated,
+      manual: challenge.manualSolveState,
+      points: challenge.points,
+    })
     const solved: ChallengeSolved = {
-      local: hasAcceptedFlag ? "solved" : "unsolved",
+      local: progressOf({
+        accepted: acceptedCount,
+        requiredFlags: challenge.requiredFlags,
+        remoteSolved: false,
+        integrated,
+        manual: "unsolved",
+      }).state,
       manual: challenge.manualSolveState,
       remote: remote?.solved ? "solved" : "unsolved",
     }
@@ -149,6 +173,7 @@ export function createCatalogReader(
       attachments: challengeAttachments,
       flags,
       solved,
+      progress,
       agentCount: agentSummary?.agentCount ?? 0,
       agentStatusCounts: agentSummary?.counts ?? {},
       remoteId: remote?.remoteId ?? null,

@@ -18,7 +18,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 21
+export const SCHEMA_VERSION = 22
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -59,6 +59,17 @@ export const challenges = sqliteTable(
     })
       .notNull()
       .default("unsolved"),
+    /** Flags the challenge requires. One owner chain: platform sync writes it
+     * when the platform reports a count, the operator may override it. Null =
+     * unknown (read as 1: single-flag, or an unreported multi-flag chain).
+     * The progress state machine's `required` — per-flag value
+     * (points / required) is what makes a multi-flag chain comparable to an
+     * independent single-flag challenge. */
+    requiredFlags: integer("required_flags"),
+    /** First transition into `solved`, stamped by the progress machine. The
+     * solve cleanup keys on it, so a chain that is later revealed to need more
+     * flags (solved → partial → solved) never runs the teardown twice. */
+    solvedAt: text("solved_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -97,11 +108,6 @@ export const challengeRemote = sqliteTable(
       .default(false),
     targetCount: integer("target_count").notNull().default(0),
     targetInfo: text("target_info").notNull().default("[]"),
-    /** Flags the challenge requires, as the platform reports it. Null means
-     * single-flag or unknown (the digest reads it as 1). Part of the yield
-     * model: per-flag value = points / flagCount is what makes a multi-flag
-     * chain comparable to an independent single-flag challenge. */
-    flagCount: integer("flag_count"),
     syncedAt: text("synced_at").notNull(),
   },
   (table) => [

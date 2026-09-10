@@ -2,6 +2,7 @@ import type { AgentSummary } from "@aegisx/shared"
 import {
   LIVE_AGENT_STATUSES,
   modelAddress,
+  progressOf,
   type FlatSettings,
 } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
@@ -237,9 +238,11 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         id: challenges.id,
         name: challenges.name,
         points: challenges.points,
-        flagCount: challengeRemote.flagCount,
+        requiredFlags: challenges.requiredFlags,
         manualSolveState: challenges.manualSolveState,
         remoteSolved: challengeRemote.solved,
+        remoteId: challengeRemote.remoteId,
+        remoteAvailable: challengeRemote.available,
       })
       .from(challenges)
       .leftJoin(challengeRemote, eq(challengeRemote.challengeId, challenges.id))
@@ -264,37 +267,34 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         }
         return []
       }
-      const accepted = acceptedByChallenge.get(row.id) ?? 0
-      const flagTotal = Math.max(row.flagCount ?? 1, 1)
-      const confirmed = Math.min(accepted, flagTotal)
-      const manual = row.manualSolveState
+      // Yield side: the progress machine owns the split (points × confirmed /
+      // required) and the state label, so the digest cannot disagree with the
+      // fence / the wire projection about what "solved" means.
+      const progress = progressOf({
+        accepted: acceptedByChallenge.get(row.id) ?? 0,
+        requiredFlags: row.requiredFlags,
+        remoteSolved: row.remoteSolved === true,
+        integrated: row.remoteId !== null && row.remoteAvailable === true,
+        manual: row.manualSolveState,
+        points: row.points,
+      })
       const solvedLabel =
-        manual === "solved"
+        progress.state === "solved"
           ? "已解"
-          : manual === "partial"
+          : progress.state === "partial"
             ? "部分"
-            : row.remoteSolved || confirmed >= flagTotal
-              ? "已解"
-              : confirmed > 0
-                ? "部分"
-                : "未解"
-      // Yield side: earned points stay 0 until a flag lands. Derived from the
-      // platform's own split (points / flagCount) because the per-flag score
-      // array is not on the agent-facing API — uniform across the board.
-      const earned =
-        row.points === null
-          ? null
-          : Math.round((row.points * confirmed) / flagTotal)
-      const perFlag =
-        row.points === null ? null : Math.round(row.points / flagTotal)
+            : "未解"
       const lastFlagAt = lastFlagAtByChallenge.get(row.id)
       return [
         {
           name: row.name,
           points: row.points,
-          perFlag,
-          earned,
-          flagProgress: flagTotal > 1 ? `${confirmed}/${flagTotal}` : "",
+          perFlag: progress.perFlag,
+          earned: progress.earned,
+          flagProgress:
+            progress.required > 1
+              ? `${progress.confirmed}/${progress.required}`
+              : "",
           solvedLabel,
           sinceLastFlag:
             lastFlagAt === undefined ? "" : fmtMs(nowMs - lastFlagAt),

@@ -220,9 +220,15 @@ function acceptFlag(
 describe("scheduler digest: multi-flag yield (the partial solve is not 已解)", () => {
   function seedMultiFlag(db: ReturnType<typeof createDatabase>["db"]) {
     seedEvent(db)
-    seedChallenge(db, { id: "ch-1", name: "chain", points: 1200 })
+    // The platform reports the flag requirement (onto the challenge row).
+    seedChallenge(db, {
+      id: "ch-1",
+      name: "chain",
+      points: 1200,
+      requiredFlags: 4,
+    })
     seedLiveAgent(db, "a1", "ch-1", "running")
-    // The platform reports the flag count; per-flag value = 1200 / 4 = 300.
+    // per-flag value = 1200 / 4 = 300.
     db.insert(challengeRemote)
       .values({
         challengeId: "ch-1",
@@ -231,7 +237,6 @@ describe("scheduler digest: multi-flag yield (the partial solve is not 已解)",
         remoteId: "r1",
         available: true,
         solved: false,
-        flagCount: 4,
         syncedAt: now(),
       })
       .run()

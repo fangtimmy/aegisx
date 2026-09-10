@@ -10,6 +10,7 @@ import type {
   EventStatsAgentSpan,
   EventToolUsageItem,
 } from "@aegisx/shared"
+import { progressOf } from "@aegisx/shared"
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -143,27 +144,30 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
     values.push(flag)
     flagsByChallenge.set(flag.challengeId, values)
   }
-  // The fully-solved rule (see challenge-state): an accepted local flag only
-  // counts where no platform verdict exists — integrated accepted rows can
-  // be multi-flag partials.
-  const solvedOf = (
-    challengeId: string,
-    manual: string,
+  // The progress machine (see @aegisx/shared/progress) — the same rule the
+  // fence, the cleanup, the digest and the wire projection read, never a
+  // second copy.
+  const progressOfRow = (
+    challenge: typeof challenges.$inferSelect,
     remote: ChallengeRemote | null
   ) =>
-    remote?.solved === true ||
-    manual !== "unsolved" ||
-    (!isPlatformIntegrated(remote) &&
-      (flagsByChallenge.get(challengeId) ?? []).some(
+    progressOf({
+      accepted: (flagsByChallenge.get(challenge.id) ?? []).filter(
         (f) => f.status === "accepted"
-      ))
+      ).length,
+      requiredFlags: challenge.requiredFlags,
+      remoteSolved: remote?.solved === true,
+      integrated: isPlatformIntegrated(remote),
+      manual: challenge.manualSolveState,
+      points: challenge.points,
+    })
   let challengesSolved = 0
   let pointsEarned = 0
   let pointsAvailable = 0
   const solvedByChallenge = new Map<string, boolean>()
   for (const { challenge, remote } of challengeRows) {
     if (challenge.points !== null) pointsAvailable += challenge.points
-    const solved = solvedOf(challenge.id, challenge.manualSolveState, remote)
+    const solved = progressOfRow(challenge, remote).state === "solved"
     solvedByChallenge.set(challenge.id, solved)
     if (solved) {
       challengesSolved += 1

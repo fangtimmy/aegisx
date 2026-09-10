@@ -1,3 +1,5 @@
+import type { ChallengeProgress } from "./progress"
+
 /** Canonical platform / provider kind lists — the TS unions and the TypeBox
  * wire schemas are both derived from these tuples. */
 export const PLATFORM_TYPES = [
@@ -276,7 +278,11 @@ export type ChallengeFlag = {
 /**
  * Solve state split into three independent dimensions, merged by priority
  * `manual > remote > local` (first non-`unsolved` wins):
- *  - `local`: derived — `accepted` iff an accepted flag exists, else `unsolved`.
+ *  - `local`: derived from the accepted flag rows. `solved` when the local
+ *    record settles the challenge (no platform verdict to wait on, or the
+ *    platform already reported it solved); `partial` while a platform-
+ *    integrated challenge still owns flags it has not confirmed (an accepted
+ *    row can be a multi-flag partial); `unsolved` with no accepted flag.
  *  - `manual`: user-assigned override (stored on `challenges.manual_solve_state`).
  *  - `remote`: platform verdict (`challenge_remote.solved` mapped to solved/unsolved).
  */
@@ -298,6 +304,10 @@ export type Challenge = {
   attachments: Attachment[]
   flags: ChallengeFlag[]
   solved: ChallengeSolved
+  /** The authoritative derived progress (state / confirmed / required / yield)
+   * from `progressOf`. `solved` stays the three raw dimensions for display;
+   * this is what decisions read. */
+  progress: ChallengeProgress
   agentCount: number
   agentStatusCounts: Partial<Record<AgentStatus, number>>
   remoteId: string | null

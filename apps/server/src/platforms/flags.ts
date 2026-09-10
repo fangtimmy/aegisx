@@ -11,10 +11,11 @@ import {
 import { logEvent } from "../lib/log"
 import { type Clock, systemClock } from "../run/clock"
 import {
-  fullySolved,
-  fullySolvedAsideFromFlag,
+  challengeSolvedAt,
   getChallengeRemote,
   isPlatformIntegrated,
+  progressOfChallenge,
+  stampChallengeSolvedAt,
 } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
@@ -149,6 +150,7 @@ export function createPlatformFlags(
       updatedAt: now,
     }
     db.insert(challengeFlags).values(row).run()
+    stampChallengeSolvedAt(db, challengeId, now)
     return toFlagPublic({ ...row })
   }
 
@@ -202,6 +204,10 @@ export function createPlatformFlags(
       isPlatformIntegrated(remote) &&
       remote.sourceKey === platform.sourceKey
     )
+    // Captured BEFORE this submission writes anything: both the acceptance
+    // tier and the first-solve anchor key on the PRIOR state, so a chain later
+    // revealed to need more flags never runs the teardown twice.
+    const alreadySolved = challengeSolvedAt(db, challengeId) !== null
 
     // Terminal cache: a flag already verified accepted/rejected is not re-submitted.
     const existing = lookup(challengeId, value)
@@ -211,16 +217,13 @@ export function createPlatformFlags(
     ) {
       // A repeat submission of an accepted flag still counts for the
       // submitting agent — but "accepted" at flag level also covers a
-      // multi-flag partial (collapsed on persist), and only a FULLY solved
+      // multi-flag partial (collapsed on persist), and only a SOLVED
       // challenge may fire agent.flagAccepted (its cleanup stops the
       // challenge's other agents). On a partially-solved challenge the
       // repeat steers instead.
       if (existing.status === "accepted") {
-        // Integrated platform → `challenge_remote.solved` is the full verdict
-        // (multi-flag partials never set it); non-integrated → an accepted
-        // flag IS the full local verdict.
-        const solved = integrated ? Boolean(remote?.solved) : true
-        if (solved) {
+        // The progress machine decides, not a local re-derivation.
+        if (progressOfChallenge(db, challengeId).state === "solved") {
           options?.onAgentFlagAccepted?.(challengeId, agentId, "repeat")
         } else {
           options?.onAgentFlagPartial?.(challengeId, null, agentId)
@@ -239,10 +242,9 @@ export function createPlatformFlags(
 
     // Non-platform challenge: record as a locally-confirmed accepted flag.
     if (!integrated) {
-      // Judged BEFORE the write: the prior solve state decides the tier.
-      const outcome: FlagAcceptOutcome = fullySolved(db, challengeId)
-        ? "extra"
-        : "first"
+      // Judged BEFORE the write (see `alreadySolved`): the prior solve state
+      // decides the tier.
+      const outcome: FlagAcceptOutcome = alreadySolved ? "extra" : "first"
       const now = new Date().toISOString()
       const row = {
         id: existing?.id ?? crypto.randomUUID(),
@@ -267,6 +269,7 @@ export function createPlatformFlags(
       // No remote judge here, but the acceptance is real — notify the agent
       // layer so the scheduler learns the flag (agent.flagAccepted). No
       // platform → no multi-flag partial: accepted IS the full verdict.
+      stampChallengeSolvedAt(db, challengeId, now)
       options?.onAgentFlagAccepted?.(challengeId, agentId, outcome)
       return { status: "accepted", verified: false }
     }
@@ -383,21 +386,16 @@ export function createPlatformFlags(
         persist(result, flagStatusFromResult(result.status))
       }
       if (result.status === "accepted" || result.status === "already_solved") {
-        // Judged aside from this submission's own row (persist may have
-        // landed above): a sibling racing another value may have flipped the
-        // challenge already — their acceptance fires "first", this one lands
-        // as "extra" (light notice), never a second cleanup round.
-        const outcome: FlagAcceptOutcome = fullySolvedAsideFromFlag(
-          db,
-          challengeId,
-          value
-        )
-          ? "extra"
-          : "first"
+        // `alreadySolved` was captured before this submission's flag row was
+        // persisted, so it IS the aside-from-this-value state a sibling race
+        // needs: their acceptance already flipped the challenge → "extra"
+        // (light notice), never a second cleanup round.
+        const outcome: FlagAcceptOutcome = alreadySolved ? "extra" : "first"
         db.update(challengeRemote)
           .set({ solved: true })
           .where(eq(challengeRemote.challengeId, challengeId))
           .run()
+        stampChallengeSolvedAt(db, challengeId, new Date().toISOString())
         options?.onAgentFlagAccepted?.(challengeId, agentId, outcome)
       }
       if (result.status === "partial") {

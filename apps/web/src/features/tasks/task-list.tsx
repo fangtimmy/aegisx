@@ -267,8 +267,7 @@ function TaskRowView({
 }) {
   const meta = row.challenge
   const solved = meta ? overallSolved(meta) : "unsolved"
-  const acceptedFlags =
-    meta?.flags.filter((flag) => flag.status === "accepted").length ?? 0
+  const progress = meta?.progress
 
   const dotClass = row.runningCount
     ? agentStatusVisual.running.dot
@@ -313,9 +312,9 @@ function TaskRowView({
         )}
         {solved === "solved" ? (
           <Check aria-label="已解决" className="size-3 shrink-0 text-success" />
-        ) : solved === "partial" || acceptedFlags > 0 ? (
+        ) : progress && progress.confirmed > 0 ? (
           <span className="shrink-0 tabular-nums">
-            · {acceptedFlags}/{meta?.flags.length ?? 0}
+            · {progress.confirmed}/{progress.required}
           </span>
         ) : null}
         {row.pendingCount > 0 && (

@@ -17,14 +17,13 @@ export type RemoteChallengeStatus =
   | "unavailable"
 
 /**
- * Merge the three solve dimensions by priority manual > remote > local
- * (first non-`unsolved` wins). `solved` > `partial` > `unsolved`.
+ * The challenge's progress state, straight from the server's state machine
+ * (`challenge.progress.state`) — never re-derived here. A partially solved
+ * multi-flag chain reads `partial`, so the badge and the filters agree with
+ * the spawn fence and the scheduler digest.
  */
 export function overallSolved(challenge: Challenge): SolveState {
-  const { manual, remote, local } = challenge.solved
-  if (manual !== "unsolved") return manual
-  if (remote !== "unsolved") return remote
-  return local
+  return challenge.progress.state
 }
 
 export function localChallengeStatus(

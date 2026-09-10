@@ -118,9 +118,10 @@ def from_dict(cls: type[T], payload: dict[str, Any] | None) -> T | None:
 
 @dataclass
 class Challenge:
-    """One challenge in the event. `solved` / `agent_status_counts` /
-    attachments / flags / targets are raw dicts — see the `solved_now`
-    property for the aggregate solved check."""
+    """One challenge in the event. `progress` is the server's derived state
+    machine result (state / confirmed / required / earned / perFlag); `solved`
+    holds the three raw dimensions for display. Read `solved_now` for the
+    aggregate."""
 
     id: str
     event_id: str
@@ -131,6 +132,7 @@ class Challenge:
     created_at: str
     updated_at: str
     solved: dict[str, str]
+    progress: dict[str, Any]
     agent_count: int
     agent_status_counts: dict[str, int]
     attachments: list[dict[str, Any]]
@@ -145,11 +147,22 @@ class Challenge:
 
     @property
     def solved_now(self) -> bool:
-        """Solved locally (accepted flag), manually, or on the remote."""
-        return any(
-            self.solved.get(k) == "solved"
-            for k in ("local", "manual", "remote")
-        )
+        """The aggregate solved verdict, from the server's progress machine.
+
+        A partially solved multi-flag chain reads `partial` (never `solved`),
+        so planning off this cannot skip the chain's remaining flags — which is
+        what an "any accepted flag" reading used to do.
+        """
+        return self.progress.get("state") == "solved"
+
+    @property
+    def flag_progress(self) -> str:
+        """`n/N` for a multi-flag chain, "" for a single-flag challenge."""
+        confirmed = self.progress.get("confirmed")
+        required = self.progress.get("required")
+        if isinstance(required, int) and required > 1:
+            return f"{confirmed}/{required}"
+        return ""
 
 
 @dataclass

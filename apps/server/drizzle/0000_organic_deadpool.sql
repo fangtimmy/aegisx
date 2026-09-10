@@ -80,7 +80,6 @@ CREATE TABLE `challenge_remote` (
 	`target_ignored` integer DEFAULT false NOT NULL,
 	`target_count` integer DEFAULT 0 NOT NULL,
 	`target_info` text DEFAULT '[]' NOT NULL,
-	`flag_count` integer,
 	`synced_at` text NOT NULL,
 	FOREIGN KEY (`challenge_id`) REFERENCES `challenges`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`event_id`) REFERENCES `events`(`id`) ON UPDATE no action ON DELETE cascade
@@ -95,6 +94,8 @@ CREATE TABLE `challenges` (
 	`category` text,
 	`points` integer,
 	`manual_solve_state` text DEFAULT 'unsolved' NOT NULL,
+	`required_flags` integer,
+	`solved_at` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
 	FOREIGN KEY (`event_id`) REFERENCES `events`(`id`) ON UPDATE no action ON DELETE cascade,

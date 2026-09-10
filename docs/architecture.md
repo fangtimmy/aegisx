@@ -30,6 +30,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 - **`spawn_queue`** — 调度计划表。一项 = 「在题 X 上派一个 agent」，enqueue 恒为 append（同题多项是合法的并行计划）。生命周期 pending → running（回填 agentId）→ done / failed；`queue_state` 按赛事暂停排水。
 - **`channel_messages` + `channel_reads`** — 全部 agent 间通信的唯一账本。频道是派生键（见下），无频道表；`channel_reads` 记 (channelKey, readerKey) → lastReadMsgId，是投递去重锚点。
 - **`challenge_flags`** — 一题多解；`agentId` 无 FK（解题史须活得比 agent 行久），`source` 区分 agent 提交 / 手工录入。
+- **进度状态机** — `@aegisx/shared/progress.ts` 的 `progressOf` 是"这题解到什么程度"的**唯一定义**：输入是事实（已接受 flag 数、`challenges.required_flags`、平台终态判定、`manual_solve_state`、分值），输出 `{ state: unsolved|partial|solved, source, confirmed, required, earned, perFlag }`。**单 flag 题是退化子集**：`required === 1` 时 `partial` 不可达。服务端所有消费方（`run/fence.ts` 封禁与槽位、`run/service.ts` 解出清理、`run/scheduler-admin.ts` digest、`events/stats.ts`、`events/catalog.ts` 的 wire 投影、`platforms/challenge-state.ts` 的 SQL 镜像）都读它，web 与 SDK 读下发结果——不存在第二份"已解出"推导。`challenges.solved_at` 记首次进入 `solved` 的时刻，解出清理以它为幂等锚点（重同步揭示出更多 flag 导致 solved → partial → solved 回环时不会二次清理）。
 - **`scheduler_config`** — 每赛事调度策略（模型、自然语言指令、target 槽位、flag 处置开关等）。
 - 其余：`events` / `event_platforms`（平台绑定）、`challenges` / `challenge_remote`（远程镜像状态）、`attachments`、`prompt_templates`、`platform_request_log`（失败的平台请求审计：请求头脱敏、保留 7 天）。
 
@@ -43,7 +44,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 - 硬截止与停滞看门狗都是 agent runtime（`run/agent-runtime.ts`）上的定时器——deadline 到点中止回合、宽限后强制处置；turn settle 后布防停滞检查（solver 专属、paused 跳过、触发前现查 DB）。
 - 赛事级生命体征看门狗 `run/fleet-watchdog.ts`（每 2 分钟）：某赛事未暂停、`spawn_queue` 有 pending 项、无任何存活 solver、且排水窗口内无进展（无 launch / 队列变化）时，发一条 urgent `eventStalled` orch 通知——既告警又唤醒调度者；每 episode 至多一次，有存活 solver 或 pending 清零后重置。触发条件刻意收窄，已完工的空闲赛事不会误报。
-- 冷启动恢复 `recoverOnBoot`（`app.ts`）— 存活 agent 标记为 idle，不自动续跑；随后 `run/boot-reentry.ts` 对每个仍有非终态调度者的赛事发一条重启重入提示（复用调度者 resume 的直发唤醒语义），由调度者重新同步并决定是否续派——不给 solver 单独发唤醒，避免多 agent 赛事的 token 冲量。调度者不存在或已终态时跳过（由 bootstrap / 用户启动）。
+- 冷启动恢复 `recoverOnBoot`（`app.ts`）— 存活 agent 标记为 idle，不自动续跑；随后 `run/boot-reentry.ts` 对每个仍有非终态调度者的赛事发一条重启重入提示（复用调度者 resume 的直发唤醒语义），由调度者重新同步并决定是否续派——不给 solver 单独发唤醒，避免多 agent 赛事的 token 冲量。调度者不存在或已终态时跳过（由 bootstrap / 用户启动）。**无人值守模式**（`AEGISX_UNATTENDED=1`，tsecbench 镜像内置）下另有两条差异：开机**不**把有可见队列项的赛事置为 `paused`（没有人工 resume 的入口，被迫暂停等于让队列停摆整场），改为续排水，且已存在的 `paused` 意图原样保留；`fleet-watchdog` 同步收紧为"只有 running 的 solver 才算进展"，这样重启后被 parking 成 idle 的 agent 不会被"有存活 solver"的旧条件掩盖（冷恢复 agent 没有 runtime，per-agent 停滞定时器也不会布防）。
 
 运行期的全部定时器（投递 flush tick、容器 sweep 与 SIGKILL 宽限、drainer 去抖与容量重试、per-agent deadline/grace、停滞 watchdog、赛事级看门狗、exec 超时与 `pollExitCode` 退避）统一经时间层 `run/clock.ts` 创建与登记（`Clock` + `TimerHub`），子系统 close 即注册表 `disposeAll()`；测试可注入 fake clock 确定性推进时间。
 
@@ -106,7 +107,7 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 
 系统→调度者的方向是类型化事件 + 可编辑模板：`orch` 频道里的系统消息全部由 `run/orch-notices.ts` 的事件渲染（flag 接受、部分解出、解出清理、手动停止、队列不足/启动失败、队列暂停恢复、赛事停滞），事件的结构字段决定 meta 与紧急度，散文只在模板里；调度者→系统的方向由容器内 Python SDK 类型化，两侧协议都不再依赖隐式约定。
 
-**调度快照必须同时给出成本与产出**（`run/scheduler-admin.ts` 的 `getDigestContext` → `schedulerDigest` 模板）。产出侧：每题 `earned`（已得分）、`flagProgress`（n/N）、`perFlag`、`sinceLastFlag`，事件级 `elapsed` 与 `sinceLastScore`，以及 `board`（未启动题数与未触达分值——没有 live agent 也没有排队项的题不会出现在逐题行里，不汇总就等于对调度者不可见）。多旗进度由本地已接受 flag 数与 `challenge_remote.flag_count` 推导（`earned = points × confirmed / flagCount`）：平台按旗均分分值，逐旗分数组不在 agent 面 API 上。`solvedLabel` 只在集齐全部 flag 时才给「已解」——把「有 1 个 accepted flag」当已解会让 2/6 的链看起来完工。缺了分子，调度者的性价比判断无从执行，故这两侧字段是同一份契约。
+**调度快照必须同时给出成本与产出**（`run/scheduler-admin.ts` 的 `getDigestContext` → `schedulerDigest` 模板）。产出侧：每题 `earned`（已得分）、`flagProgress`（n/N）、`perFlag`、`sinceLastFlag`，事件级 `elapsed` 与 `sinceLastScore`，以及 `board`（未启动题数与未触达分值——没有 live agent 也没有排队项的题不会出现在逐题行里，不汇总就等于对调度者不可见）。多旗进度由本地已接受 flag 数与 `challenges.required_flags` 经 `progressOf` 推导（`earned = points × confirmed / required`）：平台按旗均分分值，逐旗分数组不在 agent 面 API 上。`required_flags` 的写者是平台同步（仅在平台**确实报告**了数值时写，缺字段不覆写）与操作员覆写；数值未知时进度封顶在 `partial`，绝不从计数自行判「已解」。`solvedLabel` 只在 `progressOf` 判为 `solved` 时才给「已解」——把「有 1 个 accepted flag」当已解会让 2/6 的链看起来完工。缺了分子，调度者的性价比判断无从执行，故这两侧字段是同一份契约。
 
 **通用模板 vs 部署特调**：`prompt-defaults.ts` 里的内置模板只写与具体赛事无关的策略原则（含预算语义：`timeout_ms` 是兜底，分配靠 agent 上限与 `agents.close`）；具体数值（各难度首轮预算、平台并发上限、flag 格式、离线约束）属于某个评测环境的经验参数，落在部署侧的 event preset（`containers/*/preset.json` 的 `promptHint` 与 `settings`，`bootstrap.ts` 读取），不写进通用模板。
 

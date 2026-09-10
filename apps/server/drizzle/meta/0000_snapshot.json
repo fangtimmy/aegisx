@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "37097bbd-ff5b-435b-9639-d929428a10c3",
+  "id": "4c960685-5e54-4b78-b69f-9eb0e2c6545d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -571,13 +571,6 @@
           "autoincrement": false,
           "default": "'[]'"
         },
-        "flag_count": {
-          "name": "flag_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "synced_at": {
           "name": "synced_at",
           "type": "text",
@@ -681,6 +674,20 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'unsolved'"
+        },
+        "required_flags": {
+          "name": "required_flags",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "solved_at": {
+          "name": "solved_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "created_at": {
           "name": "created_at",

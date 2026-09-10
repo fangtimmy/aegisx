@@ -15,7 +15,11 @@ import {
   eventPlatforms,
 } from "../db/schema"
 import type { createStorage } from "../infrastructure/storage"
-import { getChallengeRemote, setSourceAvailability } from "./challenge-state"
+import {
+  getChallengeRemote,
+  setSourceAvailability,
+  stampChallengeSolvedAt,
+} from "./challenge-state"
 import {
   type CtfPlatformAdapter,
   PlatformError,
@@ -120,6 +124,13 @@ export function createPlatformSync(
       description: remote.description || "No challenge description provided.",
       category: remote.category,
       points: remote.points,
+      // The platform's flag requirement, written ONLY when it reports one: a
+      // re-sync that omits the field must not wipe a known count (that would
+      // turn a multi-flag chain into a single-flag one and make the scheduler
+      // skip its remaining flags).
+      ...(typeof remote.flagCount === "number"
+        ? { requiredFlags: remote.flagCount }
+        : {}),
       updatedAt: now,
     }
     const remoteValues = {
@@ -132,7 +143,6 @@ export function createPlatformSync(
       targetIgnored: existing?.targetIgnored ?? false,
       targetCount: remote.targetCount,
       targetInfo: JSON.stringify(remote.targets),
-      flagCount: remote.flagCount ?? null,
       syncedAt: now,
     }
     await onProgress?.({
@@ -179,6 +189,9 @@ export function createPlatformSync(
     }
 
     const syncedAttachments: ChallengeSyncAttachment[] = []
+    // A sync can report the challenge solved (the platform knows about a solve
+    // we never submitted); stamp the progress machine's first-solve anchor.
+    stampChallengeSolvedAt(db, id, now)
     try {
       const total = remote.attachments.length
       for (const [index, attachment] of remote.attachments.entries()) {

@@ -130,8 +130,7 @@ function ChallengeOverview({
   })
 
   const spawnTarget = challenge ?? lite
-  const flags = challenge?.flags ?? []
-  const accepted = flags.filter((flag) => flag.status === "accepted").length
+  const progress = challenge?.progress
   const solved = challenge ? overallSolved(challenge) : "unsolved"
 
   return (
@@ -151,9 +150,9 @@ function ChallengeOverview({
           </Badge>
           {solved === "solved" ? (
             <Badge variant="success">已解决</Badge>
-          ) : solved === "partial" || accepted > 0 ? (
+          ) : progress && progress.confirmed > 0 ? (
             <Badge variant="outline">
-              flag {accepted}/{flags.length}
+              flag {progress.confirmed}/{progress.required}
             </Badge>
           ) : null}
           <span className="ml-auto flex gap-2">

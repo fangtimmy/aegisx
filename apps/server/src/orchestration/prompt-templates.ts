@@ -389,8 +389,8 @@ export type SchedulerDigestContext = {
   challenges: Array<{
     name: string
     points: number | null
-    /** Per-flag value (points / flagCount) — the marginal value of the NEXT
-     * flag, and the number that makes a chain comparable to a single-flag
+    /** Per-flag value (points / required flags) — the marginal value of the
+     * NEXT flag, and the number that makes a chain comparable to a single-flag
      * challenge. */
     perFlag: number | null
     /** Points already earned on this challenge. */
