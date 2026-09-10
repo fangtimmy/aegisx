@@ -97,7 +97,7 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 
 实时扇出（`channels-context.ts` → LiveBus）：每条消息**只 emit 一次**，bus 键取频道自身 id（#team = challengeId，dm = agentId，orch = eventId）；LiveBus 只有全局订阅（`subscribeAll`）一个出口，web 端按载荷里的 `message.channelKey` 分发，因此不存在 per-channel 订阅方，也不需要有第二把事件级键。
 
-**系统通知 = 类型化事件 + 模板**（`run/orch-notices.ts`）：系统侧的调用点（service 的 flag 处置/解出清理/手动停止、queue 的队列边沿与暂停恢复）不再拼中文散文，只构造类型化事件并 `publish`；事件决定投递面（`team:<challengeId>` 或 `orch:<eventId>`）、`meta`（`eventType` / `noticeType` / 提交者 `agentId`）与紧急度，文本由模板渲染——默认值即 `NOTICE_TEMPLATE_DEFAULTS`，随 builtin 行落 `prompt_templates`（用户可编辑，下次通知生效）。投递面、urgent 语义、paused 门与 `meta.agentId`（跳过提交者自身通知）等契约全部留在 channels 层不变；`launchFailed` 的事件载荷当前仍携带 drainer 已渲染的原因行（该行由 `drainer.ts` 组装，未在本批所有权内）。9 个通知模板与其余内置模板一样在设置页预览：`POST /api/settings/prompts/preview` 对全部 `notice*` 键统一收 `kind: "notice"`，用一个覆盖全部通知变量的示例上下文渲染（前端无需按事件分派）。
+**系统通知 = 类型化事件 + 模板**（`run/orch-notices.ts`）：系统侧的调用点（service 的 flag 处置/解出清理/手动停止、queue 的队列边沿与暂停恢复、赛事级看门狗）不再拼中文散文，只构造类型化事件并 `publish`；事件决定投递面（`team:<challengeId>` 或 `orch:<eventId>`）、`meta`（`eventType` / `noticeType` / 提交者 `agentId`）与紧急度，文本由模板渲染——默认值即 `NOTICE_TEMPLATE_DEFAULTS`（10 个键），随 builtin 行落 `prompt_templates`（用户可编辑，下次通知生效）。事件载荷只带结构字段（如 `launchFailed` 携带 challengeName 与截断后的 error），措辞一律归模板。投递面、urgent 语义、paused 门与 `meta.agentId`（跳过提交者自身通知）等契约全部留在 channels 层不变。设置面：settings meta 暴露全部内置模板的默认 body（含通知模板，支持「恢复默认 / 修改标记」）与各类型的变量清单（含 `noticePromptVariables`），`POST /api/settings/prompts/preview` 对全部 `notice*` 键统一收 `kind: "notice"`，用一个与变量清单严格一致的示例上下文渲染（前端不镜像变量、不按事件分派）。
 
 ## 调度
 

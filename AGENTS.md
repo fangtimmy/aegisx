@@ -43,6 +43,7 @@ knip 会卡未使用的导出：新增导出若无消费方，`bun run check` �
 - `apps/server/src/run/` 是运行时心脏：`service.ts` 组装根与策略，`agent-factory.ts` 单次 spawn 组装（容器 → host session → 工具注入），`agent-runtime.ts` 是每个存活 agent 的所有权根与唯一终态路径，`run/host/` 是 pi 会话宿主子层（不得反向依赖编排层，oxlint 强制），`run/clock.ts` 是所有运行时定时器的唯一来源，`fence.ts` 强制并发上限与槽位——系统约束在启动侧强制校验，不依赖调度者自觉。
 - 授权分两层：中间件每请求解析 `Principal`（user / agent / system），数据层作用域由 `run/principal-scope.ts` 的断言在 service 内强制——路由层不拼 scope 条件。
 - 调度者是 agent 而非代码循环：消费 `orch` 频道事件，用 Python SDK 产出计划，`run/queue.ts` 排水落地；系统→调度者的通知是类型化事件 + 可编辑模板（`run/orch-notices.ts`）。
+- 无人值守可靠性：`run/fleet-watchdog.ts` 对「有 pending 却无存活 solver 且排水无进展」的赛事发 urgent 告警（兼唤醒调度者）；`run/session-retention.ts` 按 14 天窗口清理终态 agent 的非活跃旧会话（冷重开旧 agent 会丢窗口外历史）；`run/boot-reentry.ts` 在重启恢复后提示各赛事调度者重新同步。
 - 频道键全部派生、无频道表：`team:<challengeId>` / `dm:<agentId>` / `orch:<eventId>`；`channel_messages` 是全部 agent 间通信的唯一账本，`channels-delivery.ts` 是唯一推送出口。
 - 数据模型 Event → Challenge → Agent（`apps/server/src/db/schema.ts`）；Workspace 是派生路径无表行；数据全落 `data/`（`AEGISX_DATA_DIR` 可改址）。
 - web 侧 SSE 是一条全局多路复用流（`GET /api/stream` → `stream/live-connection.ts` 进程级单 EventSource；`conversation-store.ts` 是按 agentId 键控的状态 + selector，无单流约束）；前端 API 类型直接取自 `@aegisx/shared`。
