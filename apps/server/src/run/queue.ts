@@ -5,6 +5,7 @@ import { and, asc, count, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 import type { Database } from "../db"
 import { challenges, queueState, spawnQueue } from "../db/schema"
 import { parseJson } from "../lib/guards"
+import { logEvent } from "../lib/log"
 import { createQueueDrainer } from "./drainer"
 import { RunActionError } from "./errors"
 
@@ -155,8 +156,20 @@ export function createQueueService(deps: QueueServiceDeps) {
     if (pending === 1 && !starvedFired.get(eventId)) {
       starvedFired.set(eventId, true)
       if (stateOf(eventId) === "paused") return
+      logEvent("queue", "starved", { pending })
       deps.onQueueEmergency(eventId, "队列不足：仅剩 1 项排队")
     }
+  }
+
+  /** Challenge display name for log lines; id prefix when unbound. */
+  function challengesName(challengeId: string): string {
+    return (
+      db
+        .select({ name: challenges.name })
+        .from(challenges)
+        .where(eq(challenges.id, challengeId))
+        .get()?.name ?? challengeId.slice(0, 8)
+    )
   }
 
   /** Next ord value for an event (max + 1). */
@@ -180,11 +193,12 @@ export function createQueueService(deps: QueueServiceDeps) {
   function enqueue(input: EnqueueInput): QueueItemPublic {
     const ts = now()
     const id = crypto.randomUUID()
+    const ord = nextOrd(input.eventId)
     db.insert(spawnQueue)
       .values({
         id,
         eventId: input.eventId,
-        ord: nextOrd(input.eventId),
+        ord,
         challengeId: input.challengeId,
         params: JSON.stringify(launchParamsOf(input)),
         timeoutMs: input.timeoutMs ?? null,
@@ -197,6 +211,12 @@ export function createQueueService(deps: QueueServiceDeps) {
         updatedAt: ts,
       })
       .run()
+    logEvent("queue", "enqueued", {
+      challenge: challengesName(input.challengeId),
+      ord,
+      promptLen: (input.prompt ?? "").length,
+      source: input.source,
+    })
     // Enqueue only grows the count; ≥ 2 clears the starved edge so a later
     // 2→1 crossing re-fires.
     if (pendingCount(input.eventId) >= 2) starvedFired.set(input.eventId, false)

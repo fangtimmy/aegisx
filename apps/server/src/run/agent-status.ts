@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm"
 import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, challenges } from "../db/schema"
+import { logEvent } from "../lib/log"
 import type { EventScopePayload } from "../orchestration/types"
 import { orchKey, type ChannelService } from "./channels"
 import type { AgentQueries } from "./queries"
@@ -78,7 +79,6 @@ export function createAgentStatus(deps: AgentStatusDeps) {
   function emitAgentEvent(agentId: string, payload: EventScopePayload): void {
     const row = queries.getAgentRow(agentId)
     if (!row || row.role !== "solver" || !row.challengeId) return
-    if (deps.isSchedulerPaused(row.eventId)) return
     const challengeName = db
       .select({ name: challenges.name })
       .from(challenges)
@@ -87,6 +87,28 @@ export function createAgentStatus(deps: AgentStatusDeps) {
     const agentTag = `agent-${agentId.slice(0, 8)}`
     const tag = challengeName ? `「${challengeName}」${agentTag}` : agentTag
     const source = row.source
+    // Console timeline: every solver lifecycle event except the per-turn
+    // idle — logged before the paused gate so the run history stays complete
+    // while the scheduler itself stays silent.
+    if (payload.type !== "agent.idle") {
+      logEvent("run", payload.type, {
+        ...(challengeName ? { challenge: challengeName } : {}),
+        agent: agentTag,
+        source,
+        ...("actor" in payload ? { actor: payload.actor } : {}),
+        ...("outcome" in payload ? { outcome: payload.outcome } : {}),
+        ...((payload.type === "agent.finished" ||
+          payload.type === "agent.timedOut") &&
+        row.startedAt
+          ? {
+              durSec: Math.round(
+                (Date.now() - Date.parse(row.startedAt)) / 1000
+              ),
+            }
+          : {}),
+      })
+    }
+    if (deps.isSchedulerPaused(row.eventId)) return
     channels.post({
       channelKey: orchKey(row.eventId),
       author: { type: "system" },

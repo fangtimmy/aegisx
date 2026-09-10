@@ -10,6 +10,7 @@ import {
   challenges,
   type eventPlatforms,
 } from "../db/schema"
+import { logEvent } from "../lib/log"
 import {
   fullySolved,
   fullySolvedAsideFromFlag,
@@ -338,6 +339,16 @@ export function createPlatformFlags(
             ...patch,
           })
           .run()
+      }
+      // Rejected/error are the wasted-attempt signal the console timeline
+      // wants; accepted surfaces as the agent.flagAccepted lifecycle event.
+      if (status === "rejected" || status === "error") {
+        logEvent("flag", status, {
+          challenge: challenge.name,
+          agent: `agent-${agentId.slice(0, 8)}`,
+          flag: value,
+          ...(result.message ? { message: result.message } : {}),
+        })
       }
     }
 
