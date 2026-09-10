@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { createDatabase } from "./index"
-import { agents, events } from "./schema"
+import { createDatabase } from "../../src/db/index"
+import { agents, events } from "../../src/db/schema"
 
 /** Insert payload with only the token varying — every other column is the
  * minimum the NOT NULL/FK surface requires (events row seeded per test). */

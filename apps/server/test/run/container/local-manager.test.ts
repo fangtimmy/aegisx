@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { parseJson } from "../../lib/guards"
-import { localContainerWorkspace } from "./local-manager"
+import { parseJson } from "../../../src/lib/guards"
+import { localContainerWorkspace } from "../../../src/run/container/local-manager"
 
 type ProbeStep = { name: string; pass: boolean; error?: string }
 
@@ -40,7 +40,14 @@ describe("local container manager", () => {
     try {
       const outFile = join(dir, "results.json")
       const proc = Bun.spawn(
-        ["bun", join(import.meta.dir, "local-manager.probe.ts"), outFile],
+        [
+          "bun",
+          join(
+            import.meta.dir,
+            "../../../src/run/container/local-manager.probe.ts"
+          ),
+          outFile,
+        ],
         { stdin: "ignore", stdout: "ignore", stderr: "ignore" }
       )
       await proc.exited

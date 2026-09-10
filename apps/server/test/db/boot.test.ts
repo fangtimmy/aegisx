@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { createDatabase } from "./index"
-import { SCHEMA_VERSION } from "./schema"
+import { createDatabase } from "../../src/db/index"
+import { SCHEMA_VERSION } from "../../src/db/schema"
 
 /** Boot-time negotiation: fresh builds the schema, current opens untouched,
  * stale (any older database) and newer refuse. There is no upgrade path. */

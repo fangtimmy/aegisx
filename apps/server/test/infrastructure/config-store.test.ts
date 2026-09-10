@@ -11,7 +11,7 @@ import { join } from "node:path"
 
 import { CONFIG_DOCUMENT_VERSION } from "@aegisx/shared"
 
-import { createConfigStore } from "./config-store"
+import { createConfigStore } from "../../src/infrastructure/config-store"
 
 function tempDir() {
   return mkdtempSync(join(tmpdir(), "aegisx-config-store-"))
