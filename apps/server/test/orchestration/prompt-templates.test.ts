@@ -13,13 +13,13 @@ import {
   sampleOrchestratorPromptContext,
   samplePromptContext,
 } from "../../src/orchestration/prompt-templates"
+import { AGENT_STALL_MS } from "../../src/run/agent-runtime"
 import { DEFAULT_TIMEOUT_SEC, MAX_BYTES } from "../../src/run/bash-tool"
 import { FLUSH_INTERVAL_MS } from "../../src/run/channels-context"
 import {
   MAX_FILE_BYTES,
   MAX_FILES_PER_MESSAGE,
 } from "../../src/run/channels-post"
-import { AGENT_STALL_MS } from "../../src/run/stall-watchdog"
 
 const highlightedText = (segments: { highlighted: boolean; text: string }[]) =>
   segments.filter((s) => s.highlighted).map((s) => s.text)

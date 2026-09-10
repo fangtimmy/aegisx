@@ -10,7 +10,6 @@ import type { Database } from "../db"
 import { agents, challenges, channelMessages, channelReads } from "../db/schema"
 import type { Clock } from "./clock"
 import { RunActionError } from "./errors"
-import type { SessionLifecycle } from "./host/lifecycle"
 import type { LiveBus } from "./host/live"
 
 export type ChannelMessageRow = typeof channelMessages.$inferSelect
@@ -82,10 +81,16 @@ export type ChannelServiceDeps = {
   db: Database
   dataDir: string
   bus: LiveBus
-  /** Late-bound lifecycle getter (the delivery engine calls lifecycle.send;
-   * the service constructs channels before the lifecycle — the getter is
-   * only invoked after both exist). */
-  lifecycle(): SessionLifecycle
+  /** Deliver a message to the agent through its runtime (steer / followUp
+   * while streaming, fresh turn otherwise, cold resume when session-less).
+   * Late-bound: the service constructs channels before any runtime exists,
+   * so this is only invoked after both exist. */
+  send(
+    agentId: string,
+    text: string,
+    deliverAs?: "steer" | "followUp",
+    opts?: { assertLive?: (id: string) => boolean }
+  ): Promise<boolean>
   now(): string
   /** Host root of a challenge's workspace tree (attachment copy target). */
   challengeWorkspaceRoot(eventId: string, challengeId: string): string

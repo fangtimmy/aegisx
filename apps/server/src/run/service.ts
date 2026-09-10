@@ -40,6 +40,12 @@ import type { FlagAcceptOutcome } from "../platforms/flags"
 import type { createPlatformService } from "../platforms/service"
 import { getProviderConnections } from "../providers/public"
 import { createAgentFactory, type AgentFactory } from "./agent-factory"
+import {
+  createAgentRuntime,
+  type AgentRuntime,
+  type AgentRuntimeDeps,
+  type SettleOptions,
+} from "./agent-runtime"
 import { createAgentSessionOps } from "./agent-session-ops"
 import { createAgentStatus, type AgentStatus } from "./agent-status"
 import {
@@ -55,17 +61,12 @@ import {
   type ContainerLifecycle,
 } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
-import { createAgentDeadlines, type AgentDeadlines } from "./deadlines"
 import { RunActionError } from "./errors"
 import { applyModelSwitch } from "./host/agent-ops"
 import { createAgentHost } from "./host/host"
-import type { AgentLoopSettings, HostAgentSession } from "./host/host-session"
-import {
-  chainLock,
-  createSessionLifecycle,
-  type SessionLifecycle,
-} from "./host/lifecycle"
+import type { AgentLoopSettings } from "./host/host-session"
 import { createLiveBus, type LiveBus } from "./host/live"
+import { chainLock } from "./locks"
 import { createModelResolver } from "./model-resolver"
 import { parseAgentToolDefinitions, parseAgentTools } from "./public"
 import { createAgentQueries } from "./queries"
@@ -76,7 +77,6 @@ import {
 } from "./queue"
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
 import { type SchedulerPolicy, schedulerPolicyFor } from "./scheduler-policy"
-import { createStallWatchdog, type StallWatchdog } from "./stall-watchdog"
 import {
   agentId8,
   challengeRoot,
@@ -156,15 +156,17 @@ export function createAgentService(options: AgentServiceOptions) {
   // never come back — re-delete any who got re-seeded.
   db.run(`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
 
+  /** Live agents' in-process resources: one runtime per touched agent (the
+   * mounted session, deadline/grace + stall timers, finish_run bookkeeping,
+   * turn generation). The ONLY per-agent registry — settle() is the single
+   * path that empties an entry. Cold-restored idle/terminal agents have no
+   * entry (the DB row is their state; a message rebuilds the runtime). */
+  const runtimes = new Map<string, AgentRuntime>()
   /** Per-agent promise-chaining locks (the only concurrency mechanism). */
   const locks = new Map<string, Promise<unknown>>()
   /** Global fence lock: serializes fence check + slot reservation across all
    * spawns so the concurrency caps hold under interleaving. */
   const fenceLocks = new Map<string, Promise<unknown>>()
-  /** finish_run winners: agentId → summary (consumed at turn settle). */
-  const pendingFinish = new Map<string, string>()
-  /** Agents finish_run already warned about a missing flag (once each). */
-  const finishFlagWarned = new Set<string>()
   let closed = false
   /** Monotonic timestamp: never returns the same value twice, so agents
    * declared within one millisecond still get a strictly-ordered `createdAt`. */
@@ -218,7 +220,10 @@ export function createAgentService(options: AgentServiceOptions) {
     db,
     dataDir,
     bus,
-    lifecycle: () => lifecycle,
+    // Deliveries push through the agent's runtime (steer/followUp/fresh
+    // turn/cold resume — late-bound: channels exist before any runtime).
+    send: (agentId, text, deliverAs, opts) =>
+      sendToAgent(agentId, text, deliverAs, opts),
     now,
     challengeWorkspaceRoot,
     clock,
@@ -243,21 +248,12 @@ export function createAgentService(options: AgentServiceOptions) {
       : {}),
   })
 
-  const stallWatchdog: StallWatchdog = createStallWatchdog({
-    db,
-    channels,
-    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
-    clock,
-    ...(options.stallMs !== undefined ? { stallMs: options.stallMs } : {}),
-  })
-
   const status: AgentStatus = createAgentStatus({
     db,
     queries,
     bus,
     channels,
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
-    onAgentSettled: (agentId) => stallWatchdog.noteAgentIdle(agentId),
     // The target-slot fence counts a challenge as occupying a slot while it
     // has a live agent; the platform counts a running instance. Release the
     // instance when the last live agent leaves, or the two views diverge and
@@ -308,32 +304,64 @@ export function createAgentService(options: AgentServiceOptions) {
   let schedulerAdmin!: SchedulerAdmin
   let queue: QueueService | undefined
 
+  /** The runtime deps are per-agent-invariant: every runtime shares them,
+   * only the agentId differs (passed to createAgentRuntime). */
+  const runtimeDeps: AgentRuntimeDeps = {
+    db,
+    channels,
+    status,
+    clock,
+    closeAbortGraceMs,
+    ...(options.timeoutGraceMs !== undefined
+      ? { timeoutGraceMs: options.timeoutGraceMs }
+      : {}),
+    ...(options.stallMs !== undefined ? { stallMs: options.stallMs } : {}),
+    isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
+    withLock,
+    updateAgent,
+    now,
+    getAgentStatus: (agentId) => queries.getAgentRow(agentId)?.status ?? null,
+    forget: (agentId) => runtimes.delete(agentId),
+    resumeAgent: (agentId) => factory.resumeAgent(agentId),
+  }
+
+  /** Get-or-create the agent's runtime — created on first touch (session
+   * mount, deadline arm, finish bookkeeping, send), removed ONLY by settle
+   * or service close. */
+  function runtimeOf(agentId: string): AgentRuntime {
+    let runtime = runtimes.get(agentId)
+    if (!runtime) {
+      runtime = createAgentRuntime(agentId, runtimeDeps)
+      runtimes.set(agentId, runtime)
+    }
+    return runtime
+  }
+
+  /** Deliver a message through the agent's runtime (steer / followUp while
+   * streaming, fresh turn otherwise, cold resume when session-less). */
+  function sendToAgent(
+    agentId: string,
+    text: string,
+    deliverAs?: "steer" | "followUp",
+    opts?: { assertLive?: (id: string) => boolean }
+  ): Promise<boolean> {
+    return runtimeOf(agentId).send(text, deliverAs, opts)
+  }
+
   /** The ONE terminal-settle path (timeout force-abort, finish_run
-   * self-termination, close, finish, delete): abort (only when the caller
-   * is a user-driven close — the timeout and self-termination paths have a
-   * turn that is already dead), dispose the session, drop the deadline
-   * timers + finish bookkeeping, land the terminal status (the status core
-   * forgets the agent's bus snapshots), then run any delete-only teardown. */
+   * self-termination, close, finish, delete, superseded launch). Agents with
+   * a runtime settle through it (bounded abort → dispose → timers + finish
+   * bookkeeping → terminalize incl. the live-bus forget → delete-only
+   * teardown); agents without one (never prepared) land straight terminal. */
   async function settleAgent(
     agentId: string,
-    opts: {
-      abort: boolean
-      status: "completed" | "aborted" | "failed"
-      summary?: string
-      event?: "agent.finished"
-      actor?: "user" | "scheduler"
-      afterSettle?: () => void
-    }
+    opts: SettleOptions
   ): Promise<void> {
-    const session = lifecycle.get(agentId)
-    if (opts.abort) await abortSessionBounded(session)
-    if (session) {
-      void session.dispose()
-      lifecycle.delete(agentId)
+    const runtime = runtimes.get(agentId)
+    if (runtime) {
+      await runtime.settle(opts)
+      return
     }
-    deadlines.clearAgentTimers(agentId)
-    pendingFinish.delete(agentId)
-    finishFlagWarned.delete(agentId)
     status.terminalizeAgent(agentId, {
       status: opts.status,
       summary: opts.summary,
@@ -342,57 +370,6 @@ export function createAgentService(options: AgentServiceOptions) {
     })
     opts.afterSettle?.()
   }
-
-  /** Force terminal after a timeout grace: dispose the stuck session and
-   * mark the agent aborted (the shared container is NEVER killed). */
-  function forceAbortAgent(agentId: string): void {
-    void settleAgent(agentId, { abort: false, status: "aborted" })
-  }
-
-  /** Close paths must never hang on `session.abort()`: pi's abort does not
-   * interrupt an in-flight tool call, so a streaming turn can outlive the
-   * awaiter indefinitely — the deadline path carries the same
-   * abort-then-force-dispose fallback for exactly this reason. Bound the
-   * wait; the caller disposes regardless, which is the sanctioned force
-   * stop. */
-  async function abortSessionBounded(
-    session: HostAgentSession | undefined
-  ): Promise<void> {
-    if (!session?.session.isStreaming) return
-    await Promise.race([
-      session.session.abort().catch(() => undefined),
-      clock.sleep(closeAbortGraceMs),
-    ])
-  }
-
-  const lifecycle: SessionLifecycle = createSessionLifecycle({
-    kind: "agent",
-    withLock,
-    onTurnStart(agentId) {
-      status.agentTurnStart(agentId)
-    },
-    onTurnSettled(agentId, error) {
-      const pending = pendingFinish.get(agentId)
-      if (pending !== undefined) {
-        // finish_run's graceful self-termination: dispose the session and
-        // land the agent terminal with its summary.
-        void settleAgent(agentId, {
-          abort: false,
-          status: "completed",
-          summary: pending,
-          event: "agent.finished",
-        })
-        return
-      }
-      status.agentTurnSettled(agentId, error)
-    },
-    onBeforeNewTurn(agentId) {
-      pendingFinish.delete(agentId)
-    },
-    async onResume(agentId) {
-      await factory.resumeAgent(agentId)
-    },
-  })
 
   function agentSettings(): AgentLoopSettings {
     const s = getSettings()
@@ -404,18 +381,6 @@ export function createAgentService(options: AgentServiceOptions) {
       },
     }
   }
-
-  // Per-agent hard-deadline timers (deadlines.ts).
-  const deadlines: AgentDeadlines = createAgentDeadlines({
-    lifecycle,
-    updateAgent,
-    now,
-    getAgentStatus: (agentId) => queries.getAgentRow(agentId)?.status ?? null,
-    forceTerminal: forceAbortAgent,
-    emitAgentEvent: status.emitAgentEvent,
-    timeoutGraceMs: options.timeoutGraceMs,
-    clock,
-  })
 
   // Per-challenge container lifecycle (lazy create + idle TTL sweep; the
   // scheduler container is managed by its agent's lifecycle).
@@ -434,7 +399,10 @@ export function createAgentService(options: AgentServiceOptions) {
   // --- multi-session + flat backtrack (v12) --------------------------------
   const sessionOps = createAgentSessionOps({
     db,
-    lifecycle,
+    sessionOf: (agentId) => runtimes.get(agentId)?.session(),
+    detachSession: (agentId) => {
+      runtimes.get(agentId)?.unmountSession()
+    },
     withLock,
     prepareAgent: (agentId) => factory.prepareAgent(agentId),
     resumeAgent: (agentId) => factory.resumeAgent(agentId),
@@ -473,7 +441,10 @@ export function createAgentService(options: AgentServiceOptions) {
   /** Per-agent stop: abort the current turn; it settles to idle (the shared
    * container stays warm). */
   async function stopAgent(agentId: string): Promise<AgentSummary> {
-    await lifecycle.abort(agentId).catch(() => undefined)
+    await runtimes
+      .get(agentId)
+      ?.abort()
+      .catch(() => undefined)
     return requireAgent(agentId)
   }
 
@@ -572,14 +543,14 @@ export function createAgentService(options: AgentServiceOptions) {
     return { closed: closedCount, cancelled }
   }
 
-  /** Per-agent message — a DIRECT lifecycle.send (no channel row, no double
+  /** Per-agent message — a DIRECT runtime send (no channel row, no double
    * bookkeeping). Three-state semantics: streaming → steer at turn end,
    * idle → fresh turn, terminal → onResume reopen. */
   async function sendMessage(
     agentId: string,
     input: SendMessageInput
   ): Promise<AgentSummary> {
-    await lifecycle.send(agentId, input.text, input.deliverAs)
+    await sendToAgent(agentId, input.text, input.deliverAs)
     return requireAgent(agentId)
   }
 
@@ -590,7 +561,7 @@ export function createAgentService(options: AgentServiceOptions) {
     input: SwitchModelInput
   ): Promise<AgentSummary> {
     return withLock(agentId, async () => {
-      const session = lifecycle.get(agentId)
+      const session = runtimes.get(agentId)?.session()
       if (!session) {
         throw new RunActionError(
           "invalid_state",
@@ -643,7 +614,7 @@ export function createAgentService(options: AgentServiceOptions) {
     input: { steering: string[]; followUp: string[] }
   ): Promise<void> {
     return withLock(agentId, async () => {
-      const session = lifecycle.get(agentId)
+      const session = runtimes.get(agentId)?.session()
       if (!session) return
       session.session.clearQueue()
       for (const text of input.steering) {
@@ -660,7 +631,7 @@ export function createAgentService(options: AgentServiceOptions) {
   /** Manually compact an agent's context (pi SDK `session.compact()`). */
   async function compactAgent(agentId: string): Promise<AgentSummary> {
     await withLock(agentId, async () => {
-      const session = lifecycle.get(agentId)
+      const session = runtimes.get(agentId)?.session()
       if (!session) {
         throw new RunActionError(
           "invalid_state",
@@ -688,7 +659,7 @@ export function createAgentService(options: AgentServiceOptions) {
     )
     const row = queries.getAgentRow(agentId)
     if (row && isActiveAgentStatus(row.status)) {
-      deadlines.armAgentTimers(agentId, row.deadlineAt)
+      runtimeOf(agentId).armDeadline(row.deadlineAt)
     }
     status.emitAgent(agentId)
     return agent
@@ -1099,7 +1070,7 @@ export function createAgentService(options: AgentServiceOptions) {
     if (row.deadlineAt && Date.parse(row.deadlineAt) <= horizon) return
     const iso = new Date(horizon).toISOString()
     updateAgent(agentId, { deadlineAt: iso, updatedAt: now() })
-    deadlines.armAgentTimers(agentId, iso)
+    runtimeOf(agentId).armDeadline(iso)
   }
 
   // --- scheduler (event orchestrator) lifecycle -------------------------------
@@ -1210,22 +1181,27 @@ export function createAgentService(options: AgentServiceOptions) {
     queries,
     bus,
     channels,
-    pendingFinish,
-    finishFlagWarned,
-    lifecycle,
     withFence,
     getSettings,
     now,
     updateAgent,
     status,
-    deadlines: () => deadlines,
     queue: () => queue,
     agentSettings,
     createHost,
     getSchedulerConfig: (eventId) => schedulerAdmin.getSchedulerConfig(eventId),
-    ...(options.timeoutGraceMs !== undefined
-      ? { timeoutGraceMs: options.timeoutGraceMs }
-      : {}),
+    hasLiveSession: (agentId) => runtimes.get(agentId)?.hasSession() ?? false,
+    mountSession: (agentId, session) =>
+      runtimeOf(agentId).mountSession(session),
+    armDeadline: (agentId, deadlineAt) =>
+      runtimeOf(agentId).armDeadline(deadlineAt),
+    send: (agentId, text) => sendToAgent(agentId, text),
+    requestFinish: (agentId, summary) =>
+      runtimeOf(agentId).requestFinish(summary),
+    hasFinishFlagWarned: (agentId) =>
+      runtimes.get(agentId)?.hasFinishFlagWarned() ?? false,
+    markFinishFlagWarned: (agentId) =>
+      runtimeOf(agentId).markFinishFlagWarned(),
   })
 
   schedulerAdmin = createSchedulerAdmin({
@@ -1260,8 +1236,10 @@ export function createAgentService(options: AgentServiceOptions) {
     // The launch lost the cancel race (full-solve cleanup cancelled the item
     // mid-launch): settle the just-spawned agent with the timeout-path
     // semantics — no abort (the turn may be mid-flight), dispose and land
-    // aborted.
-    onSupersededLaunch: forceAbortAgent,
+    // aborted (the shared container is NEVER killed).
+    onSupersededLaunch: (agentId) => {
+      void settleAgent(agentId, { abort: false, status: "aborted" })
+    },
     onQueueEmergency: (eventId, line) => {
       if (schedulerAdmin.isSchedulerPaused(eventId)) return
       channels.post({
@@ -1279,15 +1257,13 @@ export function createAgentService(options: AgentServiceOptions) {
     closed = true
     await Promise.allSettled(locks.values())
     locks.clear()
-    // Every subsystem owns a timer hub: closing them disposes their timers
-    // (deadlines' per-agent deadline/grace timers included) in one call each.
-    deadlines.clearAllTimers()
     containerLifecycle.close()
     queue?.cancelDrain()
-    await lifecycle.closeAll()
-    pendingFinish.clear()
-    finishFlagWarned.clear()
-    stallWatchdog.close()
+    // Each runtime owns its agent's timers (deadline/grace/stall), finish
+    // bookkeeping and session: disposing them releases every per-agent
+    // resource in one sweep — there is no other registry to clear.
+    await Promise.allSettled([...runtimes.values()].map((rt) => rt.dispose()))
+    runtimes.clear()
     channels.close()
     bus.close()
   }

@@ -25,7 +25,6 @@ import {
 } from "../../src/run/channels"
 import { createLiveBus } from "../../src/run/host/live"
 import { seedChallenge, seedEvent, now } from "../helpers"
-import { refine } from "../support"
 
 type Db = ReturnType<typeof setupDbLite>["db"]
 type Dir = ReturnType<typeof setupDbLite>["dir"]
@@ -50,7 +49,7 @@ function disableUrgentTeam(db: Db, eventId = "evt-1") {
     .run()
 }
 
-/** Recorded lifecycle: one entry per lifecycle.send (agentId, text). */
+/** Recorded sends: one entry per runtime send (agentId, text). */
 type SentEntry = { agentId: string; text: string }
 
 function makeService(
@@ -65,15 +64,12 @@ function makeService(
     db,
     dataDir: dir,
     bus: createLiveBus(),
-    // Late-bound lifecycle getter (the service constructs before the
-    // lifecycle — same contract as production).
-    lifecycle: () =>
-      refine({
-        send: async (agentId: string, text: string) => {
-          sent.push({ agentId, text })
-          return true
-        },
-      }),
+    // Recorded runtime send (the service wires the same seam through its
+    // agents' runtimes).
+    send: async (agentId: string, text: string) => {
+      sent.push({ agentId, text })
+      return true
+    },
     now: () => new Date().toISOString(),
     challengeWorkspaceRoot: (eventId, challengeId) =>
       join(dir, "events", eventId, "challenges", challengeId, "workspace"),

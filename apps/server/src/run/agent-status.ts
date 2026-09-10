@@ -18,8 +18,6 @@ export type AgentStatusDeps = {
   /** Whether the event's scheduler is paused (W3): paused → the
    * agent-lifecycle events are dropped before they reach the scheduler. */
   isSchedulerPaused(eventId: string): boolean
-  /** Agent turn settled idle/failed: arms the stall watchdog (solver only). */
-  onAgentSettled(agentId: string): void
   /** Agent went terminal: the caller releases resources that only a live
    * agent justifies holding (the challenge's platform target instance). */
   onAgentTerminal(agentId: string): void
@@ -58,10 +56,10 @@ function eventName(p: EventScopePayload, tag: string): string {
 
 /**
  * Agent status writes + live emits + the orch event feed (v19: per-agent).
- * Turn start/settle maintain the agent row; settle consumes a pending
- * finish_run (→ completed + summary) and arms the stall watchdog; lifecycle
- * events post as system messages into the event's orch channel (urgent per
- * the §五 table — timedOut only).
+ * Turn start/settle maintain the agent row; the runtime consumes a pending
+ * finish_run (→ completed + summary) and arms the stall watchdog around
+ * these writes; lifecycle events post as system messages into the event's
+ * orch channel (urgent per the §五 table — timedOut only).
  */
 export function createAgentStatus(deps: AgentStatusDeps) {
   const { db, queries, bus, channels, now, updateAgent } = deps
@@ -129,8 +127,9 @@ export function createAgentStatus(deps: AgentStatusDeps) {
     emitAgent(agentId)
   }
 
-  /** Mark an agent's turn settled. `error` (already logged by the lifecycle
-   * core) sends the agent to `failed`; a clean settle lands idle. */
+  /** Mark an agent's turn settled. `error` (already logged by the runtime)
+   * sends the agent to `failed`; a clean settle lands idle. The runtime arms
+   * the stall check after this. */
   function agentTurnSettled(agentId: string, error: string | null): void {
     const ts = now()
     updateAgent(agentId, {
@@ -144,7 +143,6 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       agentId,
       failed: Boolean(error),
     })
-    deps.onAgentSettled(agentId)
   }
 
   /** Terminal transition shared by finish_run (settle path), the HTTP

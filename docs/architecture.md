@@ -41,13 +41,14 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 运行期守护：
 
-- `run/deadlines.ts` — `deadlineAt` / `timeoutMs` 到点触发超时终态。
-- `run/stall-watchdog.ts` — 停滞看门狗（长时间无进展的存活 agent）。
+- 硬截止与停滞看门狗都是 agent runtime（`run/agent-runtime.ts`）上的定时器——deadline 到点中止回合、宽限后强制处置；turn settle 后布防停滞检查（solver 专属、paused 跳过、触发前现查 DB）。
 - 冷启动恢复 `recoverOnBoot`（`app.ts`）— 存活 agent 标记为 idle，不自动续跑。
 
 运行期的全部定时器（投递 flush tick、容器 sweep 与 SIGKILL 宽限、drainer 去抖与容量重试、per-agent deadline/grace、停滞 watchdog、exec 超时与 `pollExitCode` 退避）统一经时间层 `run/clock.ts` 创建与登记（`Clock` + `TimerHub`），子系统 close 即注册表 `disposeAll()`；测试可注入 fake clock 确定性推进时间。
 
-终态善后收敛在 `run/service.ts`：abort → dispose → lifecycle 删除 → 清定时器 → terminalize → LiveBus forget。
+**所有权根**：一个存活 agent 的全部进程内资源（挂载的 host session、turn generation、finish_run 簿记、deadline/grace 定时器、停滞 watchdog 定时器）都挂在 `run/agent-runtime.ts` 的 `AgentRuntime` 上；service 持有唯一的按 agentId 索引的注册表 `Map<agentId, AgentRuntime>`，首次触达（session 挂载 / 布防 deadline / finish 簿记 / send）时创建。冷恢复语义不变：idle/terminal agent 无 runtime（DB 行即状态），dm 冷唤醒 → send → resume → prepareAgent 重建 runtime。
+
+**终态单一路径**：所有终态（timeout force-abort、finish_run 自终止、close、finish、delete、superseded launch）收敛到 `runtime.settle`：有界 abort（仅用户驱动的 close）→ dispose session → 清定时器与簿记 → 出注册表 → terminalize（含 LiveBus forget）→ delete-only 收尾；无 runtime 的 agent（从未 prepare）直接落终态。service.close() 对每个 runtime `dispose()`（仅释放进程内资源，不动 DB 状态）即为全部善后——不存在第二份需要记得清的注册表。
 
 ## run/ 核心模块
 
@@ -55,9 +56,11 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 | 模块 | 职责 |
 |---|---|
-| `service.ts` | agent 生命周期管理：spawn / 终态 / 刷新 / 删除 / 用量统计 |
+| `service.ts` | agent 生命周期管理：spawn / 终态 / 刷新 / 删除 / 用量统计；持有唯一的 per-agent 注册表 `Map<agentId, AgentRuntime>` |
+| `agent-runtime.ts` | 单个存活 agent 的所有权根：挂载的 host session、turn generation（send → drive → 代际校验的 settle）、finish_run 簿记、deadline/grace 定时器、停滞 watchdog 定时器、`settle()`（唯一终态路径）与 `dispose()` |
+| `locks.ts` | `chainLock`：按 key 串接的 promise 锁原语（withLock / fence / start 锁共用） |
 | `clock.ts` | 统一时间层：`Clock`（时间源 + 定时器工厂，默认 `systemClock`，测试注入 fake clock）+ `TimerHub`（定时器注册表，`clear` / `disposeAll`）；运行期定时器一律经它 |
-| `agent-factory.ts` | 一次 spawn 的完整组装（容器 → host session → 工具注入） |
+| `agent-factory.ts` | 一次 spawn 的完整组装（容器 → host session → 工具注入）；prepare 成功即把 session 挂到该 agent 的 runtime 上 |
 | `queue.ts` | spawn 队列存储与状态：条目 CRUD、pending→running→终态流转、每赛事暂停（`queue_state`）、队列不足边沿 |
 | `drainer.ts` | 排水循环（200ms 去抖单飞）：`planDrainStep` 把启动围栏判定翻译为 launch/skip/cancel/stop；`global_capacity` 停轮后按有界间隔自唤醒重试；launch 失败 → item `failed` + 调度者 DM 紧急通知 |
 | `fence.ts` | 启动围栏：全局存活 solver 上限（settings `scheduler.maxConcurrentAgents`）、每赛事 target 槽位（`maxConcurrentTargets`）、已解题封禁（`blockSpawnOnSolved`） |

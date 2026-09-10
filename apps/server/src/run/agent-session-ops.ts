@@ -4,13 +4,17 @@ import { and, asc, count, eq, gt, inArray } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents, sessionEntries, sessions } from "../db/schema"
 import { RunActionError } from "./errors"
-import type { SessionLifecycle } from "./host/lifecycle"
+import type { HostAgentSession } from "./host/host-session"
 
 /** Dependencies the run service injects — the ops share its db, per-agent
- * locks, lifecycle map, and call back into prepareAgent / emit helpers. */
+ * locks, the agents' mounted sessions, and call back into prepareAgent /
+ * emit helpers. */
 export type AgentSessionOpsDeps = {
   db: Database
-  lifecycle: SessionLifecycle
+  /** The agent's mounted live session, if any. */
+  sessionOf(agentId: string): HostAgentSession | undefined
+  /** Unmount the live session (the caller disposes it). */
+  detachSession(agentId: string): void
   withLock<T>(id: string, op: () => T | Promise<T>): Promise<T>
   /** Prepare (or reopen) one agent's live session. */
   prepareAgent(agentId: string): Promise<void>
@@ -31,11 +35,11 @@ export type AgentSessionOpsDeps = {
  * the abandoned tail is physically deleted). All ops require an idle agent
  * (a running turn is rejected, matching /compact). */
 export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
-  const { db, lifecycle } = deps
+  const { db } = deps
 
   /** Reject a session op while the agent's turn is in flight. */
   function requireIdleAgent(agentId: string): void {
-    if (lifecycle.get(agentId)?.session.isStreaming) {
+    if (deps.sessionOf(agentId)?.session.isStreaming) {
       throw new RunActionError(
         "invalid_state",
         "Agent is currently running — stop the current turn first"
@@ -43,13 +47,13 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
     }
   }
 
-  /** Dispose the agent's live session (if any) and drop it from the
-   * lifecycle map. The caller re-prepares it. */
+  /** Dispose the agent's live session (if any) and unmount it. The caller
+   * re-prepares it. */
   async function disposeLiveAgent(agentId: string): Promise<void> {
-    const session = lifecycle.get(agentId)
+    const session = deps.sessionOf(agentId)
     if (session) {
       await session.dispose()
-      lifecycle.delete(agentId)
+      deps.detachSession(agentId)
     }
   }
 
@@ -138,7 +142,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         .from(agents)
         .where(eq(agents.id, agentId))
         .get()?.sessionFile
-      if (current === sessionId && lifecycle.has(agentId)) {
+      if (current === sessionId && deps.sessionOf(agentId)) {
         return deps.requireAgent(agentId) // already active + live — no-op
       }
       requireIdleAgent(agentId)

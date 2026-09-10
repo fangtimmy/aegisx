@@ -127,14 +127,17 @@ export function createDeliveryEngine(ctx: ChannelContext) {
     // close mid-abort holds it), the agent can go terminal. The predicate
     // runs inside send()'s lock BEFORE any resume, so a lost race bails
     // instead of cold-reviving an aborted agent; only a DM cold-wake may.
-    const delivered = await deps
-      .lifecycle()
-      .send(agentId, withDigest, opts.deliverAs ?? "steer", {
+    const delivered = await deps.send(
+      agentId,
+      withDigest,
+      opts.deliverAs ?? "steer",
+      {
         assertLive: (id) => {
           const row = ctx.agentRow(id)
           return row !== undefined && (isActive(row) || coldWake)
         },
-      })
+      }
+    )
     if (!delivered) return
     // Cursors advance only on an accepted delivery — a bail above leaves
     // them untouched (nothing marked read that was never delivered), and
@@ -189,7 +192,7 @@ export function createDeliveryEngine(ctx: ChannelContext) {
   /** Urgent-post delivery trigger:
    *  - team → every live agent on the challenge (terminal: store only)
    *  - dm   → the target agent, cold-reopening a terminal agent
-   *           (lifecycle.send → onResume — reopen touches ONLY the target)
+   *           (runtime send → resume — reopen touches ONLY the target)
    *  - orch → the event's scheduler, only if live (terminal → store; the
    *           stable "scheduler" cursor catches up on next start) */
   function deliverChannel(

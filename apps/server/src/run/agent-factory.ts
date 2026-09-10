@@ -33,12 +33,10 @@ import {
   isLocalExecBackend,
   localContainerWorkspace,
 } from "./container/local-manager"
-import type { AgentDeadlines } from "./deadlines"
 import { RunActionError, RunStartError } from "./errors"
 import { checkSpawnFence } from "./fence"
 import { createAgentHost } from "./host/host"
 import type { AgentLoopSettings, HostAgentSession } from "./host/host-session"
-import type { SessionLifecycle } from "./host/lifecycle"
 import type { LiveBus } from "./host/live"
 import type { ModelResolver } from "./model-resolver"
 import type { SlotModel } from "./model-resolver"
@@ -186,11 +184,21 @@ export type AgentFactoryDeps = {
   bus: LiveBus
   /** Unified message layer core (derived-key channels). */
   channels: ChannelService
-  /** finish_run winners: agentId → summary (consumed at turn settle). */
-  pendingFinish: Map<string, string>
-  /** Agents finish_run already warned about a missing flag (once each). */
-  finishFlagWarned: Set<string>
-  lifecycle: SessionLifecycle
+  /** Whether the agent already has a live session mounted (prepare's
+   * idempotency guard). */
+  hasLiveSession(agentId: string): boolean
+  /** Mount a freshly built host session (creates the agent's runtime on
+   * first touch). */
+  mountSession(agentId: string, session: HostAgentSession): void
+  /** Arm the agent's hard-deadline timers (spawn + reopen). */
+  armDeadline(agentId: string, deadlineAt: string | null): void
+  /** Drive a turn (the spawn's priming prompt). */
+  send(agentId: string, text: string): Promise<boolean>
+  /** finish_run winner: the agent self-terminates at its turn settle. */
+  requestFinish(agentId: string, summary: string): void
+  /** finish_run's missing-flag warning, once per agent. */
+  hasFinishFlagWarned(agentId: string): boolean
+  markFinishFlagWarned(agentId: string): void
   withFence: <T>(op: () => T | Promise<T>) => Promise<T>
   getSettings: () => FlatSettings
   now: () => string
@@ -199,8 +207,6 @@ export type AgentFactoryDeps = {
     patch: Partial<typeof agents.$inferInsert>
   ) => void
   status: AgentStatus
-  /** Late-bound deadline timers (settle/timeout wiring). */
-  deadlines(): AgentDeadlines
   /** Late-bound queue (boot recovery resets running items). */
   queue: () => QueueService | undefined
   agentSettings: () => AgentLoopSettings
@@ -213,8 +219,6 @@ export type AgentFactoryDeps = {
     instruction: string
     maxConcurrentTargets: number
   }
-  /** Test seam: timeout grace between deadline-abort and a forced dispose. */
-  timeoutGraceMs?: number
 }
 
 export type AgentFactory = ReturnType<typeof createAgentFactory>
@@ -274,9 +278,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     queries,
     bus,
     channels,
-    pendingFinish,
-    finishFlagWarned,
-    lifecycle,
     withFence,
     getSettings,
     now,
@@ -458,7 +459,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       /** No atomic run flag in v19: the agent self-terminates at its turn
        * settle (completed + summary). */
       requestFinish: (summary) => {
-        pendingFinish.set(row.id, summary)
+        deps.requestFinish(row.id, summary)
       },
       /** Challenge-level: any accepted flag on the agent's challenge. */
       hasAcceptedFlag: () =>
@@ -488,9 +489,9 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           .all()
         return !siblings.some((sibling) => isActiveAgentStatus(sibling.status))
       },
-      finishFlagWarned: () => finishFlagWarned.has(row.id),
+      finishFlagWarned: () => deps.hasFinishFlagWarned(row.id),
       markFinishFlagWarned: () => {
-        finishFlagWarned.add(row.id)
+        deps.markFinishFlagWarned(row.id)
       },
     }
   }
@@ -726,7 +727,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         )
       }
       await prepareAgent(agentId)
-      await lifecycle.send(agentId, initialPrompt)
+      await deps.send(agentId, initialPrompt)
       // Onboarding: a fresh agent's channel cursor is 0 — one deliver sweeps
       // the challenge's whole #team history (prior attempts' findings +
       // announce) into the first turn's tail.
@@ -741,7 +742,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       throw new RunActionError("launch_failed", message)
     }
 
-    deps.deadlines().armAgentTimers(agentId, deadlineAtIso)
+    deps.armDeadline(agentId, deadlineAtIso)
     status.emitAgent(agentId)
     status.emitAgentEvent(agentId, { type: "agent.started", agentId })
     return agentId
@@ -764,7 +765,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
    * new session) and reopen (sessionFile → open from snapshot). Idempotent;
    * sends nothing. */
   async function prepareAgent(agentId: string): Promise<void> {
-    if (lifecycle.has(agentId)) return
+    if (deps.hasLiveSession(agentId)) return
     const row = queries.getAgentRow(agentId)
     if (!row) throw new RunActionError("not_found", "Agent not found")
 
@@ -838,13 +839,13 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       sessionFile: agentSession.sessionId ?? null,
       toolDefinitions: snapshotActiveToolDefinitions(agentSession.session),
     })
-    lifecycle.set(agentId, agentSession)
+    deps.mountSession(agentId, agentSession)
   }
 
   /** Reopen a terminal agent (cold resume): container + session rebuilt on
    * demand via prepareAgent, then status → idle, timers re-armed, scheduler
    * notified (`agent.reopened`). A failed prepare leaves the terminal state
-   * untouched and rethrows. Invoked from lifecycle.send → onResume. */
+   * untouched and rethrows. Invoked from runtime.send's cold-resume hook. */
   async function resumeAgent(agentId: string): Promise<void> {
     const row = queries.getAgentRow(agentId)
     if (!row) throw new RunActionError("not_found", "Agent not found")
@@ -855,7 +856,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       status.emitAgent(agentId)
       status.emitAgentEvent(agentId, { type: "agent.reopened", agentId })
     }
-    deps.deadlines().armAgentTimers(agentId, row.deadlineAt)
+    deps.armDeadline(agentId, row.deadlineAt)
   }
 
   // --- boot recovery ---------------------------------------------------------
