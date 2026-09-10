@@ -1,5 +1,11 @@
 import { Database as SqliteDatabase } from "bun:sqlite"
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { join, resolve } from "node:path"
 
 import { drizzle } from "drizzle-orm/bun-sqlite"
@@ -8,7 +14,13 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 import * as schema from "./schema"
 import { SCHEMA_VERSION } from "./schema"
 
-const migrationsFolder = resolve(import.meta.dir, "../../drizzle")
+// A compiled single-binary build embeds the migration tree under its basename
+// at the bunfs virtual root (`bun build --asset apps/server/drizzle`); when run
+// from source this file sits at apps/server/src/db, three levels below the app.
+const embeddedMigrations = resolve(import.meta.dir, "drizzle")
+const migrationsFolder = existsSync(embeddedMigrations)
+  ? embeddedMigrations
+  : resolve(import.meta.dir, "../../drizzle")
 
 function acquireDataDirLock(dataDir: string) {
   const path = join(dataDir, "aegisx.lock")

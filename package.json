@@ -14,6 +14,7 @@
     "test:sdk": "bun run --filter @aegisx/server test:sdk",
     "test:all": "bun run test && bun run test:sdk",
     "build": "bun run --filter @aegisx/web build",
+    "compile": "bun run build && bun build --compile --minify --asset apps/server/drizzle --asset apps/web/dist apps/server/src/index.ts --outfile dist/aegisx",
     "db:generate": "bun run --filter @aegisx/server db:generate",
     "relay": "bun run --filter @aegisx/server relay"
   },

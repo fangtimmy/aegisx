@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs"
+import { resolve } from "node:path"
+
 import { get } from "@aegisx/shared"
 import { Hono } from "hono"
 import { HTTPException } from "hono/http-exception"
@@ -27,6 +30,13 @@ import { registerSchedulerRoutes } from "./scheduler/routes"
 import { registerSettingsRoutes } from "./settings/routes"
 
 export function createApp(options: { dataDir: string }) {
+  // A compiled single-binary build embeds the SPA under its basename at the
+  // bunfs virtual root (`bun build --asset apps/web/dist`); source runs only
+  // serve the web app when AEGISX_WEB_DIR points at a built dist.
+  const embeddedWebDir = resolve(import.meta.dir, "dist")
+  const webDir =
+    process.env.AEGISX_WEB_DIR ??
+    (existsSync(embeddedWebDir) ? embeddedWebDir : undefined)
   const configStore = createConfigStore(options.dataDir)
   const { db, sqlite, releaseLock } = createDatabase(options.dataDir)
 
@@ -133,7 +143,7 @@ export function createApp(options: { dataDir: string }) {
     )
   })
 
-  if (!process.env.AEGISX_WEB_DIR) {
+  if (!webDir) {
     app.get("/", (c) =>
       c.json({ name: "AegisX", status: "ok", version: SCHEMA_VERSION })
     )
@@ -176,8 +186,8 @@ export function createApp(options: { dataDir: string }) {
   registerActivityRoutes(app, { db })
 
   // The SPA catch-all must be registered after every /api route.
-  if (process.env.AEGISX_WEB_DIR) {
-    registerWebApp(app, process.env.AEGISX_WEB_DIR)
+  if (webDir) {
+    registerWebApp(app, webDir)
   }
 
   return {

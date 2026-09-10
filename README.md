@@ -40,4 +40,5 @@ bun run dev    # 同时启动 server 与 web
 bun run check   # 格式 + lint + 类型检查（全部 workspace）
 bun run test    # 全部测试（`test:sdk` 为 Python SDK 契约测试）
 bun run build   # web 生产构建
+bun run compile # 服务端 + 前端打进单个可执行文件（dist/aegisx，内嵌 SPA 与迁移）
 ```
