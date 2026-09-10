@@ -10,6 +10,7 @@ import {
   seedAgent,
   setupDb,
   stubHostAgentSession,
+  USER,
 } from "../helpers"
 import { refine } from "../support"
 
@@ -53,10 +54,13 @@ describe("agent lifecycle (v19)", () => {
           stubHostAgentSession("sess-1", { hang: true })
         ),
       })
-      const agent = await hanging.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const agent = await hanging.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       expect(agent.status).toBe("running")
       expect(
         store.db.select().from(agents).where(eq(agents.id, agent.id)).get()!
@@ -70,10 +74,13 @@ describe("agent lifecycle (v19)", () => {
         challenge: false,
         createHost: mock(async () => stubHostFlipping("sess-1")),
       })
-      const other = await flipping.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const other = await flipping.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await new Promise((r) => setTimeout(r, 5))
       expect(
         store.db.select().from(agents).where(eq(agents.id, other.id)).get()!
@@ -90,12 +97,20 @@ describe("agent lifecycle (v19)", () => {
       createHost: mock(async () => stubHostFlipping("sess-1")),
     })
     try {
-      const agent = await h.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const agent = await h.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await new Promise((r) => setTimeout(r, 5))
-      const finished = await h.service.finishAgent(agent.id, "solved it")
+      const finished = await h.service.finishAgent(
+        agent.id,
+        "solved it",
+        "user",
+        USER
+      )
       expect(finished.status).toBe("completed")
       const row = h.db
         .select()
@@ -153,7 +168,7 @@ describe("agent lifecycle (v19)", () => {
 
       // Messaging a terminal agent reopens it (onResume → resumeAgent), then
       // sends — the snapshot is reused verbatim, the edited prompt survives.
-      await h.service.sendMessage("a-1", { text: "ping" })
+      await h.service.sendMessage("a-1", { text: "ping" }, USER)
       await new Promise((r) => setTimeout(r, 5))
 
       expect(captured).toHaveLength(1)
@@ -192,13 +207,16 @@ describe("closeAgent bounded abort (solve-time sibling stop regression)", () => 
       // the exact state that used to hang closeAgent past the deadline
       // reaper (the tsecbench a-13/a-14 siblings ran to timeout despite the
       // "stopped" notice).
-      const agent = await h.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const agent = await h.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await new Promise((r) => setTimeout(r, 5))
 
-      const closed = await h.service.closeAgent(agent.id)
+      const closed = await h.service.closeAgent(agent.id, USER)
       expect(closed.status).toBe("aborted")
       expect(
         h.db.select().from(agents).where(eq(agents.id, agent.id)).get()!.status

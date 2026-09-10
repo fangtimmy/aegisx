@@ -5,10 +5,11 @@ import { eq } from "drizzle-orm"
 import { agents } from "../../src/db/schema"
 import {
   makeAgentService,
+  now,
   seedAgent,
   stubHostAgentSession,
   TEST_MODEL_REF,
-  now,
+  USER,
 } from "../helpers"
 import { refine } from "../support"
 
@@ -84,10 +85,10 @@ describe("scheduler service behaviors (SDK backend)", () => {
         updatedAt: now(),
       })
 
-      await service.sendMessage("orch-1", { text: "wake" })
+      await service.sendMessage("orch-1", { text: "wake" }, USER)
       await settle()
       // A fresh solver spawn builds the challenge container.
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       await settle()
 
       expect(created.length).toBe(2)
@@ -147,7 +148,7 @@ describe("scheduler service behaviors (SDK backend)", () => {
         updatedAt: now(),
       })
 
-      await service.sendMessage("orch-1", { text: "wake" })
+      await service.sendMessage("orch-1", { text: "wake" }, USER)
       await settle()
 
       const [schedOpts] = refine<

@@ -74,6 +74,28 @@ export function getChallengeRemote(
     .get()
 }
 
+/** The ONLY source-scoped availability writer: a whole platform source's
+ * mappings for ONE event flip together, always qualified by the composite
+ * (eventId, sourceKey). Both call sites — platform detach and sync
+ * inventory — go through here, so the P0-2 shape (a single-key WHERE that
+ * silently hits other events sharing the same source) cannot be written. */
+export function setSourceAvailability(
+  db: Pick<Database, "update">,
+  eventId: string,
+  sourceKey: string,
+  available: boolean
+): void {
+  db.update(challengeRemote)
+    .set({ available })
+    .where(
+      and(
+        eq(challengeRemote.eventId, eventId),
+        eq(challengeRemote.sourceKey, sourceKey)
+      )
+    )
+    .run()
+}
+
 export function isPlatformIntegrated(
   remote: ChallengeRemote | null | undefined
 ): remote is ChallengeRemote {

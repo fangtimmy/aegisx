@@ -11,6 +11,7 @@ import {
   seedAgent,
   seedChallenge,
   stubHostAgentSession,
+  USER,
 } from "../helpers"
 
 const now = () => new Date().toISOString()
@@ -50,14 +51,14 @@ describe("deleteAgent", () => {
         })
         .run()
 
-      await service.delete("ag-q")
+      await service.delete("ag-q", USER)
 
       expect(
         db.select().from(agents).where(eq(agents.id, "ag-q")).get()
       ).toBeUndefined()
       // The item went through the terminal funnel (terminalize → markDone)
       // instead of sticking running forever.
-      expect(service.queue()?.list("evt-1")).toEqual([])
+      expect(service.queue()?.list("evt-1", USER)).toEqual([])
     } finally {
       await made.h.close()
     }
@@ -74,12 +75,12 @@ describe("deleteAgent", () => {
         status: "idle",
       })
 
-      await service.delete("ag-m")
+      await service.delete("ag-m", USER)
 
       expect(
         db.select().from(agents).where(eq(agents.id, "ag-m")).get()
       ).toBeUndefined()
-      expect(service.queue()?.list("evt-1")).toEqual([])
+      expect(service.queue()?.list("evt-1", USER)).toEqual([])
     } finally {
       await made.h.close()
     }
@@ -92,7 +93,7 @@ describe("workspace deletion (teardown of the cached context + container)", () =
     try {
       const { db, dir, service, killed } = made
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       const challengesRoot = join(dir, "events", "evt-1", "challenges")
       expect(existsSync(join(challengesRoot, "ch-1", "workspace"))).toBe(true)
       expect(service.containerLifecycle.registered("ch-1")).toBe(true)
@@ -106,10 +107,13 @@ describe("workspace deletion (teardown of the cached context + container)", () =
 
       // A fresh agent on another challenge rebuilds everything cleanly —
       // nothing cached for the deleted workspace is reused or crashes.
-      const fresh = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-2",
-      })
+      const fresh = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-2",
+        },
+        USER
+      )
       expect(fresh.challengeId).toBe("ch-2")
       expect(existsSync(join(challengesRoot, "ch-2", "workspace"))).toBe(true)
       expect(service.containerLifecycle.registered("ch-2")).toBe(true)
@@ -123,8 +127,8 @@ describe("workspace deletion (teardown of the cached context + container)", () =
     try {
       const { db, dir, service, killed } = made
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-2" })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-2" }, USER)
 
       service.deleteEventWorkspaces("evt-1")
 

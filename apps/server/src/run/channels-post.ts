@@ -8,6 +8,7 @@ import type {
 } from "@aegisx/shared/channels"
 
 import { channelMessages } from "../db/schema"
+import type { Principal } from "../infrastructure/agent-auth"
 import {
   parseChannelKey,
   serverMeta,
@@ -177,21 +178,51 @@ export function createPostService(
     throw new RunActionError("invalid", `非法频道键：${raw}`)
   }
 
-  /** Author name/permission resolution — the three write rules. Agent posts
-   * carry an agent-signed name (`agent-a3f1` / `Scheduler`) — the same
-   * string renders in the UI timeline and the steer text. */
+  /** Author name/permission resolution — every write path funnels here, so
+   * the identity rules are branch-proof:
+   *
+   *  1. Author ↔ principal consistency: the author face must be produced by
+   *     the matching principal (system ⇔ in-process caller, user ⇔ tokenless
+   *     request, agent ⇔ its OWN token). A route branch can therefore never
+   *     write as user/system/another agent — the P0-1 shape is rejected here
+   *     no matter which serializer or entry produced it.
+   *  2. Channel scope rules for agent authors (the same string renders in
+   *     the UI timeline and the steer text):
+   *     team — this challenge's agents + the event's scheduler;
+   *     dm — the target's event scheduler only (the target never writes its
+   *     own DM);
+   *     orch — solvers of the event (the scheduler only RECEIVES orch). */
   function resolveAuthor(
     parsed: ParsedChannelKey,
-    author: MessageAuthor
+    author: MessageAuthor,
+    principal: Principal
   ):
     | { type: "system"; name: string }
     | { type: "user"; name: string }
     | { type: "agent"; agentId: string; name: string } {
     if (author.type === "system") {
+      if (principal.kind !== "system") {
+        throw new RunActionError(
+          "invalid",
+          "system 身份仅限服务内部调用（请求不能以 system 名义发帖）"
+        )
+      }
       return { type: "system", name: author.name ?? "系统" }
     }
     if (author.type === "user") {
+      if (principal.kind !== "user") {
+        throw new RunActionError(
+          "invalid",
+          "user 帖面仅限无 token 请求（agent 用 JSON 面发帖）"
+        )
+      }
       return { type: "user", name: author.name ?? "用户" }
+    }
+    if (principal.kind !== "agent" || principal.agentId !== author.agentId) {
+      throw new RunActionError(
+        "invalid",
+        "发帖身份与请求 token 不符（只能以自己名义发帖）"
+      )
     }
     const agent = ctx.agentRow(author.agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
@@ -249,8 +280,9 @@ export function createPostService(
   /** Post one message (the single write path): resolve + copy attachments
    * into shared/, persist (crash-safe), advance the author's own cursor,
    * broadcast SSE, then apply the urgent/tick delivery policy. Sync — the
-   * attachment copy is a filesystem copy. */
-  function post(input: PostInput) {
+   * attachment copy is a filesystem copy. `principal` decides which author
+   * face the caller may claim (see resolveAuthor). */
+  function post(input: PostInput, principal: Principal) {
     const key = resolvePostKey(input.channelKey, input.author)
     const parsed = parseChannelKey(key)!
     const body = input.body ?? ""
@@ -267,8 +299,9 @@ export function createPostService(
       input.urgent === true ||
       (parsed.kind === "team" &&
         schedulerPolicyFor(ctx.db, ctx.eventOfKey(parsed)).urgentTeamMessages)
-    // Author resolution + write permission (the 3 rules).
-    const author = resolveAuthor(parsed, input.author)
+    // Author resolution + write permission (identity consistency first, then
+    // the 3 channel rules).
+    const author = resolveAuthor(parsed, input.author, principal)
 
     // Attachment sources resolved AND copied into shared/ BEFORE the row
     // insert (escape check; message id irrelevant to the target path —
@@ -339,14 +372,16 @@ export function createPostService(
 
   /** User multipart upload variant: files arrive as raw bytes and land in
    * shared/upload-<epoch>/. `urgent` defaults TRUE on this path (a user IM
-   * post is rare and intended). */
+   * post is rare and intended). Only the user principal may post here — an
+   * agent token claiming the user face is rejected by resolveAuthor. */
   async function postWithUpload(
     input: Omit<PostInput, "files"> & {
       uploads: AttachmentInput[]
       /** Where the upload lands — derived from the channel (team → the
        * challenge workspace; dm → the target agent's challenge workspace;
        * orch → reject). */
-    }
+    },
+    principal: Principal
   ) {
     const parsed = ctx.requireKey(input.channelKey)
     const body = input.body ?? ""
@@ -379,7 +414,7 @@ export function createPostService(
       )
     }
     const urgent = input.urgent ?? true
-    const author = resolveAuthor(parsed, input.author)
+    const author = resolveAuthor(parsed, input.author, principal)
     const base = serverMeta(author, input.meta, urgent)
 
     // Upload targets resolved + blobs landed BEFORE the insert (team → the

@@ -152,6 +152,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
       ctx.markRead(key, readerKey, msgId),
     // reads / listings
     listMessages: reads.listMessages,
+    read: reads.read,
     readForAgent: reads.readForAgent,
     agentChannels: reads.agentChannels,
     challengeChannelTree: reads.challengeChannelTree,

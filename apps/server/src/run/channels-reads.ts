@@ -7,6 +7,7 @@ import type {
 import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm"
 
 import { agents, challenges, channelMessages } from "../db/schema"
+import type { AgentPrincipal, Principal } from "../infrastructure/agent-auth"
 import {
   dmKey,
   orchKey,
@@ -102,9 +103,11 @@ export function createReadsService(ctx: ChannelContext) {
   /** SDK read: pull = read (marks the cursor). `selector` is "#team" (or
    * "team"), "orch", or a raw channel key; visibility enforced. Pages FORWARD
    * from the cursor — the OLDEST `limit` messages above `after`, so a backlog
-   * larger than one page is drained across pulls instead of truncated. */
+   * larger than one page is drained across pulls instead of truncated. The
+   * reader is the PRINCIPAL's own agent — a caller cannot read as someone
+   * else. */
   function readForAgent(
-    agentId: string,
+    principal: AgentPrincipal,
     selector: string,
     opts: { after?: number; limit?: number; markRead?: boolean } = {}
   ): {
@@ -113,6 +116,7 @@ export function createReadsService(ctx: ChannelContext) {
     nextAfter: number
     hasMore: boolean
   } {
+    const agentId = principal.agentId
     const agent = ctx.agentRow(agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
     const key = resolveSelector(agent, selector)
@@ -146,6 +150,33 @@ export function createReadsService(ctx: ChannelContext) {
       channel: channelInfo(parseChannelKey(key)!, agentId),
       ...result,
     }
+  }
+
+  /** Timeline read by identity: an agent principal gets the SDK face
+   * (visibility-enforced, pull-is-read); the user principal the raw page.
+   * The route hands the principal straight through — no per-route dispatch. */
+  function read(
+    channelKey: string,
+    opts: {
+      after?: number
+      limit?: number
+      before?: number
+      markRead?: boolean
+    },
+    principal: Principal
+  ) {
+    if (principal.kind === "agent") {
+      return readForAgent(principal, channelKey, {
+        after: opts.after,
+        limit: opts.limit,
+        markRead: opts.markRead,
+      })
+    }
+    return listMessages(channelKey, {
+      after: opts.after,
+      limit: opts.limit,
+      before: opts.before,
+    })
   }
 
   function unreadCount(key: string, readerKey: string): number {
@@ -265,8 +296,18 @@ export function createReadsService(ctx: ChannelContext) {
 
   /** SDK channels.list: solver = own #team + own dm + orch; scheduler =
    * every #team of its event's challenges + every dm of its event's solver
-   * agents + orch. */
-  function agentChannels(agentId: string): ChannelPublic[] {
+   * agents + orch. With an agent principal the list is addressable only by
+   * the caller's own id. */
+  function agentChannels(
+    agentId: string,
+    principal: Principal
+  ): ChannelPublic[] {
+    if (principal.kind !== "agent" || principal.agentId !== agentId) {
+      throw new RunActionError(
+        "invalid",
+        "Agent channels are addressable only by the caller's own id"
+      )
+    }
     const agent = ctx.agentRow(agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
     const readerKey =
@@ -329,6 +370,7 @@ export function createReadsService(ctx: ChannelContext) {
 
   return {
     listMessages,
+    read,
     resolveSelector,
     readForAgent,
     unreadCount,

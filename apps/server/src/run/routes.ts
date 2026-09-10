@@ -16,7 +16,7 @@ import { WorkspaceFileError } from "../infrastructure/workspace-files"
 import { responseJson } from "../lib/guards"
 import { EmptyInputSchema } from "../lib/schemas"
 import { platformActionHttpError } from "../platforms/errors"
-import { runActionError as runError } from "./errors"
+import { RunActionError, runActionError as runError } from "./errors"
 import type { AgentService } from "./service"
 import { streamAgent, streamChannel } from "./sse"
 
@@ -122,39 +122,42 @@ export function registerRunRoutes(
       try {
         const input = c.req.valid("json")
         const eventId = c.req.param("eventId")
-        const event = db
-          .select({ id: events.id })
-          .from(events)
-          .where(eq(events.id, eventId))
-          .get()
-        if (!event) return notFound(c, "Event not found")
-        const challenge = db
-          .select()
-          .from(challenges)
-          .where(eq(challenges.id, input.challengeId))
-          .get()
-        if (!challenge) return notFound(c, "Challenge not found")
-        if (challenge.eventId !== eventId) {
-          return badRequest(
-            c,
-            "invalid",
-            "Challenge does not belong to this event"
-          )
+        if (
+          !db
+            .select({ id: events.id })
+            .from(events)
+            .where(eq(events.id, eventId))
+            .get()
+        ) {
+          return notFound(c, "Event not found")
+        }
+        if (
+          !db
+            .select({ id: challenges.id })
+            .from(challenges)
+            .where(eq(challenges.id, input.challengeId))
+            .get()
+        ) {
+          return notFound(c, "Challenge not found")
         }
         agentService.assertModelsResolvable(input.model)
         const queue = agentService.queue()
-        const item = queue.enqueue({
-          eventId,
-          challengeId: challenge.id,
-          prompt: input.prompt,
-          model: input.model,
-          promptMode: input.promptMode,
-          timeoutMs: input.timeoutMs,
-          source: principalOf(c) ? "scheduler" : "manual",
-        })
+        const item = queue.enqueue(
+          {
+            eventId,
+            challengeId: input.challengeId,
+            prompt: input.prompt,
+            model: input.model,
+            promptMode: input.promptMode,
+            timeoutMs: input.timeoutMs,
+            source: principalOf(c).kind === "agent" ? "scheduler" : "manual",
+          },
+          principalOf(c)
+        )
         await queue.drainOnce()
         return c.json(
-          queue.list(eventId).find((i) => i.id === item.id) ?? item,
+          queue.list(eventId, principalOf(c)).find((i) => i.id === item.id) ??
+            item,
           202
         )
       } catch (error) {
@@ -178,19 +181,22 @@ export function registerRunRoutes(
           .where(eq(challenges.id, challengeId))
           .get()
         if (!challenge) return notFound(c, "Challenge not found")
-        const agent = await agentService.spawn({
-          eventId: challenge.eventId,
-          challengeId,
-          ...(input.model !== undefined ? { model: input.model } : {}),
-          ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
-          ...(input.promptMode !== undefined
-            ? { promptMode: input.promptMode }
-            : {}),
-          ...(input.timeoutMs !== undefined
-            ? { timeoutMs: input.timeoutMs }
-            : {}),
-          source: principalOf(c) ? "scheduler" : "manual",
-        })
+        const agent = await agentService.spawn(
+          {
+            eventId: challenge.eventId,
+            challengeId,
+            ...(input.model !== undefined ? { model: input.model } : {}),
+            ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+            ...(input.promptMode !== undefined
+              ? { promptMode: input.promptMode }
+              : {}),
+            ...(input.timeoutMs !== undefined
+              ? { timeoutMs: input.timeoutMs }
+              : {}),
+            source: principalOf(c).kind === "agent" ? "scheduler" : "manual",
+          },
+          principalOf(c)
+        )
         return c.json(agent, 201)
       } catch (error) {
         return runError(c, error)
@@ -231,7 +237,11 @@ export function registerRunRoutes(
       .where(eq(events.id, eventId))
       .get()
     if (!event) return notFound(c, "Event not found")
-    return c.json(agentService.fleet(eventId))
+    try {
+      return c.json(agentService.fleet(eventId, principalOf(c)))
+    } catch (error) {
+      return runError(c, error)
+    }
   })
 
   // --- challenge workspace files --------------------------------------------
@@ -287,9 +297,16 @@ export function registerRunRoutes(
   // --- agent detail / stream / actions --------------------------------------
 
   app.get("/api/agents/:agentId", (c) => {
-    const detail = agentService.getAgentDetail(c.req.param("agentId"))
-    if (!detail) return notFound(c, "Agent not found")
-    return c.json(detail)
+    try {
+      const detail = agentService.getAgentDetail(
+        c.req.param("agentId"),
+        principalOf(c)
+      )
+      if (!detail) return notFound(c, "Agent not found")
+      return c.json(detail)
+    } catch (error) {
+      return runError(c, error)
+    }
   })
 
   /** The agent's durable committed entries, paginated by per-session seq
@@ -301,7 +318,13 @@ export function registerRunRoutes(
     const afterRaw = Number.parseInt(c.req.query("after") ?? "0", 10)
     const after = Number.isFinite(afterRaw) && afterRaw > 0 ? afterRaw : 0
     const sessionId = c.req.query("sessionId") || undefined
-    return c.json(agentService.listMessages(agentId, { after, sessionId }))
+    try {
+      return c.json(
+        agentService.listMessages(agentId, { after, sessionId }, principalOf(c))
+      )
+    } catch (error) {
+      return runError(c, error)
+    }
   })
 
   // Live event stream (EventSource). Ephemeral progress; reconnect re-reads
@@ -312,7 +335,11 @@ export function registerRunRoutes(
     if (!agentService.getAgent(agentId)) {
       return notFound(c, "Agent not found")
     }
-    return streamAgent(c, agentService, agentId)
+    try {
+      return streamAgent(c, agentService, agentId, principalOf(c))
+    } catch (error) {
+      return runError(c, error)
+    }
   })
 
   app.post(
@@ -321,10 +348,14 @@ export function registerRunRoutes(
     async (c) => {
       try {
         const body = c.req.valid("json")
-        const agent = await agentService.sendMessage(c.req.param("agentId"), {
-          text: body.text,
-          deliverAs: body.deliverAs,
-        })
+        const agent = await agentService.sendMessage(
+          c.req.param("agentId"),
+          {
+            text: body.text,
+            deliverAs: body.deliverAs,
+          },
+          principalOf(c)
+        )
         return c.json(agent)
       } catch (error) {
         return runError(c, error)
@@ -339,9 +370,11 @@ export function registerRunRoutes(
       try {
         const body = c.req.valid("json")
         return c.json(
-          await agentService.switchAgentModel(c.req.param("agentId"), {
-            model: body.model,
-          })
+          await agentService.switchAgentModel(
+            c.req.param("agentId"),
+            { model: body.model },
+            principalOf(c)
+          )
         )
       } catch (error) {
         return runError(c, error)
@@ -351,7 +384,9 @@ export function registerRunRoutes(
 
   app.post("/api/agents/:agentId/stop", validateJson(emptyInput), async (c) => {
     try {
-      return c.json(await agentService.stopAgent(c.req.param("agentId")))
+      return c.json(
+        await agentService.stopAgent(c.req.param("agentId"), principalOf(c))
+      )
     } catch (error) {
       return runError(c, error)
     }
@@ -364,7 +399,9 @@ export function registerRunRoutes(
     validateJson(emptyInput),
     async (c) => {
       try {
-        return c.json(await agentService.closeAgent(c.req.param("agentId")))
+        return c.json(
+          await agentService.closeAgent(c.req.param("agentId"), principalOf(c))
+        )
       } catch (error) {
         return runError(c, error)
       }
@@ -383,7 +420,8 @@ export function registerRunRoutes(
           await agentService.finishAgent(
             c.req.param("agentId"),
             summary,
-            principalOf(c) ? "scheduler" : "user"
+            principalOf(c).kind === "agent" ? "scheduler" : "user",
+            principalOf(c)
           )
         )
       } catch (error) {
@@ -400,7 +438,8 @@ export function registerRunRoutes(
         return c.json(
           agentService.setAgentTimeout(
             c.req.param("agentId"),
-            c.req.valid("json").timeoutMs
+            c.req.valid("json").timeoutMs,
+            principalOf(c)
           )
         )
       } catch (error) {
@@ -414,7 +453,12 @@ export function registerRunRoutes(
     validateJson(emptyInput),
     async (c) => {
       try {
-        return c.json(await agentService.compactAgent(c.req.param("agentId")))
+        return c.json(
+          await agentService.compactAgent(
+            c.req.param("agentId"),
+            principalOf(c)
+          )
+        )
       } catch (error) {
         return runError(c, error)
       }
@@ -425,10 +469,14 @@ export function registerRunRoutes(
   app.put("/api/agents/:agentId/queue", validateJson(queueInput), async (c) => {
     try {
       const body = c.req.valid("json")
-      await agentService.setQueue(c.req.param("agentId"), {
-        steering: body.steering,
-        followUp: body.followUp,
-      })
+      await agentService.setQueue(
+        c.req.param("agentId"),
+        {
+          steering: body.steering,
+          followUp: body.followUp,
+        },
+        principalOf(c)
+      )
       return c.body(null, 204)
     } catch (error) {
       return runError(c, error)
@@ -440,7 +488,10 @@ export function registerRunRoutes(
   app.get("/api/agents/:agentId/sessions", (c) => {
     try {
       return c.json({
-        items: agentService.listAgentSessions(c.req.param("agentId")),
+        items: agentService.listAgentSessions(
+          c.req.param("agentId"),
+          principalOf(c)
+        ),
       })
     } catch (error) {
       return runError(c, error)
@@ -453,7 +504,10 @@ export function registerRunRoutes(
     async (c) => {
       try {
         return c.json(
-          await agentService.createAgentSession(c.req.param("agentId"))
+          await agentService.createAgentSession(
+            c.req.param("agentId"),
+            principalOf(c)
+          )
         )
       } catch (error) {
         return runError(c, error)
@@ -469,7 +523,8 @@ export function registerRunRoutes(
         return c.json(
           await agentService.activateAgentSession(
             c.req.param("agentId"),
-            c.req.param("sessionId")
+            c.req.param("sessionId"),
+            principalOf(c)
           )
         )
       } catch (error) {
@@ -485,7 +540,11 @@ export function registerRunRoutes(
       try {
         const body = c.req.valid("json")
         return c.json(
-          await agentService.backtrackAgent(c.req.param("agentId"), body.seq)
+          await agentService.backtrackAgent(
+            c.req.param("agentId"),
+            body.seq,
+            principalOf(c)
+          )
         )
       } catch (error) {
         return runError(c, error)
@@ -503,7 +562,8 @@ export function registerRunRoutes(
       const result = await agentService.submitFlag(
         agent.challengeId,
         agentId,
-        c.req.valid("json").flag
+        c.req.valid("json").flag,
+        principalOf(c)
       )
       agentService.refresh(agentId)
       if (!result) {
@@ -515,13 +575,14 @@ export function registerRunRoutes(
       }
       return c.json({ result })
     } catch (error) {
+      if (error instanceof RunActionError) return runError(c, error)
       return platformActionHttpError(c, error)
     }
   })
 
   app.delete("/api/agents/:agentId", async (c) => {
     try {
-      await agentService.delete(c.req.param("agentId"))
+      await agentService.delete(c.req.param("agentId"), principalOf(c))
       return c.body(null, 204)
     } catch (error) {
       return runError(c, error)
@@ -561,16 +622,11 @@ export function registerRunRoutes(
    * an agent principal the path id must be the caller's own. */
   app.get("/api/agents/:agentId/channels", (c) => {
     try {
-      const principal = principalOf(c)
-      if (principal && principal.id !== c.req.param("agentId")) {
-        return badRequest(
-          c,
-          "invalid",
-          "Agent channels are addressable only by the caller's own id"
-        )
-      }
       return c.json({
-        items: agentService.channels.agentChannels(c.req.param("agentId")),
+        items: agentService.channels.agentChannels(
+          c.req.param("agentId"),
+          principalOf(c)
+        ),
       })
     } catch (error) {
       return runError(c, error)
@@ -592,23 +648,13 @@ export function registerRunRoutes(
     const limitRaw = Number.parseInt(c.req.query("limit") ?? "50", 10)
     const limit = Number.isFinite(limitRaw) ? limitRaw : 50
     const markRead = c.req.query("markRead") !== "0"
-    const principal = principalOf(c)
     try {
-      if (principal) {
-        return c.json(
-          agentService.channels.readForAgent(principal.id, channelKey, {
-            after,
-            limit,
-            markRead,
-          })
-        )
-      }
       return c.json(
-        agentService.channels.listMessages(channelKey, {
-          after,
-          limit,
-          before,
-        })
+        agentService.channels.read(
+          channelKey,
+          { after, limit, before, markRead },
+          principalOf(c)
+        )
       )
     } catch (error) {
       return runError(c, error)
@@ -665,7 +711,10 @@ export function registerRunRoutes(
     const contentType = c.req.header("content-type")?.split(";", 1)[0]
     try {
       if (contentType === "multipart/form-data") {
-        if (principalOf(c)) {
+        // Early face gate (before formData buffers the body): multipart is
+        // the USER serializer. The same rule is enforced again — identity
+        // and all — inside channels.postWithUpload's resolveAuthor.
+        if (principalOf(c).kind === "agent") {
           return badRequest(
             c,
             "invalid",
@@ -693,22 +742,25 @@ export function registerRunRoutes(
         const uploads = [...form.getAll("files")].filter(
           (entry): entry is File => entry instanceof File
         )
-        const message = await agentService.channels.postWithUpload({
-          channelKey,
-          author: { type: "user" },
-          body: text,
-          urgent,
-          uploads: uploads.map((file) => ({
-            filename: file.name,
-            size: file.size,
-            stream: () => file.arrayBuffer().then((b) => new Uint8Array(b)),
-          })),
-        })
+        const message = await agentService.channels.postWithUpload(
+          {
+            channelKey,
+            author: { type: "user" },
+            body: text,
+            urgent,
+            uploads: uploads.map((file) => ({
+              filename: file.name,
+              size: file.size,
+              stream: () => file.arrayBuffer().then((b) => new Uint8Array(b)),
+            })),
+          },
+          principalOf(c)
+        )
         return c.json(message, 201)
       }
       // JSON path — requires an agent principal.
       const principal = principalOf(c)
-      if (!principal) {
+      if (principal.kind !== "agent") {
         return badRequest(
           c,
           "invalid",
@@ -739,15 +791,18 @@ export function registerRunRoutes(
             .slice(0, 8)
         : []
       const deliverAs = input.deliverAs === "followUp" ? "followUp" : "steer"
-      const message = agentService.channels.post({
-        channelKey,
-        author: { type: "agent", agentId: principal.id },
-        body: input.text,
-        urgent: input.urgent === true,
-        deliverAs,
-        meta: tags.length ? { tags } : undefined,
-        ...(files.length ? { files } : {}),
-      })
+      const message = agentService.channels.post(
+        {
+          channelKey,
+          author: { type: "agent", agentId: principal.agentId },
+          body: input.text,
+          urgent: input.urgent === true,
+          deliverAs,
+          meta: tags.length ? { tags } : undefined,
+          ...(files.length ? { files } : {}),
+        },
+        principal
+      )
       return c.json(message, 201)
     } catch (error) {
       return runError(c, error)

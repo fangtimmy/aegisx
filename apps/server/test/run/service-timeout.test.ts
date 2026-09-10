@@ -5,7 +5,12 @@ import { and, eq } from "drizzle-orm"
 import { agents } from "../../src/db/schema"
 import { orchKey } from "../../src/run/channels"
 import type { HostAgentSession } from "../../src/run/host/host-session"
-import { makeAgentService, seedAgent, stubHostAgentSession } from "../helpers"
+import {
+  makeAgentService,
+  seedAgent,
+  stubHostAgentSession,
+  USER,
+} from "../helpers"
 import { refine } from "../support"
 
 /**
@@ -46,11 +51,14 @@ async function createHangingAgent(abortResolves: boolean) {
     timeoutGraceMs: 40,
     createHost: mock(async () => streamingSession(abortResolves)),
   })
-  const agent = await h.service.spawn({
-    eventId: "evt-1",
-    challengeId: "ch-1",
-    timeoutMs: 30,
-  })
+  const agent = await h.service.spawn(
+    {
+      eventId: "evt-1",
+      challengeId: "ch-1",
+      timeoutMs: 30,
+    },
+    USER
+  )
   return { h, agent, killed: h.stubs.killed }
 }
 
@@ -140,7 +148,7 @@ describe("agent timeout", () => {
         deadlineAt: new Date(Date.now() - 60_000).toISOString(),
       })
 
-      await h.service.sendMessage(agentId, { text: "hello" })
+      await h.service.sendMessage(agentId, { text: "hello" }, USER)
       await wait(150)
 
       expect(aborts).toBe(0)
@@ -183,7 +191,7 @@ describe("agent timeout", () => {
         deadlineAt: new Date(Date.now() + 80).toISOString(),
       })
 
-      await h.service.sendMessage(agentId, { text: "hello" })
+      await h.service.sendMessage(agentId, { text: "hello" }, USER)
       await wait(300)
 
       // The fire consumed the one-shot deadline…
@@ -238,11 +246,14 @@ describe("agent timeout", () => {
         .where(and(eq(agents.id, sched.id), eq(agents.role, "orchestrator")))
         .get()!
 
-      const challenge = await h.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        timeoutMs: 30,
-      })
+      const challenge = await h.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          timeoutMs: 30,
+        },
+        USER
+      )
       await wait(150)
 
       const texts = promptLog.get(orch.id) ?? []

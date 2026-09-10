@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 
 import { agents, sessionEntries, sessions } from "../../src/db/schema"
-import { makeAgentService, stubHostAgentSession, now } from "../helpers"
+import { makeAgentService, now, stubHostAgentSession, USER } from "../helpers"
 
 /** A minimal service whose listMessages is the per-agent query under test. */
 function makeService() {
@@ -88,23 +88,29 @@ describe("per-agent message cursor (v19)", () => {
       insertMessage(db, "a-1", "sess-a", 3)
       insertMessage(db, "a-2", "sess-b", 2)
 
-      const page1 = service.listMessages("a-1", {})
+      const page1 = service.listMessages("a-1", {}, USER)
       expect(page1.items.map((i) => i.seq)).toEqual([1, 2, 3])
       expect(page1.nextAfter).toBe(3)
 
       // The incremental pull above the cursor: only the agent's own tail.
       insertMessage(db, "a-1", "sess-a", 4)
-      const page2 = service.listMessages("a-1", {
-        after: page1.nextAfter ?? 0,
-      })
+      const page2 = service.listMessages(
+        "a-1",
+        {
+          after: page1.nextAfter ?? 0,
+        },
+        USER
+      )
       expect(page2.items.map((i) => i.seq)).toEqual([4])
 
       // The other agent's messages are invisible (per-agent scope).
-      const other = service.listMessages("a-2", {})
+      const other = service.listMessages("a-2", {}, USER)
       expect(other.items.map((i) => i.seq)).toEqual([1, 2])
 
       // No session yet → empty list with the cursor preserved.
-      expect(service.listMessages("ghost", { after: 7 }).items).toHaveLength(0)
+      expect(
+        service.listMessages("ghost", { after: 7 }, USER).items
+      ).toHaveLength(0)
     } finally {
       await made.h.close()
     }
@@ -126,9 +132,9 @@ describe("per-agent message cursor (v19)", () => {
       insertMessage(db, "a-1", "sess-active", 1)
       insertMessage(db, "a-1", "sess-old", 1)
 
-      const active = service.listMessages("a-1", {})
+      const active = service.listMessages("a-1", {}, USER)
       expect(active.items).toHaveLength(1)
-      const old = service.listMessages("a-1", { sessionId: "sess-old" })
+      const old = service.listMessages("a-1", { sessionId: "sess-old" }, USER)
       expect(old.items).toHaveLength(1)
       expect(old.nextAfter).toBe(1)
     } finally {

@@ -21,6 +21,7 @@ import { and, desc, eq, inArray, ne } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { agents, challengeFlags, challenges } from "../db/schema"
+import type { Principal } from "../infrastructure/agent-auth"
 import type { ConfigStore } from "../infrastructure/config-store"
 import {
   readWorkspacePath,
@@ -68,6 +69,11 @@ import type { AgentLoopSettings } from "./host/host-session"
 import { createLiveBus, type LiveBus } from "./host/live"
 import { chainLock } from "./locks"
 import { createModelResolver } from "./model-resolver"
+import {
+  assertMayTouchAgent,
+  assertMayTouchChallenge,
+  assertMayTouchEvent,
+} from "./principal-scope"
 import { parseAgentToolDefinitions, parseAgentTools } from "./public"
 import { createAgentQueries } from "./queries"
 import {
@@ -416,15 +422,19 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** Spawn one solver agent (the direct path — fence full → capacity
    * error). The queue's drainer calls the factory directly. */
-  async function spawn(input: {
-    eventId: string
-    challengeId: string
-    model?: string
-    prompt?: string
-    promptMode?: "strategy" | "override"
-    timeoutMs?: number
-    source?: "manual" | "scheduler"
-  }): Promise<AgentSummary> {
+  async function spawn(
+    input: {
+      eventId: string
+      challengeId: string
+      model?: string
+      prompt?: string
+      promptMode?: "strategy" | "override"
+      timeoutMs?: number
+      source?: "manual" | "scheduler"
+    },
+    principal: Principal
+  ): Promise<AgentSummary> {
+    assertMayTouchChallenge(db, principal, input.challengeId)
     const agentId = await factory.spawnAgent({
       eventId: input.eventId,
       challengeId: input.challengeId,
@@ -440,7 +450,11 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** Per-agent stop: abort the current turn; it settles to idle (the shared
    * container stays warm). */
-  async function stopAgent(agentId: string): Promise<AgentSummary> {
+  async function stopAgent(
+    agentId: string,
+    principal: Principal
+  ): Promise<AgentSummary> {
+    assertMayTouchAgent(principal, requireAgent(agentId))
     await runtimes
       .get(agentId)
       ?.abort()
@@ -450,8 +464,12 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** Terminal close (user/scheduler): abort + dispose the session, land
    * aborted. Files and the DB session survive (reopen on demand). */
-  async function closeAgent(agentId: string): Promise<AgentSummary> {
+  async function closeAgent(
+    agentId: string,
+    principal: Principal
+  ): Promise<AgentSummary> {
     const agent = requireAgent(agentId)
+    assertMayTouchAgent(principal, agent)
     if (isTerminalAgentStatus(agent.status)) {
       throw new RunActionError("invalid_state", "Agent is already closed")
     }
@@ -471,9 +489,11 @@ export function createAgentService(options: AgentServiceOptions) {
   async function finishAgent(
     agentId: string,
     summary: string,
-    actor: "user" | "scheduler" = "user"
+    actor: "user" | "scheduler",
+    principal: Principal
   ): Promise<AgentSummary> {
     const agent = requireAgent(agentId)
+    assertMayTouchAgent(principal, agent)
     if (agent.status === "completed") return agent
     if (isTerminalAgentStatus(agent.status)) {
       throw new RunActionError("invalid_state", "Agent is already closed")
@@ -517,7 +537,7 @@ export function createAgentService(options: AgentServiceOptions) {
       .all()
     let closedCount = 0
     for (const row of live) {
-      await closeAgent(row.id)
+      await closeAgent(row.id, { kind: "system" })
         .then(() => {
           closedCount += 1
         })
@@ -548,18 +568,22 @@ export function createAgentService(options: AgentServiceOptions) {
    * idle → fresh turn, terminal → onResume reopen. */
   async function sendMessage(
     agentId: string,
-    input: SendMessageInput
+    input: SendMessageInput,
+    principal: Principal
   ): Promise<AgentSummary> {
+    assertMayTouchAgent(principal, requireAgent(agentId))
     await sendToAgent(agentId, input.text, input.deliverAs)
     return requireAgent(agentId)
   }
 
   /** Per-agent model switch: takes effect next turn; persists the snapshot
    * on the agent row. Serialized on the agent's lock against its turns. */
-  function switchAgentModel(
+  async function switchAgentModel(
     agentId: string,
-    input: SwitchModelInput
+    input: SwitchModelInput,
+    principal: Principal
   ): Promise<AgentSummary> {
+    assertMayTouchAgent(principal, requireAgent(agentId))
     return withLock(agentId, async () => {
       const session = runtimes.get(agentId)?.session()
       if (!session) {
@@ -609,10 +633,12 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** Replace an agent's steer/followUp queue. Serialized against its turns;
    * uses the SDK queue API directly. */
-  function setQueue(
+  async function setQueue(
     agentId: string,
-    input: { steering: string[]; followUp: string[] }
+    input: { steering: string[]; followUp: string[] },
+    principal: Principal
   ): Promise<void> {
+    assertMayTouchAgent(principal, requireAgent(agentId))
     return withLock(agentId, async () => {
       const session = runtimes.get(agentId)?.session()
       if (!session) return
@@ -629,7 +655,11 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Manually compact an agent's context (pi SDK `session.compact()`). */
-  async function compactAgent(agentId: string): Promise<AgentSummary> {
+  async function compactAgent(
+    agentId: string,
+    principal: Principal
+  ): Promise<AgentSummary> {
+    assertMayTouchAgent(principal, requireAgent(agentId))
     await withLock(agentId, async () => {
       const session = runtimes.get(agentId)?.session()
       if (!session) {
@@ -651,7 +681,12 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** Set / extend / shorten an agent's hard deadline; re-arms the live
    * timer. Usable on terminal agents (pre-sets the next reopen). */
-  function setAgentTimeout(agentId: string, timeoutMs: number): AgentSummary {
+  function setAgentTimeout(
+    agentId: string,
+    timeoutMs: number,
+    principal: Principal
+  ): AgentSummary {
+    assertMayTouchAgent(principal, requireAgent(agentId))
     const agent = schedulerAdmin.setAgentTimeout(
       agentId,
       timeoutMs,
@@ -666,9 +701,13 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Full agent detail (the AgentDialog view). */
-  function getAgentDetail(agentId: string): AgentDetail | undefined {
+  function getAgentDetail(
+    agentId: string,
+    principal: Principal
+  ): AgentDetail | undefined {
     const row = queries.getAgentRow(agentId)
     if (!row) return undefined
+    assertMayTouchAgent(principal, row)
     const agent = requireAgent(agentId)
     const workspace = workspaceInfoOf(row)
     return {
@@ -680,6 +719,18 @@ export function createAgentService(options: AgentServiceOptions) {
       usage: queries.usageOfAgent(agentId),
       workspace,
     }
+  }
+
+  /** Committed message history (agent-management face): assert the
+   * principal's scope, then delegate to the raw query. */
+  function listMessages(
+    agentId: string,
+    opts: { after?: number; sessionId?: string },
+    principal: Principal
+  ) {
+    const row = queries.getAgentRow(agentId)
+    if (row) assertMayTouchAgent(principal, row)
+    return queries.listMessages(agentId, opts)
   }
 
   function workspaceInfoOf(row: typeof agents.$inferSelect): WorkspaceInfo {
@@ -726,7 +777,8 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** The fleet view: challenges + per-challenge agents + scheduler agent +
    * config/status (the event overview's single poll). */
-  function fleet(eventId: string): FleetInfo {
+  function fleet(eventId: string, principal: Principal): FleetInfo {
+    assertMayTouchEvent(principal, eventId)
     const challengeRows = db
       .select({
         id: challenges.id,
@@ -777,10 +829,14 @@ export function createAgentService(options: AgentServiceOptions) {
    * vanish — a skipped markDone would stick it running forever), drop the
    * row (cascades its sessions), sweep its dm channel data. Workspaces
    * persist (challenge property). */
-  async function deleteAgent(agentId: string): Promise<void> {
+  async function deleteAgent(
+    agentId: string,
+    principal: Principal
+  ): Promise<void> {
     await withLock(agentId, async () => {
       const row = queries.getAgentRow(agentId)
       if (!row) throw new RunActionError("not_found", "Agent not found")
+      assertMayTouchAgent(principal, row)
       await settleAgent(agentId, {
         abort: true,
         status: "aborted",
@@ -817,7 +873,7 @@ export function createAgentService(options: AgentServiceOptions) {
       ...rows.filter((row) => row.role !== "orchestrator"),
     ]
     for (const row of ordered) {
-      await deleteAgent(row.id)
+      await deleteAgent(row.id, { kind: "system" })
     }
   }
 
@@ -868,15 +924,18 @@ export function createAgentService(options: AgentServiceOptions) {
     const by = submitterAgentId
       ? `（agent-${submitterAgentId.slice(0, 8)} 提交）`
       : ""
-    channels.post({
-      channelKey: teamKey(challengeId),
-      author: { type: "system" },
-      body: `「${name}」再解出一个 flag${flag ? `：${flag}` : ""}${by}。`,
-      meta: {
-        eventType: "flagAccepted",
-        ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+    channels.post(
+      {
+        channelKey: teamKey(challengeId),
+        author: { type: "system" },
+        body: `「${name}」再解出一个 flag${flag ? `：${flag}` : ""}${by}。`,
+        meta: {
+          eventType: "flagAccepted",
+          ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+        },
       },
-    })
+      { kind: "system" }
+    )
   }
 
   /** The challenge's most recently updated accepted flag, if any. */
@@ -910,15 +969,18 @@ export function createAgentService(options: AgentServiceOptions) {
     const tail = policy.stopSiblingsOnSolve
       ? ""
       : " 本题无需继续攻击，请整理 writeup 并尽快 finish_run 收尾。"
-    channels.post({
-      channelKey: teamKey(challengeId),
-      author: { type: "system" },
-      body: `「${name}」已完全解出${flag ? `：${flag}` : ""}${by}，平台已接受。${tail}`,
-      meta: {
-        eventType: "flagAccepted",
-        ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+    channels.post(
+      {
+        channelKey: teamKey(challengeId),
+        author: { type: "system" },
+        body: `「${name}」已完全解出${flag ? `：${flag}` : ""}${by}，平台已接受。${tail}`,
+        meta: {
+          eventType: "flagAccepted",
+          ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+        },
       },
-    })
+      { kind: "system" }
+    )
   }
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
@@ -949,15 +1011,18 @@ export function createAgentService(options: AgentServiceOptions) {
       `已确认：${confirmed.join("、") || "（无）"}。` +
       `请专注剩余 flag；已确认的无需重复提交。`
     if (meta && schedulerPolicyFor(db, meta.eventId).notifyTeamOnFlag) {
-      channels.post({
-        channelKey: teamKey(challengeId),
-        author: { type: "system" },
-        body: text,
-        meta: {
-          eventType: "flagPartial",
-          ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+      channels.post(
+        {
+          channelKey: teamKey(challengeId),
+          author: { type: "system" },
+          body: text,
+          meta: {
+            eventType: "flagPartial",
+            ...(submitterAgentId ? { agentId: submitterAgentId } : {}),
+          },
         },
-      })
+        { kind: "system" }
+      )
     }
     if (meta?.eventId) {
       postOrchNotice(
@@ -971,12 +1036,15 @@ export function createAgentService(options: AgentServiceOptions) {
    * paused → silently dropped). */
   function postOrchNotice(eventId: string, line: string): void {
     if (schedulerAdmin.isSchedulerPaused(eventId)) return
-    channels.post({
-      channelKey: orchKey(eventId),
-      author: { type: "system" },
-      body: line,
-      meta: { noticeType: "notice" },
-    })
+    channels.post(
+      {
+        channelKey: orchKey(eventId),
+        author: { type: "system" },
+        body: line,
+        meta: { noticeType: "notice" },
+      },
+      { kind: "system" }
+    )
   }
 
   /** Full-solve cleanup (see notifyFlagAccepted), shaped by the event's
@@ -1041,7 +1109,7 @@ export function createAgentService(options: AgentServiceOptions) {
       const stopped = (
         await Promise.all(
           siblings.map((sibling) =>
-            closeAgent(sibling.id)
+            closeAgent(sibling.id, { kind: "system" })
               .then(() => 1)
               .catch(() => 0)
           )
@@ -1113,11 +1181,17 @@ export function createAgentService(options: AgentServiceOptions) {
         // Reopen keeps memory — wake the orchestrator (onResume → resumeAgent:
         // container + session rebuilt, session kept).
         schedulerAdmin.setSchedulerPaused(eventId, false)
-        await sendMessage(existing.id, { text: SCHEDULER_RESUME_MESSAGE })
+        await sendMessage(
+          existing.id,
+          { text: SCHEDULER_RESUME_MESSAGE },
+          {
+            kind: "system",
+          }
+        )
         return requireAgent(existing.id)
       }
       if (existing && opts.reset) {
-        await deleteAgent(existing.id)
+        await deleteAgent(existing.id, { kind: "system" })
       }
       schedulerAdmin.setSchedulerPaused(eventId, false)
       const agentId = await factory.spawnAgent({
@@ -1137,7 +1211,7 @@ export function createAgentService(options: AgentServiceOptions) {
     schedulerAdmin.setSchedulerPaused(eventId, true)
     const sched = schedulerAdmin.getSchedulerAgent(eventId)
     if (sched && isActiveAgentStatus(sched.status)) {
-      await stopAgent(sched.id)
+      await stopAgent(sched.id, { kind: "system" })
       return requireAgent(sched.id)
     }
     return null
@@ -1152,7 +1226,13 @@ export function createAgentService(options: AgentServiceOptions) {
     schedulerAdmin.setSchedulerPaused(eventId, false)
     const sched = schedulerAdmin.getSchedulerAgent(eventId)
     if (sched && isActiveAgentStatus(sched.status)) {
-      await sendMessage(sched.id, { text: SCHEDULER_RESUME_MESSAGE })
+      await sendMessage(
+        sched.id,
+        { text: SCHEDULER_RESUME_MESSAGE },
+        {
+          kind: "system",
+        }
+      )
       return requireAgent(sched.id)
     }
     return null
@@ -1162,7 +1242,7 @@ export function createAgentService(options: AgentServiceOptions) {
   async function closeScheduler(eventId: string): Promise<AgentSummary> {
     const sched = schedulerAdmin.getSchedulerAgent(eventId)
     if (!sched) throw new RunActionError("not_found", "No scheduler agent")
-    const result = await closeAgent(sched.id)
+    const result = await closeAgent(sched.id, { kind: "system" })
     containerLifecycle.removeContainer(orchestratorKey(eventId))
     return result
   }
@@ -1242,13 +1322,16 @@ export function createAgentService(options: AgentServiceOptions) {
     },
     onQueueEmergency: (eventId, line) => {
       if (schedulerAdmin.isSchedulerPaused(eventId)) return
-      channels.post({
-        channelKey: orchKey(eventId),
-        author: { type: "system" },
-        body: line,
-        meta: { noticeType: "emergency" },
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: orchKey(eventId),
+          author: { type: "system" },
+          body: line,
+          meta: { noticeType: "emergency" },
+          urgent: true,
+        },
+        { kind: "system" }
+      )
     },
     onQueueNotice: (eventId, line) => postOrchNotice(eventId, line),
   })
@@ -1329,13 +1412,22 @@ export function createAgentService(options: AgentServiceOptions) {
     backtrackAgent: sessionOps.backtrackAgent,
     delete: deleteAgent,
     deleteAgentsForEvent,
-    getStatus: schedulerAdmin.getStatusSnapshot,
-    getSchedulerAgent: schedulerAdmin.getSchedulerAgent,
+    getStatus: (eventId: string, principal: Principal) => {
+      assertMayTouchEvent(principal, eventId)
+      return schedulerAdmin.getStatusSnapshot(eventId)
+    },
+    getSchedulerAgent: (eventId: string, principal: Principal) => {
+      assertMayTouchEvent(principal, eventId)
+      return schedulerAdmin.getSchedulerAgent(eventId)
+    },
     inboxSnapshot: channels.inboxSnapshot,
     setInboxDeliveryPaused: (eventId: string, paused: boolean) =>
       channels.setDeliveryPaused(eventId, paused),
     assertModelsResolvable: schedulerAdmin.assertModelsResolvable,
-    getSchedulerConfig: schedulerAdmin.getSchedulerConfig,
+    getSchedulerConfig: (eventId: string, principal: Principal) => {
+      assertMayTouchEvent(principal, eventId)
+      return schedulerAdmin.getSchedulerConfig(eventId)
+    },
     upsertSchedulerConfig: schedulerAdmin.upsertSchedulerConfig,
     startScheduler,
     pauseScheduler,
@@ -1345,7 +1437,7 @@ export function createAgentService(options: AgentServiceOptions) {
     refresh: queries.getAgent,
     recoverOnBoot: factory.recoverOnBoot,
     close,
-    listMessages: queries.listMessages,
+    listMessages,
     usageOfAgent: queries.usageOfAgent,
     usageForEvent: queries.usageForEvent,
     agentFlags: queries.agentFlags,
@@ -1353,7 +1445,16 @@ export function createAgentService(options: AgentServiceOptions) {
     channels,
     notifyFlagAccepted,
     notifyFlagPartial,
-    submitFlag: platformService.submitFlag,
+    submitFlag: (
+      challengeId: string,
+      agentId: string,
+      flag: string | undefined,
+      principal: Principal
+    ) => {
+      const row = queries.getAgentRow(agentId)
+      if (row) assertMayTouchAgent(principal, row)
+      return platformService.submitFlag(challengeId, agentId, flag)
+    },
     targetAction: platformService.targetAction,
     workspaceFiles,
     workspaceDownloadPath,

@@ -11,6 +11,7 @@ import {
   seedChallenge,
   stubHostAgentSession,
   TEST_MODEL_REF,
+  USER,
 } from "../helpers"
 import { refine } from "../support"
 
@@ -73,7 +74,7 @@ async function spawnAgent(
   service: ReturnType<typeof makeService>["service"],
   model = MODEL_1_REF
 ) {
-  return service.spawn({ eventId: "evt-1", challengeId: "ch-1", model })
+  return service.spawn({ eventId: "evt-1", challengeId: "ch-1", model }, USER)
 }
 
 describe("per-agent actions (v19)", () => {
@@ -86,16 +87,20 @@ describe("per-agent actions (v19)", () => {
       expect(prepared).toHaveLength(1)
 
       // Warm agent: per-agent message drives the turn — no error.
-      await service.sendMessage(agent.id, { text: "warm ping" })
+      await service.sendMessage(agent.id, { text: "warm ping" }, USER)
       // Close the agent (session released, agent → aborted).
-      const closed = await service.closeAgent(agent.id)
+      const closed = await service.closeAgent(agent.id, USER)
       expect(closed.status).toBe("aborted")
 
       // Cold reopen: messaging the same agent rebuilds its session (prepare)
       // and drives a fresh turn.
-      const resumed = await service.sendMessage(agent.id, {
-        text: "cold ping",
-      })
+      const resumed = await service.sendMessage(
+        agent.id,
+        {
+          text: "cold ping",
+        },
+        USER
+      )
       expect(prepared).toHaveLength(2) // create + restore
       expect(resumed.status).toBe("running")
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
@@ -116,19 +121,22 @@ describe("per-agent actions (v19)", () => {
       }),
     })
     try {
-      const agent = await h.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        model: MODEL_1_REF,
-      })
-      const closed = await h.service.closeAgent(agent.id)
+      const agent = await h.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          model: MODEL_1_REF,
+        },
+        USER
+      )
+      const closed = await h.service.closeAgent(agent.id, USER)
       expect(closed.status).toBe("aborted")
 
       // Restore fails (docker/model unavailable): the error rethrows and the
       // agent keeps its terminal state instead of flipping idle first.
       failPrepare = true
       await expect(
-        h.service.sendMessage(agent.id, { text: "cold ping" })
+        h.service.sendMessage(agent.id, { text: "cold ping" }, USER)
       ).rejects.toThrow("docker down")
       const row = h.db
         .select()
@@ -152,9 +160,13 @@ describe("per-agent actions (v19)", () => {
         db.select().from(agents).where(eq(agents.id, agent.id)).get()!.model
       ).toBe(MODEL_1_REF)
 
-      const switched = await service.switchAgentModel(agent.id, {
-        model: MODEL_2_REF,
-      })
+      const switched = await service.switchAgentModel(
+        agent.id,
+        {
+          model: MODEL_2_REF,
+        },
+        USER
+      )
       expect(switched.id).toBe(agent.id)
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.model).toBe(MODEL_2_REF)
@@ -171,7 +183,7 @@ describe("per-agent actions (v19)", () => {
       const agent = await spawnAgent(service)
       expect(agent.status).toBe("running") // prime hangs → turn in flight
 
-      const stopped = await service.stopAgent(agent.id)
+      const stopped = await service.stopAgent(agent.id, USER)
       expect(stopped.id).toBe(agent.id)
       expect(aborted).toContain(agent.id)
     } finally {
@@ -190,18 +202,24 @@ describe("per-agent actions (v19)", () => {
 
       const one = await spawnAgent(service)
       const two = await spawnAgent(service)
-      const bystander = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-2",
-        model: MODEL_1_REF,
-      })
+      const bystander = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-2",
+          model: MODEL_1_REF,
+        },
+        USER
+      )
       // Paused queue → the enqueued item stays pending (no launch race).
-      queue.pause("evt-1")
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "manual",
-      })
+      queue.pause("evt-1", "manual", USER)
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "manual",
+        },
+        USER
+      )
 
       const result = await service.haltChallenge("ch-1")
       expect(result).toEqual({ closed: 2, cancelled: 1 })
@@ -215,7 +233,7 @@ describe("per-agent actions (v19)", () => {
         db.select().from(agents).where(eq(agents.id, bystander.id)).get()!
           .status
       ).not.toBe("aborted")
-      // queue.list() shows actionable items only — read the row directly.
+      // queue.list(, USER) shows actionable items only — read the row directly.
       expect(
         db.select().from(spawnQueue).where(eq(spawnQueue.id, item.id)).get()!
           .status
@@ -231,12 +249,12 @@ describe("per-agent actions (v19)", () => {
     const { service } = made
     try {
       await expect(
-        service.sendMessage("ghost", { text: "hi" })
+        service.sendMessage("ghost", { text: "hi" }, USER)
       ).rejects.toThrow("Agent not found")
       await expect(
-        service.switchAgentModel("ghost", { model: MODEL_2_REF })
+        service.switchAgentModel("ghost", { model: MODEL_2_REF }, USER)
       ).rejects.toThrow(/not found|no live session/)
-      await expect(service.stopAgent("ghost")).rejects.toThrow(
+      await expect(service.stopAgent("ghost", USER)).rejects.toThrow(
         "Agent not found"
       )
     } finally {
@@ -274,9 +292,13 @@ describe("per-agent actions (v19)", () => {
         ],
       })
 
-      await service.switchAgentModel(agent.id, {
-        model: "aegisx-prov-2/new-model:off",
-      })
+      await service.switchAgentModel(
+        agent.id,
+        {
+          model: "aegisx-prov-2/new-model:off",
+        },
+        USER
+      )
       const row = db.select().from(agents).where(eq(agents.id, agent.id)).get()!
       expect(row.model).toBe("aegisx-prov-2/new-model:off")
     } finally {
@@ -312,12 +334,15 @@ describe("per-agent actions (v19)", () => {
       ),
     })
     try {
-      const agent = await h.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        model: MODEL_1_REF,
-      })
-      await h.service.switchAgentModel(agent.id, { model: MODEL_2_REF })
+      const agent = await h.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          model: MODEL_1_REF,
+        },
+        USER
+      )
+      await h.service.switchAgentModel(agent.id, { model: MODEL_2_REF }, USER)
       const row = h.db
         .select()
         .from(agents)
@@ -336,16 +361,20 @@ describe("per-agent actions (v19)", () => {
     try {
       const agent = await spawnAgent(service)
       await expect(
-        service.switchAgentModel(agent.id, { model: "garbage" })
+        service.switchAgentModel(agent.id, { model: "garbage" }, USER)
       ).rejects.toThrow("Invalid model ref")
       await expect(
-        service.switchAgentModel(agent.id, {
-          model: "aegisx-prov-1/no-such:off",
-        })
+        service.switchAgentModel(
+          agent.id,
+          {
+            model: "aegisx-prov-1/no-such:off",
+          },
+          USER
+        )
       ).rejects.toThrow("is unavailable")
       // alias refs no longer exist — they parse as an invalid ref.
       await expect(
-        service.switchAgentModel(agent.id, { model: "alias:nope" })
+        service.switchAgentModel(agent.id, { model: "alias:nope" }, USER)
       ).rejects.toThrow("Invalid model ref")
     } finally {
       await made.h.close()

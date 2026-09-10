@@ -13,6 +13,10 @@ import { defaultSettings } from "@aegisx/shared"
 import { createDatabase, type Database } from "../src/db"
 import { agents, challenges, events } from "../src/db/schema"
 import type {
+  AgentPrincipal,
+  Principal,
+} from "../src/infrastructure/agent-auth"
+import type {
   ConfigStore,
   ProviderData,
 } from "../src/infrastructure/config-store"
@@ -48,6 +52,30 @@ export function setupDb(): {
 }
 
 export const now = () => new Date("2025-01-01T00:00:00Z").toISOString()
+
+/** Principal fixtures for service-level tests. `agentPrincipal()` matches the
+ * {@link seedAgent} defaults (evt-1 / ch-1 / solver) so most call sites need
+ * only the agent id; the channel-post scope rules resolve the DB row, so the
+ * fixture's event fields only matter for cross-event denial cases. */
+export const USER: Principal = { kind: "user" }
+export const SYSTEM: Principal = { kind: "system" }
+export function agentPrincipal(
+  agentId: string,
+  overrides: {
+    eventId?: string
+    challengeId?: string | null
+    role?: "solver" | "orchestrator"
+  } = {}
+): AgentPrincipal {
+  return {
+    kind: "agent",
+    agentId,
+    eventId: overrides.eventId ?? "evt-1",
+    challengeId:
+      overrides.challengeId !== undefined ? overrides.challengeId : "ch-1",
+    role: overrides.role ?? "solver",
+  }
+}
 
 export function seedEvent(db: Database, id = "evt-1") {
   db.insert(events)

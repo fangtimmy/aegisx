@@ -9,7 +9,8 @@ export class RunActionError extends Error {
       | "not_found"
       | "invalid_state"
       | "launch_failed"
-      | "invalid",
+      | "invalid"
+      | "forbidden",
     message: string
   ) {
     super(message)
@@ -19,7 +20,7 @@ export class RunActionError extends Error {
 export class RunStartError extends Error {}
 
 /** Map a {@link RunActionError} to its HTTP response (404 / 500 / 429 / 400 /
- * 409 by code). Shared by the run and scheduler route modules. */
+ * 403 / 409 by code). Shared by the run and scheduler route modules. */
 export function runActionError(c: Context, error: unknown) {
   if (!(error instanceof RunActionError)) throw error
   return jsonError(
@@ -33,6 +34,8 @@ export function runActionError(c: Context, error: unknown) {
           ? 429
           : error.code === "invalid"
             ? 400
-            : 409
+            : error.code === "forbidden"
+              ? 403
+              : 409
   )
 }

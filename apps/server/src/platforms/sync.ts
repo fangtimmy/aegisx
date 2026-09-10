@@ -15,7 +15,7 @@ import {
   eventPlatforms,
 } from "../db/schema"
 import type { createStorage } from "../infrastructure/storage"
-import { getChallengeRemote } from "./challenge-state"
+import { getChallengeRemote, setSourceAvailability } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
   PlatformError,
@@ -245,17 +245,10 @@ export function createPlatformSync(
     }
     const now = new Date().toISOString()
     db.transaction((tx) => {
-      // Event-scoped flip (0007): only this event's rows — a shared
-      // source_key must never touch another event's mappings.
-      tx.update(challengeRemote)
-        .set({ available: false })
-        .where(
-          and(
-            eq(challengeRemote.eventId, eventId),
-            eq(challengeRemote.sourceKey, platform.sourceKey)
-          )
-        )
-        .run()
+      // Event-scoped flip (0007) via the shared (eventId, sourceKey) writer:
+      // only this event's rows — a shared source_key must never touch
+      // another event's mappings (P0-2).
+      setSourceAvailability(tx, eventId, platform.sourceKey, false)
       for (const item of remote) {
         tx.update(challengeRemote)
           .set({

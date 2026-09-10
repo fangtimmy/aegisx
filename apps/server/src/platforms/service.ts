@@ -18,6 +18,7 @@ import { CtfdAdapter } from "./adapters/ctfd"
 import { DasCtfAdapter } from "./adapters/dasctf"
 import { Ret2ShellAdapter } from "./adapters/ret2shell"
 import { TsecBenchAdapter } from "./adapters/tsecbench"
+import { setSourceAvailability } from "./challenge-state"
 import type {
   CtfPlatformAdapter,
   PlatformConfig,
@@ -331,15 +332,9 @@ export function createPlatformService(
     }
     await platformTargets.assertNoActiveTargets(eventId)
     db.transaction((tx) => {
-      tx.update(challengeRemote)
-        .set({ available: false })
-        .where(
-          and(
-            eq(challengeRemote.eventId, eventId),
-            eq(challengeRemote.sourceKey, platform.sourceKey)
-          )
-        )
-        .run()
+      // Composite (eventId, sourceKey) scoping via the shared writer — a
+      // shared source_key must never flip another event's mappings (P0-2).
+      setSourceAvailability(tx, eventId, platform.sourceKey, false)
       tx.delete(eventPlatforms).where(eq(eventPlatforms.eventId, eventId)).run()
     })
     adapters.delete(eventId)

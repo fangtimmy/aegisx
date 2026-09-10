@@ -8,6 +8,7 @@ import {
   makeModel,
   makeProvider,
   stubHostAgentSession,
+  USER,
 } from "../helpers"
 
 /** Stub service: every createHost call records the prepared agent and returns
@@ -88,7 +89,7 @@ function remainingSeqs(
 }
 
 async function spawnAgent(service: ReturnType<typeof makeService>["service"]) {
-  return service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+  return service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
 }
 
 describe("multi-session + flat backtrack (v12)", () => {
@@ -105,7 +106,7 @@ describe("multi-session + flat backtrack (v12)", () => {
         .where(eq(agents.id, agent.id))
         .run()
 
-      const list = service.listAgentSessions(agent.id)
+      const list = service.listAgentSessions(agent.id, USER)
       expect(list.map((s) => s.id)).toEqual(["sess-1", "sess-2"])
       expect(list[0]).toMatchObject({ messageCount: 3, isActive: false })
       expect(list[1]).toMatchObject({ messageCount: 1, isActive: true })
@@ -128,14 +129,18 @@ describe("multi-session + flat backtrack (v12)", () => {
         .run()
 
       // Per-agent: only the active session's entries.
-      const perAgent = service.listMessages(agent.id)
+      const perAgent = service.listMessages(agent.id, {}, USER)
       expect(perAgent.items).toHaveLength(3)
       expect(perAgent.items.every((i) => i.entry.id.startsWith("sess-1"))).toBe(
         true
       )
 
       // Explicit session override can still reach the inactive session.
-      const override = service.listMessages(agent.id, { sessionId: "sess-2" })
+      const override = service.listMessages(
+        agent.id,
+        { sessionId: "sess-2" },
+        USER
+      )
       expect(override.items).toHaveLength(2)
     } finally {
       await made.h.close()
@@ -155,7 +160,7 @@ describe("multi-session + flat backtrack (v12)", () => {
           .sessionFile
       ).toBe(stubSessionId)
 
-      const result = await service.createAgentSession(agent.id)
+      const result = await service.createAgentSession(agent.id, USER)
       expect(result.id).toBe(agent.id)
       // The live session was disposed + re-prepared (pointer nulled first).
       expect(prepared).toHaveLength(2)
@@ -180,10 +185,10 @@ describe("multi-session + flat backtrack (v12)", () => {
         .run()
 
       // Activating the already-active live session is a no-op (no rebuild).
-      await service.activateAgentSession(agent.id, "sess-1")
+      await service.activateAgentSession(agent.id, "sess-1", USER)
       expect(prepared).toHaveLength(1)
 
-      await service.activateAgentSession(agent.id, "sess-2")
+      await service.activateAgentSession(agent.id, "sess-2", USER)
       expect(prepared).toHaveLength(2)
       expect(
         db.select().from(agents).where(eq(agents.id, agent.id)).get()!
@@ -192,7 +197,7 @@ describe("multi-session + flat backtrack (v12)", () => {
 
       // Foreign session ids are rejected.
       await expect(
-        service.activateAgentSession(agent.id, "sess-ghost")
+        service.activateAgentSession(agent.id, "sess-ghost", USER)
       ).rejects.toThrow("Session not found")
     } finally {
       await made.h.close()
@@ -207,12 +212,16 @@ describe("multi-session + flat backtrack (v12)", () => {
 
       seedSession(db, "sess-1", agent.id, 1)
       seedSession(db, "sess-2", agent.id, 1)
-      const finished = await service.finishAgent(agent.id, "done")
+      const finished = await service.finishAgent(agent.id, "done", "user", USER)
       expect(finished.status).toBe("completed")
 
       // Switching sessions on a closed agent is a reopen: the live session
       // is rebuilt AND the status converges idle (same as a cold resume).
-      const result = await service.activateAgentSession(agent.id, "sess-2")
+      const result = await service.activateAgentSession(
+        agent.id,
+        "sess-2",
+        USER
+      )
       expect(prepared).toHaveLength(2)
       expect(result.status).toBe("idle")
       expect(
@@ -235,7 +244,7 @@ describe("multi-session + flat backtrack (v12)", () => {
         .where(eq(agents.id, agent.id))
         .run()
 
-      await service.backtrackAgent(agent.id, 2)
+      await service.backtrackAgent(agent.id, 2, USER)
       expect(remainingSeqs(db, "sess-1")).toEqual([1, 2])
       // Live session disposed + re-prepared from the truncated history.
       expect(prepared).toHaveLength(2)
@@ -245,7 +254,7 @@ describe("multi-session + flat backtrack (v12)", () => {
       ).toBe("sess-1")
 
       // Unknown target seq is rejected and changes nothing.
-      await expect(service.backtrackAgent(agent.id, 99)).rejects.toThrow(
+      await expect(service.backtrackAgent(agent.id, 99, USER)).rejects.toThrow(
         "Target message not found"
       )
       expect(remainingSeqs(db, "sess-1")).toEqual([1, 2])
@@ -261,16 +270,16 @@ describe("multi-session + flat backtrack (v12)", () => {
       await spawnAgent(service)
 
       // listAgentSessions is synchronous (read-only query).
-      expect(() => service.listAgentSessions("ghost")).toThrow(
+      expect(() => service.listAgentSessions("ghost", USER)).toThrow(
         "Agent not found"
       )
-      await expect(service.createAgentSession("ghost")).rejects.toThrow(
+      await expect(service.createAgentSession("ghost", USER)).rejects.toThrow(
         "Agent not found"
       )
       await expect(
-        service.activateAgentSession("ghost", "sess-1")
+        service.activateAgentSession("ghost", "sess-1", USER)
       ).rejects.toThrow(/not found/)
-      await expect(service.backtrackAgent("ghost", 1)).rejects.toThrow(
+      await expect(service.backtrackAgent("ghost", 1, USER)).rejects.toThrow(
         /not found|no session/
       )
     } finally {

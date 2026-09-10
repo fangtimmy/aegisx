@@ -3,8 +3,10 @@ import { and, asc, count, eq, gt, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { agents, sessionEntries, sessions } from "../db/schema"
+import type { Principal } from "../infrastructure/agent-auth"
 import { RunActionError } from "./errors"
 import type { HostAgentSession } from "./host/host-session"
+import { assertMayTouchAgent } from "./principal-scope"
 
 /** Dependencies the run service injects — the ops share its db, per-agent
  * locks, the agents' mounted sessions, and call back into prepareAgent /
@@ -68,13 +70,17 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
 
   /** List an agent's sessions (oldest first) with per-session message counts
    * and the active flag (the current sessionFile pointer). */
-  function listAgentSessions(agentId: string): AgentSessionSummary[] {
+  function listAgentSessions(
+    agentId: string,
+    principal: Principal
+  ): AgentSessionSummary[] {
     const row = db
-      .select({ id: agents.id })
+      .select({ id: agents.id, eventId: agents.eventId })
       .from(agents)
       .where(eq(agents.id, agentId))
       .get()
     if (!row) throw new RunActionError("not_found", "Agent not found")
+    assertMayTouchAgent(principal, row)
     const rows = db
       .select()
       .from(sessions)
@@ -112,7 +118,11 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
 
   /** Create a brand-new session for the agent and make it active (/new). Old
    * sessions stay in the DB (switchable). Requires an idle agent. */
-  async function createAgentSession(agentId: string): Promise<AgentSummary> {
+  async function createAgentSession(
+    agentId: string,
+    principal: Principal
+  ): Promise<AgentSummary> {
+    assertMayTouchAgent(principal, deps.requireAgent(agentId))
     return deps.withLock(agentId, async () => {
       requireIdleAgent(agentId)
       // Nulling the pointer makes prepareAgent's createHost build a fresh
@@ -128,8 +138,10 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
    * agent's own sessions. Requires an idle agent. */
   async function activateAgentSession(
     agentId: string,
-    sessionId: string
+    sessionId: string,
+    principal: Principal
   ): Promise<AgentSummary> {
+    assertMayTouchAgent(principal, deps.requireAgent(agentId))
     return deps.withLock(agentId, async () => {
       const row = db
         .select()
@@ -182,8 +194,10 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
    * take effect). Requires an idle agent. */
   async function backtrackAgent(
     agentId: string,
-    seq: number
+    seq: number,
+    principal: Principal
   ): Promise<AgentSummary> {
+    assertMayTouchAgent(principal, deps.requireAgent(agentId))
     return deps.withLock(agentId, async () => {
       requireIdleAgent(agentId)
       const agentRow = db

@@ -332,13 +332,16 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     if (deps.isSchedulerPaused(row.eventId)) return
     const nowMs = clock.now()
     if (nowMs - Date.parse(row.updatedAt) < stallMs) return
-    deps.channels.post({
-      channelKey: orchKey(row.eventId),
-      author: { type: "system" },
-      body: `停滞：agent-${agentId.slice(0, 8)} 已闲置 ${fmtMs(nowMs - Date.parse(row.updatedAt))}`,
-      meta: { agentId, noticeType: "emergency" },
-      urgent: true,
-    })
+    deps.channels.post(
+      {
+        channelKey: orchKey(row.eventId),
+        author: { type: "system" },
+        body: `停滞：agent-${agentId.slice(0, 8)} 已闲置 ${fmtMs(nowMs - Date.parse(row.updatedAt))}`,
+        meta: { agentId, noticeType: "emergency" },
+        urgent: true,
+      },
+      { kind: "system" }
+    )
   }
 
   // --- the one terminal path ---------------------------------------------------

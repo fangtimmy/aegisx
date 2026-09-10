@@ -6,14 +6,17 @@ import { agents, channelMessages, channelReads } from "../../src/db/schema"
 import { teamKey } from "../../src/run/channels"
 import type { AgentServiceOptions } from "../../src/run/service"
 import {
+  agentPrincipal,
   flatSettingsWithDefaultModel,
   makeAgentService,
   makeProvider,
+  now,
   promptRecordingHost,
   seedAgent,
   setupDb,
+  SYSTEM,
   TEST_MODEL_REF,
-  now,
+  USER,
 } from "../helpers"
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
@@ -25,16 +28,22 @@ function seedChallengeHistory(
   agentService: ReturnType<typeof makeService>["agentService"],
   priorAgentId: string
 ) {
-  agentService.channels.post({
-    channelKey: teamKey("ch-1"),
-    author: { type: "agent", agentId: priorAgentId },
-    body: "prior finding: heap overflow in edit()",
-  })
-  agentService.channels.post({
-    channelKey: teamKey("ch-1"),
-    author: { type: "system" },
-    body: "remote libc 2.35 — trust the target",
-  })
+  agentService.channels.post(
+    {
+      channelKey: teamKey("ch-1"),
+      author: { type: "agent", agentId: priorAgentId },
+      body: "prior finding: heap overflow in edit()",
+    },
+    agentPrincipal(priorAgentId)
+  )
+  agentService.channels.post(
+    {
+      channelKey: teamKey("ch-1"),
+      author: { type: "system" },
+      body: "remote libc 2.35 — trust the target",
+    },
+    SYSTEM
+  )
 }
 
 /** Service whose createHost stub records every prompt text per agent id
@@ -64,7 +73,10 @@ describe("v19 multi-spawn on one challenge", () => {
           `${TEST_MODEL_REF}:low`,
           `${TEST_MODEL_REF}:high`,
         ].map((model) =>
-          agentService.spawn({ eventId: "evt-1", challengeId: "ch-1", model })
+          agentService.spawn(
+            { eventId: "evt-1", challengeId: "ch-1", model },
+            USER
+          )
         )
       )
       await agentService.close()
@@ -103,7 +115,7 @@ describe("v19 multi-spawn on one challenge", () => {
     const made = makeService(provider)
     const { db, agentService } = made
     try {
-      await agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       await agentService.close()
 
       const row = db
@@ -125,17 +137,23 @@ describe("v19 multi-spawn on one challenge", () => {
     const { agentService, promptLog } = made
     try {
       const [overrideAgent, strategyAgent] = await Promise.all([
-        agentService.spawn({
-          eventId: "evt-1",
-          challengeId: "ch-1",
-          prompt: "OVERRIDE-BODY",
-          promptMode: "override",
-        }),
-        agentService.spawn({
-          eventId: "evt-1",
-          challengeId: "ch-1",
-          prompt: "spawn strategy text",
-        }),
+        agentService.spawn(
+          {
+            eventId: "evt-1",
+            challengeId: "ch-1",
+            prompt: "OVERRIDE-BODY",
+            promptMode: "override",
+          },
+          USER
+        ),
+        agentService.spawn(
+          {
+            eventId: "evt-1",
+            challengeId: "ch-1",
+            prompt: "spawn strategy text",
+          },
+          USER
+        ),
       ])
       await agentService.close()
 
@@ -171,7 +189,7 @@ describe("v19 multi-spawn on one challenge", () => {
       const spawned = []
       for (let i = 0; i < 5; i += 1) {
         spawned.push(
-          await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+          await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
         )
       }
       expect(spawned).toHaveLength(5)
@@ -186,11 +204,14 @@ describe("v19 multi-spawn on one challenge", () => {
         createHost: promptRecordingHost(new Map()),
       })
       await expect(
-        fresh.service.spawn({
-          eventId: "evt-1",
-          challengeId: "ch-1",
-          model: "nope/hallucinated:off",
-        })
+        fresh.service.spawn(
+          {
+            eventId: "evt-1",
+            challengeId: "ch-1",
+            model: "nope/hallucinated:off",
+          },
+          USER
+        )
       ).rejects.toThrow(/hallucinated/)
       await fresh.close()
     } finally {
@@ -204,11 +225,21 @@ describe("v19 multi-spawn on one challenge", () => {
     const { agentService } = made
     try {
       const [a, b] = await Promise.all([
-        agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }),
-        agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }),
+        agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER),
+        agentService.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER),
       ])
-      const first = await agentService.finishAgent(a.id, "summary A")
-      const second = await agentService.finishAgent(b.id, "summary B")
+      const first = await agentService.finishAgent(
+        a.id,
+        "summary A",
+        "user",
+        USER
+      )
+      const second = await agentService.finishAgent(
+        b.id,
+        "summary B",
+        "user",
+        USER
+      )
       await agentService.close()
 
       expect(first.status).toBe("completed")
@@ -226,10 +257,13 @@ describe("v19 multi-spawn on one challenge", () => {
     const { db, agentService, promptLog } = made
     try {
       // A prior attempt leaves knowledge in the challenge's #team.
-      const prior = await agentService.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const prior = await agentService.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
       seedChallengeHistory(agentService, prior.id)
 
@@ -238,10 +272,13 @@ describe("v19 multi-spawn on one challenge", () => {
       expect(promptLog.get(prior.id)).toHaveLength(1)
 
       // A second spawn on the SAME challenge shares team:ch-1…
-      const newcomer = await agentService.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const newcomer = await agentService.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await wait(150)
       const tree = agentService.channels.challengeChannelTree("ch-1")
       expect(tree.find((c) => c.kind === "team")!.key).toBe(teamKey("ch-1"))
@@ -305,13 +342,16 @@ describe("v19 multi-spawn on one challenge", () => {
       })
 
       // Unread challenge history on the #team.
-      h.service.channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "system" },
-        body: "old knowledge: libc 2.35",
-      })
+      h.service.channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: "old knowledge: libc 2.35",
+        },
+        SYSTEM
+      )
 
-      await h.service.sendMessage("a-1", { text: "wake" })
+      await h.service.sendMessage("a-1", { text: "wake" }, USER)
       await wait(100)
 
       // Exactly the direct message — no group-history sweep.
@@ -324,8 +364,9 @@ describe("v19 multi-spawn on one challenge", () => {
         h.db.select().from(agents).where(eq(agents.id, "a-1")).get()!.status
       ).toBe("idle")
       expect(
-        h.service.channels.agentChannels("a-1").find((c) => c.kind === "team")!
-          .unread
+        h.service.channels
+          .agentChannels("a-1", agentPrincipal("a-1"))
+          .find((c) => c.kind === "team")!.unread
       ).toBe(1)
     } finally {
       await h.close()

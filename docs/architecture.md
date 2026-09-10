@@ -70,7 +70,10 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 | `bash-tool.ts` | 容器内 bash 工具 |
 | `model-resolver.ts` / `model-runtime.ts` | canonical 模型引用 `aegisx-<providerId>/<modelId>:<effort>` 的解析与运行时模型表（新 provider 惰性刷新） |
 | `sse.ts` | 每 agent 的实时流出口（LiveBus → SSE） |
+| `principal-scope.ts` | 数据层作用域断言：`assertMayTouchEvent` / `assertMayTouchChallenge` / `assertMayTouchAgent`（授权的数据层，见下） |
 | `routes.ts` / `scheduler-admin.ts` / `queries.ts` / `public.ts` | 用户面路由、调度管理面、查询与对外形状 |
+
+**授权分两层**（对 P0-1/2/8「每处手写 scope 条件，漏写即越权」的结构性收敛）：中间件 `infrastructure/agent-auth.ts` 把每个请求**解析一次**为 `Principal`——`{kind:"user"}`（无 token 的本机用户面）、`{kind:"agent", agentId, eventId, challengeId, role}`（token 还原）、`{kind:"system"}`（仅进程内调用方，HTTP 永远产生不了）——它的 `verdict` 决定「这类主体能否打这个端点」（agent API 面，403 by omission）；`run/principal-scope.ts` 的断言助手决定「这个主体能否碰这条数据」。凡跨主体可达的写操作/查询（channels 发帖、queue 操作、agents 管理面、spawn、fleet 等），service 方法签名收 principal 并在内部过同一断言，路由层只做参数解析与转发、不拼任何 scope 条件；channels 发帖另有作者↔principal 一致性断言（`resolveAuthor`），token 冒充 user/system/他人发帖从任何分支进入都会被拒。纯用户面（settings/providers/平台绑定等）verdict 已挡住 agent token，无需 principal。
 
 宿主侧支撑在 `apps/server/src/run/host/`（host 子层，原 `src/agents/`）：`host-session.ts`（pi loop 封装）、`event-pipeline.ts`（事件 → 会话树 + LiveBus + 计时元数据）、`db-session-manager.ts`、`live.ts`（LiveBus）、`model-switch.ts`（存活中换模型）。依赖方向由 lint 强制（`apps/server/.oxlintrc.json` 的 `no-restricted-imports` overrides）：host 是最内层，只能依赖叶子与更内层（`run/errors` / `run/bash-tool` / `run/model-runtime` / `run/container` / `run/workspace` / `db` / `lib`），不得反向 import 编排与路由模块；路由层（`run/routes` / `run/scheduler-admin` / `events` / `scheduler` / `platforms` / `settings` / `activity`）不得深入 `run/host/*` 内部，只能经 service 或 `run/host/index.ts` 公共出口。
 
@@ -105,4 +108,4 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 ## Python SDK（`apps/sdk/python/`）
 
-构建时随镜像分发到 `/opt/aegisx-sdk`，提示词引导 agent 先 `cat /opt/aegisx-sdk/GUIDE.md`。鉴权链：agent token → `infrastructure/agent-auth.ts` 中间件 → 角色面（solver 只有频道与 `ask`；scheduler 有全部管理面）。接口一致性由契约测试保障（`apps/server/scripts/sdk-contract.ts`，根脚本 `bun run test:sdk`）。
+构建时随镜像分发到 `/opt/aegisx-sdk`，提示词引导 agent 先 `cat /opt/aegisx-sdk/GUIDE.md`。鉴权链：agent token → `infrastructure/agent-auth.ts` 中间件解析出 `Principal` 并做端点级 verdict（solver 只有频道与自面；scheduler 有本赛事管理面）→ service 层作用域断言二次限定数据边界（见「run/ 核心模块」的授权两层）。接口一致性由契约测试保障（`apps/server/scripts/sdk-contract.ts`，根脚本 `bun run test:sdk`）。

@@ -7,11 +7,12 @@ import { RunActionError } from "../../src/run/errors"
 import { createQueueService, parseSpawnQueueParams } from "../../src/run/queue"
 import {
   flatSettings,
+  now,
   seedAgent,
   seedChallenge,
   seedEvent,
   setupDb,
-  now,
+  USER,
 } from "../helpers"
 
 type Db = ReturnType<typeof setupDb>["db"]
@@ -85,13 +86,16 @@ function enqueue(
   ord = 0,
   extra: { status?: string } = {}
 ) {
-  return svc.enqueue({
-    eventId,
-    challengeId,
-    source: "manual",
-    prompt: `prompt-${ord}`,
-    ...extra,
-  })
+  return svc.enqueue(
+    {
+      eventId,
+      challengeId,
+      source: "manual",
+      prompt: `prompt-${ord}`,
+      ...extra,
+    },
+    USER
+  )
 }
 
 describe("queue CRUD", () => {
@@ -107,7 +111,7 @@ describe("queue CRUD", () => {
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       const b = enqueue(svc, "evt-1", "ch-b", 2)
       expect([a.ord, b.ord]).toEqual([1, 2])
-      const list = svc.list("evt-1")
+      const list = svc.list("evt-1", USER)
       expect(list.map((i) => i.challengeId)).toEqual(["ch-a", "ch-b"])
     } finally {
       close()
@@ -142,7 +146,7 @@ describe("queue CRUD", () => {
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       const pending = enqueue(svc, "evt-1", "ch-a", 1)
-      svc.remove("evt-1", pending.id) // ok
+      svc.remove("evt-1", pending.id, USER) // ok
       expect(item(db, pending.id)).toBeUndefined()
 
       const running = enqueue(svc, "evt-1", "ch-a", 2)
@@ -150,7 +154,9 @@ describe("queue CRUD", () => {
         .set({ status: "running", updatedAt: now() })
         .where(eq(spawnQueue.id, running.id))
         .run()
-      expect(() => svc.remove("evt-1", running.id)).toThrow(RunActionError)
+      expect(() => svc.remove("evt-1", running.id, USER)).toThrow(
+        RunActionError
+      )
     } finally {
       close()
     }
@@ -168,7 +174,7 @@ describe("queue CRUD", () => {
 
       const deny = (eventId: string): RunActionError | null => {
         try {
-          svc.remove(eventId, a.id)
+          svc.remove(eventId, a.id, USER)
           return null
         } catch (error) {
           if (error instanceof RunActionError) return error
@@ -179,7 +185,7 @@ describe("queue CRUD", () => {
       expect(item(db, a.id)).toBeDefined() // the row survives
       expect(deny("evt-missing")?.message).toBe("Queue item not found")
 
-      svc.remove("evt-1", a.id)
+      svc.remove("evt-1", a.id, USER)
       expect(item(db, a.id)).toBeUndefined()
     } finally {
       close()
@@ -194,10 +200,15 @@ describe("queue CRUD", () => {
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       const pending = enqueue(svc, "evt-1", "ch-a", 1)
-      const updated = svc.update(pending.id, {
-        prompt: "edited",
-        timeoutMs: 99,
-      })
+      const updated = svc.update(
+        "evt-1",
+        pending.id,
+        {
+          prompt: "edited",
+          timeoutMs: 99,
+        },
+        USER
+      )
       expect(updated.prompt).toBe("edited")
       expect(updated.timeoutMs).toBe(99)
 
@@ -206,9 +217,9 @@ describe("queue CRUD", () => {
         .set({ status: "running", updatedAt: now() })
         .where(eq(spawnQueue.id, running.id))
         .run()
-      expect(() => svc.update(running.id, { prompt: "x" })).toThrow(
-        RunActionError
-      )
+      expect(() =>
+        svc.update("evt-1", running.id, { prompt: "x" }, USER)
+      ).toThrow(RunActionError)
     } finally {
       close()
     }
@@ -225,8 +236,8 @@ describe("queue CRUD", () => {
       const { svc, launchedRows } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       const a = enqueue(svc, "evt-1", "ch-a", 1)
-      svc.update(a.id, { prompt: "EDITED" })
-      expect(svc.list("evt-1")[0].prompt).toBe("EDITED")
+      svc.update("evt-1", a.id, { prompt: "EDITED" }, USER)
+      expect(svc.list("evt-1", USER)[0].prompt).toBe("EDITED")
 
       await svc.drainOnce()
       expect(launchedRows.map((row) => row.prompt)).toEqual(["EDITED"])
@@ -248,8 +259,8 @@ describe("queue CRUD", () => {
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       const b = enqueue(svc, "evt-1", "ch-b", 2)
       const c = enqueue(svc, "evt-1", "ch-c", 3)
-      svc.reorder("evt-1", [c.id, a.id, b.id])
-      const list = svc.list("evt-1")
+      svc.reorder("evt-1", [c.id, a.id, b.id], USER)
+      const list = svc.list("evt-1", USER)
       expect(list.map((i) => i.id)).toEqual([c.id, a.id, b.id])
     } finally {
       close()
@@ -287,15 +298,18 @@ describe("queue CRUD", () => {
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
-      const enqueued = svc.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "spawn strategy text",
-        model: "aegisx-prov-1/gpt-4o-mini",
-        promptMode: "override",
-        timeoutMs: 3_600_000,
-      })
+      const enqueued = svc.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "spawn strategy text",
+          model: "aegisx-prov-1/gpt-4o-mini",
+          promptMode: "override",
+          timeoutMs: 3_600_000,
+        },
+        USER
+      )
       expect(enqueued.prompt).toBe("spawn strategy text")
       expect(enqueued.params).toEqual({
         model: "aegisx-prov-1/gpt-4o-mini",
@@ -336,11 +350,11 @@ describe("queue per-event state (W2.1)", () => {
     try {
       seedEvent(db, "evt-1")
       const { svc } = makeQueue(db, async () => "run-x")
-      expect(svc.stateOf("evt-1")).toBe("running")
-      svc.pause("evt-1")
-      expect(svc.stateOf("evt-1")).toBe("paused")
-      svc.resume("evt-1")
-      expect(svc.stateOf("evt-1")).toBe("running")
+      expect(svc.stateOf("evt-1", USER)).toBe("running")
+      svc.pause("evt-1", "manual", USER)
+      expect(svc.stateOf("evt-1", USER)).toBe("paused")
+      svc.resume("evt-1", "manual", USER)
+      expect(svc.stateOf("evt-1", USER)).toBe("running")
       // No row = running; resume after pause leaves an explicit running row.
       const row = db
         .select()
@@ -358,11 +372,11 @@ describe("queue per-event state (W2.1)", () => {
     try {
       seedEvent(db, "evt-1")
       const { svc, notices } = makeQueue(db, async () => "run-x")
-      svc.pause("evt-1") // default source: manual (the web UI sends nothing)
-      expect(svc.stateOf("evt-1")).toBe("paused")
+      svc.pause("evt-1", "manual", USER) // default source: manual (the web UI sends nothing)
+      expect(svc.stateOf("evt-1", USER)).toBe("paused")
       expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
-      svc.resume("evt-1", "scheduler")
-      expect(svc.stateOf("evt-1")).toBe("running")
+      svc.resume("evt-1", "scheduler", USER)
+      expect(svc.stateOf("evt-1", USER)).toBe("running")
       expect(notices[1]).toBe("evt-1: 队列已恢复")
     } finally {
       close()
@@ -379,26 +393,32 @@ describe("queue per-event state (W2.1)", () => {
       let n = 0
       const { svc, launches } = makeQueue(db, async () => `run-${++n}`)
       svc.cancelDrain()
-      const a = svc.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "manual",
-        prompt: "p",
-      })
-      const b = svc.enqueue({
-        eventId: "evt-2",
-        challengeId: "ch-b",
-        source: "manual",
-        prompt: "p",
-      })
-      svc.pause("evt-1")
+      const a = svc.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "manual",
+          prompt: "p",
+        },
+        USER
+      )
+      const b = svc.enqueue(
+        {
+          eventId: "evt-2",
+          challengeId: "ch-b",
+          source: "manual",
+          prompt: "p",
+        },
+        USER
+      )
+      svc.pause("evt-1", "manual", USER)
       await svc.drainOnce()
       // Only evt-2's item launches; evt-1's stays pending (still visible).
       expect(launches).toEqual([b.id])
       expect(item(db, a.id).status).toBe("pending")
       expect(item(db, b.id).status).toBe("running")
       // Resume → the pending item now launches.
-      svc.resume("evt-1")
+      svc.resume("evt-1", "manual", USER)
       await svc.drainOnce()
       expect(launches).toEqual([b.id, a.id])
       expect(item(db, a.id).status).toBe("running")
@@ -415,14 +435,17 @@ describe("queue per-event state (W2.1)", () => {
       let n = 0
       const { svc, launches } = makeQueue(db, async () => `run-${++n}`)
       svc.cancelDrain()
-      const a = svc.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "manual",
-        prompt: "p",
-      })
+      const a = svc.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "manual",
+          prompt: "p",
+        },
+        USER
+      )
       await svc.drainOnce() // launches a → running
-      svc.pause("evt-1")
+      svc.pause("evt-1", "manual", USER)
       await svc.drainOnce()
       expect(launches).toHaveLength(1) // no re-launch
       expect(item(db, a.id).status).toBe("running")
@@ -438,13 +461,13 @@ describe("queue per-event state (W2.1)", () => {
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
       const { svc } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
-      svc.pause("evt-1")
+      svc.pause("evt-1", "manual", USER)
       const a = enqueue(svc, "evt-1", "ch-a", 1)
-      const updated = svc.update(a.id, { prompt: "edited" })
+      const updated = svc.update("evt-1", a.id, { prompt: "edited" }, USER)
       expect(updated.prompt).toBe("edited")
-      expect(svc.list("evt-1").map((i) => i.id)).toEqual([a.id])
-      svc.remove("evt-1", a.id)
-      expect(svc.list("evt-1")).toHaveLength(0)
+      expect(svc.list("evt-1", USER).map((i) => i.id)).toEqual([a.id])
+      svc.remove("evt-1", a.id, USER)
+      expect(svc.list("evt-1", USER)).toHaveLength(0)
     } finally {
       close()
     }
@@ -598,17 +621,17 @@ describe("queue drainer", () => {
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       const b = enqueue(svc, "evt-1", "ch-b", 2)
       expect(emergencies).toHaveLength(0) // 2 pending — no edge yet
-      svc.remove("evt-1", a.id) // 2 → 1: edge fires
+      svc.remove("evt-1", a.id, USER) // 2 → 1: edge fires
       expect(emergencies).toHaveLength(1)
       expect(emergencies[0]).toContain("队列不足")
-      svc.remove("evt-1", b.id) // 1 → 0: already ≤1, no repeat
+      svc.remove("evt-1", b.id, USER) // 1 → 0: already ≤1, no repeat
       expect(emergencies).toHaveLength(1)
 
       // Refill to ≥2 re-arms; another 2→1 crossing fires again.
       enqueue(svc, "evt-1", "ch-c", 3)
       const d = enqueue(svc, "evt-1", "ch-b", 4)
       expect(emergencies).toHaveLength(1)
-      svc.remove("evt-1", d.id)
+      svc.remove("evt-1", d.id, USER)
       expect(emergencies).toHaveLength(2)
     } finally {
       close()
@@ -656,11 +679,11 @@ describe("queue drainer", () => {
       svc.cancelDrain()
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       enqueue(svc, "evt-1", "ch-b", 2)
-      svc.pause("evt-1")
-      svc.remove("evt-1", a.id) // 2→1 crossing while paused → silent
+      svc.pause("evt-1", "manual", USER)
+      svc.remove("evt-1", a.id, USER) // 2→1 crossing while paused → silent
       expect(emergencies).toHaveLength(0)
       expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
-      expect(svc.stateOf("evt-1")).toBe("paused")
+      expect(svc.stateOf("evt-1", USER)).toBe("paused")
     } finally {
       close()
     }
@@ -671,17 +694,17 @@ describe("queue drainer", () => {
     try {
       seedEvent(db, "evt-1")
       const { svc, notices } = makeQueue(db, async () => "run-x")
-      svc.pause("evt-1")
-      svc.pause("evt-1")
-      svc.pause("evt-1", "scheduler")
+      svc.pause("evt-1", "manual", USER)
+      svc.pause("evt-1", "manual", USER)
+      svc.pause("evt-1", "scheduler", USER)
       expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
-      svc.resume("evt-1")
-      svc.resume("evt-1")
+      svc.resume("evt-1", "manual", USER)
+      svc.resume("evt-1", "manual", USER)
       expect(notices).toEqual([
         "evt-1: 队列已暂停（用户手动）",
         "evt-1: 队列已恢复（用户手动）",
       ])
-      expect(svc.stateOf("evt-1")).toBe("running")
+      expect(svc.stateOf("evt-1", USER)).toBe("running")
     } finally {
       close()
     }

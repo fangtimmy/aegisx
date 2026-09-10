@@ -24,7 +24,14 @@ import {
   type ChannelService,
 } from "../../src/run/channels"
 import { createLiveBus } from "../../src/run/host/live"
-import { seedChallenge, seedEvent, now } from "../helpers"
+import {
+  agentPrincipal,
+  now,
+  seedChallenge,
+  seedEvent,
+  SYSTEM,
+  USER,
+} from "../helpers"
 
 type Db = ReturnType<typeof setupDbLite>["db"]
 type Dir = ReturnType<typeof setupDbLite>["dir"]
@@ -290,14 +297,14 @@ describe("channel trees (§2.2 / §9.1)", () => {
       seedScheduler(db, "s1")
       const { channels } = makeService(db, dir)
 
-      expect(channels.agentChannels("a1").map((c) => c.key)).toEqual([
-        teamKey("ch-1"),
-        dmKey("a1"),
-        orchKey("evt-1"),
-      ])
+      expect(
+        channels.agentChannels("a1", agentPrincipal("a1")).map((c) => c.key)
+      ).toEqual([teamKey("ch-1"), dmKey("a1"), orchKey("evt-1")])
       // The scheduler sees the whole event: both challenges' teams, every
       // solver's dm (creation order), and orch.
-      expect(channels.agentChannels("s1").map((c) => c.key)).toEqual([
+      expect(
+        channels.agentChannels("s1", agentPrincipal("s1")).map((c) => c.key)
+      ).toEqual([
         teamKey("ch-1"),
         teamKey("ch-2"),
         dmKey("a1"),
@@ -328,11 +335,18 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     try {
       const { channels } = made
       const post = (author: Parameters<typeof channels.post>[0]["author"]) =>
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author,
-          body: "b",
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author,
+            body: "b",
+          },
+          author.type === "user"
+            ? USER
+            : author.type === "system"
+              ? SYSTEM
+              : agentPrincipal(author.agentId)
+        )
       // The event scheduler posts #team (its signed agent post IS the
       // announcement — #announce is gone).
       expect(() => post({ type: "agent", agentId: "s1" })).not.toThrow()
@@ -354,7 +368,14 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     try {
       const { channels } = made
       const post = (author: Parameters<typeof channels.post>[0]["author"]) =>
-        channels.post({ channelKey: dmKey("a1"), author, body: "b" })
+        channels.post(
+          { channelKey: dmKey("a1"), author, body: "b" },
+          author.type === "user"
+            ? USER
+            : author.type === "system"
+              ? SYSTEM
+              : agentPrincipal(author.agentId)
+        )
       expect(() => post({ type: "agent", agentId: "s1" })).not.toThrow()
       expect(() => post({ type: "user" })).not.toThrow()
       expect(() => post({ type: "system" })).not.toThrow()
@@ -373,7 +394,14 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     try {
       const { channels } = made
       const post = (author: Parameters<typeof channels.post>[0]["author"]) =>
-        channels.post({ channelKey: orchKey("evt-1"), author, body: "b" })
+        channels.post(
+          { channelKey: orchKey("evt-1"), author, body: "b" },
+          author.type === "user"
+            ? USER
+            : author.type === "system"
+              ? SYSTEM
+              : agentPrincipal(author.agentId)
+        )
       expect(() => post({ type: "agent", agentId: "a1" })).not.toThrow()
       expect(() => post({ type: "agent", agentId: "x1" })).not.toThrow()
       expect(() => post({ type: "user" })).not.toThrow()
@@ -391,40 +419,55 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     try {
       const { channels } = made
       // "#team" / "team" resolve to the solver's own challenge team.
-      const viaHash = channels.post({
-        channelKey: "#team",
-        author: { type: "agent", agentId: "a1" },
-        body: "angle: heap spray",
-      })
+      const viaHash = channels.post(
+        {
+          channelKey: "#team",
+          author: { type: "agent", agentId: "a1" },
+          body: "angle: heap spray",
+        },
+        agentPrincipal("a1")
+      )
       expect(viaHash.channelKey).toBe(teamKey("ch-1"))
-      const viaBare = channels.post({
-        channelKey: "team",
-        author: { type: "agent", agentId: "a1" },
-        body: "same",
-      })
+      const viaBare = channels.post(
+        {
+          channelKey: "team",
+          author: { type: "agent", agentId: "a1" },
+          body: "same",
+        },
+        agentPrincipal("a1")
+      )
       expect(viaBare.channelKey).toBe(teamKey("ch-1"))
       // "orch" resolves to the agent's event (the ask path).
-      const viaOrch = channels.post({
-        channelKey: "orch",
-        author: { type: "agent", agentId: "a1" },
-        body: "need more time",
-      })
+      const viaOrch = channels.post(
+        {
+          channelKey: "orch",
+          author: { type: "agent", agentId: "a1" },
+          body: "need more time",
+        },
+        agentPrincipal("a1")
+      )
       expect(viaOrch.channelKey).toBe(orchKey("evt-1"))
       // The write rules still apply on the resolved key: a foreign solver's
       // "#team" resolves to ITS OWN challenge — it can never address ch-1.
-      const foreign = channels.post({
-        channelKey: "#team",
-        author: { type: "agent", agentId: "x1" },
-        body: "foreign",
-      })
+      const foreign = channels.post(
+        {
+          channelKey: "#team",
+          author: { type: "agent", agentId: "x1" },
+          body: "foreign",
+        },
+        agentPrincipal("x1")
+      )
       expect(foreign.channelKey).toBe(teamKey("ch-2"))
       // user/system authors must address a full key.
       expect(() =>
-        channels.post({
-          channelKey: "#team",
-          author: { type: "user" },
-          body: "x",
-        })
+        channels.post(
+          {
+            channelKey: "#team",
+            author: { type: "user" },
+            body: "x",
+          },
+          USER
+        )
       ).toThrow(/非法频道键/)
       channels.close()
     } finally {
@@ -436,18 +479,24 @@ describe("write permissions — the 3 rules (§2.1)", () => {
     const { close, made } = setup()
     try {
       const { channels } = made
-      const message = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "finding",
-      })
+      const message = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "finding",
+        },
+        agentPrincipal("a1")
+      )
       expect(message.authorName).toBe("agent-a1")
       expect(message.meta.agentId).toBe("a1")
-      const sys = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "system" },
-        body: "sys",
-      })
+      const sys = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: "sys",
+        },
+        SYSTEM
+      )
       expect(sys.authorName).toBe("系统")
       expect(sys.meta.agentId).toBeUndefined()
       channels.close()
@@ -471,12 +520,15 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
 
       // a1 posts urgent — a1's own post is never a1's unread; recipients:
       // a2 + b1 (the other live agents). c1 is terminal → store only.
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "cross-attempt finding",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "cross-attempt finding",
+          urgent: true,
+        },
+        agentPrincipal("a1")
+      )
       await settle()
       expect(sent.map((s) => s.agentId).toSorted()).toEqual(["a2", "b1"])
       for (const s of sent) {
@@ -486,7 +538,9 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       }
       // The terminal agent sees the message as UNREAD (store-only).
       expect(
-        channels.agentChannels("c1").find((c) => c.kind === "team")!.unread
+        channels
+          .agentChannels("c1", agentPrincipal("c1"))
+          .find((c) => c.kind === "team")!.unread
       ).toBe(1)
       channels.close()
     } finally {
@@ -503,19 +557,25 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       const { channels, sent } = makeService(db, dir)
 
       // Stored team backlog for the terminal agent — never swept on cold wake.
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "stored only",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "stored only",
+        },
+        USER
+      )
       expect(sent).toHaveLength(0)
 
-      channels.post({
-        channelKey: dmKey("a2"),
-        author: { type: "user" },
-        body: "wake up",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: dmKey("a2"),
+          author: { type: "user" },
+          body: "wake up",
+          urgent: true,
+        },
+        USER
+      )
       await settle()
       expect(sent).toHaveLength(1)
       expect(sent[0].agentId).toBe("a2")
@@ -524,7 +584,9 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       // the target agent, and only its dm face.
       expect(sent[0].text).not.toContain("stored only")
       expect(
-        channels.agentChannels("a2").find((c) => c.kind === "team")!.unread
+        channels
+          .agentChannels("a2", agentPrincipal("a2"))
+          .find((c) => c.kind === "team")!.unread
       ).toBe(1)
       channels.close()
     } finally {
@@ -545,12 +607,15 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       })
 
       // Solver urgent post → scheduler delivery carries the digest.
-      channels.post({
-        channelKey: orchKey("evt-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "ask",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: orchKey("evt-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "ask",
+          urgent: true,
+        },
+        agentPrincipal("a1")
+      )
       await settle()
       expect(sent.map((s) => s.agentId)).toEqual(["s1"])
       expect(sent[0].text).toContain("ask")
@@ -560,12 +625,15 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
 
       // Solver-facing delivery: no digest.
       sent.length = 0
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "team note",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "team note",
+          urgent: true,
+        },
+        USER
+      )
       await settle()
       expect(sent.map((s) => s.agentId)).toEqual(["a1"])
       expect(sent[0].text).toContain("team note")
@@ -585,12 +653,15 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       seedScheduler(db, "s1")
       const { channels, sent } = makeService(db, dir)
 
-      channels.post({
-        channelKey: orchKey("evt-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "ask: which challenge next?",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: orchKey("evt-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "ask: which challenge next?",
+          urgent: true,
+        },
+        agentPrincipal("a1")
+      )
       await settle()
       expect(sent.map((s) => s.agentId)).toEqual(["s1"])
       expect(sent[0].text).toContain("ask: which challenge next?")
@@ -601,12 +672,15 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
         .set({ status: "completed" })
         .where(eq(agents.id, "s1"))
         .run()
-      channels.post({
-        channelKey: orchKey("evt-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "second ask",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: orchKey("evt-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "second ask",
+          urgent: true,
+        },
+        agentPrincipal("a1")
+      )
       await settle()
       expect(sent).toHaveLength(0)
       expect(channels.unreadCount(orchKey("evt-1"), SCHEDULER_READ_KEY)).toBe(1)
@@ -626,11 +700,14 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       disableUrgentTeam(db)
       const { channels, sent } = makeService(db, dir)
 
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "fyi finding",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "fyi finding",
+        },
+        agentPrincipal("a1")
+      )
       await settle()
       expect(sent).toHaveLength(0) // policy off = wait for the tick
       channels.close()
@@ -649,11 +726,14 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       // No scheduler_config row → policy defaults ON.
       const { channels, sent } = makeService(db, dir)
 
-      const posted = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "fyi finding",
-      })
+      const posted = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "fyi finding",
+        },
+        agentPrincipal("a1")
+      )
       await settle()
       // Immediate delivery to the sibling (own post excluded) + urgent meta.
       expect(sent.map((s) => s.agentId)).toEqual(["a2"])
@@ -672,12 +752,15 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
       seedAgent(db, "a1", { status: "running" })
       seedAgent(db, "a2", { status: "running" })
       const { channels, sent } = makeService(db, dir)
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "system" },
-        body: "deadline tight",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: "deadline tight",
+          urgent: true,
+        },
+        SYSTEM
+      )
       await settle()
       expect(sent[0].text).toContain("[频道消息]")
       expect(sent[0].text).toContain("⚠ ")
@@ -702,21 +785,30 @@ describe("flush tick (§3.4)", () => {
       disableUrgentTeam(db)
       const { channels, sent } = makeService(db, dir)
 
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "c1" },
-        body: "m1",
-      })
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "m2",
-      })
-      channels.post({
-        channelKey: orchKey("evt-1"),
-        author: { type: "system" },
-        body: "agent started",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "c1" },
+          body: "m1",
+        },
+        agentPrincipal("c1")
+      )
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "m2",
+        },
+        USER
+      )
+      channels.post(
+        {
+          channelKey: orchKey("evt-1"),
+          author: { type: "system" },
+          body: "agent started",
+        },
+        SYSTEM
+      )
       channels.runFlushTick()
       await settle()
 
@@ -754,17 +846,23 @@ describe("flush tick (§3.4)", () => {
 
       channels.setDeliveryPaused("evt-1", true)
       expect(channels.isDeliveryPaused("evt-1")).toBe(true)
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "system" },
-        body: "paused post",
-        urgent: true,
-      })
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "system" },
-        body: "paused tick post",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: "paused post",
+          urgent: true,
+        },
+        SYSTEM
+      )
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: "paused tick post",
+        },
+        SYSTEM
+      )
       await settle()
       expect(sent).toHaveLength(0) // urgent skipped under hold
       channels.runFlushTick()
@@ -821,20 +919,26 @@ describe("read cursors — three progression points (§3.5)", () => {
       const { channels, sent } = makeService(db, dir)
 
       // 1. Self-post: author cursor lands on the message id.
-      const own = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "self",
-      })
+      const own = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "self",
+        },
+        agentPrincipal("a1")
+      )
       expect(channels.readCursor(teamKey("ch-1"), "a1")).toBe(own.id)
 
       // 2. SDK read (pull = consume): a user post lands, a1 reads it.
-      const hello = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "hello",
-      })
-      const read = channels.readForAgent("a1", "#team")
+      const hello = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "hello",
+        },
+        USER
+      )
+      const read = channels.readForAgent(agentPrincipal("a1"), "#team")
       expect(read.items.map((m) => m.body)).toContain("hello")
       expect(channels.readCursor(teamKey("ch-1"), "a1")).toBe(
         read.items.at(-1)!.id
@@ -866,16 +970,22 @@ describe("read cursors — three progression points (§3.5)", () => {
       seedAgent(db, "a1", { status: "completed" })
       const { channels, sent } = makeService(db, dir)
       // Prior knowledge sitting in #team (terminal agent → stored, not delivered).
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "prior finding: heap overflow in edit()",
-      })
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "system" },
-        body: "remote libc 2.35 — trust the target",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "prior finding: heap overflow in edit()",
+        },
+        agentPrincipal("a1")
+      )
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "system" },
+          body: "remote libc 2.35 — trust the target",
+        },
+        SYSTEM
+      )
 
       // A fresh agent on the same challenge: cursor 0 → one deliver sweeps BOTH.
       seedAgent(db, "b1", { status: "running" })
@@ -904,37 +1014,46 @@ describe("read cursors — three progression points (§3.5)", () => {
       seedScheduler(db, "s1")
       const { channels } = makeService(db, dir)
 
-      expect(channels.readForAgent("a1", "#team").channel.key).toBe(
-        teamKey("ch-1")
-      )
-      expect(channels.readForAgent("a1", "team").channel.key).toBe(
-        teamKey("ch-1")
-      )
-      expect(channels.readForAgent("a1", "orch").channel.key).toBe(
-        orchKey("evt-1")
-      )
-      expect(channels.readForAgent("a1", dmKey("a1")).channel.key).toBe(
-        dmKey("a1")
-      )
+      expect(
+        channels.readForAgent(agentPrincipal("a1"), "#team").channel.key
+      ).toBe(teamKey("ch-1"))
+      expect(
+        channels.readForAgent(agentPrincipal("a1"), "team").channel.key
+      ).toBe(teamKey("ch-1"))
+      expect(
+        channels.readForAgent(agentPrincipal("a1"), "orch").channel.key
+      ).toBe(orchKey("evt-1"))
+      expect(
+        channels.readForAgent(agentPrincipal("a1"), dmKey("a1")).channel.key
+      ).toBe(dmKey("a1"))
       // Visibility: a solver cannot read a foreign team, another agent's dm.
-      expect(() => channels.readForAgent("a1", teamKey("ch-2"))).toThrow(/无权/)
-      expect(() => channels.readForAgent("a1", dmKey("x1"))).toThrow(/无权/)
+      expect(() =>
+        channels.readForAgent(agentPrincipal("a1"), teamKey("ch-2"))
+      ).toThrow(/无权/)
+      expect(() =>
+        channels.readForAgent(agentPrincipal("a1"), dmKey("x1"))
+      ).toThrow(/无权/)
       // The scheduler addresses teams by key ("#team" is a solver shortcut).
-      expect(channels.readForAgent("s1", teamKey("ch-1")).channel.key).toBe(
-        teamKey("ch-1")
-      )
-      expect(channels.readForAgent("s1", dmKey("a1")).channel.key).toBe(
-        dmKey("a1")
-      )
-      expect(() => channels.readForAgent("s1", "#team")).toThrow(/调度者/)
+      expect(
+        channels.readForAgent(agentPrincipal("s1"), teamKey("ch-1")).channel.key
+      ).toBe(teamKey("ch-1"))
+      expect(
+        channels.readForAgent(agentPrincipal("s1"), dmKey("a1")).channel.key
+      ).toBe(dmKey("a1"))
+      expect(() =>
+        channels.readForAgent(agentPrincipal("s1"), "#team")
+      ).toThrow(/调度者/)
       // markRead=false leaves the cursor alone (pull without consuming).
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "unread probe",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "unread probe",
+        },
+        USER
+      )
       const before = channels.readCursor(teamKey("ch-1"), "a1")
-      channels.readForAgent("a1", "#team", { markRead: false })
+      channels.readForAgent(agentPrincipal("a1"), "#team", { markRead: false })
       expect(channels.readCursor(teamKey("ch-1"), "a1")).toBe(before)
       channels.close()
     } finally {
@@ -953,14 +1072,17 @@ describe("SDK pull paging (forward window)", () => {
       disableUrgentTeam(db)
       const { channels } = makeService(db, dir)
       for (let i = 1; i <= 55; i += 1) {
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "system" },
-          body: `m${i}`,
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "system" },
+            body: `m${i}`,
+          },
+          SYSTEM
+        )
       }
 
-      const page = channels.readForAgent("a1", "#team")
+      const page = channels.readForAgent(agentPrincipal("a1"), "#team")
       expect(page.items).toHaveLength(50)
       expect(page.items[0].body).toBe("m1")
       expect(page.items[49].body).toBe("m50")
@@ -985,18 +1107,23 @@ describe("SDK pull paging (forward window)", () => {
       disableUrgentTeam(db)
       const { channels } = makeService(db, dir)
       for (let i = 1; i <= 55; i += 1) {
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "system" },
-          body: `m${i}`,
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "system" },
+            body: `m${i}`,
+          },
+          SYSTEM
+        )
       }
 
       const seen: number[] = []
       let after = 0
       let pages = 0
       for (;;) {
-        const page = channels.readForAgent("a1", "#team", { after })
+        const page = channels.readForAgent(agentPrincipal("a1"), "#team", {
+          after,
+        })
         seen.push(...page.items.map((m) => m.id))
         pages += 1
         after = page.nextAfter
@@ -1017,7 +1144,9 @@ describe("SDK pull paging (forward window)", () => {
         channelIds[channelIds.length - 1]
       )
       // A re-pull past the frontier returns nothing new.
-      const tail = channels.readForAgent("a1", "#team", { after })
+      const tail = channels.readForAgent(agentPrincipal("a1"), "#team", {
+        after,
+      })
       expect(tail.items).toHaveLength(0)
       expect(tail.hasMore).toBe(false)
       expect(tail.nextAfter).toBe(after)
@@ -1123,12 +1252,15 @@ describe("attachments — shared/ mechanism (§六)", () => {
     try {
       const { channels } = made
       putAgentFile(db, dir, "a1", "exp2.py", 4300)
-      const message = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "exp 骨架在 exp2.py",
-        files: ["exp2.py"],
-      })
+      const message = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "exp 骨架在 exp2.py",
+          files: ["exp2.py"],
+        },
+        agentPrincipal("a1")
+      )
       expect(message.files).toHaveLength(1)
       expect(message.files[0].filename).toBe("exp2.py")
       expect(message.files[0].size).toBe(4300)
@@ -1158,18 +1290,24 @@ describe("attachments — shared/ mechanism (§六)", () => {
     try {
       const { channels } = made
       putAgentFile(db, dir, "a1", "poc.py", 10)
-      const first = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "one",
-        files: ["poc.py"],
-      })
-      const second = channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "two",
-        files: ["poc.py"],
-      })
+      const first = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "one",
+          files: ["poc.py"],
+        },
+        agentPrincipal("a1")
+      )
+      const second = channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "two",
+          files: ["poc.py"],
+        },
+        agentPrincipal("a1")
+      )
       expect(first.files[0].path).toBe("shared/from-a1/poc.py")
       expect(second.files[0].path).toBe("shared/from-a1/poc-2.py")
       made.channels.close()
@@ -1184,12 +1322,15 @@ describe("attachments — shared/ mechanism (§六)", () => {
       const { channels } = made
       putAgentFile(db, dir, "a1", "poc.py", 100)
       const post = (files: string[]) =>
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "agent", agentId: "a1" },
-          body: "b",
-          files,
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "agent", agentId: "a1" },
+            body: "b",
+            files,
+          },
+          agentPrincipal("a1")
+        )
       expect(() => post(["../../etc/passwd"])).toThrow(/越界/)
       expect(() => post(["/etc/passwd"])).toThrow(/不合法/)
       expect(() => post(["missing.py"])).toThrow(/不存在/)
@@ -1206,12 +1347,15 @@ describe("attachments — shared/ mechanism (§六)", () => {
       seedScheduler(db, "s1")
       const { channels } = made
       expect(() =>
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "agent", agentId: "s1" },
-          body: "b",
-          files: ["whatever.py"],
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "agent", agentId: "s1" },
+            body: "b",
+            files: ["whatever.py"],
+          },
+          agentPrincipal("s1")
+        )
       ).toThrow(/只有解题 agent/)
       made.channels.close()
     } finally {
@@ -1225,39 +1369,51 @@ describe("attachments — shared/ mechanism (§六)", () => {
       const { channels } = made
       for (let i = 0; i < 9; i += 1) putAgentFile(db, dir, "a1", `f${i}`, 1)
       expect(() =>
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "agent", agentId: "a1" },
-          body: "b",
-          files: Array.from({ length: 9 }, (_, i) => `f${i}`),
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "agent", agentId: "a1" },
+            body: "b",
+            files: Array.from({ length: 9 }, (_, i) => `f${i}`),
+          },
+          agentPrincipal("a1")
+        )
       ).toThrow(/最多 8 个附件/)
       expect(() =>
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "agent", agentId: "a1" },
-          body: "x".repeat(16_001),
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "agent", agentId: "a1" },
+            body: "x".repeat(16_001),
+          },
+          agentPrincipal("a1")
+        )
       ).toThrow(/16_?000|16,000|16K/)
       // Sparse 65MB file: statSync sees the size, no data written.
       const big = putAgentFile(db, dir, "a1", "big.bin", 1)
       truncateSync(big, 65 * 1024 * 1024)
       expect(() =>
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "agent", agentId: "a1" },
-          body: "b",
-          files: ["big.bin"],
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "agent", agentId: "a1" },
+            body: "b",
+            files: ["big.bin"],
+          },
+          agentPrincipal("a1")
+        )
       ).toThrow(/64MB/)
       // Workspace attachments are agent-only.
       expect(() =>
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "user" },
-          body: "b",
-          files: ["poc.py"],
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "user" },
+            body: "b",
+            files: ["poc.py"],
+          },
+          USER
+        )
       ).toThrow(/只能由 agent/)
       made.channels.close()
     } finally {
@@ -1270,18 +1426,21 @@ describe("attachments — shared/ mechanism (§六)", () => {
     try {
       seedAgent(db, "a2", { status: "running" })
       const { channels, sent } = made
-      const message = await channels.postWithUpload({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "with attachment",
-        uploads: [
-          {
-            filename: "notes.txt",
-            size: 5,
-            stream: async () => new Uint8Array([104, 101, 108, 108, 111]),
-          },
-        ],
-      })
+      const message = await channels.postWithUpload(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "with attachment",
+          uploads: [
+            {
+              filename: "notes.txt",
+              size: 5,
+              stream: async () => new Uint8Array([104, 101, 108, 108, 111]),
+            },
+          ],
+        },
+        USER
+      )
       expect(message.files).toHaveLength(1)
       expect(message.files[0].filename).toBe("notes.txt")
       expect(message.files[0].size).toBe(5)
@@ -1297,25 +1456,28 @@ describe("attachments — shared/ mechanism (§六)", () => {
       // swept with the workspace).
       const before = db.select().from(channelMessages).all().length
       await expect(
-        channels.postWithUpload({
-          channelKey: teamKey("ch-1"),
-          author: { type: "user" },
-          body: "broken",
-          uploads: [
-            {
-              filename: "ok.txt",
-              size: 1,
-              stream: async () => new Uint8Array([1]),
-            },
-            {
-              filename: "boom.txt",
-              size: 1,
-              stream: async () => {
-                throw new Error("disk full")
+        channels.postWithUpload(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "user" },
+            body: "broken",
+            uploads: [
+              {
+                filename: "ok.txt",
+                size: 1,
+                stream: async () => new Uint8Array([1]),
               },
-            },
-          ],
-        })
+              {
+                filename: "boom.txt",
+                size: 1,
+                stream: async () => {
+                  throw new Error("disk full")
+                },
+              },
+            ],
+          },
+          USER
+        )
       ).rejects.toThrow(/disk full/)
       expect(db.select().from(channelMessages).all().length).toBe(before)
       made.channels.close()
@@ -1333,11 +1495,14 @@ describe("timeline pagination (§9.1)", () => {
       seedChallenge(db, { id: "ch-1" })
       const { channels } = makeService(db, dir)
       for (let i = 1; i <= 5; i += 1) {
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "system" },
-          body: `m${i}`,
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "system" },
+            body: `m${i}`,
+          },
+          SYSTEM
+        )
       }
       // The window is always the newest `limit` messages above the floor.
       const page1 = channels.listMessages(teamKey("ch-1"), { limit: 2 })
@@ -1374,16 +1539,22 @@ describe("explicit cleanup (§八)", () => {
       seedChallenge(db, { id: "ch-1" })
       seedAgent(db, "a1", { status: "running" })
       const { channels } = makeService(db, dir)
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "agent", agentId: "a1" },
-        body: "knowledge",
-      })
-      channels.post({
-        channelKey: dmKey("a1"),
-        author: { type: "user" },
-        body: "dm note",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "agent", agentId: "a1" },
+          body: "knowledge",
+        },
+        agentPrincipal("a1")
+      )
+      channels.post(
+        {
+          channelKey: dmKey("a1"),
+          author: { type: "user" },
+          body: "dm note",
+        },
+        USER
+      )
       channels.markRead(dmKey("a1"), "a1", 99)
 
       channels.cleanupAgentChannels("a1")
@@ -1422,21 +1593,30 @@ describe("explicit cleanup (§八)", () => {
       seedChallenge(db, { id: "ch-1" })
       seedAgent(db, "a1", { status: "running" })
       const { channels } = makeService(db, dir)
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "team",
-      })
-      channels.post({
-        channelKey: orchKey("evt-1"),
-        author: { type: "system" },
-        body: "evt",
-      })
-      channels.post({
-        channelKey: dmKey("a1"),
-        author: { type: "user" },
-        body: "dm",
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "team",
+        },
+        USER
+      )
+      channels.post(
+        {
+          channelKey: orchKey("evt-1"),
+          author: { type: "system" },
+          body: "evt",
+        },
+        SYSTEM
+      )
+      channels.post(
+        {
+          channelKey: dmKey("a1"),
+          author: { type: "user" },
+          body: "dm",
+        },
+        USER
+      )
 
       channels.cleanupEventChannels("evt-1")
       expect(db.select().from(channelMessages).all()).toHaveLength(0)
@@ -1460,22 +1640,28 @@ describe("terminal agents and urgent delivery (kill-undo guard)", () => {
 
       // Urgent broadcast: only the live reader receives it. The aborted
       // agent stays dead (a delivery must never reopen what a close killed).
-      channels.post({
-        channelKey: teamKey("ch-1"),
-        author: { type: "user" },
-        body: "storm notice",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: teamKey("ch-1"),
+          author: { type: "user" },
+          body: "storm notice",
+          urgent: true,
+        },
+        USER
+      )
       expect(sent.map((s) => s.agentId)).toEqual(["a2"])
 
       // Targeted urgent DM: the ONE sanctioned wake path for a terminal
       // agent (the scheduler intervening on a wrongly-stopped agent).
-      channels.post({
-        channelKey: dmKey("a1"),
-        author: { type: "user" },
-        body: "wake up",
-        urgent: true,
-      })
+      channels.post(
+        {
+          channelKey: dmKey("a1"),
+          author: { type: "user" },
+          body: "wake up",
+          urgent: true,
+        },
+        USER
+      )
       expect(sent.map((s) => s.agentId)).toEqual(["a2", "a1"])
       channels.close()
     } finally {
@@ -1490,11 +1676,14 @@ describe("terminal agents and urgent delivery (kill-undo guard)", () => {
       seedChallenge(db, { id: "ch-1" })
       seedAgent(db, "a1", { status: "completed" })
       const { channels, sent } = makeService(db, dir)
-      channels.post({
-        channelKey: dmKey("a1"),
-        author: { type: "user" },
-        body: "later",
-      })
+      channels.post(
+        {
+          channelKey: dmKey("a1"),
+          author: { type: "user" },
+          body: "later",
+        },
+        USER
+      )
       expect(sent).toHaveLength(0)
       channels.close()
     } finally {
@@ -1516,11 +1705,14 @@ describe("delivery budget folds the NEWEST, keeps the OLDEST (ground truth first
       const { channels, sent } = makeService(db, dir)
 
       for (let i = 1; i <= 30; i += 1) {
-        channels.post({
-          channelKey: teamKey("ch-1"),
-          author: { type: "user", name: "u" },
-          body: groundTruthBodyOf(i),
-        })
+        channels.post(
+          {
+            channelKey: teamKey("ch-1"),
+            author: { type: "user", name: "u" },
+            body: groundTruthBodyOf(i),
+          },
+          USER
+        )
       }
 
       channels.runFlushTick()

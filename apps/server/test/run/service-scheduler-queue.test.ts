@@ -9,6 +9,7 @@ import {
   promptRecordingHost,
   seedAgent,
   stubHostAgentSession,
+  USER,
 } from "../helpers"
 import { refine } from "../support"
 
@@ -65,16 +66,19 @@ describe("v19 spawn-spec passthrough (params → drainer → spawn)", () => {
       const { service, promptLog } = made
       const queue = service.queue()
 
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "shared strategy text",
-        model: "aegisx-prov-1/gpt-4o-mini:high",
-      })
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "shared strategy text",
+          model: "aegisx-prov-1/gpt-4o-mini:high",
+        },
+        USER
+      )
       await queue.drainOnce()
 
-      const launched = queue.list("evt-1").find((i) => i.id === item.id)!
+      const launched = queue.list("evt-1", USER).find((i) => i.id === item.id)!
       expect(launched.status).toBe("running")
       expect(launched.agentId).toBeTruthy()
       const solver = made.h.db
@@ -98,16 +102,19 @@ describe("v19 spawn-spec passthrough (params → drainer → spawn)", () => {
     try {
       const { service, promptLog } = made
       const queue = service.queue()
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "RAW FIRST PROMPT",
-        promptMode: "override",
-      })
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "RAW FIRST PROMPT",
+          promptMode: "override",
+        },
+        USER
+      )
       await queue.drainOnce()
       const agentId = queue
-        .list("evt-1")
+        .list("evt-1", USER)
         .find((i) => i.id === item.id)!.agentId!
       expect(promptLog.get(agentId)?.[0]).toBe("RAW FIRST PROMPT")
     } finally {
@@ -123,16 +130,19 @@ describe("scheduler queue integration (v19)", () => {
       const { service } = made
       const queue = service.queue()
 
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "manual",
-        prompt: "go",
-      })
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "manual",
+          prompt: "go",
+        },
+        USER
+      )
       expect(item.status).toBe("pending")
       await queue.drainOnce()
 
-      const launched = queue.list("evt-1").find((i) => i.id === item.id)!
+      const launched = queue.list("evt-1", USER).find((i) => i.id === item.id)!
       expect(launched.status).toBe("running")
       expect(launched.agentId).toBeTruthy()
       const agent = made.h.db
@@ -152,18 +162,21 @@ describe("scheduler queue integration (v19)", () => {
     try {
       const { service } = made
       const queue = service.queue()
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "go",
-      })
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "go",
+        },
+        USER
+      )
       await queue.drainOnce()
       const agentId = queue
-        .list("evt-1")
+        .list("evt-1", USER)
         .find((i) => i.id === item.id)!.agentId!
 
-      await service.finishAgent(agentId, "solved")
+      await service.finishAgent(agentId, "solved", "user", USER)
       await settle()
 
       const done = made.h.db
@@ -183,21 +196,24 @@ describe("scheduler queue integration (v19)", () => {
       const { service } = made
       const db = made.h.db
       const queue = service.queue()
-      queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "manual",
-        prompt: "go",
-      })
+      queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "manual",
+          prompt: "go",
+        },
+        USER
+      )
       await queue.drainOnce()
-      const agentId = queue.list("evt-1")[0].agentId!
+      const agentId = queue.list("evt-1", USER)[0].agentId!
       const before = db
         .select()
         .from(agents)
         .where(eq(agents.id, agentId))
         .get()!
 
-      service.setAgentTimeout(agentId, 7_200_000)
+      service.setAgentTimeout(agentId, 7_200_000, USER)
       const after = db
         .select()
         .from(agents)
@@ -222,7 +238,7 @@ describe("scheduler queue integration (v19)", () => {
 
       // Direct spawn at the cap → capacity error (the agent count stays 4).
       await expect(
-        service.spawn({ eventId: "evt-1", challengeId: "ch-a" })
+        service.spawn({ eventId: "evt-1", challengeId: "ch-a" }, USER)
       ).rejects.toThrow(/Live agent cap reached/)
       expect(
         db
@@ -234,12 +250,15 @@ describe("scheduler queue integration (v19)", () => {
 
       // A queued item drains but stays pending (capacity → skip, not fail).
       const queue = service.queue()
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "go",
-      })
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "go",
+        },
+        USER
+      )
       await queue.drainOnce()
       expect(
         db.select().from(spawnQueue).where(eq(spawnQueue.id, item.id)).get()!
@@ -262,11 +281,11 @@ describe("scheduler queue integration (v19)", () => {
 
       const sched = await service.startScheduler("evt-1")
       expect(sched.role).toBe("orchestrator")
-      const config = service.getSchedulerConfig("evt-1")
+      const config = service.getSchedulerConfig("evt-1", USER)
       expect(config.instruction).toBe("Hit crypto first.")
       expect(config.maxConcurrentTargets).toBe(2)
       // get_status reflects the configured target cap.
-      const status = service.getStatus("evt-1")
+      const status = service.getStatus("evt-1", USER)
       expect(status.maxConcurrentTargets).toBe(2)
     } finally {
       await made.h.close()
@@ -314,12 +333,15 @@ describe("scheduler queue integration (v19)", () => {
       const service = h.service
 
       const queue = service.queue()
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "go",
-      })
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "go",
+        },
+        USER
+      )
       await queue.drainOnce()
       await settle()
 
@@ -343,14 +365,17 @@ describe("scheduler queue integration (v19)", () => {
       const { service, promptLog } = made
 
       const queue = service.queue()
-      queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "Hit crypto first; try z3.",
-      })
+      queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "Hit crypto first; try z3.",
+        },
+        USER
+      )
       await queue.drainOnce()
-      const agentId = queue.list("evt-1")[0].agentId!
+      const agentId = queue.list("evt-1", USER)[0].agentId!
       const prime = promptLog.get(agentId)?.[0] ?? ""
       // The standard blocks are always rendered; the strategy is a section.
       expect(prime).toContain("## Challenge")
@@ -368,15 +393,18 @@ describe("scheduler queue integration (v19)", () => {
       const db = made.h.db
       const { service } = made
       const queue = service.queue()
-      const item = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-a",
-        source: "scheduler",
-        prompt: "go",
-      })
+      const item = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-a",
+          source: "scheduler",
+          prompt: "go",
+        },
+        USER
+      )
       await queue.drainOnce()
       const agentId = queue
-        .list("evt-1")
+        .list("evt-1", USER)
         .find((i) => i.id === item.id)!.agentId!
       // The launched agent is live (hang host) with its item linked `running`.
       expect(

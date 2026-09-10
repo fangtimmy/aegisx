@@ -8,11 +8,28 @@ import { jsonError } from "./http-errors"
 /** The authenticated agent identity, derived from the bearer token — never
  * from client-reported headers. */
 export type AgentPrincipal = {
-  id: string
+  kind: "agent"
+  agentId: string
   eventId: string
   challengeId: string | null
   role: "solver" | "orchestrator"
 }
+
+/**
+ * Request identity, resolved exactly once (by the {@link agentAuth}
+ * middleware for HTTP, by hand for in-process callers) and passed down into
+ * service methods. Scope enforcement lives in the service layer via the
+ * assertion helpers in run/principal-scope.ts; this type is the only thing
+ * they accept.
+ *
+ *  - user: a tokenless request — the localhost user/UI face, full authority.
+ *  - agent: a valid bearer token; confined to its own event (solvers further
+ *    to their own agent) by the scope assertions.
+ *  - system: in-process internal callers only (flag pipeline, notices,
+ *    bootstrap) — full authority. The middleware never produces it, so no
+ *    HTTP request can claim it.
+ */
+export type Principal = { kind: "user" } | { kind: "system" } | AgentPrincipal
 
 /** Spawn-time credential (64 hex). Injected per-exec as AEGISX_TOKEN. */
 export function newAgentToken(): string {
@@ -45,11 +62,14 @@ function challengeEventOf(db: Database, challengeId: string): string | null {
 }
 
 /**
- * The complete agent-API surface: one function holding every rule. A request
- * carrying an agent token may ONLY reach routes this returns ok for — the
- * user-facing API (events/challenges CRUD, providers, settings, platforms,
- * scheduler policy) is 403 by omission. Solver = the self face + channels;
- * scheduler = the management face of its own event + channels.
+ * Endpoint-level gate (layer 1 of 2): which KINDS of principal may hit which
+ * route shape at all. Data-level scope ("may this principal touch this row")
+ * is layer 2 — the service-side assertions in run/principal-scope.ts. The
+ * complete agent-API surface lives here: a request carrying an agent token
+ * may ONLY reach routes this returns ok for — the user-facing API (events/
+ * challenges CRUD, providers, settings, platforms, scheduler policy) is 403
+ * by omission. Solver = the self face + channels; scheduler = the management
+ * face of its own event + channels.
  */
 function verdict(
   db: Database,
@@ -62,7 +82,7 @@ function verdict(
   const isScheduler = p.role === "orchestrator"
 
   // Channels face (both roles): visibility and identity are enforced inside
-  // the channel service (readForAgent / resolvePostKey use the principal).
+  // the channel service (readForAgent / resolveAuthor use the principal).
   if (area === "channels" && id !== undefined && sub === "messages") {
     if (method === "GET" || method === "POST") return { ok: true }
     return deny("channels face is read/post only")
@@ -76,7 +96,7 @@ function verdict(
         (sub === "messages" || sub === "channels") &&
         leaf === undefined &&
         method === "GET"
-      if (id === p.id && (bareSelf || subSelf)) return { ok: true }
+      if (id === p.agentId && (bareSelf || subSelf)) return { ok: true }
       return deny("solvers may only read their own agent face; use channels")
     }
     // Scheduler: full agent management, own event only.
@@ -128,15 +148,18 @@ function verdict(
 }
 
 /**
- * Global middleware: resolves the agent principal from the bearer token and
- * gates agent-identified requests to the agent API surface. Requests without
- * a token pass through untouched (the user/UI face — the unauthenticated
- * localhost boundary is documented and accepted).
+ * Global middleware: resolves the {@link Principal} once per request. A
+ * bearer token resolves to an agent principal, gated to the agent API
+ * surface by verdict; tokenless requests become the user principal and pass
+ * through untouched (the unauthenticated localhost boundary is documented
+ * and accepted). Routes read it back via principalOf and hand it to the
+ * service layer.
  */
 export function agentAuth(db: Database): MiddlewareHandler {
   return async (c, next) => {
     const header = c.req.header("authorization")
     if (!header?.startsWith("Bearer ")) {
+      setPrincipal(c, { kind: "user" })
       return await next()
     }
     const token = header.slice(7).trim()
@@ -164,7 +187,8 @@ export function agentAuth(db: Database): MiddlewareHandler {
       )
     }
     const principal: AgentPrincipal = {
-      id: row.id,
+      kind: "agent",
+      agentId: row.id,
       eventId: row.eventId,
       challengeId: row.challengeId,
       role: row.role,
@@ -175,7 +199,7 @@ export function agentAuth(db: Database): MiddlewareHandler {
         c,
         {
           code: "forbidden",
-          message: `Agent ${principal.id} may not ${c.req.method} ${c.req.path}: ${decision.reason}`,
+          message: `Agent ${principal.agentId} may not ${c.req.method} ${c.req.path}: ${decision.reason}`,
         },
         403
       )
@@ -185,21 +209,21 @@ export function agentAuth(db: Database): MiddlewareHandler {
   }
 }
 
-type PrincipalEnv = { Variables: { agentPrincipal: AgentPrincipal } }
+type PrincipalEnv = { Variables: { principal: Principal } }
 
-function setPrincipal(c: Context, principal: AgentPrincipal): void {
+function setPrincipal(c: Context, principal: Principal): void {
   // Hono's env typing does not flow through `app.use("*", ...)`; the
   // Variables contract lives in PrincipalEnv below.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  ;(c as unknown as Context<PrincipalEnv>).set("agentPrincipal", principal)
+  ;(c as unknown as Context<PrincipalEnv>).set("principal", principal)
 }
 
-/** The request's agent principal, when the call carries a valid token. */
-export function principalOf(c: Context): AgentPrincipal | undefined {
+/** The request's principal — every request has one (`{kind: "user"}` when no
+ * token was presented). Routes only pass it on; scope decisions live in the
+ * service layer. */
+export function principalOf(c: Context): Principal {
   // Hono's env typing does not flow through `app.use("*", ...)`.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  const ctx = c as unknown as Context<{
-    Variables: { agentPrincipal?: AgentPrincipal }
-  }>
-  return ctx.get("agentPrincipal")
+  const ctx = c as unknown as Context<{ Variables: { principal: Principal } }>
+  return ctx.get("principal")
 }

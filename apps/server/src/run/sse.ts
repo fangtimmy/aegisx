@@ -2,7 +2,9 @@ import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { Context } from "hono"
 import { streamSSE } from "hono/streaming"
 
+import type { Principal } from "../infrastructure/agent-auth"
 import { parseChannelKey } from "./channels"
+import { assertMayTouchAgent } from "./principal-scope"
 import type { AgentService } from "./service"
 
 /** The two streaming variants the pipeline stamps with a monotonic
@@ -128,8 +130,13 @@ function pumpLiveStream(
 export function streamAgent(
   c: Context,
   service: AgentService,
-  agentId: string
+  agentId: string,
+  principal: Principal
 ): Response {
+  // Existence (404) is the route's business; the scope check is here so the
+  // stream face is guarded at the same layer as every other agent op.
+  const agent = service.getAgent(agentId)
+  if (agent) assertMayTouchAgent(principal, agent)
   const bus = service.bus
 
   return pumpLiveStream(
@@ -137,7 +144,7 @@ export function streamAgent(
     (listener) => bus.subscribe(agentId, listener),
     (push) => {
       // Fresh snapshot (re-read after subscribe, not before).
-      const detail = service.getAgentDetail(agentId)
+      const detail = service.getAgentDetail(agentId, principal)
       if (!detail) return false
       push({ type: "ready", agentId })
       push({ type: "agent.updated", agent: detail.agent })

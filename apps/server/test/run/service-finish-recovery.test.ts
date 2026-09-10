@@ -4,7 +4,12 @@ import { eq } from "drizzle-orm"
 
 import { agents } from "../../src/db/schema"
 import type { AgentHostInput } from "../../src/run/host/host"
-import { makeAgentService, seedAgent, stubHostAgentSession } from "../helpers"
+import {
+  makeAgentService,
+  seedAgent,
+  stubHostAgentSession,
+  USER,
+} from "../helpers"
 import { refine } from "../support"
 
 /** A service wired against a stub container/host (sessions hang so a reopened
@@ -41,16 +46,19 @@ describe("terminal lifecycle + pendingFinish (v19, no atomic flag)", () => {
     const made = makeService()
     try {
       const { service } = made
-      const agent = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const agent = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
 
-      const first = await service.finishAgent(agent.id, "summary")
+      const first = await service.finishAgent(agent.id, "summary", "user", USER)
       expect(first.status).toBe("completed")
       expect(first.summary).toBe("summary")
       // A late finish_run on the same completed agent is a no-op return.
-      const again = await service.finishAgent(agent.id, "second")
+      const again = await service.finishAgent(agent.id, "second", "user", USER)
       expect(again.status).toBe("completed")
       expect(again.summary).toBe("summary")
     } finally {
@@ -62,19 +70,22 @@ describe("terminal lifecycle + pendingFinish (v19, no atomic flag)", () => {
     const made = makeService()
     try {
       const { service } = made
-      const agent = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const closed = await service.closeAgent(agent.id)
+      const agent = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const closed = await service.closeAgent(agent.id, USER)
       expect(closed.status).toBe("aborted")
       // A late close/finish on the aborted agent rejects.
-      await expect(service.closeAgent(agent.id)).rejects.toThrow(
+      await expect(service.closeAgent(agent.id, USER)).rejects.toThrow(
         /already closed/
       )
-      await expect(service.finishAgent(agent.id, "x")).rejects.toThrow(
-        /already closed/
-      )
+      await expect(
+        service.finishAgent(agent.id, "x", "user", USER)
+      ).rejects.toThrow(/already closed/)
     } finally {
       await made.h.close()
     }
@@ -84,15 +95,23 @@ describe("terminal lifecycle + pendingFinish (v19, no atomic flag)", () => {
     const made = makeService()
     try {
       const { service } = made
-      const agent = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      await service.closeAgent(agent.id)
+      const agent = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      await service.closeAgent(agent.id, USER)
       // Reopen + finish: the completed transition works on the reopened agent
       // (pendingFinish was cleared at close; the reopen arms a fresh one).
-      await service.sendMessage(agent.id, { text: "resume" })
-      const finished = await service.finishAgent(agent.id, "final summary")
+      await service.sendMessage(agent.id, { text: "resume" }, USER)
+      const finished = await service.finishAgent(
+        agent.id,
+        "final summary",
+        "user",
+        USER
+      )
       expect(finished.status).toBe("completed")
       expect(finished.summary).toBe("final summary")
     } finally {
@@ -129,10 +148,13 @@ describe("terminal lifecycle + pendingFinish (v19, no atomic flag)", () => {
       }),
     })
     try {
-      const agent = await h.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const agent = await h.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       // Replay snapshots a freshly connected SSE tab would receive…
       h.service.bus.emit(agent.id, {
         type: "context.updated",

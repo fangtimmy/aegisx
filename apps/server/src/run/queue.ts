@@ -4,11 +4,13 @@ import { and, asc, count, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, queueState, spawnQueue } from "../db/schema"
+import type { Principal } from "../infrastructure/agent-auth"
 import { parseJson } from "../lib/guards"
 import { logEvent } from "../lib/log"
 import type { Clock } from "./clock"
 import { createQueueDrainer } from "./drainer"
 import { RunActionError } from "./errors"
+import { assertMayTouchEvent } from "./principal-scope"
 
 /** Public queue item shape (REST + tools). Canonical definition lives in
  * @aegisx/shared/queue; re-exported here for server-side importers. */
@@ -158,7 +160,9 @@ export function createQueueService(deps: QueueServiceDeps) {
     }
     if (pending === 1 && !starvedFired.get(eventId)) {
       starvedFired.set(eventId, true)
-      if (stateOf(eventId) === "paused") return
+      // Internal caller — the system principal passes the event scope free
+      // of charge; the assertion only gates external (route) callers.
+      if (stateOf(eventId, { kind: "system" }) === "paused") return
       logEvent("queue", "starved", { pending })
       deps.onQueueEmergency(eventId, "队列不足：仅剩 1 项排队")
     }
@@ -191,9 +195,24 @@ export function createQueueService(deps: QueueServiceDeps) {
 
   /**
    * Append a spawn item (v19 semantics: ALWAYS append — one challenge may
-   * hold several pending items; parallel attempts are a legal plan).
+   * hold several pending items; parallel attempts are a legal plan). The
+   * principal is scope-checked against the event, and the challenge must
+   * belong to the event's queue it lands in (data integrity, enforced here
+   * rather than per-route).
    */
-  function enqueue(input: EnqueueInput): QueueItemPublic {
+  function enqueue(input: EnqueueInput, principal: Principal): QueueItemPublic {
+    assertMayTouchEvent(principal, input.eventId)
+    const challenge = db
+      .select({ eventId: challenges.eventId })
+      .from(challenges)
+      .where(eq(challenges.id, input.challengeId))
+      .get()
+    if (!challenge || challenge.eventId !== input.eventId) {
+      throw new RunActionError(
+        "invalid",
+        "Challenge does not belong to this event"
+      )
+    }
     const ts = now()
     const id = crypto.randomUUID()
     const ord = nextOrd(input.eventId)
@@ -228,7 +247,8 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /** Actionable items for an event (pending + running + failed), FIFO by ord. */
-  function list(eventId: string): QueueItemPublic[] {
+  function list(eventId: string, principal: Principal): QueueItemPublic[] {
+    assertMayTouchEvent(principal, eventId)
     return db
       .select()
       .from(spawnQueue)
@@ -244,8 +264,10 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /** Remove an item of `eventId`. Running items cannot be deleted; an item
-   * from another event is indistinguishable from a missing one. */
-  function remove(eventId: string, itemId: string): void {
+   * from another event is indistinguishable from a missing one (P0-8: the
+   * event scope is enforced HERE, not at the route). */
+  function remove(eventId: string, itemId: string, principal: Principal): void {
+    assertMayTouchEvent(principal, eventId)
     const row = getRow(itemId)
     if (!row || row.eventId !== eventId) {
       throw new RunActionError("not_found", "Queue item not found")
@@ -261,7 +283,8 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /** Remove every non-running item for an event. */
-  function clear(eventId: string): void {
+  function clear(eventId: string, principal: Principal): void {
+    assertMayTouchEvent(principal, eventId)
     db.delete(spawnQueue)
       .where(
         and(eq(spawnQueue.eventId, eventId), ne(spawnQueue.status, "running"))
@@ -301,17 +324,25 @@ export function createQueueService(deps: QueueServiceDeps) {
   }
 
   /** Update a pending item's prompt / timeout / params. Only
-   * pending items are editable; running/done/failed reject. */
+   * pending items are editable; running/done/failed reject. The item is
+   * addressed as (eventId, itemId) — same-event scoping like remove/reorder,
+   * so a cross-event edit is a not_found and an out-of-event principal is
+   * forbidden. */
   function update(
+    eventId: string,
     itemId: string,
     patch: {
       prompt?: string
       timeoutMs?: number | null
       params?: Record<string, unknown>
-    }
+    },
+    principal: Principal
   ): QueueItemPublic {
+    assertMayTouchEvent(principal, eventId)
     const row = getRow(itemId)
-    if (!row) throw new RunActionError("not_found", "Queue item not found")
+    if (!row || row.eventId !== eventId) {
+      throw new RunActionError("not_found", "Queue item not found")
+    }
     if (row.status !== "pending") {
       throw new RunActionError(
         "invalid_state",
@@ -328,7 +359,12 @@ export function createQueueService(deps: QueueServiceDeps) {
 
   /** Reassign ord by position. Only pending items may be reordered; running
    * items keep their place. Items must belong to the event. */
-  function reorder(eventId: string, itemIds: string[]): void {
+  function reorder(
+    eventId: string,
+    itemIds: string[],
+    principal: Principal
+  ): void {
+    assertMayTouchEvent(principal, eventId)
     const ts = now()
     itemIds.forEach((id, index) => {
       const row = getRow(id)
@@ -475,7 +511,11 @@ export function createQueueService(deps: QueueServiceDeps) {
   // blocks FUTURE launches only — already-live agents keep going (pause ≠
   // kill) and enqueue/edit/reorder/remove still work.
 
-  function stateOf(eventId: string): "running" | "paused" {
+  function stateOf(
+    eventId: string,
+    principal: Principal
+  ): "running" | "paused" {
+    assertMayTouchEvent(principal, eventId)
     const row = db
       .select({ status: queueState.status })
       .from(queueState)
@@ -497,19 +537,23 @@ export function createQueueService(deps: QueueServiceDeps) {
 
   function pause(
     eventId: string,
-    source: "manual" | "scheduler" = "manual"
+    source: "manual" | "scheduler",
+    principal: Principal
   ): void {
+    assertMayTouchEvent(principal, eventId)
     // Idempotent: a repeat flip keeps silent (no duplicate notice lines).
-    if (stateOf(eventId) === "paused") return
+    if (stateOf(eventId, principal) === "paused") return
     setState(eventId, "paused")
     deps.onQueueNotice(eventId, stateNotice("暂停", source))
   }
 
   function resume(
     eventId: string,
-    source: "manual" | "scheduler" = "manual"
+    source: "manual" | "scheduler",
+    principal: Principal
   ): void {
-    if (stateOf(eventId) === "running") return
+    assertMayTouchEvent(principal, eventId)
+    if (stateOf(eventId, principal) === "running") return
     setState(eventId, "running")
     deps.onQueueNotice(eventId, stateNotice("恢复", source))
   }

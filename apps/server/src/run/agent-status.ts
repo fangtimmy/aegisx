@@ -107,18 +107,21 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       })
     }
     if (deps.isSchedulerPaused(row.eventId)) return
-    channels.post({
-      channelKey: orchKey(row.eventId),
-      author: { type: "system" },
-      body: eventName({ ...payload, source }, tag),
-      meta: {
-        agentId,
-        eventType: payload.type,
-        source,
-        ...("actor" in payload ? { actor: payload.actor } : {}),
+    channels.post(
+      {
+        channelKey: orchKey(row.eventId),
+        author: { type: "system" },
+        body: eventName({ ...payload, source }, tag),
+        meta: {
+          agentId,
+          eventType: payload.type,
+          source,
+          ...("actor" in payload ? { actor: payload.actor } : {}),
+        },
+        urgent: payload.type === "agent.timedOut",
       },
-      urgent: payload.type === "agent.timedOut",
-    })
+      { kind: "system" }
+    )
   }
 
   /** Mark an agent's turn starting. */

@@ -84,10 +84,14 @@ export function registerSchedulerRoutes(
     const miss = requireEvent(c, eventId)
     if (miss) return miss
     const queue = agentService.queue()
-    return c.json({
-      items: queue.list(eventId),
-      state: queue.stateOf(eventId),
-    })
+    try {
+      return c.json({
+        items: queue.list(eventId, principalOf(c)),
+        state: queue.stateOf(eventId, principalOf(c)),
+      })
+    } catch (error) {
+      return runError(c, error)
+    }
   })
 
   /** Live scheduler-DM digest snapshot (the scheduler DM view's status
@@ -135,9 +139,17 @@ export function registerSchedulerRoutes(
       const miss = requireEvent(c, eventId)
       if (miss) return miss
       // Blocks future launches only — running runs keep going (pause ≠ kill).
-      agentService
-        .queue()
-        .pause(eventId, principalOf(c) ? "scheduler" : "manual")
+      try {
+        agentService
+          .queue()
+          .pause(
+            eventId,
+            principalOf(c).kind === "agent" ? "scheduler" : "manual",
+            principalOf(c)
+          )
+      } catch (error) {
+        return runError(c, error)
+      }
       return c.json({ state: "paused" })
     }
   )
@@ -149,9 +161,17 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      agentService
-        .queue()
-        .resume(eventId, principalOf(c) ? "scheduler" : "manual")
+      try {
+        agentService
+          .queue()
+          .resume(
+            eventId,
+            principalOf(c).kind === "agent" ? "scheduler" : "manual",
+            principalOf(c)
+          )
+      } catch (error) {
+        return runError(c, error)
+      }
       agentService.queue().scheduleDrain()
       return c.json({ state: "running" })
     }
@@ -162,7 +182,9 @@ export function registerSchedulerRoutes(
     const miss = requireEvent(c, eventId)
     if (miss) return miss
     try {
-      agentService.queue().remove(eventId, c.req.param("itemId"))
+      agentService
+        .queue()
+        .remove(eventId, c.req.param("itemId"), principalOf(c))
       return c.body(null, 204)
     } catch (error) {
       return runError(c, error)
@@ -176,7 +198,11 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      agentService.queue().clear(eventId)
+      try {
+        agentService.queue().clear(eventId, principalOf(c))
+      } catch (error) {
+        return runError(c, error)
+      }
       return c.body(null, 204)
     }
   )
@@ -188,8 +214,16 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      agentService.queue().reorder(eventId, c.req.valid("json").itemIds)
-      return c.json({ items: agentService.queue().list(eventId) })
+      try {
+        agentService
+          .queue()
+          .reorder(eventId, c.req.valid("json").itemIds, principalOf(c))
+        return c.json({
+          items: agentService.queue().list(eventId, principalOf(c)),
+        })
+      } catch (error) {
+        return runError(c, error)
+      }
     }
   )
 
@@ -209,13 +243,18 @@ export function registerSchedulerRoutes(
           agentService.assertModelsResolvable(model)
         }
         return c.json(
-          agentService.queue().update(c.req.param("itemId"), {
-            ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
-            ...(body.timeoutMs !== undefined
-              ? { timeoutMs: body.timeoutMs }
-              : {}),
-            ...(body.params !== undefined ? { params: body.params } : {}),
-          })
+          agentService.queue().update(
+            eventId,
+            c.req.param("itemId"),
+            {
+              ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+              ...(body.timeoutMs !== undefined
+                ? { timeoutMs: body.timeoutMs }
+                : {}),
+              ...(body.params !== undefined ? { params: body.params } : {}),
+            },
+            principalOf(c)
+          )
         )
       } catch (error) {
         return runError(c, error)
@@ -229,11 +268,15 @@ export function registerSchedulerRoutes(
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
     if (miss) return miss
-    return c.json({
-      config: agentService.getSchedulerConfig(eventId),
-      agent: agentService.getSchedulerAgent(eventId) ?? null,
-      status: agentService.getStatus(eventId),
-    })
+    try {
+      return c.json({
+        config: agentService.getSchedulerConfig(eventId, principalOf(c)),
+        agent: agentService.getSchedulerAgent(eventId, principalOf(c)) ?? null,
+        status: agentService.getStatus(eventId, principalOf(c)),
+      })
+    } catch (error) {
+      return runError(c, error)
+    }
   })
 
   app.patch(
@@ -274,10 +317,10 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      const sched = agentService.getSchedulerAgent(eventId)
+      const sched = agentService.getSchedulerAgent(eventId, principalOf(c))
       if (!sched) return notFound(c, "No scheduler agent for this event")
       try {
-        return c.json(await agentService.stopAgent(sched.id))
+        return c.json(await agentService.stopAgent(sched.id, principalOf(c)))
       } catch (error) {
         return runError(c, error)
       }
@@ -339,15 +382,19 @@ export function registerSchedulerRoutes(
       const eventId = c.req.param("eventId")
       const miss = requireEvent(c, eventId)
       if (miss) return miss
-      const sched = agentService.getSchedulerAgent(eventId)
+      const sched = agentService.getSchedulerAgent(eventId, principalOf(c))
       if (!sched) return notFound(c, "No scheduler agent for this event")
       try {
         const body = c.req.valid("json")
         return c.json(
-          await agentService.sendMessage(sched.id, {
-            text: body.text,
-            deliverAs: body.deliverAs,
-          })
+          await agentService.sendMessage(
+            sched.id,
+            {
+              text: body.text,
+              deliverAs: body.deliverAs,
+            },
+            principalOf(c)
+          )
         )
       } catch (error) {
         return runError(c, error)

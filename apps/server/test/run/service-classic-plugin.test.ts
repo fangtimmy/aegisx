@@ -8,6 +8,7 @@ import {
   makeAgentService,
   makeProvider,
   stubHostAgentSession,
+  USER,
 } from "../helpers"
 
 /** Seed a challenge_remote row marking the challenge platform-integrated and
@@ -60,7 +61,7 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
       const { db, service } = made
       seedRemote(db, "ch-1")
 
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       const agent = db
         .select()
         .from(agents)
@@ -92,7 +93,7 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
     try {
       const { db, service } = made
       // no challenge_remote row
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       const agent = db
         .select()
         .from(agents)
@@ -119,7 +120,7 @@ describe("classic-parity: spawn on a challenge (v19 path)", () => {
     const made = makeService(provider)
     try {
       const { db, service } = made
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
 
       const all = db.select().from(agents).all()
       expect(all).toHaveLength(1)

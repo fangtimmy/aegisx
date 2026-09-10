@@ -17,6 +17,7 @@ import {
   makeAgentService,
   seedChallenge,
   stubHostAgentSession,
+  USER,
 } from "../helpers"
 import { refine } from "../support"
 
@@ -111,37 +112,52 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       await settle()
 
       // Three agents on ch-1 (submitter + co-solver + sibling) + one on ch-2.
-      const submitter = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const coSolver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const sibling = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-2" })
+      const submitter = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const coSolver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const sibling = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-2" }, USER)
       await settle()
       stageRunning(db, coSolver.id)
       stageRunning(db, sibling.id)
 
       // Stale pending item on ch-1 (cancelled) + one on ch-2 (kept).
       const queue = service.queue()
-      const stale = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-        prompt: "stale",
-      })
-      const keep = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-2",
-        source: "scheduler",
-        prompt: "keep",
-      })
+      const stale = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "stale",
+        },
+        USER
+      )
+      const keep = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-2",
+          source: "scheduler",
+          prompt: "keep",
+        },
+        USER
+      )
       queue.cancelDrain()
 
       service.notifyFlagAccepted("ch-1", submitter.id)
@@ -225,18 +241,27 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
       await service.startScheduler("evt-1")
       await settle()
 
-      const submitter = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const coSolver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const sibling = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const submitter = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const coSolver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const sibling = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
 
       service.notifyFlagPartial(
@@ -334,23 +359,32 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
 
       await service.startScheduler("evt-1")
       await settle()
-      const submitter = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const sibling = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const submitter = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const sibling = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
       stageRunning(db, sibling.id)
       const queue = service.queue()
-      const stale = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-        prompt: "stale",
-      })
+      const stale = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "stale",
+        },
+        USER
+      )
       queue.cancelDrain()
 
       service.notifyFlagAccepted("ch-1", submitter.id)
@@ -402,14 +436,20 @@ describe("solved-challenge cleanup (v19 flag hooks)", () => {
 
       await service.startScheduler("evt-1")
       await settle()
-      const submitter = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const sibling = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const submitter = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const sibling = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
       stageRunning(db, sibling.id)
 
@@ -441,18 +481,24 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
       const targetCalls: string[] = []
       made = makeService({ targetCalls })
       const { db, service } = made
-      const submitter = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const submitter = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await new Promise((resolve) => setTimeout(resolve, 20))
       const queue = service.queue()
-      const pending = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-        prompt: "work",
-      })
+      const pending = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "work",
+        },
+        USER
+      )
       queue.cancelDrain()
 
       service.notifyFlagAccepted("ch-1", submitter.id, "repeat")
@@ -514,23 +560,32 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
           updatedAt: new Date().toISOString(),
         })
         .run()
-      const finder = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
-      const sibling = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const finder = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
+      const sibling = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await new Promise((resolve) => setTimeout(resolve, 20))
       stageRunning(db, sibling.id)
       const queue = service.queue()
-      const pending = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-        prompt: "work",
-      })
+      const pending = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "work",
+        },
+        USER
+      )
       queue.cancelDrain()
 
       service.notifyFlagAccepted("ch-1", finder.id, "extra")
@@ -581,20 +636,26 @@ describe("acceptance outcome tiers (repeat / extra)", () => {
         })
         .run()
 
-      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
-      const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const a = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
+      const b = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       await settle()
       targetCalls.length = 0
 
       // First close: a sibling is still live → the target stays for it.
-      await service.closeAgent(a.id)
+      await service.closeAgent(a.id, USER)
       await settle()
       expect(targetCalls).not.toContain("stop")
 
       // Last live agent terminal → the instance is released. Without this
       // the platform keeps the instance while the fence stops counting the
       // slot, and every later spawn on a new challenge is refused.
-      await service.closeAgent(b.id)
+      await service.closeAgent(b.id, USER)
       await wait(50)
       expect(targetCalls).toContain("stop")
     } finally {
@@ -646,8 +707,14 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       // Siblings survive (stop off) so BOTH agents are live recipients.
       seedPolicy(db, { stopSiblingsOnSolve: false })
 
-      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
-      const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const a = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
+      const b = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       await settle()
       made.promptLog.get(a.id)!.length = 0
       made.promptLog.get(b.id)!.length = 0
@@ -679,7 +746,10 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       const { db, service } = made
       seedPolicy(db, { stopSubmitterOnSolve: true })
 
-      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const a = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       await settle()
 
       service.notifyFlagAccepted("ch-1", a.id, "first")
@@ -698,7 +768,10 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       const { db, service } = made
       seedPolicy(db, { stopSubmitterOnSolve: true })
 
-      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const a = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       await settle()
 
       service.notifyFlagPartial("ch-1", "flag 1/3 已确认", a.id)
@@ -716,7 +789,10 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       made = makeService({ solvedWrapupMs: 60_000 })
       const { db, service } = made
 
-      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const a = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       await settle()
 
       service.notifyFlagAccepted("ch-1", a.id, "first")
@@ -737,8 +813,14 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       made = makeService()
       const { dir, service } = made
 
-      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
-      const b = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const a = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
+      const b = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       await settle()
       const dirOf = (id: string) =>
         join(
@@ -754,11 +836,11 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       writeFileSync(join(dirOf(a.id), "scan.log"), "x")
       writeFileSync(join(dirOf(b.id), "WRITEUP.md"), "# wp")
 
-      await service.closeAgent(a.id)
+      await service.closeAgent(a.id, USER)
       await wait(50)
       expect(existsSync(dirOf(a.id))).toBe(false)
 
-      await service.finishAgent(b.id, "solved")
+      await service.finishAgent(b.id, "solved", "user", USER)
       await wait(50)
       expect(existsSync(dirOf(b.id))).toBe(true)
     } finally {
@@ -777,12 +859,18 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
       // Submitter survives (no sibling closes → nothing else triggers a drain).
       seedPolicy(db, { stopSiblingsOnSolve: false })
 
-      const a = await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      const a = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       await settle()
       // maxConcurrentTargets=1: ch-1 holds the only slot, ch-2 must queue.
       const item = service
         .queue()
-        .enqueue({ eventId: "evt-1", challengeId: "ch-2", source: "manual" })
+        .enqueue(
+          { eventId: "evt-1", challengeId: "ch-2", source: "manual" },
+          USER
+        )
       await wait(400)
       expect(item.status).toBe("pending")
 
@@ -796,7 +884,7 @@ describe("tsecbench post-mortem: self-notification / solve-stop / recycle / drai
 
       const after = service
         .queue()
-        .list("evt-1")
+        .list("evt-1", USER)
         .find((i) => i.id === item.id)
       expect(after?.status).toBe("running")
     } finally {

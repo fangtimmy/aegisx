@@ -8,6 +8,7 @@ import {
   makeAgentService,
   seedChallenge,
   stubHostAgentSession,
+  USER,
 } from "../helpers"
 import { refine } from "../support"
 
@@ -84,10 +85,13 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const orch = orchestratorOf(db)
       const primed = promptLog.get(orch.id)?.length ?? 0
 
-      const solver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const solver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
 
       // Events ARE messages: started (manual marker) + idle both landed in
@@ -138,10 +142,13 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       await settle()
       expect(orchestratorOf(db).id).toBeTruthy()
 
-      const solver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const solver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
 
       service.notifyFlagAccepted("ch-1", solver.id)
@@ -153,7 +160,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
         )
       ).toBe(true)
 
-      await service.finishAgent(solver.id, "solved it")
+      await service.finishAgent(solver.id, "solved it", "user", USER)
       await settle()
       expect(
         orchRows(db).some(
@@ -179,7 +186,7 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       await settle()
       expect(orchestratorOf(db).id).toBeTruthy()
 
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       await wait(80)
 
       expect(
@@ -207,17 +214,20 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       await settle()
       expect(orchestratorOf(db).id).toBeTruthy()
 
-      const solver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const solver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
-      await service.closeAgent(solver.id)
+      await service.closeAgent(solver.id, USER)
       await settle()
 
       // Direct user message → lifecycle.send → onResume reopen; the restore
       // posts agent.reopened into orch.
-      await service.sendMessage(solver.id, { text: "继续" })
+      await service.sendMessage(solver.id, { text: "继续" }, USER)
       await wait(80)
       const tag = tagOf(solver.id)
       expect(
@@ -246,20 +256,26 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const primed = promptLog.get(orch.id)?.length ?? 0
 
       const queue = service.queue()
-      const one = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-        prompt: "p1",
-      })
-      queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-2",
-        source: "scheduler",
-        prompt: "p2",
-      })
+      const one = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "p1",
+        },
+        USER
+      )
+      queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-2",
+          source: "scheduler",
+          prompt: "p2",
+        },
+        USER
+      )
       queue.cancelDrain()
-      queue.remove("evt-1", one.id)
+      queue.remove("evt-1", one.id, USER)
       await settle()
 
       const urgent = orchRows(db).filter((r) => metaOf(r).urgent === true)
@@ -288,27 +304,36 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       const primed = promptLog.get(orch.id)?.length ?? 0
 
       await service.pauseScheduler("evt-1")
-      const solver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const solver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
       service.notifyFlagAccepted("ch-1", solver.id)
       const queue = service.queue()
-      const one = queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-        prompt: "p",
-      })
-      queue.enqueue({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-        prompt: "q",
-      })
+      const one = queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "p",
+        },
+        USER
+      )
+      queue.enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "q",
+        },
+        USER
+      )
       queue.cancelDrain()
-      queue.remove("evt-1", one.id)
+      queue.remove("evt-1", one.id, USER)
       await settle()
 
       // Silent: no orch rows at all while paused (dropped, not stored).
@@ -341,10 +366,13 @@ describe("agent lifecycle events → orch messages (v19)", () => {
 
       // Events while the scheduler is terminal: stored under the stable
       // 'scheduler' cursor, nothing delivered.
-      const solver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const solver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await settle()
       const stored = orchRows(db)
       expect(stored.length).toBeGreaterThanOrEqual(2)
@@ -405,11 +433,14 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       expect(orchestratorOf(db).id).toBeTruthy()
 
       // A scheduler-spawned agent: source='scheduler' — NO manual marker.
-      const solver = await service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-        source: "scheduler",
-      })
+      const solver = await service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+        },
+        USER
+      )
       await settle()
       const started = orchRows(db).filter(
         (r) => metaOf(r).eventType === "agent.started"

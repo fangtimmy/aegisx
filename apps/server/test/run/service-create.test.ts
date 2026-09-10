@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents } from "../../src/db/schema"
-import { makeAgentService, stubHostAgentSession } from "../helpers"
+import { makeAgentService, stubHostAgentSession, USER } from "../helpers"
 import { refine } from "../support"
 
 describe("agentService.spawn", () => {
@@ -13,10 +13,13 @@ describe("agentService.spawn", () => {
     )
     const h = makeAgentService({ createHost })
     try {
-      const agent = await h.service.spawn({
-        eventId: "evt-1",
-        challengeId: "ch-1",
-      })
+      const agent = await h.service.spawn(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+        },
+        USER
+      )
       await h.service.close()
 
       // Agent row
@@ -64,7 +67,7 @@ describe("agentService.spawn", () => {
     })
     try {
       await expect(
-        h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+        h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       ).rejects.toThrow("agent session boom")
       await h.service.close()
 
@@ -81,7 +84,7 @@ describe("agentService.spawn", () => {
     const h = makeAgentService({ challenge: false })
     try {
       await expect(
-        h.service.spawn({ eventId: "evt-1", challengeId: "missing" })
+        h.service.spawn({ eventId: "evt-1", challengeId: "missing" }, USER)
       ).rejects.toThrow("Challenge not found")
     } finally {
       await h.close()
@@ -94,8 +97,8 @@ describe("agentService.spawn", () => {
     )
     const h = makeAgentService({ createHost })
     try {
-      await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
-      await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" })
+      await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
+      await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       await h.service.close()
 
       // One container for the whole challenge; two agents share it.

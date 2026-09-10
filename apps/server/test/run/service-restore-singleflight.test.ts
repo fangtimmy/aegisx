@@ -9,6 +9,7 @@ import {
   promptRecordingHost,
   seedAgent,
   stubContainerManager,
+  USER,
 } from "../helpers"
 
 /** Container manager whose create is SLOW (simulates a real docker build) and
@@ -61,8 +62,8 @@ describe("reopen single-flight (v19)", () => {
       // reach prepareAgent concurrently and race the shared challenge
       // container build.
       await Promise.all([
-        h.service.sendMessage("a-1", { text: "wake 1" }),
-        h.service.sendMessage("a-2", { text: "wake 2" }),
+        h.service.sendMessage("a-1", { text: "wake 1" }, USER),
+        h.service.sendMessage("a-2", { text: "wake 2" }, USER),
       ])
 
       // The shared challenge container was built ONCE.

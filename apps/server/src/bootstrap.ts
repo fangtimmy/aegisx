@@ -482,7 +482,7 @@ async function ensureScheduler(
     })
   } else if (
     spec.schedulerInstruction &&
-    !agentService.getSchedulerConfig(eventId).instruction
+    !agentService.getSchedulerConfig(eventId, { kind: "system" }).instruction
   ) {
     // Re-apply the env instruction while the user has not set their own.
     agentService.upsertSchedulerConfig({
@@ -491,7 +491,7 @@ async function ensureScheduler(
     })
   }
 
-  const agent = agentService.getSchedulerAgent(eventId)
+  const agent = agentService.getSchedulerAgent(eventId, { kind: "system" })
   if (!agent || !isActiveAgentStatus(agent.status)) {
     await agentService.startScheduler(eventId)
     console.log("bootstrap: scheduler started", { eventId })
