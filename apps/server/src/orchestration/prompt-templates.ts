@@ -305,6 +305,8 @@ export function previewOrchestratorSystemPrompt(
 /** Context for the channelDelivery template: the merged delivery block
  * pushed into an agent's turn. */
 export type DeliveryRenderContext = {
+  /** Delivery-time wall clock (`YYYY-MM-DD HH:MM`, local). */
+  now: string
   dropped: number
   messages: Array<{
     urgent: boolean
@@ -319,6 +321,7 @@ export type DeliveryRenderContext = {
 }
 
 export const DELIVERY_TEMPLATE_VARIABLES = [
+  "now",
   "dropped",
   "messages",
   "messages[].urgent",
@@ -333,6 +336,7 @@ export const DELIVERY_TEMPLATE_VARIABLES = [
 ] as const
 
 const sampleDeliveryContext: DeliveryRenderContext = {
+  now: "2026-09-10 14:32",
   dropped: 0,
   messages: [
     {
@@ -369,14 +373,35 @@ export function previewChannelDelivery(template: string) {
 /** Context for the schedulerDigest template: the fleet snapshot appended to
  * every scheduler (orch) delivery. */
 export type SchedulerDigestContext = {
+  /** Delivery-time wall clock (`YYYY-MM-DD HH:MM`, local). */
+  now: string
+  /** Time since the event's scheduler started ("" when it never ran). */
+  elapsed: string
+  /** Time since the newest accepted flag on the whole event ("" when none).
+   * The fleet's yield rate in one figure — the stall clock. */
+  sinceLastScore: string
   agents: { live: number; max: number }
   targets: { used: number; max: number }
   queue: { pending: number; running: number; paused: boolean }
+  /** Board coverage: an untouched challenge is invisible in the per-challenge
+   * lines, so its weight is summarised here. */
+  board: { total: number; untouched: number; untouchedPoints: number }
   challenges: Array<{
     name: string
     points: number | null
-    /** Pre-derived: 已解 / 部分 / 未解. */
+    /** Per-flag value (points / flagCount) — the marginal value of the NEXT
+     * flag, and the number that makes a chain comparable to a single-flag
+     * challenge. */
+    perFlag: number | null
+    /** Points already earned on this challenge. */
+    earned: number | null
+    /** Confirmed/total flags (`n/N`); "" for single-flag challenges. */
+    flagProgress: string
+    /** Pre-derived: 已解 / 部分 / 未解. Only a fully-collected multi-flag
+     * chain reads 已解. */
     solvedLabel: string
+    /** Time since this challenge's last accepted flag ("" when none). */
+    sinceLastFlag: string
     live: number
     running: number
     pending: number
@@ -388,6 +413,9 @@ export type SchedulerDigestContext = {
 }
 
 export const SCHEDULER_DIGEST_TEMPLATE_VARIABLES = [
+  "now",
+  "elapsed",
+  "sinceLastScore",
   "agents.live",
   "agents.max",
   "targets.used",
@@ -395,10 +423,17 @@ export const SCHEDULER_DIGEST_TEMPLATE_VARIABLES = [
   "queue.pending",
   "queue.running",
   "queue.paused",
+  "board.total",
+  "board.untouched",
+  "board.untouchedPoints",
   "challenges",
   "challenges[].name",
   "challenges[].points",
+  "challenges[].perFlag",
+  "challenges[].earned",
+  "challenges[].flagProgress",
   "challenges[].solvedLabel",
+  "challenges[].sinceLastFlag",
   "challenges[].live",
   "challenges[].running",
   "challenges[].pending",
@@ -407,14 +442,22 @@ export const SCHEDULER_DIGEST_TEMPLATE_VARIABLES = [
 ] as const
 
 const sampleSchedulerDigestContext: SchedulerDigestContext = {
+  now: "2026-09-10 14:32",
+  elapsed: "3h44m",
+  sinceLastScore: "1h51m",
   agents: { live: 3, max: 8 },
   targets: { used: 1, max: 2 },
   queue: { pending: 2, running: 1, paused: false },
+  board: { total: 63, untouched: 33, untouchedPoints: 12300 },
   challenges: [
     {
       name: "web1",
       points: 300,
+      perFlag: 300,
+      earned: 0,
+      flagProgress: "",
       solvedLabel: "未解",
+      sinceLastFlag: "",
       live: 2,
       running: 1,
       pending: 1,
@@ -423,8 +466,12 @@ const sampleSchedulerDigestContext: SchedulerDigestContext = {
     },
     {
       name: "pwn2",
-      points: 500,
+      points: 1200,
+      perFlag: 300,
+      earned: 600,
+      flagProgress: "2/4",
       solvedLabel: "部分",
+      sinceLastFlag: "48m",
       live: 1,
       running: 0,
       pending: 1,
@@ -434,7 +481,11 @@ const sampleSchedulerDigestContext: SchedulerDigestContext = {
     {
       name: "crypto1",
       points: 200,
+      perFlag: 200,
+      earned: 200,
+      flagProgress: "",
       solvedLabel: "已解",
+      sinceLastFlag: "12m",
       live: 0,
       running: 0,
       pending: 0,

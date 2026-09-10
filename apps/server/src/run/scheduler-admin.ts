@@ -21,6 +21,8 @@ import {
 } from "../db/schema"
 import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
 import { collapseToAttempts } from "../platforms/wire"
+import { fmtMs } from "./agent-runtime"
+import { fmtClock } from "./channels-render"
 import { RunActionError } from "./errors"
 import { fenceSnapshot } from "./fence"
 import { usageTotalsSql } from "./host"
@@ -186,9 +188,16 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       )
     }
 
+    // Accepted flags per challenge, plus the newest acceptance time — the
+    // yield side (count) and the stall clock (recency) both come from here.
     const acceptedByChallenge = new Map<string, number>()
+    const lastFlagAtByChallenge = new Map<string, number>()
+    let lastAcceptedAt = 0
     for (const row of db
-      .select({ challengeId: challengeFlags.challengeId })
+      .select({
+        challengeId: challengeFlags.challengeId,
+        updatedAt: challengeFlags.updatedAt,
+      })
       .from(challengeFlags)
       .where(eq(challengeFlags.status, "accepted"))
       .all()) {
@@ -196,6 +205,14 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         row.challengeId,
         (acceptedByChallenge.get(row.challengeId) ?? 0) + 1
       )
+      const at = Date.parse(row.updatedAt)
+      if (Number.isFinite(at)) {
+        lastFlagAtByChallenge.set(
+          row.challengeId,
+          Math.max(lastFlagAtByChallenge.get(row.challengeId) ?? 0, at)
+        )
+        lastAcceptedAt = Math.max(lastAcceptedAt, at)
+      }
     }
 
     // Real dispatch attempts per challenge (queue-item replays collapsed)
@@ -220,6 +237,7 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         id: challenges.id,
         name: challenges.name,
         points: challenges.points,
+        flagCount: challengeRemote.flagCount,
         manualSolveState: challenges.manualSolveState,
         remoteSolved: challengeRemote.solved,
       })
@@ -228,28 +246,62 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
       .where(eq(challenges.eventId, eventId))
       .all()
 
+    const nowMs = Date.parse(deps.now())
+    const startedAt = startedAtFor(eventId)
+    let untouched = 0
+    let untouchedPoints = 0
     const digestChallenges = rows.flatMap((row) => {
       const live = liveByChallenge.get(row.id)
       const pending = pendingByChallenge.get(row.id) ?? 0
-      if (!live && pending === 0) return []
+      const attempts = attemptsByChallenge.get(row.id) ?? 0
+      if (!live && pending === 0) {
+        // Never dispatched and not queued: absent from the per-challenge
+        // lines, but still counted in the board coverage line — a challenge
+        // nobody has touched must not be invisible to the scheduler.
+        if (attempts === 0) {
+          untouched += 1
+          untouchedPoints += row.points ?? 0
+        }
+        return []
+      }
+      const accepted = acceptedByChallenge.get(row.id) ?? 0
+      const flagTotal = Math.max(row.flagCount ?? 1, 1)
+      const confirmed = Math.min(accepted, flagTotal)
       const manual = row.manualSolveState
       const solvedLabel =
-        manual !== "unsolved"
-          ? manual === "solved"
-            ? "已解"
-            : "部分"
-          : row.remoteSolved || (acceptedByChallenge.get(row.id) ?? 0) > 0
-            ? "已解"
-            : "未解"
+        manual === "solved"
+          ? "已解"
+          : manual === "partial"
+            ? "部分"
+            : row.remoteSolved || confirmed >= flagTotal
+              ? "已解"
+              : confirmed > 0
+                ? "部分"
+                : "未解"
+      // Yield side: earned points stay 0 until a flag lands. Derived from the
+      // platform's own split (points / flagCount) because the per-flag score
+      // array is not on the agent-facing API — uniform across the board.
+      const earned =
+        row.points === null
+          ? null
+          : Math.round((row.points * confirmed) / flagTotal)
+      const perFlag =
+        row.points === null ? null : Math.round(row.points / flagTotal)
+      const lastFlagAt = lastFlagAtByChallenge.get(row.id)
       return [
         {
           name: row.name,
           points: row.points,
+          perFlag,
+          earned,
+          flagProgress: flagTotal > 1 ? `${confirmed}/${flagTotal}` : "",
           solvedLabel,
+          sinceLastFlag:
+            lastFlagAt === undefined ? "" : fmtMs(nowMs - lastFlagAt),
           live: live?.live ?? 0,
           running: live?.running ?? 0,
           pending,
-          attempts: attemptsByChallenge.get(row.id) ?? 0,
+          attempts,
           tokens: tokensOfChallenge(agentsByChallenge.get(row.id) ?? []),
         },
       ]
@@ -263,6 +315,9 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         .get()?.status === "paused"
 
     return {
+      now: fmtClock(nowMs),
+      elapsed: Number.isFinite(startedAt) ? fmtMs(nowMs - startedAt) : "",
+      sinceLastScore: lastAcceptedAt === 0 ? "" : fmtMs(nowMs - lastAcceptedAt),
       agents: { live: snap.liveAgentCount, max: snap.maxConcurrentAgents },
       targets: {
         used: snap.activeTargetChallenges.length,
@@ -276,8 +331,21 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
         running: queueRunning,
         paused,
       },
+      board: { total: rows.length, untouched, untouchedPoints },
       challenges: digestChallenges,
     }
+  }
+
+  /** Event clock anchor: when this event's scheduler agent was created — the
+   * appliance's run start. No scheduler yet → NaN (no elapsed figure). */
+  function startedAtFor(eventId: string): number {
+    const row = db
+      .select({ createdAt: agents.createdAt })
+      .from(agents)
+      .where(and(eq(agents.eventId, eventId), eq(agents.role, "orchestrator")))
+      .get()
+    const at = row ? Date.parse(row.createdAt) : Number.NaN
+    return Number.isFinite(at) ? at : Number.NaN
   }
 
   /** Cumulative tokens spent on a challenge's agents, compact-formatted

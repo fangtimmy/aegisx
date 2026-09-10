@@ -237,6 +237,11 @@ export function stubHostAgentSession(
   sessionId = "stub-session",
   opts: { hang?: boolean } = {}
 ): HostAgentSession {
+  // Real pi queue semantics: steer()/followUp() append, clearQueue() drains
+  // both, getSteeringMessages() reads the pending steers. The runtime's
+  // steer-merge folds into this queue, so a stub that no-ops would hide it.
+  const steering: string[] = []
+  const followUps: string[] = []
   const session = {
     isStreaming: false,
     thinkingLevel: "off",
@@ -245,9 +250,22 @@ export function stubHostAgentSession(
     abort: async () => {},
     setModel: async () => {},
     setThinkingLevel: () => {},
-    steer: async () => {},
-    followUp: async () => {},
-    clearQueue: () => {},
+    steer: async (text: string) => {
+      steering.push(text)
+    },
+    followUp: async (text: string) => {
+      followUps.push(text)
+    },
+    clearQueue: () => {
+      const drained = {
+        steering: [...steering],
+        followUp: [...followUps],
+      }
+      steering.length = 0
+      followUps.length = 0
+      return drained
+    },
+    getSteeringMessages: () => [...steering],
   }
   return refine<HostAgentSession>({
     session,

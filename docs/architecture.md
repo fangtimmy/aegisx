@@ -94,6 +94,8 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 
 写路径（`channels-post.ts`）：消息入账本，附件拷入该题工作区 `shared/` 树（路径存 `meta` JSON，容器内直读，无取回步骤）。投递引擎（`channels-delivery.ts`）是唯一的推送出口：按读游标取增量、按 agent 的投递面（solver = 本题 #team + 自身 dm；调度者 = orch）渲染成投递提示，全局 flush tick 批量冲刷；事件先落账、再聚合唤醒，调度者不会被逐条事件牵引。dm 支持 urgent 冷唤醒（终态 agent 也可被重新叫起）；team/orch 只向存活 agent 投递，终态后仅存档。
 
+投递引擎的三条不变式：**每个 agent 一条串行链**（并发投递会各自读到同一段未读区间并重复投递；串行同时保证写入顺序）；**每条投递的首行是 `[当前时间]`**（唤醒自带时间锚点，读者不靠最新消息推断「现在」）；**idle 调度者有心跳**——连续一个 tick 无事件、无未读、且距上次成功投递超过一个 tick 时，仍投递一次「心跳 + 调度快照」，且不写频道账本。心跳是唤醒可靠性的下限：纯事件驱动会让「安静的赛事」与「死掉的赛事」不可区分，而静默恰是调度者最该复核组合（产出速率、难度/方向多样性、队列水位）的时刻。多个 steer 的合并发生在运行时而非此处：`agent-runtime.send` 检测到已有 pending steer 时把新文本折进同一条——pi 的每次 `steer()` 各算一条独立注入，不合并就会让一次批量指令变成 N 条消息。
+
 实时扇出（`channels-context.ts` → LiveBus）：每条消息**只 emit 一次**，bus 键取频道自身 id（#team = challengeId，dm = agentId，orch = eventId）；LiveBus 只有全局订阅（`subscribeAll`）一个出口，web 端按载荷里的 `message.channelKey` 分发，因此不存在 per-channel 订阅方，也不需要有第二把事件级键。
 
 **系统通知 = 类型化事件 + 模板**（`run/orch-notices.ts`）：系统侧的调用点（service 的 flag 处置/解出清理/手动停止、queue 的队列边沿与暂停恢复、赛事级看门狗）不再拼中文散文，只构造类型化事件并 `publish`；事件决定投递面（`team:<challengeId>` 或 `orch:<eventId>`）、`meta`（`eventType` / `noticeType` / 提交者 `agentId`）与紧急度，文本由模板渲染——默认值即 `NOTICE_TEMPLATE_DEFAULTS`（10 个键），随 builtin 行落 `prompt_templates`（用户可编辑，下次通知生效）。事件载荷只带结构字段（如 `launchFailed` 携带 challengeName 与截断后的 error），措辞一律归模板。投递面、urgent 语义、paused 门与 `meta.agentId`（跳过提交者自身通知）等契约全部留在 channels 层不变。设置面：settings meta 暴露全部内置模板的默认 body（含通知模板，支持「恢复默认 / 修改标记」）与各类型的变量清单（含 `noticePromptVariables`），`POST /api/settings/prompts/preview` 对全部 `notice*` 键统一收 `kind: "notice"`，用一个与变量清单严格一致的示例上下文渲染（前端不镜像变量、不按事件分派）。
@@ -103,6 +105,10 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 调度者不是代码里的循环，而是**一个 agent**：消费 `orch` 频道的事件投递，用 Python SDK（`queue.enqueue` / `agents.*`）产出计划，由 `queue.ts` 排水落地。系统侧的约束都在 `fence.ts` 与 `run/scheduler-policy.ts`（读侧合并 `scheduler_config`：flag 通知、解出后停兄弟、槽位释放时机 eager/drained 等）。并发与槽位在启动侧强制校验，不依赖调度者自觉；事件批处理与阈值触发由投递引擎的 flush tick 承担。
 
 系统→调度者的方向是类型化事件 + 可编辑模板：`orch` 频道里的系统消息全部由 `run/orch-notices.ts` 的事件渲染（flag 接受、部分解出、解出清理、手动停止、队列不足/启动失败、队列暂停恢复、赛事停滞），事件的结构字段决定 meta 与紧急度，散文只在模板里；调度者→系统的方向由容器内 Python SDK 类型化，两侧协议都不再依赖隐式约定。
+
+**调度快照必须同时给出成本与产出**（`run/scheduler-admin.ts` 的 `getDigestContext` → `schedulerDigest` 模板）。产出侧：每题 `earned`（已得分）、`flagProgress`（n/N）、`perFlag`、`sinceLastFlag`，事件级 `elapsed` 与 `sinceLastScore`，以及 `board`（未启动题数与未触达分值——没有 live agent 也没有排队项的题不会出现在逐题行里，不汇总就等于对调度者不可见）。多旗进度由本地已接受 flag 数与 `challenge_remote.flag_count` 推导（`earned = points × confirmed / flagCount`）：平台按旗均分分值，逐旗分数组不在 agent 面 API 上。`solvedLabel` 只在集齐全部 flag 时才给「已解」——把「有 1 个 accepted flag」当已解会让 2/6 的链看起来完工。缺了分子，调度者的性价比判断无从执行，故这两侧字段是同一份契约。
+
+**通用模板 vs 部署特调**：`prompt-defaults.ts` 里的内置模板只写与具体赛事无关的策略原则（含预算语义：`timeout_ms` 是兜底，分配靠 agent 上限与 `agents.close`）；具体数值（各难度首轮预算、平台并发上限、flag 格式、离线约束）属于某个评测环境的经验参数，落在部署侧的 event preset（`containers/*/preset.json` 的 `promptHint` 与 `settings`，`bootstrap.ts` 读取），不写进通用模板。
 
 ## 平台适配（`apps/server/src/platforms/`）
 

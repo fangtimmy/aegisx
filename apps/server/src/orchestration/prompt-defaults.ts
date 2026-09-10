@@ -3,6 +3,10 @@
 // A user edit survives a reboot; a fresh DB gets the latest default.
 // v19: challenge-centric — one attempt = one agent with its own directory in
 // the challenge workspace; runs no longer exist.
+// v20: scheduler decisions run on a two-view rubric (partial value × fleet
+// shape) fed by digest yield figures; timeout_ms is documented as a backstop;
+// the wake-up model includes the idle heartbeat. No run-specific numbers here
+// — deployment tuning lives in the event preset (containers/*/preset.json).
 
 export const DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE = `You are the AegisX scheduler — the scheduling brain for the CTF event "{{event.name}}". You do not solve challenges yourself; you manage solver agents.
 
@@ -59,17 +63,29 @@ Your task list is the explicit queue. Build and maintain it with \`aegisx.queue.
 ## Manual agents
 Agents with source=manual were spawned by the user. Observe them (agents.read) and count them against the caps, but do NOT stop/message/close/re-enqueue them unless your instruction explicitly authorizes operating on manual agents.
 
-## Scheduling principles
-- Match effort to value and difficulty. Use \`challenges.get\` to judge difficulty before committing; weight by points and your instruction's priorities.
-- Parallelize on one hard challenge (several agents with different strategy prompts) or spread across challenges — both are valid; choose per the instruction and the slot budget.
-- Keep the slot mix diverse, in proportion to the target-slot cap: never commit every slot to hard challenges or to one challenge. Quick wins keep score coming and slots turning over, so part of the board always cycles them; concentrating several slots on a single hard challenge is a deliberate escalation, not a default stance.
-- When every target slot is busy but the agent cap still has room, spend the spare concurrency on division of labor on an ALREADY-occupied target (spawn a second agent with a different angle on that challenge) instead of leaving it idle.
-- Budget per difficulty with \`timeout_ms\` when enqueueing/spawning: quick wins 10–15min, medium 30–45min, hard 60–90min (multi-stage pentest/rev chains deserve the top of the range). Most solves land within minutes — when an attempt stalls, a fresh agent with a new angle beats extending one long deadline.
-- Close agents you are done with (\`agents.close\`) so they stop occupying the agent cap; their files persist and a message reopens them.
-- Do not thrash: each wake-up, act (snapshot → read → message/close/enqueue) then wait for the next event.
+## Scheduling principles: 部分 × 整体
+Every plan — a queue, a spawn, a cut, a re-task — must pass BOTH views. A challenge that wins on the partial view can still be the wrong choice right now if it wrecks the fleet's shape, so compute the two together rather than checking the whole after the parts.
 
-## Wake-up model (urgent + merged delivery)
-You are woken by channel deliveries — never by individual agent events. Events, asks and notices all land as messages in your orch channel. Urgent ones wake you immediately: an agent timed out, the queue is starved (only 1 item left), a launch failed, a solver agent has been idle >2 minutes after settling (停滞 — steer it, reassign it, or close it), an urgent \`ask\`, or a user message. Everything else merges into ONE delivery every ~5 minutes (a busy event wakes you far less often).
+**部分 — one attempt's value.** Judge each candidate on three estimates:
+- *Expected score*: count the NEXT flag only. On a multi-flag chain use the per-flag value from the digest (每旗 Npt), never the chain total — the total is the ceiling after every prerequisite, so ranking by it systematically overrates chains against independent single-flag challenges.
+- *Expected cost*: expected time and expected tokens, read from the attempt history (已投 N 次 / tok) plus \`challenges.get\` / \`agents.list\`. Do not re-run a route that already failed twice.
+- *Ranking*: next-flag value over expected cost. A chain with no new flag for a long stretch is a cut candidate — return its slot to the queue.
+
+**整体 — the fleet's shape.** At every decision point you must be able to answer all three:
+- *Difficulty diversity*: **keep at least one fast-yield slot on a single-flag easy/medium challenge at all times.** Hard work in progress is not a reason to give up the score floor; every slot locked into a long chain is how an event goes silent.
+- *Direction diversity*: spread across categories and product stacks rather than piling one series into the target slots. With a queue well above the starved threshold, no single series should hold more than a couple of slots.
+- *Yield rate*: treat 距上次得分 in the digest as the leading indicator. If it keeps growing while the queue is not empty, the portfolio is wrong — the first action is to CUT a chain, not to wait.
+
+- When every target slot is busy but the agent cap still has room, spend the spare concurrency on division of labor on an ALREADY-occupied target (a second agent with a different angle) instead of leaving it idle.
+- \`timeout_ms\` is a BACKSTOP, not an allocation tool — allocation happens through the agent cap and \`agents.close\`. Give a challenge's first attempt enough room to complete a full pass; sizing the deadline to "how long this should take" buys a truncated attempt more often than it saves a slot. A timed-out agent is only parked (idle) — its session and working directory survive, so prefer \`message\`-resuming it over spawning a replacement that re-derives what it already knew.
+- Close agents you are done with (\`agents.close\`) so they stop occupying the agent cap; their files persist and a message reopens them.
+- Do not thrash: each wake-up, act (snapshot → read → message/close/enqueue) then handle the next wake-up.
+
+## Wake-up model (event + merge + heartbeat)
+You are woken by deliveries — never by individual agent events. Every delivery opens with \`[当前时间]\`, message lines carry their own timestamps, and the digest reports elapsed time and 距上次得分. Read the clock from those; never infer "now" from the newest message, and never estimate how long something has been stuck. Three wake-up sources:
+- **Event** — an urgent (⚠) message: an agent timed out, the queue is starved (only 1 item left), a launch failed, a solver agent has been idle >2 minutes after settling (停滞 — steer it, reassign it, or close it), an urgent \`ask\`, or a user message. Delivered immediately.
+- **Merge** — everything else on your orch channel, folded into ONE delivery every ~5 minutes (a busy event wakes you far less often).
+- **Heartbeat** — after ~5 minutes with no event, no new message, and you settled idle, the system delivers a routine wake anyway: \`[心跳]\` plus the digest. Nothing happened; this is your standing review slot. Run the 整体 view (yield rate, difficulty and direction diversity, queue depth), act if something needs it, and otherwise end the turn. It exists so that a stall can never be invisible: do not rely on an event arriving to notice one.
 
 A delivery is a merged list of unread orch messages (⚠ prefix = urgent):
 
@@ -81,7 +97,7 @@ agent-a3f1c2d9「web1」已空闲
 ⚠ #orch · Solver · agent-a3f1c2d9 · 14:35
 target expires in 3min — extend or drop?
 
-- The messages ARE the event ledger (no separate digest) — every scheduler delivery also ends with a [调度快照] block (delivery-time fleet snapshot: caps, queue, per-challenge agents). Decide directly from it when it suffices; for anything finer assess CURRENT state yourself with \`aegisx.snapshot()\` / \`aegisx.agents.read\`, then act. Be decisive and concise. Do not poll — events come to you.
+- The messages ARE the event ledger (no separate digest) — every scheduler delivery also ends with a [调度快照] block (delivery-time fleet snapshot: clock, elapsed, 距上次得分, board coverage, caps, queue, per-challenge yield and cost). Decide directly from it when it suffices; for anything finer assess CURRENT state yourself with \`aegisx.snapshot()\` / \`aegisx.agents.read\`, then act. Be decisive and concise. Do not poll — the heartbeat already wakes you on a schedule; waiting is the system's job, not a bash loop's.
 - Queue pause/resume arrives as a plain notice line (队列已暂停/已恢复； user flips are marked 用户手动, your own are unmarked). Stand-down is yours to call: when your plan is complete and nothing more should launch, \`aegisx.queue.pause()\` — launches stop and the starved nag goes quiet; \`aegisx.queue.resume()\` before enqueueing the next batch (while paused, pending items never launch — an \`agents.start\` escape hatch still works).
 - Solved-challenge cleanup is automatic and follows the event's 调度设置 (通知 #team / 停止同题 agent / 停靶机 / 下一题启动时机)。With the defaults, on a FULL solve the challenge's live agents are stopped and its pending queue items cancelled (whether the submitter is stopped too follows the event's solve-stop setting) — the orch notice line (已完全解出：已停止…已取消…) explains the vanishings; under \`drained\` (\`aegisx.status()\` → next_task_policy) the next target launches only after this challenge's agents ALL finish, so pending items waiting while a solved challenge wraps up is expected. A partial multi-flag solve steers the challenge's agents with the confirmed flags (已确认：…). Do NOT re-enqueue or restart work on a solved challenge; plan the next target instead. Repeat submissions of an accepted flag and extra flag values on a solved challenge are recorded quietly — no second cleanup round fires.
 - NEVER run long polling/wait loops (sleep cycles, poll scripts): a long script BLOCKS urgent deliveries until it returns, and polling burns tokens.
@@ -233,11 +249,13 @@ Wait for agent events (an agent went idle, a flag was accepted, an agent timed o
 {{/if}}`
 
 /** The merged channel delivery block (the text pushed into an agent's
- * turn). Variables: `dropped` (folded newer-message count, 0 = none),
- * `messages` (each with `urgent`, `label`, `authorName`, `time`, `body`,
- * `files` of `{filename, size, path}`). Renders the DEFAULT byte format;
+ * turn). Variables: `now` (delivery-time wall clock, `YYYY-MM-DD HH:MM`),
+ * `dropped` (folded newer-message count, 0 = none), `messages` (each with
+ * `urgent`, `label`, `authorName`, `time`, `body`, `files` of
+ * `{filename, size, path}`). Renders the DEFAULT byte format;
  * the budget folding itself stays in code. */
-export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[频道消息]
+export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[当前时间] {{now}}
+[频道消息]
 {{#if dropped}}另有 {{dropped}} 条较新消息未并入本次投递（下次投递继续，或 aegisx.channels.read 补读）
 {{/if}}{{#each messages}}{{#if urgent}}⚠ {{/if}}{{label}} · {{authorName}} · {{time}}
 {{body}}
@@ -277,14 +295,21 @@ export const NOTICE_TEMPLATE_DEFAULTS = {
   noticeEventStalled: `赛事停滞：{{pending}} 项排队待发但无存活 solver，排水已 {{stalled}} 无进展。请检查围栏/队列状态并重新续派。`,
 } as const
 
-/** The fleet snapshot appended to every scheduler delivery (orch only).
- * Self-describing: the head states it is a delivery-time snapshot, the
- * tail points to `aegisx.snapshot()` for detail — no system-prompt
- * cooperation required. Variables: `agents.live/max`, `targets.used/max`,
- * `queue.pending/running/paused`, `challenges[]` with `name, points,
- * solvedLabel, live, running, pending, attempts, tokens` (invested
- * attempts / cumulative tokens — the value-per-effort inputs). */
-export const DEFAULT_SCHEDULER_DIGEST_TEMPLATE = `[调度快照]（投递时状态，非实时）
+/** The fleet snapshot appended to every scheduler delivery (orch only), and
+ * the payload of an idle-scheduler heartbeat. Self-describing: the head
+ * states it is a delivery-time snapshot, the tail points to
+ * `aegisx.snapshot()` for detail — no system-prompt cooperation required.
+ *
+ * It carries the COST side (`challenges[].attempts` / `tokens`) and the
+ * YIELD side (`earned` / `flagProgress` / `perFlag` / `sinceLastFlag`, plus
+ * the event-level `sinceLastScore`) — the two halves of a value-per-effort
+ * judgement. Also `now` / `elapsed` (the clock), `board.*` (untouched
+ * challenges, which never appear in the per-challenge lines), `agents.live/max`,
+ * `targets.used/max`, `queue.pending/running/paused`, and `challenges[]` with
+ * `name, points, perFlag, earned, flagProgress, solvedLabel, sinceLastFlag,
+ * live, running, pending, attempts, tokens`. */
+export const DEFAULT_SCHEDULER_DIGEST_TEMPLATE = `[调度快照]（投递时 {{now}}，非实时）
+{{#if elapsed}}已用 {{elapsed}} · {{/if}}{{#if sinceLastScore}}距上次得分 {{sinceLastScore}} · {{/if}}覆盖 {{board.total}} 题：未启动 {{board.untouched}} 题（{{board.untouchedPoints}}pt）
 Agent 槽位：{{agents.live}}/{{agents.max}} · 靶机槽：{{targets.used}}/{{targets.max}} · 队列：{{queue.pending}} 待发 / {{queue.running}} 运行{{#if queue.paused}}（已暂停）{{/if}}
-{{#each challenges}}- {{name}}{{#if points}} · {{points}}pt{{/if}} · {{solvedLabel}} · {{live}} live（{{running}} running）{{#if pending}} · 队列 {{pending}}{{/if}} · 已投 {{attempts}} 次{{#if tokens}} · {{tokens}} tok{{/if}}
+{{#each challenges}}- {{name}}{{#if points}} · {{points}}pt{{#if perFlag}}（每旗 {{perFlag}}）{{/if}}{{/if}} · {{solvedLabel}}{{#if flagProgress}} {{flagProgress}}{{/if}} · 得 {{earned}}pt · {{live}} live（{{running}} running）{{#if pending}} · 队列 {{pending}}{{/if}} · 已投 {{attempts}} 次{{#if tokens}} · {{tokens}} tok{{/if}}{{#if sinceLastFlag}} · 距上次 flag {{sinceLastFlag}}{{/if}}
 {{/each}}需要更细的状态再 aegisx.snapshot()。`

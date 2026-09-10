@@ -118,12 +118,18 @@ describe("scheduler digest (getDigestContext + default template)", () => {
       const ctx = admin.getDigestContext("evt-1")
       expect(ctx.agents).toEqual({ live: 3, max: 4 })
       expect(ctx.queue).toEqual({ pending: 1, running: 1, paused: true })
+      // Fixed test clock, rendered in the local zone (zone-agnostic assert).
+      expect(ctx.now).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
       const names = ctx.challenges.map((c) => c.name)
       expect(names).toEqual(["web1", "pwn2"]) // quiet dropped
       expect(ctx.challenges[0]).toEqual({
         name: "web1",
         points: 300,
+        perFlag: 300,
+        earned: 0,
+        flagProgress: "",
         solvedLabel: "已解",
+        sinceLastFlag: "",
         live: 2,
         running: 1,
         pending: 1,
@@ -131,14 +137,22 @@ describe("scheduler digest (getDigestContext + default template)", () => {
         tokens: "",
       })
       expect(ctx.challenges[1].solvedLabel).toBe("部分")
+      // ch-3 is the untouched one — invisible per-challenge, counted on the
+      // board line instead.
+      expect(ctx.board).toEqual({
+        total: 3,
+        untouched: 1,
+        untouchedPoints: 0,
+      })
 
       const text = renderTemplateBody(DEFAULT_SCHEDULER_DIGEST_TEMPLATE, ctx)
+      expect(text).toContain("覆盖 3 题：未启动 1 题")
       expect(text).toContain("Agent 槽位：3/4")
       expect(text).toContain("队列：1 待发 / 1 运行（已暂停）")
       expect(text).toContain(
-        "- web1 · 300pt · 已解 · 2 live（1 running） · 队列 1 · 已投 2 次"
+        "- web1 · 300pt（每旗 300） · 已解 · 得 0pt · 2 live（1 running） · 队列 1 · 已投 2 次"
       )
-      expect(text).toContain("- pwn2 · 500pt · 部分 · 1 live（0 running）")
+      expect(text).toContain("- pwn2 · 500pt（每旗 500） · 部分")
       expect(text).not.toContain("quiet")
       expect(text).toContain("aegisx.snapshot()")
     } finally {
@@ -168,9 +182,106 @@ describe("scheduler digest (getDigestContext + default template)", () => {
       const ctx = admin.getDigestContext("evt-1")
       expect(ctx.challenges[0].solvedLabel).toBe("已解")
       expect(ctx.agents.live).toBe(1)
+      // Yield side: single-flag challenge, accepted → full value earned.
+      expect(ctx.challenges[0].earned).toBe(100)
+      expect(ctx.challenges[0].perFlag).toBe(100)
+      expect(ctx.sinceLastScore).toBe("0s")
 
       const text = renderTemplateBody(DEFAULT_SCHEDULER_DIGEST_TEMPLATE, ctx)
-      expect(text).toContain("crypto1 · 100pt · 已解")
+      expect(text).toContain("crypto1 · 100pt（每旗 100） · 已解 · 得 100pt")
+      expect(text).toContain("距上次得分 0s")
+    } finally {
+      close()
+    }
+  })
+})
+
+/** One accepted flag on ch-1 at `updatedAt` (defaults to the fixed test
+ * clock). */
+function acceptFlag(
+  db: ReturnType<typeof createDatabase>["db"],
+  id: string,
+  updatedAt = now()
+) {
+  db.insert(challengeFlags)
+    .values({
+      id,
+      challengeId: "ch-1",
+      flag: `flag{${id}}`,
+      status: "accepted",
+      source: "agent",
+      agentId: "a1",
+      createdAt: updatedAt,
+      updatedAt,
+    })
+    .run()
+}
+
+describe("scheduler digest: multi-flag yield (the partial solve is not 已解)", () => {
+  function seedMultiFlag(db: ReturnType<typeof createDatabase>["db"]) {
+    seedEvent(db)
+    seedChallenge(db, { id: "ch-1", name: "chain", points: 1200 })
+    seedLiveAgent(db, "a1", "ch-1", "running")
+    // The platform reports the flag count; per-flag value = 1200 / 4 = 300.
+    db.insert(challengeRemote)
+      .values({
+        challengeId: "ch-1",
+        eventId: "evt-1",
+        sourceKey: "k",
+        remoteId: "r1",
+        available: true,
+        solved: false,
+        flagCount: 4,
+        syncedAt: now(),
+      })
+      .run()
+  }
+
+  test("2 of 4 confirmed reads 部分 with per-flag value and earned = 2 × perFlag", () => {
+    const { db, admin, close } = setup()
+    try {
+      seedMultiFlag(db)
+      acceptFlag(db, "f1")
+      acceptFlag(db, "f2")
+
+      const c = admin.getDigestContext("evt-1").challenges[0]
+      expect(c.flagProgress).toBe("2/4")
+      expect(c.perFlag).toBe(300)
+      expect(c.earned).toBe(600)
+      // The whole point: an unfinished chain must not read as solved.
+      expect(c.solvedLabel).toBe("部分")
+    } finally {
+      close()
+    }
+  })
+
+  test("collecting every flag flips to 已解 and the full value", () => {
+    const { db, admin, close } = setup()
+    try {
+      seedMultiFlag(db)
+      for (const id of ["f1", "f2", "f3", "f4"]) acceptFlag(db, id)
+
+      const c = admin.getDigestContext("evt-1").challenges[0]
+      expect(c.flagProgress).toBe("4/4")
+      expect(c.earned).toBe(1200)
+      expect(c.solvedLabel).toBe("已解")
+    } finally {
+      close()
+    }
+  })
+
+  test("a per-challenge clock reports time since that challenge's last flag", () => {
+    const { db, admin, close } = setup()
+    try {
+      seedMultiFlag(db)
+      // Accepted 3 minutes before the fixed test clock.
+      acceptFlag(db, "f1", "2024-12-31T23:57:00.000Z")
+      acceptFlag(db, "f2", "2024-12-31T23:59:00.000Z")
+
+      const ctx = admin.getDigestContext("evt-1")
+      expect(ctx.challenges[0].sinceLastFlag).toBe("1m")
+      // Event-wide clock uses the NEWEST acceptance too.
+      expect(ctx.sinceLastScore).toBe("1m")
     } finally {
       close()
     }

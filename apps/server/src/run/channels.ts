@@ -64,7 +64,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
   const intervalMs = deps.flushIntervalMs ?? FLUSH_INTERVAL_MS
   const ctx = createChannelContext(deps, intervalMs, deps.clock ?? systemClock)
   const reads = createReadsService(ctx)
-  const delivery = createDeliveryEngine(ctx)
+  const delivery = createDeliveryEngine(ctx, { unreadCount: reads.unreadCount })
   const writes = createPostService(
     ctx,
     delivery.deliverChannel,

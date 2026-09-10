@@ -28,11 +28,24 @@ export type RenderGroup = {
  * delivered (null = nothing from that group made the cut). */
 export type RenderedDelivery = { text: string; lastIds: Array<number | null> }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0")
+}
+
 function timeOf(iso: string): string {
   const date = new Date(iso)
-  const hh = String(date.getHours()).padStart(2, "0")
-  const mm = String(date.getMinutes()).padStart(2, "0")
-  return `${hh}:${mm}`
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+/** Wall-clock stamp for delivery headers (`YYYY-MM-DD HH:MM`, local). Every
+ * wake carries one so the reader can place itself in time without inferring
+ * "now" from the newest message. */
+export function fmtClock(at: number): string {
+  const date = new Date(at)
+  return (
+    `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ` +
+    `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+  )
 }
 
 /** Render the merged delivery text via the channelDelivery template:
@@ -51,7 +64,8 @@ function timeOf(iso: string): string {
 export function renderDelivery(
   body: string,
   groups: RenderGroup[],
-  maxChars: number
+  maxChars: number,
+  nowMs: number = Date.now()
 ): RenderedDelivery {
   const messages = groups.flatMap((group, groupIndex) =>
     group.messages.map((message) => ({
@@ -69,6 +83,7 @@ export function renderDelivery(
     list: typeof messages,
     dropped: number
   ): DeliveryRenderContext => ({
+    now: fmtClock(nowMs),
     dropped,
     messages: list.map((message) => ({
       urgent: message.urgent,

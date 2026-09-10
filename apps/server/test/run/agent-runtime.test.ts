@@ -19,6 +19,7 @@ import {
   type ChannelService,
 } from "../../src/run/channels"
 import { createFakeClock } from "../../src/run/clock"
+import type { HostAgentSession } from "../../src/run/host/host-session"
 import { createLiveBus } from "../../src/run/host/live"
 import { seedChallenge, seedEvent, now } from "../helpers"
 import { refine } from "../support"
@@ -241,5 +242,94 @@ describe("agent stall watchdog (docs/im-simplify-v18.md §五)", () => {
     expect(fmtMs(180_000)).toBe("3m")
     expect(fmtMs(7_200_000)).toBe("2h")
     expect(fmtMs(-45_000)).toBe("-45s(超时)")
+  })
+})
+
+/** pi's queue semantics: steer()/followUp() append, clearQueue() drains. */
+function streamingSession() {
+  const steering: string[] = []
+  const followUps: string[] = []
+  const session = {
+    isStreaming: true,
+    thinkingLevel: "off",
+    modelRuntime: {},
+    prompt: async () => {},
+    abort: async () => {},
+    setModel: async () => {},
+    setThinkingLevel: () => {},
+    steer: async (text: string) => {
+      steering.push(text)
+    },
+    followUp: async (text: string) => {
+      followUps.push(text)
+    },
+    clearQueue: () => {
+      const drained = { steering: [...steering], followUp: [...followUps] }
+      steering.length = 0
+      followUps.length = 0
+      return drained
+    },
+    getSteeringMessages: () => [...steering],
+  }
+  return { session, steering, followUps }
+}
+
+describe("steer merging (one turn sees one steer)", () => {
+  function mountStreaming(
+    db: Db,
+    runtimeFor: ReturnType<typeof makeRuntime>["runtimeFor"],
+    s: ReturnType<typeof streamingSession>
+  ) {
+    seedEvent(db)
+    seedChallenge(db, { id: "ch-1" })
+    seedAgent(db, "a1", { status: "running" })
+    const runtime = runtimeFor("a1")
+    runtime.mountSession(
+      refine<HostAgentSession>({
+        session: s.session,
+        sessionId: "sess-1",
+        pipeline: { attach: () => () => {}, detach: () => {} },
+        dispose: async () => {},
+      })
+    )
+    return runtime
+  }
+
+  test("a second steer folds into the pending one instead of stacking", async () => {
+    const { db, dir, close: closeDb } = setupLite()
+    try {
+      const s = streamingSession()
+      const { runtimeFor, close } = makeRuntime(db, dir)
+      const runtime = mountStreaming(db, runtimeFor, s)
+
+      await runtime.send("first", "steer")
+      expect(s.steering).toEqual(["first"])
+      await runtime.send("second", "steer")
+      // ONE pending steer carrying both — not two separate injections.
+      expect(s.steering).toEqual(["first\n\nsecond"])
+
+      await close()
+    } finally {
+      closeDb()
+    }
+  })
+
+  test("merging preserves follow-ups queued behind the steer", async () => {
+    const { db, dir, close: closeDb } = setupLite()
+    try {
+      const s = streamingSession()
+      const { runtimeFor, close } = makeRuntime(db, dir)
+      const runtime = mountStreaming(db, runtimeFor, s)
+
+      await runtime.send("steer-1", "steer")
+      await runtime.send("later", "followUp")
+      await runtime.send("steer-2", "steer")
+
+      expect(s.steering).toEqual(["steer-1\n\nsteer-2"])
+      expect(s.followUps).toEqual(["later"])
+      await close()
+    } finally {
+      closeDb()
+    }
   })
 })

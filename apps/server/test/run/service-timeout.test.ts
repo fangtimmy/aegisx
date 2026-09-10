@@ -34,7 +34,8 @@ function streamingSession(abortResolves: boolean): HostAgentSession {
     setThinkingLevel: () => {},
     steer: async () => {},
     followUp: async () => {},
-    clearQueue: () => {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    getSteeringMessages: () => [],
   }
   return refine<HostAgentSession>({
     session,

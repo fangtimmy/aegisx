@@ -12,6 +12,7 @@ import {
   channelReads,
   schedulerConfig,
 } from "../../src/db/schema"
+import { DEFAULT_CHANNEL_DELIVERY_TEMPLATE } from "../../src/orchestration/prompt-defaults"
 import {
   FLUSH_INTERVAL_MS,
   SCHEDULER_READ_KEY,
@@ -23,6 +24,8 @@ import {
   teamKey,
   type ChannelService,
 } from "../../src/run/channels"
+import { fmtClock, renderDelivery } from "../../src/run/channels-render"
+import { type Clock, createFakeClock } from "../../src/run/clock"
 import { createLiveBus, type LiveBus } from "../../src/run/host/live"
 import {
   agentPrincipal,
@@ -65,6 +68,7 @@ function makeService(
   deps: {
     renderSchedulerDigest?: (eventId: string) => string
     bus?: LiveBus
+    clock?: Clock
   } = {}
 ) {
   const sent: SentEntry[] = []
@@ -85,6 +89,7 @@ function makeService(
     ...(deps.renderSchedulerDigest
       ? { renderSchedulerDigest: deps.renderSchedulerDigest }
       : {}),
+    ...(deps.clock ? { clock: deps.clock } : {}),
   })
   return { channels, sent, bus }
 }
@@ -164,9 +169,11 @@ function timeOfLegacy(iso: string) {
 
 function legacy(
   groups: Parameters<typeof renderMerged>[0],
-  maxChars = 8_000
+  maxChars = 8_000,
+  nowMs = Date.now()
 ): string {
-  const header = "[频道消息]"
+  const header = `[当前时间] ${fmtClock(nowMs)}\n[频道消息]`
+  const prefixLen = header.length + 1
   const blocks: string[][] = []
   for (const grp of groups) {
     for (const message of grp.messages) {
@@ -186,7 +193,7 @@ function legacy(
   const render = (kept: string[][]) =>
     [header, ...kept.flatMap((lines) => lines)].join("\n")
   if (render(blocks).length <= maxChars) return render(blocks)
-  const budget = maxChars - header.length - 120
+  const budget = maxChars - prefixLen - 120
   let used = 0
   let kept = 0
   for (let i = 0; i < blocks.length; i += 1) {
@@ -1261,6 +1268,11 @@ describe("renderMerged", () => {
   // format byte-for-byte with the default builtin body — the folding math
   // included. This locks the channelDelivery default against regressions.
   test("default template renders byte-identical to the legacy renderer", () => {
+    // Pinned delivery clock: the default header now carries the wall clock,
+    // so byte-identity needs the same instant on both sides.
+    const nowMs = Date.parse("2026-09-10T14:32:00+08:00")
+    const render = (groups: Parameters<typeof renderMerged>[0]) =>
+      renderDelivery(DEFAULT_CHANNEL_DELIVERY_TEMPLATE, groups, 8_000, nowMs)
     const matrix = [
       { label: "#team", messages: [] },
       testGroup(1),
@@ -1269,20 +1281,33 @@ describe("renderMerged", () => {
       testGroup(60, 400), // deep overflow
     ]
     for (const groups of matrix) {
-      expect(renderMerged([groups])).toBe(legacy([groups]))
+      expect(render([groups]).text).toBe(legacy([groups], 8_000, nowMs))
     }
     // Multi-group interleaving (team + dm faces in one delivery).
     expect(
-      renderMerged([
+      render([
         testGroup(3),
         { label: "#orch", messages: testGroup(2).messages },
-      ])
+      ]).text
     ).toBe(
-      legacy([
-        testGroup(3),
-        { label: "#orch", messages: testGroup(2).messages },
-      ])
+      legacy(
+        [testGroup(3), { label: "#orch", messages: testGroup(2).messages }],
+        8_000,
+        nowMs
+      )
     )
+  })
+
+  test("every delivery opens with the current wall clock", () => {
+    const nowMs = Date.parse("2026-09-10T14:32:00+08:00")
+    const text = renderDelivery(
+      DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
+      [testGroup(1)],
+      8_000,
+      nowMs
+    ).text
+    expect(text.split("\n")[0]).toBe(`[当前时间] ${fmtClock(nowMs)}`)
+    expect(fmtClock(nowMs)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
   })
 })
 
@@ -1674,6 +1699,127 @@ describe("explicit cleanup (§八)", () => {
       close()
     }
   })
+})
+
+describe("scheduler heartbeat (§3.4)", () => {
+  /** A service on a fake clock with one idle scheduler and no other agents. */
+  function setupHeartbeat() {
+    const lite = setupDbLite()
+    const clock = createFakeClock()
+    seedEvent(lite.db)
+    seedScheduler(lite.db, "s1")
+    lite.db
+      .update(agents)
+      .set({ status: "idle" })
+      .where(eq(agents.id, "s1"))
+      .run()
+    const made = makeService(lite.db, lite.dir, {
+      clock,
+      renderSchedulerDigest: () =>
+        "[调度快照]（投递时 2026-09-10 14:32，非实时）",
+    })
+    return { ...lite, clock, ...made }
+  }
+
+  test("an idle scheduler with nothing to read is woken on the tick anyway", async () => {
+    const { clock, channels, sent, close } = setupHeartbeat()
+    try {
+      clock.advance(FLUSH_INTERVAL_MS)
+      await settle()
+      expect(sent).toHaveLength(1)
+      expect(sent[0].agentId).toBe("s1")
+      expect(sent[0].text).toContain("[心跳]")
+      expect(sent[0].text).toContain("[当前时间]")
+      expect(sent[0].text).toContain("[调度快照]")
+    } finally {
+      channels.close()
+      close()
+    }
+  })
+
+  test("the heartbeat respects the tick interval, not every tick", async () => {
+    const { clock, channels, sent, close } = setupHeartbeat()
+    try {
+      clock.advance(FLUSH_INTERVAL_MS)
+      await settle()
+      expect(sent).toHaveLength(1)
+      // One more tick inside the window: last delivery is fresh → silent.
+      clock.advance(FLUSH_INTERVAL_MS)
+      await settle()
+      expect(sent).toHaveLength(2)
+      // A tick after the window elapses with no delivery in between would
+      // fire; here each tick IS a delivery, so the cadence is one per tick.
+      expect(sent[1].text).toContain("[心跳]")
+    } finally {
+      channels.close()
+      close()
+    }
+  })
+
+  test("a running scheduler is never heartbeated (it is already awake)", async () => {
+    const { db, dir, close } = setupDbLiteWithEvent()
+    try {
+      const clock = createFakeClock()
+      seedScheduler(db, "s1")
+      db.update(agents)
+        .set({ status: "running" })
+        .where(eq(agents.id, "s1"))
+        .run()
+      const { channels, sent } = makeService(db, dir, { clock })
+      clock.advance(FLUSH_INTERVAL_MS)
+      await settle()
+      expect(sent).toHaveLength(0)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("unread messages take the normal path — no heartbeat on top", async () => {
+    const { db, dir, close } = setupDbLiteWithEvent()
+    try {
+      const clock = createFakeClock()
+      seedScheduler(db, "s1")
+      db.update(agents).set({ status: "idle" }).where(eq(agents.id, "s1")).run()
+      const { channels, sent } = makeService(db, dir, { clock })
+      channels.post(
+        {
+          channelKey: orchKey("evt-1"),
+          author: { type: "system" },
+          body: "agent timed out",
+        },
+        SYSTEM
+      )
+      clock.advance(FLUSH_INTERVAL_MS)
+      await settle()
+      expect(sent).toHaveLength(1)
+      expect(sent[0].text).toContain("agent timed out")
+      expect(sent[0].text).not.toContain("[心跳]")
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("hold suppresses the heartbeat like every other delivery", async () => {
+    const { clock, channels, sent, close } = setupHeartbeat()
+    try {
+      channels.setDeliveryPaused("evt-1", true)
+      clock.advance(FLUSH_INTERVAL_MS * 2)
+      await settle()
+      expect(sent).toHaveLength(0)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  /** Bare db + dir with the event seeded (local to this block). */
+  function setupDbLiteWithEvent() {
+    const lite = setupDbLite()
+    seedEvent(lite.db)
+    return lite
+  }
 })
 
 describe("terminal agents and urgent delivery (kill-undo guard)", () => {

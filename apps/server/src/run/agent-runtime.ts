@@ -196,8 +196,24 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
         if (!current) return false
       }
       if (current.session.isStreaming) {
-        if (deliverAs === "followUp") await current.session.followUp(text)
-        else await current.session.steer(text)
+        if (deliverAs === "followUp") {
+          await current.session.followUp(text)
+          return true
+        }
+        // pi queues every steer() as its OWN message, so a second delivery
+        // during the same turn would reach the agent as a separate injection
+        // — N posts become N messages to reconcile mid-task. Fold it into
+        // whatever is already pending instead, so a turn sees one steer.
+        const pending = current.session.getSteeringMessages()
+        if (pending.length === 0) {
+          await current.session.steer(text)
+          return true
+        }
+        // clearQueue drops follow-ups too: restore them after re-queuing the
+        // merged steer (their relative order is preserved).
+        const { followUp } = current.session.clearQueue()
+        await current.session.steer([...pending, text].join("\n\n"))
+        for (const queued of followUp) await current.session.followUp(queued)
         return true
       }
       pendingFinish = undefined

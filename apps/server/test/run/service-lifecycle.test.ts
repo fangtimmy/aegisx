@@ -34,7 +34,8 @@ function stubHostFlipping(sessionId = "sess-1") {
     setThinkingLevel: () => {},
     steer: async () => {},
     followUp: async () => {},
-    clearQueue: () => {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    getSteeringMessages: () => [],
   }
   return refine<import("../../src/run/host/host-session").HostAgentSession>({
     session,
