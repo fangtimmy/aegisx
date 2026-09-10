@@ -5,11 +5,11 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 
-import type { Database } from "../db"
-import { createBashTool } from "../run/bash-tool"
-import type { ContainerManager } from "../run/container/container-manager"
-import { createDockerExecBackend } from "../run/workspace/backend"
-import { createWorkspaceTools } from "../run/workspace/tools"
+import type { Database } from "../../db"
+import { createBashTool } from "../bash-tool"
+import type { ContainerManager } from "../container/container-manager"
+import { createDockerExecBackend } from "../workspace/backend"
+import { createWorkspaceTools } from "../workspace/tools"
 import {
   type AgentLoopSettings,
   createHostAgentSession,

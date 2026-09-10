@@ -12,7 +12,6 @@ import type {
 } from "@aegisx/shared"
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm"
 
-import { roleField, usageField } from "../agents/session-queries"
 import type { Database } from "../db"
 import {
   agents,
@@ -27,6 +26,7 @@ import {
   isPlatformIntegrated,
   type ChallengeRemote,
 } from "../platforms/challenge-state"
+import { roleField, usageField } from "../run/host"
 
 /** Per-group usage rollup bucket (tokens carried without toolCalls). */
 type UsageTotals = {
@@ -39,7 +39,7 @@ type UsageTotals = {
 }
 
 /** Sum of one guarded usage field over entries joined to the event's agents.
- * Shares the JSON1 extractors with sumUsageTotals (agents/session-queries). */
+ * Shares the JSON1 extractors with sumUsageTotals (run/host/session-queries). */
 const sumUsageField = (msgPath: string, entryPath: string) => sql<number>`
     SUM(
       CASE
@@ -57,7 +57,7 @@ const sumUsageField = (msgPath: string, entryPath: string) => sql<number>`
  * agent: per-model and per-challenge usage roll up from these rows in JS
  * (agentRows carry model/challengeId) instead of re-scanning the largest
  * table. Shares the JSON1 extractors with sumUsageTotals
- * (agents/session-queries). */
+ * (run/host/session-queries). */
 function usageByAgentRows(db: Database, eventId: string) {
   return db
     .select({

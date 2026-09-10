@@ -10,7 +10,6 @@ import { join } from "node:path"
 
 import { defaultSettings } from "@aegisx/shared"
 
-import type { HostAgentSession } from "../src/agents/host-session"
 import { createDatabase, type Database } from "../src/db"
 import { agents, challenges, events } from "../src/db/schema"
 import type {
@@ -20,6 +19,7 @@ import type {
 import type { createPlatformService } from "../src/platforms/service"
 import { builtinModelProfile } from "../src/providers/builtin-models"
 import type { ContainerManager } from "../src/run/container/container-manager"
+import type { HostAgentSession } from "../src/run/host/host-session"
 import {
   createAgentService,
   type AgentService,

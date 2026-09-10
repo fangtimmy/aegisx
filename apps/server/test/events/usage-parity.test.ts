@@ -3,18 +3,18 @@ import { describe, expect, test } from "bun:test"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { eq, sql, type SQL } from "drizzle-orm"
 
+import { sessionEntries, sessions } from "../../src/db/schema"
+import { parseJson } from "../../src/lib/guards"
 import {
   accumulateEntryUsage,
   type EntryUsage,
-} from "../../src/agents/entry-usage"
+} from "../../src/run/host/entry-usage"
 import {
   roleField,
   sumUsageTotals,
   usageField,
   usageTotalsSql,
-} from "../../src/agents/session-queries"
-import { sessionEntries, sessions } from "../../src/db/schema"
-import { parseJson } from "../../src/lib/guards"
+} from "../../src/run/host/session-queries"
 import { seedAgent, seedChallenge, seedEvent, setupDb, now } from "../helpers"
 
 type Db = ReturnType<typeof setupDb>["db"]

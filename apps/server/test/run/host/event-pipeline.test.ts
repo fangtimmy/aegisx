@@ -8,13 +8,13 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent"
 
-import { accumulateEntryUsage } from "../../src/agents/entry-usage"
+import { accumulateEntryUsage } from "../../../src/run/host/entry-usage"
 import {
   computeContextSample,
   createAgentEventPipeline,
-} from "../../src/agents/event-pipeline"
-import type { LiveBus } from "../../src/agents/live"
-import { refine } from "../support"
+} from "../../../src/run/host/event-pipeline"
+import type { LiveBus } from "../../../src/run/host/live"
+import { refine } from "../../support"
 
 type Committed = Extract<LiveEvent, { type: "message.committed" }>
 type ToolProgress = Extract<LiveEvent, { type: "tool.progress" }>

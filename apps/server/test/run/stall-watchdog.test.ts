@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { createLiveBus } from "../../src/agents/live"
 import { createDatabase } from "../../src/db"
 import { agents, channelMessages } from "../../src/db/schema"
 import {
@@ -11,6 +10,7 @@ import {
   orchKey,
   type ChannelService,
 } from "../../src/run/channels"
+import { createLiveBus } from "../../src/run/host/live"
 import {
   AGENT_STALL_MS,
   createStallWatchdog,

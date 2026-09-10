@@ -8,7 +8,6 @@ import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { SchedulerStatusSnapshot } from "@aegisx/shared/scheduler"
 import { and, eq, inArray } from "drizzle-orm"
 
-import { usageTotalsSql } from "../agents/session-queries"
 import type { Database } from "../db"
 import {
   agents,
@@ -24,6 +23,7 @@ import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
 import { collapseToAttempts } from "../platforms/wire"
 import { RunActionError } from "./errors"
 import { fenceSnapshot } from "./fence"
+import { usageTotalsSql } from "./host"
 import type { ModelResolver } from "./model-resolver"
 import type { AgentQueries } from "./queries"
 import {

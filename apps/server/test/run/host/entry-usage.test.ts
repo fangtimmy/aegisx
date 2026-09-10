@@ -5,8 +5,8 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import {
   accumulateEntryUsage,
   entryUsageOf,
-} from "../../src/agents/entry-usage"
-import { refine } from "../support"
+} from "../../../src/run/host/entry-usage"
+import { refine } from "../../support"
 
 /**
  * Parity anchor for `accumulateEntryUsage` / `entryUsageOf`.

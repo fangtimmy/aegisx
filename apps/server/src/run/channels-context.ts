@@ -6,11 +6,11 @@ import type {
 } from "@aegisx/shared/channels"
 import { and, eq, sql } from "drizzle-orm"
 
-import type { SessionLifecycle } from "../agents/lifecycle"
-import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, challenges, channelMessages, channelReads } from "../db/schema"
 import { RunActionError } from "./errors"
+import type { SessionLifecycle } from "./host/lifecycle"
+import type { LiveBus } from "./host/live"
 
 export type ChannelMessageRow = typeof channelMessages.$inferSelect
 

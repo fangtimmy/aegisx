@@ -15,6 +15,56 @@
       "rules": {
         "typescript/await-thenable": "off"
       }
+    },
+    {
+      "files": ["src/run/host/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "../**",
+                  "!../bash-tool",
+                  "!../errors",
+                  "!../model-runtime",
+                  "!../container/**",
+                  "!../workspace/**",
+                  "!../../db",
+                  "!../../db/**",
+                  "!../../lib/**"
+                ],
+                "message": "run/host is the innermost agent-session layer: it must not import orchestration or route modules (run/service, run/queue, run/drainer, run/routes, run/scheduler-admin, run/agent-factory, run/sse, scheduler/, events/, platforms/ ...). Allowed: run leaf modules (errors, bash-tool, model-runtime), run/container/**, run/workspace/**, db/, lib/."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/run/routes.ts",
+        "src/run/scheduler-admin.ts",
+        "src/events/**",
+        "src/scheduler/**",
+        "src/platforms/**",
+        "src/settings/**",
+        "src/activity/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["./host/**", "../run/host/**"],
+                "message": "Route layers must not reach into run/host/* internals; go through the service or the public outlet (run/host/index.ts)."
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

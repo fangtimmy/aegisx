@@ -2,8 +2,8 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import type { AgentHostInput } from "../../src/agents/host"
 import { agents } from "../../src/db/schema"
+import type { AgentHostInput } from "../../src/run/host/host"
 import {
   makeAgentService,
   now,
@@ -35,7 +35,7 @@ function stubHostFlipping(sessionId = "sess-1") {
     followUp: async () => {},
     clearQueue: () => {},
   }
-  return refine<import("../../src/agents/host-session").HostAgentSession>({
+  return refine<import("../../src/run/host/host-session").HostAgentSession>({
     session,
     sessionId,
     pipeline: { attach: () => () => {}, detach: () => {} },

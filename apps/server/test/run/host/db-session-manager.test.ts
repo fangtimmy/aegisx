@@ -6,9 +6,9 @@ import { join } from "node:path"
 import { SessionManager } from "@earendil-works/pi-coding-agent"
 import { asc, eq } from "drizzle-orm"
 
-import { DbSessionManager } from "../../src/agents/db-session-manager"
-import { createDatabase } from "../../src/db"
-import { sessionEntries, sessions } from "../../src/db/schema"
+import { createDatabase } from "../../../src/db"
+import { sessionEntries, sessions } from "../../../src/db/schema"
+import { DbSessionManager } from "../../../src/run/host/db-session-manager"
 
 /** Minimal AgentMessage factories (shapes match pi-ai Message). */
 function userMsg(text: string) {

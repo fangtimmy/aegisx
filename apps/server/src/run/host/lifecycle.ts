@@ -1,4 +1,4 @@
-import { RunActionError } from "../run/errors"
+import { RunActionError } from "../errors"
 import type { HostAgentSession } from "./host-session"
 
 /**

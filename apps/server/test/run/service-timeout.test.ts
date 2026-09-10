@@ -2,9 +2,9 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { and, eq } from "drizzle-orm"
 
-import type { HostAgentSession } from "../../src/agents/host-session"
 import { agents } from "../../src/db/schema"
 import { orchKey } from "../../src/run/channels"
+import type { HostAgentSession } from "../../src/run/host/host-session"
 import { makeAgentService, seedAgent, stubHostAgentSession } from "../helpers"
 import { refine } from "../support"
 

@@ -2,8 +2,8 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import type { AgentHostInput } from "../../src/agents/host"
 import { agents } from "../../src/db/schema"
+import type { AgentHostInput } from "../../src/run/host/host"
 import { makeAgentService, seedAgent, stubHostAgentSession } from "../helpers"
 import { refine } from "../support"
 

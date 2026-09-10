@@ -7,13 +7,6 @@ import type { ProviderConnection } from "@aegisx/shared/domain"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { and, eq, inArray, ne } from "drizzle-orm"
 
-import { createAgentHost } from "../agents/host"
-import type {
-  AgentLoopSettings,
-  HostAgentSession,
-} from "../agents/host-session"
-import type { SessionLifecycle } from "../agents/lifecycle"
-import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import {
   agents,
@@ -43,6 +36,10 @@ import {
 import type { AgentDeadlines } from "./deadlines"
 import { RunActionError, RunStartError } from "./errors"
 import { checkSpawnFence } from "./fence"
+import { createAgentHost } from "./host/host"
+import type { AgentLoopSettings, HostAgentSession } from "./host/host-session"
+import type { SessionLifecycle } from "./host/lifecycle"
+import type { LiveBus } from "./host/live"
 import type { ModelResolver } from "./model-resolver"
 import type { SlotModel } from "./model-resolver"
 import {

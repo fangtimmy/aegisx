@@ -2,10 +2,6 @@ import type { AgentUsage, ChallengeFlag, MessageList } from "@aegisx/shared"
 import type { AgentSummary } from "@aegisx/shared/agent"
 import { and, asc, eq, inArray, sql } from "drizzle-orm"
 
-import {
-  listRenderableEntries,
-  sumUsageTotals,
-} from "../agents/session-queries"
 import type { Database } from "../db"
 import {
   agents,
@@ -16,6 +12,7 @@ import {
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { collapseToAttempts, toFlagPublic } from "../platforms/wire"
+import { listRenderableEntries, sumUsageTotals } from "./host/session-queries"
 import { type ChallengeMeta, toAgentSummary } from "./public"
 
 export type AgentQueries = ReturnType<typeof createAgentQueries>

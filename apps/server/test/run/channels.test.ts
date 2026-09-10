@@ -5,7 +5,6 @@ import { join } from "node:path"
 import { formatSize } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
-import { createLiveBus } from "../../src/agents/live"
 import { createDatabase } from "../../src/db"
 import {
   agents,
@@ -24,6 +23,7 @@ import {
   teamKey,
   type ChannelService,
 } from "../../src/run/channels"
+import { createLiveBus } from "../../src/run/host/live"
 import { seedChallenge, seedEvent, now } from "../helpers"
 import { refine } from "../support"
 

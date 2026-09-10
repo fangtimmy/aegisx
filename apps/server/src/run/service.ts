@@ -20,18 +20,6 @@ import {
 import type { ProviderConnection } from "@aegisx/shared/domain"
 import { and, desc, eq, inArray, ne } from "drizzle-orm"
 
-import { applyModelSwitch } from "../agents/agent-ops"
-import { createAgentHost } from "../agents/host"
-import type {
-  AgentLoopSettings,
-  HostAgentSession,
-} from "../agents/host-session"
-import {
-  chainLock,
-  createSessionLifecycle,
-  type SessionLifecycle,
-} from "../agents/lifecycle"
-import { createLiveBus, type LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, challengeFlags, challenges } from "../db/schema"
 import type { ConfigStore } from "../infrastructure/config-store"
@@ -68,6 +56,15 @@ import {
 import type { ContainerManager } from "./container/container-manager"
 import { createAgentDeadlines, type AgentDeadlines } from "./deadlines"
 import { RunActionError } from "./errors"
+import { applyModelSwitch } from "./host/agent-ops"
+import { createAgentHost } from "./host/host"
+import type { AgentLoopSettings, HostAgentSession } from "./host/host-session"
+import {
+  chainLock,
+  createSessionLifecycle,
+  type SessionLifecycle,
+} from "./host/lifecycle"
+import { createLiveBus, type LiveBus } from "./host/live"
 import { createModelResolver } from "./model-resolver"
 import { parseAgentToolDefinitions, parseAgentTools } from "./public"
 import { createAgentQueries } from "./queries"

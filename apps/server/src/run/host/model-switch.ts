@@ -5,7 +5,7 @@ import type { ThinkingLevel } from "@aegisx/shared/live-event"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
 
-import { resolveRunModel } from "../run/model-runtime"
+import { resolveRunModel } from "../model-runtime"
 
 export type SwitchTarget = {
   provider: ProviderConnection

@@ -66,7 +66,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 | `sse.ts` | 每 agent 的实时流出口（LiveBus → SSE） |
 | `routes.ts` / `scheduler-admin.ts` / `queries.ts` / `public.ts` | 用户面路由、调度管理面、查询与对外形状 |
 
-宿主侧支撑在 `apps/server/src/agents/`：`host-session.ts`（pi loop 封装）、`event-pipeline.ts`（事件 → 会话树 + LiveBus + 计时元数据）、`db-session-manager.ts`、`live.ts`（LiveBus）、`model-switch.ts`（存活中换模型）。
+宿主侧支撑在 `apps/server/src/run/host/`（host 子层，原 `src/agents/`）：`host-session.ts`（pi loop 封装）、`event-pipeline.ts`（事件 → 会话树 + LiveBus + 计时元数据）、`db-session-manager.ts`、`live.ts`（LiveBus）、`model-switch.ts`（存活中换模型）。依赖方向由 lint 强制（`apps/server/.oxlintrc.json` 的 `no-restricted-imports` overrides）：host 是最内层，只能依赖叶子与更内层（`run/errors` / `run/bash-tool` / `run/model-runtime` / `run/container` / `run/workspace` / `db` / `lib`），不得反向 import 编排与路由模块；路由层（`run/routes` / `run/scheduler-admin` / `events` / `scheduler` / `platforms` / `settings` / `activity`）不得深入 `run/host/*` 内部，只能经 service 或 `run/host/index.ts` 公共出口。
 
 ## 协作层（channels）
 

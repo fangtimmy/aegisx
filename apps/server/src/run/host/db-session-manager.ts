@@ -14,9 +14,9 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { asc, eq } from "drizzle-orm"
 
-import type { Database } from "../db"
-import { sessionEntries, sessions } from "../db/schema"
-import { parseJson } from "../lib/guards"
+import type { Database } from "../../db"
+import { sessionEntries, sessions } from "../../db/schema"
+import { parseJson } from "../../lib/guards"
 
 /** Short unique id with collision check (mirrors pi's generateId). */
 function generateId(byId: Map<string, unknown>): string {

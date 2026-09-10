@@ -1,6 +1,6 @@
-import type { SessionLifecycle } from "../agents/lifecycle"
 import { agents } from "../db/schema"
 import type { EventScopePayload } from "../orchestration/types"
+import type { SessionLifecycle } from "./host/lifecycle"
 
 /** Grace between deadline-abort and a forced session dispose. */
 const TIMEOUT_GRACE_MS = 30_000

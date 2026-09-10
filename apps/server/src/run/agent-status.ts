@@ -1,11 +1,11 @@
 import { eq } from "drizzle-orm"
 
-import type { LiveBus } from "../agents/live"
 import type { Database } from "../db"
 import { agents, challenges } from "../db/schema"
 import { logEvent } from "../lib/log"
 import type { EventScopePayload } from "../orchestration/types"
 import { orchKey, type ChannelService } from "./channels"
+import type { LiveBus } from "./host/live"
 import type { AgentQueries } from "./queries"
 import type { QueueService } from "./queue"
 

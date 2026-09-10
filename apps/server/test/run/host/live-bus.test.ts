@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 
 import type { LiveEvent } from "@aegisx/shared"
 
-import { createLiveBus } from "../../src/agents/live"
-import { refine } from "../support"
+import { createLiveBus } from "../../../src/run/host/live"
+import { refine } from "../../support"
 
 type ToolProgressEvent = Extract<LiveEvent, { type: "tool.progress" }>
 
