@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c73c6369-3014-4c2f-8530-ccc3b85933f3",
+  "id": "9c7363e9-4899-49a4-84c3-833f05621ba8",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -14,11 +14,26 @@
           "notNull": true,
           "autoincrement": false
         },
-        "run_id": {
-          "name": "run_id",
+        "token": {
+          "name": "token",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "challenge_id": {
+          "name": "challenge_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "role": {
@@ -28,8 +43,36 @@
           "notNull": true,
           "autoincrement": false
         },
-        "parent_agent_id": {
-          "name": "parent_agent_id",
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "system_prompt": {
+          "name": "system_prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tools": {
+          "name": "tools",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "tool_definitions": {
+          "name": "tool_definitions",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -49,15 +92,58 @@
           "notNull": false,
           "autoincrement": false
         },
-        "name": {
-          "name": "name",
+        "prompt": {
+          "name": "prompt",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "task": {
-          "name": "task",
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'manual'"
+        },
+        "timeout_ms": {
+          "name": "timeout_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "deadline_at": {
+          "name": "deadline_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_timeout_at": {
+          "name": "last_timeout_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "queue_item_id": {
+          "name": "queue_item_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "error": {
+          "name": "error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "summary": {
+          "name": "summary",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -90,31 +176,67 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "error": {
-          "name": "error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         }
       },
       "indexes": {
-        "agents_run_id_idx": {
-          "name": "agents_run_id_idx",
+        "agents_event_id_idx": {
+          "name": "agents_event_id_idx",
           "columns": [
-            "run_id"
+            "event_id"
           ],
           "isUnique": false
+        },
+        "agents_challenge_id_idx": {
+          "name": "agents_challenge_id_idx",
+          "columns": [
+            "challenge_id"
+          ],
+          "isUnique": false
+        },
+        "agents_status_idx": {
+          "name": "agents_status_idx",
+          "columns": [
+            "status"
+          ],
+          "isUnique": false
+        },
+        "agents_event_orchestrator_unique": {
+          "name": "agents_event_orchestrator_unique",
+          "columns": [
+            "event_id"
+          ],
+          "isUnique": true,
+          "where": "\"agents\".\"role\" = 'orchestrator'"
+        },
+        "agents_token_unique": {
+          "name": "agents_token_unique",
+          "columns": [
+            "token"
+          ],
+          "isUnique": true,
+          "where": "\"agents\".\"token\" != ''"
         }
       },
       "foreignKeys": {
-        "agents_run_id_runs_id_fk": {
-          "name": "agents_run_id_runs_id_fk",
+        "agents_event_id_events_id_fk": {
+          "name": "agents_event_id_events_id_fk",
           "tableFrom": "agents",
-          "tableTo": "runs",
+          "tableTo": "events",
           "columnsFrom": [
-            "run_id"
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "agents_challenge_id_challenges_id_fk": {
+          "name": "agents_challenge_id_challenges_id_fk",
+          "tableFrom": "agents",
+          "tableTo": "challenges",
+          "columnsFrom": [
+            "challenge_id"
           ],
           "columnsTo": [
             "id"
@@ -128,11 +250,15 @@
       "checkConstraints": {
         "agents_role_check": {
           "name": "agents_role_check",
-          "value": "\"agents\".\"role\" in ('main', 'child')"
+          "value": "\"agents\".\"role\" in ('solver', 'orchestrator')"
         },
         "agents_status_check": {
           "name": "agents_status_check",
-          "value": "\"agents\".\"status\" in ('running', 'idle', 'completed', 'failed')"
+          "value": "\"agents\".\"status\" in ('running', 'idle', 'completed', 'aborted', 'failed')"
+        },
+        "agents_source_check": {
+          "name": "agents_source_check",
+          "value": "\"agents\".\"source\" in ('manual', 'scheduler')"
         }
       }
     },
@@ -240,6 +366,132 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "challenge_flags": {
+      "name": "challenge_flags",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "challenge_id": {
+          "name": "challenge_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "flag": {
+          "name": "flag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "remote_id": {
+          "name": "remote_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "message": {
+          "name": "message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "challenge_flags_challenge_flag_unique": {
+          "name": "challenge_flags_challenge_flag_unique",
+          "columns": [
+            "challenge_id",
+            "flag"
+          ],
+          "isUnique": true
+        },
+        "challenge_flags_challenge_id_idx": {
+          "name": "challenge_flags_challenge_id_idx",
+          "columns": [
+            "challenge_id"
+          ],
+          "isUnique": false
+        },
+        "challenge_flags_agent_id_idx": {
+          "name": "challenge_flags_agent_id_idx",
+          "columns": [
+            "agent_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "challenge_flags_challenge_id_challenges_id_fk": {
+          "name": "challenge_flags_challenge_id_challenges_id_fk",
+          "tableFrom": "challenge_flags",
+          "tableTo": "challenges",
+          "columnsFrom": [
+            "challenge_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "challenge_flags_status_check": {
+          "name": "challenge_flags_status_check",
+          "value": "\"challenge_flags\".\"status\" in ('pending', 'accepted', 'rejected', 'error')"
+        },
+        "challenge_flags_source_check": {
+          "name": "challenge_flags_source_check",
+          "value": "\"challenge_flags\".\"source\" in ('agent', 'manual')"
+        }
+      }
+    },
     "challenge_remote": {
       "name": "challenge_remote",
       "columns": {
@@ -247,6 +499,13 @@
           "name": "challenge_id",
           "type": "text",
           "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
@@ -324,6 +583,7 @@
         "challenge_remote_source_unique": {
           "name": "challenge_remote_source_unique",
           "columns": [
+            "event_id",
             "source_key",
             "remote_id"
           ],
@@ -337,6 +597,19 @@
           "tableTo": "challenges",
           "columnsFrom": [
             "challenge_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "challenge_remote_event_id_events_id_fk": {
+          "name": "challenge_remote_event_id_events_id_fk",
+          "tableFrom": "challenge_remote",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
           ],
           "columnsTo": [
             "id"
@@ -394,6 +667,14 @@
           "notNull": false,
           "autoincrement": false
         },
+        "manual_solve_state": {
+          "name": "manual_solve_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unsolved'"
+        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -434,6 +715,138 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "challenges_manual_solve_state_check": {
+          "name": "challenges_manual_solve_state_check",
+          "value": "\"challenges\".\"manual_solve_state\" in ('solved', 'partial', 'unsolved')"
+        }
+      }
+    },
+    "channel_messages": {
+      "name": "channel_messages",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "channel_key": {
+          "name": "channel_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "author_type": {
+          "name": "author_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "author_agent_id": {
+          "name": "author_agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "author_name": {
+          "name": "author_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "meta": {
+          "name": "meta",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "channel_messages_channel_key_idx": {
+          "name": "channel_messages_channel_key_idx",
+          "columns": [
+            "channel_key",
+            "id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "channel_messages_author_type_check": {
+          "name": "channel_messages_author_type_check",
+          "value": "\"channel_messages\".\"author_type\" in ('system', 'user', 'agent')"
+        }
+      }
+    },
+    "channel_reads": {
+      "name": "channel_reads",
+      "columns": {
+        "channel_key": {
+          "name": "channel_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "reader_key": {
+          "name": "reader_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_read_msg_id": {
+          "name": "last_read_msg_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "channel_reads_channel_key_reader_key_pk": {
+          "columns": [
+            "channel_key",
+            "reader_key"
+          ],
+          "name": "channel_reads_channel_key_reader_key_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
@@ -570,152 +983,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "orchestrators": {
-      "name": "orchestrators",
-      "columns": {
-        "event_id": {
-          "name": "event_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "model_id": {
-          "name": "model_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "thinking_level": {
-          "name": "thinking_level",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'off'"
-        },
-        "instruction": {
-          "name": "instruction",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "''"
-        },
-        "max_concurrent_targets": {
-          "name": "max_concurrent_targets",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 1
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'idle'"
-        },
-        "container_name": {
-          "name": "container_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "image": {
-          "name": "image",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "cpus": {
-          "name": "cpus",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "memory_mb": {
-          "name": "memory_mb",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "pids_limit": {
-          "name": "pids_limit",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "workspace_path": {
-          "name": "workspace_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_dir": {
-          "name": "session_dir",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "orchestrators_event_id_events_id_fk": {
-          "name": "orchestrators_event_id_events_id_fk",
-          "tableFrom": "orchestrators",
-          "tableTo": "events",
-          "columnsFrom": [
-            "event_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "orchestrators_status_check": {
-          "name": "orchestrators_status_check",
-          "value": "\"orchestrators\".\"status\" in ('running', 'idle', 'closed')"
-        }
-      }
-    },
     "platform_request_log": {
       "name": "platform_request_log",
       "columns": {
@@ -804,127 +1071,28 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "runs": {
-      "name": "runs",
+    "prompt_templates": {
+      "name": "prompt_templates",
       "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "challenge_id": {
-          "name": "challenge_id",
+        "plugin": {
+          "name": "plugin",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "status": {
-          "name": "status",
+        "key": {
+          "name": "key",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "provider": {
-          "name": "provider",
+        "body": {
+          "name": "body",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
-        },
-        "provider_label": {
-          "name": "provider_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "model_id": {
-          "name": "model_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "model_label": {
-          "name": "model_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "thinking_level": {
-          "name": "thinking_level",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'off'"
-        },
-        "image": {
-          "name": "image",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "cpus": {
-          "name": "cpus",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "memory_mb": {
-          "name": "memory_mb",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "pids_limit": {
-          "name": "pids_limit",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "container_name": {
-          "name": "container_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "workspace_path": {
-          "name": "workspace_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_dir": {
-          "name": "session_dir",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
           "autoincrement": false
         },
         "updated_at": {
@@ -933,81 +1101,57 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "completed_at": {
-          "name": "completed_at",
+        }
+      },
+      "indexes": {
+        "prompt_templates_plugin_key_unique": {
+          "name": "prompt_templates_plugin_key_unique",
+          "columns": [
+            "plugin",
+            "key"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "queue_state": {
+      "name": "queue_state",
+      "columns": {
+        "event_id": {
+          "name": "event_id",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false,
+          "primaryKey": true,
+          "notNull": true,
           "autoincrement": false
         },
-        "error": {
-          "name": "error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "summary": {
-          "name": "summary",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "flag": {
-          "name": "flag",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "source": {
-          "name": "source",
+        "status": {
+          "name": "status",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'manual'"
+          "default": "'running'"
         },
-        "timeout_ms": {
-          "name": "timeout_ms",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "deadline_at": {
-          "name": "deadline_at",
+        "updated_at": {
+          "name": "updated_at",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "halfway_notified_at": {
-          "name": "halfway_notified_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         }
       },
-      "indexes": {
-        "runs_challenge_id_idx": {
-          "name": "runs_challenge_id_idx",
-          "columns": [
-            "challenge_id"
-          ],
-          "isUnique": false
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
-        "runs_challenge_id_challenges_id_fk": {
-          "name": "runs_challenge_id_challenges_id_fk",
-          "tableFrom": "runs",
-          "tableTo": "challenges",
+        "queue_state_event_id_events_id_fk": {
+          "name": "queue_state_event_id_events_id_fk",
+          "tableFrom": "queue_state",
+          "tableTo": "events",
           "columnsFrom": [
-            "challenge_id"
+            "event_id"
           ],
           "columnsTo": [
             "id"
@@ -1018,16 +1162,139 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {
-        "runs_status_check": {
-          "name": "runs_status_check",
-          "value": "\"runs\".\"status\" in ('running', 'idle', 'closed')"
+      "checkConstraints": {}
+    },
+    "scheduler_config": {
+      "name": "scheduler_config",
+      "columns": {
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
         },
-        "runs_source_check": {
-          "name": "runs_source_check",
-          "value": "\"runs\".\"source\" in ('manual', 'orchestrator')"
+        "model_id": {
+          "name": "model_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "instruction": {
+          "name": "instruction",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "max_concurrent_targets": {
+          "name": "max_concurrent_targets",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "paused": {
+          "name": "paused",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "notify_team_on_flag": {
+          "name": "notify_team_on_flag",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "stop_siblings_on_solve": {
+          "name": "stop_siblings_on_solve",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "stop_target_on_solve": {
+          "name": "stop_target_on_solve",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "stop_submitter_on_solve": {
+          "name": "stop_submitter_on_solve",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "next_task_policy": {
+          "name": "next_task_policy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'eager'"
+        },
+        "urgent_team_messages": {
+          "name": "urgent_team_messages",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "block_spawn_on_solved": {
+          "name": "block_spawn_on_solved",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
         }
-      }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "scheduler_config_event_id_events_id_fk": {
+          "name": "scheduler_config_event_id_events_id_fk",
+          "tableFrom": "scheduler_config",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
     },
     "session_entries": {
       "name": "session_entries",
@@ -1046,33 +1313,11 @@
           "notNull": true,
           "autoincrement": false
         },
-        "owner_type": {
-          "name": "owner_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'run'"
-        },
-        "owner_id": {
-          "name": "owner_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "agent_id": {
           "name": "agent_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "parent_id": {
@@ -1103,6 +1348,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "meta": {
+          "name": "meta",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -1120,29 +1372,10 @@
           ],
           "isUnique": true
         },
-        "session_entries_owner_seq_idx": {
-          "name": "session_entries_owner_seq_idx",
+        "session_entries_agent_seq_idx": {
+          "name": "session_entries_agent_seq_idx",
           "columns": [
-            "owner_type",
-            "owner_id",
-            "seq"
-          ],
-          "isUnique": false
-        },
-        "session_entries_owner_agent_seq_idx": {
-          "name": "session_entries_owner_agent_seq_idx",
-          "columns": [
-            "owner_type",
-            "owner_id",
             "agent_id",
-            "seq"
-          ],
-          "isUnique": false
-        },
-        "session_entries_run_seq_idx": {
-          "name": "session_entries_run_seq_idx",
-          "columns": [
-            "run_id",
             "seq"
           ],
           "isUnique": false
@@ -1163,19 +1396,6 @@
           "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "session_entries_run_id_runs_id_fk": {
-          "name": "session_entries_run_id_runs_id_fk",
-          "tableFrom": "session_entries",
-          "tableTo": "runs",
-          "columnsFrom": [
-            "run_id"
           ],
           "columnsTo": [
             "id"
@@ -1211,33 +1431,11 @@
           "notNull": true,
           "autoincrement": false
         },
-        "owner_type": {
-          "name": "owner_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'run'"
-        },
-        "owner_id": {
-          "name": "owner_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "run_id": {
-          "name": "run_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "agent_id": {
           "name": "agent_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "autoincrement": false
         },
         "cwd": {
@@ -1256,36 +1454,15 @@
         }
       },
       "indexes": {
-        "sessions_owner_idx": {
-          "name": "sessions_owner_idx",
+        "sessions_agent_id_idx": {
+          "name": "sessions_agent_id_idx",
           "columns": [
-            "owner_type",
-            "owner_id"
-          ],
-          "isUnique": false
-        },
-        "sessions_run_id_idx": {
-          "name": "sessions_run_id_idx",
-          "columns": [
-            "run_id"
+            "agent_id"
           ],
           "isUnique": false
         }
       },
       "foreignKeys": {
-        "sessions_run_id_runs_id_fk": {
-          "name": "sessions_run_id_runs_id_fk",
-          "tableFrom": "sessions",
-          "tableTo": "runs",
-          "columnsFrom": [
-            "run_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
         "sessions_agent_id_agents_id_fk": {
           "name": "sessions_agent_id_agents_id_fk",
           "tableFrom": "sessions",
@@ -1304,8 +1481,8 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "submissions": {
-      "name": "submissions",
+    "spawn_queue": {
+      "name": "spawn_queue",
       "columns": {
         "id": {
           "name": "id",
@@ -1314,15 +1491,50 @@
           "notNull": true,
           "autoincrement": false
         },
-        "run_id": {
-          "name": "run_id",
+        "event_id": {
+          "name": "event_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "flag": {
-          "name": "flag",
+        "ord": {
+          "name": "ord",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "challenge_id": {
+          "name": "challenge_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "params": {
+          "name": "params",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "timeout_ms": {
+          "name": "timeout_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "prompt": {
+          "name": "prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "source": {
+          "name": "source",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -1333,17 +1545,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
+          "autoincrement": false,
+          "default": "'pending'"
         },
-        "remote_id": {
-          "name": "remote_id",
+        "agent_id": {
+          "name": "agent_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "message": {
-          "name": "message",
+        "error": {
+          "name": "error",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -1365,29 +1578,62 @@
         }
       },
       "indexes": {
-        "submissions_run_id_idx": {
-          "name": "submissions_run_id_idx",
+        "spawn_queue_event_ord_idx": {
+          "name": "spawn_queue_event_ord_idx",
           "columns": [
-            "run_id"
+            "event_id",
+            "ord"
           ],
           "isUnique": false
         },
-        "submissions_run_flag_unique": {
-          "name": "submissions_run_flag_unique",
+        "spawn_queue_status_idx": {
+          "name": "spawn_queue_status_idx",
           "columns": [
-            "run_id",
-            "flag"
+            "status"
           ],
-          "isUnique": true
+          "isUnique": false
+        },
+        "spawn_queue_agent_id_idx": {
+          "name": "spawn_queue_agent_id_idx",
+          "columns": [
+            "agent_id"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {
-        "submissions_run_id_runs_id_fk": {
-          "name": "submissions_run_id_runs_id_fk",
-          "tableFrom": "submissions",
-          "tableTo": "runs",
+        "spawn_queue_event_id_events_id_fk": {
+          "name": "spawn_queue_event_id_events_id_fk",
+          "tableFrom": "spawn_queue",
+          "tableTo": "events",
           "columnsFrom": [
-            "run_id"
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "spawn_queue_challenge_id_challenges_id_fk": {
+          "name": "spawn_queue_challenge_id_challenges_id_fk",
+          "tableFrom": "spawn_queue",
+          "tableTo": "challenges",
+          "columnsFrom": [
+            "challenge_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "spawn_queue_agent_id_agents_id_fk": {
+          "name": "spawn_queue_agent_id_agents_id_fk",
+          "tableFrom": "spawn_queue",
+          "tableTo": "agents",
+          "columnsFrom": [
+            "agent_id"
           ],
           "columnsTo": [
             "id"
@@ -1399,9 +1645,13 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {
-        "submissions_status_check": {
-          "name": "submissions_status_check",
-          "value": "\"submissions\".\"status\" in ('pending', 'accepted', 'rejected', 'partial', 'already_solved', 'rate_limited', 'error')"
+        "spawn_queue_source_check": {
+          "name": "spawn_queue_source_check",
+          "value": "\"spawn_queue\".\"source\" in ('manual', 'scheduler')"
+        },
+        "spawn_queue_status_check": {
+          "name": "spawn_queue_status_check",
+          "value": "\"spawn_queue\".\"status\" in ('pending', 'running', 'done', 'cancelled', 'failed')"
         }
       }
     }

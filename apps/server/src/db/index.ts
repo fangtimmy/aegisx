@@ -1,16 +1,7 @@
 import { Database as SqliteDatabase } from "bun:sqlite"
-import {
-  copyFileSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs"
-import { basename, join, resolve } from "node:path"
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
+import { join, resolve } from "node:path"
 
-import { isRecord } from "@aegisx/shared"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
 
@@ -84,100 +75,22 @@ function tableNames(sqlite: SqliteDatabase): Set<string> {
   return new Set(rows.map((row) => row.name))
 }
 
-export type DbClassification =
-  | { kind: "fresh" }
-  | { kind: "recognized" }
-  | { kind: "preBaseline" }
-  | { kind: "newerThanBinary"; userVersion: number }
-
 /**
- * Classify an existing database by its structural markers. Drives the
- * open/migrate decision in createDatabase:
+ * Open-time negotiation between a data directory and this binary. There is no
+ * upgrade path: the migration folder holds a single baseline (the full DDL of
+ * the current schema), applied only to an empty database.
  *
- *  - fresh: no tables → bootstrap via migrate (every migration from scratch).
- *  - recognized: has the drizzle migration-tracking table → on the migration
- *    track; migrate applies pending migrations forward (data-preserving).
- *  - preBaseline: has tables but no drizzle tracking → predates the migration
- *    system (schema v1–v5); cannot be migrated in place, refuse.
- *  - newerThanBinary: user_version ahead of this binary → downgrade, refuse.
+ *  - fresh: no tables → apply the baseline, stamp user_version, open.
+ *  - current: user_version == SCHEMA_VERSION → open as-is (no migrations run).
+ *  - stale: user_version < SCHEMA_VERSION (any pre-baseline database) → hard
+ *    fail. Old databases are never upgraded or silently rewritten; the user
+ *    backs up and starts a fresh data directory.
+ *  - newer: user_version > SCHEMA_VERSION → hard fail (downgrade unsupported).
  *
- * user_version is NOT a correctness gate for recognized databases — drizzle's
- * migration journal is the source of truth. user_version only feeds the
- * newer-than-binary guard (set after every migrate) and a quick
- * `PRAGMA user_version` inspection handle.
+ * user_version is the single gate: it is stamped right after the baseline
+ * lands, so it exactly distinguishes "created by this schema" from everything
+ * else.
  */
-function classifyDatabaseState(
-  tables: Set<string>,
-  userVersion: number,
-  schemaVersion: number
-): DbClassification {
-  if (tables.size === 0) return { kind: "fresh" }
-  if (userVersion > schemaVersion)
-    return { kind: "newerThanBinary", userVersion }
-  if (!tables.has("__drizzle_migrations")) return { kind: "preBaseline" }
-  return { kind: "recognized" }
-}
-
-/** Number of migrations the binary knows about, from the drizzle journal. */
-function readJournalMigrationCount(folder: string): number {
-  try {
-    const journal: unknown = JSON.parse(
-      readFileSync(join(folder, "meta", "_journal.json"), "utf8")
-    )
-    if (isRecord(journal) && Array.isArray(journal.entries)) {
-      return journal.entries.length
-    }
-    return 0
-  } catch {
-    return 0
-  }
-}
-
-/** Pure pending-count: journal migrations not yet recorded as applied. */
-function pendingMigrationCount(
-  knownMigrations: number,
-  appliedMigrations: number
-): number {
-  return Math.max(0, knownMigrations - appliedMigrations)
-}
-
-/**
- * Snapshot aegisx.sqlite to a timestamped sibling after flushing the WAL, so a
- * failed migration can be rolled back. Returns the backup path, or null when
- * nothing is pending to guard (no copy is made).
- */
-function backupDatabase(
-  sqlite: SqliteDatabase,
-  dataDir: string,
-  pending: number
-): string | null {
-  if (pending <= 0) return null
-  sqlite.run("PRAGMA wal_checkpoint(TRUNCATE)")
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-  const dst = join(dataDir, `aegisx.sqlite.bak-${stamp}`)
-  copyFileSync(join(dataDir, "aegisx.sqlite"), dst)
-  console.warn(
-    `Migrating database (${pending} pending); backup → ${basename(dst)}`
-  )
-  pruneBackups(dataDir)
-  return dst
-}
-
-/** Keep only the newest N migration backups (stamp names sort
- * chronologically). Best-effort. */
-export function pruneBackups(dataDir: string, keep = 3): void {
-  const names = readdirSync(dataDir)
-    .filter((name) => name.startsWith("aegisx.sqlite.bak-"))
-    .toSorted()
-  for (const name of names.slice(0, Math.max(0, names.length - keep))) {
-    try {
-      unlinkSync(join(dataDir, name))
-    } catch {
-      // best-effort
-    }
-  }
-}
-
 export function createDatabase(dataDir: string) {
   mkdirSync(dataDir, { recursive: true })
   const releaseLock = acquireDataDirLock(dataDir)
@@ -188,81 +101,41 @@ export function createDatabase(dataDir: string) {
     sqlite.run("PRAGMA foreign_keys = ON")
     sqlite.run("PRAGMA journal_mode = WAL")
 
-    const tables = tableNames(sqlite)
     const userVersion = sqlite
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get()!.user_version
-    const classification = classifyDatabaseState(
-      tables,
-      userVersion,
-      SCHEMA_VERSION
-    )
-    if (classification.kind === "newerThanBinary") {
+    if (tableNames(sqlite).size === 0) {
+      // Fresh: the baseline builds the whole schema; stamp the version so the
+      // next boot classifies the database as current.
+      const db = drizzle({ client: sqlite, schema })
+      try {
+        migrate(db, { migrationsFolder })
+      } catch (error) {
+        throw new Error(
+          `Database baseline migration failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { cause: error }
+        )
+      }
+      sqlite.run(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+      return { db, sqlite, releaseLock }
+    }
+    if (userVersion > SCHEMA_VERSION) {
       throw new Error(
         `Database schema version ${userVersion} is newer than this binary (${SCHEMA_VERSION}). Downgrade is not supported; run a newer AegisX.`
       )
     }
-    if (classification.kind === "preBaseline") {
+    if (userVersion < SCHEMA_VERSION) {
       throw new Error(
         [
-          "This database predates the migration system (schema v1–v5) and cannot be migrated in place.",
-          `Back it up, then remove it and restart to bootstrap fresh at v${SCHEMA_VERSION}.`,
-          "Example: mv data/aegisx.sqlite data/aegisx.sqlite.old",
+          `Database schema version ${userVersion} is older than this binary (v${SCHEMA_VERSION}); old databases have no upgrade path.`,
+          `Back up anything you need, then point AEGISX_DATA_DIR at a new directory or delete aegisx.sqlite to start fresh.`,
+          `Example: mv data data.old-${userVersion}`,
         ].join(" ")
       )
     }
-
-    // Back up only when migrations are actually pending — a fresh DB or an
-    // already-current DB copies nothing.
-    let backupPath: string | null = null
-    if (classification.kind === "recognized") {
-      const known = readJournalMigrationCount(migrationsFolder)
-      const applied = sqlite
-        .query<{ n: number }, []>(
-          "SELECT count(*) AS n FROM __drizzle_migrations"
-        )
-        .get()!.n
-      backupPath = backupDatabase(
-        sqlite,
-        dataDir,
-        pendingMigrationCount(known, applied)
-      )
-    }
-
     const db = drizzle({ client: sqlite, schema })
-    try {
-      migrate(db, { migrationsFolder })
-    } catch (error) {
-      // A failed migration can leave the DB half-applied. Restore the
-      // pre-migration snapshot so the next startup retries cleanly.
-      sqlite.close()
-      if (backupPath) {
-        copyFileSync(backupPath, dbPath)
-        for (const ext of ["-wal", "-shm"]) {
-          try {
-            unlinkSync(join(dataDir, `aegisx.sqlite${ext}`))
-          } catch {
-            // best-effort; the files may not exist
-          }
-        }
-      }
-      throw new Error(
-        `Database migration failed${
-          backupPath ? `; restored from ${basename(backupPath)}` : ""
-        }: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error }
-      )
-    }
-    sqlite.run(`PRAGMA user_version = ${SCHEMA_VERSION}`)
-    // Sweep legacy execution data (data/runs, data/channel-files) only when a
-    // migration actually ran this boot — 0013 dropped their tables, so the
-    // directories are dead. An already-current boot must not touch user files
-    // in the data dir.
-    if (backupPath) {
-      for (const legacy of ["runs", "channel-files"]) {
-        rmSync(join(dataDir, legacy), { recursive: true, force: true })
-      }
-    }
     return { db, sqlite, releaseLock }
   } catch (error) {
     releaseLock()

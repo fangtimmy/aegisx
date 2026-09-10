@@ -23,7 +23,7 @@ function agentRow(id: string, token: string) {
   }
 }
 
-describe("agents.token index (0018)", () => {
+describe("agents.token index", () => {
   test("agent-auth token lookups use the partial unique index, not a table scan", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-idx-"))
     try {

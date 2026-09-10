@@ -47,11 +47,13 @@ knip 会卡未使用的导出：新增导出若无消费方，`bun run check` �
 
 ## Schema 变更工作流
 
-1. 改 `apps/server/src/db/schema.ts` → `bun run db:generate`。
-2. 人工审查生成 SQL：`DROP COLUMN/TABLE`、`RENAME`、类型变更、无默认值的 `NOT NULL` 按生成即数据丢失，须手写为「加新列 → UPDATE 回填 → 再删旧列」。
-3. 同步 bump `SCHEMA_VERSION`（同文件），migration + journal + schema + 版本号一个提交。
+Schema 演进是基线制：`apps/server/drizzle/` 只保留一份从当前 schema 生成的基线迁移，旧库不做升级。
 
-详见 docs/migrations.md（开机四态分类、备份与失败自动回滚）。
+1. 改 `apps/server/src/db/schema.ts` → `rm -rf apps/server/drizzle` → 在 apps/server 下 `bun run db:generate` 重新生成唯一基线。
+2. 人工审查生成 SQL：必须是从空库到当前 schema 的完整 DDL，不得出现 `DROP` / `RENAME` / `ALTER`。
+3. 同步 bump `SCHEMA_VERSION`（同文件，开机 stale 判定锚点），基线 SQL + journal + schema + 版本号一个提交。
+
+详见 docs/migrations.md（开机三态协商、无升级路径）。
 
 ## 文档导航
 

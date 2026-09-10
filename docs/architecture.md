@@ -23,10 +23,10 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 
 ## 数据模型（`apps/server/src/db/schema.ts`）
 
-Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径，无表行；容器是按题惰性管理的资源，跟随该题的存活 agent。
+Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径，无表行；容器是按题惰性管理的资源，跟随该题的存活 agent。schema 演进是基线制（`drizzle/` 只有一份从空库建出当前 schema 的基线迁移），开机按 `user_version` 三态协商：fresh 建库、current 直开、其余版本一律拒绝——旧库无升级路径，详见 [migrations.md](migrations.md)。
 
 - **`agents`** — 执行单元，一次解题尝试一行。`challengeId` 为 null 即该赛事的调度者（orchestrator；每赛事至多一个，唯一索引强制）。model / systemPrompt / tools 在 spawn 时快照，冷恢复原样复用。`token` 为注入凭据（运行时以 `AEGISX_TOKEN` 注入，中间件据此还原 agent 主体）。
-- **`sessions` + `session_entries`** — DB 会话树（取代每 agent 一个 jsonl）：一条 entry 逐字节对应 pi 会写进 jsonl 的一行，`seq` 为会话内单调序。
+- **`sessions` + `session_entries`** — DB 会话树，唯一的会话存储后端：一条 entry 逐字节对应 pi 的一个 jsonl 行，`seq` 为会话内单调序。
 - **`spawn_queue`** — 调度计划表。一项 = 「在题 X 上派一个 agent」，enqueue 恒为 append（同题多项是合法的并行计划）。生命周期 pending → running（回填 agentId）→ done / failed；`queue_state` 按赛事暂停排水。
 - **`channel_messages` + `channel_reads`** — 全部 agent 间通信的唯一账本。频道是派生键（见下），无频道表；`channel_reads` 记 (channelKey, readerKey) → lastReadMsgId，是投递去重锚点。
 - **`challenge_flags`** — 一题多解；`agentId` 无 FK（解题史须活得比 agent 行久），`source` 区分 agent 提交 / 手工录入。

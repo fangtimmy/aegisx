@@ -11,7 +11,13 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core"
 
-/** Schema major version stored in SQLite user_version. */
+/**
+ * Schema major version stamped into SQLite user_version right after the
+ * baseline migration builds an empty database. Boot-time gate: a database
+ * whose user_version differs from this value never opens (below → stale, no
+ * upgrade path; above → downgrade refused). Bump alongside regenerating the
+ * baseline whenever schema.ts changes shape.
+ */
 export const SCHEMA_VERSION = 20
 
 export const events = sqliteTable("events", {
@@ -161,7 +167,8 @@ export const agents = sqliteTable(
      * timeline can render real tool schemas incl. the always-on file tools. */
     toolDefinitions: text("tool_definitions"),
     status: text("status").$type<AgentStatus>().notNull(),
-    /** DB session id (or legacy jsonl path) for this agent (resume + audit). */
+    /** The agent's active session id (`sessions` row; multi-session ops
+     * switch the pointer). Null until the first session is prepared. */
     sessionFile: text("session_file"),
     /** The spawn prompt (strategy input); reused when re-running an attempt. */
     prompt: text("prompt"),
@@ -423,8 +430,8 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
    * next start. */
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   /** Flag-acceptance orchestration policy (read side coalesces in
-   * run/scheduler-policy.ts; DB defaults double as the insert fallback for
-   * legacy create paths). */
+   * run/scheduler-policy.ts; the scheduler-admin upsert mirrors these
+   * defaults as insert fallbacks). */
   notifyTeamOnFlag: integer("notify_team_on_flag", { mode: "boolean" })
     .notNull()
     .default(true),
