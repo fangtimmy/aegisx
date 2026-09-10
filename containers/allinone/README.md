@@ -11,7 +11,7 @@ docker buildx build -f containers/allinone/Dockerfile \
   --platform linux/amd64 -t aegisx/allinone:latest .
 ```
 
-镜像内布局：`/opt/aegisx`（server 源码 + 生产依赖）、`/opt/aegisx-web`（Web 静态产物）、`/opt/aegisx-sdk`（来自 minimal 档的 Python SDK）、`/data`（数据卷：SQLite、附件、各赛事工作区）。
+镜像内布局：`/opt/aegisx`（server 压缩 bundle + 基线迁移 SQL，构建期 `bun build --minify` 产物，不含源码）、`/opt/aegisx-web`（Web 静态产物）、`/opt/aegisx-sdk`（来自 minimal 档的 Python SDK）、`/data`（数据卷：SQLite、附件、各赛事工作区）。
 
 ## 运行
 

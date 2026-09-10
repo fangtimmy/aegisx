@@ -27,7 +27,7 @@ COPY apps/shared apps/shared
 COPY apps/web apps/web
 RUN bun run build
 
-# === server bundle (single 13MB file replaces node_modules) ==================
+# === server bundle (minified single file replaces node_modules) ==============
 FROM oven/bun:1.4 AS server-bundle
 WORKDIR /app
 COPY package.json bun.lock ./
@@ -52,7 +52,7 @@ RUN set -eux; \
       d=$(find node_modules -type d -path "*node_modules/$pkg" | head -1); \
       if [ -n "$d" ]; then mkdir -p "$d/build/Release"; touch "$d/build/Release/$bin.node"; fi; \
     done
-RUN bun build apps/server/src/index.ts --target=bun --outdir=/out/server/dist
+RUN bun build apps/server/src/index.ts --target=bun --minify --outdir=/out/server/dist
 
 # === knowledge bases (git lives only in this stage) ==========================
 FROM kalilinux/kali-rolling AS knowledges

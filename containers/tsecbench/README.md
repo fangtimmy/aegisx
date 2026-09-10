@@ -165,7 +165,7 @@ preset 文件缺失或损坏只记日志跳过，服务器照常启动。
 
 | 路径 | 内容 |
 |---|---|
-| `/opt/aegisx/server/dist/` | bun bundle 后的服务端（13MB 单文件） |
+| `/opt/aegisx/server/dist/` | bun bundle + minify 后的服务端单文件 |
 | `/opt/aegisx/drizzle/` | 迁移文件（bundle 以 `../../drizzle` 相对解析，布局不可改） |
 | `/opt/aegisx-web/` | Web 静态产物 |
 | `/opt/aegisx-sdk/` | Python SDK（PYTHONPATH 已设） |
