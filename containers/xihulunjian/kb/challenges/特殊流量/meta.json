@@ -1,0 +1,30 @@
+{
+  "key": "特殊流量",
+  "names": [
+    "MISC-04",
+    "特殊流量"
+  ],
+  "category": "Misc",
+  "quali": {
+    "label": "MISC-04",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "特殊流量的附件.zip",
+      "sha256": "deede029aae4b4fde57fd20e8b68d74c076738620ca7bffb5c827014628f4e9a",
+      "size": 4924
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "25cad9a6-6b4a-4510-b744-5942eb6e6c76"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "tshark",
+    "7z"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "key": "logbool",
+  "names": [
+    "MISC-02",
+    "logbool"
+  ],
+  "category": "Misc",
+  "quali": {
+    "label": "MISC-02",
+    "score": 100,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "logbool的附件.zip",
+      "sha256": "f29595d1d2b8a56cbbefb04590f6738be0dd48a2698f59e1f29324d1e43d195e",
+      "size": 2577689
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "rehearsal": "33c12355cd508de6b9b3676b97ece17e",
+    "quali": "33c12355cd508de6b9b3676b97ece17e"
+  },
+  "rehearsal": {
+    "name": "logbool",
+    "solved": true
+  },
+  "status": "verified",
+  "deps": [
+    "tshark",
+    "unrar|7z"
+  ]
+}

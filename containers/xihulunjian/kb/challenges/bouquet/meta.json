@@ -1,0 +1,27 @@
+{
+  "key": "bouquet",
+  "names": [
+    "REVERSE-09",
+    "bouquet"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-09",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "bouquet的附件.zip",
+      "sha256": "0fe52c748a5e0322fbeece2bfd74410a11526a2dffeb1ca7f530898f7b6a4f69",
+      "size": 11693
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "asd48_daj7w_3adqo"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": []
+}

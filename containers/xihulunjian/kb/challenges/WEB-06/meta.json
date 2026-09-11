@@ -1,0 +1,17 @@
+{
+  "key": "WEB-06",
+  "names": [
+    "WEB-06"
+  ],
+  "category": "Web",
+  "quali": {
+    "label": "WEB-06",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": null,
+  "status": "todo"
+}

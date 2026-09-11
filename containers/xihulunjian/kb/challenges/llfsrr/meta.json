@@ -1,0 +1,31 @@
+{
+  "key": "llfsrr",
+  "names": [
+    "CRYPTO-03",
+    "llfsrr"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-03",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "llfsrr的附件.zip",
+      "sha256": "c4826c77c25d61f7123935a5775a355febc8af628589d9959f9790e5ab1cad21",
+      "size": 1302
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "rehearsal": "5e1996755a3811ef93ccc03c59457d50",
+    "quali": "5e1996755a3811ef93ccc03c59457d50"
+  },
+  "rehearsal": {
+    "name": "llfsrr",
+    "solved": true
+  },
+  "status": "verified",
+  "deps": []
+}

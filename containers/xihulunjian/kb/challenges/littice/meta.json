@@ -1,0 +1,30 @@
+{
+  "key": "littice",
+  "names": [
+    "CRYPTO-06",
+    "littice"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-06",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "littice的附件.zip",
+      "sha256": "15a4a3c07e21a3426d330b12bd4781390777b4b7c88c42f6e6b52305d5c32414",
+      "size": 34523
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "R4a11y_n4w_l1ttice!!!"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "fpylll",
+    "pycryptodome"
+  ]
+}

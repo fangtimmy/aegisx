@@ -1,0 +1,30 @@
+{
+  "key": "number_2",
+  "names": [
+    "CRYPTO-05",
+    "number_2"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-05",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "number_2的附件.zip",
+      "sha256": "7620c6cfbab6261f0b110deebf49352dfbd750208770748b0790cac7a92af808",
+      "size": 7585
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "b157059c-2871-421f-8cec-332b617de4d5"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "fpylll",
+    "pycryptodome"
+  ]
+}

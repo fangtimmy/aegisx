@@ -1,0 +1,31 @@
+{
+  "key": "idol",
+  "names": [
+    "REVERSE-05",
+    "idol"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-05",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "idol的附件.zip",
+      "sha256": "5aa295c9d5b2f07a545f19a7c47163a81565a0adaaac01725c744c0fc1b8bdb3",
+      "size": 2492
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "rehearsal": "103baab6d786b0fe13c846ecb9f6a0ec",
+    "quali": "103baab6d786b0fe13c846ecb9f6a0ec"
+  },
+  "rehearsal": {
+    "name": "idol",
+    "solved": true
+  },
+  "status": "verified",
+  "deps": []
+}

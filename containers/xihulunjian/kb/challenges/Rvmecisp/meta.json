@@ -1,0 +1,30 @@
+{
+  "key": "Rvmecisp",
+  "names": [
+    "CRYPTO-04",
+    "Rvmecisp"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-04",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "Rvmecisp的附件.zip",
+      "sha256": "5e95f624cbcfd8eccc983d9f0a9d708c05c86f0800064bc924fef71c2f21372f",
+      "size": 13824
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "rehearsal": "Rc4&Matrix&C0nfusedconfused_thx4UR_w0RK~"
+  },
+  "rehearsal": {
+    "name": "Rvmecisp",
+    "solved": true
+  },
+  "status": "verified",
+  "deps": []
+}

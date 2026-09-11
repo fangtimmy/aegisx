@@ -1,0 +1,30 @@
+{
+  "key": "wish",
+  "names": [
+    "PWN-05",
+    "wish"
+  ],
+  "category": "pwn",
+  "quali": {
+    "label": "PWN-05",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "wish的附件.zip",
+      "sha256": "0c772d12cc689af328e3fdd7d30c47be0e269e8c850e2b9fe55c8095e8f91853",
+      "size": 891279
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": {
+    "name": "wish",
+    "solved": false
+  },
+  "status": "researched",
+  "deps": [
+    "pwntools"
+  ]
+}

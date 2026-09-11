@@ -1,0 +1,29 @@
+{
+  "key": "mvmph",
+  "names": [
+    "PWN-02",
+    "mvmph"
+  ],
+  "category": "pwn",
+  "quali": {
+    "label": "PWN-02",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "mvmph的附件.zip",
+      "sha256": "6b6caa3002aeccff84a92ca205ca3d2a19470b3f7e615b3a5bd7cfd99bf0c978",
+      "size": 949123
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {
+    "quali": "67126353521039200926297497409404"
+  },
+  "rehearsal": null,
+  "status": "researched",
+  "deps": [
+    "pwntools"
+  ]
+}

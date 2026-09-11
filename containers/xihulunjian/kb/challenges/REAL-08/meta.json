@@ -1,0 +1,35 @@
+{
+  "key": "REAL-08",
+  "names": [
+    "REAL-08"
+  ],
+  "category": "REAL",
+  "quali": {
+    "label": "REAL-08",
+    "score": 500,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "drupal-8.5.8.tar.gz.zip",
+      "sha256": "b08168a8ea7d1ab907cc0d66036be7e7e9f20ac4e50f876e884d5476e974f755",
+      "size": 15715603
+    }
+  ],
+  "flag_policy": "unknown",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "cve_candidates": [
+    {
+      "cve": "CVE-2019-6339",
+      "direction": "affected",
+      "why": "NVD CVSS 9.8 CRITICAL：8.5.x prior to 8.5.9 受影响（SA-CORE-2019-002，phar:// 反序列化 RCE），8.5.9/8.6.6/7.62 修复；vulhub/msf 复现齐全——nvd.nist.gov"
+    },
+    {
+      "cve": "CVE-2019-6338",
+      "direction": "affected",
+      "why": "同日披露的 Archive_Tar 反序列化 RCE（SA-CORE-2019-002 同批）"
+    }
+  ]
+}

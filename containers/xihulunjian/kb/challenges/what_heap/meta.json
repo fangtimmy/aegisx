@@ -1,0 +1,42 @@
+{
+  "key": "what_heap",
+  "names": [
+    "PWN-01",
+    "what_heap"
+  ],
+  "category": "pwn",
+  "quali": {
+    "label": "PWN-01",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "what_heap的附件.zip",
+      "sha256": "be0f999e41fc958d2e83667ece8211eab1de424c3ca8fcb518d2b86f9865332b",
+      "size": 889681
+    },
+    {
+      "filename": "what_heap",
+      "sha256": "97cd62919fb70756adc2643785dbbf33ab516a133a503a96304fff3f69cca16e",
+      "size": 10328
+    },
+    {
+      "filename": "libc.so.6",
+      "sha256": "acf8ac6d219b657af09328abde95a6a52a3ce7019c6717cade77db5634498866",
+      "size": 2030928
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {
+    "rehearsal": "99662910051854216523180535035538"
+  },
+  "rehearsal": {
+    "name": "what_heap",
+    "solved": true
+  },
+  "status": "researched",
+  "deps": [
+    "pwntools"
+  ]
+}

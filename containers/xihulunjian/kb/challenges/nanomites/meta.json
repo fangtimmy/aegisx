@@ -1,0 +1,27 @@
+{
+  "key": "nanomites",
+  "names": [
+    "REVERSE-04",
+    "nanomites"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-04",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "nanomites的附件.zip",
+      "sha256": "1121cd36d757e47516face6731d05e18f9836e1eb38bd485ceddbe84bf802ae1",
+      "size": 45508
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "BBFE6A51-AE09-BCB1-E153-F2A3A297F228"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": []
+}

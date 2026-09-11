@@ -1,0 +1,22 @@
+{
+  "key": "WEB-05",
+  "names": [
+    "WEB-05"
+  ],
+  "category": "Web",
+  "quali": {
+    "label": "WEB-05",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [],
+  "flag_policy": "dynamic",
+  "flags": {
+    "quali": "97649000032632195190566220880392"
+  },
+  "rehearsal": null,
+  "status": "researched",
+  "deps": [
+    "php-cli"
+  ]
+}

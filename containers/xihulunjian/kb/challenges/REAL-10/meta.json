@@ -1,0 +1,35 @@
+{
+  "key": "REAL-10",
+  "names": [
+    "REAL-10"
+  ],
+  "category": "REAL",
+  "quali": {
+    "label": "REAL-10",
+    "score": 500,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "cmsms-2.2.8-install.expanded.zip",
+      "sha256": "4e09ac765f600a43e681c9b2caee31701ea245a709e7342b12ee08e58d67784e",
+      "size": 5088549
+    }
+  ],
+  "flag_policy": "unknown",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "cve_candidates": [
+    {
+      "cve": "CVE-2019-9053",
+      "direction": "affected",
+      "why": "NVD 描述原文「in CMS Made Simple 2.2.8」且 CPE 精确钉 2.2.8（CVSS 8.1 HIGH）：News 模块 m1_idlist 未授权时间型盲注，2.2.10 修复；vulhub/exploit-db 齐全——nvd.nist.gov"
+    },
+    {
+      "cve": "（DesignManager 对象注入 RCE）",
+      "direction": "affected",
+      "why": "2.2.8 认证后对象注入 RCE（msf 模块），次选"
+    }
+  ]
+}

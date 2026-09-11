@@ -1,0 +1,37 @@
+{
+  "key": "EZheap_2",
+  "names": [
+    "EZheap_2",
+    "PWN-06"
+  ],
+  "category": "pwn",
+  "quali": {
+    "label": "PWN-06",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "EZheap_2的附件.zip",
+      "sha256": "9f05be813b5e1b3ab76bd83b01e766d180ed6cd9276ec4d64b3d08242dc3637d",
+      "size": 738725
+    },
+    {
+      "filename": "ezheap",
+      "sha256": "ad971e7ad9846c25a25d10be81f56e105945564cfdfed2a6244c4de2cc0dda51",
+      "size": 10216
+    },
+    {
+      "filename": "libc.so.6",
+      "sha256": "acf8ac6d219b657af09328abde95a6a52a3ce7019c6717cade77db5634498866",
+      "size": 2030928
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "deps": [
+    "pwntools"
+  ]
+}

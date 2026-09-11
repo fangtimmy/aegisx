@@ -1,0 +1,29 @@
+{
+  "key": "BabyXSS",
+  "names": [
+    "BabyXSS",
+    "WEB-04"
+  ],
+  "category": "Web",
+  "quali": {
+    "label": "WEB-04",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "BabyXSS的附件.zip",
+      "sha256": "1e44800edf29528378a5bf7ab4b3fbc3fb8da8787b427c613236fd12c6d5c3b0",
+      "size": 35351,
+      "inner": {
+        "filename": "src-file.zip",
+        "sha256": "b7d95801f036670693f01d955b0e74bcf61bb9355d7e658a7360a92c0a6da25b",
+        "size": 35827
+      }
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched"
+}

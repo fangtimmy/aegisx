@@ -1,0 +1,27 @@
+{
+  "key": "Messy_heap",
+  "names": [
+    "Messy_heap",
+    "PWN-07"
+  ],
+  "category": "pwn",
+  "quali": {
+    "label": "PWN-07",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "Messy_heap的附件.zip",
+      "sha256": "e0574cf87c3b22bb292310bd32aa8b4a127924762e5dcf4f71adf60a8536cd1d",
+      "size": 957407
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "deps": [
+    "pwntools"
+  ]
+}

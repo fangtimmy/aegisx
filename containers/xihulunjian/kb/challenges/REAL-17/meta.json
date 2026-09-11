@@ -1,0 +1,50 @@
+{
+  "key": "REAL-17",
+  "names": [
+    "REAL-17"
+  ],
+  "category": "REAL",
+  "quali": {
+    "label": "REAL-17",
+    "score": 700,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "07_postgresql_18.4-source.zip",
+      "sha256": "7f88314a09f7f7d5f0b27599a0877d766ff95004b27e3ffb1ea78ce100b6190b",
+      "size": 33685565
+    }
+  ],
+  "flag_policy": "unknown",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "cve_candidates": [
+    {
+      "cve": "CVE-2026-6473",
+      "direction": "fixed-in",
+      "why": "批内最高危 CVSS 8.8（postgresql.org/support/security 官方标注）：core server 整数回绕→分配不足→越界写，官方 release notes 明言很可能任意代码执行、批内覆盖 4 处修复点；2026-09-12 重排（原首列 6472 仅 5.4）"
+    },
+    {
+      "cve": "CVE-2026-6479",
+      "direction": "fixed-in",
+      "why": "CVSS 7.5、批内唯一预认证（PR:N）：SSL/GSS 加密请求交替触发无界递归 DoS；官方 release notes 首条"
+    },
+    {
+      "cve": "CVE-2026-6475",
+      "direction": "fixed-in",
+      "why": "CVSS 8.8：pg_basebackup/pg_rewind 路径穿越覆盖任意文件（client 侧工具）"
+    },
+    {
+      "cve": "CVE-2026-6477",
+      "direction": "fixed-in",
+      "why": "CVSS 8.8：恶意服务端经 libpq lo_* 覆盖客户端栈内存（client 侧）"
+    },
+    {
+      "cve": "（批内其余 7 个，按 CVSS 降序）",
+      "direction": "fixed-in",
+      "why": "6637（8.8，contrib/spi 栈溢出+SQLi，示例模块）→ 6476（7.2，pg_createsubscriber SQLi）→ 6478（6.5，MD5 口令时序信道泄露）→ 6472（5.4，multirange 建型权限缺失，原首列）→ 6474（4.3，时区串内存泄露）→ 6575（4.3，仅 18 线）→ 6638（3.7）"
+    }
+  ]
+}

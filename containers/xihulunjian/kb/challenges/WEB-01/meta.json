@@ -1,0 +1,22 @@
+{
+  "key": "WEB-01",
+  "names": [
+    "WEB-01",
+    "Age Test",
+    "HardFlask"
+  ],
+  "category": "Web",
+  "quali": {
+    "label": "WEB-01",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [],
+  "flag_policy": "dynamic",
+  "flags": {
+    "quali": "16063092785889954752794598715573"
+  },
+  "rehearsal": null,
+  "status": "authored",
+  "deps": []
+}

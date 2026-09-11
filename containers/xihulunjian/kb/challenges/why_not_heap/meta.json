@@ -1,0 +1,42 @@
+{
+  "key": "why_not_heap",
+  "names": [
+    "PWN-04",
+    "why_not_heap"
+  ],
+  "category": "pwn",
+  "quali": {
+    "label": "PWN-04",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "why_not_heap的附件.zip",
+      "sha256": "2f6cde979cafc68f1d58c7d4d001dddde951f239810127e16eaa063e7c03969b",
+      "size": 6705732
+    },
+    {
+      "filename": "pwn",
+      "sha256": "3bd13dee5eb60b15990618af16a33980c8cf9b440626a2e8e1ff742cf59a3b20",
+      "size": 22672
+    },
+    {
+      "filename": "libc.so.6",
+      "sha256": "9b5bf1626e392ddbfa3e7bb95905a6ef4591be8ea8b1b3d72854ab07238c7598",
+      "size": 19111656
+    },
+    {
+      "filename": "ld-linux-x86-64.so.2",
+      "sha256": "46973706a7e7dd38d58829a73a935adaad76540b8cfe7c226b44e3dd1ed415f9",
+      "size": 1772840
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "pwntools"
+  ]
+}

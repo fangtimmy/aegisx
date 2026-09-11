@@ -1,0 +1,31 @@
+{
+  "key": "QRCodeWorld",
+  "names": [
+    "QRCodeWorld",
+    "REVERSE-07"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-07",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "QRCodeWorld的附件.zip",
+      "sha256": "38a61efae681c789fbb37d542265ed598c58bd61bb3d2b37ce48fa9c2b6c09e4",
+      "size": 24014713
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "e45e144f-fe2a-4d49-9f3f-1af4f9df0244"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "numpy",
+    "Pillow",
+    "pyzbar"
+  ]
+}

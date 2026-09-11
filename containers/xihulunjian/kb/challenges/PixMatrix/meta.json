@@ -1,0 +1,30 @@
+{
+  "key": "PixMatrix",
+  "names": [
+    "MISC-08",
+    "PixMatrix"
+  ],
+  "category": "Misc",
+  "quali": {
+    "label": "MISC-08",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "PixMatrix的附件.zip",
+      "sha256": "a2e747b588edb3d81a61376c41d97be7e60abb90f57bb8d8aba5d4ab28cccaa5",
+      "size": 9732
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "824f1e986260efa86f1bd252b5e13a4d"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "Pillow",
+    "7z"
+  ]
+}

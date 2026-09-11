@@ -1,0 +1,33 @@
+{
+  "key": "QL_again",
+  "names": [
+    "QL_again",
+    "WEB-02"
+  ],
+  "category": "Web",
+  "quali": {
+    "label": "WEB-02",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "QL_again的附件.zip",
+      "sha256": "aa0cff46a270a63003221477e0ae87233d7c88f6f4e2124a97363401053048a5",
+      "size": 19147200
+    }
+  ],
+  "flag_policy": "dynamic",
+  "flags": {
+    "rehearsal": "13819373917935250746958143020673",
+    "quali": "23586486279216336138143286856946"
+  },
+  "rehearsal": {
+    "name": "QL_again",
+    "solved": true
+  },
+  "status": "verified",
+  "deps": [
+    "jdk8"
+  ]
+}

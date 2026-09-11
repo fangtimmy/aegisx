@@ -1,0 +1,35 @@
+{
+  "key": "REAL-06",
+  "names": [
+    "REAL-06"
+  ],
+  "category": "REAL",
+  "quali": {
+    "label": "REAL-06",
+    "score": 500,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "joomla-4.0.0-full-package.tar.gz.zip",
+      "sha256": "f12f7d03145a2f1af30881333d763f8cdd61760ce4fbea656b071b28646a15f4",
+      "size": 21388904
+    }
+  ],
+  "flag_policy": "unknown",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "cve_candidates": [
+    {
+      "cve": "CVE-2023-23752",
+      "direction": "affected",
+      "why": "NVD 描述原文即「4.0.0 through 4.2.7」：webservice 端点未授权访问（/api/index.php/v1/config/application?public=true 泄 DB 凭据），4.2.8 修复——nvd.nist.gov；Joomla 4.0.0 最著名漏洞，可链 RCE"
+    },
+    {
+      "cve": "CVE-2021-26032",
+      "direction": "affected",
+      "why": "4.0.0 时代其它问题（次选）"
+    }
+  ]
+}

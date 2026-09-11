@@ -1,0 +1,45 @@
+{
+  "key": "REAL-03",
+  "names": [
+    "REAL-03"
+  ],
+  "category": "REAL",
+  "quali": {
+    "label": "REAL-03",
+    "score": 300,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "drupal-11.4.5.tar.gz.zip",
+      "sha256": "9c3612c2b47d017354144fbefe8634c8ae773ecd8f1b8618763f53cc94bda359",
+      "size": 23046763
+    }
+  ],
+  "flag_policy": "unknown",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "cve_candidates": [
+    {
+      "cve": "CVE-2026-15917",
+      "direction": "adjacent",
+      "why": "SA-CORE-2026-011（HTMX 属性 XSS，moderate 14/25），同 11.4.4 批；原表漏列，2026-09-12 加深研究补入（批内最高危）"
+    },
+    {
+      "cve": "CVE-2026-15916",
+      "direction": "adjacent",
+      "why": "SA-CORE-2026-010（信息泄露），修复于 11.4.4（前一版）；11.4.5 本身是 bugfix 版"
+    },
+    {
+      "cve": "CVE-2026-55805",
+      "direction": "adjacent",
+      "why": "SA-CORE-2026-012（Layout Builder 块标签 XSS），同 11.4.4 批"
+    },
+    {
+      "cve": "（2026-08 后新披露）",
+      "direction": "unknown",
+      "why": "2026-09-12 加深研究核实：7-15 批之后 core 无新公告；11.4.6（2026-09-03）是 bugfix 版非安全版，11.4.7 不存在——『押后一版安全修复』假设排除"
+    }
+  ]
+}

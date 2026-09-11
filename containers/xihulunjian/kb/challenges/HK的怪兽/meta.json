@@ -1,0 +1,31 @@
+{
+  "key": "HK的怪兽",
+  "names": [
+    "HK的怪兽",
+    "MISC-03"
+  ],
+  "category": "Misc",
+  "quali": {
+    "label": "MISC-03",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "HK的怪兽的附件.zip",
+      "sha256": "4547cb06511b8aa4da4235d68172d445acbe52a92ac345ff4abc02c7c3280c47",
+      "size": 295413
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "987787ad-5cf9-4909-b847-8dfb9d657988"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "tshark",
+    "7z",
+    "openssl"
+  ]
+}

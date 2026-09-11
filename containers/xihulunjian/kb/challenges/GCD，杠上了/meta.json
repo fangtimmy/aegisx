@@ -1,0 +1,29 @@
+{
+  "key": "GCD，杠上了",
+  "names": [
+    "CRYPTO-09",
+    "GCD，杠上了"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-09",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "GCD，杠上了的附件.zip",
+      "sha256": "5866126e0530f620dbe00915c558e6ad308de55c5be642bbb37db609e79e471b",
+      "size": 1569
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "eead8ea2b3519a2273a5292375e31009"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": [
+    "fpylll"
+  ]
+}

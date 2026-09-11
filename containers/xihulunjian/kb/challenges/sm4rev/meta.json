@@ -1,0 +1,27 @@
+{
+  "key": "sm4rev",
+  "names": [
+    "REVERSE-06",
+    "sm4rev"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-06",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "sm4rev的附件.zip",
+      "sha256": "279e4bcd6c62c5d3e69c171fa3f851f4d6ef515dc2170d07694b555ae0fe620e",
+      "size": 725084
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "SM4_is_secure_but_d0nt_t3ll_any0ne!"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": []
+}

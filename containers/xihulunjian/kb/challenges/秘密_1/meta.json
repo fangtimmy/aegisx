@@ -1,0 +1,24 @@
+{
+  "key": "秘密_1",
+  "names": [
+    "MISC-07",
+    "秘密_1"
+  ],
+  "category": "Misc",
+  "quali": {
+    "label": "MISC-07",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "秘密_1的附件.zip",
+      "sha256": "6e0de1f632e99d873c5b2be6930b3539694fd49b9a8fc21e8ef816b48df8df07",
+      "size": 194239669
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched"
+}

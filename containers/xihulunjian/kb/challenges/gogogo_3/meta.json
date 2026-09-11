@@ -1,0 +1,33 @@
+{
+  "key": "gogogo_3",
+  "names": [
+    "REVERSE-01",
+    "gogogo_3"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-01",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "gogogo_3的附件.zip",
+      "sha256": "c51555dad0ab4753c7cb560a686a6fd0f37e7bdaf1017b2a997bccff8e1cb776",
+      "size": 921171
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "WOW_y0u_Find_Me_HaHa_go!",
+    "rehearsal": "WOW_y0u_Find_Me_HaHa_go!"
+  },
+  "rehearsal": {
+    "name": "gogogo_3",
+    "solved": true
+  },
+  "status": "verified",
+  "deps": [
+    "pycryptodome"
+  ]
+}

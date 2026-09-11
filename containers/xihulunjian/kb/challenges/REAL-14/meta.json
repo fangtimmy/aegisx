@@ -1,0 +1,35 @@
+{
+  "key": "REAL-14",
+  "names": [
+    "REAL-14"
+  ],
+  "category": "REAL",
+  "quali": {
+    "label": "REAL-14",
+    "score": 700,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "04_caddy_2.11.4-source.zip",
+      "sha256": "f5ba3558fa005d4eb2e33e62f7f5bf5a092dde3ff9de1b309756160280114c48",
+      "size": 1207308
+    }
+  ],
+  "flag_policy": "unknown",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "cve_candidates": [
+    {
+      "cve": "CVE-2026-52844",
+      "direction": "fixed-in",
+      "why": "NVD（GitHub CNA）CVSS 7.5 原文「fixed in 2.11.4」：Windows 路径分隔符混淆绕过 path-scoped auth/deny（/private/* 保护失效）——与本版本精确绑定，nvd.nist.gov"
+    },
+    {
+      "cve": "CVE-2026-30851/30852",
+      "direction": "adjacent",
+      "why": "forward_auth 认证问题/环境变量泄露，修于 2.11.2（前两版）"
+    }
+  ]
+}

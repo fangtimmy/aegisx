@@ -1,0 +1,19 @@
+{
+  "key": "HardFlask-awdp-fix",
+  "names": [
+    "HardFlask-awdp-fix"
+  ],
+  "category": "Web",
+  "quali": null,
+  "attachments": [],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": {
+    "name": "HardFlask-awdp-fix",
+    "solved": false
+  },
+  "status": "researched",
+  "deps": [
+    "requests"
+  ]
+}

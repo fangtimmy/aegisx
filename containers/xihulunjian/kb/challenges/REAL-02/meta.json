@@ -1,0 +1,30 @@
+{
+  "key": "REAL-02",
+  "names": [
+    "REAL-02"
+  ],
+  "category": "REAL",
+  "quali": {
+    "label": "REAL-02",
+    "score": 300,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "wordpress-7.0.4.tar.gz.zip",
+      "sha256": "25f86af1c2ee02c7dec3f2e304c606095d5765c15b1b69c3ca17c409202e03a2",
+      "size": 29528953
+    }
+  ],
+  "flag_policy": "unknown",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched",
+  "cve_candidates": [
+    {
+      "cve": "CVE-2026-65640",
+      "direction": "fixed-in",
+      "why": "NVD/CNA 原文点名「Version 7.0.4 has been released, containing a fix」：全版本受影响、本版仅修此一个 CVE（authenticated Imagick/Ghostscript PostScript 上传 RCE，7.0.4 2026-08-12 发布）——nvd.nist.gov"
+    }
+  ]
+}

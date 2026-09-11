@@ -1,0 +1,27 @@
+{
+  "key": "How_many_rot_are_there",
+  "names": [
+    "CRYPTO-02",
+    "How_many_rot_are_there"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-02",
+    "score": 200,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "How_many_rot_are_there的附件.zip",
+      "sha256": "adf8d741edd6153e11bed864ede86645c165daa090ec5e0362ae630942d57346",
+      "size": 873
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "rabbits1sc0mpl3x1s4w1n1nc0mpl3x1s4w1n1nc0mpl3x1s4w1n1nc0mpl3"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": []
+}

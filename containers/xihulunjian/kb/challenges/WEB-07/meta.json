@@ -1,0 +1,17 @@
+{
+  "key": "WEB-07",
+  "names": [
+    "WEB-07"
+  ],
+  "category": "Web",
+  "quali": {
+    "label": "WEB-07",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [],
+  "flag_policy": "dynamic",
+  "flags": {},
+  "rehearsal": null,
+  "status": "todo"
+}

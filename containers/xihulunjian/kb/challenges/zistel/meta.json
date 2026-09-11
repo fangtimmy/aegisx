@@ -1,0 +1,27 @@
+{
+  "key": "zistel",
+  "names": [
+    "REVERSE-08",
+    "zistel"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-08",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "zistel的附件.zip",
+      "sha256": "15b175ad1cd5def80bef4e266ed28322d5502346acdae2f27b8af8abc4fb3526",
+      "size": 6282
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "z1g_I3_S0_Coo0l!"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": []
+}

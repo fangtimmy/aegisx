@@ -1,0 +1,19 @@
+{
+  "key": "upup_exec",
+  "names": [
+    "upup_exec"
+  ],
+  "category": "Web",
+  "quali": null,
+  "attachments": [],
+  "flag_policy": "dynamic",
+  "flags": {
+    "rehearsal": "10625892386034338937447170285653"
+  },
+  "rehearsal": {
+    "name": "upup_exec",
+    "solved": true
+  },
+  "status": "researched",
+  "deps": []
+}

@@ -1,0 +1,26 @@
+{
+  "key": "QAQTAT",
+  "names": [
+    "CRYPTO-08",
+    "QAQTAT"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-08",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "QAQTAT的附件.zip",
+      "sha256": "fa261449e445d44e27997d1a07e087913c0f78bb0363badd2e60e3cf4a92de61",
+      "size": 4559
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "QAQ~4_Br0ken_Crypto_Sy5tem~TAT"
+  },
+  "rehearsal": null,
+  "status": "verified"
+}

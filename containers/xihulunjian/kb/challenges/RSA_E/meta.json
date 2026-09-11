@@ -1,0 +1,24 @@
+{
+  "key": "RSA_E",
+  "names": [
+    "CRYPTO-07",
+    "RSA_E"
+  ],
+  "category": "Crypto",
+  "quali": {
+    "label": "CRYPTO-07",
+    "score": 200,
+    "solved": false
+  },
+  "attachments": [
+    {
+      "filename": "RSA_E的附件.zip",
+      "sha256": "ed34af379203281b531baf59af779207393eb588fac3c3753b28c472fed3e6ab",
+      "size": 1580
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {},
+  "rehearsal": null,
+  "status": "researched"
+}

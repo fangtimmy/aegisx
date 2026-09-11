@@ -1,0 +1,27 @@
+{
+  "key": "MirrorShield",
+  "names": [
+    "MirrorShield",
+    "REVERSE-02"
+  ],
+  "category": "Reverse",
+  "quali": {
+    "label": "REVERSE-02",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "MirrorShield的附件.zip",
+      "sha256": "cb020727df417d47bba5e35b74feba06297cac14d8404d12e97bb9cd12a19a6e",
+      "size": 139835
+    }
+  ],
+  "flag_policy": "static",
+  "flags": {
+    "quali": "3d97fe7e53a5fc5de1ebdaae046cb93f"
+  },
+  "rehearsal": null,
+  "status": "verified",
+  "deps": []
+}

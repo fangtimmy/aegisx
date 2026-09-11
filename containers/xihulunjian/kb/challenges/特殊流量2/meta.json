@@ -1,0 +1,34 @@
+{
+  "key": "特殊流量2",
+  "names": [
+    "MISC-06",
+    "特殊流量2"
+  ],
+  "category": "Misc",
+  "quali": {
+    "label": "MISC-06",
+    "score": 300,
+    "solved": true
+  },
+  "attachments": [
+    {
+      "filename": "特殊流量2的附件.zip",
+      "sha256": "3a40c4a63f1a0814f2c3b2befb426c46f1115e980610d4c36d0b40fa60a7a477",
+      "size": 1739447
+    }
+  ],
+  "flag_policy": "rotated",
+  "flags": {
+    "rehearsal": "3fd34b59-4e9d-4390-927b-1346d5364d99",
+    "quali": "edffd5be04cc060e343cad479a8b845c"
+  },
+  "rehearsal": {
+    "name": "特殊流量2",
+    "solved": true
+  },
+  "status": "verified",
+  "deps": [
+    "tshark",
+    "pycryptodome"
+  ]
+}
