@@ -1,6 +1,6 @@
 # 西湖论剑决赛知识库索引
 
-初赛 60 题全量 + 决赛测试新题。条目目录 `challenges/<key>/`：`SOLVE.md`（确定性操作手册）+ `exp/`（可直接执行的脚本）+ `meta.json`（本表数据源）。
+初赛题解题手册（42 条，覆盖 40 个初赛题号；决赛复用初赛原题）。条目目录 `challenges/<key>/`：`SOLVE.md`（确定性操作手册）+ `exp/`（可直接执行的脚本）+ `meta.json`（本表数据源）。
 
 ## 匹配步骤（按顺序）
 
@@ -27,26 +27,6 @@ status 含义：`verified`=exp 已实跑验证；`authored`=已写 runbook 未�
 | QAQTAT | CRYPTO-08 / QAQTAT | Crypto | static | verified | 解出 | - | `QAQTAT的附件.zip` `fa261449e445` |
 | QL_again | QL_again / WEB-02 | Web | dynamic | verified | 解出 | 解出 | `QL_again的附件.zip` `aa0cff46a270` |
 | QRCodeWorld | QRCodeWorld / REVERSE-07 | Reverse | static | verified | 解出 | - | `QRCodeWorld的附件.zip` `38a61efae681` |
-| REAL-01 | REAL-01 | REAL | unknown | researched | 未解 | - | `joomla-6.1.2-full-package.tar.gz.zip` `ef0fc2382306` |
-| REAL-02 | REAL-02 | REAL | unknown | researched | 未解 | - | `wordpress-7.0.4.tar.gz.zip` `25f86af1c2ee` |
-| REAL-03 | REAL-03 | REAL | unknown | researched | 未解 | - | `drupal-11.4.5.tar.gz.zip` `9c3612c2b47d` |
-| REAL-04 | REAL-04 | REAL | unknown | researched | 未解 | - | `cmsms-2.2.23-install.expanded.zip` `90431da50bfa` |
-| REAL-05 | REAL-05 | REAL | unknown | researched | 未解 | - | `ghost-v6.57.1.tar.gz.zip` `6c14c7d46014` |
-| REAL-06 | REAL-06 | REAL | unknown | researched | 未解 | - | `joomla-4.0.0-full-package.tar.gz.zip` `f12f7d03145a` |
-| REAL-07 | REAL-07 | REAL | unknown | researched | 未解 | - | `wordpress-7.0.1.tar.gz.zip` `bb280aa772d6` |
-| REAL-08 | REAL-08 | REAL | unknown | researched | 未解 | - | `drupal-8.5.8.tar.gz.zip` `b08168a8ea7d` |
-| REAL-09 | REAL-09 | REAL | unknown | researched | 未解 | - | `ghost-v6.19.0.tar.gz.zip` `f5b93e24c5bd` |
-| REAL-10 | REAL-10 | REAL | unknown | researched | 未解 | - | `cmsms-2.2.8-install.expanded.zip` `4e09ac765f60` |
-| REAL-11 | REAL-11 | REAL | unknown | researched | 未解 | - | `01_nginx_1.31.4-source.zip` `9217d06a62a3` |
-| REAL-12 | REAL-12 | REAL | unknown | researched | 未解 | - | `02_httpd_2.4.68-source.zip` `2d582d3549f2` |
-| REAL-13 | REAL-13 | REAL | unknown | researched | 未解 | - | `03_openlitespeed_1.9.2-source.zip` `c4a9d81339ff` |
-| REAL-14 | REAL-14 | REAL | unknown | researched | 未解 | - | `04_caddy_2.11.4-source.zip` `f5ba3558fa00` |
-| REAL-15 | REAL-15 | REAL | unknown | researched | 未解 | - | `05_openresty_1.31.1.1-source.zip` `ab219fed0a4a` |
-| REAL-16 | REAL-16 | REAL | unknown | researched | 未解 | - | `06_mysql_26.7.0-source.zip` `f462f5e3d736` |
-| REAL-17 | REAL-17 | REAL | unknown | researched | 未解 | - | `07_postgresql_18.4-source.zip` `7f88314a09f7` |
-| REAL-18 | REAL-18 | REAL | unknown | researched | 未解 | - | `08_mongodb_8.2.12-source.zip` `70554db21b17` |
-| REAL-19 | REAL-19 | REAL | unknown | researched | 未解 | - | `09_redis_8.10.0-source.zip` `ccad0f6c70c9` |
-| REAL-20 | REAL-20 | REAL | unknown | researched | 未解 | - | `10_clickhouse_26.7.4.58-source.zip` `46ecf30b1915` |
 | RSA_E | CRYPTO-07 / RSA_E | Crypto | static | researched | 未解 | - | `RSA_E的附件.zip` `ed34af379203` |
 | Regular_apples | PWN-03 / Regular_apples | pwn | dynamic | verified | 解出 | 解出 | `Regular_apples的附件.zip` `65084c840874` |
 | Rvmecisp | CRYPTO-04 / Rvmecisp | Crypto | static | verified | 未解 | 解出 | `Rvmecisp的附件.zip` `5e95f624cbcf` |
