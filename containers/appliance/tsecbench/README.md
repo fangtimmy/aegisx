@@ -49,7 +49,7 @@ docker run -d --name aegisx-tsec \
 `{"maxTokens":65536}`）。优先级：metadata 字段 > profile 绑定 > 内置目录按
 model id 匹配 > 保守默认值。
 
-镜像体积：未压缩 4.75GB，gzip 压缩后 **1.81GB**（上限 3GB）。
+镜像体积：未压缩 4.75GB，gzip 压缩后 **1.77GB**（上限 3GB）。
 
 环境变量完整清单见 [docs/env.md](../../docs/env.md)。
 
