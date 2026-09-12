@@ -17,6 +17,7 @@ event preset（`/opt/aegisx-preset/preset.json`，见 `containers/appliance/tsec
 | `AEGISX_PROVIDER_BASE_URL` | 推荐 | LLM API base URL（须 http/https），与 `AEGISX_MODEL_ID` 成对生效，二者齐备才创建 provider |
 | `AEGISX_MODEL_ID` | 推荐 | 模型 id；元数据解析见下方「模型元数据层」 |
 | `AEGISX_PROVIDER_TYPE` | 否 | `openai-compatible`（默认）/ `openai-responses` / `anthropic-messages` |
+| `AEGISX_PROVIDER_EXACT_ENDPOINT` | 否 | 设 `1`/`true`：`AEGISX_PROVIDER_BASE_URL` 已是完整上游端点，不再追加 `/chat/completions` 等路径（DASCTF LLM 网关等 exact-endpoint 代理必需）。重启合并时显式设置覆盖已存值 |
 | `AEGISX_PROVIDER_API_KEY` | 否 | LLM API key |
 | `AEGISX_PROVIDER_LABEL` | 否 | provider 显示名，默认 `Bootstrap` |
 | `AEGISX_MODEL_EFFORT` | 否 | 思考档位（`low`/`medium`/`high` 等），拼进默认模型引用（`model:effort`）；模型元数据未命中目录时据此推断 `reasoning:true` |

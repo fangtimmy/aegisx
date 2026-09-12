@@ -4,6 +4,7 @@
 appliance：服务端（API + agent 宿主 + Web UI + 调度者）与解题工具链在**同一容器**
 （`AEGISX_EXEC_BACKEND=local`）。**决赛沙箱完全离线**：LLM 走平台网关，所有工具、
 词表、通用知识库与**逐题解题手册（kb/）**构建期内置，运行时不安装。
+赛事主办方的导入/启动/观测说明见 **[ORGANIZER.md](./ORGANIZER.md)**。
 
 ## 内置解题知识库（kb/）
 
@@ -27,21 +28,23 @@ docker buildx build -f containers/app-build/Dockerfile \
 
 # 构建（amd64；构建机需可访问 kali/pypi 镜像与 github）
 docker buildx build -f containers/appliance/Dockerfile \
-  --platform linux/amd64 --target xihulunjian -t aegisx/xihulunjian:v2 .
+  --platform linux/amd64 --target xihulunjian -t aegisx/xihulunjian:test .
 
 # 运行（LLM/平台凭据走环境变量；调优经 preset 在首启落库）
+# DASCTF LLM 网关是 exact-endpoint 型：URL 即完整端点，必须设 EXACT_ENDPOINT=1
 docker run -d --name aegisx-xihu \
   -p 3000:3000 \
   -v aegisx-xihu-data:/data \
   -e AEGISX_PROVIDER_BASE_URL=<LLM网关> \
-  -e AEGISX_PROVIDER_TYPE=openai-compatible \
+  -e AEGISX_PROVIDER_TYPE=openai-responses \
+  -e AEGISX_PROVIDER_EXACT_ENDPOINT=1 \
   -e AEGISX_PROVIDER_API_KEY=<key> \
   -e AEGISX_MODEL_ID=<model> \
   -e AEGISX_MODEL_EFFORT=high \
   -e AEGISX_PLATFORM_TYPE=dasctf \
   -e AEGISX_PLATFORM_BASE_URL=https://pro.dasctf.com \
   -e AEGISX_PLATFORM_CREDENTIAL=<AccessKey> \
-  aegisx/xihulunjian:v2
+  aegisx/xihulunjian:test
 ```
 
 事件名默认 `xihulunjian-finals`（镜像 ENV，可用 `AEGISX_EVENT_NAME` 覆盖）——

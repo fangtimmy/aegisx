@@ -118,6 +118,9 @@ export type BootstrapSpec = {
     type: ProviderType
     baseUrl: string
     apiKey: string
+    /** Exact-endpoint gateway: baseUrl already IS the complete upstream URL
+     * (no /chat/completions or /responses suffix is appended). */
+    exactEndpoint?: boolean
     modelId: string
     effort?: string
     /** Resolved metadata (AEGISX_MODEL_PROFILE / AEGISX_MODEL_METADATA) —
@@ -262,6 +265,10 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
       baseUrl,
       apiKey: env.AEGISX_PROVIDER_API_KEY ?? "",
       modelId: env.AEGISX_MODEL_ID,
+      ...(env.AEGISX_PROVIDER_EXACT_ENDPOINT === "1" ||
+      env.AEGISX_PROVIDER_EXACT_ENDPOINT === "true"
+        ? { exactEndpoint: true }
+        : {}),
       ...(env.AEGISX_MODEL_EFFORT ? { effort: env.AEGISX_MODEL_EFFORT } : {}),
       ...(env.AEGISX_MODEL_PROFILE || env.AEGISX_MODEL_METADATA
         ? {
@@ -340,7 +347,7 @@ export function ensureProvider(
       label: want.label,
       type: want.type,
       baseUrl: want.baseUrl,
-      exactEndpoint: false,
+      exactEndpoint: want.exactEndpoint ?? false,
       apiKey: want.apiKey,
       enabled: true,
       models: [],
@@ -357,6 +364,17 @@ export function ensureProvider(
       provider.type !== base.type ||
       provider.baseUrl !== base.baseUrl ||
       provider.apiKey !== base.apiKey
+    // The exact-endpoint flag is a deployment fact (gateway URL shape), so an
+    // explicit env setting wins even over an already-stored value — without
+    // this an exact-endpoint gateway silently 404s after image upgrade on an
+    // old data volume.
+    if (
+      want.exactEndpoint !== undefined &&
+      want.exactEndpoint !== base.exactEndpoint
+    ) {
+      provider.exactEndpoint = want.exactEndpoint
+      changed = true
+    }
   }
 
   const modelIndex = provider.models.findIndex(

@@ -10,7 +10,7 @@
 | target | 镜像 | 场景 | 手册 |
 |---|---|---|---|
 | `tsecbench` | `aegisx/tsecbench:v12` | TSecBench 断网评测 | [tsecbench/README.md](tsecbench/README.md) |
-| `xihulunjian` | `aegisx/xihulunjian:v2` | 西湖论剑决赛（内置逐题知识库） | [xihulunjian/README.md](xihulunjian/README.md) |
+| `xihulunjian` | `aegisx/xihulunjian:test` | 西湖论剑决赛（内置逐题知识库） | [xihulunjian/README.md](xihulunjian/README.md) |
 
 ## 构建
 
@@ -26,7 +26,7 @@ docker buildx build -f containers/app-build/Dockerfile \
 docker buildx build -f containers/appliance/Dockerfile \
   --platform linux/amd64 --target tsecbench -t aegisx/tsecbench:v12 .
 docker buildx build -f containers/appliance/Dockerfile \
-  --platform linux/amd64 --target xihulunjian -t aegisx/xihulunjian:v2 .
+  --platform linux/amd64 --target xihulunjian -t aegisx/xihulunjian:test .
 ```
 
 工具链的 apt/pip cache mount id（`tsec-apt`/`tsec-pip` 等）跨 target 共享——本机一次

@@ -61,6 +61,7 @@ describe("readBootstrapSpec", () => {
       AEGISX_PROVIDER_BASE_URL: "http://10.0.0.8:8080/v1",
       AEGISX_PROVIDER_API_KEY: "sk-test",
       AEGISX_PROVIDER_LABEL: "Gateway",
+      AEGISX_PROVIDER_EXACT_ENDPOINT: "1",
       AEGISX_MODEL_ID: "glm-5.3",
       AEGISX_MODEL_EFFORT: "high",
       AEGISX_EVENT_NAME: "Qualifier",
@@ -75,6 +76,7 @@ describe("readBootstrapSpec", () => {
       type: "openai-responses",
       baseUrl: "http://10.0.0.8:8080/v1",
       apiKey: "sk-test",
+      exactEndpoint: true,
       modelId: "glm-5.3",
       effort: "high",
     })
@@ -96,6 +98,7 @@ describe("readBootstrapSpec", () => {
     })
     expect(spec.provider?.type).toBe("openai-compatible")
     expect(spec.provider?.effort).toBeUndefined()
+    expect(spec.provider?.exactEndpoint).toBeUndefined()
     expect(spec.platform).toBeUndefined()
     expect(spec.eventName).toBeUndefined()
   })
@@ -292,6 +295,39 @@ describe("ensureProvider", () => {
       expect(provider?.models[0]?.modelId).toBe("my-model")
       expect(provider?.models[0]?.metadataSource).toBe("bootstrap")
       expect(t.configStore.getSettings()["agent.defaultModelRef"]).toBe(ref)
+    } finally {
+      t.cleanup()
+    }
+  })
+
+  test("exact-endpoint flag: env wins at creation and on re-bootstrap merge", () => {
+    const t = makeConfigStore()
+    try {
+      const base = {
+        label: "Bootstrap",
+        type: "openai-responses" as const,
+        baseUrl: "https://gw/proxy/e/token",
+        apiKey: "sk-1",
+        modelId: "m1",
+      }
+      ensureProvider(t.configStore, {
+        provider: { ...base, exactEndpoint: true },
+      })
+      const stored = () =>
+        t.configStore.getProviders().find((p) => p.label === "Bootstrap")
+      expect(stored()?.exactEndpoint).toBe(true)
+
+      // Re-bootstrap without the env var keeps the stored flag (merge, never
+      // clobber — same semantics as the other deploy-time fields).
+      ensureProvider(t.configStore, { provider: { ...base } })
+      expect(stored()?.exactEndpoint).toBe(true)
+
+      // A deployment that drops the flag (exact-endpoint gateway replaced by
+      // a normal one) must be able to clear it explicitly.
+      ensureProvider(t.configStore, {
+        provider: { ...base, exactEndpoint: false },
+      })
+      expect(stored()?.exactEndpoint).toBe(false)
     } finally {
       t.cleanup()
     }
