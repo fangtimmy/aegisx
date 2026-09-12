@@ -52,12 +52,24 @@ docker run -d --name aegisx-eval \
 | `AEGISX_PROVIDER_EXACT_ENDPOINT` | 视网关 | 设 `1` 表示网关地址**本身即完整端点**、不要再拼 `/chat/completions` 等路径（DASCTF LLM 网关属此类，漏设会全部 404） |
 | `AEGISX_PROVIDER_API_KEY` | ✅ | 网关鉴权 key |
 | `AEGISX_MODEL_ID` | ✅ | 模型 id（按网关注册名） |
+| `AEGISX_MODEL_PROFILE` | 建议 | 绑定 pi 内置模型目录条目（`<providerId>/<modelId>`）。网关变体模型名必设，例见下 |
+| `AEGISX_MODEL_METADATA` | 可选 | 模型元数据 JSON，逐字段合并到 PROFILE 之上（仅当需要微调目录条目时使用） |
 | `AEGISX_MODEL_METADATA` | 建议 | 模型元数据 JSON（`contextWindow`/`maxTokens` 等）；网关模型是变体名时由赛事方提供，缺失时系统按保守推断运行 |
 | `AEGISX_PLATFORM_TYPE` | ✅ | `dasctf`（西湖论剑评测平台） |
 | `AEGISX_PLATFORM_BASE_URL` | ✅ | 评测平台地址 |
 | `AEGISX_PLATFORM_CREDENTIAL` | ✅ | 平台 AccessKey |
 
 其余变量均有出厂默认值，评测场景无需设置。
+
+**DASCTF 网关（deepseek-flash）的推荐绑定**：网关注册名 `deepseek-flash` 实际是
+DeepSeek **v4.1-flash**——基线元数据与 v4-flash 一致但带视觉能力。pi 内置目录尚无
+v4.1 条目，绑定 `deepseek-v4-flash-vision-exp`（与 v4-flash 仅差视觉输入，其余逐项
+一致）即可获得正确的上下文窗口（1M）/输出上限/推理档位与视觉声明：
+
+```text
+AEGISX_MODEL_ID=deepseek-flash
+AEGISX_MODEL_PROFILE=deepseek/deepseek-v4-flash-vision-exp
+```
 
 ## 4. 启动后会发生什么
 

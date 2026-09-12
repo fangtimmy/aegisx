@@ -41,6 +41,8 @@ docker run -d --name aegisx-xihu \
   -e AEGISX_PROVIDER_API_KEY=<key> \
   -e AEGISX_MODEL_ID=<model> \
   -e AEGISX_MODEL_EFFORT=high \
+  # 网关模型是目录变体时绑定元数据（deepseek-flash 实为 v4.1-flash，目录暂无该条目）：
+  -e AEGISX_MODEL_PROFILE=deepseek/deepseek-v4-flash-vision-exp \
   -e AEGISX_PLATFORM_TYPE=dasctf \
   -e AEGISX_PLATFORM_BASE_URL=https://pro.dasctf.com \
   -e AEGISX_PLATFORM_CREDENTIAL=<AccessKey> \
