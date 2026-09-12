@@ -25,9 +25,8 @@ python3 /opt/solver/knowledges/xihulunjian/challenges/flag^galf/exp/solve.py
 自动流程：mmap 扫 PNG 签名 → 完整解析配对 XOR → 失败则截断 PNG 容错重建
 （按 IHDR 容错走 chunk、部分解压、零填充建图、恰好两幅唯一图的尺寸做两种通道 XOR）→
 放大二值化 OCR 找 `DASCTF`/32 位 hex。输出 `ori*_big.png` 供肉眼/迭代。
-**注意**：初赛镜像实测目标 200×200 对每份副本只有 ~64KB 连续 IDAT（页面不连续），
-部分重建只覆盖顶部行——OCR 未必命中，需要人工看 `orit_200x200_rev_big.png` 等输出图，
-必要时调二值化阈值/裁剪中段再 OCR。
+**注意**：实测每份副本只有前 2 个缓存页（8KB IDAT）可顺序解压——正确去行滤波后仅 ≈10 行，
+OCR 必然不命中（字形不在顶部行带）；输出图只用于人工辨认图像内容，不要指望它读出 flag。
 
 ## 原理（备查）
 
@@ -48,3 +47,8 @@ python3 /opt/solver/knowledges/xihulunjian/challenges/flag^galf/exp/solve.py
 
 - 初赛 200 分 Misc，平台验证 1/1 accepted：`9da98cbf7e99bff7c93ef066935f65ba`。
   flag 由附件（内存镜像）决定，static 跨场不变。
+- 2026-09-12 用本附件原字节实跑复核：exp 全链路可执行（雕 PNG → 配对 → 截断兜底 →
+  OCR），但重建兜底**无法复现 flag**——200×200 的 picture/encrypt 各只有 2 个缓存页
+  可解压（≈10 行），全部变体两两配对（rev/plain × 全通道、正确 unfilter 后）顶部行带
+  均无字形。**exp 当算法文档用，不是可信自动路径**：已知值被拒（轮换）时走「失败分支」
+  的重新分析，不要花时间调 exp 输出图。

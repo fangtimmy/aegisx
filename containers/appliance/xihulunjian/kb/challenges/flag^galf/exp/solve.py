@@ -126,6 +126,45 @@ def main():
     return 0
 
 
+def unfilter_rows(raw: bytes, w: int, bpp: int):
+    """PNG unfilter the decompressed prefix; returns (pixels, complete_rows)."""
+    stride = w * bpp
+
+    def paeth(a, b, c):
+        p = a + b - c
+        pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+        if pa <= pb and pa <= pc:
+            return a
+        return b if pb <= pc else c
+
+    out = bytearray()
+    pos, prev = 0, bytearray(stride)
+    nrows = 0
+    while pos + 1 + stride <= len(raw):
+        ft = raw[pos]
+        row = bytearray(raw[pos + 1:pos + 1 + stride])
+        pos += 1 + stride
+        if ft == 1:
+            for i in range(bpp, stride):
+                row[i] = (row[i] + row[i - bpp]) & 0xFF
+        elif ft == 2:
+            for i in range(stride):
+                row[i] = (row[i] + prev[i]) & 0xFF
+        elif ft == 3:
+            for i in range(stride):
+                left = row[i - bpp] if i >= bpp else 0
+                row[i] = (row[i] + (left + prev[i]) // 2) & 0xFF
+        elif ft == 4:
+            for i in range(stride):
+                left = row[i - bpp] if i >= bpp else 0
+                ul = prev[i - bpp] if i >= bpp else 0
+                row[i] = (row[i] + paeth(left, prev[i], ul)) & 0xFF
+        out += row
+        prev = row
+        nrows += 1
+    return bytes(out), nrows
+
+
 def truncated_fallback(lime: Path):
     """页面缓存的 PNG 页不连续：按 IHDR 起点做容错 chunk 走查，取最长 IDAT 前缀
     部分解压建图（零填充），对同尺寸恰好两幅唯一图做两种通道 XOR。"""
@@ -182,27 +221,30 @@ def truncated_fallback(lime: Path):
         stride = {0: w, 2: w * 3, 4: w * 4, 6: w * 4}.get(ct, w * 4)
         rowsz = stride + 1
         imgs = []
+        bpp = {0: 1, 2: 3, 4: 4, 6: 4}.get(ct, 4)
+        mode = {0: "L", 2: "RGB", 4: "RGBA", 6: "RGBA"}.get(ct, "RGBA")
         for raw, idat, off in groups.values():
-            rows = len(raw) // rowsz
+            px, rows = unfilter_rows(raw, w, bpp)
             if rows == 0:
                 continue
-            buf = raw[:rows * rowsz].ljust(h * rowsz, b"\x00")
-            im = Image.frombytes({0: "L", 2: "RGB", 4: "RGBA", 6: "RGBA"}.get(ct, "RGBA"), (w, h), buf)
+            buf = px.ljust(h * w * bpp, b"\x00")
+            im = Image.frombytes(mode, (w, h), buf)
             imgs.append((im, rows))
         if len(imgs) < 2:
             continue
         a = imgs[0][0].convert("RGBA")
         b = imgs[1][0].convert("RGBA")
+        band = min(imgs[0][1], imgs[1][1])  # XOR only the rows both sides cover
         for kind, fn in (("rev", lambda p, q: (p[0] ^ q[3], p[1] ^ q[2], p[2] ^ q[1], p[3] ^ q[0])),
                          ("plain", lambda p, q: (p[0] ^ q[0], p[1] ^ q[1], p[2] ^ q[2], p[3] ^ q[3]))):
-            out = Image.new("RGBA", (w, h))
+            out = Image.new("RGBA", (w, band))
             pa, pb, po = a.load(), b.load(), out.load()
-            for y in range(h):
+            for y in range(band):
                 for x in range(w):
                     po[x, y] = fn(pa[x, y], pb[x, y])
             name = f"orit_{w}x{h}_{kind}.png"
             out.save(name)
-            im2 = out.convert("L").resize((w * 3, h * 3), Image.LANCZOS)
+            im2 = out.convert("L").resize((w * 3, band * 3), Image.LANCZOS)
             im2 = im2.point(lambda p: 0 if p < 100 else 255)
             big = name.replace(".png", "_big.png")
             im2.save(big)

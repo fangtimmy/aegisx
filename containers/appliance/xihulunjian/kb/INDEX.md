@@ -30,7 +30,7 @@ status 含义：`verified`=exp 已实跑验证；`authored`=已写 runbook 未�
 | RSA_E | CRYPTO-07 / RSA_E | Crypto | static | researched | 未解 | - | `RSA_E的附件.zip` `ed34af379203` |
 | Regular_apples | PWN-03 / Regular_apples | pwn | dynamic | verified | 解出 | 解出 | `Regular_apples的附件.zip` `65084c840874` |
 | Rvmecisp | CRYPTO-04 / Rvmecisp | Crypto | static | verified | 未解 | 解出 | `Rvmecisp的附件.zip` `5e95f624cbcf` |
-| WEB-01 | WEB-01 / Age Test / HardFlask | Web | dynamic | authored | 解出 | - | - |
+| WEB-01 | WEB-01 / Age Test / HardFlask | Web | dynamic | verified | 解出 | - | - |
 | WEB-03 | WEB-03 | Web | dynamic | todo | 未解 | - | - |
 | WEB-05 | WEB-05 | Web | dynamic | researched | 解出 | - | - |
 | WEB-06 | WEB-06 | Web | dynamic | todo | 未解 | - | - |
