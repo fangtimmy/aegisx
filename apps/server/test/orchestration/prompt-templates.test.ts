@@ -393,17 +393,17 @@ describe("notice variable list sync (NOTICE_TEMPLATE_VARIABLES ↔ defaults ↔ 
 
 describe("template registry (every builtin renders + declares its variables)", () => {
   // Generalized drift guard: the registry is the single declaration of the
-  // 16 builtin templates. Each entry must (a) render against its own sample
+  // 24 builtin templates. Each entry must (a) render against its own sample
   // context — strict handlebars throws on any variable the sample lacks, so
   // a template edit referencing an undeclared field fails here instead of at
   // spawn or in the settings preview — and (b) only extend variables its
   // palette declares.
 
-  test("all 16 builtin keys are declared exactly once", () => {
+  test("all 24 builtin keys are declared exactly once", () => {
     const keys = PROMPT_TEMPLATES.map((entry) => entry.key)
-    expect(keys).toHaveLength(16)
-    expect(new Set(keys).size).toBe(16)
-    expect(new Set(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).size).toBe(10)
+    expect(keys).toHaveLength(24)
+    expect(new Set(keys).size).toBe(24)
+    expect(new Set(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).size).toBe(18)
   })
 
   test("each default renders against its sample and references declared variables only", () => {

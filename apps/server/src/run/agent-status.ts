@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents, challenges } from "../db/schema"
 import { logEvent } from "../lib/log"
+import type { NOTICE_TEMPLATE_DEFAULTS } from "../orchestration/prompt-defaults"
+import { renderTemplateBody } from "../orchestration/prompt-templates"
 import type { EventScopePayload } from "../orchestration/types"
 import { orchKey, type ChannelService } from "./channels"
 import type { LiveBus } from "./host/live"
@@ -30,29 +32,56 @@ export type AgentStatusDeps = {
   /** Late-bound queue port (agent terminal → item done + re-drain); bound by
    * the assembly root before any agent can terminalize. */
   queue: RunPort<QueueService>
+  /** Notice-template body for a lifecycle key: the stored (user-editable) row
+   * when present, else the shipped default — same store as orch-notices. */
+  templateBody: (key: LifecycleNoticeKey) => string
 }
 
 export type AgentStatus = ReturnType<typeof createAgentStatus>
 
-/** Event display line (the orch message body): the agent's challenge name
- * + the agent label + a human verb — the machine shape lives in meta. */
-function eventName(p: EventScopePayload, tag: string): string {
+/** The notice-template keys this module renders (defaults in
+ * orchestration/prompt-defaults.ts, seeded into the same user-editable store
+ * as every other system→agent notice). */
+type LifecycleNoticeKey = Extract<
+  keyof typeof NOTICE_TEMPLATE_DEFAULTS,
+  `noticeAgent${string}`
+>
+
+/** Event display line (the orch message body): rendered from the lifecycle
+ * notice templates — `tag` is the pre-derived 「challenge」agent-<id8> label,
+ * the machine shape lives in meta. */
+function eventBody(
+  p: EventScopePayload,
+  tag: string,
+  templateBody: (key: LifecycleNoticeKey) => string
+): string {
   switch (p.type) {
     case "agent.started":
-      return `${tag}已启动${p.source === "manual" ? "（手动）" : ""}`
+      return renderTemplateBody(templateBody("noticeAgentStarted"), {
+        tag,
+        manual: p.source === "manual",
+      })
     case "agent.idle":
-      return `${tag}已空闲${p.failed ? "（失败）" : ""}`
+      return renderTemplateBody(templateBody("noticeAgentIdle"), {
+        tag,
+        failed: Boolean(p.failed),
+      })
     case "agent.flagAccepted":
-      return `${tag}flag 已接受`
+      return renderTemplateBody(templateBody("noticeAgentFlagAccepted"), {
+        tag,
+      })
     case "agent.finished":
-      return `${tag}已完成${p.actor === "scheduler" ? "（调度者）" : ""}`
+      return renderTemplateBody(templateBody("noticeAgentFinished"), {
+        tag,
+        schedulerActor: p.actor === "scheduler",
+      })
     case "agent.timedOut":
-      return p.outcome === "aborted"
-        ? `${tag}超时（已强制终止）`
-        : `${tag}超时（已中止，agent 空闲）`
-    case "agent.reopened":
+      return renderTemplateBody(templateBody("noticeAgentTimedOut"), {
+        tag,
+        aborted: p.outcome === "aborted",
+      })
     default:
-      return `${tag}已重开`
+      return renderTemplateBody(templateBody("noticeAgentReopened"), { tag })
   }
 }
 
@@ -64,7 +93,7 @@ function eventName(p: EventScopePayload, tag: string): string {
  * orch channel (urgent per the §五 table — timedOut only).
  */
 export function createAgentStatus(deps: AgentStatusDeps) {
-  const { db, queries, bus, channels, now, updateAgent } = deps
+  const { db, queries, bus, channels, now, updateAgent, templateBody } = deps
 
   function emitAgent(agentId: string) {
     const agent = queries.getAgent(agentId)
@@ -113,7 +142,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       {
         channelKey: orchKey(row.eventId),
         author: { type: "system" },
-        body: eventName({ ...payload, source }, tag),
+        body: eventBody({ ...payload, source }, tag, templateBody),
         meta: {
           agentId,
           eventType: payload.type,

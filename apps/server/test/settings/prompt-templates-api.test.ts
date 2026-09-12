@@ -131,7 +131,7 @@ describe("prompt template store API", () => {
 })
 
 describe("settings meta notice contract", () => {
-  test("meta carries all 10 notice defaults and the notice variable list", async () => {
+  test("meta carries all 18 notice defaults and the notice variable list", async () => {
     const app = createTestApp()
     const response = await app.request("/api/settings")
     expect(response.status).toBe(200)
@@ -141,7 +141,7 @@ describe("settings meta notice contract", () => {
         noticePromptVariables: string[]
       }
     }>(response)
-    expect(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).toHaveLength(10)
+    expect(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).toHaveLength(18)
     for (const [key, body] of Object.entries(NOTICE_TEMPLATE_DEFAULTS)) {
       expect(meta.promptTemplateDefaults[key]).toBe(body)
     }

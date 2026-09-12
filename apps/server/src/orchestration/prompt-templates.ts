@@ -328,16 +328,18 @@ const sampleSchedulerDigestContext: SchedulerDigestContext = {
 }
 
 /** Sample context for the notice templates (`NOTICE_TEMPLATE_DEFAULTS`,
- * rendered by `run/orch-notices.ts`). One context covers every `notice*` key:
- * the shipped defaults reference an `{{#if}}`-guarded subset of the typed
- * notice-event fields below, and a single superset avoids one sample per
- * event kind. Variables, checked against the actual defaults:
+ * rendered by `run/orch-notices.ts`, `run/agent-status.ts` and the direct
+ * scheduler wakes). One context covers every `notice*` key: the shipped
+ * defaults reference an `{{#if}}`-guarded subset of the fields below, and a
+ * single superset avoids one sample per event kind. Variables, checked
+ * against the actual defaults:
  * `challengeName`, `flag`, `submitter`, `stopSiblings` (flagAccepted),
  * `message`, `confirmed` (flagPartial), `progress` (flagPartialProgress),
  * `stopped`, `cancelled` (solveCleanup), `closed`, `cancelled`
  * (challengeHalt), `pending` (queueStarved / eventStalled), `error`
  * (launchFailed), `action`, `manual` (queueStateChanged), `stalled`
- * (eventStalled). */
+ * (eventStalled), `tag`, `failed`, `schedulerActor`, `aborted`
+ * (agent lifecycle), `idleAgents` (boot reentry). */
 export const sampleNoticeContext = {
   challengeName: "web1",
   flag: "flag{sample}",
@@ -354,6 +356,11 @@ export const sampleNoticeContext = {
   action: "暂停",
   manual: true,
   stalled: "5m",
+  tag: "「web1」agent-a3f1c2d9",
+  failed: false,
+  schedulerActor: true,
+  aborted: false,
+  idleAgents: 3,
 }
 
 // --- preview entry points ----------------------------------------------------

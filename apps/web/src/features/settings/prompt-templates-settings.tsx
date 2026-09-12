@@ -41,9 +41,10 @@ const TEMPLATE_KEYS = [
   "schedulerDigest",
 ] as const
 
-/** System→scheduler notice templates (orch-notices): seeded into the same
- * builtin namespace, so the settings page lists/edits them alongside the
- * prompts. Previewed through the server's shared `notice` sample context. */
+/** System→agent notice templates (orch-notices + agent lifecycle lines +
+ * direct scheduler wakes): seeded into the same builtin namespace, so the
+ * settings page lists/edits them alongside the prompts. Previewed through
+ * the server's shared `notice` sample context. */
 const NOTICE_TEMPLATE_KEYS = [
   "noticeFlagAccepted",
   "noticeFlagExtra",
@@ -55,6 +56,14 @@ const NOTICE_TEMPLATE_KEYS = [
   "noticeLaunchFailed",
   "noticeQueueState",
   "noticeEventStalled",
+  "noticeAgentStarted",
+  "noticeAgentIdle",
+  "noticeAgentFlagAccepted",
+  "noticeAgentFinished",
+  "noticeAgentTimedOut",
+  "noticeAgentReopened",
+  "noticeBootReentry",
+  "noticeSchedulerResume",
 ] as const
 
 const TEMPLATE_META: Record<string, { title: string; description: string }> = {
@@ -124,6 +133,38 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
   noticeEventStalled: {
     title: "通知 · 赛事停滞（紧急）",
     description: "队列有待发项但无存活 solver 排水时的紧急通知。",
+  },
+  noticeAgentStarted: {
+    title: "通知 · agent 启动",
+    description: "agent 启动时发到调度频道的生命周期行。",
+  },
+  noticeAgentIdle: {
+    title: "通知 · agent 空闲",
+    description: "agent 回合落定（空闲/失败）后发到调度频道的生命周期行。",
+  },
+  noticeAgentFlagAccepted: {
+    title: "通知 · flag 接受",
+    description: "agent 提交的 flag 被接受时发到调度频道的生命周期行。",
+  },
+  noticeAgentFinished: {
+    title: "通知 · agent 完成",
+    description: "agent 完成任务时发到调度频道的生命周期行。",
+  },
+  noticeAgentTimedOut: {
+    title: "通知 · agent 超时（紧急）",
+    description: "agent 触发硬截止时发到调度频道的生命周期行（紧急唤醒）。",
+  },
+  noticeAgentReopened: {
+    title: "通知 · agent 重开",
+    description: "终态 agent 被重开时发到调度频道的生命周期行。",
+  },
+  noticeBootReentry: {
+    title: "通知 · 重启回归",
+    description: "服务重启后直接发送给各赛事调度者的重新同步唤醒。",
+  },
+  noticeSchedulerResume: {
+    title: "通知 · 调度恢复",
+    description: "调度者被恢复/重开时收到的直接唤醒。",
   },
 }
 

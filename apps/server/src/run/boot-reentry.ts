@@ -4,14 +4,7 @@ import { and, eq, inArray } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents } from "../db/schema"
 import { logEvent } from "../lib/log"
-
-/** Boot re-entry prompt sent to an event's surviving scheduler. Same direct
- * wake + "re-sync then act" phrasing as the scheduler resume path
- * (run/service.ts SCHEDULER_RESUME_MESSAGE) — the scheduler is expected to
- * call `aegisx.snapshot()` before deciding whether to re-dispatch. */
-function reentryMessage(idleAgents: number): string {
-  return `服务已重启：本赛事 ${idleAgents} 个存活 agent 已置为 idle，请重新同步状态（aegisx.snapshot()）并决定是否续派。`
-}
+import { renderTemplateBody } from "../orchestration/prompt-templates"
 
 type BootReentryDeps = {
   db: Database
@@ -19,6 +12,9 @@ type BootReentryDeps = {
   send(agentId: string, text: string): Promise<void>
   /** A disabled scheduler is not woken (W3). */
   isSchedulerPaused(eventId: string): boolean
+  /** The (user-editable) noticeBootReentry template body — same store as
+   * orch-notices; `{{idleAgents}}` is its only variable. */
+  templateBody: (key: "noticeBootReentry") => string
 }
 
 /**
@@ -59,7 +55,12 @@ export async function notifyBootReentry(deps: BootReentryDeps): Promise<void> {
       )
       .all().length
     try {
-      await deps.send(scheduler.id, reentryMessage(idleAgents))
+      await deps.send(
+        scheduler.id,
+        renderTemplateBody(deps.templateBody("noticeBootReentry"), {
+          idleAgents,
+        })
+      )
       logEvent("boot", "scheduler_reentry", {
         eventId: scheduler.eventId,
         idleAgents,

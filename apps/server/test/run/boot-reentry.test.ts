@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
+import { NOTICE_TEMPLATE_DEFAULTS } from "../../src/orchestration/prompt-defaults"
 import { notifyBootReentry } from "../../src/run/boot-reentry"
 import {
   makeAgentService,
@@ -24,6 +25,7 @@ function collect(db: Db, paused = false) {
         send: async (agentId, text) => {
           sends.push({ agentId, text })
         },
+        templateBody: (key) => NOTICE_TEMPLATE_DEFAULTS[key],
         isSchedulerPaused: () => paused,
       }),
   }

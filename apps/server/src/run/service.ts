@@ -282,12 +282,17 @@ export function createAgentService(options: AgentServiceOptions) {
       : {}),
   })
 
+  // System→agent notice bodies: the stored (user-editable) template row when
+  // present, else the shipped default. Shared by the typed notice publisher,
+  // the agent lifecycle lines and the direct scheduler wakes — a few local
+  // rows read per message, no cache to invalidate.
+  const noticeTemplateBody = (key: keyof typeof NOTICE_TEMPLATE_DEFAULTS) =>
+    loadTemplateMap(db).get(key) ?? NOTICE_TEMPLATE_DEFAULTS[key]
+
   // Every system→scheduler/team notice is a typed event (run/orch-notices)
-  // rendered through its (user-editable) template. Templates read per publish,
-  // like the delivery templates — a few local rows, no cache to invalidate.
+  // rendered through its (user-editable) template.
   const notices = createNoticePublisher({
-    templateBody: (key) =>
-      loadTemplateMap(db).get(key) ?? NOTICE_TEMPLATE_DEFAULTS[key],
+    templateBody: noticeTemplateBody,
     post: (input, principal) => channels.post(input, principal),
     isSchedulerPaused: (eventId) =>
       schedulerAdminPort.get().isSchedulerPaused(eventId),
@@ -298,6 +303,7 @@ export function createAgentService(options: AgentServiceOptions) {
     queries,
     bus,
     channels,
+    templateBody: noticeTemplateBody,
     isSchedulerPaused: (eventId) =>
       schedulerAdminPort.get().isSchedulerPaused(eventId),
     // The target-slot fence counts a challenge as occupying a slot while it
@@ -1210,9 +1216,10 @@ export function createAgentService(options: AgentServiceOptions) {
 
   // --- scheduler (event orchestrator) lifecycle -------------------------------
 
-  /** Wake text sent on resume / reopen so the orchestrator re-syncs. */
-  const SCHEDULER_RESUME_MESSAGE =
-    "调度已恢复。请重新同步状态（aegisx.snapshot()）后再行动。"
+  /** Wake text sent on resume / reopen so the orchestrator re-syncs —
+   * rendered from the user-editable noticeSchedulerResume template. */
+  const schedulerResumeMessage = () =>
+    renderTemplateBody(noticeTemplateBody("noticeSchedulerResume"), {})
 
   /** Start (or restart) the event's scheduler agent from its config. The
    * orchestrator's model is the per-event `scheduler_config.modelId`
@@ -1251,7 +1258,7 @@ export function createAgentService(options: AgentServiceOptions) {
         admin.setSchedulerPaused(eventId, false)
         await sendMessage(
           existing.id,
-          { text: SCHEDULER_RESUME_MESSAGE },
+          { text: schedulerResumeMessage() },
           {
             kind: "system",
           }
@@ -1298,7 +1305,7 @@ export function createAgentService(options: AgentServiceOptions) {
     if (sched && isActiveAgentStatus(sched.status)) {
       await sendMessage(
         sched.id,
-        { text: SCHEDULER_RESUME_MESSAGE },
+        { text: schedulerResumeMessage() },
         {
           kind: "system",
         }
@@ -1445,6 +1452,7 @@ export function createAgentService(options: AgentServiceOptions) {
       send: async (agentId, text) => {
         await sendMessage(agentId, { text }, { kind: "system" })
       },
+      templateBody: noticeTemplateBody,
       isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
     })
   }
