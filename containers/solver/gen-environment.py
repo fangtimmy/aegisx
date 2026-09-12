@@ -3,8 +3,14 @@
 在每个叶子 stage 的全部工具层之后运行 (Dockerfile 用 bind mount 挂入, 不落层),
 只描述当前文件系统真实存在的内容: 缺失工具的章节与条目自动消失, venv 清单来自
 pip freeze。文档不出现档位概念 — agent 读到的就是对自己环境的直接描述。
+
+离线分支由部署清单驱动: --manifest 指向镜像内 /opt/aegisx-preset/preset.json,
+offline.enabled 为真时「缺工具时的安装 SOP」章节整体替换为 offline.note 的离线
+声明 (断网镜像禁装包)。不传 --manifest (通用三档 solver) 保留联网 SOP。
 """
 
+import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -28,7 +34,7 @@ def venv_packages() -> set[str]:
     return {norm(line.split("==")[0]) for line in out.splitlines() if "==" in line}
 
 
-VENV = venv_packages()
+VENV: set[str] = set()
 
 
 def vp(pkg: str) -> bool:
@@ -88,16 +94,21 @@ def wrap(names: list[str], width: int = 88) -> str:
     return "\n".join(lines)
 
 
-def section_python() -> str:
+def section_python(offline: bool = False) -> str:
     installed = [name for name in VENV_DISPLAY if vp(name)]
     listing = wrap(installed) if installed else "(无预装 CTF 库)"
+    tail = (
+        "断网镜像无法补装包 — 缺库时换不需要该库的实现思路。"
+        if offline
+        else "完整列表用 `pip list` 自查; 缺包直接 `pip install` (见缺工具 SOP)。"
+    )
     return f"""## Python (重要)
 
 `python` / `python3` 已指向 `/opt/venv` (PATH + `/usr/local/bin` 软链)。当前 venv 已预装:
 
 {listing}
 
-完整列表用 `pip list` 自查; 缺包直接 `pip install` (见缺工具 SOP)。
+{tail}
 
 ```bash
 python3 script.py
@@ -310,6 +321,32 @@ def section_sop() -> str:
 5. 装不上就换不需要该工具的思路 — 不要在安装上耗过解题本身."""
 
 
+def offline_note(manifest_path: str) -> str:
+    """Read offline.enabled / offline.note from the deployment manifest.
+    A manifest passed explicitly must be readable, well-formed AND carry the
+    offline key — anything else fails the build loudly instead of silently
+    shipping a networked SOP to a disconnected image. An explicit
+    offline.enabled=false is a legal "networked appliance" declaration."""
+    doc = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    if "offline" not in doc:
+        raise SystemExit(
+            f"{manifest_path}: manifest has no 'offline' key — "
+            "appliance builds must declare offline.enabled explicitly"
+        )
+    offline = doc["offline"] or {}
+    if not offline.get("enabled"):
+        return ""
+    return offline.get("note") or (
+        "本镜像为断网环境构建: 没有公网。\n"
+        "**不要尝试 `pip install` / `apt-get install`** — 会直接失败。\n"
+        "预装工具见上文清单; 缺工具时换不需要该工具的技术路线, 不要在安装上耗时。"
+    )
+
+
+def section_offline(note: str) -> str:
+    return f"## 离线环境（重要）\n\n{note}"
+
+
 def section_volatility() -> str:
     if not (has("vol") or vp("volatility3")):
         return ""
@@ -323,14 +360,27 @@ def section_volatility() -> str:
 
 
 def main() -> None:
+    global VENV
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--manifest",
+        help="部署清单 (preset.json): offline.enabled/offline.note 驱动离线章节",
+    )
+    args = parser.parse_args()
+    note = offline_note(args.manifest) if args.manifest else ""
+    offline = bool(note)
+    # Filesystem introspection runs after the manifest gate — --help and a
+    # bad manifest must not pay for (or crash on) the venv probe.
+    VENV = venv_packages()
+    install_section = section_offline(note) if offline else section_sop()
     sections = [
         section_paths(),
-        section_python(),
+        section_python(offline),
         section_commands(),
         section_wine(),
         section_categories(),
         section_workspace(),
-        section_sop(),
+        install_section,
         section_volatility(),
     ]
     print("# AegisX Solver Environment\n")

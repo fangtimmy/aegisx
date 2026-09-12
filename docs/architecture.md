@@ -111,7 +111,7 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 
 **调度快照必须同时给出成本与产出**（`run/scheduler-admin.ts` 的 `getDigestContext` → `schedulerDigest` 模板）。产出侧：每题 `earned`（已得分）、`flagProgress`（n/N）、`perFlag`、`sinceLastFlag`，事件级 `elapsed` 与 `sinceLastScore`，以及 `board`（未启动题数与未触达分值——没有 live agent 也没有排队项的题不会出现在逐题行里，不汇总就等于对调度者不可见）。多旗进度由本地已接受 flag 数与 `challenges.required_flags` 经 `progressOf` 推导（`earned = points × confirmed / required`）：平台按旗均分分值，逐旗分数组不在 agent 面 API 上。`required_flags` 的写者是平台同步（仅在平台**确实报告**了数值时写，缺字段不覆写）与操作员覆写；数值未知时进度封顶在 `partial`，绝不从计数自行判「已解」。`solvedLabel` 只在 `progressOf` 判为 `solved` 时才给「已解」——把「有 1 个 accepted flag」当已解会让 2/6 的链看起来完工。缺了分子，调度者的性价比判断无从执行，故这两侧字段是同一份契约。
 
-**通用模板 vs 部署特调**：`prompt-defaults.ts` 里的内置模板只写与具体赛事无关的策略原则（含预算语义：`timeout_ms` 是兜底，分配靠 agent 上限与 `agents.close`）；具体数值（各难度首轮预算、平台并发上限、flag 格式、离线约束）属于某个评测环境的经验参数，落在部署侧的 event preset（`containers/*/preset.json` 的 `promptHint` 与 `settings`，`bootstrap.ts` 读取），不写进通用模板。
+**通用模板 vs 部署特调**：`prompt-defaults.ts` 里的内置模板只写与具体赛事无关的策略原则（含预算语义：`timeout_ms` 是兜底，分配靠 agent 上限与 `agents.close`）；具体数值（各难度首轮预算、平台并发上限、flag 格式、离线约束）属于某个评测环境的经验参数，落在部署侧的 appliance 清单（`containers/*/preset.json`，`bootstrap.ts` 读取）。清单是结构化的：`brief` 按**读者分区**（`common` 两类 agent 都读、`solver` 只进解题 agent、`orchestrator` 只进调度者——上下文构造器按角色合并后经 `{{event.brief}}` 渲染），`flagFormats` 渲染进 mainSystem 的提交章节，`offline` 在**构建期**被 `gen-environment.py --manifest` 消费（离线声明替代联网安装 SOP），`settings`/`scheduler` 维持首启落库语义。模板语料在 `orchestration/prompt-templates.ts` 的 `PROMPT_TEMPLATES` 注册表单点声明（key / 上下文种类 / 默认值 / 变量面板 / 预览），seed 表、设置页变量面板与预览派发均由它派生；漂移测试对全部内置模板断言「默认值可渲染 + 引用的变量已声明」。
 
 ## 平台适配（`apps/server/src/platforms/`）
 

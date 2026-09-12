@@ -34,11 +34,16 @@ docker buildx build -f containers/appliance/Dockerfile \
 
 ## 共享机制
 
-- **调优以数据分发**：每个 target 的 `preset.json`（promptHint / settings / scheduler
-  三段）构建期 COPY 到 `/opt/aegisx-preset/preset.json`，bootstrap 首启落库——不做
-  构建期源码改写，preset 缺失或损坏只记日志跳过。语义见 `apps/server/src/bootstrap.ts`。
+- **调优以数据分发**：每个 target 的 `preset.json` 是一份结构化**部署清单**（`brief`
+  按 common/solver/orchestrator 读者分区 + `flagFormats` + `offline` + `settings` +
+  `scheduler`）构建期 COPY 到 `/opt/aegisx-preset/preset.json`：bootstrap 首启把
+  brief/flagFormats 落库为赛事简报（solver 渲染 common+solver，调度者渲染
+  common+orchestrator），settings/scheduler 维持首启落库语义——不做构建期源码改写，
+  清单缺失或损坏只记日志跳过。语义见 `apps/server/src/bootstrap.ts`。
 - **ENVIRONMENT.md 离线化**：构建期以 `containers/solver/gen-environment.py` 文件系统
-  自省生成，并把「缺工具时的安装 SOP」章节替换为各场景的离线文案（离线禁装包）。
+  自省生成；传入 `--manifest /opt/aegisx-preset/preset.json` 时由清单的
+  `offline.enabled`/`offline.note` 驱动——离线镜像把「缺工具时的安装 SOP」章节整体
+  换成离线声明（不再用正则改写生成结果）。通用三档 solver 不传该参数，保留联网 SOP。
 - **app 产物**：`/opt/aegisx/aegisx` 单可执行文件（内嵌 Bun 运行时、Web SPA、基线迁移），
   来自 `aegisx/app-build`；Python SDK 固定 COPY 到 `/opt/aegisx-sdk`（`PYTHONPATH` 已设，
   位置不可移动）。

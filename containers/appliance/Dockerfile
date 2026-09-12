@@ -165,23 +165,11 @@ CMD ["/opt/aegisx/aegisx"]
 # === tsecbench target =========================================================
 FROM toolchain AS tsecbench
 COPY containers/appliance/tsecbench/preset.json /opt/aegisx-preset/preset.json
-# Environment doc: build-time self-introspection, then replace the networked
-# "install SOP" section — this image runs disconnected.
+# Environment doc: build-time self-introspection; the manifest's offline flag
+# swaps the networked "install SOP" section for the offline notice — this
+# image runs disconnected.
 RUN --mount=type=bind,src=containers/solver/gen-environment.py,target=/tmp/gen-environment.py \
-    python3 /tmp/gen-environment.py > /opt/solver/ENVIRONMENT.md && \
-    python3 - <<'PY'
-import re
-p = "/opt/solver/ENVIRONMENT.md"
-s = open(p).read()
-offline = """## 离线环境（重要）
-
-本镜像为断网评测构建: 没有公网, 只有 VPN 内的靶机网段可达。
-**不要尝试 `pip install` / `apt-get install`** — 会直接失败。
-预装工具见上文清单; 缺工具时换不需要该工具的技术路线, 不要在安装上耗时。
-"""
-s = re.sub(r"## 缺工具时的安装 SOP.*?(?=\n## |\Z)", offline, s, flags=re.S)
-open(p, "w").write(s)
-PY
+    python3 /tmp/gen-environment.py --manifest /opt/aegisx-preset/preset.json > /opt/solver/ENVIRONMENT.md
 RUN echo tsecbench > /opt/solver/VARIANT
 
 # === xihulunjian target =======================================================
@@ -207,22 +195,10 @@ RUN --mount=type=cache,id=tsec-apt,target=/var/cache/apt,sharing=locked \
 # 西湖论剑解题知识库：初赛 60 题 + 决赛测试新题的 runbook（题名/附件 sha256 定位）。
 COPY containers/appliance/xihulunjian/kb /opt/solver/knowledges/xihulunjian
 COPY containers/appliance/xihulunjian/preset.json /opt/aegisx-preset/preset.json
-# Environment doc offline rewrite — finals sandbox flavour.
+# Environment doc offline rewrite — the manifest's offline note (finals
+# sandbox flavour) replaces the networked install SOP.
 RUN --mount=type=bind,src=containers/solver/gen-environment.py,target=/tmp/gen-environment.py \
-    python3 /tmp/gen-environment.py > /opt/solver/ENVIRONMENT.md && \
-    python3 - <<'PY'
-import re
-p = "/opt/solver/ENVIRONMENT.md"
-s = open(p).read()
-offline = """## 离线环境（重要）
-
-本镜像为断网决赛沙箱构建: 没有公网, 只有平台网关（LLM）与 DASCTF 平台可达。
-**不要尝试 `pip install` / `apt-get install`** — 会直接失败。
-预装工具见上文清单; 缺工具时换不需要该工具的技术路线, 不要在安装上耗时。
-"""
-s = re.sub(r"## 缺工具时的安装 SOP.*?(?=\n## |\Z)", offline, s, flags=re.S)
-open(p, "w").write(s)
-PY
+    python3 /tmp/gen-environment.py --manifest /opt/aegisx-preset/preset.json > /opt/solver/ENVIRONMENT.md
 RUN echo xihulunjian > /opt/solver/VARIANT && \
     test -s /opt/solver/knowledges/xihulunjian/INDEX.md
 # Event name is explicit because bootstrap's platform-bound default is the

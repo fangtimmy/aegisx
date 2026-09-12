@@ -37,4 +37,4 @@ essential, plus:
 - memory forensics (volatility3 + dwarf2json), AD suite (bloodyAD/certipy/coercer/pypykatz)
 - angr/scipy/opencv, vulhub + hacktricks-cloud
 
-`ENVIRONMENT.md` is generated inside each image at build time by probing that image's actual filesystem (`which`, paths, `pip freeze`) — it never mentions tiers and always matches what the image contains; edit `gen-environment.py` to change it. `/opt/solver/VARIANT` stamps the tier for tooling.
+`ENVIRONMENT.md` is generated inside each image at build time by probing that image's actual filesystem (`which`, paths, `pip freeze`) — it never mentions tiers and always matches what the image contains; edit `gen-environment.py` to change it. Appliance targets additionally pass `--manifest /opt/aegisx-preset/preset.json`: when the manifest's `offline.enabled` is set, the networked install-SOP section is replaced by the manifest's offline notice. `/opt/solver/VARIANT` stamps the tier for tooling.

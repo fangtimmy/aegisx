@@ -117,12 +117,22 @@ flag 的逐条日志（`agent.started` / `agent.finished` 带 `durSec`、
 
 ## 调优注入：preset（`/opt/aegisx-preset/preset.json`）
 
-调优以 **JSON 数据**随镜像分发，bootstrap 首启时读取并落库（v5 及以前是构建期
-sed 改写源码——那种方式把提示词文本硬编码在 Dockerfile 里，已废弃）：
+调优以 **JSON 部署清单**随镜像分发，bootstrap 首启时读取并落库（v5 及以前是构建期
+sed 改写源码——那种方式把提示词文本硬编码在 Dockerfile 里，已废弃）。清单是
+结构化的：`brief` 按 common/solver/orchestrator 读者分区（solver 渲染
+common+solver，调度者渲染 common+orchestrator）、`flagFormats` 结构化渲染进
+mainSystem 的提交章节、`offline` 在构建期由 `gen-environment.py --manifest`
+消费（ENVIRONMENT.md 的离线章节）：
 
 ```json
 {
-  "promptHint": "平台：TSecBench。flag 格式恒为 flag{<uuid>}（f2 系列为 FLAG{...}）……",
+  "brief": {
+    "common": "平台：TSecBench。category 字段是难度（easy/medium/hard）……",
+    "solver": "flag 格式恒为 flag{<uuid>}，f2 系列为 FLAG{...}……",
+    "orchestrator": "评测总时长 6 小时（自启动起算）：前期用快题建立分数底盘……"
+  },
+  "flagFormats": ["flag{<uuid>}", "FLAG{...}"],
+  "offline": { "enabled": true, "note": "本镜像为断网评测构建: 没有公网……" },
   "settings": { "scheduler.defaultRunTimeoutMs": 2700000, "scheduler.maxConcurrentAgents": 5 },
   "scheduler": { "maxConcurrentTargets": 3, "stopSubmitterOnSolve": true }
 }
@@ -130,14 +140,17 @@ sed 改写源码——那种方式把提示词文本硬编码在 Dockerfile 里�
 
 | 项 | 值 | 依据 |
 |---|---|---|
-| 赛事 `promptHint` | TSecBench 平台简报：flag 格式、category=难度、**6 小时总时长与截止感知**、**按难度分档的首轮预算（≥30/45/60min）**、靶机不过期、409=等槽退避（含满槽时撤链让位）、离线禁装包、**扫描限定靶机地址** | 68 个 accepted flag 格式恒定；230 次 409；实测出现过扫宿主内网的偏航；预算依据见下行 |
+| `brief.common` | TSecBench 平台事实：category=难度、离线禁装包 | 平台口径 |
+| `brief.solver` | 靶机不过期（extend_target 无意义）、多 flag 进度以系统通知为准、**扫描限定靶机地址** | 实测出现过扫宿主内网的偏航 |
+| `brief.orchestrator` | **6 小时总时长与截止感知**、**按难度分档的首轮预算（≥30/45/60min）**、409=等槽退避（含满槽时撤链让位） | 230 次 409；预算依据见下行 |
+| `flagFormats` | `flag{<uuid>}` / f2 系列 `FLAG{...}` | 68 个 accepted flag 格式恒定 |
 | `scheduler.defaultRunTimeoutMs` | 45min | **兜底而非分配**：最好一轮（89.8%）用 45min 档，208 个 agent 只有 4 个真正触到 deadline，解题中位耗时 1–2min——给足几乎不花钱。改成 10–15min「快题预算」的那一轮，c-03/c-05/c-09 全部在临界点被截断（超时只把 agent 转 idle，重开新 agent 反而丢掉上下文） |
 | `scheduler.maxConcurrentAgents` | 5 | 托管沙箱 8核16G；靶机槽 3 必然占满后，剩余 2 个 agent 槽供编排者在已占靶机上做同题多角度分工（上轮实测有效） |
 | `maxConcurrentTargets` | 3 | 平台实例硬上限 |
 | `stopSubmitterOnSolve` | true | 评测只看 flag，完全解出即停（省 5% 成本 + 2.9 agent-h） |
 
 应用语义（`apps/server/src/bootstrap.ts`）：settings 按漂移收敛（值变了才写）；
-promptHint 在建赛事时写入、已非空则不覆盖；scheduler 策略仅首建时应用。
+brief 在建赛事时写入、已有内容则不覆盖；scheduler 策略仅首建时应用。
 preset 文件缺失或损坏只记日志跳过，服务器照常启动。
 
 ## 工具集（实测驱动）

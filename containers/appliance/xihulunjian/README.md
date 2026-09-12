@@ -52,16 +52,19 @@ bootstrap 绑定平台时的事件名默认值是 tsecbench 的名字，这里�
 
 ## 调优注入：preset（`/opt/aegisx-preset/preset.json`）
 
-与 tsecbench 相同的数据化机制（promptHint / settings / scheduler 三段，bootstrap
-首启落库）。本 preset 的 DASCTF 特调要点：
+与 tsecbench 相同的结构化部署清单（`brief` 按 common/solver/orchestrator 读者
+分区 + `flagFormats` + `offline` + `settings` + `scheduler`，bootstrap 首启落库）。
+本清单的 DASCTF 特调要点：
 
 | 项 | 值 | 依据 |
 |---|---|---|
-| promptHint·KB 机械首步 | 题名/sha256 查 INDEX → 命中走 SOLVE.md | rehearsal 连续两场知识库工具零调用；KB 命中题必须走捷径 |
-| promptHint·提交纪律 | 自洽验证后提交；裸值优先；两形态各一次即止损升级 | 每题 50 次预算（实测）；WEB-01 DASCTF{} 被拒裸值接受的实证；Rvmecisp 38 次与 HardFlask 4 次止损的正反案例 |
-| promptHint·靶机 | 异步拉起轮询、expireTime 过期、429 退避 | rehearsal 实测（启动期 10 次 429、what_heap 初始未就绪） |
-| promptHint·反幻觉 | 无提交计数 API，以 flag 事件流为准 | rehearsal 调度者「提交计数 5→9」纯幻觉引发误报警告 |
-| promptHint·调度 | 同题无进展降级/park；KB 题先收割 | wish 9 连 spawn 约 800 agent 分钟 0 提交的教训 |
+| `brief.solver`·KB 机械首步 | 题名/sha256 查 INDEX → 命中走 SOLVE.md | rehearsal 连续两场知识库工具零调用；KB 命中题必须走捷径 |
+| `brief.solver`·提交纪律 | 自洽验证后提交；裸值优先；两形态各一次即止损升级 | 每题 50 次预算（实测）；WEB-01 DASCTF{} 被拒裸值接受的实证；Rvmecisp 38 次与 HardFlask 4 次止损的正反案例 |
+| `brief.solver`·靶机 | 异步拉起轮询、expireTime 过期 | rehearsal 实测（what_heap 初始未就绪） |
+| `brief.common`·限流 | 平台 API 429 退避 | rehearsal 实测（启动期 10 次 429） |
+| `brief.orchestrator`·反幻觉 | 无提交计数 API，以 flag 事件流为准 | rehearsal 调度者「提交计数 5→9」纯幻觉引发误报警告 |
+| `brief.orchestrator`·调度 | 同题无进展降级/park；KB 题先收割 | wish 9 连 spawn 约 800 agent 分钟 0 提交的教训 |
+| `flagFormats` | `DASCTF{...}` | 平台格式 |
 | `defaultRunTimeoutMs` | 60min | rehearsal 120min 偏松（wish 沉没 31% 墙钟）；KB 快题本就不该吃满 |
 | `maxConcurrentAgents` | 5 | 沙箱 8 核量级假设（同 tsecbench 托管），决赛资源细则若不同再调 |
 | `maxConcurrentTargets` | 3 | rehearsal 实测事件级 3 槽 |
@@ -73,7 +76,7 @@ bootstrap 绑定平台时的事件名默认值是 tsecbench 的名字，这里�
 app 产物（`aegisx/app-build`），差异全部在 target 专属层：
 
 - 内置 `kb/`（`COPY containers/appliance/xihulunjian/kb → /opt/solver/knowledges/xihulunjian`）；
-- preset 换为 DASCTF 决赛简报（含 KB 首步指令）；
+- preset 换为 DASCTF 决赛部署清单（brief 含 KB 首步指令与提交纪律）；
 - `VARIANT=xihulunjian`，`AEGISX_EVENT_NAME=xihulunjian-finals`；
 - 额外工具：legacy JDK 8（SecurityManager 类 jar 靶机）、libzbar0/pyzbar
   （QR 杂项）、cysignals/fpylll（格密码）。
