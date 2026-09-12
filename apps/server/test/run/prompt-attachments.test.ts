@@ -119,6 +119,7 @@ describe("solver prompt: live multi-flag progress", () => {
           },
           agentId: "01234567-abcd-abcd-abcd-abcdabcdabcd",
           containerWorkspace: "/workspace",
+          timeoutMs: 2_700_000,
         },
         db
       )

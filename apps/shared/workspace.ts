@@ -147,4 +147,8 @@ export type PromptTemplateContext = {
   /** challenge-scope initial only: the spawn prompt appended as a
    * `## Strategy` section. */
   strategy?: string
+  /** solver only: this attempt's hard deadline in minutes (spawn spec or the
+   * scheduler.defaultRunTimeoutMs default, rounded). The agent is
+   * force-terminated at it without warning. */
+  timeoutMinutes?: number
 }

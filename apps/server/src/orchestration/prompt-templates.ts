@@ -142,6 +142,7 @@ export const samplePromptContext: PromptTemplateContext = {
     attachmentPaths: ["challenge.zip"],
     confirmedFlags: [],
   },
+  timeoutMinutes: 45,
   model: {
     provider: "Sample Provider",
     name: "Sample Model",
@@ -471,6 +472,7 @@ const SOLVER_PROMPT_VARIABLES = [
   "capabilities.canSubmitFlag",
   "capabilities.canManageTarget",
   "strategy",
+  "timeoutMinutes",
 ] as const
 
 export const PROMPT_TEMPLATES: PromptTemplateEntry[] = [

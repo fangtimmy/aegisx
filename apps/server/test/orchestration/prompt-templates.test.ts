@@ -170,6 +170,21 @@ describe("prompt drift control (env facts live in ENVIRONMENT.md, not inline)", 
       "Extract the flag format from the challenge description"
     )
   })
+
+  test("initial frames the attempt's wall-clock budget without inviting clock polling", () => {
+    const withBudget = renderTemplateBody(
+      DEFAULT_INITIAL_PROMPT_TEMPLATE,
+      samplePromptContext
+    )
+    expect(withBudget).toContain("45 minutes")
+    expect(withBudget).toContain("do NOT poll the clock")
+
+    const bare = renderTemplateBody(DEFAULT_INITIAL_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      timeoutMinutes: undefined,
+    })
+    expect(bare).not.toContain("Budget:")
+  })
 })
 
 describe("prompt preview", () => {

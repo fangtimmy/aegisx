@@ -87,6 +87,9 @@ export type PromptContext = {
    * standard blocks (challenge, environment, submission) are always
    * rendered. */
   strategy?: string
+  /** solver only: this attempt's hard deadline in minutes (spawn spec or the
+   * scheduler.defaultRunTimeoutMs default, rounded). */
+  timeoutMinutes?: number
 }
 
 // --- scheduler wake-up events (v19: agent-scoped) --------------------------

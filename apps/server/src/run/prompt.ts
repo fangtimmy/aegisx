@@ -35,6 +35,9 @@ export type SolverPromptInputs = {
   model: ModelConfig
   agentId: string
   containerWorkspace: string
+  /** This attempt's hard deadline (spawn spec or the default); rendered into
+   * the initial prompt as `timeoutMinutes`. */
+  timeoutMs: number
 }
 
 /**
@@ -58,6 +61,7 @@ export function buildSolverPromptContext(
     model,
     agentId,
     containerWorkspace,
+    timeoutMs,
   } = inputs
   const event = db
     .select()
@@ -105,6 +109,7 @@ export function buildSolverPromptContext(
       attachmentPaths: challengeAttachments.map(({ path }) => path),
       confirmedFlags,
     },
+    timeoutMinutes: Math.max(1, Math.round(timeoutMs / 60_000)),
     model: {
       provider: model.providerLabel ?? model.provider,
       name: model.modelLabel ?? model.modelId,

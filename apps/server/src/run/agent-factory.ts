@@ -605,6 +605,9 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       modelLabel: target.model.label,
       thinkingLevel: target.thinkingLevel,
     }
+    const timeoutMs =
+      input.timeoutMs ?? get(settings, "scheduler.defaultRunTimeoutMs")
+    const deadlineAtIso = new Date(Date.now() + timeoutMs).toISOString()
     let systemPrompt: string
     let initialPrompt: string
     let tools: string[]
@@ -626,6 +629,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           model: modelConfig,
           agentId,
           containerWorkspace: wsCtx.containerWorkspace,
+          timeoutMs,
         },
         db
       )
@@ -676,9 +680,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       )
     }
 
-    const timeoutMs =
-      input.timeoutMs ?? get(settings, "scheduler.defaultRunTimeoutMs")
-    const deadlineAtIso = new Date(Date.now() + timeoutMs).toISOString()
     const ts = now()
     const source = input.source
 
