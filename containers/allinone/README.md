@@ -4,14 +4,14 @@
 
 ## 构建
 
-构建上下文为仓库根目录；先构建求解镜像 minimal 档（`containers/solver`），再构建本镜像：
+构建上下文为仓库根目录；先构建共享单二进制（`containers/app-build` → `aegisx/app-build:latest`），并确保求解镜像 minimal 档（`containers/solver` → `aegisx/solver:minimal`）已存在，再构建本镜像：
 
 ```sh
 docker buildx build -f containers/allinone/Dockerfile \
   --platform linux/amd64 -t aegisx/allinone:latest .
 ```
 
-镜像内布局：`/opt/aegisx`（server 压缩 bundle + 基线迁移 SQL，构建期 `bun build --minify` 产物，不含源码）、`/opt/aegisx-web`（Web 静态产物）、`/opt/aegisx-sdk`（来自 minimal 档的 Python SDK）、`/data`（数据卷：SQLite、附件、各赛事工作区）。
+镜像内布局：`/opt/aegisx/aegisx`（服务端单可执行文件：bun `--compile` 产物，内嵌 Web SPA 与基线迁移 SQL，不含源码）、`/opt/aegisx-sdk`（来自 minimal 档的 Python SDK）、`/data`（数据卷：SQLite、附件、各赛事工作区）。
 
 ## 运行
 
