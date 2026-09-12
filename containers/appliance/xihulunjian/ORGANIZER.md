@@ -15,7 +15,7 @@
 ## 2. 导入与启动
 
 ```bash
-docker load -i aegisx-xihulunjian-<版本>.tar
+docker load -i aegisx-xihulunjian-<版本>.tar.gz
 
 docker run -d --name aegisx-eval \
   --platform linux/amd64 \

@@ -99,10 +99,21 @@ app 产物（`aegisx/app-build`），差异全部在 target 专属层：
 | `/usr/share/nuclei-templates` | nuclei 离线模板（`~/nuclei-templates` symlink 指向） |
 | `/data` | 数据卷（SQLite、config.json、工作区） |
 
+## 交付（分发）
+
+镜像体积：未压缩 5.05GB，gzip 压缩后 **1.85GB**（2026-09-12 于 `:test` 实测，与 tsecbench 同在 3GB 量级以内）。
+
+```sh
+docker save aegisx/xihulunjian:test | gzip > /tmp/aegisx-xihulunjian-<版本>.tar.gz
+shasum -a 256 /tmp/aegisx-xihulunjian-<版本>.tar.gz   # 上传前记录，平台侧核对
+```
+
+主办方侧的导入/启动说明见 [ORGANIZER.md](./ORGANIZER.md)（`docker load` 直接支持 .tar.gz）。
+
 ## 出厂自检
 
 ```sh
-docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/xihulunjian:v2 -c '
+docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/xihulunjian:test -c '
   set -e
   python3 -c "import aegisx"
   python3 -c "import pwn, z3, capstone, angr, PIL, flask_unsign"
