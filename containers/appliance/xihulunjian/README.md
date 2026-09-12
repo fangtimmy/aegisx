@@ -20,9 +20,13 @@ status：`verified`（exp 实跑输出与已知 flag 一致）/ `authored` / `re
 ## 构建与运行
 
 ```sh
+# 前置：共享单二进制构建段（containers/app-build）
+docker buildx build -f containers/app-build/Dockerfile \
+  --platform linux/amd64 -t aegisx/app-build:latest .
+
 # 构建（amd64；构建机需可访问 kali/pypi 镜像与 github）
-docker buildx build -f containers/xihulunjian/Dockerfile \
-  --platform linux/amd64 -t aegisx/xihulunjian:v1 .
+docker buildx build -f containers/appliance/Dockerfile \
+  --platform linux/amd64 --target xihulunjian -t aegisx/xihulunjian:v2 .
 
 # 运行（LLM/平台凭据走环境变量；调优经 preset 在首启落库）
 docker run -d --name aegisx-xihu \
@@ -36,7 +40,7 @@ docker run -d --name aegisx-xihu \
   -e AEGISX_PLATFORM_TYPE=dasctf \
   -e AEGISX_PLATFORM_BASE_URL=https://pro.dasctf.com \
   -e AEGISX_PLATFORM_CREDENTIAL=<AccessKey> \
-  aegisx/xihulunjian:v1
+  aegisx/xihulunjian:v2
 ```
 
 事件名默认 `xihulunjian-finals`（镜像 ENV，可用 `AEGISX_EVENT_NAME` 覆盖）——
@@ -65,18 +69,20 @@ bootstrap 绑定平台时的事件名默认值是 tsecbench 的名字，这里�
 
 ## 与 tsecbench 镜像的差异
 
-- 新增 `COPY containers/xihulunjian/kb → /opt/solver/knowledges/xihulunjian`；
+同一阶梯（`containers/appliance/Dockerfile`）上的兄弟 target，共享工具链与
+app 产物（`aegisx/app-build`），差异全部在 target 专属层：
+
+- 内置 `kb/`（`COPY containers/appliance/xihulunjian/kb → /opt/solver/knowledges/xihulunjian`）；
 - preset 换为 DASCTF 决赛简报（含 KB 首步指令）；
 - `VARIANT=xihulunjian`，`AEGISX_EVENT_NAME=xihulunjian-finals`；
-- 工具链沿用 tsecbench v11 全套（rehearsal 在 solver:full 上实战验证过同等栈）。
+- 额外工具：legacy JDK 8（SecurityManager 类 jar 靶机）、libzbar0/pyzbar
+  （QR 杂项）、cysignals/fpylll（格密码）。
 
 ## 镜像内布局
 
 | 路径 | 内容 |
 |---|---|
-| `/opt/aegisx/server/dist/` | bun bundle + minify 后的服务端单文件 |
-| `/opt/aegisx/drizzle/` | 迁移文件（bundle 以 `../../drizzle` 相对解析，布局不可改） |
-| `/opt/aegisx-web/` | Web 静态产物 |
+| `/opt/aegisx/aegisx` | 服务端单可执行文件（bun `--compile` 产物，内嵌 Web SPA 与基线迁移） |
 | `/opt/aegisx-sdk/` | Python SDK（PYTHONPATH 已设） |
 | `/opt/aegisx-preset/preset.json` | 决赛调优预设（bootstrap 首启应用） |
 | `/opt/solver/knowledges/xihulunjian/` | **逐题解题手册**（INDEX.md + challenges/） |
@@ -87,14 +93,14 @@ bootstrap 绑定平台时的事件名默认值是 tsecbench 的名字，这里�
 ## 出厂自检
 
 ```sh
-docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/xihulunjian:v1 -c '
+docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/xihulunjian:v2 -c '
   set -e
   python3 -c "import aegisx"
   python3 -c "import pwn, z3, capstone, angr, PIL, flask_unsign"
   command -v sqlite3 jdb flask-unsign fd nuclei chisel whatweb searchsploit ghidra-analyze
   test -x /usr/bin/time
   test -s /opt/solver/knowledges/xihulunjian/INDEX.md
-  grep -c "DASCTF" /opt/solver/knowledges/xihulunjian/INDEX.md
+  grep -c "西湖论剑" /opt/solver/knowledges/xihulunjian/INDEX.md
   python3 /opt/solver/knowledges/xihulunjian/challenges/gogogo_3/exp/solve.py
   echo SELF-CHECK OK'
 ```

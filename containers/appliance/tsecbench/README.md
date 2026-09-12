@@ -7,9 +7,13 @@
 ## 构建与运行
 
 ```sh
+# 前置：共享单二进制构建段（containers/app-build）
+docker buildx build -f containers/app-build/Dockerfile \
+  --platform linux/amd64 -t aegisx/app-build:latest .
+
 # 构建（amd64；构建机需可访问 kali/pypi 镜像与 github）
-docker buildx build -f containers/tsecbench/Dockerfile \
-  --platform linux/amd64 -t aegisx/tsecbench:v11 .
+docker buildx build -f containers/appliance/Dockerfile \
+  --platform linux/amd64 --target tsecbench -t aegisx/tsecbench:v12 .
 
 # 运行（tsec-vpn 为常驻 VPN 容器——本地模式专用，用于连接靶机网段；托管模式不需要
 # VPN。LLM/平台凭据走环境变量——仅运行时密钥走 env，所有策略/提示词调优通过 preset
@@ -26,7 +30,7 @@ docker run -d --name aegisx-tsec \
   -e AEGISX_PLATFORM_TYPE=tsecbench \
   -e AEGISX_PLATFORM_BASE_URL=https://tsecbench.zc.tencent.com \
   -e AEGISX_PLATFORM_CREDENTIAL=<BENCHMARK_TOKEN> \
-  aegisx/tsecbench:v11
+  aegisx/tsecbench:v12
 
 # TSecBench 托管环境兼容：harness 注入的 BENCHMARK_BASE_URL / BENCHMARK_TOKEN
 # 可直接替代 AEGISX_PLATFORM_BASE_URL / AEGISX_PLATFORM_CREDENTIAL
@@ -70,8 +74,8 @@ VPN（tsec-vpn + 任务 ovpn）只在本地模式需要，用途是连接靶机�
 **1) 导出并上传镜像**（平台「制作并上传 Docker 镜像」步骤）：
 
 ```sh
-docker buildx build -f containers/tsecbench/Dockerfile \
-  --platform linux/amd64 -t aegisx/tsecbench:vN .
+docker buildx build -f containers/appliance/Dockerfile \
+  --platform linux/amd64 --target tsecbench -t aegisx/tsecbench:vN .
 docker save aegisx/tsecbench:vN | gzip > /tmp/aegisx-tsecbench-vN.tar.gz
 shasum -a 256 /tmp/aegisx-tsecbench-vN.tar.gz   # 上传前记录，平台侧核对
 ```
@@ -165,9 +169,7 @@ preset 文件缺失或损坏只记日志跳过，服务器照常启动。
 
 | 路径 | 内容 |
 |---|---|
-| `/opt/aegisx/server/dist/` | bun bundle + minify 后的服务端单文件 |
-| `/opt/aegisx/drizzle/` | 迁移文件（bundle 以 `../../drizzle` 相对解析，布局不可改） |
-| `/opt/aegisx-web/` | Web 静态产物 |
+| `/opt/aegisx/aegisx` | 服务端单可执行文件（bun `--compile` 产物，内嵌 Web SPA 与基线迁移） |
 | `/opt/aegisx-sdk/` | Python SDK（PYTHONPATH 已设） |
 | `/opt/aegisx-preset/preset.json` | TSecBench 调优预设（bootstrap 首启应用） |
 | `/opt/solver/` | ENVIRONMENT.md（已离线化）/ knowledges / VARIANT |
@@ -180,14 +182,15 @@ preset 文件缺失或损坏只记日志跳过，服务器照常启动。
 （local backend 的 bash 继承 server 进程 env）导致全部 agent 的 SDK 调用失败：
 
 ```sh
-docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/tsecbench:v11 -c '
+docker run --rm --platform linux/amd64 --entrypoint /bin/bash aegisx/tsecbench:v12 -c '
   set -e
   python3 -c "import aegisx"
   python3 -c "import pwn, z3, capstone, angr, PIL, flask_unsign"
   command -v sqlite3 jdb flask-unsign fd nuclei chisel whatweb searchsploit ghidra-analyze
   test -x /usr/bin/time
+  test -x /opt/aegisx/aegisx
   test -d /root/nuclei-templates/http/cves
   test -f /opt/aegisx-preset/preset.json
-  grep -c TSecBench /opt/aegisx/server/dist/index.js
+  grep -c TSecBench /opt/aegisx-preset/preset.json
   echo SELF-CHECK OK'
 ```

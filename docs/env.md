@@ -6,7 +6,7 @@ bash 工具环境，面向容器内的 Python SDK，使用者不应手工设置�
 
  Bootstrap 相关变量仅在 `AEGISX_BOOTSTRAP=1` 时被读取；bootstrap 幂等——重启时只
 补缺失项，绝不覆盖 UI 里已手工配置的值。调优（提示词/调度策略）不走环境变量，走
-event preset（`/opt/aegisx-preset/preset.json`，见 `containers/tsecbench/README.md`）。
+event preset（`/opt/aegisx-preset/preset.json`，见 `containers/appliance/tsecbench/README.md`）。
 
 ## 运行时可设
 
@@ -42,7 +42,7 @@ event preset（`/opt/aegisx-preset/preset.json`，见 `containers/tsecbench/READ
 |---|---|---|
 | `AEGISX_DATA_DIR` | `<repo>/data` | 数据根目录（SQLite、config.json、工作区、附件）。镜像内置为 `/data` 并挂 VOLUME |
 | `AEGISX_EXEC_BACKEND` | `docker`（每题一个 solver 容器） | `local` = solver bash 与服务端同容器执行（单镜像 appliance 模式） |
-| `AEGISX_WEB_DIR` | 未设 = 纯 API | 设值则从该目录托管 Web 静态产物（镜像内置 `/opt/aegisx-web`；开发模式不设，走 vite 代理） |
+| `AEGISX_WEB_DIR` | 未设 | 设值则从该目录托管 Web 静态产物；编译单二进制（`bun run compile`）已内嵌 SPA，镜像与源码运行（`bun run dev`，走 vite 代理）都无需设置，仅指向外部 dist 时使用 |
 | `AEGISX_API_URL` | `http://host.docker.internal:3000` | 容器内 agent 访问服务端 API 的地址；docker 后端下 `127.0.0.1`/`localhost` 自动改写为 `host.docker.internal`，local 后端原样使用 |
 | `AEGISX_SDK_PATH` | 未设 | **开发用**：把宿主机的 SDK 目录只读挂载进 solver 容器 `/opt/aegisx-sdk`（镜像构建时已 COPY，无需设置） |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | docker 后端的 socket 路径 |
@@ -52,12 +52,11 @@ event preset（`/opt/aegisx-preset/preset.json`，见 `containers/tsecbench/READ
 
 | 变量 | 值 | 出处 |
 |---|---|---|
-| `AEGISX_BOOTSTRAP` | `1` | tsecbench / allinone 镜像：启用 appliance 自动装配 |
-| `AEGISX_EXEC_BACKEND` | `local` | tsecbench / allinone 镜像：单容器模式 |
-| `AEGISX_UNATTENDED` | `1` | tsecbench 镜像：无人值守模式。开机恢复**不**把有可见队列项的赛事置为 `paused`（没有人能把它 resume 回来），改为续排水；`fleet-watchdog` 同步收紧——只有 running 的 solver 才算进展，全部 solver 被重启parking 成 idle 且队列无进展时告警。allinone 不设，保留「重启后先人工复核」的交互语义 |
+| `AEGISX_BOOTSTRAP` | `1` | appliance 镜像（tsecbench / xihulunjian / allinone）：启用自动装配 |
+| `AEGISX_EXEC_BACKEND` | `local` | 同上：单容器模式 |
+| `AEGISX_UNATTENDED` | `1` | appliance 镜像（tsecbench / xihulunjian）：无人值守模式。开机恢复**不**把有可见队列项的赛事置为 `paused`（没有人能把它 resume 回来），改为续排水；`fleet-watchdog` 同步收紧——只有 running 的 solver 才算进展，全部 solver 被重启parking 成 idle 且队列无进展时告警。allinone 不设，保留「重启后先人工复核」的交互语义 |
 | `AEGISX_DATA_DIR` | `/data` | 同上，数据卷挂载点 |
 | `AEGISX_API_URL` | `http://127.0.0.1:3000` | 同上，local 后端回环地址 |
-| `AEGISX_WEB_DIR` | `/opt/aegisx-web` | 同上，Web 静态产物位置 |
 | `PYTHONPATH` | `/opt/aegisx-sdk` | 同上，SDK 免配置导入（出厂自检项，见 tsecbench README） |
 | `KNOWLEDGES_DIR` | `/opt/solver/knowledges` | solver 镜像（三档）：离线知识库位置，ENVIRONMENT.md 引用 |
 
