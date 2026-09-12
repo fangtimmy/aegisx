@@ -22,27 +22,13 @@ import { normalizeHttpBaseUrl } from "../infrastructure/urls"
 import { validateJson } from "../infrastructure/validation"
 import { ProviderTypeSchema } from "../lib/schemas"
 import {
-  DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
-  DEFAULT_INITIAL_PROMPT_TEMPLATE,
-  DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-  DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
-  DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
-  NOTICE_TEMPLATE_DEFAULTS,
-} from "../orchestration/prompt-defaults"
-import {
+  BUILTIN_DEFAULTS,
   DELIVERY_TEMPLATE_VARIABLES,
   NOTICE_TEMPLATE_VARIABLES,
   ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES,
+  PROMPT_TEMPLATES,
   PROMPT_TEMPLATE_VARIABLES,
   SCHEDULER_DIGEST_TEMPLATE_VARIABLES,
-  previewChannelDelivery,
-  previewNotice,
-  previewOrchestratorSystemPrompt,
-  previewPromptTemplate,
-  previewSchedulerDigest,
-  sampleOrchestratorPromptContext,
-  samplePromptContext,
 } from "../orchestration/prompt-templates"
 import {
   normalizeModelMetadata,
@@ -82,15 +68,7 @@ function settingsResponse(configStore: ConfigStore) {
     settings: configStore.getSettings(),
     updatedAt: configStore.getUpdatedAt(),
     meta: {
-      promptTemplateDefaults: {
-        mainSystem: DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE,
-        initial: DEFAULT_INITIAL_PROMPT_TEMPLATE,
-        orchestratorSystem: DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE,
-        schedulerInitial: DEFAULT_SCHEDULER_INITIAL_PROMPT_TEMPLATE,
-        channelDelivery: DEFAULT_CHANNEL_DELIVERY_TEMPLATE,
-        schedulerDigest: DEFAULT_SCHEDULER_DIGEST_TEMPLATE,
-        ...NOTICE_TEMPLATE_DEFAULTS,
-      },
+      promptTemplateDefaults: BUILTIN_DEFAULTS,
       promptVariables: [...PROMPT_TEMPLATE_VARIABLES],
       orchestratorPromptVariables: [...ORCHESTRATOR_PROMPT_TEMPLATE_VARIABLES],
       deliveryPromptVariables: [...DELIVERY_TEMPLATE_VARIABLES],
@@ -98,6 +76,17 @@ function settingsResponse(configStore: ConfigStore) {
       noticePromptVariables: [...NOTICE_TEMPLATE_VARIABLES],
     },
   }
+}
+
+/** Settings preview kind → registry entry. Every `notice*` key previews
+ * through the shared `notice` sample context, so the kind resolves to the
+ * first notice entry — all of them render against the same sample. */
+const PREVIEW_KIND_TO_KEY: Record<string, string> = {
+  mainSystemPrompt: "mainSystem",
+  initialPrompt: "initial",
+  orchestratorSystemPrompt: "orchestratorSystem",
+  channelDeliveryPrompt: "channelDelivery",
+  schedulerDigestPrompt: "schedulerDigest",
 }
 
 function previewPrompt(
@@ -110,26 +99,13 @@ function previewPrompt(
     | "notice",
   template: string
 ) {
-  if (kind === "orchestratorSystemPrompt") {
-    return previewOrchestratorSystemPrompt(
-      template,
-      sampleOrchestratorPromptContext
-    )
-  }
-  if (kind === "channelDeliveryPrompt") {
-    return previewChannelDelivery(template)
-  }
-  if (kind === "schedulerDigestPrompt") {
-    return previewSchedulerDigest(template)
-  }
-  // All 10 notice* keys (flagAccepted/launchFailed/queueStarved/eventStalled/
-  // ...) share one sample notice context; the frontend sends kind: "notice".
-  if (kind === "notice") {
-    return previewNotice(template)
-  }
-  // mainSystemPrompt and initialPrompt render against the same full run
-  // context through the same template renderer.
-  return previewPromptTemplate(template, samplePromptContext)
+  const key =
+    kind === "notice"
+      ? PROMPT_TEMPLATES.find((entry) => entry.kind === "notice")!.key
+      : PREVIEW_KIND_TO_KEY[kind]
+  const entry = PROMPT_TEMPLATES.find((candidate) => candidate.key === key)
+  if (!entry) throw new Error(`No preview context for kind: ${kind}`)
+  return entry.preview(template)
 }
 
 const transferModel = (model: ProviderModelData) => ({

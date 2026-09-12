@@ -7,7 +7,7 @@ import type {
   EventSummary,
   RemoteTargetInfo,
 } from "@aegisx/shared"
-import { progressOf } from "@aegisx/shared"
+import { parseEventPromptBrief, progressOf } from "@aegisx/shared"
 import { asc, count, eq, getTableColumns, inArray, max, sql } from "drizzle-orm"
 import { Value } from "typebox/value"
 
@@ -75,13 +75,22 @@ export function createCatalogReader(
       .all()
     const platforms = platformService.getPublicMany(rows.map((row) => row.id))
     return rows.map(
-      ({ lastChallengeAt, activeAgentCount, lastAgentAt, ...event }) => {
+      ({
+        lastChallengeAt,
+        activeAgentCount,
+        lastAgentAt,
+        promptBrief,
+        ...event
+      }) => {
         const lastActivityAt = [lastChallengeAt, lastAgentAt].reduce<string>(
           (latest, value) => (value && value > latest ? value : latest),
           event.updatedAt
         )
         return {
           ...event,
+          // The stored JSON string is parsed once at the wire boundary —
+          // agents and the UI both consume the structured brief.
+          promptBrief: parseEventPromptBrief(promptBrief),
           challengeCount: event.challengeCount,
           solvedCount: event.solvedCount,
           activeAgentCount: activeAgentCount ?? 0,

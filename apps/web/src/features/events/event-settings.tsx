@@ -78,14 +78,22 @@ export function EventSettings({ event }: { event: EventSummary }) {
       queryClient.invalidateQueries({ queryKey: keys.agents.fleet(event.id) }),
     ])
   }
-  // Two independent forms: "名称" and "提示词指令" live in separate sections
-  // and each save button only submits its own field (Partial update), so
+  // Two independent forms: "名称" and "赛事简报" live in separate sections
+  // and each save button only submits its own fields (Partial update), so
   // editing one never implicitly re-submits the other.
   const nameForm = useForm<{ name: string }>({
     defaultValues: { name: event.name },
   })
-  const promptForm = useForm<{ promptHint: string }>({
-    defaultValues: { promptHint: event.promptHint ?? "" },
+  const briefForm = useForm<{
+    common: string
+    solver: string
+    orchestrator: string
+  }>({
+    defaultValues: {
+      common: event.promptBrief?.common ?? "",
+      solver: event.promptBrief?.solver ?? "",
+      orchestrator: event.promptBrief?.orchestrator ?? "",
+    },
   })
   const updateName = useMutation({
     mutationFn: (input: { name: string }) =>
@@ -101,16 +109,17 @@ export function EventSettings({ event }: { event: EventSummary }) {
     },
     onError: (error) => toast.error("更新名称失败", error.message),
   })
-  const updatePrompt = useMutation({
-    mutationFn: (input: { promptHint: string }) =>
-      eventsApi.updateEvent(event.id, input),
+  const updateBrief = useMutation({
+    mutationFn: (input: {
+      promptBrief: { common?: string; solver?: string; orchestrator?: string }
+    }) => eventsApi.updateEvent(event.id, input),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: keys.events.detail(event.id),
       })
-      toast.success("提示词指令已保存")
+      toast.success("赛事简报已保存")
     },
-    onError: (error) => toast.error("保存指令失败", error.message),
+    onError: (error) => toast.error("保存简报失败", error.message),
   })
   const remove = useMutation({
     mutationFn: () => eventsApi.deleteEvent(event.id),
@@ -209,31 +218,79 @@ export function EventSettings({ event }: { event: EventSummary }) {
 
       <CardFrame>
         <CardFrameHeader>
-          <CardFrameTitle>提示词指令</CardFrameTitle>
+          <CardFrameTitle>赛事简报</CardFrameTitle>
           <CardFrameDescription>
-            追加到本赛事每个 agent 提示词末尾的额外指令——flag
-            格式、约定、常见陷阱。
+            追加到本赛事 agent 提示词末尾的部署简报。通用段两类 agent
+            都会读到；解题段只进 solver，调度段只进调度者——按读者拆开写，
+            避免解题 agent 读到调度方针。
           </CardFrameDescription>
         </CardFrameHeader>
         <Card>
           <CardPanel>
             <form
               className="max-w-xl"
-              onSubmit={promptForm.handleSubmit((values) =>
-                updatePrompt.mutate({ promptHint: values.promptHint.trim() })
+              onSubmit={briefForm.handleSubmit((values) =>
+                updateBrief.mutate({
+                  promptBrief: {
+                    common: values.common.trim(),
+                    solver: values.solver.trim(),
+                    orchestrator: values.orchestrator.trim(),
+                  },
+                })
               )}
             >
               <Field>
+                <FieldLabel htmlFor="event-brief-common">
+                  通用（solver + 调度者）
+                </FieldLabel>
                 <Controller
-                  control={promptForm.control}
-                  name="promptHint"
+                  control={briefForm.control}
+                  name="common"
                   render={({ field }) => (
                     <Textarea
-                      id="event-prompt-hint"
+                      id="event-brief-common"
                       onBlur={field.onBlur}
                       onChange={field.onChange}
-                      placeholder="例如：flag 格式为 moectf{...}。仅提交匹配该格式的 flag。"
-                      rows={6}
+                      placeholder="平台、题型/难度语义、离线约束、flag 格式等两类 agent 都需要的事实。"
+                      rows={4}
+                      value={field.value}
+                    />
+                  )}
+                />
+              </Field>
+              <Field className="mt-4">
+                <FieldLabel htmlFor="event-brief-solver">
+                  解题（仅 solver）
+                </FieldLabel>
+                <Controller
+                  control={briefForm.control}
+                  name="solver"
+                  render={({ field }) => (
+                    <Textarea
+                      id="event-brief-solver"
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      placeholder="解题工作流、提交纪律、靶机注意事项——只进 solver 的系统提示词。"
+                      rows={4}
+                      value={field.value}
+                    />
+                  )}
+                />
+              </Field>
+              <Field className="mt-4">
+                <FieldLabel htmlFor="event-brief-orchestrator">
+                  调度（仅调度者）
+                </FieldLabel>
+                <Controller
+                  control={briefForm.control}
+                  name="orchestrator"
+                  render={({ field }) => (
+                    <Textarea
+                      id="event-brief-orchestrator"
+                      onBlur={field.onBlur}
+                      onChange={field.onChange}
+                      placeholder="预算分档、优先级、让位规则——只进调度者的系统提示词。"
+                      rows={4}
                       value={field.value}
                     />
                   )}
@@ -241,18 +298,16 @@ export function EventSettings({ event }: { event: EventSummary }) {
               </Field>
               <Button
                 className="mt-3"
-                loading={updatePrompt.isPending}
+                loading={updateBrief.isPending}
                 type="submit"
               >
-                保存指令
+                保存简报
               </Button>
             </form>
-            {updatePrompt.error && (
+            {updateBrief.error && (
               <Alert className="mt-3 max-w-xl" variant="error">
                 <TriangleAlert />
-                <AlertDescription>
-                  {updatePrompt.error.message}
-                </AlertDescription>
+                <AlertDescription>{updateBrief.error.message}</AlertDescription>
               </Alert>
             )}
           </CardPanel>

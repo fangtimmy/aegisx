@@ -10,6 +10,7 @@ import { join } from "node:path"
 
 import { systemClock } from "../clock"
 import { buildSingleFileTar } from "../workspace/backend"
+import { SDK_CONTAINER_ENV, SDK_EXEC_ENV, sdkExecEnv } from "./env-contract"
 import { createLocalContainerManager } from "./local-manager"
 
 /**
@@ -58,7 +59,7 @@ async function setup(): Promise<string> {
     workingDir: containerWorkspace,
     binds: [`${workspace}:${containerWorkspace}`],
     extraBinds: [`${challenges}:${containerChallenges}:ro`],
-    env: ["AEGISX_EVENT_ID=evt-1"],
+    env: [`${SDK_CONTAINER_ENV.eventId}=evt-1`],
     limits: { cpus: 1, memoryMb: 512, pidsLimit: 64 },
     tmpfsSize: "1g",
   })
@@ -87,10 +88,10 @@ await step("exec merges container env and per-call env", async () => {
   const chunks: Buffer[] = []
   const result = await manager.exec(
     name,
-    'printf %s:%s "$AEGISX_EVENT_ID" "$AEGISX_AGENT_ID"',
+    `printf %s:%s "$${SDK_CONTAINER_ENV.eventId}" "$${SDK_EXEC_ENV.agentId}"`,
     {
       onData: (data) => chunks.push(data),
-      env: ["AEGISX_AGENT_ID=agent-9"],
+      env: sdkExecEnv("agent-9", "token-unused"),
     }
   )
   assert(result.exitCode === 0, `exit ${result.exitCode}`)

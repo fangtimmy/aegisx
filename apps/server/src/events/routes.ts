@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs"
 
-import { get, LIVE_AGENT_STATUSES, type AgentUsage } from "@aegisx/shared"
+import {
+  get,
+  LIVE_AGENT_STATUSES,
+  type AgentUsage,
+  mergeEventPromptBrief,
+  parseEventPromptBrief,
+} from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Hono } from "hono"
 import { Type } from "typebox"
@@ -23,20 +29,31 @@ import type { createPlatformService } from "../platforms/service"
 import type { createCatalogReader } from "./catalog"
 import { buildEventStats } from "./stats"
 
-const createEventInput = Type.Object(
+/** The brief patch: the three editable text sections. Manifest-seeded
+ * flagFormats are preserved — they never patch through this route. */
+const promptBriefInput = Type.Object(
   {
-    name: Type.String({ minLength: 1, maxLength: 160 }),
-    promptHint: Type.Optional(Type.String({ maxLength: 10_000 })),
+    common: Type.Optional(Type.String({ maxLength: 20_000 })),
+    solver: Type.Optional(Type.String({ maxLength: 20_000 })),
+    orchestrator: Type.Optional(Type.String({ maxLength: 20_000 })),
   },
   { additionalProperties: false }
 )
 
-/** PATCH is a partial update — name/promptHint are individually optional, so
- * the frontend can save the prompt hint without resubmitting the name. */
+const createEventInput = Type.Object(
+  {
+    name: Type.String({ minLength: 1, maxLength: 160 }),
+    promptBrief: Type.Optional(promptBriefInput),
+  },
+  { additionalProperties: false }
+)
+
+/** PATCH is a partial update — name/promptBrief are individually optional, so
+ * the frontend can save the brief without resubmitting the name. */
 const updateEventInput = Type.Object(
   {
     name: Type.Optional(Type.String({ minLength: 1, maxLength: 160 })),
-    promptHint: Type.Optional(Type.String({ maxLength: 10_000 })),
+    promptBrief: Type.Optional(promptBriefInput),
   },
   { additionalProperties: false }
 )
@@ -126,10 +143,14 @@ export function registerEventRoutes(
   app.post("/api/events", validateJson(createEventInput), (c) => {
     const input = c.req.valid("json")
     const now = new Date().toISOString()
+    const promptBrief = mergeEventPromptBrief(
+      parseEventPromptBrief(""),
+      input.promptBrief ?? {}
+    )
     const event = {
       id: crypto.randomUUID(),
       name: input.name.trim(),
-      promptHint: input.promptHint?.trim() ?? "",
+      promptBrief: JSON.stringify(promptBrief),
       createdAt: now,
       updatedAt: now,
     }
@@ -140,6 +161,7 @@ export function registerEventRoutes(
     return c.json(
       {
         ...event,
+        promptBrief,
         challengeCount: 0,
         solvedCount: 0,
         activeAgentCount: 0,
@@ -176,13 +198,13 @@ export function registerEventRoutes(
 
   app.patch("/api/events/:eventId", validateJson(updateEventInput), (c) => {
     const eventId = c.req.param("eventId")
-    if (!requireEventRow(eventId)) {
+    const row = requireEventRow(eventId)
+    if (!row) {
       return notFound(c, "Event not found")
     }
     const input = c.req.valid("json")
-    const updates: { name?: string; promptHint?: string; updatedAt: string } = {
-      updatedAt: new Date().toISOString(),
-    }
+    const updates: { name?: string; promptBrief?: string; updatedAt: string } =
+      { updatedAt: new Date().toISOString() }
     if (input.name !== undefined) {
       const name = input.name.trim()
       if (!name) {
@@ -190,8 +212,15 @@ export function registerEventRoutes(
       }
       updates.name = name
     }
-    if (input.promptHint !== undefined) {
-      updates.promptHint = input.promptHint.trim()
+    if (input.promptBrief !== undefined) {
+      // Merge over the stored brief so manifest-seeded flagFormats survive a
+      // text-section edit.
+      updates.promptBrief = JSON.stringify(
+        mergeEventPromptBrief(
+          parseEventPromptBrief(row.promptBrief),
+          input.promptBrief
+        )
+      )
     }
     db.update(events).set(updates).where(eq(events.id, eventId)).run()
     return c.json(getEvent(eventId))

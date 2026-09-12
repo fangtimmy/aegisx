@@ -140,7 +140,7 @@ CREATE TABLE `event_platforms` (
 CREATE TABLE `events` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
-	`prompt_hint` text DEFAULT '' NOT NULL,
+	`prompt_brief` text DEFAULT '' NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL
 );

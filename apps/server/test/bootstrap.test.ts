@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { parseEventPromptBrief } from "@aegisx/shared"
 import { eq } from "drizzle-orm"
 
 import {
@@ -549,14 +550,15 @@ describe("bootstrap event preset", () => {
     expect(settings["scheduler.defaultRunTimeoutMs"]).toBe(1_800_000)
   })
 
-  test("runBootstrap applies promptHint and scheduler policy on first boot", async () => {
+  test("runBootstrap applies the manifest brief and scheduler policy on first boot", async () => {
     const dbh = setupDb()
     try {
       const presetPath = join(dir, "tsec.json")
       writeFileSync(
         presetPath,
         JSON.stringify({
-          promptHint: "平台：TSecBench",
+          brief: { common: "平台：TSecBench", orchestrator: "先快题建底盘" },
+          flagFormats: ["flag{<uuid>}"],
           settings: { "scheduler.defaultRunTimeoutMs": 1_800_000 },
           scheduler: { maxConcurrentTargets: 3, stopSubmitterOnSolve: true },
         })
@@ -580,7 +582,12 @@ describe("bootstrap event preset", () => {
         .from(events)
         .all()
         .find((e) => e.name === "preset-evt")
-      expect(event?.promptHint).toBe("平台：TSecBench")
+      expect(parseEventPromptBrief(event?.promptBrief ?? "")).toEqual({
+        common: "平台：TSecBench",
+        solver: "",
+        orchestrator: "先快题建底盘",
+        flagFormats: ["flag{<uuid>}"],
+      })
       expect(settings["scheduler.defaultRunTimeoutMs"]).toBe(1_800_000)
       expect(applied).toHaveLength(1)
       expect(applied[0].maxConcurrentTargets).toBe(3)
@@ -590,11 +597,14 @@ describe("bootstrap event preset", () => {
     }
   })
 
-  test("re-bootstrap backfills an empty promptHint but never overwrites a set one", async () => {
+  test("re-bootstrap backfills an empty brief but never overwrites a set one", async () => {
     const dbh = setupDb()
     try {
       const presetPath = join(dir, "hint.json")
-      writeFileSync(presetPath, JSON.stringify({ promptHint: "v2 简报" }))
+      writeFileSync(
+        presetPath,
+        JSON.stringify({ brief: { common: "v2 简报" } })
+      )
       const deps: BootstrapDeps = {
         db: dbh.db,
         configStore: fakeConfigStore({}),
@@ -604,11 +614,18 @@ describe("bootstrap event preset", () => {
       }
       const spec = readBootstrapSpec({ AEGISX_EVENT_NAME: "hint-evt" })
       await runBootstrap(deps, spec)
-      // User (or an older image) set a hint afterwards — the preset must not
-      // clobber it on the next boot.
+      // User (or an older image) set a brief afterwards — the manifest must
+      // not clobber it on the next boot.
       dbh.db
         .update(events)
-        .set({ promptHint: "用户改过的简报" })
+        .set({
+          promptBrief: JSON.stringify({
+            common: "用户改过的简报",
+            solver: "",
+            orchestrator: "",
+            flagFormats: [],
+          }),
+        })
         .where(eq(events.name, "hint-evt"))
         .run()
       await runBootstrap(deps, spec)
@@ -617,7 +634,49 @@ describe("bootstrap event preset", () => {
         .from(events)
         .all()
         .find((e) => e.name === "hint-evt")
-      expect(event?.promptHint).toBe("用户改过的简报")
+      expect(parseEventPromptBrief(event?.promptBrief ?? "").common).toBe(
+        "用户改过的简报"
+      )
+    } finally {
+      dbh.close()
+    }
+  })
+
+  test("re-bootstrap backfills manifest flagFormats even when the brief text is set", async () => {
+    const dbh = setupDb()
+    try {
+      const presetPath = join(dir, "fmt.json")
+      writeFileSync(
+        presetPath,
+        JSON.stringify({ brief: { common: "v1 简报" } })
+      )
+      const deps: BootstrapDeps = {
+        db: dbh.db,
+        configStore: fakeConfigStore({}),
+        platformService: refine<BootstrapDeps["platformService"]>({}),
+        agentService: fakeAgentService([]),
+        presetPath,
+      }
+      const spec = readBootstrapSpec({ AEGISX_EVENT_NAME: "fmt-evt" })
+      await runBootstrap(deps, spec)
+      // A rebuilt image's manifest adds flagFormats — the user's text stays,
+      // the manifest-only formats backfill (they are never UI-editable).
+      writeFileSync(
+        presetPath,
+        JSON.stringify({
+          brief: { common: "v2 简报" },
+          flagFormats: ["flag{<uuid>}"],
+        })
+      )
+      await runBootstrap(deps, spec)
+      const event = dbh.db
+        .select()
+        .from(events)
+        .all()
+        .find((e) => e.name === "fmt-evt")
+      const brief = parseEventPromptBrief(event?.promptBrief ?? "")
+      expect(brief.common).toBe("v1 简报")
+      expect(brief.flagFormats).toEqual(["flag{<uuid>}"])
     } finally {
       dbh.close()
     }

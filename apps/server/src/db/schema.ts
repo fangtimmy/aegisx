@@ -18,12 +18,15 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 22
+export const SCHEMA_VERSION = 23
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  promptHint: text("prompt_hint").notNull().default(""),
+  /** Role-scoped deployment brief (EventPromptBrief JSON: common / solver /
+   * orchestrator sections + flagFormats). Seeded from the appliance manifest
+   * at first boot; edited via the event settings UI. */
+  promptBrief: text("prompt_brief").notNull().default(""),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 })
@@ -477,9 +480,9 @@ export const schedulerConfig = sqliteTable("scheduler_config", {
 
 /**
  * Prompt template store (v8). Independent of FlatSettings (which is a closed
- * enum). `(plugin, key)` unique; v9+ only uses `plugin='builtin'` with the
- * four built-in keys (mainSystem/initial/orchestratorSystem/schedulerInitial).
- * Rows are seeded at runtime (app boot), not by migration SQL.
+ * enum). `(plugin, key)` unique; rows are the 16 builtin keys declared in
+ * orchestration/prompt-templates.ts (PROMPT_TEMPLATES registry), seeded at
+ * runtime (app boot), not by migration SQL.
  */
 export const promptTemplates = sqliteTable(
   "prompt_templates",

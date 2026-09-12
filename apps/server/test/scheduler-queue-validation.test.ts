@@ -25,7 +25,7 @@ function createTestApp() {
   closeDatabases.push(instance.close)
   const db = new Database(join(path, "aegisx.sqlite"))
   db.run(
-    `insert into events (id,name,created_at,updated_at,prompt_hint) values ('e1','E1','t','t','')`
+    `insert into events (id,name,created_at,updated_at,prompt_brief) values ('e1','E1','t','t','')`
   )
   db.run(
     `insert into challenges (id,event_id,name,description,category,points,created_at,updated_at) values ('c1','e1','C1','','web',100,'t','t')`

@@ -8,6 +8,7 @@ import {
 } from "../../src/orchestration/prompt-defaults"
 import {
   NOTICE_TEMPLATE_VARIABLES,
+  PROMPT_TEMPLATES,
   previewOrchestratorSystemPrompt,
   previewPromptTemplate,
   renderTemplateBody,
@@ -124,7 +125,7 @@ describe("prompt drift control (env facts live in ENVIRONMENT.md, not inline)", 
     expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain("offline")
   })
 
-  test("initial gates submit/finish on capabilities and carries no promptHint duplicate", () => {
+  test("initial gates submit/finish on capabilities and carries no brief duplicate", () => {
     const capped = renderTemplateBody(DEFAULT_INITIAL_PROMPT_TEMPLATE, {
       ...samplePromptContext,
       capabilities: {
@@ -132,7 +133,7 @@ describe("prompt drift control (env facts live in ENVIRONMENT.md, not inline)", 
         canSubmitFlag: false,
         canManageTarget: false,
       },
-      event: { ...samplePromptContext.event, promptHint: "flag{...}" },
+      event: { ...samplePromptContext.event, brief: "flag{...}" },
     })
     expect(capped).not.toContain("submit_flag")
     expect(capped).not.toContain("finish_run")
@@ -140,11 +141,34 @@ describe("prompt drift control (env facts live in ENVIRONMENT.md, not inline)", 
 
     const normal = renderTemplateBody(DEFAULT_INITIAL_PROMPT_TEMPLATE, {
       ...samplePromptContext,
-      event: { ...samplePromptContext.event, promptHint: "flag{...}" },
+      event: { ...samplePromptContext.event, brief: "flag{...}" },
     })
     expect(normal).toContain("finish_run")
     // Event instructions stay a system-prompt-only block (survives compaction).
     expect(normal).not.toContain("## Event instructions")
+  })
+
+  test("mainSystem renders the role-merged brief and structured flag formats", () => {
+    const main = renderTemplateBody(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      event: {
+        ...samplePromptContext.event,
+        brief: "通用约束",
+        flagFormats: ["flag{...}", "FLAG{...}"],
+      },
+    })
+    expect(main).toContain("## Event instructions")
+    expect(main).toContain("通用约束")
+    expect(main).toContain("flag{...} / FLAG{...}")
+
+    const bare = renderTemplateBody(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE, {
+      ...samplePromptContext,
+      event: { ...samplePromptContext.event, brief: "", flagFormats: [] },
+    })
+    expect(bare).not.toContain("## Event instructions")
+    expect(bare).toContain(
+      "Extract the flag format from the challenge description"
+    )
   })
 })
 
@@ -336,7 +360,7 @@ describe("SDK signature sync (GUIDE.md exact-signature block ↔ mainSystem inli
 })
 
 describe("notice variable list sync (NOTICE_TEMPLATE_VARIABLES ↔ defaults ↔ preview context)", () => {
-  const HANDLEBARS_KEYWORDS = new Set(["if", "unless", "each", "else", "with"])
+  const HANDLEBARS_KEYWORDS = new Set(["if", "unless", "each", "with"])
 
   function referencedVariables(template: string): Set<string> {
     const names = new Set<string>()
@@ -363,6 +387,59 @@ describe("notice variable list sync (NOTICE_TEMPLATE_VARIABLES ↔ defaults ↔ 
   test("every listed variable exists in the preview sample context", () => {
     for (const variable of NOTICE_TEMPLATE_VARIABLES) {
       expect(Object.hasOwn(sampleNoticeContext, variable)).toBe(true)
+    }
+  })
+})
+
+describe("template registry (every builtin renders + declares its variables)", () => {
+  // Generalized drift guard: the registry is the single declaration of the
+  // 16 builtin templates. Each entry must (a) render against its own sample
+  // context — strict handlebars throws on any variable the sample lacks, so
+  // a template edit referencing an undeclared field fails here instead of at
+  // spawn or in the settings preview — and (b) only extend variables its
+  // palette declares.
+
+  test("all 16 builtin keys are declared exactly once", () => {
+    const keys = PROMPT_TEMPLATES.map((entry) => entry.key)
+    expect(keys).toHaveLength(16)
+    expect(new Set(keys).size).toBe(16)
+    expect(new Set(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).size).toBe(10)
+  })
+
+  test("each default renders against its sample and references declared variables only", () => {
+    for (const entry of PROMPT_TEMPLATES) {
+      const segments = entry.preview(entry.default)
+      expect(segments.length).toBeGreaterThan(0)
+      for (const match of entry.default.matchAll(/\{\{([^}]*)\}\}/g)) {
+        const raw = match[1].trim()
+        // Helper calls (`{{join list " / "}}`): the referenced path is the
+        // first argument, not the helper name.
+        const token = raw.startsWith("join ")
+          ? raw.slice("join ".length).trim().split(/\s+/)[0]
+          : raw.replace(/^[#/~]*(if|unless|each|with|else)\s*/, "").trim()
+        if (!token) continue
+        // Undotted tokens are `#each` item fields (`{{name}}` inside
+        // attachments) — the strict render above already validates them
+        // against the sample. Dotted references must extend a declared
+        // palette path (e.g. `event.flagFormats.length` extends
+        // `event.flagFormats`), so a brand-new context root cannot slip in
+        // undeclared.
+        if (!token.includes(".")) continue
+        expect(
+          entry.variables.some(
+            (variable) => token === variable || token.startsWith(`${variable}.`)
+          )
+        ).toBe(true)
+      }
+    }
+  })
+
+  test("the registry is the seed source (BUILTIN_DEFAULTS mirrors the defaults)", () => {
+    // Covered indirectly by the store test, but the notice defaults must not
+    // drift from the registry copies.
+    for (const [key, body] of Object.entries(NOTICE_TEMPLATE_DEFAULTS)) {
+      const entry = PROMPT_TEMPLATES.find((candidate) => candidate.key === key)
+      expect(entry?.default).toBe(body)
     }
   })
 })

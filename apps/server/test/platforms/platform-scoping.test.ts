@@ -31,7 +31,7 @@ function seedSharedSource(dataDir: string, sourceKey: string) {
   const db = new Database(join(dataDir, "aegisx.sqlite"))
   const t = new Date().toISOString()
   db.run(
-    `insert into events (id,name,created_at,updated_at,prompt_hint) values
+    `insert into events (id,name,created_at,updated_at,prompt_brief) values
      ('e1','E1','${t}','${t}',''),('e2','E2','${t}','${t}','')`
   )
   db.run(

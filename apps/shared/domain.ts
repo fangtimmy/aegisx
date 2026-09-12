@@ -1,3 +1,4 @@
+import { isRecord } from "./agent"
 import type { ChallengeProgress } from "./progress"
 
 /** Canonical platform / provider kind lists — the TS unions and the TypeBox
@@ -76,6 +77,92 @@ export type EventPlatform = {
   createdAt: string
   updatedAt: string
   credentialConfigured: boolean
+}
+
+/** Event-level deployment brief, injected into agent system prompts as the
+ * 「Event instructions」 section. Role-scoped: solvers render common+solver,
+ * the scheduler renders common+orchestrator (merged by the prompt-context
+ * builder). The appliance manifest (preset.json, per appliance target) seeds
+ * it; the UI edits the three text sections. */
+export type EventPromptBrief = {
+  /** Facts both roles need: platform, categories, environment constraints. */
+  common: string
+  /** Solve-side doctrine: workflows, submission discipline, target notes. */
+  solver: string
+  /** Scheduling doctrine: budgets, priorities, fleet-shaping rules. */
+  orchestrator: string
+  /** Acceptable flag formats — mainSystem validates candidates against them.
+   * Manifest-seeded, not UI-editable. */
+  flagFormats: string[]
+}
+
+const EMPTY_EVENT_PROMPT_BRIEF: EventPromptBrief = {
+  common: "",
+  solver: "",
+  orchestrator: "",
+  flagFormats: [],
+}
+
+function isBriefText(value: unknown): value is string {
+  return typeof value === "string"
+}
+
+/** Parse the stored `events.prompt_brief` JSON. Defensive: any deviation from
+ * the shape degrades to the empty brief — a broken row must never fail a
+ * spawn. */
+export function parseEventPromptBrief(raw: string): EventPromptBrief {
+  const brief = { ...EMPTY_EVENT_PROMPT_BRIEF, flagFormats: [] }
+  if (!raw) return brief
+  try {
+    const doc: unknown = JSON.parse(raw)
+    if (!isRecord(doc)) return brief
+    const { common, solver, orchestrator, flagFormats } = doc
+    if (
+      !isBriefText(common) ||
+      !isBriefText(solver) ||
+      !isBriefText(orchestrator)
+    ) {
+      return brief
+    }
+    if (!Array.isArray(flagFormats) || !flagFormats.every(isBriefText)) {
+      return brief
+    }
+    return { common, solver, orchestrator, flagFormats }
+  } catch {
+    return brief
+  }
+}
+
+/** Merge a UI patch (the three editable text sections) into the stored brief,
+ * preserving manifest-seeded flagFormats. Empty strings are meaningful
+ * (cleared section). */
+export function mergeEventPromptBrief(
+  base: EventPromptBrief,
+  patch: { common?: string; solver?: string; orchestrator?: string }
+): EventPromptBrief {
+  return {
+    common: patch.common ?? base.common,
+    solver: patch.solver ?? base.solver,
+    orchestrator: patch.orchestrator ?? base.orchestrator,
+    flagFormats: base.flagFormats,
+  }
+}
+
+/** The role-merged brief text a template renders: common section first, then
+ * the role's own. Empty sections drop out; the result is "" when nothing is
+ * set (the template's {{#if}} hides the section). */
+export function eventBriefFor(
+  role: "solver" | "orchestrator",
+  brief: EventPromptBrief
+): string {
+  const sections = [
+    brief.common,
+    role === "solver" ? brief.solver : brief.orchestrator,
+  ]
+  return sections
+    .map((section) => section.trim())
+    .filter((section) => section.length > 0)
+    .join("\n\n")
 }
 
 /** Per-agent lifecycle. Solver + orchestrator agents use running|idle
@@ -201,13 +288,17 @@ export type ModelOption = {
 }
 export type EventInput = {
   name: string
-  promptHint?: string
+  promptBrief?: {
+    common?: string
+    solver?: string
+    orchestrator?: string
+  }
 }
 
 export type EventSummary = {
   id: string
   name: string
-  promptHint: string
+  promptBrief: EventPromptBrief
   platform: EventPlatform | null
   createdAt: string
   updatedAt: string

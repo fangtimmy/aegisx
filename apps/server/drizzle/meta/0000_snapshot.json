@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4c960685-5e54-4b78-b69f-9eb0e2c6545d",
+  "id": "458bfb1f-fa72-4d87-8c58-98052297d26a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -968,8 +968,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "prompt_hint": {
-          "name": "prompt_hint",
+        "prompt_brief": {
+          "name": "prompt_brief",
           "type": "text",
           "primaryKey": false,
           "notNull": true,

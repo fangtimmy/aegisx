@@ -94,7 +94,12 @@ export type PromptTemplateContext = {
     id: string
     name: string
     platform: string | null
-    promptHint: string
+    /** Role-merged deployment brief (common + this role's section, joined by
+     * the context builder) — renders as the Event instructions section. */
+    brief: string
+    /** Acceptable flag formats (manifest-seeded); empty → the prompt falls
+     * back to "extract from the challenge description". */
+    flagFormats: string[]
   }
   challenge?: {
     id: string

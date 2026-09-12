@@ -6,6 +6,7 @@ import type {
   ModelConfig,
   PromptAttachment,
 } from "@aegisx/shared"
+import { eventBriefFor, parseEventPromptBrief } from "@aegisx/shared"
 import { and, asc, eq } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -84,12 +85,14 @@ export function buildSolverPromptContext(
     .orderBy(asc(challengeFlags.createdAt), asc(challengeFlags.id))
     .all()
     .map((row) => row.flag)
+  const brief = parseEventPromptBrief(event.promptBrief)
   return {
     event: {
       id: event.id,
       name: event.name,
       platform: platform?.type ?? null,
-      promptHint: event.promptHint ?? "",
+      brief: eventBriefFor("solver", brief),
+      flagFormats: brief.flagFormats,
     },
     challenge: {
       id: challenge.id,
@@ -146,12 +149,14 @@ export function buildSchedulerPromptContext(
     .from(eventPlatforms)
     .where(eq(eventPlatforms.eventId, event.id))
     .get()
+  const brief = parseEventPromptBrief(event.promptBrief)
   return {
     event: {
       id: event.id,
       name: event.name,
       platform: platform?.type ?? null,
-      promptHint: event.promptHint ?? "",
+      brief: eventBriefFor("orchestrator", brief),
+      flagFormats: brief.flagFormats,
     },
     model: {
       provider: model.providerLabel ?? model.provider,

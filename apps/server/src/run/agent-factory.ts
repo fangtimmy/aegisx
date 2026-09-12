@@ -29,6 +29,7 @@ import type { AgentStatus } from "./agent-status"
 import type { ChannelService } from "./channels"
 import type { ContainerLifecycle } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
+import { sdkContainerEnv, sdkExecEnv } from "./container/env-contract"
 import {
   isLocalExecBackend,
   localContainerWorkspace,
@@ -109,11 +110,7 @@ function schedulerSdkContainerOpts(
       `${resolve(dataDir, "events", eventId, "challenges")}:/challenges:ro`,
       ...(dev?.extraBinds ?? []),
     ],
-    env: [
-      `AEGISX_EVENT_ID=${eventId}`,
-      `AEGISX_API_URL=${containerApiUrl()}`,
-      ...(dev?.env ?? []),
-    ],
+    env: [...sdkContainerEnv(eventId, containerApiUrl()), ...(dev?.env ?? [])],
   }
 }
 
@@ -129,11 +126,7 @@ function solverSdkContainerOpts(eventId: string): {
   const dev = sdkDevMount()
   return {
     extraBinds: [...(dev?.extraBinds ?? [])],
-    env: [
-      `AEGISX_EVENT_ID=${eventId}`,
-      `AEGISX_API_URL=${containerApiUrl()}`,
-      ...(dev?.env ?? []),
-    ],
+    env: [...sdkContainerEnv(eventId, containerApiUrl()), ...(dev?.env ?? [])],
   }
 }
 
@@ -837,11 +830,12 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         systemPrompt: row.systemPrompt,
         extraTools: nativeTools,
         extraToolNames: snapshotTools,
-        // Per-agent identity for the container-side `aegisx` SDK: one
-        // challenge's N agents share a container, so identity cannot be
-        // container-wide env — the agent id + its bearer token ride the
-        // per-exec env of the bash tool.
-        execEnv: [`AEGISX_AGENT_ID=${agentId}`, `AEGISX_TOKEN=${row.token}`],
+        // Per-agent identity for the container-side `aegisx` SDK (the name
+        // contract lives in container/env-contract.ts): one challenge's N
+        // agents share a container, so identity cannot be container-wide
+        // env — the agent id + its bearer token ride the per-exec env of
+        // the bash tool.
+        execEnv: sdkExecEnv(agentId, row.token),
         ...(row.sessionFile
           ? { resumeFrom: { sessionId: row.sessionFile } }
           : {}),

@@ -49,18 +49,23 @@ function bindPlatform(dataDir: string, eventId: string) {
 }
 
 describe("event PATCH partial updates", () => {
-  test("saves promptHint alone (frontend sends only { promptHint })", async () => {
+  test("saves the brief alone (frontend sends only { promptBrief })", async () => {
     const { app } = createTestApp()
     const event = await createEvent(app)
     const response = await app.request(
       `/api/events/${event.id}`,
-      json("PATCH", { promptHint: "flag 格式为 moectf{...}" })
+      json("PATCH", {
+        promptBrief: { common: "flag 格式为 moectf{...}" },
+      })
     )
     expect(response.status).toBe(200)
     const detail = await app.request(`/api/events/${event.id}`)
-    expect((await detail.json()).event.promptHint).toBe(
-      "flag 格式为 moectf{...}"
-    )
+    expect((await detail.json()).event.promptBrief).toEqual({
+      common: "flag 格式为 moectf{...}",
+      solver: "",
+      orchestrator: "",
+      flagFormats: [],
+    })
   })
 
   test("saves name alone", async () => {
@@ -74,19 +79,29 @@ describe("event PATCH partial updates", () => {
     expect((await response.json()).name).toBe("Renamed")
   })
 
-  test("saves name + promptHint together", async () => {
+  test("saves name + brief together (text sections merge, not replace)", async () => {
     const { app } = createTestApp()
     const event = await createEvent(app)
+    await app.request(
+      `/api/events/${event.id}`,
+      json("PATCH", {
+        promptBrief: { common: "c", solver: "s", orchestrator: "o" },
+      })
+    )
     const response = await app.request(
       `/api/events/${event.id}`,
-      json("PATCH", { name: "Renamed", promptHint: "hint" })
+      json("PATCH", { name: "Renamed", promptBrief: { common: "c2" } })
     )
     expect(response.status).toBe(200)
-    const body = await responseJson<{ name: string; promptHint: string }>(
-      response
-    )
+    const body = await responseJson<{
+      name: string
+      promptBrief: { common: string; solver: string; orchestrator: string }
+    }>(response)
     expect(body.name).toBe("Renamed")
-    expect(body.promptHint).toBe("hint")
+    expect(body.promptBrief.common).toBe("c2")
+    // solver/orchestrator keep their earlier values (merge, not replace).
+    expect(body.promptBrief.solver).toBe("s")
+    expect(body.promptBrief.orchestrator).toBe("o")
   })
 
   test("response keeps the full EventSummary shape", async () => {
@@ -106,7 +121,7 @@ describe("event PATCH partial updates", () => {
       "lastActivityAt",
       "name",
       "platform",
-      "promptHint",
+      "promptBrief",
       "solvedCount",
       "updatedAt",
     ])
@@ -133,7 +148,7 @@ describe("event PATCH partial updates", () => {
     const { app } = createTestApp()
     const response = await app.request(
       "/api/events",
-      json("POST", { promptHint: "hint" })
+      json("POST", { promptBrief: { common: "hint" } })
     )
     expect(response.status).toBe(400)
   })

@@ -38,7 +38,10 @@ export type PromptContext = {
     id: string
     name: string
     platform: string | null
-    promptHint: string
+    /** Role-merged deployment brief (common + this role's section). */
+    brief: string
+    /** Acceptable flag formats (manifest-seeded). */
+    flagFormats: string[]
   }
   challenge?: {
     id: string

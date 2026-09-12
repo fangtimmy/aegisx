@@ -4,6 +4,7 @@ import {
   isActiveAgentStatus,
   isRecord,
   modelAddress,
+  parseEventPromptBrief,
   type PlatformType,
   type ProviderType,
 } from "@aegisx/shared"
@@ -133,15 +134,31 @@ export type BootstrapSpec = {
   schedulerInstruction?: string
 }
 
-/** Path convention for appliance event presets. A preset bakes deployment
- * tuning (platform brief, settings, scheduler policy) as DATA instead of
- * build-time source rewrites; absent file = no-op, so non-appliance
- * deployments are unaffected. */
+/** Path convention for the appliance deployment manifest. The manifest bakes
+ * deployment facts (role-scoped brief, flag formats, offline constraint,
+ * settings, scheduler policy) as DATA instead of build-time source rewrites;
+ * absent file = no-op, so non-appliance deployments are unaffected. Both
+ * bootstrap (first-boot seed, runtime) and gen-environment.py (build-time
+ * offline section) consume it. */
 const EVENT_PRESET_PATH = "/opt/aegisx-preset/preset.json"
 
 export type EventPreset = {
-  /** Event-level platform brief, injected into agent prompts verbatim. */
-  promptHint?: string
+  /** Role-scoped event brief: solvers render common+solver, the scheduler
+   * renders common+orchestrator (see shared EventPromptBrief). */
+  brief?: {
+    common?: string
+    solver?: string
+    orchestrator?: string
+  }
+  /** Acceptable flag formats — rendered structurally by mainSystem. */
+  flagFormats?: string[]
+  /** Build-time image fact: an offline appliance ships no install SOP. Read
+   * by gen-environment.py at image build; ignored by bootstrap. */
+  offline?: {
+    enabled?: boolean
+    /** The offline notice rendered into ENVIRONMENT.md. */
+    note?: string
+  }
   /** Global settings overrides (flat `key` → scalar). */
   settings?: Record<string, string | number | boolean>
   /** First-boot scheduler policy (the event's 调度设置). */
@@ -161,11 +178,27 @@ export type EventPreset = {
  * (patchSettings for settings, upsertSchedulerConfig for the policy). */
 function isEventPreset(doc: unknown): doc is EventPreset {
   if (!isRecord(doc)) return false
-  if (doc.promptHint !== undefined && typeof doc.promptHint !== "string")
+  if (doc.brief !== undefined && !isRecord(doc.brief)) return false
+  if (
+    doc.flagFormats !== undefined &&
+    (!Array.isArray(doc.flagFormats) ||
+      !doc.flagFormats.every((item) => typeof item === "string"))
+  )
     return false
+  if (doc.offline !== undefined && !isRecord(doc.offline)) return false
   if (doc.settings !== undefined && !isRecord(doc.settings)) return false
   if (doc.scheduler !== undefined && !isRecord(doc.scheduler)) return false
   return true
+}
+
+/** Serialize the manifest brief into the stored `prompt_brief` JSON. */
+function briefJson(preset: EventPreset | null): string {
+  return JSON.stringify({
+    common: preset?.brief?.common ?? "",
+    solver: preset?.brief?.solver ?? "",
+    orchestrator: preset?.brief?.orchestrator ?? "",
+    flagFormats: preset?.flagFormats ?? [],
+  })
 }
 
 /** Read the appliance preset. A missing file is normal (no preset); an
@@ -403,19 +436,50 @@ async function ensureEventAndPlatform(
       .values({
         id: eventId,
         name: spec.eventName,
-        promptHint: preset?.promptHint ?? "",
+        promptBrief: briefJson(preset),
         createdAt: now,
         updatedAt: now,
       })
       .run()
-  } else if (preset?.promptHint && !existing.promptHint) {
-    // Backfill an empty hint on re-bootstrap; a set hint is the user's —
-    // preset updates ship with a fresh data dir, not over edits.
-    const now = new Date().toISOString()
-    db.update(events)
-      .set({ promptHint: preset.promptHint, updatedAt: now })
-      .where(eq(events.id, eventId))
-      .run()
+  } else if (
+    preset !== null &&
+    (preset.brief !== undefined || (preset.flagFormats?.length ?? 0) > 0)
+  ) {
+    // Backfill-from-manifest on re-bootstrap, per-seed kind:
+    // - brief text only when the stored brief has NO text at all — any set
+    //   text is the user's (manifest updates ship with a fresh data dir, not
+    //   over edits). Caveat: a user who deliberately clears all three text
+    //   sections is indistinguishable from "never seeded" and gets re-seeded.
+    // - flagFormats whenever the manifest has them and the row has none —
+    //   they are manifest data, never UI-editable, so there is no user edit
+    //   to protect.
+    const stored = parseEventPromptBrief(existing.promptBrief)
+    const seedText =
+      preset.brief !== undefined &&
+      !stored.common.trim() &&
+      !stored.solver.trim() &&
+      !stored.orchestrator.trim()
+    const seedFormats =
+      (preset.flagFormats?.length ?? 0) > 0 && stored.flagFormats.length === 0
+    if (seedText || seedFormats) {
+      const now = new Date().toISOString()
+      db.update(events)
+        .set({
+          promptBrief: JSON.stringify({
+            common: seedText ? (preset.brief?.common ?? "") : stored.common,
+            solver: seedText ? (preset.brief?.solver ?? "") : stored.solver,
+            orchestrator: seedText
+              ? (preset.brief?.orchestrator ?? "")
+              : stored.orchestrator,
+            flagFormats: seedFormats
+              ? (preset.flagFormats ?? [])
+              : stored.flagFormats,
+          }),
+          updatedAt: now,
+        })
+        .where(eq(events.id, eventId))
+        .run()
+    }
   }
   if (spec.platform) {
     const bound = db
