@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -69,17 +70,24 @@ async function setup(): Promise<string> {
 await step("exec maps container workdir onto the bind host dir", async () => {
   const name = await setup()
   const chunks: Buffer[] = []
-  const result = await manager.exec(name, "pwd", {
-    workdir: `${containerWorkspace}/agents/ab12cd34`,
-    onData: (data) => chunks.push(data),
-  })
-  assert(result.exitCode === 0, `exit ${result.exitCode}`)
+  const marker = join(workspace, "agents", "ab12cd34", ".ran")
+  const result = await manager.exec(
+    name,
+    `pwd; touch ${JSON.stringify(marker)}`,
+    {
+      workdir: `${containerWorkspace}/agents/ab12cd34`,
+      onData: (data) => chunks.push(data),
+    }
+  )
   // bash pwd resolves symlinks (macOS /var → /private/var), so compare
-  // against the real path of the bind source.
+  // against the real path of the bind source. The side-effect marker
+  // distinguishes "command never ran" from "stdout lost in the pipe".
+  const got = Buffer.concat(chunks).toString("utf8")
+  const want = join(realpathSync(workspace), "agents/ab12cd34")
+  const ran = existsSync(marker)
   assert(
-    Buffer.concat(chunks).toString("utf8").trim() ===
-      join(realpathSync(workspace), "agents/ab12cd34"),
-    "unexpected pwd output"
+    result.exitCode === 0 && ran && got.trim() === want,
+    `pwd mapping failed: exit=${result.exitCode} ran=${ran} bytes=${got.length} got=${JSON.stringify(got.slice(0, 120))} want=${JSON.stringify(want)}`
   )
 })
 

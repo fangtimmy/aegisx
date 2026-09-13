@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -39,6 +39,8 @@ describe("local container manager", () => {
     const dir = mkdtempSync(join(tmpdir(), "aegisx-local-mgr-out-"))
     try {
       const outFile = join(dir, "results.json")
+      const errFile = join(dir, "probe-stderr.log")
+      const errFd = openSync(errFile, "w")
       const proc = Bun.spawn(
         [
           "bun",
@@ -48,10 +50,20 @@ describe("local container manager", () => {
           ),
           outFile,
         ],
-        { stdin: "ignore", stdout: "ignore", stderr: "ignore" }
+        { stdin: "ignore", stdout: "ignore", stderr: errFd }
       )
       await proc.exited
-      const results = parseProbeResults(readFileSync(outFile, "utf8"))
+      closeSync(errFd)
+      let results
+      try {
+        results = parseProbeResults(readFileSync(outFile, "utf8"))
+      } catch (error) {
+        const stderr = readFileSync(errFile, "utf8").slice(-2000)
+        throw new Error(
+          `probe produced no results: ${error instanceof Error ? error.message : String(error)}\nstderr:\n${stderr}`,
+          { cause: error }
+        )
+      }
       expect(results.length).toBeGreaterThan(0)
       for (const result of results) {
         expect(

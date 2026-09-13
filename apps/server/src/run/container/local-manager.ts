@@ -150,6 +150,17 @@ function runLocal(
       detached: true,
       stdio,
     })
+    if (!child.stdout || !child.stderr) {
+      // Bun fd-setup degradation (posix_spawn EBADF family): stdio fell back
+      // instead of piping — output would vanish into OUR stdio. Fail loudly;
+      // never report an empty successful run.
+      opts.stderrSink.write("local exec failed: stdio pipes unavailable\n")
+      child.on("error", () => undefined)
+      child.on("close", () =>
+        finish({ exitCode: 127, timedOut: false, aborted })
+      )
+      return
+    }
 
     let timedOut = false
     let aborted = opts.signal?.aborted ?? false
@@ -205,9 +216,35 @@ function runLocal(
       )
       finish({ exitCode: 127, timedOut: false, aborted })
     })
-    child.on("close", (code, signal) => {
-      const exitCode = timedOut || aborted || signal ? null : code
+
+    // Resolve only when the child AND both stdio pipes have closed. Bun's
+    // `close` can fire before the last piped stdout chunk lands (observed as
+    // intermittently empty output for fast commands like `pwd`), so the
+    // stream "close" events are part of the settle condition.
+    let childClosed = false
+    let lastCode: number | null = null
+    let lastSignal: NodeJS.Signals | null = null
+    let openStreams = 0
+    const maybeFinish = () => {
+      if (!childClosed || openStreams > 0) return
+      const exitCode = timedOut || aborted || lastSignal ? null : lastCode
       finish({ exitCode, timedOut, aborted })
+    }
+    for (const stream of [child.stdout, child.stderr]) {
+      if (!stream) continue
+      openStreams += 1
+      const onDone = () => {
+        openStreams -= 1
+        maybeFinish()
+      }
+      stream.on("close", onDone)
+      stream.on("error", onDone)
+    }
+    child.on("close", (code, signal) => {
+      childClosed = true
+      lastCode = code
+      lastSignal = signal
+      maybeFinish()
     })
   })
 }
