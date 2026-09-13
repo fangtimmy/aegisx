@@ -532,7 +532,10 @@ async function syncChallenges(deps: BootstrapDeps, eventId: string) {
   const { items } = await deps.platformService.discoverChallenges(eventId)
   const missing = items.filter((item) => !item.imported).map((item) => item.id)
   if (missing.length === 0) return
-  await deps.platformService.syncChallenges(eventId, missing)
+  await deps.platformService.syncChallenges(eventId, missing, undefined, {
+    kind: "system",
+    actorId: "platform-sync",
+  })
   console.log("bootstrap: challenges synced", {
     eventId,
     count: missing.length,

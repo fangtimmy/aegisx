@@ -16,10 +16,15 @@ import {
 } from "../db/schema"
 import type { createStorage } from "../infrastructure/storage"
 import {
-  getChallengeRemote,
-  setSourceAvailability,
-  stampChallengeSolvedAt,
-} from "./challenge-state"
+  applyInventoryAvailability,
+  applySourceAvailability,
+  rollbackChallengeImport,
+} from "../run/domain-events/projector"
+import {
+  emitDomainEvent,
+  type DomainEventActor,
+} from "../run/domain-events/store"
+import { getChallengeRemote, stampChallengeSolvedAt } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
   PlatformError,
@@ -101,6 +106,7 @@ export function createPlatformSync(
     sourceKey: string,
     remote: RemoteChallenge,
     adapter: CtfPlatformAdapter,
+    actor: DomainEventActor,
     onProgress?: (progress: ChallengeSyncProgress) => void | Promise<void>
   ) {
     // Dedupe on (event, source, remote) — event-scoped since 0007: the same
@@ -117,65 +123,69 @@ export function createPlatformSync(
       )
       .get()
     const id = existing?.challengeId ?? crypto.randomUUID()
-    const now = new Date().toISOString()
-    const challengeValues = {
-      eventId,
-      name: remote.name,
-      description: remote.description || "No challenge description provided.",
-      category: remote.category,
-      points: remote.points,
-      // The platform's flag requirement, written ONLY when it reports one: a
-      // re-sync that omits the field must not wipe a known count (that would
-      // turn a multi-flag chain into a single-flag one and make the scheduler
-      // skip its remaining flags).
-      ...(typeof remote.flagCount === "number"
-        ? { requiredFlags: remote.flagCount }
-        : {}),
-      updatedAt: now,
-    }
-    const remoteValues = {
-      eventId,
-      sourceKey,
-      remoteId: remote.id,
-      available: true,
-      solved: existing?.solved === true || remote.solved,
-      targetSupported: remote.targetSupported,
-      targetIgnored: existing?.targetIgnored ?? false,
-      targetCount: remote.targetCount,
-      targetInfo: JSON.stringify(remote.targets),
-      syncedAt: now,
-    }
+    const name = remote.name
+    const description =
+      remote.description || "No challenge description provided."
+    const category = remote.category
+    const points = remote.points
+    // The platform's flag requirement, written ONLY when it reports one: a
+    // re-sync that omits the field must not wipe a known count (that would
+    // turn a multi-flag chain into a single-flag one and make the scheduler
+    // skip its remaining flags).
+    const requiredFlags =
+      typeof remote.flagCount === "number" ? remote.flagCount : undefined
+    const targetInfo = JSON.stringify(remote.targets)
     await onProgress?.({
       remoteId: remote.id,
       phase: "metadata",
       message: existing
         ? `Updating challenge metadata`
         : `Creating challenge metadata`,
-      name: remote.name,
-      category: remote.category,
-      points: remote.points,
+      name,
+      category,
+      points,
     })
     if (existing) {
-      db.update(challenges)
-        .set(challengeValues)
-        .where(eq(challenges.id, id))
-        .run()
-      db.update(challengeRemote)
-        .set(remoteValues)
-        .where(eq(challengeRemote.challengeId, id))
-        .run()
+      emitDomainEvent(db, {
+        type: "challenge.synced",
+        eventId,
+        challengeId: id,
+        actor,
+        payload: {
+          challengeId: id,
+          name,
+          description,
+          ...(category !== undefined ? { category } : {}),
+          points,
+          ...(requiredFlags !== undefined ? { requiredFlags } : {}),
+          available: true,
+          solved: existing.solved || remote.solved,
+          targetSupported: remote.targetSupported,
+          targetCount: remote.targetCount,
+          targetInfo,
+        },
+      })
     } else {
-      // Atomic: a challenge row must never survive without its remote mapping
-      // (the pre-0007 bug left orphan challenge rows when the mapping insert
-      // hit the unique index).
       try {
-        db.transaction((tx) => {
-          tx.insert(challenges)
-            .values({ id, ...challengeValues, createdAt: now })
-            .run()
-          tx.insert(challengeRemote)
-            .values({ challengeId: id, ...remoteValues })
-            .run()
+        emitDomainEvent(db, {
+          type: "challenge.imported",
+          eventId,
+          challengeId: id,
+          actor,
+          payload: {
+            challengeId: id,
+            remoteId: remote.id,
+            sourceKey,
+            name,
+            description,
+            category: category ?? null,
+            points: points ?? null,
+            ...(requiredFlags !== undefined ? { requiredFlags } : {}),
+            solved: remote.solved,
+            targetSupported: remote.targetSupported,
+            targetCount: remote.targetCount,
+            targetInfo,
+          },
         })
       } catch (error) {
         if (error instanceof Error && error.message.includes("UNIQUE")) {
@@ -191,7 +201,7 @@ export function createPlatformSync(
     const syncedAttachments: ChallengeSyncAttachment[] = []
     // A sync can report the challenge solved (the platform knows about a solve
     // we never submitted); stamp the progress machine's first-solve anchor.
-    stampChallengeSolvedAt(db, id, now)
+    stampChallengeSolvedAt(db, id, new Date().toISOString())
     try {
       const total = remote.attachments.length
       for (const [index, attachment] of remote.attachments.entries()) {
@@ -200,9 +210,9 @@ export function createPlatformSync(
           remoteId: remote.id,
           phase: "attachment",
           message: `Downloading attachment ${index + 1}/${total}: ${filename}`,
-          name: remote.name,
-          category: remote.category,
-          points: remote.points,
+          name,
+          category,
+          points,
           attachment: { filename, index: index + 1, total },
         })
         syncedAttachments.push(
@@ -227,7 +237,8 @@ export function createPlatformSync(
       }
     } catch (error) {
       if (!existing) {
-        db.delete(challenges).where(eq(challenges.id, id)).run()
+        // The failed command rolls its own provisioned rows back (no fact).
+        rollbackChallengeImport(db, id)
         storage.purge(storage.challengePath(eventId, id))
       }
       throw error
@@ -235,9 +246,9 @@ export function createPlatformSync(
     return {
       id,
       created: !existing,
-      name: remote.name,
-      category: remote.category,
-      points: remote.points,
+      name,
+      category,
+      points,
       attachments: syncedAttachments,
     }
   }
@@ -262,21 +273,15 @@ export function createPlatformSync(
       // Event-scoped flip (0007) via the shared (eventId, sourceKey) writer:
       // only this event's rows — a shared source_key must never touch
       // another event's mappings (P0-2).
-      setSourceAvailability(tx, eventId, platform.sourceKey, false)
+      applySourceAvailability(tx, eventId, platform.sourceKey, false)
       for (const item of remote) {
-        tx.update(challengeRemote)
-          .set({
-            available: true,
-            ...(item.solved ? { solved: true } : {}),
-          })
-          .where(
-            and(
-              eq(challengeRemote.eventId, eventId),
-              eq(challengeRemote.sourceKey, platform.sourceKey),
-              eq(challengeRemote.remoteId, item.id)
-            )
-          )
-          .run()
+        applyInventoryAvailability(
+          tx,
+          eventId,
+          platform.sourceKey,
+          item.id,
+          item.solved
+        )
       }
       tx.update(eventPlatforms)
         .set({ lastSyncedAt: now, updatedAt: now })
@@ -330,7 +335,8 @@ export function createPlatformSync(
             completed: number
             total: number
           }
-    ) => void | Promise<void>
+    ) => void | Promise<void>,
+    actor: DomainEventActor = { kind: "user" }
   ) {
     const inventory = await discoverInventory(eventId)
     const available = new Map(inventory.remote.map((item) => [item.id, item]))
@@ -370,6 +376,7 @@ export function createPlatformSync(
               solved: remote.solved || summary.solved,
             },
             inventory.adapter,
+            actor,
             async (progress) => {
               await onEvent?.({ type: "progress", progress })
             }
@@ -426,20 +433,25 @@ export function createPlatformSync(
         "Challenge is not connected to a platform"
       )
     }
-    const now = new Date().toISOString()
     try {
       const solved = await adapter.getSolveState(remote.remoteId)
-      db.update(challengeRemote)
-        .set({ available: true, solved, syncedAt: now })
-        .where(eq(challengeRemote.challengeId, challengeId))
-        .run()
+      emitDomainEvent(db, {
+        type: "challenge.synced",
+        eventId: challenge.eventId,
+        challengeId,
+        actor: { kind: "user" },
+        payload: { challengeId, available: true, solved },
+      })
       return { found: true as const, available: true, solved }
     } catch (error) {
       if (error instanceof PlatformError && error.status === 404) {
-        db.update(challengeRemote)
-          .set({ available: false, syncedAt: now })
-          .where(eq(challengeRemote.challengeId, challengeId))
-          .run()
+        emitDomainEvent(db, {
+          type: "challenge.synced",
+          eventId: challenge.eventId,
+          challengeId,
+          actor: { kind: "user" },
+          payload: { challengeId, available: false },
+        })
         return {
           found: false as const,
           available: false,

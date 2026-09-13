@@ -26,6 +26,7 @@ import { validateJson } from "../infrastructure/validation"
 import { stampChallengeSolvedAt } from "../platforms/challenge-state"
 import { platformActionHttpError } from "../platforms/errors"
 import type { createPlatformService } from "../platforms/service"
+import { emitDomainEvent } from "../run/domain-events/store"
 import type { createCatalogReader } from "./catalog"
 import { buildEventStats } from "./stats"
 
@@ -527,10 +528,18 @@ export function registerEventRoutes(
       }
       const { state } = c.req.valid("json")
       const now = new Date().toISOString()
-      db.update(challenges)
-        .set({ manualSolveState: state, updatedAt: now })
+      const row = db
+        .select({ eventId: challenges.eventId })
+        .from(challenges)
         .where(eq(challenges.id, challengeId))
-        .run()
+        .get()
+      emitDomainEvent(db, {
+        type: "challenge.overridden",
+        eventId: row?.eventId ?? null,
+        challengeId,
+        actor: { kind: "user" },
+        payload: { manualSolveState: state },
+      })
       // An operator marking a challenge solved is a first-solve transition too
       // (the cleanup gate and the digest anchor both key on it).
       stampChallengeSolvedAt(db, challengeId, now)

@@ -19,6 +19,7 @@ import {
   type ParsedChannelKey,
   type PostInput,
 } from "./channels-context"
+import { emitDomainEvent } from "./domain-events/store"
 import { RunActionError } from "./errors"
 import { schedulerPolicyFor } from "./scheduler-policy"
 
@@ -148,19 +149,44 @@ export function createPostService(
     meta: ChannelMessageMeta & { files?: ChannelFileMeta[] }
   ) {
     const ts = ctx.deps.now()
-    const inserted = ctx.db
-      .insert(channelMessages)
-      .values({
-        channelKey: key,
-        authorType: author.type,
-        authorAgentId: author.type === "agent" ? author.agentId : null,
-        authorName: author.name,
-        body,
-        meta: JSON.stringify(meta),
-        createdAt: ts,
+    const inserted = ctx.db.transaction((tx) => {
+      const row = tx
+        .insert(channelMessages)
+        .values({
+          channelKey: key,
+          authorType: author.type,
+          authorAgentId: author.type === "agent" ? author.agentId : null,
+          authorName: author.name,
+          body,
+          meta: JSON.stringify(meta),
+          createdAt: ts,
+        })
+        .returning()
+        .get()
+      // The thin control-plane fact rides the ledger insert's transaction
+      // (the body stays in channel_messages; the stream references it).
+      const parsed = parseChannelKey(key)
+      emitDomainEvent(ctx.db, {
+        type: "channel.posted",
+        eventId: parsed ? ctx.eventOfKey(parsed) || null : null,
+        challengeId: parsed?.kind === "team" ? parsed.id : null,
+        agentId: parsed?.kind === "dm" ? parsed.id : null,
+        actor:
+          author.type === "agent"
+            ? { kind: "agent", agentId: author.agentId }
+            : author.type === "user"
+              ? { kind: "user" }
+              : { kind: "system", actorId: "system" },
+        payload: {
+          channelKey: key,
+          messageId: row.id,
+          authorType: author.type,
+          ...(author.type === "agent" ? { authorAgentId: author.agentId } : {}),
+          ...(meta.urgent === true ? { urgent: true } : {}),
+        },
       })
-      .returning()
-      .get()
+      return row
+    })
     return ctx.toPublic(inserted)
   }
 

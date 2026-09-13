@@ -1,4 +1,5 @@
 import type { AgentStatus, PlatformType } from "@aegisx/shared"
+import type { DomainEventActorKind } from "@aegisx/shared/domain-events"
 import { sql } from "drizzle-orm"
 import {
   check,
@@ -18,7 +19,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 23
+export const SCHEMA_VERSION = 24
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -560,4 +561,44 @@ export const platformRequestLog = sqliteTable(
     error: text("error"),
   },
   (table) => [index("platform_request_log_created_at_idx").on(table.createdAt)]
+)
+
+/**
+ * Domain event stream (control-plane §A): the control plane's append-only
+ * fact log — who was dispatched, why, what the fence rejected, what a flag
+ * verdict was. Projection tables (spawn_queue / queue_state / challenge_flags
+ * / challenge_remote / the challenges control fields) are maintained
+ * exclusively by the projector (run/domain-events/projector.ts) inside the
+ * same transaction as the append. No FKs on the hot dimensions: the stream
+ * outlives the entities it references (solve history survives agent
+ * deletion, same rule as challenge_flags.agent_id). `events` is already the
+ * CTF-competition entity table, hence the table name.
+ */
+export const domainEvents = sqliteTable(
+  "domain_events",
+  {
+    /** Global monotonic id (also the decision log's paging cursor). */
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    type: text("type").notNull(),
+    /** Hot dimensions — nullable, not every fact carries every dimension. */
+    eventId: text("event_id"),
+    challengeId: text("challenge_id"),
+    agentId: text("agent_id"),
+    /** user | agent | system. */
+    actorKind: text("actor_kind").$type<DomainEventActorKind>().notNull(),
+    /** agentId / 'drainer' / 'progress-machine' / 'platform-sync' / ... */
+    actorId: text("actor_id"),
+    /** The triggering event's id, when one is naturally at hand. */
+    causationId: integer("causation_id"),
+    /** Type-registered JSON payload (run/domain-events/registry.ts). */
+    payload: text("payload").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("domain_events_type_id_idx").on(table.type, table.id),
+    index("domain_events_event_id_id_idx").on(table.eventId, table.id),
+    index("domain_events_challenge_id_id_idx").on(table.challengeId, table.id),
+    index("domain_events_agent_id_id_idx").on(table.agentId, table.id),
+    index("domain_events_causation_id_idx").on(table.causationId),
+  ]
 )

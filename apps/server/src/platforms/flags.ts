@@ -1,15 +1,11 @@
 import type { ChallengeFlag } from "@aegisx/shared"
-import { and, asc, eq, inArray } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 
 import type { Database } from "../db"
-import {
-  challengeFlags,
-  challengeRemote,
-  challenges,
-  type eventPlatforms,
-} from "../db/schema"
+import { challengeFlags, challenges, type eventPlatforms } from "../db/schema"
 import { logEvent } from "../lib/log"
 import { type Clock, systemClock } from "../run/clock"
+import { emitDomainEvent } from "../run/domain-events/store"
 import {
   challengeSolvedAt,
   getChallengeRemote,
@@ -118,16 +114,41 @@ export function createPlatformFlags(
       .map(toFlagPublic)
   }
 
+  /** The challenge's eventId (envelope for the flag facts); null when the
+   * row is gone mid-request. */
+  function eventIdOf(challengeId: string): string | null {
+    return (
+      db
+        .select({ eventId: challenges.eventId })
+        .from(challenges)
+        .where(eq(challenges.id, challengeId))
+        .get()?.eventId ?? null
+    )
+  }
+
   function addManualFlag(challengeId: string, flag: string): ChallengeFlag {
     const value = flag.trim()
     const now = new Date().toISOString()
     const existing = lookup(challengeId, value)
+    const tier: "first" | "extra" =
+      challengeSolvedAt(db, challengeId) !== null ? "extra" : "first"
     if (existing) {
+      // An entry already accepted+manual wrote nothing before — keep that
+      // (no duplicate fact); anything else flips to accepted+manual.
       if (existing.status !== "accepted" || existing.source !== "manual") {
-        db.update(challengeFlags)
-          .set({ status: "accepted", source: "manual", updatedAt: now })
-          .where(eq(challengeFlags.id, existing.id))
-          .run()
+        emitDomainEvent(db, {
+          type: "flag.accepted",
+          eventId: eventIdOf(challengeId),
+          challengeId,
+          actor: { kind: "user" },
+          payload: {
+            flagId: existing.id,
+            value,
+            source: "manual",
+            submitter: null,
+            tier,
+          },
+        })
       }
       return {
         ...toFlagPublic(existing),
@@ -137,6 +158,14 @@ export function createPlatformFlags(
       }
     }
     const id = crypto.randomUUID()
+    emitDomainEvent(db, {
+      type: "flag.accepted",
+      eventId: eventIdOf(challengeId),
+      challengeId,
+      actor: { kind: "user" },
+      payload: { flagId: id, value, source: "manual", submitter: null, tier },
+    })
+    stampChallengeSolvedAt(db, challengeId, now)
     const row = {
       id,
       challengeId,
@@ -149,14 +178,12 @@ export function createPlatformFlags(
       createdAt: now,
       updatedAt: now,
     }
-    db.insert(challengeFlags).values(row).run()
-    stampChallengeSolvedAt(db, challengeId, now)
-    return toFlagPublic({ ...row })
+    return toFlagPublic({ ...row, ...lookup(challengeId, value)! })
   }
 
   function deleteFlag(challengeId: string, flagId: string): boolean {
     const existing = db
-      .select({ id: challengeFlags.id })
+      .select()
       .from(challengeFlags)
       .where(
         and(
@@ -166,14 +193,13 @@ export function createPlatformFlags(
       )
       .get()
     if (!existing) return false
-    db.delete(challengeFlags)
-      .where(
-        and(
-          eq(challengeFlags.challengeId, challengeId),
-          eq(challengeFlags.id, flagId)
-        )
-      )
-      .run()
+    emitDomainEvent(db, {
+      type: "flag.deleted",
+      eventId: eventIdOf(challengeId),
+      challengeId,
+      actor: { kind: "user" },
+      payload: { flagId, value: existing.flag },
+    })
     return true
   }
 
@@ -182,17 +208,13 @@ export function createPlatformFlags(
    * platform verdict. Progress is derived (challenge-state.ts), so emptying
    * the facts IS the reset — no state-machine surgery. */
   function resetChallengeProgress(challengeId: string): void {
-    db.delete(challengeFlags)
-      .where(eq(challengeFlags.challengeId, challengeId))
-      .run()
-    db.update(challenges)
-      .set({ manualSolveState: "unsolved", solvedAt: null })
-      .where(eq(challenges.id, challengeId))
-      .run()
-    db.update(challengeRemote)
-      .set({ solved: false })
-      .where(eq(challengeRemote.challengeId, challengeId))
-      .run()
+    emitDomainEvent(db, {
+      type: "challenge.progress_reset",
+      eventId: eventIdOf(challengeId),
+      challengeId,
+      actor: { kind: "user" },
+      payload: {},
+    })
   }
 
   /** {@link resetChallengeProgress} for every challenge of the event;
@@ -205,17 +227,12 @@ export function createPlatformFlags(
       .all()
       .map((row) => row.id)
     if (ids.length === 0) return 0
-    db.delete(challengeFlags)
-      .where(inArray(challengeFlags.challengeId, ids))
-      .run()
-    db.update(challenges)
-      .set({ manualSolveState: "unsolved", solvedAt: null })
-      .where(eq(challenges.eventId, eventId))
-      .run()
-    db.update(challengeRemote)
-      .set({ solved: false })
-      .where(eq(challengeRemote.eventId, eventId))
-      .run()
+    emitDomainEvent(db, {
+      type: "challenge.progress_reset",
+      eventId,
+      actor: { kind: "user" },
+      payload: { challengeIds: ids },
+    })
     return ids.length
   }
 
@@ -288,26 +305,22 @@ export function createPlatformFlags(
       // decides the tier.
       const outcome: FlagAcceptOutcome = alreadySolved ? "extra" : "first"
       const now = new Date().toISOString()
-      const row = {
-        id: existing?.id ?? crypto.randomUUID(),
+      emitDomainEvent(db, {
+        type: "flag.accepted",
+        eventId: challenge.eventId,
         challengeId,
-        flag: value,
-        status: "accepted" as const,
-        source: "agent" as const,
         agentId,
-        remoteId: null,
-        message: null,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-      }
-      if (existing) {
-        db.update(challengeFlags)
-          .set({ status: "accepted", source: "agent", agentId, updatedAt: now })
-          .where(eq(challengeFlags.id, existing.id))
-          .run()
-      } else {
-        db.insert(challengeFlags).values(row).run()
-      }
+        actor: { kind: "agent", agentId },
+        payload: {
+          flagId: existing?.id ?? crypto.randomUUID(),
+          value,
+          source: "agent",
+          submitter: agentId,
+          tier: outcome,
+          remoteId: existing?.remoteId ?? null,
+          message: existing?.message ?? null,
+        },
+      })
       // No remote judge here, but the acceptance is real — notify the agent
       // layer so the scheduler learns the flag (agent.flagAccepted). No
       // platform → no multi-flag partial: accepted IS the full verdict.
@@ -318,28 +331,21 @@ export function createPlatformFlags(
 
     // Platform challenge, but verification explicitly skipped: store as pending.
     if (!verifyRemote) {
-      const now = new Date().toISOString()
-      if (existing) {
-        db.update(challengeFlags)
-          .set({ status: "pending", source: "agent", agentId, updatedAt: now })
-          .where(eq(challengeFlags.id, existing.id))
-          .run()
-      } else {
-        db.insert(challengeFlags)
-          .values({
-            id: crypto.randomUUID(),
-            challengeId,
-            flag: value,
-            status: "pending",
-            source: "agent",
-            agentId,
-            remoteId: null,
-            message: null,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .run()
-      }
+      emitDomainEvent(db, {
+        type: "flag.submitted",
+        eventId: challenge.eventId,
+        challengeId,
+        agentId,
+        actor: { kind: "agent", agentId },
+        payload: {
+          flagId: existing?.id ?? crypto.randomUUID(),
+          value,
+          submitter: agentId,
+          status: "pending",
+          remoteId: existing?.remoteId ?? null,
+          message: existing?.message ?? null,
+        },
+      })
       return { status: "pending", verified: false }
     }
 
@@ -364,30 +370,80 @@ export function createPlatformFlags(
       ) {
         return
       }
-      const now = new Date().toISOString()
       const patch = {
         status,
         source: "agent" as const,
         agentId,
         remoteId: result.remoteId ?? row?.remoteId ?? null,
         message: result.message ?? null,
-        updatedAt: now,
       }
-      if (row) {
-        db.update(challengeFlags)
-          .set(patch)
-          .where(eq(challengeFlags.id, row.id))
-          .run()
+      // An identical re-persist (async-judge poll iterations) writes nothing.
+      if (
+        row &&
+        row.status === patch.status &&
+        row.agentId === patch.agentId &&
+        row.remoteId === patch.remoteId &&
+        row.message === patch.message
+      ) {
+        return
+      }
+      const flagId = row?.id ?? crypto.randomUUID()
+      if (status === "accepted") {
+        emitDomainEvent(db, {
+          type: "flag.accepted",
+          eventId: challenge.eventId,
+          challengeId,
+          agentId,
+          actor: { kind: "agent", agentId },
+          payload: {
+            flagId,
+            value,
+            source: "agent",
+            submitter: agentId,
+            tier:
+              result.status === "partial"
+                ? "partial"
+                : alreadySolved
+                  ? "extra"
+                  : "first",
+            remoteId: patch.remoteId,
+            message: patch.message,
+            remoteSolved:
+              result.status === "accepted" ||
+              result.status === "already_solved",
+          },
+        })
+      } else if (status === "rejected") {
+        emitDomainEvent(db, {
+          type: "flag.rejected",
+          eventId: challenge.eventId,
+          challengeId,
+          agentId,
+          actor: { kind: "agent", agentId },
+          payload: {
+            flagId,
+            value,
+            submitter: agentId,
+            remoteId: patch.remoteId,
+            message: patch.message,
+          },
+        })
       } else {
-        db.insert(challengeFlags)
-          .values({
-            id: crypto.randomUUID(),
-            challengeId,
-            flag: value,
-            createdAt: now,
-            ...patch,
-          })
-          .run()
+        emitDomainEvent(db, {
+          type: "flag.submitted",
+          eventId: challenge.eventId,
+          challengeId,
+          agentId,
+          actor: { kind: "agent", agentId },
+          payload: {
+            flagId,
+            value,
+            submitter: agentId,
+            status,
+            remoteId: patch.remoteId,
+            message: patch.message,
+          },
+        })
       }
       // Rejected/error are the wasted-attempt signal the console timeline
       // wants; accepted surfaces as the agent.flagAccepted lifecycle event.
@@ -431,12 +487,9 @@ export function createPlatformFlags(
         // `alreadySolved` was captured before this submission's flag row was
         // persisted, so it IS the aside-from-this-value state a sibling race
         // needs: their acceptance already flipped the challenge → "extra"
-        // (light notice), never a second cleanup round.
+        // (light notice), never a second cleanup round. The remote mirror
+        // flip rode the flag.accepted fact (remoteSolved).
         const outcome: FlagAcceptOutcome = alreadySolved ? "extra" : "first"
-        db.update(challengeRemote)
-          .set({ solved: true })
-          .where(eq(challengeRemote.challengeId, challengeId))
-          .run()
         stampChallengeSolvedAt(db, challengeId, new Date().toISOString())
         options?.onAgentFlagAccepted?.(challengeId, agentId, outcome)
       }

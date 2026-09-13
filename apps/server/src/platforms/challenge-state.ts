@@ -1,8 +1,9 @@
 import { progressOf, type ChallengeProgress } from "@aegisx/shared"
-import { and, eq, isNull, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challengeFlags, challengeRemote, challenges } from "../db/schema"
+import { emitDomainEvent } from "../run/domain-events/store"
 
 export type ChallengeRemote = typeof challengeRemote.$inferSelect
 
@@ -80,18 +81,29 @@ export function challengeSolvedAt(
   )
 }
 
-/** Stamp the first transition into `solved`. Idempotent (guarded on
- * `solved_at IS NULL`) and a no-op while the challenge is not solved yet. */
+/** Stamp the first transition into `solved`. Idempotent: only the FIRST entry
+ * emits `challenge.solved` (the projector's guarded `solved_at IS NULL` write
+ * is the idempotency anchor the solve cleanup keys on — a chain later
+ * revealed to need more flags never re-stamps or re-runs the teardown). */
 export function stampChallengeSolvedAt(
   db: Database,
   challengeId: string,
   nowIso: string
 ): void {
   if (progressOfChallenge(db, challengeId).state !== "solved") return
-  db.update(challenges)
-    .set({ solvedAt: nowIso })
-    .where(and(eq(challenges.id, challengeId), isNull(challenges.solvedAt)))
-    .run()
+  const row = db
+    .select({ eventId: challenges.eventId, solvedAt: challenges.solvedAt })
+    .from(challenges)
+    .where(eq(challenges.id, challengeId))
+    .get()
+  if (!row || row.solvedAt) return
+  emitDomainEvent(db, {
+    type: "challenge.solved",
+    eventId: row.eventId,
+    challengeId,
+    actor: { kind: "system", actorId: "progress-machine" },
+    payload: { solvedAt: nowIso },
+  })
 }
 
 /** The progress machine's SQL mirror, for read-side aggregations that must not
@@ -109,28 +121,6 @@ export function getChallengeRemote(
     .from(challengeRemote)
     .where(eq(challengeRemote.challengeId, challengeId))
     .get()
-}
-
-/** The ONLY source-scoped availability writer: a whole platform source's
- * mappings for ONE event flip together, always qualified by the composite
- * (eventId, sourceKey). Both call sites — platform detach and sync
- * inventory — go through here, so the P0-2 shape (a single-key WHERE that
- * silently hits other events sharing the same source) cannot be written. */
-export function setSourceAvailability(
-  db: Pick<Database, "update">,
-  eventId: string,
-  sourceKey: string,
-  available: boolean
-): void {
-  db.update(challengeRemote)
-    .set({ available })
-    .where(
-      and(
-        eq(challengeRemote.eventId, eventId),
-        eq(challengeRemote.sourceKey, sourceKey)
-      )
-    )
-    .run()
 }
 
 /** Whether a platform verdict exists and is authoritative. Accepts the

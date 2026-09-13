@@ -62,6 +62,7 @@ import {
   type ContainerLifecycle,
 } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
+import { actorFromPrincipal } from "./domain-events/store"
 import { RunActionError } from "./errors"
 import { createFleetWatchdog } from "./fleet-watchdog"
 import { applyModelSwitch } from "./host/agent-ops"
@@ -484,6 +485,7 @@ export function createAgentService(options: AgentServiceOptions) {
       promptMode: input.promptMode,
       timeoutMs: input.timeoutMs,
       source: input.source ?? "manual",
+      actor: actorFromPrincipal(principal),
     })
     return requireAgent(agentId)
   }
@@ -1274,6 +1276,9 @@ export function createAgentService(options: AgentServiceOptions) {
         challengeId: null,
         role: "orchestrator",
         source: "manual",
+        // Orchestrators bypass the spawn fence — the actor only labels the
+        // spawn (never a fence.blocked fact).
+        actor: { kind: "system", actorId: "scheduler-admin" },
       })
       return requireAgent(agentId)
     })
@@ -1395,6 +1400,7 @@ export function createAgentService(options: AgentServiceOptions) {
         timeoutMs: item.timeoutMs ?? undefined,
         source: item.source,
         queueItemId: item.id,
+        actor: { kind: "system", actorId: "drainer" },
       })
     },
     // The launch lost the cancel race (full-solve cleanup cancelled the item

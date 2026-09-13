@@ -124,6 +124,24 @@ CREATE TABLE `channel_reads` (
 	PRIMARY KEY(`channel_key`, `reader_key`)
 );
 --> statement-breakpoint
+CREATE TABLE `domain_events` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`type` text NOT NULL,
+	`event_id` text,
+	`challenge_id` text,
+	`agent_id` text,
+	`actor_kind` text NOT NULL,
+	`actor_id` text,
+	`causation_id` integer,
+	`payload` text NOT NULL,
+	`created_at` text NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `domain_events_type_id_idx` ON `domain_events` (`type`,`id`);--> statement-breakpoint
+CREATE INDEX `domain_events_event_id_id_idx` ON `domain_events` (`event_id`,`id`);--> statement-breakpoint
+CREATE INDEX `domain_events_challenge_id_id_idx` ON `domain_events` (`challenge_id`,`id`);--> statement-breakpoint
+CREATE INDEX `domain_events_agent_id_id_idx` ON `domain_events` (`agent_id`,`id`);--> statement-breakpoint
+CREATE INDEX `domain_events_causation_id_idx` ON `domain_events` (`causation_id`);--> statement-breakpoint
 CREATE TABLE `event_platforms` (
 	`event_id` text PRIMARY KEY NOT NULL,
 	`type` text NOT NULL,

@@ -25,6 +25,7 @@ import {
   createLocalContainerManager,
   isLocalExecBackend,
 } from "./run/container/local-manager"
+import { registerDomainEventRoutes } from "./run/domain-events/routes"
 import { registerRunRoutes } from "./run/routes"
 import { createAgentService } from "./run/service"
 import { registerSchedulerRoutes } from "./scheduler/routes"
@@ -201,6 +202,7 @@ export function createApp(options: { dataDir: string }) {
     db,
     agentService,
   })
+  registerDomainEventRoutes(app, { db })
   registerSchedulerRoutes(app, { db, agentService })
   registerActivityRoutes(app, { db })
 

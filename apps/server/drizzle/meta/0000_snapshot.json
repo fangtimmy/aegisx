@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "458bfb1f-fa72-4d87-8c58-98052297d26a",
+  "id": "4ddc28ee-3eff-44db-977c-6c2c59de3aa3",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -861,6 +861,126 @@
           "name": "channel_reads_channel_key_reader_key_pk"
         }
       },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "domain_events": {
+      "name": "domain_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "challenge_id": {
+          "name": "challenge_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "agent_id": {
+          "name": "agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "actor_kind": {
+          "name": "actor_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "causation_id": {
+          "name": "causation_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "domain_events_type_id_idx": {
+          "name": "domain_events_type_id_idx",
+          "columns": [
+            "type",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "domain_events_event_id_id_idx": {
+          "name": "domain_events_event_id_id_idx",
+          "columns": [
+            "event_id",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "domain_events_challenge_id_id_idx": {
+          "name": "domain_events_challenge_id_id_idx",
+          "columns": [
+            "challenge_id",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "domain_events_agent_id_id_idx": {
+          "name": "domain_events_agent_id_id_idx",
+          "columns": [
+            "agent_id",
+            "id"
+          ],
+          "isUnique": false
+        },
+        "domain_events_causation_id_idx": {
+          "name": "domain_events_causation_id_idx",
+          "columns": [
+            "causation_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
     },

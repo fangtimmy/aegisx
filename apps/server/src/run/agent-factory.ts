@@ -13,7 +13,6 @@ import {
   challengeFlags,
   challenges,
   events,
-  queueState,
   spawnQueue,
 } from "../db/schema"
 import { newAgentToken } from "../infrastructure/agent-auth"
@@ -34,6 +33,8 @@ import {
   isLocalExecBackend,
   localContainerWorkspace,
 } from "./container/local-manager"
+import { emitDomainEvent } from "./domain-events/store"
+import type { DomainEventActor } from "./domain-events/store"
 import { RunActionError, RunStartError } from "./errors"
 import { checkSpawnFence } from "./fence"
 import { createAgentHost } from "./host/host"
@@ -160,6 +161,8 @@ export type SpawnAgentInput = {
   source: "manual" | "scheduler"
   /** Back-filled when the queue drainer spawns this agent. */
   queueItemId?: string
+  /** Who is spawning — the actor recorded on a fence.blocked fact. */
+  actor: DomainEventActor
 }
 
 export type AgentFactoryDeps = {
@@ -692,6 +695,18 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           challengeId: input.challengeId!,
         })
         if (!decision.ok) {
+          // Every rejection leaves a trace (the decision log's raw material).
+          emitDomainEvent(db, {
+            type: "fence.blocked",
+            eventId: input.eventId,
+            challengeId: input.challengeId,
+            actor: input.actor,
+            payload: {
+              code: decision.code,
+              message: decision.message,
+              via: "spawn",
+            },
+          })
           throw new RunActionError("capacity", decision.message)
         }
       }
@@ -899,7 +914,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       await containerManager.remove(name).catch(() => undefined)
       if (row.queueItemId && !seenQueueEvents.has(row.eventId)) {
         seenQueueEvents.add(row.eventId)
-        deps.queue.get().resetRunning(row.eventId, ts)
+        deps.queue.get().resetRunning(row.eventId)
       }
     }
     // Events with visible queue items. Interactive: every queue starts paused
@@ -920,13 +935,12 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       return
     }
     for (const { eventId } of pendingEvents) {
-      db.insert(queueState)
-        .values({ eventId, status: "paused", updatedAt: ts })
-        .onConflictDoUpdate({
-          target: queueState.eventId,
-          set: { status: "paused", updatedAt: ts },
-        })
-        .run()
+      emitDomainEvent(db, {
+        type: "queue.paused",
+        eventId,
+        actor: { kind: "system", actorId: "boot-recovery" },
+        payload: { source: "boot" },
+      })
     }
   }
 

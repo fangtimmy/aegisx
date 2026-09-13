@@ -8,6 +8,11 @@ import type { Principal } from "../infrastructure/agent-auth"
 import { parseJson } from "../lib/guards"
 import { logEvent } from "../lib/log"
 import type { Clock } from "./clock"
+import {
+  actorFromPrincipal,
+  emitDomainEvent,
+  type DomainEventActor,
+} from "./domain-events/store"
 import { createQueueDrainer } from "./drainer"
 import { RunActionError } from "./errors"
 import type { NoticeEvent } from "./orch-notices"
@@ -120,7 +125,20 @@ function safeParseObject(raw: string): Record<string, unknown> {
   }
 }
 
-const now = () => new Date().toISOString()
+/** Internal actors for the queue's system-driven state transitions. */
+const DRAINER_ACTOR: DomainEventActor = { kind: "system", actorId: "drainer" }
+const AGENT_SETTLE_ACTOR: DomainEventActor = {
+  kind: "system",
+  actorId: "agent-settle",
+}
+const BOOT_RECOVERY_ACTOR: DomainEventActor = {
+  kind: "system",
+  actorId: "boot-recovery",
+}
+const SOLVE_CLEANUP_ACTOR: DomainEventActor = {
+  kind: "system",
+  actorId: "solve-cleanup",
+}
 
 export function createQueueService(deps: QueueServiceDeps) {
   const { db } = deps
@@ -208,26 +226,23 @@ export function createQueueService(deps: QueueServiceDeps) {
         "Challenge does not belong to this event"
       )
     }
-    const ts = now()
     const id = crypto.randomUUID()
     const ord = nextOrd(input.eventId)
-    db.insert(spawnQueue)
-      .values({
-        id,
-        eventId: input.eventId,
+    emitDomainEvent(db, {
+      type: "queue.enqueued",
+      eventId: input.eventId,
+      challengeId: input.challengeId,
+      actor: actorFromPrincipal(principal),
+      payload: {
+        itemId: id,
         ord,
         challengeId: input.challengeId,
-        params: JSON.stringify(launchParamsOf(input)),
+        params: launchParamsOf(input),
         timeoutMs: input.timeoutMs ?? null,
         prompt: input.prompt ?? "",
         source: input.source,
-        status: "pending",
-        agentId: null,
-        error: null,
-        createdAt: ts,
-        updatedAt: ts,
-      })
-      .run()
+      },
+    })
     logEvent("queue", "enqueued", {
       challenge: challengesName(input.challengeId),
       ord,
@@ -273,18 +288,25 @@ export function createQueueService(deps: QueueServiceDeps) {
         "Cannot remove a running queue item; close its agent first"
       )
     }
-    db.delete(spawnQueue).where(eq(spawnQueue.id, itemId)).run()
+    emitDomainEvent(db, {
+      type: "queue.item_removed",
+      eventId,
+      challengeId: row.challengeId,
+      actor: actorFromPrincipal(principal),
+      payload: { itemId },
+    })
     checkStarved(row.eventId)
   }
 
   /** Remove every non-running item for an event. */
   function clear(eventId: string, principal: Principal): void {
     assertMayTouchEvent(principal, eventId)
-    db.delete(spawnQueue)
-      .where(
-        and(eq(spawnQueue.eventId, eventId), ne(spawnQueue.status, "running"))
-      )
-      .run()
+    emitDomainEvent(db, {
+      type: "queue.items_cleared",
+      eventId,
+      actor: actorFromPrincipal(principal),
+      payload: {},
+    })
   }
 
   /** Fully-solved cleanup: cancel the challenge's pending items (stale
@@ -304,17 +326,16 @@ export function createQueueService(deps: QueueServiceDeps) {
         )
       )
       .all()
-    if (!rows.length) return 0
-    db.update(spawnQueue)
-      .set({ status: "cancelled", updatedAt: now() })
-      .where(
-        and(
-          eq(spawnQueue.challengeId, challengeId),
-          eq(spawnQueue.status, "pending")
-        )
-      )
-      .run()
-    checkStarved(eventId)
+    for (const row of rows) {
+      emitDomainEvent(db, {
+        type: "queue.item_cancelled",
+        eventId,
+        challengeId,
+        actor: SOLVE_CLEANUP_ACTOR,
+        payload: { itemId: row.id },
+      })
+    }
+    if (rows.length > 0) checkStarved(eventId)
     return rows.length
   }
 
@@ -344,11 +365,20 @@ export function createQueueService(deps: QueueServiceDeps) {
         "Only pending queue items can be edited"
       )
     }
-    const set: Partial<typeof spawnQueue.$inferInsert> = { updatedAt: now() }
-    if (patch.prompt !== undefined) set.prompt = patch.prompt
-    if (patch.timeoutMs !== undefined) set.timeoutMs = patch.timeoutMs
-    if (patch.params !== undefined) set.params = JSON.stringify(patch.params)
-    db.update(spawnQueue).set(set).where(eq(spawnQueue.id, itemId)).run()
+    emitDomainEvent(db, {
+      type: "queue.item_edited",
+      eventId,
+      challengeId: row.challengeId,
+      actor: actorFromPrincipal(principal),
+      payload: {
+        itemId,
+        ...(patch.prompt !== undefined ? { prompt: patch.prompt } : {}),
+        ...(patch.timeoutMs !== undefined
+          ? { timeoutMs: patch.timeoutMs }
+          : {}),
+        ...(patch.params !== undefined ? { params: patch.params } : {}),
+      },
+    })
     return toPublic(db, getRow(itemId)!)
   }
 
@@ -360,17 +390,17 @@ export function createQueueService(deps: QueueServiceDeps) {
     principal: Principal
   ): void {
     assertMayTouchEvent(principal, eventId)
-    const ts = now()
-    itemIds.forEach((id, index) => {
+    for (const id of itemIds) {
       const row = getRow(id)
       if (!row || row.eventId !== eventId) {
         throw new RunActionError("not_found", `Queue item not found: ${id}`)
       }
-      if (row.status !== "pending") return
-      db.update(spawnQueue)
-        .set({ ord: index + 1, updatedAt: ts })
-        .where(eq(spawnQueue.id, id))
-        .run()
+    }
+    emitDomainEvent(db, {
+      type: "queue.reordered",
+      eventId,
+      actor: actorFromPrincipal(principal),
+      payload: { itemIds },
     })
   }
 
@@ -412,12 +442,15 @@ export function createQueueService(deps: QueueServiceDeps) {
   function markRunning(itemId: string, agentId: string): boolean {
     const row = getRow(itemId)
     const won =
-      db
-        .update(spawnQueue)
-        .set({ status: "running", agentId, error: null, updatedAt: now() })
-        .where(and(eq(spawnQueue.id, itemId), eq(spawnQueue.status, "pending")))
-        .returning({ id: spawnQueue.id })
-        .get() !== undefined
+      row?.status === "pending" &&
+      emitDomainEvent(db, {
+        type: "queue.launched",
+        eventId: row.eventId,
+        challengeId: row.challengeId,
+        agentId,
+        actor: DRAINER_ACTOR,
+        payload: { itemId, agentId },
+      }).applied
     if (row) checkStarved(row.eventId)
     return won
   }
@@ -425,10 +458,13 @@ export function createQueueService(deps: QueueServiceDeps) {
   /** Mark an item failed (launch error recorded). */
   function markFailed(itemId: string, error: string): void {
     const row = getRow(itemId)
-    db.update(spawnQueue)
-      .set({ status: "failed", error, updatedAt: now() })
-      .where(eq(spawnQueue.id, itemId))
-      .run()
+    emitDomainEvent(db, {
+      type: "queue.item_failed",
+      eventId: row?.eventId ?? null,
+      challengeId: row?.challengeId ?? null,
+      actor: DRAINER_ACTOR,
+      payload: { itemId, error },
+    })
     if (row) checkStarved(row.eventId)
   }
 
@@ -436,10 +472,13 @@ export function createQueueService(deps: QueueServiceDeps) {
    * notice already went out), dropped silently rather than recorded failed. */
   function markCancelled(itemId: string): void {
     const row = getRow(itemId)
-    db.update(spawnQueue)
-      .set({ status: "cancelled", updatedAt: now() })
-      .where(eq(spawnQueue.id, itemId))
-      .run()
+    emitDomainEvent(db, {
+      type: "queue.item_cancelled",
+      eventId: row?.eventId ?? null,
+      challengeId: row?.challengeId ?? null,
+      actor: DRAINER_ACTOR,
+      payload: { itemId },
+    })
     if (row) checkStarved(row.eventId)
   }
 
@@ -454,28 +493,30 @@ export function createQueueService(deps: QueueServiceDeps) {
     agentId: string
   ): void {
     if (!queueItemId) return
-    db.update(spawnQueue)
-      .set({ status: "done", updatedAt: now() })
-      .where(
-        and(
-          eq(spawnQueue.id, queueItemId),
-          eq(spawnQueue.agentId, agentId),
-          eq(spawnQueue.status, "running")
-        )
-      )
-      .run()
+    const row = getRow(queueItemId)
+    if (row?.status !== "running" || row.agentId !== agentId) return
+    emitDomainEvent(db, {
+      type: "queue.item_done",
+      eventId: row.eventId,
+      challengeId: row.challengeId,
+      agentId,
+      actor: AGENT_SETTLE_ACTOR,
+      payload: { itemId: queueItemId, agentId },
+    })
   }
 
   /** Boot recovery: a `running` item's agent was mid-flight at the crash;
    * reset it to pending so a future resume re-launches (the old agent row
    * stays in history). */
-  function resetRunning(eventId: string, ts: string): void {
-    db.update(spawnQueue)
-      .set({ status: "pending", agentId: null, updatedAt: ts })
-      .where(
-        and(eq(spawnQueue.eventId, eventId), eq(spawnQueue.status, "running"))
-      )
-      .run()
+  function resetRunning(eventId: string): void {
+    const running = pendingCountRunning(eventId)
+    if (running === 0) return
+    emitDomainEvent(db, {
+      type: "queue.item_reset",
+      eventId,
+      actor: BOOT_RECOVERY_ACTOR,
+      payload: { count: running },
+    })
   }
 
   // --- drainer (single-flight, debounced) --------------------------------
@@ -520,15 +561,17 @@ export function createQueueService(deps: QueueServiceDeps) {
     return row?.status === "paused" ? "paused" : "running"
   }
 
-  function setState(eventId: string, status: "running" | "paused"): void {
-    const ts = now()
-    db.insert(queueState)
-      .values({ eventId, status, updatedAt: ts })
-      .onConflictDoUpdate({
-        target: queueState.eventId,
-        set: { status, updatedAt: ts },
-      })
-      .run()
+  /** Count of `running` items for an event (boot-reset scope). */
+  function pendingCountRunning(eventId: string): number {
+    return (
+      db
+        .select({ count: count() })
+        .from(spawnQueue)
+        .where(
+          and(eq(spawnQueue.eventId, eventId), eq(spawnQueue.status, "running"))
+        )
+        .get()?.count ?? 0
+    )
   }
 
   function pause(
@@ -539,7 +582,12 @@ export function createQueueService(deps: QueueServiceDeps) {
     assertMayTouchEvent(principal, eventId)
     // Idempotent: a repeat flip keeps silent (no duplicate notice lines).
     if (stateOf(eventId, principal) === "paused") return
-    setState(eventId, "paused")
+    emitDomainEvent(db, {
+      type: "queue.paused",
+      eventId,
+      actor: actorFromPrincipal(principal),
+      payload: { source },
+    })
     deps.onQueueNotice({
       type: "queueStateChanged",
       eventId,
@@ -555,7 +603,12 @@ export function createQueueService(deps: QueueServiceDeps) {
   ): void {
     assertMayTouchEvent(principal, eventId)
     if (stateOf(eventId, principal) === "running") return
-    setState(eventId, "running")
+    emitDomainEvent(db, {
+      type: "queue.resumed",
+      eventId,
+      actor: actorFromPrincipal(principal),
+      payload: { source },
+    })
     deps.onQueueNotice({
       type: "queueStateChanged",
       eventId,
