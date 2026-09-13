@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import type { TimingMeta } from "@aegisx/shared"
+import type { TimingMeta, SessionEntryView } from "@aegisx/shared"
 import type { ImageContent, TextContent, Usage } from "@earendil-works/pi-ai"
 import {
   type NewSessionOptions,
@@ -100,12 +100,13 @@ export class PiSessionAdapter extends SessionManagerBase {
   private nextSeq: number
   /** Fired after every persisted entry (with its seq). pi emits no such event
    * for regular messages, so the storage layer owns it. Set by the
-   * agent-session wiring. */
-  onAppend?: (entry: SessionEntry, seq: number) => void
+   * agent-session wiring. Consumers receive the owned wire view — the same
+   * object the adapter settled, zero copy. */
+  onAppend?: (entry: SessionEntryView, seq: number) => void
   /** Pre-persist timing provider: called BEFORE the row insert to compute the
    * `meta` column. Returns null for rows with no timing. Injected by the
    * agent-session wiring (the event pipeline). */
-  metaProvider?: (entry: SessionEntry) => TimingMeta | null
+  metaProvider?: (entry: SessionEntryView) => TimingMeta | null
 
   private constructor(opts: {
     db: Database
@@ -256,9 +257,13 @@ export class PiSessionAdapter extends SessionManagerBase {
 
   private persistEntry(entry: SessionEntry): void {
     const seq = ++this.nextSeq
+    // Listeners consume the owned wire view — the same object, re-typed (the
+    // view is the wire-side ownership of pi's entry shape, byte-identical).
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- pi entry → wire view at the adapter boundary
+    const view = entry as unknown as SessionEntryView
     // meta is computed pre-INSERT (NOT in onAppend, which is post-insert) so
     // it lands in the row itself and survives a refresh.
-    const meta = this.metaProvider?.(entry) ?? null
+    const meta = this.metaProvider?.(view) ?? null
     this.db
       .insert(sessionEntries)
       .values({
@@ -275,7 +280,7 @@ export class PiSessionAdapter extends SessionManagerBase {
       })
       .run()
     this.persistActiveLeaf(entry.id)
-    this.onAppend?.(entry, seq)
+    this.onAppend?.(view, seq)
   }
 
   private persistActiveLeaf(id: string | null): void {

@@ -1,10 +1,10 @@
 import { isRecord } from "@aegisx/shared"
 
 import type {
-  CompactionEntry,
   EntryItem,
-  SessionEntry,
-  SessionMessageEntry,
+  SessionCompactionEntryView,
+  SessionEntryView,
+  SessionMessageEntryView,
   TimingBlock,
   TimingMeta,
 } from "@/api"
@@ -97,7 +97,7 @@ export type LiveEntry =
   | {
       key: string
       type: "message"
-      entry: SessionEntry
+      entry: SessionEntryView
     }
   | {
       key: string
@@ -252,7 +252,7 @@ function accumulateUsage(target: ConversationAgentItem, usage: unknown): void {
 }
 
 function applyUser(
-  entry: SessionMessageEntry,
+  entry: SessionMessageEntryView,
   items: ConversationItem[],
   stableKey: string,
   seq?: number
@@ -280,7 +280,7 @@ export function formatTokensPiAligned(count: number): string {
 }
 
 function applyCompaction(
-  entry: CompactionEntry,
+  entry: SessionCompactionEntryView,
   items: ConversationItem[],
   stableKey: string,
   seq?: number
@@ -312,7 +312,7 @@ function terminalOfDetails(
 }
 
 function applyToolResult(
-  entry: SessionMessageEntry,
+  entry: SessionMessageEntryView,
   tools: Map<string, ToolBlock>,
   currentAgent: (
     timestamp?: string | number,
@@ -356,7 +356,7 @@ function applyToolResult(
 }
 
 function applyAssistant(
-  entry: SessionMessageEntry,
+  entry: SessionMessageEntryView,
   tools: Map<string, ToolBlock>,
   currentAgent: (
     timestamp?: string | number,
@@ -445,7 +445,7 @@ export function buildConversation(
   }
 
   const applyEntry = (
-    entry: SessionEntry,
+    entry: SessionEntryView,
     stableKey: string,
     meta?: TimingMeta,
     seq?: number

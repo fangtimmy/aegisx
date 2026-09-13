@@ -1,4 +1,4 @@
-import type { AgentSummary, EntryItem, SessionEntry } from "./agent"
+import type { AgentSummary, EntryItem, SessionEntryView } from "./agent"
 import type { ChannelFileMeta } from "./channels"
 
 /** One channel message (the ledger row — shared wire shape for timelines,
@@ -85,8 +85,8 @@ export type LiveEvent =
       key: string
       revision: number
       /** Synthetic message entry (not yet persisted): {type:"message", ...,
-       * message: <partial AgentMessage>}. No seq (assigned on commit). */
-      entry: SessionEntry
+       * message: <partial message>}. No seq (assigned on commit). */
+      entry: SessionEntryView
     }
   | {
       type: "tool.progress"

@@ -3,7 +3,7 @@ import type {
   ContextSnapshot,
   EntryItem,
   LiveEvent,
-  SessionEntry,
+  SessionEntryView,
 } from "@/api"
 import {
   buildConversation,
@@ -19,7 +19,7 @@ type MessageProgress = {
   agentId: string
   key: string
   revision: number
-  entry: SessionEntry
+  entry: SessionEntryView
 }
 
 type ToolProgress = {
@@ -67,7 +67,7 @@ function isUserTurn(item: EntryItem): boolean {
 }
 
 /** Tool-call id of a toolResult entry, if any. */
-function toolCallIdOf(entry: SessionEntry): string | null {
+function toolCallIdOf(entry: SessionEntryView): string | null {
   if (entry.type === "message" && entry.message.role === "toolResult") {
     return entry.message.toolCallId
   }

@@ -1,12 +1,16 @@
-import type { TimingBlockType, TimingMeta } from "@aegisx/shared"
+import type {
+  SessionEntryView,
+  SessionMessageEntryView,
+  SessionMessageView,
+  TimingBlockType,
+  TimingMeta,
+} from "@aegisx/shared"
 import { isRecord } from "@aegisx/shared"
 import type { ContextSnapshot, ToolTerminal } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type {
   AgentSession,
   AgentSessionEvent,
-  SessionEntry,
-  SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent"
 
 import { createEntryUsageAccumulator } from "./entry-usage"
@@ -30,15 +34,20 @@ type AssistantMessageEvent = Extract<
  * the committed entry. For other kinds (compaction, branch_summary, ...) it is
  * the entry's own id (those are never streamed in-progress).
  */
-export function entryKeyOf(agentId: string, entry: SessionEntry): string {
+export function entryKeyOf(agentId: string, entry: SessionEntryView): string {
   if (entry.type === "message") {
     return messageIdOf(agentId, entry.message)
   }
   return entry.id
 }
 
-/** Deterministic, stable key for an SDK AgentMessage (it has none of its own). */
-function messageIdOf(agentId: string, msg: AgentMessage): string {
+/** Deterministic, stable key for a message (it has none of its own). Takes a
+ * minimal structural slice so SDK messages and wire view messages key
+ * identically. */
+function messageIdOf(
+  agentId: string,
+  msg: { role: string; timestamp?: number; toolCallId?: string }
+): string {
   if (msg.role === "toolResult") {
     return `${agentId}:toolResult:${msg.toolCallId}`
   }
@@ -46,19 +55,23 @@ function messageIdOf(agentId: string, msg: AgentMessage): string {
 }
 
 /** Build a synthetic message entry for a streaming (not-yet-persisted)
- * AgentMessage, so `message.progress` carries the same SessionEntry shape the
+ * AgentMessage, so `message.progress` carries the same entry shape the
  * committed event will. id/parentId are placeholders (the store keys by `key`). */
 function syntheticMessageEntry(
   agentId: string,
   msg: AgentMessage
-): SessionMessageEntry {
+): SessionMessageEntryView {
   const ts = typeof msg.timestamp === "number" ? msg.timestamp : Date.now()
   return {
     type: "message",
     id: messageIdOf(agentId, msg),
     parentId: null,
     timestamp: new Date(ts).toISOString(),
-    message: msg,
+    // The SDK message rides the wire verbatim (the view is the wire-side
+    // ownership of that shape); pi's extension message roles have no declared
+    // view shape — the UI ignores them at runtime, as before.
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- AgentMessage → owned SessionMessageView at the projection boundary
+    message: msg as unknown as SessionMessageView,
   }
 }
 
@@ -275,7 +288,7 @@ export function createAgentEventPipeline(options: {
    * the session adapter calls this pre-commit (metaProvider) to write the `meta`
    * column; `commitEntry` calls it again to attach meta to the live
    * message.committed item. */
-  function metaFor(entry: SessionEntry): TimingMeta | null {
+  function metaFor(entry: SessionEntryView): TimingMeta | null {
     if (entry.type !== "message") return null
     const message = entry.message
     if (message.role === "assistant") {
@@ -293,7 +306,7 @@ export function createAgentEventPipeline(options: {
    * refreshes context/totals when a compaction/branch_summary lands (they carry
    * their own usage). Non-renderable kinds (model_change, custom, ...) are
    * skipped but still occupied a seq, so the gap matches `listMessages`. */
-  function commitEntry(entry: SessionEntry, seq: number): void {
+  function commitEntry(entry: SessionEntryView, seq: number): void {
     if (
       entry.type !== "message" &&
       entry.type !== "compaction" &&

@@ -17,6 +17,7 @@
  * Unknown kinds are default-accepted: the whole entry remainder goes into
  * `payload` and comes back byte-equal on resume.
  */
+import type { SessionEntryView } from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 
 import { parseJson } from "../../lib/guards"
@@ -86,6 +87,22 @@ export function entryFromRow(row: {
     parentId: row.parentId,
     timestamp: row.createdAt,
   } as unknown as SessionEntry
+}
+
+/** De-canonicalize one row to the owned wire view
+ * ({@link SessionEntryView}). Same object {@link entryFromRow} builds — the
+ * view is the wire-side ownership of that shape, not a different one — so
+ * history replay and adapter resume read identical bytes. */
+export function entryViewFromRow(row: {
+  id: string
+  parentId: string | null
+  createdAt: string
+  body: string
+}): SessionEntryView {
+  // Rows are written by the adapter (typed at commit time); the rebuild
+  // trusts the canonical envelope.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- canonical envelope → wire view at the codec boundary
+  return entryFromRow(row) as unknown as SessionEntryView
 }
 
 function omit(

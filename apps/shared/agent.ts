@@ -77,21 +77,121 @@ export {
 } from "./domain"
 export type { AgentStatus } from "./domain"
 
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
+/**
+ * Owned wire shape of one session entry (the `session_entries` body, projected
+ * for the wire). One-time adoption of the shape the pipeline has always put on
+ * the wire — structurally identical to what consumers read today — so a pi
+ * shape change now hits the adapter's conversion functions, not this contract.
+ *
+ * Fields the UI reads are declared; message-extras pi attaches (provider
+ * metadata, diagnostics, deferred handles, ...) ride the wire as untyped
+ * passthrough and are ignored. Unknown entry kinds are default-accepted by the
+ * canonical codec server-side (they round-trip through the body column) but
+ * never reach the render path — the REST query filters to renderable kinds and
+ * {@link isSessionEntry} drops them — so the union stays closed and every
+ * `type` narrowing is total.
+ */
 
-export type {
-  CompactionEntry,
-  SessionEntry,
-  SessionMessageEntry,
-} from "@earendil-works/pi-coding-agent"
+/** The message payload of a `message` entry. The three roles AegisX's agent
+ * produces are declared with exactly the fields consumers read; content blocks
+ * (text / thinking / toolCall payloads) are opaque passthrough read
+ * defensively. pi's extension message roles (bashExecution / custom / ...) are
+ * not produced by the zero-extension agent and have no declared shape — the
+ * render path ignores them at runtime, as before. */
+export type SessionMessageView =
+  | {
+      role: "user"
+      content: unknown
+      timestamp?: number
+    }
+  | {
+      role: "assistant"
+      /** Content blocks (text / thinking / toolCall), in message order. */
+      content: unknown[]
+      usage?: unknown
+      stopReason?: string
+      errorMessage?: string
+      timestamp?: number
+    }
+  | {
+      role: "toolResult"
+      toolCallId: string
+      toolName: string
+      content: unknown
+      details?: unknown
+      isError: boolean
+      timestamp?: number
+    }
+
+type SessionEntryViewBase = {
+  id: string
+  parentId: string | null
+  timestamp: string
+}
+
+export type SessionMessageEntryView = SessionEntryViewBase & {
+  type: "message"
+  message: SessionMessageView
+}
+
+export type SessionCompactionEntryView = SessionEntryViewBase & {
+  type: "compaction"
+  summary: string
+  firstKeptEntryId: string
+  tokensBefore: number
+  /** Extension data / summary usage — passthrough. */
+  details?: unknown
+  usage?: unknown
+  fromHook?: boolean
+}
+
+export type SessionEntryView =
+  | SessionMessageEntryView
+  | SessionCompactionEntryView
+  | (SessionEntryViewBase & {
+      type: "branch_summary"
+      fromId: string
+      summary: string
+      details?: unknown
+      usage?: unknown
+      fromHook?: boolean
+    })
+  | (SessionEntryViewBase & {
+      type: "model_change"
+      provider: string
+      modelId: string
+    })
+  | (SessionEntryViewBase & {
+      type: "thinking_level_change"
+      thinkingLevel: string
+    })
+  | (SessionEntryViewBase & {
+      type: "custom"
+      customType: string
+      data?: unknown
+    })
+  | (SessionEntryViewBase & {
+      type: "custom_message"
+      customType: string
+      content: unknown
+      display: boolean
+      details?: unknown
+    })
+  | (SessionEntryViewBase & { type: "session_info"; name?: string })
+  | (SessionEntryViewBase & {
+      type: "label"
+      targetId: string
+      label: string | undefined
+    })
 
 /**
  * One persisted session entry projected for the wire, with its append position.
  *
- * `entry` is a native pi `SessionEntry` (byte-for-byte a `session_entries.data`
- * row). `seq` is the `session_entries.seq` column — it is NOT part of the entry
- * JSON, so it travels alongside. It is the render order and the pagination
- * cursor (`?after=`).
+ * `entry` is the owned {@link SessionEntryView} — the `session_entries` body
+ * rebuilt wire-side, structurally the shape the adapter appends. `seq` is the
+ * `session_entries.seq` column — it is NOT part of the entry JSON, so it
+ * travels alongside. It is the render order and the pagination cursor
+ * (`?after=`).
  *
  * `key` is the stable identity used by the frontend store for dedup and for
  * matching an in-flight `message.progress` to its eventual `message.committed`.
@@ -100,7 +200,7 @@ export type {
  * entries it is the entry's own `id`. Computed server-side.
  */
 export type EntryItem = {
-  entry: SessionEntry
+  entry: SessionEntryView
   seq: number
   key: string
   /** Timing metadata (the `meta` column, v10). Present for new message rows
@@ -196,9 +296,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-/** Narrow an arbitrary value to a pi `SessionEntry` (structural check on the
- * discriminating fields the frontend relies on). */
-export function isSessionEntry(value: unknown): value is SessionEntry {
+/** Narrow an arbitrary value to a {@link SessionEntryView} (structural check
+ * on the discriminating fields the frontend relies on). Unknown entry kinds
+ * fail the check — they have no render path. */
+export function isSessionEntry(value: unknown): value is SessionEntryView {
   if (!isRecord(value)) return false
   const type = value.type
   if (typeof type !== "string" || !ENTRY_TYPES.has(type)) return false

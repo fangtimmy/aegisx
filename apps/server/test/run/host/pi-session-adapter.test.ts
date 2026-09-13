@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import type { SessionEntryView } from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { SessionManager } from "@earendil-works/pi-coding-agent"
 import { and, asc, eq, gt } from "drizzle-orm"
@@ -441,7 +442,7 @@ describe("PiSessionAdapter", () => {
         entry.type === "message" && entry.message.role === "assistant"
           ? { durationMs: 42 }
           : null
-      const seen: Array<[SessionEntry, number]> = []
+      const seen: Array<[SessionEntryView, number]> = []
       sm.onAppend = (entry, seq) => seen.push([entry, seq])
 
       sm.appendMessage(userMsg("a"))

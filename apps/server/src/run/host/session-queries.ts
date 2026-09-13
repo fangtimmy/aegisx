@@ -3,16 +3,16 @@ import {
   type MessageList,
   type MessageListItem,
   type AgentUsage,
+  type SessionEntryView,
   type TimingMeta,
 } from "@aegisx/shared"
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
 import { and, asc, desc, gt, inArray, sql, type SQL } from "drizzle-orm"
 
 import type { Database } from "../../db"
 import { sessionEntries } from "../../db/schema"
 import { type EntryUsageTotals } from "./entry-usage"
 import { entryKeyOf } from "./event-pipeline"
-import { entryFromRow } from "./session-entry-codec"
+import { entryViewFromRow } from "./session-entry-codec"
 
 /** Only renderable session-entry kinds are surfaced to message lists. */
 const RENDERABLE_TYPES = [
@@ -143,11 +143,11 @@ export function listRenderableEntries(
     .get()
   const items: MessageListItem[] = []
   for (const row of rows) {
-    let entry: SessionEntry
+    let entry: SessionEntryView
     try {
       // Written by the adapter (typed at commit time); parse only guards
       // against corrupt/truncated rows.
-      entry = entryFromRow(row)
+      entry = entryViewFromRow(row)
     } catch {
       continue
     }

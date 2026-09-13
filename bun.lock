@@ -37,9 +37,6 @@
     },
     "apps/shared": {
       "name": "@aegisx/shared",
-      "devDependencies": {
-        "@earendil-works/pi-coding-agent": "catalog:",
-      },
     },
     "apps/web": {
       "name": "@aegisx/web",

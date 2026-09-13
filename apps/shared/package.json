@@ -11,8 +11,5 @@
   "scripts": {
     "check": "oxlint --type-check . && oxfmt --check .",
     "fmt": "oxlint --fix --type-check . && oxfmt ."
-  },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "catalog:"
   }
 }

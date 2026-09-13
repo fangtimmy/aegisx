@@ -1,5 +1,6 @@
 import { describe, expect, setSystemTime, test } from "bun:test"
 
+import type { SessionEntryView, SessionMessageView } from "@aegisx/shared"
 import type { LiveEvent } from "@aegisx/shared/live-event"
 import type { AgentMessage } from "@earendil-works/pi-agent-core"
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent"
@@ -42,19 +43,25 @@ const committedOf = (emitted: LiveEvent[]) =>
   emitted.filter((e): e is Committed => e.type === "message.committed")
 
 function messageEntry(role: string, ts: number, id: string): SessionEntry {
-  return {
+  return refine<SessionEntry>({
     type: "message",
     id,
     parentId: null,
     timestamp: new Date(ts).toISOString(),
     message: refine<AgentMessage>({ role, content: [], timestamp: ts }),
-  }
+  })
+}
+
+/** The pipeline consumes the owned wire view; fixtures build pi entries and
+ * cross the boundary the same way the adapter does (same object, re-typed). */
+function viewEntry(entry: SessionEntry): SessionEntryView {
+  return refine<SessionEntryView>(entry)
 }
 
 describe("createAgentEventPipeline commitEntry", () => {
   test("emits committed for a message with its real seq", () => {
     const { pipeline, emitted } = setup()
-    pipeline.commitEntry(messageEntry("user", 1000, "e1"), 1)
+    pipeline.commitEntry(viewEntry(messageEntry("user", 1000, "e1")), 1)
 
     const committed = committedOf(emitted)
     expect(committed.length).toBe(1)
@@ -78,7 +85,7 @@ describe("createAgentEventPipeline commitEntry", () => {
       },
       1
     )
-    pipeline.commitEntry(messageEntry("user", 2000, "e1"), 2)
+    pipeline.commitEntry(viewEntry(messageEntry("user", 2000, "e1")), 2)
 
     const committed = committedOf(emitted)
     expect(committed.length).toBe(1)
@@ -87,7 +94,7 @@ describe("createAgentEventPipeline commitEntry", () => {
 
   test("compaction entry is emitted as its native compaction entry", () => {
     const { pipeline, emitted } = setup()
-    pipeline.commitEntry(messageEntry("assistant", 1000, "e1"), 1)
+    pipeline.commitEntry(viewEntry(messageEntry("assistant", 1000, "e1")), 1)
     pipeline.commitEntry(
       {
         type: "compaction",
@@ -354,8 +361,8 @@ function assistantMessage(timestamp: number): AgentMessage {
   })
 }
 
-function assistantEntry(msg: AgentMessage): SessionEntry {
-  return refine<SessionEntry>({
+function assistantEntry(msg: AgentMessage): SessionEntryView {
+  return refine<SessionEntryView>({
     type: "message",
     id: "e",
     parentId: null,
@@ -364,13 +371,13 @@ function assistantEntry(msg: AgentMessage): SessionEntry {
   })
 }
 
-function toolResultEntry(toolCallId: string): SessionEntry {
-  return refine<SessionEntry>({
+function toolResultEntry(toolCallId: string): SessionEntryView {
+  return refine<SessionEntryView>({
     type: "message",
     id: "e",
     parentId: null,
     timestamp: "t",
-    message: refine<AgentMessage>({
+    message: refine<SessionMessageView>({
       role: "toolResult",
       toolCallId,
       content: [],
