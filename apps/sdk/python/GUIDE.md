@@ -135,17 +135,30 @@ events). `channels.list()` returns your visible keys with unread counts.
 
 ## Decision workflow (scheduler)
 
-1. Every delivery ends with a [调度快照] block (delivery-time fleet state).
-   Decide from it when it suffices.
-2. Finer detail: `snapshot()` first; `agents.read(id, limit=…)` for one
-   agent's recent lines; `challenges.get(id)` before committing to an
-   unknown challenge.
-3. Submit one typed plan: `submit_plan(rationale, [...])` — enqueue new work,
-   steer/stop/close the agents that need it. The queue drains FIFO under the
-   caps; slow actions report via plan.result.
+The engine drives your turns. A **decision point** arrives as ONE injected
+message in your session — `[决策点 xxxx]（引擎注入，非频道消息）` — listing the
+coalesced triggering facts (a solver settled, a first flag, queue changes, a
+launch failure, a timeout, your ask being answered, a user message, the
+periodic re-examination, a boot re-sync) plus a [调度快照] block
+(decision-time fleet state). It is NOT a channel message.
+
+1. Decide from the [调度快照] when it suffices; finer detail: `snapshot()`
+   first; `agents.read(id, limit=…)` for one agent's recent lines;
+   `challenges.get(id)` before committing to an unknown challenge. The orch
+   channel is the event ledger — `channels.read("orch")` replays solver asks
+   and system events.
+2. **Close EVERY decision point with one typed plan in the SAME turn:**
+   `submit_plan(rationale, [...])` — enqueue new work, steer/stop/close the
+   agents that need it. A deliberate "do nothing" is `aegisx.no_op("reason")`,
+   never silence. A turn that ends without a plan is a protocol violation:
+   the engine re-prompts once, then escalates to the user.
+3. Communication stays free-text: answer solvers on orch, broadcast to
+   #team, DM a solver (`channels.post` / `agents.message`) any time during
+   the turn — only CONTROL decisions go through the plan.
 4. Read the per-ref results in the same call and repair immediately
    (`wrong_state` → re-read state; `solved_blocked` → pick another target).
-5. Do not poll or sleep-loop — events wake you.
+   The queue drains FIFO under the caps; slow actions report via plan.result.
+5. Do not poll or sleep-loop — decision points wake you.
 
 ## Errors
 

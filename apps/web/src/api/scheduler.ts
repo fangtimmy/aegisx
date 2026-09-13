@@ -26,26 +26,9 @@ export function listQueue(eventId: string) {
 }
 
 /** The scheduler orch inbox status (the scheduler DM view's status header):
- * unread backlog / next flush tick / delivery hold. */
+ * the channel key + the scheduler's unread backlog (read via the SDK). */
 export function getInbox(eventId: string) {
   return apiRequest<InboxSnapshot>(`/events/${eventId}/inbox`)
-}
-
-/** Hold delivery for the event (posts store only — the flush tick and
- * urgent deliveries skip the event entirely). */
-export function pauseInbox(eventId: string) {
-  return apiRequest<{ deliveryPaused: boolean }>(
-    `/events/${eventId}/inbox/pause`,
-    jsonRequest("POST", {})
-  )
-}
-
-/** Resume delivery — the next tick/urgent post catches up the backlog. */
-export function resumeInbox(eventId: string) {
-  return apiRequest<{ deliveryPaused: boolean }>(
-    `/events/${eventId}/inbox/resume`,
-    jsonRequest("POST", {})
-  )
 }
 
 /** Pause the event's queue: blocks FUTURE launches (running runs keep going). */

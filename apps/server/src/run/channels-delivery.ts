@@ -4,19 +4,16 @@ import { and, asc, eq, gt, inArray } from "drizzle-orm"
 import { agents, channelMessages, promptTemplates } from "../db/schema"
 import { DEFAULT_CHANNEL_DELIVERY_TEMPLATE } from "../orchestration/prompt-defaults"
 import { BUILTIN_PLUGIN } from "../orchestration/prompt-templates"
-import { fmtMs } from "./agent-runtime"
 import {
   dmKey,
   isUrgent,
-  orchKey,
   parseChannelKey,
   parseMeta,
-  SCHEDULER_READ_KEY,
   teamKey,
   type AgentRow,
   type ChannelContext,
 } from "./channels-context"
-import { fmtClock, MAX_DELIVER_CHARS, renderDelivery } from "./channels-render"
+import { MAX_DELIVER_CHARS, renderDelivery } from "./channels-render"
 import type { ClockTimer } from "./clock"
 import { emitDomainEvent } from "./domain-events/store"
 import { createEffects } from "./effects"
@@ -25,35 +22,22 @@ function isActive(agent: AgentRow): boolean {
   return isActiveAgentStatus(agent.status)
 }
 
-/** The functional read key of an agent: solvers read under their own id;
- * the scheduler reads orch under the stable "scheduler" key. */
-function readerKeyOf(agent: AgentRow): string {
-  return agent.role === "orchestrator" ? SCHEDULER_READ_KEY : agent.id
-}
-
-/** The agent's delivery face: solver = its challenge's #team + own dm;
- * scheduler = orch. */
+/** The agent's delivery face: its challenge's #team + own dm. The scheduler
+ * has NO delivery face (control-plane §3.6) — its orch channel is a ledger it
+ * reads via the SDK, and the engine's decision points are its only wakes. */
 function deliveryKeys(agent: AgentRow): string[] {
-  if (agent.role === "orchestrator") return [orchKey(agent.eventId)]
   const keys: string[] = []
   if (agent.challengeId) keys.push(teamKey(agent.challengeId))
   keys.push(dmKey(agent.id))
   return keys
 }
 
-/** The delivery engine: the one push exit for unread messages plus the
- * global flush tick. Cold-wake red line: team/orch only deliver on a live
- * agent; dm may cold-reopen a terminal agent when the caller is an urgent
- * post (coldWake=true). */
-export function createDeliveryEngine(
-  ctx: ChannelContext,
-  probes: {
-    /** Unread count for a reader on a channel — the heartbeat's "nothing to
-     * read" test (the reads service owns cursor semantics). */
-    unreadCount(channelKey: string, readerKey: string): number
-  }
-) {
-  const { db, deps } = ctx
+/** The solver-facing delivery engine: the push exit for unread #team / dm
+ * messages plus the global flush tick. Cold-wake red line: #team only
+ * delivers on a live agent; dm may cold-reopen a terminal agent when the
+ * caller is an urgent post (coldWake=true). */
+export function createDeliveryEngine(ctx: ChannelContext) {
+  const { db } = ctx
 
   // --- per-agent delivery serialization -------------------------------------
   // Deliveries for one agent run strictly one at a time. Two concurrent runs
@@ -65,8 +49,6 @@ export function createDeliveryEngine(
   // are and costs the first delivery no latency.
   const clock = ctx.clock
   const effects = createEffects(clock)
-  /** Last ACCEPTED delivery per agent — the heartbeat's silence clock. */
-  const lastDeliveredAt = new Map<string, number>()
 
   /** Chain a delivery task for one agent (the effect layer's per-key
    * single-flight). An idle chain starts it synchronously (an urgent post
@@ -96,10 +78,8 @@ export function createDeliveryEngine(
   ): Promise<void> {
     const agent = ctx.agentRow(agentId)
     if (!agent) return
-    if (ctx.isDeliveryPaused(agent.eventId)) return
     const live = isActive(agent)
     if (!live && !opts.coldWake) return
-    const readerKey = readerKeyOf(agent)
     const coldWake = opts.coldWake === true
 
     type Snapshot = {
@@ -112,7 +92,7 @@ export function createDeliveryEngine(
       const parsed = parseChannelKey(key)!
       if (parsed.kind !== "dm" && !live) continue // terminal: store only
       if (parsed.kind === "dm" && !live && !coldWake) continue
-      const cursor = ctx.readCursor(key, readerKey)
+      const cursor = ctx.readCursor(key, agent.id)
       const rows = db
         .select()
         .from(channelMessages)
@@ -143,7 +123,6 @@ export function createDeliveryEngine(
     }
     if (snapshots.length === 0) return
 
-    const nowMs = clock.now()
     const { text, lastIds } = renderDelivery(
       deliveryTemplateBody(),
       snapshots.map(({ label, messages }) => ({
@@ -158,24 +137,16 @@ export function createDeliveryEngine(
         })),
       })),
       MAX_DELIVER_CHARS,
-      nowMs
+      clock.now()
     )
-    // Scheduler deliveries carry the fleet snapshot (the digest renders
-    // against delivery-time state — usually enough to decide without a
-    // snapshot() round trip). Solvers never get one.
-    const digest =
-      agent.role === "orchestrator"
-        ? (deps.renderSchedulerDigest?.(agent.eventId) ?? "")
-        : ""
-    const withDigest = digest ? `${text}\n\n${digest}` : text
     // Send-time liveness guard (race): the entry check may have raced a
     // concurrent close — while the delivery op waits on the agent lock (a
     // close mid-abort holds it), the agent can go terminal. The predicate
     // runs inside send()'s lock BEFORE any resume, so a lost race bails
     // instead of cold-reviving an aborted agent; only a DM cold-wake may.
-    const outcome = await deps.send(
+    const outcome = await ctx.deps.send(
       agentId,
-      withDigest,
+      text,
       opts.deliverAs ?? "steer",
       {
         assertLive: (id) => {
@@ -185,7 +156,6 @@ export function createDeliveryEngine(
       }
     )
     if (!outcome.delivered) return
-    lastDeliveredAt.set(agentId, nowMs)
     // The accepted-delivery fact: what was pushed, how, and how big.
     emitDomainEvent(db, {
       type: "agent.delivered",
@@ -202,7 +172,7 @@ export function createDeliveryEngine(
     // flush instead of being silently dropped).
     snapshots.forEach(({ key }, index) => {
       const lastId = lastIds[index]
-      if (lastId !== null) ctx.markRead(key, readerKey, lastId)
+      if (lastId !== null) ctx.markRead(key, agent.id, lastId)
     })
   }
 
@@ -241,19 +211,18 @@ export function createDeliveryEngine(
     deliverAsync(agentId)
   }
 
-  /** Urgent-post delivery trigger:
+  /** Urgent-post delivery trigger (SOLVERS only — the scheduler is woken by
+   * the decision-point engine, never by deliveries):
    *  - team → every live agent on the challenge (terminal: store only)
-   *  - dm   → the target agent, cold-reopening a terminal agent
-   *           (runtime send → resume — reopen touches ONLY the target)
-   *  - orch → the event's scheduler, only if live (terminal → store; the
-   *           stable "scheduler" cursor catches up on next start) */
+   *  - dm   → the target solver, cold-reopening a terminal agent (runtime
+   *           send → resume — reopen touches ONLY the target); a dm to the
+   *           scheduler agent stores unread for its SDK reads. */
   function deliverChannel(
     key: string,
     deliverAs: "steer" | "followUp" = "steer"
   ): void {
     const parsed = parseChannelKey(key)
     if (!parsed) return
-    if (ctx.isDeliveryPaused(ctx.eventOfKey(parsed))) return
     if (parsed.kind === "team") {
       const liveAgents = db
         .select({ id: agents.id })
@@ -271,52 +240,39 @@ export function createDeliveryEngine(
       return
     }
     if (parsed.kind === "dm") {
+      const target = ctx.agentRow(parsed.id)
+      if (!target || target.role === "orchestrator") return
       deliverAsync(parsed.id, { coldWake: true, deliverAs })
-      return
     }
-    // orch: only a live scheduler receives pushes.
-    const orch = ctx.schedulerAgentRow(parsed.id)
-    if (orch && isActive(orch)) {
-      deliverAsync(orch.id, { deliverAs })
-    }
+    // orch: ledger only — no delivery face.
   }
 
   // --- flush tick -----------------------------------------------------------
 
   let flushTimer: ClockTimer | null = null
-  let nextFlushAt: number | null = null
 
   /** One global interval; no per-event objects, no catch-up code — messages
    * are persisted, so a missed tick's backlog settles on the next one. */
   function startFlushLoop(): void {
     if (flushTimer) return
-    nextFlushAt = clock.now() + ctx.intervalMs
     flushTimer = effects.every(ctx.intervalMs, runFlushTick)
   }
 
-  /** The tick: every live agent delivers its unread backlog (one single
-   * query). Hold skips the whole event. An idle scheduler with nothing to
-   * read gets a heartbeat instead — see {@link heartbeatDue}. */
+  /** The tick: every live SOLVER delivers its unread backlog (one single
+   * query). Orchestrators are skipped — their unread orch content rides the
+   * decision-point engine's triggers, never a delivery. */
   function runFlushTick(): void {
-    const nowMs = clock.now()
-    nextFlushAt = nowMs + ctx.intervalMs
     try {
       const live = db
         .select({
           id: agents.id,
-          eventId: agents.eventId,
           role: agents.role,
-          status: agents.status,
         })
         .from(agents)
         .where(inArray(agents.status, LIVE_AGENT_STATUSES))
         .all()
       for (const row of live) {
-        if (ctx.isDeliveryPaused(row.eventId)) continue
-        if (row.role === "orchestrator" && heartbeatDue(row, nowMs)) {
-          enqueue(row.id, () => deliverHeartbeat(row.id))
-          continue
-        }
+        if (row.role === "orchestrator") continue
         deliverAsync(row.id)
       }
     } catch (error) {
@@ -326,60 +282,11 @@ export function createDeliveryEngine(
     }
   }
 
-  /** Whether this scheduler warrants a heartbeat this tick.
-   *
-   * A wake-up is otherwise purely event-driven, which makes a silent event
-   * indistinguishable from a dead one: with an empty orch channel the
-   * scheduler is never resumed, no matter how long the fleet grinds without
-   * producing. The heartbeat is the floor — it only applies when the
-   * scheduler is genuinely asleep and has nothing to read, so it adds no wake
-   * to a busy event:
-   *   - idle (a running scheduler is already awake; steering it would
-   *     interrupt a turn in progress);
-   *   - delivery not held;
-   *   - last accepted delivery at least one tick old;
-   *   - nothing unread (with unread messages the normal path covers it). */
-  function heartbeatDue(
-    row: { id: string; eventId: string; status: string },
-    nowMs: number
-  ): boolean {
-    if (row.status !== "idle") return false
-    const last = lastDeliveredAt.get(row.id)
-    if (last !== undefined && nowMs - last < ctx.intervalMs) return false
-    return probes.unreadCount(orchKey(row.eventId), SCHEDULER_READ_KEY) === 0
-  }
-
-  /** Resume the scheduler with the fleet digest and the wall clock, without
-   * posting anything to the channel — the ledger stays a record of events,
-   * not of wake-ups. */
-  async function deliverHeartbeat(agentId: string): Promise<void> {
-    const agent = ctx.agentRow(agentId)
-    if (!agent || !isActive(agent)) return
-    if (ctx.isDeliveryPaused(agent.eventId)) return
-    const nowMs = clock.now()
-    const last = lastDeliveredAt.get(agentId)
-    const digest = deps.renderSchedulerDigest?.(agent.eventId) ?? ""
-    const silent = last === undefined ? "启动以来" : fmtMs(nowMs - last)
-    const body =
-      `[当前时间] ${fmtClock(nowMs)}\n` +
-      `[心跳] 距上次唤醒 ${silent}，期间无新消息 — 例行复核，不是新事件。` +
-      (digest ? `\n\n${digest}` : "")
-    const outcome = await deps.send(agentId, body, "steer", {
-      assertLive: (id) => {
-        const row = ctx.agentRow(id)
-        return row !== undefined && isActive(row)
-      },
-    })
-    if (outcome.delivered) lastDeliveredAt.set(agentId, nowMs)
-  }
-
   function stopFlushLoop(): void {
     // The flush interval and the delivery chains drop with the loop: a
     // closed service must not fire a delivery afterwards.
     effects.dispose()
     flushTimer = null
-    lastDeliveredAt.clear()
-    nextFlushAt = null
   }
 
   return {
@@ -389,7 +296,5 @@ export function createDeliveryEngine(
     runFlushTick,
     startFlushLoop,
     stopFlushLoop,
-    /** Null when the flush loop is stopped (closed service). */
-    nextFlushAt: () => nextFlushAt,
   }
 }

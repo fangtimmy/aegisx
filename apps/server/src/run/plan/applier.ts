@@ -526,7 +526,10 @@ export function createPlanApplier(deps: PlanApplierDeps) {
           }
           case "setQueuePaused": {
             if (action.paused) {
-              deps.queue.pause(eventId, "scheduler", principal)
+              // The pause carries the plan's id (§3.8 provenance labeling):
+              // a scheduler that pauses and then dies leaves an auditable
+              // source instead of a stuck anonymous gate.
+              deps.queue.pause(eventId, "scheduler", principal, planId)
             } else {
               deps.queue.resume(eventId, "scheduler", principal)
               deps.queue.scheduleDrain()

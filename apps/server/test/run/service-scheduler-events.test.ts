@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { agents, channelMessages } from "../../src/db/schema"
+import { agents, channelMessages, domainEvents } from "../../src/db/schema"
 import { orchKey } from "../../src/run/channels"
 import {
   makeAgentService,
@@ -13,7 +13,16 @@ import {
 import { refine } from "../support"
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Poll until cond() holds or the deadline passes (the engine drives turns
+ * through async chains; tests need the settled end-state). */
+async function waitUntil(cond: () => boolean, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("waitUntil timed out")
+    await new Promise((r) => setTimeout(r, 10))
+  }
+}
 
 /** The event's orchestrator agent row. */
 function orchestratorOf(
@@ -29,7 +38,7 @@ function orchestratorOf(
     .at(-1)!
 }
 
-/** orch channel message rows (id order) for an event. */
+/** orch channel message rows (id order) for an event — the LEDGER. */
 function orchRows(db: ReturnType<typeof makeService>["db"], eventId = "evt-1") {
   return db
     .select()
@@ -42,9 +51,24 @@ function metaOf(row: { meta: string }): Record<string, unknown> {
   return JSON.parse(row.meta)
 }
 
-/** Service whose scheduler createHost records prompt texts per agent. */
+function decisionPoints(db: ReturnType<typeof makeService>["db"]) {
+  return db
+    .select({ type: domainEvents.type, payload: domainEvents.payload })
+    .from(domainEvents)
+    .all()
+    .filter(
+      (r) =>
+        r.type === "decision_point.opened" || r.type === "decision_point.closed"
+    )
+    .map((r) => ({ type: r.type, ...JSON.parse(r.payload) }))
+}
+
+/** Service whose scheduler createHost records prompt texts per agent. The
+ * decision-point engine's timings are shrunk so coalesced triggers fire
+ * within test waits; the periodic tick is pushed far away. */
 function makeService(promptLog: Map<string, string[]>, failSolver = false) {
   const h = makeAgentService({
+    decisionTimings: { coalesceMs: 5, errorRetryMs: 20, periodicMs: 3_600_000 },
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
       const list: string[] = []
@@ -72,8 +96,8 @@ function makeService(promptLog: Map<string, string[]>, failSolver = false) {
 const tagOf = (agentId: string) =>
   `「Test Challenge」agent-${agentId.slice(0, 8)}`
 
-describe("agent lifecycle events → orch messages (v19)", () => {
-  test("started/idle post as NON-urgent orch messages; the live scheduler is not woken until the tick", async () => {
+describe("decision points drive the scheduler (§3.6)", () => {
+  test("lifecycle lines stay in the orch ledger; a solver settle opens a decision point whose payload is injected (not delivered)", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeService> | undefined
     try {
@@ -94,8 +118,8 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       )
       await settle()
 
-      // Events ARE messages: started (manual marker) + idle both landed in
-      // orch as system posts, non-urgent.
+      // Events ARE ledger rows: started (manual marker) + idle, non-urgent,
+      // stored for the scheduler's SDK reads.
       const rows = orchRows(db)
       const tag = tagOf(solver.id)
       expect(
@@ -112,26 +136,154 @@ describe("agent lifecycle events → orch messages (v19)", () => {
         )
       ).toBe(true)
       expect(rows.every((r) => metaOf(r).urgent !== true)).toBe(true)
-      // No immediate wake: the scheduler saw nothing new.
-      expect(promptLog.get(orch.id)?.length ?? 0).toBe(primed)
 
-      // The tick delivers the backlog as ONE merged steer.
-      service.channels.runFlushTick()
+      // The settle opened ONE decision point (agent.settled) whose payload
+      // — not a [频道消息] delivery — reached the scheduler's session.
+      await waitUntil(() => (promptLog.get(orch.id)?.length ?? 0) >= primed + 2)
+      const texts = promptLog.get(orch.id) ?? []
+      const payload = texts[primed]
+      expect(payload).toContain("[决策点")
+      expect(payload).toContain("agent.settled：")
+      expect(payload).toContain("submit_plan")
+      expect(payload).not.toContain("[频道消息]")
+      // The turn produced no plan → ONE strict re-prompt, then a violation.
+      expect(texts[primed + 1]).toContain("违约提醒")
+      await waitUntil(() =>
+        decisionPoints(db).some((d) => d.type === "decision_point.closed")
+      )
+      const closed = decisionPoints(db).find(
+        (d) => d.type === "decision_point.closed"
+      )
+      expect(closed?.outcome).toBe("violation")
+    } finally {
+      await made?.h.close().catch(() => undefined)
+    }
+  })
+
+  test("a scheduler-submitted plan inside the turn window closes the point as plan", async () => {
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeAgentService> | undefined
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    try {
+      const h = makeAgentService({
+        decisionTimings: {
+          coalesceMs: 5,
+          errorRetryMs: 20,
+          periodicMs: 3_600_000,
+        },
+        createHost: mock(async (input: { agentId: string }) => {
+          const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6))
+          const list: string[] = []
+          promptLog.set(input.agentId, list)
+          const sdk = refine<{
+            prompt: (text: string) => Promise<void>
+          }>(stub.session)
+          sdk.prompt = async (text: string) => {
+            list.push(text)
+            // Only the scheduler's decision-point turn hangs on the gate.
+            if (text.includes("回合协议")) await gate
+          }
+          return stub
+        }),
+      })
+      made = h
+      const { db, service } = h
+
+      await service.startScheduler("evt-1")
+      await settle()
+      const orch = orchestratorOf(db)
+
+      const solver = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
+      await settle()
+      // The decision-point turn is now mid-flight (hung in prompt) — match
+      // the payload's protocol demand, not the initial prompt.
+      await waitUntil(() =>
+        (promptLog.get(orch.id) ?? []).some((t) => t.includes("回合协议"))
+      )
+      const opened = decisionPoints(db).find(
+        (d) => d.type === "decision_point.opened"
+      )
+      expect(opened).toBeTruthy()
+
+      // The scheduler submits its plan from the container (HTTP endpoint)
+      // WHILE the decision-point turn is in flight.
+      await service.submitPlan(
+        "evt-1",
+        {
+          rationale: "quiet round, nothing to do",
+          actions: [{ ref: "r1", kind: "noOp", reason: "no change" }],
+        },
+        {
+          kind: "agent",
+          agentId: orch.id,
+          eventId: "evt-1",
+          challengeId: null,
+          role: "orchestrator",
+        }
+      )
+      release()
+      await waitUntil(() =>
+        decisionPoints(db).some((d) => d.type === "decision_point.closed")
+      )
+      const closed = decisionPoints(db).find(
+        (d) => d.type === "decision_point.closed"
+      )
+      expect(closed?.outcome).toBe("plan")
+      expect(solver.id).toBeTruthy()
+    } finally {
+      release()
+      await made?.close().catch(() => undefined)
+    }
+  })
+
+  test("a first flag acceptance is an URGENT trigger: the decision point flushes without the window", async () => {
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
+    try {
+      made = makeService(promptLog)
+      const { db, service } = made
+
+      await service.startScheduler("evt-1")
+      await settle()
+      const orch = orchestratorOf(db)
+      const primed = promptLog.get(orch.id)?.length ?? 0
+
+      const solver = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
+      await settle()
+      // Drain the settle's decision point (payload + re-prompt + violation).
+      await waitUntil(() => (promptLog.get(orch.id)?.length ?? 0) >= primed + 2)
+      const afterSettle = promptLog.get(orch.id)!.length
+      const closedAfterSettle = decisionPoints(db).filter(
+        (d) => d.type === "decision_point.closed"
+      ).length
+
+      // First flag: urgent → the next payload arrives without waiting.
+      service.notifyFlagAccepted("ch-1", solver.id)
       await settle()
       const texts = promptLog.get(orch.id) ?? []
-      expect(texts.length).toBe(primed + 1)
-      expect(texts.at(-1)).toContain("[频道消息]")
-      expect(texts.at(-1)).toContain("已启动（手动）")
-      expect(texts.at(-1)).toContain("已空闲")
-      service.channels.runFlushTick()
-      await settle()
-      expect(promptLog.get(orch.id)?.length).toBe(primed + 1)
+      expect(texts.length).toBeGreaterThan(afterSettle)
+      const flagPayload = texts.at(-2)!
+      expect(flagPayload).toContain("flag.accepted：")
+      expect(flagPayload).toContain("首次解出")
+      expect(flagPayload).toContain("submit_plan")
+      await waitUntil(
+        () =>
+          decisionPoints(db).filter((d) => d.type === "decision_point.closed")
+            .length > closedAfterSettle
+      )
     } finally {
       await made?.h.close().catch(() => undefined)
     }
   })
 
-  test("flagAccepted and finished post orch messages; a failed settle carries the idle(failed) marker", async () => {
+  test("W3 paused: no orch rows and no decision points; resume opens a user.directive re-sync point", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeService> | undefined
     try {
@@ -140,70 +292,119 @@ describe("agent lifecycle events → orch messages (v19)", () => {
 
       await service.startScheduler("evt-1")
       await settle()
-      expect(orchestratorOf(db).id).toBeTruthy()
+      const orch = orchestratorOf(db)
+      const primed = promptLog.get(orch.id)?.length ?? 0
 
+      await service.pauseScheduler("evt-1")
       const solver = await service.spawn(
-        {
-          eventId: "evt-1",
-          challengeId: "ch-1",
-        },
+        { eventId: "evt-1", challengeId: "ch-1" },
         USER
       )
       await settle()
-
       service.notifyFlagAccepted("ch-1", solver.id)
-      const tag = tagOf(solver.id)
-      expect(
-        orchRows(db).some(
-          (r) =>
-            r.body === `${tag}flag 已接受` && metaOf(r).agentId === solver.id
-        )
-      ).toBe(true)
-
-      await service.finishAgent(solver.id, "solved it", "user", USER)
       await settle()
-      expect(
-        orchRows(db).some(
-          (r) =>
-            r.body === `${tag}已完成` &&
-            metaOf(r).eventType === "agent.finished" &&
-            metaOf(r).urgent !== true
-        )
-      ).toBe(true)
+      await service.queue().enqueue(
+        {
+          eventId: "evt-1",
+          challengeId: "ch-1",
+          source: "scheduler",
+          prompt: "p",
+        },
+        USER
+      )
+      await settle()
+
+      // Silent: no orch rows, no decision points, no payloads.
+      expect(orchRows(db)).toHaveLength(0)
+      expect(decisionPoints(db)).toHaveLength(0)
+      expect(promptLog.get(orch.id)?.length ?? 0).toBe(primed)
+
+      await service.resumeScheduler("evt-1")
+      await settle()
+      await waitUntil(() => (promptLog.get(orch.id)?.length ?? 0) >= primed + 1)
+      const texts = promptLog.get(orch.id) ?? []
+      const payload = texts[primed]
+      expect(payload).toContain("[决策点")
+      expect(payload).toContain("调度已恢复")
+      expect(payload).toContain("aegisx.snapshot()")
+      const opened = decisionPoints(db).find(
+        (d) => d.type === "decision_point.opened"
+      )
+      expect(opened).toBeTruthy()
+      expect(Array.isArray(opened.triggers) && opened.triggers[0]).toContain(
+        "user.directive"
+      )
     } finally {
       await made?.h.close().catch(() => undefined)
     }
   })
 
-  test("a failed solver turn posts idle(failed) so the scheduler can tell a dead solver from a pause", async () => {
+  test("a terminal scheduler stores events unread; a restart reopens the SAME agent with a reviving decision point (no delivery catch-up)", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeService> | undefined
     try {
-      made = makeService(promptLog, true)
+      made = makeService(promptLog)
       const { db, service } = made
 
-      await service.startScheduler("evt-1")
+      const sched = await service.startScheduler("evt-1")
       await settle()
-      expect(orchestratorOf(db).id).toBeTruthy()
+      const orchId = orchestratorOf(db).id
 
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
-      await wait(80)
+      await service.closeScheduler("evt-1")
+      expect(service.getAgent(sched.id)?.status).toBe("aborted")
 
-      expect(
-        orchRows(db).some(
-          (r) =>
-            !r.body.endsWith("「Test Challenge」agent-") &&
-            r.body.includes("「Test Challenge」") &&
-            r.body.endsWith("已空闲（失败）") &&
-            metaOf(r).eventType === "agent.idle"
-        )
-      ).toBe(true)
+      // Events while the scheduler is terminal: stored under the stable
+      // 'scheduler' cursor, nothing delivered (the SDK replays the ledger).
+      const solver = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
+      await settle()
+      const stored = orchRows(db)
+      expect(stored.length).toBeGreaterThanOrEqual(2)
+
+      // Restore: SAME scheduler agent (memory kept) + a user.directive
+      // decision point cold-resumes it.
+      const restored = await service.startScheduler("evt-1")
+      await settle()
+      expect(restored.id).toBe(sched.id)
+      await waitUntil(() => (promptLog.get(orchId)?.length ?? 0) >= 1)
+      const payload = promptLog.get(orchId)![0]
+      expect(payload).toContain("[决策点")
+      expect(payload).toContain("调度已恢复")
+      expect(payload).not.toContain("[频道消息]")
+      // The ledger backlog stays unread for the scheduler's own reads.
+      expect(service.channels.unreadCount(orchKey("evt-1"), "scheduler")).toBe(
+        stored.length
+      )
+      expect(solver.id).toBeTruthy()
     } finally {
       await made?.h.close().catch(() => undefined)
     }
   })
 
-  test("a reopened agent posts agent.reopened", async () => {
+  test("startScheduler reset recreates: the terminal scheduler is deleted, a fresh one made (W3.2)", async () => {
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
+    try {
+      made = makeService(promptLog)
+      const { service } = made
+
+      const sched = await service.startScheduler("evt-1")
+      await settle()
+      await service.closeScheduler("evt-1")
+
+      const fresh = await service.startScheduler("evt-1", { reset: true })
+      await settle()
+      expect(fresh.id).not.toBe(sched.id)
+      expect(service.getAgent(sched.id)).toBeUndefined()
+      expect(service.getAgent(fresh.id)?.status).toBe("idle")
+    } finally {
+      await made?.h.close().catch(() => undefined)
+    }
+  })
+
+  test("scheduler-spawned agents carry no manual marker in the orch ledger (W5)", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeService> | undefined
     try {
@@ -218,31 +419,23 @@ describe("agent lifecycle events → orch messages (v19)", () => {
         {
           eventId: "evt-1",
           challengeId: "ch-1",
+          source: "scheduler",
         },
         USER
       )
       await settle()
-      await service.closeAgent(solver.id, USER)
-      await settle()
-
-      // Direct user message → lifecycle.send → onResume reopen; the restore
-      // posts agent.reopened into orch.
-      await service.sendMessage(solver.id, { text: "继续" }, USER)
-      await wait(80)
-      const tag = tagOf(solver.id)
-      expect(
-        orchRows(db).some(
-          (r) =>
-            r.body === `${tag}已重开` &&
-            metaOf(r).eventType === "agent.reopened"
-        )
-      ).toBe(true)
+      const started = orchRows(db).filter(
+        (r) => metaOf(r).eventType === "agent.started"
+      )
+      expect(started).toHaveLength(1)
+      expect(started[0].body).toBe(`${tagOf(solver.id)}已启动`)
+      expect(metaOf(started[0]).source).toBe("scheduler")
     } finally {
       await made?.h.close().catch(() => undefined)
     }
   })
 
-  test("the queue-starved edge posts an URGENT orch message that wakes the live scheduler immediately", async () => {
+  test("the queue's low-water edge rides a queue.changed decision point", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeService> | undefined
     try {
@@ -277,21 +470,18 @@ describe("agent lifecycle events → orch messages (v19)", () => {
       queue.cancelDrain()
       queue.remove("evt-1", one.id, USER)
       await settle()
-
-      const urgent = orchRows(db).filter((r) => metaOf(r).urgent === true)
-      expect(urgent).toHaveLength(1)
-      expect(urgent[0].body).toContain("队列不足")
-      expect(metaOf(urgent[0]).noticeType).toBe("emergency")
-      // Immediate wake: the scheduler got the steer without any tick.
-      const texts = promptLog.get(orch.id) ?? []
-      expect(texts.length).toBe(primed + 1)
-      expect(texts.at(-1)).toContain("队列不足")
+      await waitUntil(() => (promptLog.get(orch.id)?.length ?? 0) >= primed + 1)
+      const payload = promptLog.get(orch.id)![primed]
+      expect(payload).toContain("[决策点")
+      expect(payload).toContain("queue.changed：队列低水位（待发 1）")
+      // The old starved-edge emergency notice is gone — no urgent orch line.
+      expect(orchRows(db).every((r) => metaOf(r).urgent !== true)).toBe(true)
     } finally {
       await made?.h.close().catch(() => undefined)
     }
   })
 
-  test("W3 paused: agent events and queue urgent lines are dropped entirely; resume wakes with the re-sync message", async () => {
+  test("recoverOnBoot re-enters via a boot.resync decision point (replaces boot-reentry)", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeService> | undefined
     try {
@@ -300,154 +490,30 @@ describe("agent lifecycle events → orch messages (v19)", () => {
 
       await service.startScheduler("evt-1")
       await settle()
-      const orch = orchestratorOf(db)
-      const primed = promptLog.get(orch.id)?.length ?? 0
+      const scheduler = orchestratorOf(db)
+      const primed = promptLog.get(scheduler.id)?.length ?? 0
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
+      await settle()
+      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
 
-      await service.pauseScheduler("evt-1")
-      const solver = await service.spawn(
-        {
-          eventId: "evt-1",
-          challengeId: "ch-1",
-        },
-        USER
+      await service.recoverOnBoot()
+      await waitUntil(
+        () => (promptLog.get(scheduler.id)?.length ?? 0) >= primed + 1
       )
-      await settle()
-      service.notifyFlagAccepted("ch-1", solver.id)
-      const queue = service.queue()
-      const one = queue.enqueue(
-        {
-          eventId: "evt-1",
-          challengeId: "ch-1",
-          source: "scheduler",
-          prompt: "p",
-        },
-        USER
+      const payload = promptLog.get(scheduler.id)!.at(-1)!
+      expect(payload).toContain("[决策点")
+      expect(payload).toContain("boot.resync：服务已重启")
+      expect(payload).toContain("重新同步")
+      const opened = decisionPoints(db).filter(
+        (d) => d.type === "decision_point.opened"
       )
-      queue.enqueue(
-        {
-          eventId: "evt-1",
-          challengeId: "ch-1",
-          source: "scheduler",
-          prompt: "q",
-        },
-        USER
-      )
-      queue.cancelDrain()
-      queue.remove("evt-1", one.id, USER)
-      await settle()
-
-      // Silent: no orch rows at all while paused (dropped, not stored).
-      expect(orchRows(db)).toHaveLength(0)
-      expect(promptLog.get(orch.id)?.length ?? 0).toBe(primed)
-
-      await service.resumeScheduler("evt-1")
-      await settle()
-      const texts = promptLog.get(orch.id) ?? []
-      expect(texts.length).toBeGreaterThan(primed)
-      expect(texts.some((t) => t.includes("重新同步"))).toBe(true)
-    } finally {
-      await made?.h.close().catch(() => undefined)
-    }
-  })
-
-  test("a terminal scheduler stores events unread; a restart reopens the SAME agent and the tick catches up", async () => {
-    const promptLog = new Map<string, string[]>()
-    let made: ReturnType<typeof makeService> | undefined
-    try {
-      made = makeService(promptLog)
-      const { db, service } = made
-
-      const sched = await service.startScheduler("evt-1")
-      await settle()
-      const orchId = orchestratorOf(db).id
-
-      await service.closeScheduler("evt-1")
-      expect(service.getAgent(sched.id)?.status).toBe("aborted")
-
-      // Events while the scheduler is terminal: stored under the stable
-      // 'scheduler' cursor, nothing delivered.
-      const solver = await service.spawn(
-        {
-          eventId: "evt-1",
-          challengeId: "ch-1",
-        },
-        USER
-      )
-      await settle()
-      const stored = orchRows(db)
-      expect(stored.length).toBeGreaterThanOrEqual(2)
-      expect(service.channels.unreadCount(orchKey("evt-1"), "scheduler")).toBe(
-        stored.length
-      )
-
-      // Restore: SAME scheduler agent (memory kept)…
-      const restored = await service.startScheduler("evt-1")
-      await settle()
-      expect(restored.id).toBe(sched.id)
-
-      // …and the next tick sweeps the stored backlog into the orchestrator.
-      service.channels.runFlushTick()
-      await settle()
-      const texts = promptLog.get(orchId) ?? []
-      const catchUp = texts.find(
-        (t) => t.includes("[频道消息") && t.includes("已启动")
-      )
-      expect(catchUp).toBeDefined()
-      expect(catchUp).toContain("已空闲")
-      expect(solver.id).toBeTruthy()
-    } finally {
-      await made?.h.close().catch(() => undefined)
-    }
-  })
-
-  test("startScheduler reset recreates: the terminal scheduler is deleted, a fresh one made (W3.2)", async () => {
-    const promptLog = new Map<string, string[]>()
-    let made: ReturnType<typeof makeService> | undefined
-    try {
-      made = makeService(promptLog)
-      const { service } = made
-
-      const sched = await service.startScheduler("evt-1")
-      await settle()
-      await service.closeScheduler("evt-1")
-
-      const fresh = await service.startScheduler("evt-1", { reset: true })
-      await settle()
-      expect(fresh.id).not.toBe(sched.id)
-      expect(service.getAgent(sched.id)).toBeUndefined()
-      expect(service.getAgent(fresh.id)?.status).toBe("idle")
-    } finally {
-      await made?.h.close().catch(() => undefined)
-    }
-  })
-
-  test("scheduler-launched agents carry no manual marker in the orch message (W5)", async () => {
-    const promptLog = new Map<string, string[]>()
-    let made: ReturnType<typeof makeService> | undefined
-    try {
-      made = makeService(promptLog)
-      const { db, service } = made
-
-      await service.startScheduler("evt-1")
-      await settle()
-      expect(orchestratorOf(db).id).toBeTruthy()
-
-      // A scheduler-spawned agent: source='scheduler' — NO manual marker.
-      const solver = await service.spawn(
-        {
-          eventId: "evt-1",
-          challengeId: "ch-1",
-          source: "scheduler",
-        },
-        USER
-      )
-      await settle()
-      const started = orchRows(db).filter(
-        (r) => metaOf(r).eventType === "agent.started"
-      )
-      expect(started).toHaveLength(1)
-      expect(started[0].body).toBe(`${tagOf(solver.id)}已启动`)
-      expect(metaOf(started[0]).source).toBe("scheduler")
+      expect(
+        opened.some(
+          (d) =>
+            Array.isArray(d.triggers) &&
+            d.triggers.some((t: string) => t.includes("boot.resync"))
+        )
+      ).toBe(true)
     } finally {
       await made?.h.close().catch(() => undefined)
     }

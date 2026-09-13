@@ -258,12 +258,16 @@ describe("agent timeout", () => {
       await wait(150)
 
       const texts = promptLog.get(orch.id) ?? []
+      // The timed-out outcome reaches the scheduler as an URGENT
+      // decision-point payload (agent.timedOut trigger), not a delivery.
       expect(
-        texts.some((t) => t.includes("超时") && t.includes("已强制终止"))
+        texts.some(
+          (t) => t.includes("agent.timedOut：") && t.includes("aborted")
+        )
       ).toBe(true)
       // P2 wire: the agent exposes its hard deadline.
       expect(challenge.deadlineAt).not.toBeNull()
-      // The urgent orch message rides the timeline too.
+      // The urgent orch lifecycle line rides the ledger timeline too.
       const orchPosts = h.service.channels.listMessages(orchKey("evt-1"))
       expect(orchPosts.items.some((m) => m.body.includes("超时"))).toBe(true)
     } finally {

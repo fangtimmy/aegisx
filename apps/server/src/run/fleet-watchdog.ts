@@ -26,7 +26,9 @@ export type FleetStall = {
 
 type FleetWatchdogDeps = {
   db: Database
-  /** Publish the urgent orch notice (the service wires notices.publish). */
+  /** Publish the escalation: the `watchdog.escalated` fact + the urgent
+   * eventStalled notice (the service wires both beside the decision-point
+   * trigger). */
   onStalled(event: FleetStall): void
   /** A disabled scheduler cannot act on the notice — skip it silently. */
   isSchedulerPaused(eventId: string): boolean
@@ -49,10 +51,12 @@ type FleetWatchdogDeps = {
 type ProgressState = { marker: string; progressAt: number; fired: boolean }
 
 /**
- * Event-level vital-signs watchdog. The per-agent stall watchdog only covers
- * solvers; this one covers the PATIENT — an event with pending `spawn_queue`
- * work and no live solver at all means the fence / drain / platform is stuck,
- * and in an unattended event nobody else would notice.
+ * Event-level vital-signs watchdog — the ESCALATION alarm (§3.6/§3.7: the
+ * wake duty moved to the decision-point engine; what remains is the alarm
+ * when the machinery itself is stuck). The per-agent stall watchdog only
+ * covers solvers; this one covers the PATIENT — an event with pending
+ * `spawn_queue` work and no live solver at all means the fence / drain /
+ * platform is stuck, and in an unattended event nobody else would notice.
  *
  * The trigger is deliberately narrow (no false positives on a completed
  * event):
@@ -63,9 +67,10 @@ type ProgressState = { marker: string; progressAt: number; fired: boolean }
  *   - the pending-set fingerprint has not changed for {@link FLEET_STALL_MS}
  *     (a launch, failure, enqueue or removal all count as progress).
  *
- * A stalled event fires ONE urgent `eventStalled` notice per episode, which
- * also wakes the scheduler; state resets the moment a solver appears, the
- * pending set empties, or the queue/scheduler is paused.
+ * A stalled event fires ONE escalation per episode (per-episode dedup stays):
+ * the `watchdog.escalated` fact plus the urgent `eventStalled` notice — the
+ * unattended appliance's alarm face. State resets the moment a solver
+ * appears, the pending set empties, or the queue/scheduler is paused.
  */
 export function createFleetWatchdog(deps: FleetWatchdogDeps) {
   const clock = deps.clock ?? systemClock

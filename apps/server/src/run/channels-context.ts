@@ -105,10 +105,17 @@ export type ChannelServiceDeps = {
   now(): string
   /** Host root of a challenge's workspace tree (attachment copy target). */
   challengeWorkspaceRoot(eventId: string, challengeId: string): string
-  /** Renders the fleet snapshot appended to every scheduler (orch)
-   * delivery; return "" to skip. Wired by the run service (owns the
-   * fleet/scheduler domain); absent in tests. */
-  renderSchedulerDigest?(eventId: string): string
+  /** Decision-point engine feed (late-bound via the run service): unread
+   * content the scheduler must see — solver asks and user posts on orch, and
+   * user DMs to the scheduler agent — open decision points instead of
+   * deliveries (§3.6). System posts carry their own explicit triggers. */
+  onSchedulerInbox?(post: {
+    eventId: string
+    kind: "orch" | "dm"
+    authorType: "agent" | "user"
+    authorAgentId?: string
+    body: string
+  }): void
   /** Test seam: flush tick interval. */
   flushIntervalMs?: number
   /** Time layer (default: the system clock). The flush tick reads time and
@@ -189,9 +196,9 @@ export function isUrgent(row: ChannelMessageRow): boolean {
   }
 }
 
-/** Shared channel state: entity lookups, read cursors, SSE fan-out, and the
- * per-event delivery hold. The section modules (post / delivery / reads)
- * close over one context instead of one 1500-line factory closure. */
+/** Shared channel state: entity lookups, read cursors, SSE fan-out. The
+ * section modules (post / delivery / reads) close over one context instead
+ * of one 1500-line factory closure. */
 export function createChannelContext(
   deps: ChannelServiceDeps,
   intervalMs: number,
@@ -320,13 +327,6 @@ export function createChannelContext(
     bus.emit(parsed.id, { type: "channel.message", message })
   }
 
-  // --- hold (deliveryPaused, per event) --------------------------------
-
-  /** Paused events: the tick AND urgent deliveries skip them entirely (posts
-   * only store); the next tick/urgent after resume catches up. In-memory
-   * only (a service restart resets it). */
-  const deliveryPausedEvents = new Set<string>()
-
   return {
     db,
     dataDir,
@@ -344,16 +344,6 @@ export function createChannelContext(
     markRead,
     toPublic,
     emitChannelMessage,
-    setDeliveryPaused(eventId: string, paused: boolean): void {
-      if (paused) deliveryPausedEvents.add(eventId)
-      else deliveryPausedEvents.delete(eventId)
-    },
-    isDeliveryPaused(eventId: string): boolean {
-      return deliveryPausedEvents.has(eventId)
-    },
-    clearDeliveryPaused(): void {
-      deliveryPausedEvents.clear()
-    },
   }
 }
 

@@ -14,7 +14,6 @@ import {
 } from "../../src/db/schema"
 import { DEFAULT_CHANNEL_DELIVERY_TEMPLATE } from "../../src/orchestration/prompt-defaults"
 import {
-  FLUSH_INTERVAL_MS,
   SCHEDULER_READ_KEY,
   createChannelService,
   dmKey,
@@ -25,7 +24,7 @@ import {
   type ChannelService,
 } from "../../src/run/channels"
 import { fmtClock, renderDelivery } from "../../src/run/channels-render"
-import { type Clock, createFakeClock } from "../../src/run/clock"
+import type { Clock } from "../../src/run/clock"
 import { createLiveBus, type LiveBus } from "../../src/run/host/live"
 import {
   agentPrincipal,
@@ -65,13 +64,16 @@ type SentEntry = { agentId: string; text: string }
 function makeService(
   db: Db,
   dir: Dir,
-  deps: {
-    renderSchedulerDigest?: (eventId: string) => string
-    bus?: LiveBus
-    clock?: Clock
-  } = {}
+  deps: { bus?: LiveBus; clock?: Clock } = {}
 ) {
   const sent: SentEntry[] = []
+  const inbox: Array<{
+    eventId: string
+    kind: "orch" | "dm"
+    authorType: "agent" | "user"
+    authorAgentId?: string
+    body: string
+  }> = []
   const bus = deps.bus ?? createLiveBus()
   const channels: ChannelService = createChannelService({
     db,
@@ -86,12 +88,12 @@ function makeService(
     now: () => new Date().toISOString(),
     challengeWorkspaceRoot: (eventId, challengeId) =>
       join(dir, "events", eventId, "challenges", challengeId, "workspace"),
-    ...(deps.renderSchedulerDigest
-      ? { renderSchedulerDigest: deps.renderSchedulerDigest }
-      : {}),
+    // The service wires the decision-point engine behind this seam; tests
+    // record the posts it would be fed.
+    onSchedulerInbox: (post) => inbox.push(post),
     ...(deps.clock ? { clock: deps.clock } : {}),
   })
-  return { channels, sent, bus }
+  return { channels, sent, inbox, bus }
 }
 
 function seedAgent(
@@ -649,65 +651,17 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
     }
   })
 
-  test("scheduler deliveries append the fleet digest; solver deliveries never do", async () => {
+  test("orch posts are a ledger: NO scheduler delivery; solver asks + user posts feed the engine's inbox hook", async () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
       seedAgent(db, "a1", { status: "running" })
       seedScheduler(db, "s1")
-      const { channels, sent } = makeService(db, dir, {
-        renderSchedulerDigest: (eventId) =>
-          `[调度快照] mock digest for ${eventId}`,
-      })
+      const { channels, sent, inbox } = makeService(db, dir)
 
-      // Solver urgent post → scheduler delivery carries the digest.
-      channels.post(
-        {
-          channelKey: orchKey("evt-1"),
-          author: { type: "agent", agentId: "a1" },
-          body: "ask",
-          urgent: true,
-        },
-        agentPrincipal("a1")
-      )
-      await settle()
-      expect(sent.map((s) => s.agentId)).toEqual(["s1"])
-      expect(sent[0].text).toContain("ask")
-      expect(sent[0].text).toContain("[调度快照] mock digest for evt-1")
-      // The digest is separated from the merged block.
-      expect(sent[0].text).toContain("\n\n[调度快照]")
-
-      // Solver-facing delivery: no digest.
-      sent.length = 0
-      channels.post(
-        {
-          channelKey: teamKey("ch-1"),
-          author: { type: "user" },
-          body: "team note",
-          urgent: true,
-        },
-        USER
-      )
-      await settle()
-      expect(sent.map((s) => s.agentId)).toEqual(["a1"])
-      expect(sent[0].text).toContain("team note")
-      expect(sent[0].text).not.toContain("调度快照")
-      channels.close()
-    } finally {
-      close()
-    }
-  })
-
-  test("orch urgent: a live scheduler receives immediately; a terminal scheduler stores for catch-up", async () => {
-    const { db, dir, close } = setupDbLite()
-    try {
-      seedEvent(db)
-      seedChallenge(db, { id: "ch-1" })
-      seedAgent(db, "a1", { status: "running" })
-      seedScheduler(db, "s1")
-      const { channels, sent } = makeService(db, dir)
-
+      // Solver urgent ask: stored in the ledger; the engine hook fires; NO
+      // delivery (the decision-point engine is the only wake path now).
       channels.post(
         {
           channelKey: orchKey("evt-1"),
@@ -718,27 +672,85 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
         agentPrincipal("a1")
       )
       await settle()
-      expect(sent.map((s) => s.agentId)).toEqual(["s1"])
-      expect(sent[0].text).toContain("ask: which challenge next?")
+      expect(sent).toHaveLength(0)
+      expect(inbox).toEqual([
+        {
+          eventId: "evt-1",
+          kind: "orch",
+          authorType: "agent",
+          authorAgentId: "a1",
+          body: "ask: which challenge next?",
+        },
+      ])
+      expect(channels.unreadCount(orchKey("evt-1"), SCHEDULER_READ_KEY)).toBe(1)
 
-      // Scheduler terminal → urgent stores only (next start catches up).
-      sent.length = 0
-      db.update(agents)
-        .set({ status: "completed" })
-        .where(eq(agents.id, "s1"))
-        .run()
+      // User orch post: user.directive for the engine.
+      inbox.length = 0
       channels.post(
         {
           channelKey: orchKey("evt-1"),
-          author: { type: "agent", agentId: "a1" },
-          body: "second ask",
+          author: { type: "user" },
+          body: "focus web this hour",
           urgent: true,
         },
-        agentPrincipal("a1")
+        USER
       )
       await settle()
       expect(sent).toHaveLength(0)
-      expect(channels.unreadCount(orchKey("evt-1"), SCHEDULER_READ_KEY)).toBe(1)
+      expect(inbox).toEqual([
+        {
+          eventId: "evt-1",
+          kind: "orch",
+          authorType: "user",
+          body: "focus web this hour",
+        },
+      ])
+
+      // System posts carry their own triggers — no inbox hook call.
+      inbox.length = 0
+      channels.post(
+        {
+          channelKey: orchKey("evt-1"),
+          author: { type: "system" },
+          body: "system ledger line",
+        },
+        SYSTEM
+      )
+      await settle()
+      expect(inbox).toHaveLength(0)
+      channels.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a user DM to the scheduler agent feeds the engine hook; no delivery face for the scheduler", async () => {
+    const { db, dir, close } = setupDbLite()
+    try {
+      seedEvent(db)
+      seedChallenge(db, { id: "ch-1" })
+      seedScheduler(db, "s1")
+      const { channels, sent, inbox } = makeService(db, dir)
+
+      channels.post(
+        {
+          channelKey: dmKey("s1"),
+          author: { type: "user" },
+          body: "hold the pwn series",
+          urgent: true,
+        },
+        USER
+      )
+      await settle()
+      expect(sent).toHaveLength(0)
+      expect(inbox).toEqual([
+        {
+          eventId: "evt-1",
+          kind: "dm",
+          authorType: "user",
+          body: "hold the pwn series",
+        },
+      ])
       channels.close()
     } finally {
       close()
@@ -826,7 +838,7 @@ describe("urgent delivery matrix (§3.2 / §3.3)", () => {
   })
 })
 
-describe("flush tick (§3.4)", () => {
+describe("flush tick (solver-facing; the scheduler has no delivery face)", () => {
   test("the tick delivers every live reader's backlog as one merged steer each", async () => {
     const { db, dir, close } = setupDbLite()
     try {
@@ -867,19 +879,21 @@ describe("flush tick (§3.4)", () => {
       channels.runFlushTick()
       await settle()
 
-      // a1 gets the agent post m1 (not its own), a2 + b1 get both, s1 gets
-      // the orch notice — each as ONE steer. c1 (terminal): store only.
+      // a1 gets the agent post m1 (not its own), a2 + b1 get both — each as
+      // ONE steer. c1 (terminal): store only. s1 (scheduler) gets NOTHING:
+      // the flush tick services live solvers only; the orch ledger stays
+      // unread for its SDK reads and the engine drives its turns.
       const byAgent = new Map<string, string[]>()
       for (const s of sent) {
         byAgent.set(s.agentId, [...(byAgent.get(s.agentId) ?? []), s.text])
       }
-      expect([...byAgent.keys()].toSorted()).toEqual(["a1", "a2", "b1", "s1"])
+      expect([...byAgent.keys()].toSorted()).toEqual(["a1", "a2", "b1"])
       for (const agentId of ["a1", "a2", "b1"]) {
         expect(byAgent.get(agentId)).toHaveLength(1)
       }
       expect(byAgent.get("a2")![0]).toContain("m1")
       expect(byAgent.get("a2")![0]).toContain("m2")
-      expect(byAgent.get("s1")![0]).toContain("agent started")
+      expect(channels.unreadCount(orchKey("evt-1"), SCHEDULER_READ_KEY)).toBe(1)
       // Second tick: cursors advanced → nothing new.
       sent.length = 0
       channels.runFlushTick()
@@ -891,70 +905,15 @@ describe("flush tick (§3.4)", () => {
     }
   })
 
-  test("hold (deliveryPaused): the tick and urgent posts skip the whole event; resume catches up", async () => {
+  test("inboxSnapshot: orch key + stable-cursor unread (the scheduler reads via the SDK)", () => {
     const { db, dir, close } = setupDbLite()
     try {
       seedEvent(db)
-      seedChallenge(db, { id: "ch-1" })
-      seedAgent(db, "a1", { status: "running" })
-      const { channels, sent } = makeService(db, dir)
-
-      channels.setDeliveryPaused("evt-1", true)
-      expect(channels.isDeliveryPaused("evt-1")).toBe(true)
-      channels.post(
-        {
-          channelKey: teamKey("ch-1"),
-          author: { type: "system" },
-          body: "paused post",
-          urgent: true,
-        },
-        SYSTEM
-      )
-      channels.post(
-        {
-          channelKey: teamKey("ch-1"),
-          author: { type: "system" },
-          body: "paused tick post",
-        },
-        SYSTEM
-      )
-      await settle()
-      expect(sent).toHaveLength(0) // urgent skipped under hold
-      channels.runFlushTick()
-      await settle()
-      expect(sent).toHaveLength(0) // tick skipped under hold
-
-      // Resume: the stored backlog rides the next tick.
-      channels.setDeliveryPaused("evt-1", false)
-      channels.runFlushTick()
-      await settle()
-      expect(sent.map((s) => s.agentId)).toEqual(["a1"])
-      expect(sent[0].text).toContain("paused post")
-      expect(sent[0].text).toContain("paused tick post")
-      channels.close()
-    } finally {
-      close()
-    }
-  })
-
-  test("inboxSnapshot: orch key + stable-cursor unread + tick state + hold", () => {
-    const { db, dir, close } = setupDbLite()
-    try {
-      seedEvent(db)
+      seedScheduler(db, "s1")
       const { channels } = makeService(db, dir)
       const snap = channels.inboxSnapshot("evt-1")
       expect(snap.channelKey).toBe(orchKey("evt-1"))
       expect(snap.unreadCount).toBe(0)
-      expect(snap.deliveryPaused).toBe(false)
-      // nextFlushAt exposed for the UI state head; a tick re-arms it.
-      expect(snap.nextFlushAt).toBeGreaterThanOrEqual(Date.now())
-      channels.runFlushTick()
-      const after = channels.inboxSnapshot("evt-1")
-      expect(after.nextFlushAt).toBeGreaterThanOrEqual(
-        Date.now() + FLUSH_INTERVAL_MS - 1_000
-      )
-      channels.setDeliveryPaused("evt-1", true)
-      expect(channels.inboxSnapshot("evt-1").deliveryPaused).toBe(true)
       channels.close()
     } finally {
       close()
@@ -1699,127 +1658,6 @@ describe("explicit cleanup (§八)", () => {
       close()
     }
   })
-})
-
-describe("scheduler heartbeat (§3.4)", () => {
-  /** A service on a fake clock with one idle scheduler and no other agents. */
-  function setupHeartbeat() {
-    const lite = setupDbLite()
-    const clock = createFakeClock()
-    seedEvent(lite.db)
-    seedScheduler(lite.db, "s1")
-    lite.db
-      .update(agents)
-      .set({ status: "idle" })
-      .where(eq(agents.id, "s1"))
-      .run()
-    const made = makeService(lite.db, lite.dir, {
-      clock,
-      renderSchedulerDigest: () =>
-        "[调度快照]（投递时 2026-09-10 14:32，非实时）",
-    })
-    return { ...lite, clock, ...made }
-  }
-
-  test("an idle scheduler with nothing to read is woken on the tick anyway", async () => {
-    const { clock, channels, sent, close } = setupHeartbeat()
-    try {
-      clock.advance(FLUSH_INTERVAL_MS)
-      await settle()
-      expect(sent).toHaveLength(1)
-      expect(sent[0].agentId).toBe("s1")
-      expect(sent[0].text).toContain("[心跳]")
-      expect(sent[0].text).toContain("[当前时间]")
-      expect(sent[0].text).toContain("[调度快照]")
-    } finally {
-      channels.close()
-      close()
-    }
-  })
-
-  test("the heartbeat respects the tick interval, not every tick", async () => {
-    const { clock, channels, sent, close } = setupHeartbeat()
-    try {
-      clock.advance(FLUSH_INTERVAL_MS)
-      await settle()
-      expect(sent).toHaveLength(1)
-      // One more tick inside the window: last delivery is fresh → silent.
-      clock.advance(FLUSH_INTERVAL_MS)
-      await settle()
-      expect(sent).toHaveLength(2)
-      // A tick after the window elapses with no delivery in between would
-      // fire; here each tick IS a delivery, so the cadence is one per tick.
-      expect(sent[1].text).toContain("[心跳]")
-    } finally {
-      channels.close()
-      close()
-    }
-  })
-
-  test("a running scheduler is never heartbeated (it is already awake)", async () => {
-    const { db, dir, close } = setupDbLiteWithEvent()
-    try {
-      const clock = createFakeClock()
-      seedScheduler(db, "s1")
-      db.update(agents)
-        .set({ status: "running" })
-        .where(eq(agents.id, "s1"))
-        .run()
-      const { channels, sent } = makeService(db, dir, { clock })
-      clock.advance(FLUSH_INTERVAL_MS)
-      await settle()
-      expect(sent).toHaveLength(0)
-      channels.close()
-    } finally {
-      close()
-    }
-  })
-
-  test("unread messages take the normal path — no heartbeat on top", async () => {
-    const { db, dir, close } = setupDbLiteWithEvent()
-    try {
-      const clock = createFakeClock()
-      seedScheduler(db, "s1")
-      db.update(agents).set({ status: "idle" }).where(eq(agents.id, "s1")).run()
-      const { channels, sent } = makeService(db, dir, { clock })
-      channels.post(
-        {
-          channelKey: orchKey("evt-1"),
-          author: { type: "system" },
-          body: "agent timed out",
-        },
-        SYSTEM
-      )
-      clock.advance(FLUSH_INTERVAL_MS)
-      await settle()
-      expect(sent).toHaveLength(1)
-      expect(sent[0].text).toContain("agent timed out")
-      expect(sent[0].text).not.toContain("[心跳]")
-      channels.close()
-    } finally {
-      close()
-    }
-  })
-
-  test("hold suppresses the heartbeat like every other delivery", async () => {
-    const { clock, channels, sent, close } = setupHeartbeat()
-    try {
-      channels.setDeliveryPaused("evt-1", true)
-      clock.advance(FLUSH_INTERVAL_MS * 2)
-      await settle()
-      expect(sent).toHaveLength(0)
-      channels.close()
-    } finally {
-      close()
-    }
-  })
-
-  /** Bare db + dir with the event seeded (local to this block). */
-  function setupDbLiteWithEvent() {
-    const lite = setupDbLite()
-    seedEvent(lite.db)
-    return lite
-  }
 })
 
 describe("terminal agents and urgent delivery (kill-undo guard)", () => {

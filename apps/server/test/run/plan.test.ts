@@ -361,6 +361,17 @@ describe("fast phase (inline application)", () => {
           .where(eq(queueState.eventId, "evt-1"))
           .get()!.status
       ).toBe("paused")
+      // The pause carries its plan's id (§3.8 provenance labeling) — a
+      // scheduler that pauses and dies leaves an auditable source.
+      const pausedPayload = JSON.parse(
+        h.db
+          .select({ payload: domainEvents.payload })
+          .from(domainEvents)
+          .where(eq(domainEvents.type, "queue.paused"))
+          .get()!.payload
+      )
+      expect(pausedPayload.source).toBe("scheduler")
+      expect(pausedPayload.planId).toMatch(/^[0-9a-f-]+$/)
       await h.service.submitPlan(
         "evt-1",
         planOf({ ref: "p2", kind: "setQueuePaused", paused: false }),

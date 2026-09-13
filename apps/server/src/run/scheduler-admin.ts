@@ -153,11 +153,11 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     return { ...snap, activeAgents }
   }
 
-  /** Fleet digest context for scheduler deliveries (schedulerDigest
+  /** Fleet digest context for the decision-point payloads (schedulerDigest
    * template): caps, queue, and one line per challenge with live agents /
    * pending items plus the invested attempts / cumulative tokens (the
    * value-per-effort inputs for diversity decisions). Advisory snapshot
-   * rendered at delivery time — derive, don't cache. */
+   * rendered at decision time — derive, don't cache. */
   function getDigestContext(eventId: string): SchedulerDigestContext {
     const snap = fenceSnapshot(db, getSettings(), eventId)
 

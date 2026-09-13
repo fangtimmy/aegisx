@@ -191,10 +191,7 @@ describe("notice events render the shipped wording (byte-level)", () => {
     ])
   })
 
-  test("queueStarved and launchFailed", () => {
-    expect(
-      text({ type: "queueStarved", eventId: "evt-1", pending: 1 })
-    ).toEqual(["队列不足：仅剩 1 项排队"])
+  test("launchFailed and schedulerViolation (the escalation alarms)", () => {
     expect(
       text({
         type: "launchFailed",
@@ -203,6 +200,16 @@ describe("notice events render the shipped wording (byte-level)", () => {
         error: "boom",
       })
     ).toEqual(["启动失败：「web1」— boom"])
+    expect(
+      text({
+        type: "schedulerViolation",
+        eventId: "evt-1",
+        decisionPointId: "a1b2c3d4",
+        consecutive: 3,
+      })
+    ).toEqual([
+      "调度违约：调度者已连续 3 个决策点未提交计划（最近 a1b2c3d4）——引擎已停止等待，请检查调度者状态并人工介入。",
+    ])
   })
 
   test("queueStateChanged: pause/resume, manual flips marked", () => {
@@ -306,7 +313,12 @@ describe("notice delivery contract (channel / meta / urgent)", () => {
 
   test("emergencies are urgent noticeType:emergency", () => {
     const emergencies: NoticeEvent[] = [
-      { type: "queueStarved", eventId: "evt-1", pending: 1 },
+      {
+        type: "schedulerViolation",
+        eventId: "evt-1",
+        decisionPointId: "a1b2c3d4",
+        consecutive: 3,
+      },
       {
         type: "launchFailed",
         eventId: "evt-1",
@@ -354,7 +366,12 @@ describe("notice publisher", () => {
   test("a paused scheduler drops orch notices but not #team ones", () => {
     const { publisher, posts } = makePublisher({ paused: true })
     publisher.publish(cleanup(1, 0))
-    publisher.publish({ type: "queueStarved", eventId: "evt-1", pending: 1 })
+    publisher.publish({
+      type: "schedulerViolation",
+      eventId: "evt-1",
+      decisionPointId: "a1b2c3d4",
+      consecutive: 3,
+    })
     expect(posts).toHaveLength(0)
     // Team notices are not gated by the scheduler pause.
     publisher.publish(first({ stopSiblings: false }))

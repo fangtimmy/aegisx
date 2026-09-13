@@ -1,0 +1,666 @@
+import { isRecord, LIVE_AGENT_STATUSES } from "@aegisx/shared"
+import { and, eq, inArray } from "drizzle-orm"
+
+import type { Database } from "../../db"
+import { agents, domainEvents, queueState } from "../../db/schema"
+import { parseJson } from "../../lib/guards"
+import { logEvent } from "../../lib/log"
+import { fmtMs } from "../agent-runtime"
+import type { SendOutcome } from "../channels-context"
+import { FLUSH_INTERVAL_MS } from "../channels-context"
+import type { Clock } from "../clock"
+import { emitDomainEvent } from "../domain-events/store"
+import { createEffects } from "../effects"
+
+/**
+ * The decision-point engine (control-plane design §3.6): the deterministic
+ * half of the scheduling loop. Triggers (solver settles, flags, queue
+ * changes, asks, the wall clock, boot) coalesce into decision points; the
+ * engine drives ONE scheduler turn per decision point — a payload message
+ * injected straight into the session (never a channel row) whose facts plus
+ * the fleet digest are the decision's inputs — and correlates the turn's
+ * outcome: a `submit_plan` inside the turn window closes the point `plan`
+ * (an explicit noOp IS a plan); a silent turn gets ONE strict re-prompt,
+ * then closes `violation`; consecutive violations escalate
+ * (`watchdog.escalated` + the urgent orch notice). A failed turn (provider
+ * error) is never a violation — the same point re-issues after a bounded
+ * backoff.
+ *
+ * The engine is the ONE wake gate for the scheduler: queue paused or
+ * scheduler paused (W3) → no decision points, no violation escalation. The
+ * delivery engine keeps no scheduler face anymore; the per-event pause/hold
+ * plumbing collapsed into these gates.
+ */
+
+/** Test-tunable timings; defaults keep production behavior. */
+export type DecisionTimings = {
+  /** Coalescing window for non-urgent triggers (urgent ones flush at once). */
+  coalesceMs: number
+  /** Backoff before a failed decision point re-issues. */
+  errorRetryMs: number
+  /** Periodic re-examination cadence (the old delivery heartbeat slot). */
+  periodicMs: number
+  /** Consecutive violations before the escalation alarm fires. */
+  violationsToEscalate: number
+  /** Failed-turn re-issues before a decision point gives up (outcome=error). */
+  maxErrorRetries: number
+}
+
+const DEFAULT_TIMINGS: DecisionTimings = {
+  coalesceMs: 2_000,
+  errorRetryMs: 5_000,
+  periodicMs: FLUSH_INTERVAL_MS,
+  violationsToEscalate: 3,
+  maxErrorRetries: 2,
+}
+
+/** One thing the scheduler should look at. Facts ride the trigger; the
+ * payload renders them as readable lines. */
+export type DecisionTrigger =
+  | { kind: "agent.settled"; agentId: string; status: string }
+  | {
+      kind: "flag.accepted"
+      challengeName: string
+      tier: "first" | "extra" | "partial"
+    }
+  | {
+      kind: "queue.changed"
+      reason: "enqueued" | "low_water" | "paused" | "resumed"
+      pending?: number
+    }
+  | { kind: "launch.failed"; challengeName: string; error: string }
+  | { kind: "agent.timedOut"; agentId: string; outcome: string }
+  | {
+      kind: "user.directive"
+      source: "dm" | "orch" | "resume"
+      preview?: string
+      /** A terminal scheduler may be cold-revived (startScheduler reopen). */
+      revive?: boolean
+    }
+  | { kind: "solver.asked"; authorAgentId?: string; preview?: string }
+  | { kind: "fleet.stalled"; pending: number; stalledMs: number }
+  | { kind: "periodic" }
+  | { kind: "boot.resync" }
+
+/** Urgent triggers flush immediately (no coalescing window) — the spec's
+ * first-flag / launch-failure rule plus the user- and boot-initiated wakes. */
+function isUrgentTrigger(t: DecisionTrigger): boolean {
+  if (t.kind === "flag.accepted" && t.tier === "first") return true
+  return (
+    t.kind === "launch.failed" ||
+    t.kind === "agent.timedOut" ||
+    t.kind === "user.directive" ||
+    t.kind === "boot.resync"
+  )
+}
+
+/** The readable fact line for the payload and the decision_point.opened
+ * trigger list (the decision log's display form). */
+function triggerLine(t: DecisionTrigger): string {
+  switch (t.kind) {
+    case "agent.settled":
+      return `agent.settled：agent-${t.agentId.slice(0, 8)}（${t.status}）`
+    case "flag.accepted":
+      return `flag.accepted：「${t.challengeName}」${
+        t.tier === "first"
+          ? "首次解出"
+          : t.tier === "extra"
+            ? "新增 flag"
+            : "部分解出（多 flag）"
+      }`
+    case "queue.changed": {
+      const label =
+        t.reason === "enqueued"
+          ? "新排队项"
+          : t.reason === "low_water"
+            ? "队列低水位"
+            : t.reason === "paused"
+              ? "队列已暂停"
+              : "队列已恢复"
+      return `queue.changed：${label}${t.pending !== undefined ? `（待发 ${t.pending}）` : ""}`
+    }
+    case "launch.failed":
+      return `launch.failed：「${t.challengeName}」${t.error}`
+    case "agent.timedOut":
+      return `agent.timedOut：agent-${t.agentId.slice(0, 8)}（${t.outcome}）`
+    case "user.directive":
+      return `user.directive：${
+        t.source === "dm"
+          ? "用户私信"
+          : t.source === "resume"
+            ? "调度已恢复，请重新同步状态（aegisx.snapshot()）后再行动"
+            : "用户在 orch 留言"
+      }${t.preview ? ` — ${t.preview}` : ""}`
+    case "solver.asked":
+      return `solver.asked：${
+        t.authorAgentId ? `agent-${t.authorAgentId.slice(0, 8)} ` : ""
+      }orch 有未读内容${t.preview ? ` — ${t.preview}` : ""}`
+    case "fleet.stalled":
+      return `fleet.stalled：${t.pending} 项排队待发，排水已 ${fmtMs(t.stalledMs)} 无进展`
+    case "periodic":
+      return "periodic：例行复核（自上次决策以来局面有变化）"
+    case "boot.resync":
+      return "boot.resync：服务已重启，请重新同步状态（aegisx.snapshot()）并决定是否续派"
+  }
+  return assertNever(t)
+}
+
+function assertNever(_t: never): never {
+  throw new Error("unreachable trigger kind")
+}
+
+/** One open decision point's in-flight state. */
+type OpenPoint = {
+  id: string
+  triggers: DecisionTrigger[]
+  /** Service-clock ms when the payload turn started (the plan-correlation
+   * window's lower bound). */
+  startedAtMs: number
+  phase: "turn" | "reprompt"
+  errorRetries: number
+  /** A payload turn is in flight (its settle correlates to this point). */
+  awaiting: boolean
+  digest: string
+}
+
+type EventState = {
+  pending: DecisionTrigger[]
+  open: OpenPoint | null
+  /** Consecutive no-plan closes since the last plan (or escalation). */
+  violations: number
+  /** Fleet fingerprint at the last explicit no-decision close — the
+   * periodic trigger skips while the fingerprint is unchanged (§3.6 r4). */
+  quietFingerprint: string | null
+}
+
+export type DecisionPointEngineDeps = {
+  db: Database
+  clock: Clock
+  /** Service-clock ISO stamp (monotonic; same source as other payloads). */
+  now(): string
+  /** Direct runtime send into the scheduler's session (steer/fresh turn/
+   * cold resume — the engine never touches the channel ledger). */
+  send(agentId: string, text: string): Promise<SendOutcome>
+  /** The fleet digest + a wall-clock-independent state fingerprint, computed
+   * together against current DB state (moved here from the delivery face). */
+  digestOf(eventId: string): { digest: string; fingerprint: string }
+  /** W3 gate: a disabled scheduler receives nothing. */
+  isSchedulerPaused(eventId: string): boolean
+  /** The violation escalation's user-facing alarm (the urgent orch notice —
+   * today's eventStalled channel, the unattended alarm face). */
+  escalateNotice(
+    eventId: string,
+    decisionPointId: string,
+    consecutive: number
+  ): void
+  timings?: Partial<DecisionTimings>
+}
+
+export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
+  const { db, clock } = deps
+  const timings: DecisionTimings = { ...DEFAULT_TIMINGS, ...deps.timings }
+  const effects = createEffects(clock)
+  let closed = false
+
+  const states = new Map<string, EventState>()
+  const stateOf = (eventId: string): EventState => {
+    let state = states.get(eventId)
+    if (!state) {
+      state = {
+        pending: [],
+        open: null,
+        violations: 0,
+        quietFingerprint: null,
+      }
+      states.set(eventId, state)
+    }
+    return state
+  }
+
+  function agentRow(agentId: string) {
+    return db.select().from(agents).where(eq(agents.id, agentId)).get()
+  }
+
+  function schedulerRow(eventId: string) {
+    return db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.eventId, eventId), eq(agents.role, "orchestrator")))
+      .get()
+  }
+
+  /** The engine's event gate — the ONE pause gate (§3.7): a paused event
+   * queue or a disabled scheduler (W3) produces no decision points and no
+   * violation escalation. */
+  function gated(eventId: string): boolean {
+    if (deps.isSchedulerPaused(eventId)) return true
+    const row = db
+      .select({ status: queueState.status })
+      .from(queueState)
+      .where(eq(queueState.eventId, eventId))
+      .get()
+    return row?.status === "paused"
+  }
+
+  // --- trigger intake ---------------------------------------------------------
+
+  /** Record a trigger. Urgent ones flush at once; the rest wait for the
+   * coalescing window so a burst (a solve's cleanup cascade) lands as one
+   * decision point. */
+  function trigger(eventId: string, t: DecisionTrigger): void {
+    if (closed || gated(eventId)) return
+    stateOf(eventId).pending.push(t)
+    if (isUrgentTrigger(t)) drive(eventId)
+    else scheduleFlush(eventId)
+  }
+
+  function scheduleFlush(eventId: string): void {
+    if (closed) return
+    effects.debounce(`dp:${eventId}`, timings.coalesceMs, () => drive(eventId))
+  }
+
+  // --- driving ------------------------------------------------------------------
+
+  /** Serialize per event: one decision point at a time. */
+  function drive(eventId: string): void {
+    if (closed) return
+    effects.chain(`dp-drive:${eventId}`, () => driveAwaited(eventId))
+  }
+
+  async function driveAwaited(eventId: string): Promise<void> {
+    if (closed) return
+    const state = stateOf(eventId)
+    if (state.open || state.pending.length === 0) return
+    if (gated(eventId)) {
+      state.pending = []
+      return
+    }
+    const sched = schedulerRow(eventId)
+    if (!sched) {
+      // No scheduler to decide — the triggers have no consumer.
+      state.pending = []
+      return
+    }
+    if (sched.status === "running") return // mid-turn: wait for its settle
+    const canRevive = state.pending.some(
+      (t) => t.kind === "user.directive" && t.revive === true
+    )
+    // A live scheduler is idle here (running returned above). A terminal one
+    // is driven only by a user-initiated revive (startScheduler reopen) —
+    // the cold resume rides the runtime send.
+    if (sched.status !== "idle" && !canRevive) return
+    const triggers = state.pending
+    state.pending = []
+    const { digest } = deps.digestOf(eventId)
+    const id = crypto.randomUUID()
+    state.open = {
+      id,
+      triggers,
+      startedAtMs: clock.now(),
+      phase: "turn",
+      errorRetries: 0,
+      awaiting: true,
+      digest,
+    }
+    emitDomainEvent(db, {
+      type: "decision_point.opened",
+      eventId,
+      agentId: sched.id,
+      actor: { kind: "system", actorId: "decision-engine" },
+      payload: { id, triggers: triggers.map(triggerLine), at: deps.now() },
+    })
+    logEvent("scheduler", "decision_point_opened", {
+      eventId,
+      id: id.slice(0, 8),
+      triggers: triggers.map((t) => t.kind),
+    })
+    await sendPayload(eventId, payloadMessage(id, triggers, digest))
+  }
+
+  /** Inject the payload into the scheduler's session. A failed/undelivered
+   * send takes the error path (the turn can never settle). */
+  async function sendPayload(eventId: string, text: string): Promise<void> {
+    const open = stateOf(eventId).open
+    if (!open) return
+    const sched = schedulerRow(eventId)
+    if (!sched) {
+      closeDecisionPoint(eventId, "error")
+      return
+    }
+    try {
+      const outcome = await deps.send(sched.id, text)
+      if (!outcome.delivered) handleError(eventId)
+    } catch (error) {
+      console.error("decision point payload send failed", {
+        eventId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      closeDecisionPoint(eventId, "error")
+    }
+  }
+
+  // --- turn-settle correlation ----------------------------------------------------
+
+  /** From the status core, for EVERY agent turn settle. Solvers feed the
+   * `agent.settled` trigger; the scheduler's own settle either correlates to
+   * the open decision point or (a user-driven turn) re-drives pending ones. */
+  function onTurnSettled(agentId: string, error: string | null): void {
+    if (closed) return
+    const row = agentRow(agentId)
+    if (!row) return
+    if (row.role !== "orchestrator") {
+      trigger(row.eventId, {
+        kind: "agent.settled",
+        agentId,
+        status: row.status,
+      })
+      return
+    }
+    const state = stateOf(row.eventId)
+    const open = state.open
+    if (!open || !open.awaiting) {
+      // Not our turn (user message, boot) — pending triggers may proceed now.
+      if (state.pending.length > 0) scheduleFlush(row.eventId)
+      return
+    }
+    open.awaiting = false
+    if (error) {
+      handleError(row.eventId)
+      return
+    }
+    correlatePlan(row.eventId)
+  }
+
+  /** A scheduler agent landed terminal: a decision point that was driving it
+   * closes as error WITHOUT retry (a retry would cold-revive an agent the
+   * user just closed). Solver terminals feed the agent.settled trigger. */
+  function onAgentTerminal(agentId: string): void {
+    if (closed) return
+    const row = agentRow(agentId)
+    if (!row) return
+    if (row.role === "orchestrator") {
+      if (stateOf(row.eventId).open) closeDecisionPoint(row.eventId, "error")
+      return
+    }
+    trigger(row.eventId, {
+      kind: "agent.settled",
+      agentId,
+      status: row.status,
+    })
+  }
+
+  /** Was a `plan.proposed` by THIS scheduler submitted inside the turn
+   * window? The endpoint call arrives from the container mid-turn; the
+   * engine drove the turn, so it owns the window. */
+  function correlatePlan(eventId: string): void {
+    const state = stateOf(eventId)
+    const open = state.open
+    if (!open) return
+    // The user paused (halt) while the turn was in flight: the ladder stops
+    // here — no re-prompt, no violation counting, the gate owns the rest.
+    if (gated(eventId)) {
+      closeDecisionPoint(eventId, "error")
+      flushPending(eventId)
+      return
+    }
+    const sched = schedulerRow(eventId)
+    if (!sched) {
+      closeDecisionPoint(eventId, "error")
+      return
+    }
+    for (const row of db
+      .select({ payload: domainEvents.payload })
+      .from(domainEvents)
+      .where(
+        and(
+          eq(domainEvents.eventId, eventId),
+          eq(domainEvents.type, "plan.proposed")
+        )
+      )
+      .all()) {
+      const parsed = parseJson<unknown>(row.payload)
+      if (
+        !isRecord(parsed) ||
+        parsed.schedulerAgentId !== sched.id ||
+        typeof parsed.at !== "string" ||
+        !Array.isArray(parsed.actions)
+      ) {
+        continue
+      }
+      if (Date.parse(parsed.at) < open.startedAtMs) continue
+      // A plan (noOp included) closes the point. An all-noOp plan is an
+      // explicit no-decision — record the fingerprint for the periodic skip.
+      const allNoOp =
+        parsed.actions.length > 0 &&
+        parsed.actions.every((a) => isRecord(a) && a.kind === "noOp")
+      state.quietFingerprint = allNoOp
+        ? deps.digestOf(eventId).fingerprint
+        : null
+      state.violations = 0
+      closeDecisionPoint(eventId, "plan")
+      flushPending(eventId)
+      return
+    }
+    // No plan in the window — the violation ladder (§3.6 rule 3).
+    if (open.phase !== "reprompt") {
+      open.phase = "reprompt"
+      open.awaiting = true
+      open.startedAtMs = clock.now()
+      void sendReprompt(eventId, sched.id, open.id)
+      return
+    }
+    closeDecisionPoint(eventId, "violation")
+    state.violations += 1
+    if (state.violations >= timings.violationsToEscalate) {
+      state.violations = 0
+      const detail = {
+        decisionPointId: open.id.slice(0, 8),
+        consecutive: timings.violationsToEscalate,
+      }
+      emitDomainEvent(db, {
+        type: "watchdog.escalated",
+        eventId,
+        agentId: sched.id,
+        actor: { kind: "system", actorId: "decision-engine" },
+        payload: { reason: "scheduler_violation", detail, at: deps.now() },
+      })
+      deps.escalateNotice(eventId, detail.decisionPointId, detail.consecutive)
+      logEvent("scheduler", "violation_escalated", { eventId, ...detail })
+    }
+    flushPending(eventId)
+  }
+
+  async function sendReprompt(
+    eventId: string,
+    schedulerId: string,
+    pointId: string
+  ): Promise<void> {
+    if (closed || gated(eventId)) {
+      closeDecisionPoint(eventId, "error")
+      return
+    }
+    try {
+      const outcome = await deps.send(schedulerId, repromptMessage(pointId))
+      if (!outcome.delivered) handleError(eventId)
+    } catch (error) {
+      console.error("decision point re-prompt failed", {
+        eventId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      closeDecisionPoint(eventId, "error")
+    }
+  }
+
+  /** The turn errored (provider failure, dead session): NOT a violation —
+   * re-issue the same decision point after a bounded backoff, give up as
+   * outcome=error after the bound. */
+  function handleError(eventId: string): void {
+    const open = stateOf(eventId).open
+    if (!open) return
+    if (open.errorRetries < timings.maxErrorRetries) {
+      open.errorRetries += 1
+      if (closed) return
+      effects.retry(`dp-retry:${eventId}`, timings.errorRetryMs, () =>
+        redrive(eventId)
+      )
+      return
+    }
+    closeDecisionPoint(eventId, "error")
+    flushPending(eventId)
+  }
+
+  /** Re-issue the SAME decision point (same id, same triggers) — the payload
+   * is re-rendered so the digest reflects current state. */
+  function redrive(eventId: string): void {
+    effects.chain(`dp-drive:${eventId}`, async () => {
+      if (closed) return
+      const state = stateOf(eventId)
+      const open = state.open
+      if (!open || open.awaiting) return
+      if (gated(eventId)) {
+        closeDecisionPoint(eventId, "error")
+        return
+      }
+      const sched = schedulerRow(eventId)
+      if (!sched || sched.status !== "idle") {
+        // The scheduler vanished or is mid-turn: the point cannot re-issue.
+        closeDecisionPoint(eventId, "error")
+        return
+      }
+      open.awaiting = true
+      open.startedAtMs = clock.now()
+      const { digest } = deps.digestOf(eventId)
+      open.digest = digest
+      await sendPayload(eventId, payloadMessage(open.id, open.triggers, digest))
+    })
+  }
+
+  // --- lifecycle -----------------------------------------------------------------
+
+  function closeDecisionPoint(
+    eventId: string,
+    outcome: "plan" | "violation" | "error"
+  ): void {
+    const state = stateOf(eventId)
+    const open = state.open
+    if (!open) return
+    state.open = null
+    if (outcome !== "plan") state.quietFingerprint = null
+    emitDomainEvent(db, {
+      type: "decision_point.closed",
+      eventId,
+      actor: { kind: "system", actorId: "decision-engine" },
+      payload: { id: open.id, outcome, at: deps.now() },
+    })
+    logEvent("scheduler", "decision_point_closed", {
+      eventId,
+      id: open.id.slice(0, 8),
+      outcome,
+    })
+  }
+
+  /** After a close, remaining triggers open the next decision point. */
+  function flushPending(eventId: string): void {
+    const state = stateOf(eventId)
+    if (state.open || state.pending.length === 0 || closed) return
+    if (state.pending.some(isUrgentTrigger)) drive(eventId)
+    else scheduleFlush(eventId)
+  }
+
+  // --- periodic re-examination (the old heartbeat's replacement) -------------------
+
+  function periodicTick(): void {
+    if (closed) return
+    const rows = db
+      .select({ eventId: agents.eventId })
+      .from(agents)
+      .where(and(eq(agents.role, "orchestrator"), eq(agents.status, "idle")))
+      .all()
+    for (const { eventId } of rows) {
+      if (gated(eventId)) continue
+      // Skip the tick when the fleet is fingerprint-identical to the last
+      // explicit no-decision — a quiet event burns no heartbeat turn (§3.6 r4).
+      const { fingerprint } = deps.digestOf(eventId)
+      const state = stateOf(eventId)
+      if (
+        state.quietFingerprint !== null &&
+        state.quietFingerprint === fingerprint
+      ) {
+        continue
+      }
+      trigger(eventId, { kind: "periodic" })
+    }
+  }
+
+  effects.every(timings.periodicMs, periodicTick)
+
+  // --- boot ----------------------------------------------------------------------
+
+  /** `recoverOnBoot`'s re-entry: every surviving live scheduler gets one
+   * re-sync decision point (replaces run/boot-reentry). */
+  function bootResync(): void {
+    if (closed) return
+    const rows = db
+      .select({ eventId: agents.eventId })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.role, "orchestrator"),
+          inArray(agents.status, [...LIVE_AGENT_STATUSES])
+        )
+      )
+      .all()
+    for (const { eventId } of rows) {
+      trigger(eventId, { kind: "boot.resync" })
+    }
+  }
+
+  /** Drop one event's in-memory state (event deletion). */
+  function forget(eventId: string): void {
+    states.delete(eventId)
+  }
+
+  function close(): void {
+    closed = true
+    effects.dispose()
+    states.clear()
+  }
+
+  return {
+    trigger,
+    onTurnSettled,
+    onAgentTerminal,
+    bootResync,
+    forget,
+    close,
+  }
+}
+
+// --- payload rendering -----------------------------------------------------------
+
+/** The ONE payload message injected per decision point: trigger facts + the
+ * fleet digest + the turn protocol demand. Not a channel row — the scheduler's
+ * session is the only destination. */
+function payloadMessage(
+  id: string,
+  triggers: DecisionTrigger[],
+  digest: string
+): string {
+  const lines = triggers.map(triggerLine).map((line) => `- ${line}`)
+  return (
+    `[决策点 ${id.slice(0, 8)}]（引擎注入，非频道消息）\n` +
+    `触发：\n${lines.join("\n")}\n` +
+    (digest ? `\n${digest}\n` : "") +
+    `\n回合协议：先处理触发事项——通信保持自由文本（aegisx.channels.post 回答/广播、aegisx.agents.message 定向），` +
+    `状态细节用 aegisx.snapshot() / aegisx.agents.read 现查；然后必须以 aegisx.submit_plan(rationale, actions) 收束本回合，` +
+    `确实无需行动时提交 aegisx.no_op("原因")。不交计划的回合会被重试一次并计入违约。`
+  )
+}
+
+/** The ONE strict re-prompt of the violation ladder. */
+function repromptMessage(pointId: string): string {
+  return (
+    `[决策点 ${pointId.slice(0, 8)}] 违约提醒：上一回合结束仍未收到计划。` +
+    `立即调用 aegisx.submit_plan(rationale, actions) 收束（无需行动 = aegisx.no_op("原因")）——继续不交计划将升级告警。`
+  )
+}

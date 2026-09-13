@@ -94,42 +94,15 @@ export function registerSchedulerRoutes(
     }
   })
 
-  /** Live scheduler-DM digest snapshot (the scheduler DM view's status
-   * header): unread backlog, silence/stall timers, hold state + the channel
-   * id for the timeline. No live digest (no scheduler run) → live:false. */
+  /** Live scheduler-DM snapshot (the scheduler DM view's status header):
+   * the orch channel id + the scheduler's unread backlog (it reads via the
+   * SDK — deliveries no longer wake it; the decision-point engine does). */
   app.get("/api/events/:eventId/inbox", (c) => {
     const eventId = c.req.param("eventId")
     const miss = requireEvent(c, eventId)
     if (miss) return miss
     return c.json(agentService.inboxSnapshot(eventId))
   })
-
-  /** Hold delivery: the inbox keeps collecting silently but flushes nothing —
-   * the orchestrator stays idle. Resume flushes the backlog in one digest.
-   * In-memory only (a scheduler-run rebuild resets it); no live inbox → no-op. */
-  app.post(
-    "/api/events/:eventId/inbox/pause",
-    validateJson(emptyInput),
-    (c) => {
-      const eventId = c.req.param("eventId")
-      const miss = requireEvent(c, eventId)
-      if (miss) return miss
-      agentService.setInboxDeliveryPaused(eventId, true)
-      return c.json({ deliveryPaused: true })
-    }
-  )
-
-  app.post(
-    "/api/events/:eventId/inbox/resume",
-    validateJson(emptyInput),
-    (c) => {
-      const eventId = c.req.param("eventId")
-      const miss = requireEvent(c, eventId)
-      if (miss) return miss
-      agentService.setInboxDeliveryPaused(eventId, false)
-      return c.json({ deliveryPaused: false })
-    }
-  )
 
   app.post(
     "/api/events/:eventId/queue/pause",
@@ -343,8 +316,9 @@ export function registerSchedulerRoutes(
   )
 
   // W3.1: pause = paused flag + stop (abort the current turn, container warm);
-  // resume = clear flag + re-sync message to the orchestrator. Both write the
-  // flag even with no scheduler run (presets the next start).
+  // resume = clear flag + a user-directive decision point (the engine drives
+  // the re-sync turn). Both write the flag even with no scheduler run
+  // (presets the next start).
   app.post(
     "/api/events/:eventId/scheduler/pause",
     validateJson(emptyInput),

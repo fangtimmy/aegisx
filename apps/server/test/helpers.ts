@@ -350,6 +350,7 @@ export function makeAgentService(
       | "flushIntervalMs"
       | "stallMs"
       | "solvedWrapupMs"
+      | "decisionTimings"
       | "clock"
       | "unattended"
     >
@@ -389,6 +390,7 @@ export function makeAgentService(
     flushIntervalMs: opts.flushIntervalMs,
     stallMs: opts.stallMs,
     solvedWrapupMs: opts.solvedWrapupMs,
+    decisionTimings: opts.decisionTimings,
     unattended: opts.unattended ?? false,
     ...(opts.clock ? { clock: opts.clock } : {}),
   })

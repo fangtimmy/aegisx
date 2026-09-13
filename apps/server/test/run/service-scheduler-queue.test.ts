@@ -352,8 +352,13 @@ describe("scheduler queue integration (v19)", () => {
         .get()!
       expect(failed.status).toBe("failed")
       expect(failed.error).toBeTruthy()
-      // The urgent launch-failure line woke the live scheduler.
-      expect(await deliveredTo(promptLog, "a-sched", "启动失败")).toBe(true)
+      // The launch failure is an URGENT decision-point trigger: the live
+      // scheduler is driven with a payload naming the failure (no delivery
+      // wake — the ledger line is for its SDK reads).
+      expect(await deliveredTo(promptLog, "a-sched", "launch.failed：")).toBe(
+        true
+      )
+      expect(await deliveredTo(promptLog, "a-sched", "启动失败")).toBe(false)
     } finally {
       await h.close()
     }

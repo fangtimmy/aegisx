@@ -1,21 +1,17 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 
 import { keys, schedulerApi } from "@/api"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { ChannelComposer, ChannelTimeline } from "@/features/runs/channels-view"
-import { formatDurationClock } from "@/lib/format"
-import { toast } from "@/lib/toast"
 
 import { POLL_INTERVAL_MS } from "./event-agents-shared"
 
 /**
- * The scheduler agent dialog's DM tab (v18 派生键频道): a status header
- * (orch unread backlog / global flush-tick countdown / per-event delivery
- * hold toggle) + the orch timeline itself (solver asks + system run/queue
- * events + user posts — the event stream; no recap rendering) + the
- * composer (a user post defaults urgent → immediate delivery).
+ * The scheduler agent dialog's DM tab: a status header (orch unread backlog
+ * — the scheduler reads the ledger via its SDK, and the decision-point
+ * engine drives its turns) + the orch timeline itself (solver asks + system
+ * run/queue events + user posts — the event stream; no recap rendering) +
+ * the composer (a user post opens a user.directive decision point).
  */
 export function SchedulerDmTab({
   eventId,
@@ -24,40 +20,17 @@ export function SchedulerDmTab({
   eventId: string
   active: boolean
 }) {
-  // Ticking clock for the flush countdown; only runs while the tab is visible.
-  const [nowMs, setNowMs] = useState(() => Date.now())
-  useEffect(() => {
-    if (!active) return undefined
-    const timer = setInterval(() => setNowMs(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [active])
-
   const snapshot = useQuery({
     queryKey: keys.scheduler.inbox(eventId),
     queryFn: () => schedulerApi.getInbox(eventId),
     refetchInterval: active ? POLL_INTERVAL_MS : false,
   })
   const channelKey = snapshot.data?.channelKey ?? null
-
-  const queryClient = useQueryClient()
-  const holdToggle = useMutation({
-    mutationFn: (paused: boolean) =>
-      paused
-        ? schedulerApi.pauseInbox(eventId)
-        : schedulerApi.resumeInbox(eventId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: keys.scheduler.inbox(eventId),
-      })
-    },
-    onError: (error) => toast.error("切换投递暂停失败", error.message),
-  })
-
   const snap = snapshot.data
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Status header (orch unread / flush tick / hold) */}
+      {/* Status header (orch unread) */}
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2.5 text-sm">
         {!snap ? (
           snapshot.error ? (
@@ -71,36 +44,14 @@ export function SchedulerDmTab({
           )
         ) : (
           <>
-            {snap.deliveryPaused ? (
-              <Badge size="sm" variant="warning">
-                已暂停（只存不投）
-              </Badge>
-            ) : snap.nextFlushAt !== null ? (
-              <Badge size="sm" variant="info">
-                合并投递 {formatDurationClock(snap.nextFlushAt - nowMs)}
-              </Badge>
-            ) : (
-              <Badge size="sm" variant="secondary">
-                投递循环未运行
-              </Badge>
-            )}
+            <Badge size="sm" variant="secondary">
+              引擎驱动 · 决策点唤醒
+            </Badge>
             {snap.unreadCount > 0 && (
               <Badge size="sm" variant="outline">
                 未读 {snap.unreadCount}
               </Badge>
             )}
-            <Button
-              disabled={holdToggle.isPending}
-              onClick={() => holdToggle.mutate(!snap.deliveryPaused)}
-              size="sm"
-              variant="outline"
-            >
-              {holdToggle.isPending
-                ? "…"
-                : snap.deliveryPaused
-                  ? "恢复投递"
-                  : "暂停投递"}
-            </Button>
           </>
         )}
       </div>

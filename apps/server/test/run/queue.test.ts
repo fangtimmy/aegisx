@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test"
 
 import { eq } from "drizzle-orm"
 
-import { queueState, spawnQueue, challengeFlags } from "../../src/db/schema"
+import {
+  domainEvents,
+  queueState,
+  spawnQueue,
+  challengeFlags,
+} from "../../src/db/schema"
 import { NOTICE_TEMPLATE_DEFAULTS } from "../../src/orchestration/prompt-defaults"
 import { RunActionError } from "../../src/run/errors"
 import {
@@ -64,6 +69,7 @@ function makeQueue(db: Db, launch: (row: QueueRow) => Promise<string>) {
   const launchedRows: QueueRow[] = []
   const emergencies: string[] = []
   const notices: string[] = []
+  const changed: Array<{ reason: string; pending: number }> = []
   let n = 0
   let disposed = false
   const svc = createQueueService({
@@ -86,6 +92,8 @@ function makeQueue(db: Db, launch: (row: QueueRow) => Promise<string>) {
       emergencies.push(`${event.eventId}: ${noticeText(event)}`),
     onQueueNotice: (event) =>
       notices.push(`${event.eventId}: ${noticeText(event)}`),
+    onQueueChanged: (eventId, change) =>
+      changed.push({ ...change, reason: `${eventId}:${change.reason}` }),
   })
   createdQueues.push({
     dispose: () => {
@@ -93,7 +101,7 @@ function makeQueue(db: Db, launch: (row: QueueRow) => Promise<string>) {
       svc.cancelDrain()
     },
   })
-  return { svc, launches, launchedRows, emergencies, notices }
+  return { svc, launches, launchedRows, emergencies, notices, changed }
 }
 
 function enqueue(
@@ -567,21 +575,15 @@ describe("queue drainer", () => {
         })
         .run()
       let n = 0
-      const { svc, launches, emergencies } = makeQueue(
-        db,
-        async () => `run-${++n}`
-      )
+      const { svc, launches } = makeQueue(db, async () => `run-${++n}`)
       svc.cancelDrain()
       const stale = enqueue(svc, "evt-1", "ch-solved", 1)
       const open = enqueue(svc, "evt-1", "ch-open", 2)
       await svc.drainOnce()
-      // Silent cancel — no launch, no failure record. The penultimate-item
-      // cancel still crosses the starved edge (markCancelled feeds
-      // checkStarved like every other pending-consuming path).
+      // Silent cancel — no launch, no failure record.
       expect(launches).toEqual([open.id])
       expect(item(db, stale.id).status).toBe("cancelled")
       expect(item(db, open.id).status).toBe("running")
-      expect(emergencies).toEqual(["evt-1: 队列不足：仅剩 1 项排队"])
     } finally {
       close()
     }
@@ -626,81 +628,83 @@ describe("queue drainer", () => {
     }
   })
 
-  test("queue-starved edge: pending 2→1 fires once; refill re-arms", async () => {
+  test("queue.changed triggers: enqueued on growth, low_water on consumption to ≤1", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
       seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
       seedChallenge(db, { id: "ch-c", eventId: "evt-1" })
-      const { svc, emergencies } = makeQueue(db, async () => "run-x")
-      svc.cancelDrain()
-      const a = enqueue(svc, "evt-1", "ch-a", 1)
-      const b = enqueue(svc, "evt-1", "ch-b", 2)
-      expect(emergencies).toHaveLength(0) // 2 pending — no edge yet
-      svc.remove("evt-1", a.id, USER) // 2 → 1: edge fires
-      expect(emergencies).toHaveLength(1)
-      expect(emergencies[0]).toContain("队列不足")
-      svc.remove("evt-1", b.id, USER) // 1 → 0: already ≤1, no repeat
-      expect(emergencies).toHaveLength(1)
-
-      // Refill to ≥2 re-arms; another 2→1 crossing fires again.
-      enqueue(svc, "evt-1", "ch-c", 3)
-      const d = enqueue(svc, "evt-1", "ch-b", 4)
-      expect(emergencies).toHaveLength(1)
-      svc.remove("evt-1", d.id, USER)
-      expect(emergencies).toHaveLength(2)
-    } finally {
-      close()
-    }
-  })
-
-  test("markCancelled crosses the starved edge like remove/markFailed do", async () => {
-    const { db, close } = setupDb()
-    try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
-      seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
-      const { svc, emergencies } = makeQueue(db, async () => "run-x")
-      svc.cancelDrain()
-      const a = enqueue(svc, "evt-1", "ch-a", 1)
-      enqueue(svc, "evt-1", "ch-b", 2) // ≥2 pending resets the starved edge
-      svc.markCancelled(a.id) // 2 → 1 crossing fires exactly once
-      expect(emergencies).toEqual(["evt-1: 队列不足：仅剩 1 项排队"])
-    } finally {
-      close()
-    }
-  })
-
-  test("initial single-item queue never fires the starved edge", async () => {
-    const { db, close } = setupDb()
-    try {
-      seedEvent(db, "evt-1")
-      seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
-      const { svc, emergencies } = makeQueue(db, async () => "run-x")
+      const { svc, changed } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       enqueue(svc, "evt-1", "ch-a", 1)
-      expect(emergencies).toHaveLength(0)
+      expect(changed).toEqual([{ reason: "evt-1:enqueued", pending: 1 }])
+      enqueue(svc, "evt-1", "ch-b", 2)
+      // Growth above 1 is a plain enqueue trigger (no low-water line).
+      expect(changed).toEqual([
+        { reason: "evt-1:enqueued", pending: 1 },
+        { reason: "evt-1:enqueued", pending: 2 },
+      ])
+      const a = db.select({ id: spawnQueue.id }).from(spawnQueue).all().at(-1)!
+      changed.length = 0
+      svc.remove("evt-1", a.id, USER) // consumption to low water
+      expect(changed).toEqual([{ reason: "evt-1:low_water", pending: 1 }])
+      // Refill above 1, then launches consume to the low-water edge (each
+      // decrease to ≤1 is one coalescable trigger for the engine).
+      enqueue(svc, "evt-1", "ch-c", 3)
+      changed.length = 0
+      await svc.drainOnce()
+      expect(changed).toEqual([
+        { reason: "evt-1:low_water", pending: 1 },
+        { reason: "evt-1:low_water", pending: 0 },
+      ])
     } finally {
       close()
     }
   })
 
-  test("a paused queue fires no starved emergency (the user stopped launches)", async () => {
+  test("markCancelled consumes pending like remove (low-water trigger)", async () => {
     const { db, close } = setupDb()
     try {
       seedEvent(db, "evt-1")
       seedChallenge(db, { id: "ch-a", eventId: "evt-1" })
       seedChallenge(db, { id: "ch-b", eventId: "evt-1" })
-      const { svc, emergencies, notices } = makeQueue(db, async () => "run-x")
+      const { svc, changed } = makeQueue(db, async () => "run-x")
       svc.cancelDrain()
       const a = enqueue(svc, "evt-1", "ch-a", 1)
       enqueue(svc, "evt-1", "ch-b", 2)
+      changed.length = 0
+      svc.markCancelled(a.id)
+      expect(changed).toEqual([{ reason: "evt-1:low_water", pending: 1 }])
+    } finally {
+      close()
+    }
+  })
+
+  test("queue.paused carries the plan provenance when the plan path asks for it", async () => {
+    const { db, close } = setupDb()
+    try {
+      seedEvent(db, "evt-1")
+      const { svc } = makeQueue(db, async () => "run-x")
+      svc.pause("evt-1", "scheduler", USER, "plan-42")
+      const payload = db
+        .select({ payload: domainEvents.payload })
+        .from(domainEvents)
+        .where(eq(domainEvents.type, "queue.paused"))
+        .get()
+      expect(JSON.parse(payload!.payload)).toEqual({
+        source: "scheduler",
+        planId: "plan-42",
+      })
+      // A manual pause stays unlabeled.
+      svc.resume("evt-1", "scheduler", USER)
       svc.pause("evt-1", "manual", USER)
-      svc.remove("evt-1", a.id, USER) // 2→1 crossing while paused → silent
-      expect(emergencies).toHaveLength(0)
-      expect(notices).toEqual(["evt-1: 队列已暂停（用户手动）"])
-      expect(svc.stateOf("evt-1", USER)).toBe("paused")
+      const rows = db
+        .select({ payload: domainEvents.payload })
+        .from(domainEvents)
+        .where(eq(domainEvents.type, "queue.paused"))
+        .all()
+      expect(JSON.parse(rows[1].payload)).toEqual({ source: "manual" })
     } finally {
       close()
     }

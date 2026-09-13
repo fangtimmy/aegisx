@@ -16,10 +16,13 @@ import { orchKey, teamKey, type PostInput } from "./channels-context"
  * templates (`orchestration/prompt-defaults.ts`), seeded into the
  * `prompt_templates` store so a user edit takes effect on the next notice.
  *
- * The delivery contract is load-bearing and must not drift: orch deliveries are
- * dropped for a paused scheduler, `meta.agentId` carries the submitter so
- * `channels-delivery.ts` skips its own notice, and `meta.noticeType` /
- * `meta.urgent` decide the ⚠ prefix and the immediate wake. */
+ * The delivery contract is load-bearing and must not drift: orch notices are
+ * dropped for a paused scheduler (W3), `meta.agentId` carries the submitter so
+ * channel delivery skips its own notice, and `meta.noticeType` /
+ * `meta.urgent` decide the ⚠ prefix. Urgent notices are the ALARM face (the
+ * unattended appliance's pager); they no longer wake the scheduler — the
+ * decision-point engine's triggers do (each notice's facts ride an explicit
+ * trigger wired beside the publish call). */
 
 /** Template key of one notice. */
 type NoticeTemplateKey = keyof typeof NOTICE_TEMPLATE_DEFAULTS
@@ -77,8 +80,6 @@ export type NoticeEvent =
       closed: number
       cancelled: number
     }
-  /** The queue's pending 2→1 edge (urgent). */
-  | { type: "queueStarved"; eventId: string; pending: number }
   /** A permanent queue launch failure (urgent). The drainer supplies the
    * challenge name and the bounded error; the template owns the wording. */
   | {
@@ -95,8 +96,9 @@ export type NoticeEvent =
       source: "manual" | "scheduler"
     }
   /** Fleet vital signs: the event has pending work, no live solver, and the
-   * drain has made no progress for the stall window (urgent — also wakes the
-   * scheduler, which is the point). */
+   * drain has made no progress for the stall window (urgent — the
+   * unattended alarm face; the engine's decision point rides the same call
+   * in the service). */
   | {
       type: "eventStalled"
       eventId: string
@@ -104,6 +106,15 @@ export type NoticeEvent =
       pending: number
       /** No-progress duration (see run/fleet-watchdog.ts). */
       stalledMs: number
+    }
+  /** The scheduler ended `consecutive` decision points without submitting a
+   * plan (§3.6 rule 3) — the violation escalation alarm (urgent). */
+  | {
+      type: "schedulerViolation"
+      eventId: string
+      /** The latest closed decision point, shortened for display. */
+      decisionPointId: string
+      consecutive: number
     }
 
 /** One channel post derived from a notice event. */
@@ -223,16 +234,6 @@ export function noticeDeliveries(event: NoticeEvent): NoticeDelivery[] {
           meta: { noticeType: "notice" },
         },
       ]
-    case "queueStarved":
-      return [
-        {
-          ...notice,
-          template: "noticeQueueStarved",
-          context: { pending: event.pending },
-          meta: { noticeType: "emergency" },
-          urgent: true,
-        },
-      ]
     case "launchFailed":
       return [
         {
@@ -267,6 +268,19 @@ export function noticeDeliveries(event: NoticeEvent): NoticeDelivery[] {
           context: {
             pending: event.pending,
             stalled: fmtMs(event.stalledMs),
+          },
+          meta: { noticeType: "emergency" },
+          urgent: true,
+        },
+      ]
+    case "schedulerViolation":
+      return [
+        {
+          ...notice,
+          template: "noticeSchedulerViolation",
+          context: {
+            decisionPointId: event.decisionPointId,
+            consecutive: event.consecutive,
           },
           meta: { noticeType: "emergency" },
           urgent: true,

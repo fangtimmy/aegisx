@@ -471,11 +471,6 @@ function SchedulerOverview({
                       无未读
                     </Badge>
                   )}
-                  {inbox.data.deliveryPaused && (
-                    <Badge size="sm" variant="warning">
-                      投递已暂停
-                    </Badge>
-                  )}
                 </>
               ) : (
                 <Badge size="sm" variant="secondary">

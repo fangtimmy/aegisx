@@ -54,7 +54,6 @@ import {
 } from "./agent-runtime"
 import { createAgentSessionOps } from "./agent-session-ops"
 import { createAgentStatus, type AgentStatus } from "./agent-status"
-import { notifyBootReentry } from "./boot-reentry"
 import { createChannelService, type ChannelService } from "./channels"
 import type { SendOutcome } from "./channels-context"
 import type { Clock } from "./clock"
@@ -64,6 +63,10 @@ import {
   type ContainerLifecycle,
 } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
+import {
+  createDecisionPointEngine,
+  type DecisionTimings,
+} from "./decision-points/engine"
 import {
   actorFromPrincipal,
   actorLabel,
@@ -136,9 +139,11 @@ export type AgentServiceOptions = {
   stallMs?: number
   /** Test seam: solved write-up wrap-up bound (default SOLVED_WRAPUP_MS). */
   solvedWrapupMs?: number
+  /** Test seam overrides for the decision-point engine's timings. */
+  decisionTimings?: Partial<DecisionTimings>
   /** Time layer (default: the system clock) — every runtime timer (flush
-   * tick, sweep, drainer, deadlines, watchdog) reads and schedules through
-   * it; tests inject a fake clock for deterministic time. */
+   * tick, sweep, drainer, deadlines, watchdog, decision points) reads and
+   * schedules through it; tests inject a fake clock for deterministic time. */
   clock?: Clock
   /** Unattended appliance mode (`AEGISX_UNATTENDED=1`): there is no human to
    * review a restart or resume a paused queue, so boot recovery must not pause
@@ -262,20 +267,29 @@ export function createAgentService(options: AgentServiceOptions) {
     now,
     challengeWorkspaceRoot,
     clock,
-    // Fleet digest appended to scheduler deliveries: rendered per delivery
-    // against the current DB state (advisory — a render failure just skips
-    // the digest, delivery itself must not fail).
-    renderSchedulerDigest: (eventId) => {
-      try {
-        const body =
-          loadTemplateMap(db).get("schedulerDigest") ??
-          DEFAULT_SCHEDULER_DIGEST_TEMPLATE
-        return renderTemplateBody(
-          body,
-          schedulerAdminPort.get().getDigestContext(eventId)
-        )
-      } catch {
-        return ""
+    // Scheduler-directed content (solver asks, user posts on orch, user DMs
+    // to the scheduler) opens a decision point — the delivery engine keeps
+    // NO scheduler face (§3.6). Late-bound over the engine defined below.
+    onSchedulerInbox: (post) => {
+      const preview = post.body.trim().slice(0, 120)
+      if (post.kind === "dm") {
+        decisionEngine.trigger(post.eventId, {
+          kind: "user.directive",
+          source: "dm",
+          preview,
+        })
+      } else if (post.authorType === "user") {
+        decisionEngine.trigger(post.eventId, {
+          kind: "user.directive",
+          source: "orch",
+          preview,
+        })
+      } else {
+        decisionEngine.trigger(post.eventId, {
+          kind: "solver.asked",
+          ...(post.authorAgentId ? { authorAgentId: post.authorAgentId } : {}),
+          preview,
+        })
       }
     },
     ...(options.flushIntervalMs !== undefined
@@ -299,6 +313,65 @@ export function createAgentService(options: AgentServiceOptions) {
       schedulerAdminPort.get().isSchedulerPaused(eventId),
   })
 
+  // The decision-point engine (§3.6): the ONE deterministic wake path for
+  // every scheduler. All deps are late-bound closures — the ports and the
+  // send path resolve at first trigger, not at construction.
+  const decisionEngine = createDecisionPointEngine({
+    db,
+    clock,
+    now,
+    send: async (agentId, text) => sendToAgent(agentId, text),
+    // The fleet digest moved here from the delivery face (§3.7): every
+    // decision-point payload ends with the [调度快照] block, rendered per
+    // open against the current DB state (a render failure degrades to an
+    // empty block, the payload itself must not fail).
+    digestOf: (eventId) => {
+      try {
+        const context = schedulerAdminPort.get().getDigestContext(eventId)
+        const body =
+          loadTemplateMap(db).get("schedulerDigest") ??
+          DEFAULT_SCHEDULER_DIGEST_TEMPLATE
+        return {
+          digest: renderTemplateBody(body, context),
+          // Wall-clock-independent fingerprint for the periodic skip: the
+          // fleet's structural state (clock/elapsed/last-flag ages excluded —
+          // they always change; token burn excluded — a working fleet needs
+          // no nudge).
+          fingerprint: JSON.stringify({
+            agents: context.agents,
+            targets: context.targets,
+            queue: context.queue,
+            board: context.board,
+            challenges: context.challenges.map((c) => [
+              c.name,
+              c.earned,
+              c.flagProgress,
+              c.solvedLabel,
+              c.live,
+              c.running,
+              c.pending,
+              c.attempts,
+            ]),
+          }),
+        }
+      } catch {
+        return { digest: "", fingerprint: "" }
+      }
+    },
+    isSchedulerPaused: (eventId) =>
+      schedulerAdminPort.get().isSchedulerPaused(eventId),
+    // The violation escalation's alarm face — the same urgent orch channel
+    // today's eventStalled uses (the unattended appliance's pager).
+    escalateNotice: (eventId, decisionPointId, consecutive) =>
+      notices.publish({
+        type: "schedulerViolation",
+        eventId,
+        decisionPointId,
+        consecutive,
+      }),
+    ...(options.decisionTimings ? { timings: options.decisionTimings } : {}),
+  })
+
   const status: AgentStatus = createAgentStatus({
     db,
     queries,
@@ -312,6 +385,7 @@ export function createAgentService(options: AgentServiceOptions) {
     // instance when the last live agent leaves, or the two views diverge and
     // the fence keeps admitting spawns the platform cannot serve.
     onAgentTerminal: (agentId) => {
+      decisionEngine.onAgentTerminal(agentId)
       const row = queries.getAgentRow(agentId)
       if (!row?.challengeId) return
       const challengeId = row.challengeId
@@ -347,6 +421,20 @@ export function createAgentService(options: AgentServiceOptions) {
     },
     now,
     queue: queuePort,
+    // Decision-point engine feeds: every solver turn settle is an
+    // agent.settled trigger; the scheduler's own settle correlates its open
+    // decision point; a deadline fire is the urgent agent.timedOut trigger.
+    onTurnSettled: (agentId, error) =>
+      decisionEngine.onTurnSettled(agentId, error),
+    onAgentTimedOut: (agentId, outcome) => {
+      const row = queries.getAgentRow(agentId)
+      if (!row) return
+      decisionEngine.trigger(row.eventId, {
+        kind: "agent.timedOut",
+        agentId,
+        outcome,
+      })
+    },
   })
 
   /** The runtime deps are per-agent-invariant: every runtime shares them,
@@ -671,11 +759,11 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Event-level emergency halt — every lever, one click, all reversible:
-   * freeze the queue (pending items kept, the watchdog honours paused),
-   * pause the scheduler (emit gate: no new notices), hold the inbox
-   * (delivery gate: stockpiled unread stays undelivered), close all live
-   * solvers and stop all platform targets. Without the inbox hold the
-   * delivery engine would wake the scheduler with the pre-halt backlog. */
+   * freeze the queue, pause the scheduler (the engine's two gates — no
+   * decision points, no notices, no violation escalation), close all live
+   * solvers and stop all platform targets. The scheduler cannot be woken
+   * while halted because BOTH of the engine's gates are closed; no inbox
+   * hold exists anymore (the delivery engine has no scheduler face). */
   async function haltEvent(
     eventId: string,
     principal: Principal
@@ -692,7 +780,6 @@ export function createAgentService(options: AgentServiceOptions) {
     if (!event) throw new RunActionError("not_found", "Event not found")
     queuePort.get().pause(eventId, "manual", principal)
     await pauseScheduler(eventId)
-    channels.setDeliveryPaused(eventId, true)
     const solverClosed = await closeEventAgents(eventId, principal)
     const targets = await platformService.stopEventTargets(eventId)
     return {
@@ -702,9 +789,8 @@ export function createAgentService(options: AgentServiceOptions) {
     }
   }
 
-  /** Counterpart of {@link haltEvent}: release the inbox hold (the backlog
-   * flushes as one digest), resume the scheduler (re-sync notice) and
-   * unfreeze the queue. */
+  /** Counterpart of {@link haltEvent}: resume the scheduler (a decision
+   * point re-syncs it) and unfreeze the queue. */
   async function resumeEvent(
     eventId: string,
     principal: Principal
@@ -715,7 +801,6 @@ export function createAgentService(options: AgentServiceOptions) {
       .where(eq(events.id, eventId))
       .get()
     if (!event) throw new RunActionError("not_found", "Event not found")
-    channels.setDeliveryPaused(eventId, false)
     await resumeScheduler(eventId)
     queuePort.get().resume(eventId, "manual", principal)
     queuePort.get().scheduleDrain()
@@ -1064,11 +1149,11 @@ export function createAgentService(options: AgentServiceOptions) {
   // --- flag hooks -------------------------------------------------------------
 
   /** Platform-side hook: a flag was accepted. Tiered by outcome — "first"
-   * (the challenge's initial solve): notify the scheduler
-   * (agent.flagAccepted), post a #team notice (policy-gated), run the
-   * full-solve cleanup under the event's policy; "extra" (a new flag value
-   * on an already-solved challenge): light #team notice only; "repeat" (a
-   * duplicate of an accepted value): submitter event only. */
+   * (the challenge's initial solve): open an URGENT decision point + a #team
+   * notice (policy-gated), run the full-solve cleanup under the event's
+   * policy; "extra" (a new flag value on an already-solved challenge): light
+   * #team notice only; "repeat" (a duplicate of an accepted value):
+   * submitter event only. */
   function notifyFlagAccepted(
     challengeId: string,
     submitterAgentId?: string,
@@ -1086,6 +1171,11 @@ export function createAgentService(options: AgentServiceOptions) {
     const { eventId, name } = meta
     const policy = schedulerPolicyFor(db, eventId)
     if (outcome === "extra") {
+      decisionEngine.trigger(eventId, {
+        kind: "flag.accepted",
+        challengeName: name,
+        tier: "extra",
+      })
       if (policy.notifyTeamOnFlag) {
         notices.publish({
           type: "flagAccepted",
@@ -1099,6 +1189,11 @@ export function createAgentService(options: AgentServiceOptions) {
       }
       return
     }
+    decisionEngine.trigger(eventId, {
+      kind: "flag.accepted",
+      challengeName: name,
+      tier: "first",
+    })
     if (policy.notifyTeamOnFlag) {
       notices.publish({
         type: "flagAccepted",
@@ -1146,6 +1241,7 @@ export function createAgentService(options: AgentServiceOptions) {
 
   /** Platform-side hook: a correct-but-incomplete multi-flag submission
    * (a multi-flag partial — the challenge is NOT fully solved). ONE
+   * non-urgent decision-point trigger (flag.accepted/partial) + a
    * non-urgent system post into the challenge's #team (policy-gated) + a
    * non-urgent orch notice. The submitter rides in meta so delivery can
    * skip its own notice. */
@@ -1156,6 +1252,11 @@ export function createAgentService(options: AgentServiceOptions) {
   ): void {
     const meta = queries.getChallengeMeta(challengeId)
     if (!meta) return
+    decisionEngine.trigger(meta.eventId, {
+      kind: "flag.accepted",
+      challengeName: meta.name,
+      tier: "partial",
+    })
     if (schedulerPolicyFor(db, meta.eventId).notifyTeamOnFlag) {
       notices.publish({
         type: "flagAccepted",
@@ -1282,19 +1383,15 @@ export function createAgentService(options: AgentServiceOptions) {
 
   // --- scheduler (event orchestrator) lifecycle -------------------------------
 
-  /** Wake text sent on resume / reopen so the orchestrator re-syncs —
-   * rendered from the user-editable noticeSchedulerResume template. */
-  const schedulerResumeMessage = () =>
-    renderTemplateBody(noticeTemplateBody("noticeSchedulerResume"), {})
-
   /** Start (or restart) the event's scheduler agent from its config. The
    * orchestrator's model is the per-event `scheduler_config.modelId`
    * override when set, else the global default.
    *
-   *  - live scheduler agent: paused → resume (un-pause + wake); else error.
-   *  - terminal scheduler agent: reopen — wake it (onResume → resumeAgent:
-   *    container + session rebuilt, memory kept). `reset: true` deletes the
-   *    row and spawns fresh.
+   *  - live scheduler agent: paused → resume (un-pause + re-sync decision
+   *    point); else error.
+   *  - terminal scheduler agent: reopen — a user-directive decision point
+   *    cold-resumes it (container + session rebuilt, memory kept).
+   *    `reset: true` deletes the row and spawns fresh.
    *  - no scheduler agent: fresh spawn (also clears paused). */
   async function startScheduler(
     eventId: string,
@@ -1319,16 +1416,15 @@ export function createAgentService(options: AgentServiceOptions) {
         )
       }
       if (existing && !opts.reset) {
-        // Reopen keeps memory — wake the orchestrator (onResume → resumeAgent:
-        // container + session rebuilt, session kept).
+        // Reopen keeps memory — the user-directive decision point cold-
+        // resumes the orchestrator (the engine's runtime send rebuilds the
+        // container + session and drives the re-sync turn).
         admin.setSchedulerPaused(eventId, false)
-        await sendMessage(
-          existing.id,
-          { text: schedulerResumeMessage() },
-          {
-            kind: "system",
-          }
-        )
+        decisionEngine.trigger(eventId, {
+          kind: "user.directive",
+          source: "resume",
+          revive: true,
+        })
         return requireAgent(existing.id)
       }
       if (existing && opts.reset) {
@@ -1362,9 +1458,9 @@ export function createAgentService(options: AgentServiceOptions) {
     return null
   }
 
-  /** Re-enable the scheduler (W3): set paused=0 + tell the orchestrator to
-   * re-sync before acting. No-op messaging when absent/terminal (the flag is
-   * still written). */
+  /** Re-enable the scheduler (W3): set paused=0 + open a user-directive
+   * decision point so the orchestrator re-syncs before acting. No trigger
+   * when absent/terminal (the flag is still written). */
   async function resumeScheduler(
     eventId: string
   ): Promise<AgentSummary | null> {
@@ -1372,13 +1468,10 @@ export function createAgentService(options: AgentServiceOptions) {
     admin.setSchedulerPaused(eventId, false)
     const sched = admin.getSchedulerAgent(eventId)
     if (sched && isActiveAgentStatus(sched.status)) {
-      await sendMessage(
-        sched.id,
-        { text: schedulerResumeMessage() },
-        {
-          kind: "system",
-        }
-      )
+      decisionEngine.trigger(eventId, {
+        kind: "user.directive",
+        source: "resume",
+      })
       return requireAgent(sched.id)
     }
     return null
@@ -1482,8 +1575,34 @@ export function createAgentService(options: AgentServiceOptions) {
         by: { kind: "system", actorId: "drainer" },
       })
     },
-    onQueueEmergency: (event) => notices.publish(event),
-    onQueueNotice: (event) => notices.publish(event),
+    onQueueEmergency: (event) => {
+      notices.publish(event)
+      // The launch failure is an URGENT decision-point trigger (§3.6) —
+      // the notice is the ledger line, the trigger is the wake.
+      if (event.type === "launchFailed") {
+        decisionEngine.trigger(event.eventId, {
+          kind: "launch.failed",
+          challengeName: event.challengeName,
+          error: event.error,
+        })
+      }
+    },
+    onQueueNotice: (event) => {
+      notices.publish(event)
+      // Pause/resume are queue.changed triggers; the engine's own gate
+      // drops the paused half (a paused queue stays silent until resume).
+      if (event.type === "queueStateChanged") {
+        decisionEngine.trigger(event.eventId, {
+          kind: "queue.changed",
+          reason: event.action === "paused" ? "paused" : "resumed",
+        })
+      }
+    },
+    // Queue growth and the low-water edge feed the engine (§3.6) — the old
+    // starved-edge mechanism, collapsed into a coalesced trigger.
+    onQueueChanged: (eventId, change) => {
+      decisionEngine.trigger(eventId, { kind: "queue.changed", ...change })
+    },
   })
   queuePort.bind(queue)
 
@@ -1503,8 +1622,9 @@ export function createAgentService(options: AgentServiceOptions) {
   })
 
   // Event-level vital signs: pending work with no live solver and no drain
-  // progress → ONE urgent orch notice per episode (which also wakes the
-  // scheduler). Deliberately narrow trigger; see run/fleet-watchdog.ts.
+  // progress → ONE escalation per episode (watchdog.escalated fact + the
+  // urgent eventStalled notice + a fleet.stalled decision point). The wake
+  // duty belongs to the engine; the watchdog is the stuck-machinery alarm.
   const fleetWatchdog = createFleetWatchdog({
     db,
     clock,
@@ -1512,13 +1632,29 @@ export function createAgentService(options: AgentServiceOptions) {
     isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
     onStalled: (stall) => {
       logEvent("fleet", "event_stalled", { ...stall })
+      emitDomainEvent(db, {
+        type: "watchdog.escalated",
+        eventId: stall.eventId,
+        actor: { kind: "system", actorId: "fleet-watchdog" },
+        payload: {
+          reason: "fleet_stalled",
+          detail: { pending: stall.pending, stalledMs: stall.stalledMs },
+          at: now(),
+        },
+      })
       notices.publish({ type: "eventStalled", ...stall })
+      decisionEngine.trigger(stall.eventId, {
+        kind: "fleet.stalled",
+        pending: stall.pending,
+        stalledMs: stall.stalledMs,
+      })
     },
   })
   fleetWatchdog.start()
 
   async function close(): Promise<void> {
     closed = true
+    decisionEngine.close()
     await Promise.allSettled(locks.values())
     locks.clear()
     containerLifecycle.close()
@@ -1535,20 +1671,13 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Boot recovery + restart re-entry. `factory.recoverOnBoot` flips every
-   * live agent idle (no auto-resume); each event whose scheduler survived
-   * non-terminal then gets ONE direct wake to re-sync and decide whether to
-   * re-dispatch (run/boot-reentry.ts). Events without a scheduler are left
-   * to bootstrap / the user. */
+   * live agent idle (no auto-resume); each event with a surviving live
+   * scheduler then gets ONE boot.resync decision point to re-sync and decide
+   * whether to re-dispatch (§3.7 — replaces run/boot-reentry). Events
+   * without a scheduler are left to bootstrap / the user. */
   async function recoverOnBoot(): Promise<void> {
     await factory.recoverOnBoot()
-    await notifyBootReentry({
-      db,
-      send: async (agentId, text) => {
-        await sendMessage(agentId, { text }, { kind: "system" })
-      },
-      templateBody: noticeTemplateBody,
-      isSchedulerPaused: (eventId) => schedulerAdmin.isSchedulerPaused(eventId),
-    })
+    decisionEngine.bootResync()
   }
 
   /** Remove a challenge's workspace tree (agents/ shared/ attachments/
@@ -1626,8 +1755,7 @@ export function createAgentService(options: AgentServiceOptions) {
       return schedulerAdmin.getSchedulerAgent(eventId)
     },
     inboxSnapshot: channels.inboxSnapshot,
-    setInboxDeliveryPaused: (eventId: string, paused: boolean) =>
-      channels.setDeliveryPaused(eventId, paused),
+    forgetEventState: (eventId: string) => decisionEngine.forget(eventId),
     assertModelsResolvable: schedulerAdmin.assertModelsResolvable,
     getSchedulerConfig: (eventId: string, principal: Principal) => {
       assertMayTouchEvent(principal, eventId)

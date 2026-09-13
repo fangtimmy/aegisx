@@ -246,17 +246,21 @@ describe("numeric contracts (prompt wording ↔ runtime constants)", () => {
   // The prompts quote runtime numbers as behavior contracts; the solver and
   // scheduler reason from the quoted number, not the constant. Either side
   // moving must drag the other.
-  test("merged delivery cadence (~5 min)", () => {
+  test("merged delivery cadence ↔ periodic re-examination cadence (~5 min)", () => {
     expect(FLUSH_INTERVAL_MS).toBe(5 * 60_000)
+    // The solver delivery tick and the engine's periodic decision point
+    // share the cadence constant; both prompts quote it.
     expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
-      "every ~5 minutes"
+      "每 ~5 分钟一次的例行复核"
     )
     expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain("每 5 分钟合并投递")
   })
 
   test("solver idle-stall threshold (>2 min)", () => {
     expect(AGENT_STALL_MS).toBe(2 * 60_000)
-    expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
+    // The stall line is orch-ledger-only since the engine took over the
+    // wakes (§3.7 row 1) — the scheduler prompt no longer quotes it.
+    expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).not.toContain(
       "idle >2 minutes"
     )
   })
@@ -327,15 +331,16 @@ describe("notice wording sync (typed notice templates ↔ orchestrator template 
       })
     const paused = flip("paused")
     const resumed = flip("resumed")
-    // The notice templates spell 队列已{暂停|恢复}（用户手动）; the scheduler
-    // template spells both forms out.
+    // The notice templates spell 队列已{暂停|恢复}（用户手动）; the ledger
+    // lines keep the manual-flip marker.
     for (const frag of ["队列已", "暂停", "恢复", "（用户手动）"]) {
       expect(`${paused}\n${resumed}`).toContain(frag)
     }
+    // The scheduler template teaches the plan verb — pause/resume reach it
+    // as queue.changed triggers, not quoted ledger lines.
     expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
-      "队列已暂停/已恢复"
+      "set_queue_paused"
     )
-    expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain("用户手动")
   })
 })
 
@@ -414,11 +419,11 @@ describe("template registry (every builtin renders + declares its variables)", (
   // spawn or in the settings preview — and (b) only extend variables its
   // palette declares.
 
-  test("all 24 builtin keys are declared exactly once", () => {
+  test("all 22 builtin keys are declared exactly once", () => {
     const keys = PROMPT_TEMPLATES.map((entry) => entry.key)
-    expect(keys).toHaveLength(24)
-    expect(new Set(keys).size).toBe(24)
-    expect(new Set(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).size).toBe(18)
+    expect(keys).toHaveLength(22)
+    expect(new Set(keys).size).toBe(22)
+    expect(new Set(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).size).toBe(16)
   })
 
   test("each default renders against its sample and references declared variables only", () => {

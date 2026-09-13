@@ -41,10 +41,11 @@ const TEMPLATE_KEYS = [
   "schedulerDigest",
 ] as const
 
-/** System→agent notice templates (orch-notices + agent lifecycle lines +
- * direct scheduler wakes): seeded into the same builtin namespace, so the
- * settings page lists/edits them alongside the prompts. Previewed through
- * the server's shared `notice` sample context. */
+/** System→agent notice templates (orch-notices + agent lifecycle lines):
+ * seeded into the same builtin namespace, so the settings page lists/edits
+ * them alongside the prompts. Previewed through the server's shared `notice`
+ * sample context. (The scheduler's wakes are engine-rendered decision-point
+ * payloads — not user-editable rows.) */
 const NOTICE_TEMPLATE_KEYS = [
   "noticeFlagAccepted",
   "noticeFlagExtra",
@@ -52,18 +53,16 @@ const NOTICE_TEMPLATE_KEYS = [
   "noticeFlagPartialProgress",
   "noticeSolveCleanup",
   "noticeChallengeHalt",
-  "noticeQueueStarved",
   "noticeLaunchFailed",
   "noticeQueueState",
   "noticeEventStalled",
+  "noticeSchedulerViolation",
   "noticeAgentStarted",
   "noticeAgentIdle",
   "noticeAgentFlagAccepted",
   "noticeAgentFinished",
   "noticeAgentTimedOut",
   "noticeAgentReopened",
-  "noticeBootReentry",
-  "noticeSchedulerResume",
 ] as const
 
 const TEMPLATE_META: Record<string, { title: string; description: string }> = {
@@ -92,7 +91,7 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
   schedulerDigest: {
     title: "调度快照",
     description:
-      "追加到调度者每次投递尾部的 fleet 状态摘要（槽位、队列、每题 agent 概况）。",
+      "附加到调度者每个决策点载荷尾部的 fleet 状态摘要（槽位、队列、每题 agent 概况）。",
   },
   noticeFlagAccepted: {
     title: "通知 · 首次解出",
@@ -117,10 +116,6 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
   noticeChallengeHalt: {
     title: "通知 · 手动停止",
     description: "操作员手动停止题目时关闭 agent、取消排队项的摘要。",
-  },
-  noticeQueueStarved: {
-    title: "通知 · 队列不足（紧急）",
-    description: "待发队列降到阈值时的紧急通知。",
   },
   noticeLaunchFailed: {
     title: "通知 · 启动失败（紧急）",
@@ -158,13 +153,9 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
     title: "通知 · agent 重开",
     description: "终态 agent 被重开时发到调度频道的生命周期行。",
   },
-  noticeBootReentry: {
-    title: "通知 · 重启回归",
-    description: "服务重启后直接发送给各赛事调度者的重新同步唤醒。",
-  },
-  noticeSchedulerResume: {
-    title: "通知 · 调度恢复",
-    description: "调度者被恢复/重开时收到的直接唤醒。",
+  noticeSchedulerViolation: {
+    title: "通知 · 调度违约（紧急）",
+    description: "调度者连续多个决策点未提交计划时引擎升级发出的紧急告警。",
   },
 }
 

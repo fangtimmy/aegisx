@@ -27,8 +27,16 @@ export type AgentStatusDeps = {
    * agent-lifecycle events are dropped before they reach the scheduler. */
   isSchedulerPaused(eventId: string): boolean
   /** Agent went terminal: the caller releases resources that only a live
-   * agent justifies holding (the challenge's platform target instance). */
+   * agent justifies holding (the challenge's platform target instance) and
+   * feeds the decision-point engine. */
   onAgentTerminal(agentId: string): void
+  /** Decision-point engine feed (§3.6): EVERY turn settle — solver settles
+   * are agent.settled triggers; the scheduler's own settle correlates its
+   * open decision point. */
+  onTurnSettled?(agentId: string, error: string | null): void
+  /** Decision-point engine feed: a solver's hard deadline fired (the
+   * urgent agent.timedOut trigger). */
+  onAgentTimedOut?(agentId: string, outcome: string): void
   now: () => string
   /** Late-bound queue port (agent terminal → item done + re-drain); bound by
    * the assembly root before any agent can terminalize. */
@@ -155,6 +163,9 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       },
       { kind: "system" }
     )
+    if (payload.type === "agent.timedOut") {
+      deps.onAgentTimedOut?.(agentId, payload.outcome)
+    }
   }
 
   /** Mark an agent's turn starting: the agent.turn_started fact (its
@@ -202,6 +213,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       agentId,
       failed: Boolean(error),
     })
+    deps.onTurnSettled?.(agentId, error)
   }
 
   /** Terminal transition shared by finish_run (settle path), the HTTP

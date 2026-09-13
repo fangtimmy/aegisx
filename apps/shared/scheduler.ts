@@ -42,15 +42,13 @@ export type SchedulerStatusSnapshot = {
   }>
 }
 
-/** GET /api/events/:id/inbox — the scheduler DM view's status header
- * (v18): the orch channel key + its unread backlog + the global flush tick
- * + the per-event delivery hold. The timeline itself comes from the channel
- * messages endpoint via `channelKey`. */
+/** GET /api/events/:id/inbox — the scheduler DM view's status header: the
+ * orch channel key + the scheduler's unread backlog (it reads via the SDK;
+ * its wakes are decision points, not deliveries). The timeline itself comes
+ * from the channel messages endpoint via `channelKey`. */
 export type InboxSnapshot = {
   channelKey: string
   unreadCount: number
-  nextFlushAt: number | null
-  deliveryPaused: boolean
 }
 
 /** Light challenge shape for the fleet view. */

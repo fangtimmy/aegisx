@@ -24,7 +24,9 @@ type QueueItemFailedPayload = { itemId: string; error: string }
 type QueueItemCancelledPayload = { itemId: string }
 type QueueItemDonePayload = { itemId: string; agentId: string }
 type QueueReorderedPayload = { itemIds: string[] }
-type QueuePausedPayload = { source: QueueSource | "boot" }
+/** A scheduler-initiated pause carries the plan that asked for it (§3.8
+ * provenance labeling — the UI/decision log can show the source). */
+type QueuePausedPayload = { source: QueueSource | "boot"; planId?: string }
 type QueueResumedPayload = { source: QueueSource }
 /** Boot recovery: running items reset to pending (agent ids dropped). */
 type QueueItemResetPayload = { count: number }
@@ -139,6 +141,32 @@ type PlanProposedPayload = {
 type PlanResultPayload = {
   planId: string
   results: Record<string, unknown>[]
+  at: string
+}
+
+// --- decision-point family (§3.6) -------------------------------------------
+
+/** One coalesced decision point opened. `triggers` are compact readable
+ * lines (kind + fact) — the decision log's display form. */
+type DecisionPointOpenedPayload = {
+  id: string
+  triggers: string[]
+  at: string
+}
+/** The decision point resolved. `plan` = a submit_plan arrived in the turn
+ * window (an explicit noOp IS a plan); `violation` = the turn(s) ended
+ * without one; `error` = the turn failed (provider/session) — never counted
+ * as a violation. */
+type DecisionPointClosedPayload = {
+  id: string
+  outcome: "plan" | "violation" | "error"
+  at: string
+}
+/** The converged watchdog escalation (§2.4): the fleet-stall alarm and the
+ * scheduler's consecutive decision-point violations both surface here. */
+type WatchdogEscalatedPayload = {
+  reason: string
+  detail: Record<string, unknown>
   at: string
 }
 
@@ -269,6 +297,9 @@ export type DomainEventPayloads = {
   "boot.recovered": BootRecoveredPayload
   "plan.proposed": PlanProposedPayload
   "plan.result": PlanResultPayload
+  "decision_point.opened": DecisionPointOpenedPayload
+  "decision_point.closed": DecisionPointClosedPayload
+  "watchdog.escalated": WatchdogEscalatedPayload
 }
 
 export type DomainEventType = keyof DomainEventPayloads
@@ -375,7 +406,12 @@ const DOMAIN_EVENT_REGISTRY: {
     },
   },
   "queue.reordered": { fields: { itemIds: { kind: "string[]" } } },
-  "queue.paused": { fields: { source: { kind: "string" } } },
+  "queue.paused": {
+    fields: {
+      source: { kind: "string" },
+      planId: { kind: "string", optional: true },
+    },
+  },
   "queue.resumed": { fields: { source: { kind: "string" } } },
   "queue.item_reset": { fields: { count: { kind: "number" } } },
   "queue.item_removed": { fields: { itemId: { kind: "string" } } },
@@ -599,6 +635,27 @@ const DOMAIN_EVENT_REGISTRY: {
       at: { kind: "string" },
     },
   },
+  "decision_point.opened": {
+    fields: {
+      id: { kind: "string" },
+      triggers: { kind: "string[]" },
+      at: { kind: "string" },
+    },
+  },
+  "decision_point.closed": {
+    fields: {
+      id: { kind: "string" },
+      outcome: { kind: "string" },
+      at: { kind: "string" },
+    },
+  },
+  "watchdog.escalated": {
+    fields: {
+      reason: { kind: "string" },
+      detail: { kind: "record" },
+      at: { kind: "string" },
+    },
+  },
 }
 
 /** Validate a payload against its type's registry entry. Returns the problem
@@ -610,8 +667,7 @@ export function validateDomainEventPayload<T extends DomainEventType>(
   return validateFields(payload, DOMAIN_EVENT_REGISTRY[type].fields)
 }
 
-/** The decision-log type set the web view queries (§2.5). Later batches add
- * decision_point.* / watchdog.escalated. */
+/** The decision-log type set the web view queries (§2.5). */
 export const DECISION_LOG_EVENT_TYPES: DomainEventType[] = [
   "queue.enqueued",
   "queue.launched",
@@ -639,4 +695,7 @@ export const DECISION_LOG_EVENT_TYPES: DomainEventType[] = [
   "boot.recovered",
   "plan.proposed",
   "plan.result",
+  "decision_point.opened",
+  "decision_point.closed",
+  "watchdog.escalated",
 ]

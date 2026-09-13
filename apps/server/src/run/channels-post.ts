@@ -390,6 +390,31 @@ export function createPostService(
 
     ctx.emitChannelMessage(parsed, message)
 
+    // Scheduler-directed content opens a decision point instead of a
+    // delivery (§3.6): solver asks and user posts on orch, user DMs to the
+    // scheduler agent. System posts carry their own explicit triggers.
+    if (ctx.deps.onSchedulerInbox && author.type !== "system") {
+      if (parsed.kind === "orch") {
+        ctx.deps.onSchedulerInbox({
+          eventId: ctx.eventOfKey(parsed),
+          kind: "orch",
+          authorType: author.type,
+          ...(author.type === "agent" ? { authorAgentId: author.agentId } : {}),
+          body,
+        })
+      } else if (
+        parsed.kind === "dm" &&
+        ctx.agentRow(parsed.id)?.role === "orchestrator"
+      ) {
+        ctx.deps.onSchedulerInbox({
+          eventId: ctx.eventOfKey(parsed),
+          kind: "dm",
+          authorType: author.type,
+          body,
+        })
+      }
+    }
+
     if (urgent) {
       deliverChannel(key, input.deliverAs ?? "steer")
     }

@@ -19,7 +19,6 @@ import { systemClock } from "./clock"
 export { renderMerged } from "./channels-render"
 
 export {
-  FLUSH_INTERVAL_MS,
   SCHEDULER_READ_KEY,
   dmKey,
   orchKey,
@@ -40,7 +39,9 @@ export type ChannelService = ReturnType<typeof createChannelService>
  *   DM scheduler   orch:<eventId>       solver asks + system agent/queue
  *                                       events → the scheduler (stable
  *                                       "scheduler" read cursor across
- *                                       scheduler restarts)
+ *                                       scheduler restarts). LEDGER ONLY —
+ *                                       the scheduler reads it via the SDK;
+ *                                       its wakes are decision points.
  *
  * The first message makes a channel exist; there is no directory table and
  * no get-or-create. Delivery is ONE policy for all three kinds:
@@ -64,7 +65,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
   const intervalMs = deps.flushIntervalMs ?? FLUSH_INTERVAL_MS
   const ctx = createChannelContext(deps, intervalMs, deps.clock ?? systemClock)
   const reads = createReadsService(ctx)
-  const delivery = createDeliveryEngine(ctx, { unreadCount: reads.unreadCount })
+  const delivery = createDeliveryEngine(ctx)
   const writes = createPostService(
     ctx,
     delivery.deliverChannel,
@@ -121,7 +122,6 @@ export function createChannelService(deps: ChannelServiceDeps) {
 
   function close(): void {
     delivery.stopFlushLoop()
-    ctx.clearDeliveryPaused()
   }
 
   delivery.startFlushLoop()
@@ -155,15 +155,10 @@ export function createChannelService(deps: ChannelServiceDeps) {
     channelInfo: reads.channelInfo,
     channelFileTarget: reads.channelFileTarget,
     // hold + inbox
-    setDeliveryPaused: (eventId: string, paused: boolean) =>
-      ctx.setDeliveryPaused(eventId, paused),
-    isDeliveryPaused: (eventId: string) => ctx.isDeliveryPaused(eventId),
     inboxSnapshot: (eventId: string) => {
       return {
         channelKey: orchKey(eventId),
         unreadCount: reads.unreadCount(orchKey(eventId), SCHEDULER_READ_KEY),
-        nextFlushAt: delivery.nextFlushAt(),
-        deliveryPaused: ctx.isDeliveryPaused(eventId),
       }
     },
     // cleanup

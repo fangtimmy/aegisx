@@ -80,13 +80,21 @@ export type QueueServiceDeps = {
    * success; rejects with {@link RunActionError} (capacity /
    * launch_failed) or other errors. */
   launch(item: QueueRow): Promise<string>
-  /** Emergency notice for the event's scheduler: a permanent launch failure,
-   * or the queue-starved edge (pending 2→1). Posted urgent (immediate wake).
-   * Never throws. */
+  /** Emergency notice for the event's scheduler: a permanent launch failure.
+   * Posted urgent (the decision-point engine's launch.failed trigger rides
+   * the same call in the service). Never throws. */
   onQueueEmergency(event: NoticeEvent): void
-  /** Ordinary notice for the event's scheduler (queue pause/resume): a
-   * non-urgent message riding the next delivery. Never throws. */
+  /** Ordinary notice for the event's scheduler (queue pause/resume): the
+   * orch ledger line (the engine's queue.changed trigger rides the same
+   * call). Never throws. */
   onQueueNotice(event: NoticeEvent): void
+  /** Decision-point engine feed (§3.6): queue growth and the low-water edge
+   * (pending ≤ 1 after a decrease) are `queue.changed` triggers. Optional —
+   * absent in tests that don't exercise the engine. Never throws. */
+  onQueueChanged?(
+    eventId: string,
+    change: { reason: "enqueued" | "low_water"; pending: number }
+  ): void
   /** Settle a just-spawned agent whose queue item was cancelled/removed
    * mid-launch (markRunning lost the race). Never throws; failures are
    * logged by the drainer. */
@@ -146,13 +154,8 @@ const SOLVE_CLEANUP_ACTOR: DomainEventActor = {
 export function createQueueService(deps: QueueServiceDeps) {
   const { db } = deps
 
-  /** Per-event starved-edge memory: true once pending crossed 2→1 (fired);
-   * reset when the count climbs back ≥ 2 (refill re-arms). Edge-triggered so
-   * a queue sitting at ≤ 1 never keeps nagging. */
-  const starvedFired = new Map<string, boolean>()
-
-  /** Pending items count for an event (queue-starved判定口径). */
-  function pendingCount(eventId: string): number {
+  /** Pending items count for an event (the low-water trigger's measure). */
+  function pendingCountOf(eventId: string): number {
     return (
       db
         .select({ count: count() })
@@ -164,23 +167,14 @@ export function createQueueService(deps: QueueServiceDeps) {
     )
   }
 
-  /** Check the 2→1 edge on a pending-count DECREASE (spawn 拉走 / remove /
-   * fail): exactly one pending item left → fire once. A PAUSED queue stays
-   * silent — the user stopped launching on purpose; the edge is still
-   * consumed so a resumed queue never nags about it. */
-  function checkStarved(eventId: string): void {
-    const pending = pendingCount(eventId)
-    if (pending >= 2) {
-      starvedFired.set(eventId, false)
-      return
-    }
-    if (pending === 1 && !starvedFired.get(eventId)) {
-      starvedFired.set(eventId, true)
-      // Internal caller — the system principal passes the event scope free
-      // of charge; the assertion only gates external (route) callers.
-      if (stateOf(eventId, { kind: "system" }) === "paused") return
-      logEvent("queue", "starved", { pending })
-      deps.onQueueEmergency({ type: "queueStarved", eventId, pending })
+  /** A pending count DECREASE (launch / remove / fail / cancel): at ≤ 1 the
+   * queue is at low water — one `queue.changed` trigger for the engine
+   * (control-plane §3.6; the old 2→1 starved edge, now without its own edge
+   * memory: coalescing is the engine's business). */
+  function noteConsumed(eventId: string): void {
+    const pending = pendingCountOf(eventId)
+    if (pending <= 1) {
+      deps.onQueueChanged?.(eventId, { reason: "low_water", pending })
     }
   }
 
@@ -252,9 +246,10 @@ export function createQueueService(deps: QueueServiceDeps) {
       promptLen: (input.prompt ?? "").length,
       source: input.source,
     })
-    // Enqueue only grows the count; ≥ 2 clears the starved edge so a later
-    // 2→1 crossing re-fires.
-    if (pendingCount(input.eventId) >= 2) starvedFired.set(input.eventId, false)
+    deps.onQueueChanged?.(input.eventId, {
+      reason: "enqueued",
+      pending: pendingCountOf(input.eventId),
+    })
     drainer.scheduleDrain()
     return toPublic(db, getRow(id)!)
   }
@@ -298,7 +293,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       actor: actorFromPrincipal(principal),
       payload: { itemId },
     })
-    checkStarved(row.eventId)
+    noteConsumed(row.eventId)
   }
 
   /** Remove every non-running item for an event. */
@@ -310,6 +305,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       actor: actorFromPrincipal(principal),
       payload: {},
     })
+    noteConsumed(eventId)
   }
 
   /** Fully-solved cleanup: cancel the challenge's pending items (stale
@@ -338,7 +334,7 @@ export function createQueueService(deps: QueueServiceDeps) {
         payload: { itemId: row.id },
       })
     }
-    if (rows.length > 0) checkStarved(eventId)
+    if (rows.length > 0) noteConsumed(eventId)
     return rows.length
   }
 
@@ -369,7 +365,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       actor: actorFromPrincipal(principal),
       payload: { itemId },
     })
-    checkStarved(eventId)
+    noteConsumed(eventId)
   }
 
   /** Update a pending item's prompt / timeout / params. Only
@@ -484,7 +480,7 @@ export function createQueueService(deps: QueueServiceDeps) {
         actor: DRAINER_ACTOR,
         payload: { itemId, agentId },
       }).applied
-    if (row) checkStarved(row.eventId)
+    if (row) noteConsumed(row.eventId)
     return won
   }
 
@@ -498,7 +494,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       actor: DRAINER_ACTOR,
       payload: { itemId, error },
     })
-    if (row) checkStarved(row.eventId)
+    if (row) noteConsumed(row.eventId)
   }
 
   /** Cancel one item — stale work (the challenge is solved; the full-solve
@@ -512,7 +508,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       actor: DRAINER_ACTOR,
       payload: { itemId },
     })
-    if (row) checkStarved(row.eventId)
+    if (row) noteConsumed(row.eventId)
   }
 
   /**
@@ -570,12 +566,6 @@ export function createQueueService(deps: QueueServiceDeps) {
     store: { pendingItems, markRunning, markFailed, markCancelled },
   })
 
-  /** Drop per-event in-memory bookkeeping (starved edge memory). The DB rows
-   * cascade away with the event; only this map would linger. */
-  function forget(eventId: string): void {
-    starvedFired.delete(eventId)
-  }
-
   // --- per-event queue state (W2) -----------------------------------------
   // Absent row = `running` (a fresh event's queue drains immediately). pause
   // blocks FUTURE launches only — already-live agents keep going (pause ≠
@@ -610,7 +600,9 @@ export function createQueueService(deps: QueueServiceDeps) {
   function pause(
     eventId: string,
     source: "manual" | "scheduler",
-    principal: Principal
+    principal: Principal,
+    /** Provenance labeling (§3.8): the plan that asked for the pause. */
+    planId?: string
   ): void {
     assertMayTouchEvent(principal, eventId)
     // Idempotent: a repeat flip keeps silent (no duplicate notice lines).
@@ -619,7 +611,7 @@ export function createQueueService(deps: QueueServiceDeps) {
       type: "queue.paused",
       eventId,
       actor: actorFromPrincipal(principal),
-      payload: { source },
+      payload: { source, ...(planId ? { planId } : {}) },
     })
     deps.onQueueNotice({
       type: "queueStateChanged",
@@ -665,7 +657,6 @@ export function createQueueService(deps: QueueServiceDeps) {
     scheduleDrain: drainer.scheduleDrain,
     drainOnce: drainer.drainOnce,
     cancelDrain: drainer.cancelDrain,
-    forget,
     pause,
     resume,
     stateOf,

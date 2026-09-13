@@ -573,10 +573,13 @@ export function projectDomainEvent(
     case "agent.started":
     case "agent.delivered":
     case "boot.recovered":
+    case "decision_point.closed":
+    case "decision_point.opened":
     case "fence.blocked":
     case "channel.posted":
     case "plan.proposed":
     case "plan.result":
+    case "watchdog.escalated":
       return true
   }
   return true
