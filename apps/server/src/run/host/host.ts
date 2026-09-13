@@ -40,7 +40,7 @@ function buildHostFileTools(
   containerName: string,
   containerManager: ContainerManager,
   multimodal = false,
-  execEnv?: string[]
+  execEnv?: () => string[]
 ): ToolDefinition[] {
   return [
     createBashTool(cwd, containerName, containerManager, execEnv),
@@ -80,11 +80,10 @@ export type AgentHostInput = {
   extraToolNames?: string[]
   /** Resume an existing session; omit for a new session. */
   resumeFrom?: SessionResume
-  /** Per-call exec env for the bash tool ("KEY=value" entries) — per-agent
-   * identity (AEGISX_AGENT_ID) injected into every bash exec so the
-   * container-side aegisx SDK knows who is calling (shared solver
-   * containers). */
-  execEnv?: string[]
+  /** Per-exec env provider for the bash tool — identity (AEGISX_AGENT_ID +
+   * a freshly minted AEGISX_TOKEN) is evaluated at each bash execute so an
+   * agent idling past one token TTL still gets valid credentials. */
+  execEnv?: () => string[]
   /** Fired after a commit that may change usage (compaction / branch_summary). */
   onUsageMaybeChanged?: () => void
   db: Database

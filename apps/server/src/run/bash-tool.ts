@@ -229,10 +229,10 @@ export function createBashTool(
   containerCwd: string,
   containerName: string,
   manager: ContainerManager,
-  /** Per-call exec env ("KEY=value" entries) — per-agent identity for the
-   * container-side aegisx SDK (AEGISX_AGENT_ID) on shared solver
-   * containers. */
-  execEnv?: string[],
+  /** Per-exec env provider ("KEY=value" entries) — the in-container aegisx
+   * SDK's identity (AEGISX_AGENT_ID + a freshly minted AEGISX_TOKEN),
+   * evaluated at each execute so tokens never outlive their TTL. */
+  execEnv?: () => string[],
   /** Time layer for the streaming-partial debounce (default: the system
    * clock). Not threaded through host/ on purpose — the host layer stays
    * clock-free; tests inject a fake here directly. */
@@ -301,7 +301,7 @@ export function createBashTool(
             onData: handleData,
             signal,
             timeout,
-            env: execEnv,
+            env: execEnv?.(),
             workdir: containerCwd,
           })
           exitCode = res.exitCode

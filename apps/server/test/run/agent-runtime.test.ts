@@ -52,6 +52,7 @@ function makeRuntime(db: Db, dir: string) {
         withLock: (_agentId, op) => Promise.resolve(op()),
         now: () => new Date(clock.now()).toISOString(),
         forget: (id) => runtimes.delete(id),
+        destroySandbox: () => {},
         resumeAgent: async () => {},
       }
       const runtime = createAgentRuntime(agentId, deps)

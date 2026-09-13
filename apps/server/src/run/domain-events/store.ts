@@ -46,11 +46,6 @@ export type DomainEventInput<T extends DomainEventType = DomainEventType> = {
   /** The triggering event's id, when one is naturally at hand. */
   causationId?: number | null
   payload: DomainEventPayloadOf<T>
-  /** Command inputs the projector consumes but the payload must NOT carry
-   * (agent.spawned's per-spawn credential — append-only streams cannot be
-   * scrubbed; a projection rebuild regenerates/invalidates historical
-   * tokens, which is acceptable for a per-spawn credential). */
-  projectorInput?: { agentToken?: string }
 }
 
 export type DomainEventEmitResult = {
@@ -98,18 +93,14 @@ export function emitDomainEvent<T extends DomainEventType>(
       .returning({ id: domainEvents.id })
       .get()
     const id = inserted?.id ?? 0
-    const applied = projectDomainEvent(
-      tx,
-      {
-        id,
-        type: input.type,
-        eventId: input.eventId ?? null,
-        challengeId: input.challengeId ?? null,
-        agentId: input.agentId ?? null,
-        payload: input.payload,
-      },
-      input.projectorInput
-    )
+    const applied = projectDomainEvent(tx, {
+      id,
+      type: input.type,
+      eventId: input.eventId ?? null,
+      challengeId: input.challengeId ?? null,
+      agentId: input.agentId ?? null,
+      payload: input.payload,
+    })
     result = { id, applied }
   })
   return result

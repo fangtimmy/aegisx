@@ -1,6 +1,6 @@
 # AegisX 架构概览
 
-活文档：描述当前（schema v24）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)，控制平面重设计（领域事件 / 计划 / 决策点）的取舍记录见 [control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)。
+活文档：描述当前（schema v25）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)，控制平面重设计（领域事件 / 计划 / 决策点）的取舍记录见 [control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)；沙箱生命周期对齐与自有会话模型的设计见 [sandbox-session-design-2026-09-13.md](sandbox-session-design-2026-09-13.md)。
 
 ## 总览
 
@@ -17,7 +17,7 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 | `containers/allinone` | 单镜像整机（server + web + 解题工具链，local 执行后端） |
 | `containers/appliance` | 竞赛 all-in-one 镜像家族（tsecbench / xihulunjian），一个 Dockerfile 多 `--target` 阶梯 |
 
-进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）。bash 与 CTF 工具链不在进程内执行：每道题一个长寿 Kali 容器（主进程 `sleep infinity`，纯工具箱）承载执行，命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。网络边界：solver 容器在默认 bridge 上持有 `NET_RAW`，出站不受限，宿主局域网亦可达（也可经 `container.networkMode` 共享 VPN 容器的网络命名空间）；系统强制的隔离是 solver↔宿主数据与 solver↔其他题目，不含 solver↔局域网，有需要时通过 `container.networkMode` 收紧。
+进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）。bash 与 CTF 工具链不在进程内执行：每个 agent 一个一次性 Kali 容器（主进程 `sleep infinity`，纯工具箱；命名 `aegisx-agent-<id8>`，prepare 时创建、settle 时销毁；调度者为 `aegisx-orch-<eventId8>`，机制相同），命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。同题 N 个 agent 共享的只有卷：workspace bind（题级）+ 命名缓存卷 `aegisx-ch-cache-<challengeId>`（挂 `/var/cache/apt/archives` 与 `/opt/aegisx-cache`，apt/pip/go 缓存跨容器复用，随题删除）。网络边界：solver 容器在默认 bridge 上持有 `NET_RAW`，出站不受限，宿主局域网亦可达（也可经 `container.networkMode` 共享 VPN 容器的网络命名空间）；系统强制的隔离是 solver↔宿主数据与 solver↔其他题目，不含 solver↔局域网，有需要时通过 `container.networkMode` 收紧。
 
 数据全部落在 `data/`（可用 `AEGISX_DATA_DIR` 改址）：`aegisx.sqlite`（库）、`attachments/`（附件，按赛事/题目分目录）、`events/<eventId>/challenges/<challengeId>/workspace`（求解者工作区，内含 `agents/<id8>` 与 `shared/`）、`events/<eventId>/orchestrator`（调度者工作区）。
 
@@ -25,10 +25,10 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 
 ## 数据模型（`apps/server/src/db/schema.ts`）
 
-Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径，无表行；容器是按题惰性管理的资源，跟随该题的存活 agent。schema 演进是基线制（`drizzle/` 只有一份从空库建出当前 schema 的基线迁移），开机按 `user_version` 三态协商：fresh 建库、current 直开、其余版本一律拒绝——旧库无升级路径，详见 [migrations.md](migrations.md)。
+Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径，无表行；沙箱容器是 per-agent 的一次性资源（prepare 创建、settle 销毁），题级共享的只有 workspace bind 与缓存卷。schema 演进是基线制（`drizzle/` 只有一份从空库建出当前 schema 的基线迁移），开机按 `user_version` 三态协商：fresh 建库、current 直开、其余版本一律拒绝——旧库无升级路径，详见 [migrations.md](migrations.md)。
 
 - **`domain_events`** — 控制平面唯一事实源（append-only，全局单调 id，`causation_id` 串因果链）：agent 生命周期、队列秩序、flag 判定、fence 拒绝、计划与决策点。写路径单一：`run/domain-events/store.ts` 的 `emitDomainEvent` 在**同一个 SQLite 事务**里 append 事件 + 应用投影；`run/domain-events/projector.ts` 是基线表（agents / spawn_queue / queue_state / challenge_flags / challenge_remote / challenges 控制字段）的**唯一写者**。事件类型在 `run/domain-events/registry.ts` 单点声明（载荷校验 + decision-log 类型集）。`GET /api/events/:eventId/decisions` 是决策日志读面（web 的「决策日志」页签渲染它）。token 等凭据永不入事件载荷。
-- **`agents`** — 执行单元，一次解题尝试一行；`domain_events` 的投影。`challengeId` 为 null 即该赛事的调度者（orchestrator；每赛事至多一个，唯一索引强制）。model / systemPrompt / tools 在 spawn 时快照（`agent.spawned` 事件），冷恢复原样复用。`token` 为注入凭据（运行时以 `AEGISX_TOKEN` 注入，中间件据此还原 agent 主体；只落投影，投影重建即失效再生）。
+- **`agents`** — 执行单元，一次解题尝试一行；`domain_events` 的投影。`challengeId` 为 null 即该赛事的调度者（orchestrator；每赛事至多一个，唯一索引强制）。model / systemPrompt / tools 在 spawn 时快照（`agent.spawned` 事件），冷恢复原样复用。**无凭据列**：agent 的 bearer 是每次 bash exec 时用 per-boot HMAC secret 短时铸造的（`infrastructure/agent-credentials.ts`，1h TTL），中间件验签 + 查行还原主体；事件流与投影都不涉及凭据。
 - **`sessions` + `session_entries`** — DB 会话树，唯一的会话存储后端：一条 entry 逐字节对应 pi 的一个 jsonl 行，`seq` 为会话内单调序。`session_entries` 是全库最大的表（每条消息一行），**没有自动保留/清理**：会话数据只在显式删除时消失（删 agent / session 走级联，回溯裁剪该会话尾部），因此长赛事下会持续增长。
 - **`spawn_queue`** — 调度计划表（`queue.*` 事件的投影）。一项 = 「在题 X 上派一个 agent」，enqueue 恒为 append（同题多项是合法的并行计划）。生命周期 pending → running（回填 agentId）→ done / failed；`queue_state` 按赛事暂停排水。
 - **`channel_messages` + `channel_reads`** — 全部 agent 间通信的唯一账本。频道是派生键（见下），无频道表；`channel_reads` 记 (channelKey, readerKey) → lastReadMsgId，是投递去重锚点。
@@ -41,19 +41,19 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 状态机（`shared/domain.ts` 词表）：`running` / `idle` 为存活（`LIVE_AGENT_STATUSES`），终态 `completed` / `aborted` / `failed`。idle = 回合间保温（容器、槽位、会话都在），直到终态才释放。
 
-出生两条路：`spawn_queue` 排水（默认；调度者的计划与用户入队都走它）或用户面直接派发（`POST /challenges/:id/agents` 逃生舱，绕过队列，fence 照拦——SDK 侧已无此动词，调度者启动 = 计划里的 close + enqueue）。组装在 `run/agent-factory.ts`：先经 `run/container-lifecycle.ts` 保证该题容器就绪（引用计数），再建 host session。
+出生两条路：`spawn_queue` 排水（默认；调度者的计划与用户入队都走它）或用户面直接派发（`POST /challenges/:id/agents` 逃生舱，绕过队列，fence 照拦——SDK 侧已无此动词，调度者启动 = 计划里的 close + enqueue）。组装在 `run/agent-factory.ts`：创建该 agent 的一次性沙箱容器（`ensureContainerFor`，per-agent in-flight 单飞；仍在运行则复用），再建 host session。
 
 运行期守护：
 
 - 硬截止是 agent runtime（`run/agent-runtime.ts`）上的定时器——deadline 到点中止回合、宽限后强制处置。per-agent 停滞看门狗已收缩进决策点引擎（`run/decision-points/engine.ts`，控制面 §3.7 r1）：只有决策点产出 noOp/无决策、且局面（状态指纹）持续 ≥ stallMs 无变化时，才升级一次告警——空闲 agent 本身不再触发。
 - 赛事级生命体征看门狗 `run/fleet-watchdog.ts`（每 2 分钟）：某赛事未暂停、`spawn_queue` 有 pending 项、无任何存活 solver、且排水窗口内无进展（无 launch / 队列变化）时，升级告警（`watchdog.escalated` 事实 + urgent orch 通知）并开一个 `fleet.stalled` 决策点；每 episode 至多一次，有存活 solver 或 pending 清零后重置。触发条件刻意收窄，已完工的空闲赛事不会误报。
-- 冷启动恢复 `recoverOnBoot`（`app.ts`）— 存活 agent 标记为 idle（`agent.recovered` 事实），不自动续跑；随后决策点引擎对每个仍有非终态调度者的赛事开一个 `boot.resync` 决策点，由调度者重新同步并决定是否续派——不给 solver 单独发唤醒，避免多 agent 赛事的 token 冲量。调度者不存在或已终态时跳过（由 bootstrap / 用户启动）。**无人值守模式**（`AEGISX_UNATTENDED=1`，tsecbench 镜像内置）下另有两条差异：开机**不**把有可见队列项的赛事置为 `paused`（没有人工 resume 的入口，被迫暂停等于让队列停摆整场），改为续排水，且已存在的 `paused` 意图原样保留；`fleet-watchdog` 同步收紧为"只有 running 的 solver 才算进展"，这样重启后被 parking 成 idle 的 agent 不会被"有存活 solver"的旧条件掩盖（冷恢复 agent 没有 runtime）。
+- 冷启动恢复 `recoverOnBoot`（`app.ts`）— 存活 agent 标记为 idle（`agent.recovered` 事实），不自动续跑；**开机孤儿清扫**按 `aegisx-agent-` / `aegisx-orch-` 前缀枚举守护进程下的全部遗留沙箱并确定性清除（卷保留——缓存与工作区皆可重建；会话在 DB）；随后决策点引擎对每个仍有非终态调度者的赛事开一个 `boot.resync` 决策点，由调度者重新同步并决定是否续派——不给 solver 单独发唤醒，避免多 agent 赛事的 token 冲量。调度者不存在或已终态时跳过（由 bootstrap / 用户启动）。**无人值守模式**（`AEGISX_UNATTENDED=1`，tsecbench 镜像内置）下另有两条差异：开机**不**把有可见队列项的赛事置为 `paused`（没有人工 resume 的入口，被迫暂停等于让队列停摆整场），改为续排水，且已存在的 `paused` 意图原样保留；`fleet-watchdog` 同步收紧为"只有 running 的 solver 才算进展"，这样重启后被 parking 成 idle 的 agent 不会被"有存活 solver"的旧条件掩盖（冷恢复 agent 没有 runtime）。
 
-运行期的全部延迟动作（投递 flush tick、容器 sweep 与 SIGKILL 宽限、drainer 去抖与容量重试、决策点合并、计划应用链、per-agent deadline/grace、赛事级看门狗）统一经时间层 `run/clock.ts`（`Clock` + `TimerHub`）与语义层 `run/effects.ts`（`createEffects`：debounce 后沿合并 / per-key 串行单飞 chain / 有界自唤醒 retry / 一次性 after / 周期 every——五个手写调度语义的收敛点）创建；子系统 close 即 dispose；测试注入 fake clock 确定性推进时间。
+运行期的全部延迟动作（投递 flush tick、drainer 去抖与容量重试、决策点合并、计划应用链、per-agent deadline/grace、赛事级看门狗）统一经时间层 `run/clock.ts`（`Clock` + `TimerHub`）与语义层 `run/effects.ts`（`createEffects`：debounce 后沿合并 / per-key 串行单飞 chain / 有界自唤醒 retry / 一次性 after / 周期 every——五个手写调度语义的收敛点）创建；子系统 close 即 dispose；测试注入 fake clock 确定性推进时间。
 
 **所有权根**：一个存活 agent 的全部进程内资源（挂载的 host session、turn generation、finish_run 簿记、deadline/grace 定时器）都挂在 `run/agent-runtime.ts` 的 `AgentRuntime` 上；service 持有唯一的按 agentId 索引的注册表 `Map<agentId, AgentRuntime>`，首次触达（session 挂载 / 布防 deadline / finish 簿记 / send）时创建。冷恢复语义不变：idle/terminal agent 无 runtime（DB 行即状态），dm 冷唤醒 → send → resume → prepareAgent 重建 runtime。
 
-**终态单一路径**：所有终态（timeout force-abort、finish_run 自终止、close、finish、delete、superseded launch，以及 spawn 过程中失败）收敛到 `runtime.settle`：有界 abort（仅用户驱动的 close）→ dispose session → 清定时器与簿记 → 出注册表 → terminalize（含 LiveBus forget）→ delete-only 收尾；无 runtime 的 agent（从未 prepare）直接落终态。service.close() 对每个 runtime `dispose()`（仅释放进程内资源，不动 DB 状态）即为全部善后——不存在第二份需要记得清的注册表。
+**终态单一路径**：所有终态（timeout force-abort、finish_run 自终止、close、finish、delete、superseded launch，以及 spawn 过程中失败）收敛到 `runtime.settle`：有界 abort（仅用户驱动的 close）→ dispose session → 清定时器与簿记 → 出注册表 → terminalize（含 LiveBus forget）→ 销毁沙箱（一次 `remove(force)`，fire-and-forget；无宽限定时器——pid1 是 `sleep infinity`，工作区是 bind mount，无物可冲刷）→ delete-only 收尾；无 runtime 的 agent（从未 prepare，含 build 失败的 spawn）直接落终态并同样销毁沙箱。service.close() 对每个 runtime `dispose()`（仅释放进程内资源，不动 DB 状态、不杀容器——遗留沙箱由下次开机的孤儿清扫接管）即为全部善后——不存在第二份需要记得清的注册表。
 
 LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus 自持有；`run/host/live.ts` 属 host 内层，不认识 runtime 与终态。淘汰只由上述唯一终态路径经 status core 的 terminalize 通知（`bus.forget`）触发——settle 先同步 detach session pipeline（此后不再有新事件），再 forget，故不存在终态后写入；除 `close()` 的整体清空外无第二条淘汰路径。
 

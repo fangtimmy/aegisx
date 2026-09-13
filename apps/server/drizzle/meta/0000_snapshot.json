@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4ddc28ee-3eff-44db-977c-6c2c59de3aa3",
+  "id": "f8367ccb-c8d9-41ca-bcca-6f7c386a53d6",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "agents": {
@@ -13,14 +13,6 @@
           "primaryKey": true,
           "notNull": true,
           "autoincrement": false
-        },
-        "token": {
-          "name": "token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "''"
         },
         "event_id": {
           "name": "event_id",
@@ -207,14 +199,6 @@
           ],
           "isUnique": true,
           "where": "\"agents\".\"role\" = 'orchestrator'"
-        },
-        "agents_token_unique": {
-          "name": "agents_token_unique",
-          "columns": [
-            "token"
-          ],
-          "isUnique": true,
-          "where": "\"agents\".\"token\" != ''"
         }
       },
       "foreignKeys": {

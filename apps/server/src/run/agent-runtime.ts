@@ -66,6 +66,10 @@ export type AgentRuntimeDeps = {
   now(): string
   /** Drop the runtime from the service's registry (settle). */
   forget(agentId: string): void
+  /** Destroy the agent's one-shot sandbox container (settle only — dispose
+   * leaves it for the boot sweep). Fire-and-forget; failures are logged by
+   * the implementation. */
+  destroySandbox(agentId: string): void
   /** Cold-resume a session-less agent so send() can start a new turn. */
   resumeAgent(agentId: string): Promise<void>
 }
@@ -243,12 +247,11 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
   }
 
   // --- hard-deadline timers ----------------------------------------------------
-  // The deadline belongs to the agent, never to the shared container. At
-  // expiry the turn is aborted; a clean settle within the grace lands idle
-  // (warm), else the session is force-disposed and the agent goes aborted
-  // (the shared container is NEVER killed). The deadline is ONE-SHOT: the
-  // fire consumes it (deadlineAt → null), so later turns are unbounded and a
-  // reopen never re-arms a stale deadline.
+  // The deadline belongs to the agent, never to the sandbox. At expiry the
+  // turn is aborted; a clean settle within the grace lands idle (warm), else
+  // the session is force-disposed and the agent goes aborted. The deadline is
+  // ONE-SHOT: the fire consumes it (deadlineAt → null), so later turns are
+  // unbounded and a reopen never re-arms a stale deadline.
 
   /** Arm the hard-deadline timer. Idempotent. A deadline already in the past
    * (crash/boot leftovers) is never armed — it would fire at delay 0 and
@@ -326,8 +329,8 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
   /** Land the terminal state and release every in-process resource: bounded
    * abort (when the caller is a user-driven close) → dispose the session →
    * drop the timers + finish bookkeeping → leave the registry → terminalize
-   * (the status core forgets the agent's bus snapshots) → delete-only
-   * teardown. */
+   * (the status core forgets the agent's bus snapshots) → destroy the
+   * sandbox (fire-and-forget; one `remove(force)`) → delete-only teardown. */
   async function settle(opts: SettleOptions): Promise<void> {
     const current = session
     if (opts.abort) await abortBounded(current)
@@ -341,6 +344,10 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     pendingFinish = undefined
     finishFlagWarned = false
     deps.forget(agentId)
+    // The sandbox's lifetime ends here — pid1 is `sleep infinity` and the
+    // workspace is a bind mount, so a single force-remove is the whole
+    // teardown (no grace timer; one could only murder a same-name successor).
+    deps.destroySandbox(agentId)
     deps.status.terminalizeAgent(agentId, {
       status: opts.status,
       summary: opts.summary,

@@ -19,7 +19,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 24
+export const SCHEMA_VERSION = 25
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -148,17 +148,14 @@ export const attachments = sqliteTable(
 /**
  * v19 agents: the execution unit — one attempt on a challenge = one row
  * (challengeId null = the event's orchestrator agent). The workspace is a
- * derived path (no row); the container is a lazily-managed per-challenge
- * resource keyed off this table's live agents. Role/model/prompt/tools are
- * snapshotted at spawn time; cold-restore reuses them verbatim.
+ * derived path (no row); the sandbox is a per-agent one-shot container that
+ * lives exactly as long as the agent (prepare → settle). Role/model/prompt/
+ * tools are snapshotted at spawn time; cold-restore reuses them verbatim.
  */
 export const agents = sqliteTable(
   "agents",
   {
     id: text("id").primaryKey(),
-    /** Opaque credential injected per-exec as AEGISX_TOKEN; the server derives
-     * the agent principal from it. */
-    token: text("token").notNull().default(""),
     /** Redundant event anchor (accelerates fleet/usage/flush queries). */
     eventId: text("event_id")
       .notNull()
@@ -218,12 +215,6 @@ export const agents = sqliteTable(
     uniqueIndex("agents_event_orchestrator_unique")
       .on(table.eventId)
       .where(sql`${table.role} = 'orchestrator'`),
-    // Agent-token lookup (agent-auth runs on every tokenized request).
-    // Partial: the column's default '' is not unique — several historical or
-    // pre-spawn rows may hold it; spawn always writes a real token.
-    uniqueIndex("agents_token_unique")
-      .on(table.token)
-      .where(sql`${table.token} != ''`),
     check(
       "agents_role_check",
       sql`${table.role} in ('solver', 'orchestrator')`

@@ -58,10 +58,6 @@ import { createChannelService, type ChannelService } from "./channels"
 import type { SendOutcome } from "./channels-context"
 import type { Clock } from "./clock"
 import { systemClock } from "./clock"
-import {
-  createContainerLifecycle,
-  type ContainerLifecycle,
-} from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
 import {
   createDecisionPointEngine,
@@ -98,9 +94,11 @@ import {
 import { createSchedulerAdmin, type SchedulerAdmin } from "./scheduler-admin"
 import { type SchedulerPolicy, schedulerPolicyFor } from "./scheduler-policy"
 import {
+  agentContainerName,
   agentId8,
+  challengeCacheVolume,
   challengeRoot,
-  orchestratorKey,
+  orchestratorContainerName,
   orchestratorRoot,
   workspaceDir as workspaceDirOf,
 } from "./workspace-resolver"
@@ -129,10 +127,6 @@ export type AgentServiceOptions = {
   timeoutGraceMs?: number
   /** Test seam: bound on `session.abort()` inside close paths (default 5s). */
   closeAbortGraceMs?: number
-  /** Test seam: container idle-sweep cadence. */
-  sweepIntervalMs?: number
-  /** Test seam: container idle TTL. */
-  idleTtlMs?: number
   /** Test seam: channel flush tick interval (default 5min). */
   flushIntervalMs?: number
   /** Test seam: solved write-up wrap-up bound (default SOLVED_WRAPUP_MS). */
@@ -457,6 +451,7 @@ export function createAgentService(options: AgentServiceOptions) {
     withLock,
     now,
     forget: (agentId) => runtimes.delete(agentId),
+    destroySandbox,
     resumeAgent: (agentId) => factoryPort.get().resumeAgent(agentId),
   }
 
@@ -486,8 +481,10 @@ export function createAgentService(options: AgentServiceOptions) {
   /** The ONE terminal-settle path (timeout force-abort, finish_run
    * self-termination, close, finish, delete, superseded launch). Agents with
    * a runtime settle through it (bounded abort → dispose → timers + finish
-   * bookkeeping → terminalize incl. the live-bus forget → delete-only
-   * teardown); agents without one (never prepared) land straight terminal. */
+   * bookkeeping → terminalize incl. the live-bus forget → sandbox destroy →
+   * delete-only teardown); agents without one (never prepared — e.g. a spawn
+   * that failed before its session mounted) land straight terminal, and the
+   * destroy here reclaims a sandbox the failed prepare may have built. */
   async function settleAgent(
     agentId: string,
     opts: SettleOptions
@@ -497,6 +494,7 @@ export function createAgentService(options: AgentServiceOptions) {
       await runtime.settle(opts)
       return
     }
+    destroySandbox(agentId)
     status.terminalizeAgent(agentId, {
       status: opts.status,
       summary: opts.summary,
@@ -519,19 +517,25 @@ export function createAgentService(options: AgentServiceOptions) {
     }
   }
 
-  // Per-challenge container lifecycle (lazy create + idle TTL sweep; the
-  // scheduler container is managed by its agent's lifecycle).
-  const containerLifecycle: ContainerLifecycle = createContainerLifecycle({
-    db,
-    containerManager,
-    clock,
-    ...(options.sweepIntervalMs !== undefined
-      ? { sweepIntervalMs: options.sweepIntervalMs }
-      : {}),
-    ...(options.idleTtlMs !== undefined
-      ? { idleTtlMs: options.idleTtlMs }
-      : {}),
-  })
+  /** Destroy one agent's sandbox container: ONE `remove(force)` (pid1 is
+   * `sleep infinity`, nothing to flush — no grace timer, which could only
+   * murder a same-name successor). Fire-and-forget; the name derives from
+   * the agent row (the scheduler rides its per-event orchestrator container).
+   * Idempotent: missing rows/containers are no-ops. */
+  function destroySandbox(agentId: string): void {
+    const row = queries.getAgentRow(agentId)
+    if (!row) return
+    const name = row.challengeId
+      ? agentContainerName(agentId)
+      : orchestratorContainerName(row.eventId)
+    void containerManager.remove(name).catch((error) => {
+      console.error("sandbox destroy failed", {
+        agentId,
+        name,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
 
   // --- multi-session + flat backtrack (v12) --------------------------------
   const sessionOps = createAgentSessionOps({
@@ -959,15 +963,15 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Full agent detail (the AgentDialog view). */
-  function getAgentDetail(
+  async function getAgentDetail(
     agentId: string,
     principal: Principal
-  ): AgentDetail | undefined {
+  ): Promise<AgentDetail | undefined> {
     const row = queries.getAgentRow(agentId)
     if (!row) return undefined
     assertMayTouchAgent(principal, row)
     const agent = requireAgent(agentId)
-    const workspace = workspaceInfoOf(row)
+    const workspace = await workspaceInfoOf(row)
     return {
       agent,
       tools: parseAgentTools(row.tools),
@@ -991,14 +995,20 @@ export function createAgentService(options: AgentServiceOptions) {
     return queries.listMessages(agentId, opts)
   }
 
-  function workspaceInfoOf(row: typeof agents.$inferSelect): WorkspaceInfo {
+  async function workspaceInfoOf(
+    row: typeof agents.$inferSelect
+  ): Promise<WorkspaceInfo> {
     const s = getSettings()
-    const key = row.challengeId ?? orchestratorKey(row.eventId)
     // containerRunning is inherently async (docker inspect) — the fleet
-    // polls every few seconds and a stale registry read is acceptable; a
-    // registered container is treated as running.
+    // polls every few seconds and a stale answer is acceptable; the probe
+    // asks the manager directly about the agent's own sandbox.
+    const name = row.challengeId
+      ? agentContainerName(row.id)
+      : orchestratorContainerName(row.eventId)
     return {
-      containerRunning: containerLifecycle.registered(key),
+      containerRunning: await containerManager
+        .isRunning(name)
+        .catch(() => false),
       liveAgentCount: liveAgentCountOf(row.challengeId),
       image: get(s, "container.image"),
       cpus: get(s, "container.cpus"),
@@ -1102,11 +1112,8 @@ export function createAgentService(options: AgentServiceOptions) {
         by: actorFromPrincipal(principal),
         afterSettle: () => {
           channels.cleanupAgentChannels(agentId)
-          if (row.role === "orchestrator") {
-            containerLifecycle.removeContainer(orchestratorKey(row.eventId))
-          }
-          // The last fact before the row vanishes — its projection IS the
-          // delete (cascading the agent's sessions and queue reference).
+          // The agent's sandbox went with settle's destroy step; the row
+          // vanishes below (cascading its sessions and queue reference).
           emitDomainEvent(db, {
             type: "agent.deleted",
             eventId: row.eventId,
@@ -1480,13 +1487,12 @@ export function createAgentService(options: AgentServiceOptions) {
     return null
   }
 
-  /** Close the scheduler agent (terminal aborted) + remove its container. */
+  /** Close the scheduler agent (terminal aborted). Its sandbox goes with
+   * the settle's destroy step. */
   async function closeScheduler(eventId: string): Promise<AgentSummary> {
     const sched = schedulerAdminPort.get().getSchedulerAgent(eventId)
     if (!sched) throw new RunActionError("not_found", "No scheduler agent")
-    const result = await closeAgent(sched.id, { kind: "system" })
-    containerLifecycle.removeContainer(orchestratorKey(eventId))
-    return result
+    return closeAgent(sched.id, { kind: "system" })
   }
 
   // --- construction of the factory + queue -------------------------------------
@@ -1495,7 +1501,6 @@ export function createAgentService(options: AgentServiceOptions) {
     db,
     dataDir,
     containerManager,
-    containerLifecycle,
     platformService,
     providers,
     relayOrigin,
@@ -1570,7 +1575,7 @@ export function createAgentService(options: AgentServiceOptions) {
     // The launch lost the cancel race (full-solve cleanup cancelled the item
     // mid-launch): settle the just-spawned agent with the timeout-path
     // semantics — no abort (the turn may be mid-flight), dispose and land
-    // aborted (the shared container is NEVER killed).
+    // aborted (the sandbox goes with the settle's destroy step).
     onSupersededLaunch: (agentId) => {
       void settleAgent(agentId, {
         abort: false,
@@ -1660,7 +1665,6 @@ export function createAgentService(options: AgentServiceOptions) {
     decisionEngine.close()
     await Promise.allSettled(locks.values())
     locks.clear()
-    containerLifecycle.close()
     fleetWatchdog.close()
     queue.cancelDrain()
     planApplier.close()
@@ -1684,15 +1688,18 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Remove a challenge's workspace tree (agents/ shared/ attachments/
-   * sessions/ runtime/) — called on challenge deletion. The deletion routes
-   * refuse while live agents exist on the challenge, so evicting the cached
-   * workspace context + shared container alongside the tree is safe. */
+   * sessions/ runtime/) + its cache volume — called on challenge deletion.
+   * The deletion routes refuse while live agents exist on the challenge, so
+   * evicting the cached workspace context alongside the tree is safe (the
+   * last agent's settle already destroyed its sandbox). */
   function deleteChallengeWorkspace(
     eventId: string,
     challengeId: string
   ): void {
     factory.forgetWorkspace({ eventId, challengeId })
-    containerLifecycle.removeContainer(challengeId)
+    void containerManager
+      .removeVolume(challengeCacheVolume(challengeId))
+      .catch(() => undefined)
     rmSync(challengeRoot(dataDir, eventId, challengeId), {
       recursive: true,
       force: true,
@@ -1702,7 +1709,6 @@ export function createAgentService(options: AgentServiceOptions) {
   /** Remove the orchestrator workspace tree — called on event deletion. */
   function deleteSchedulerWorkspace(eventId: string): void {
     factory.forgetWorkspace({ eventId, challengeId: null })
-    containerLifecycle.removeContainer(orchestratorKey(eventId))
     rmSync(orchestratorRoot(dataDir, eventId), {
       recursive: true,
       force: true,
@@ -1797,6 +1803,5 @@ export function createAgentService(options: AgentServiceOptions) {
     deleteChallengeWorkspace,
     deleteSchedulerWorkspace,
     deleteEventWorkspaces,
-    containerLifecycle,
   }
 }

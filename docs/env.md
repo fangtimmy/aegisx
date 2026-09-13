@@ -68,8 +68,8 @@ event preset（`/opt/aegisx-preset/preset.json`，见 `containers/appliance/tsec
 
 | 变量 | 注入粒度 | 说明 |
 |---|---|---|
-| `AEGISX_EVENT_ID` | 每 challenge 容器 | 赛事 id，SDK 调用按此路由 |
-| `AEGISX_API_URL` | 每 challenge 容器 | 服务端地址（上表运行时变量的派生值） |
-| `AEGISX_AGENT_ID` | 每次 bash exec | agent 身份；同一题的 N 个 agent 共享容器、各自区分 |
-| `AEGISX_TOKEN` | 每次 bash exec | agent 调用凭据，与 AGENT_ID 配对 |
+| `AEGISX_EVENT_ID` | 容器级（创建时） | 赛事 id，SDK 调用按此路由 |
+| `AEGISX_API_URL` | 容器级（创建时） | 服务端地址（上表运行时变量的派生值） |
+| `AEGISX_AGENT_ID` | 每次 bash exec | agent 身份；每个 agent 一个独立沙箱容器 |
+| `AEGISX_TOKEN` | 每次 bash exec | agent 调用凭据：短时铸造，随 exec 注入，1h 有效；与 AGENT_ID 配对 |
 | `PYTHONPATH` | SDK 挂载时 | 仅开发挂载（`AEGISX_SDK_PATH`）或镜像内置时存在 |

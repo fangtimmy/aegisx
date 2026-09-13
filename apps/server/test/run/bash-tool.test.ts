@@ -1,7 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, setSystemTime, test } from "bun:test"
 
+import { verifyAgentToken } from "../../src/infrastructure/agent-credentials"
 import { createBashTool } from "../../src/run/bash-tool"
 import type { ContainerManager } from "../../src/run/container/container-manager"
+import { sdkExecEnv } from "../../src/run/container/env-contract"
 import { refine } from "../support"
 
 /** Minimal ContainerManager stub: drives onData with canned output, then
@@ -79,5 +81,51 @@ describe("createBashTool result details", () => {
       refine(undefined)
     )
     expect(result.details).toMatchObject({ terminal: "cancelled" })
+  })
+})
+
+describe("createBashTool exec env provider", () => {
+  test("the provider is evaluated at each execute — tokens are minted lazily, never captured", async () => {
+    const t0 = Date.parse("2026-01-01T00:00:00Z")
+    setSystemTime(t0)
+    try {
+      const envs: Array<Record<string, string>> = []
+      const exec = async (
+        _name: string,
+        _command: string,
+        opts: { env?: string[] }
+      ) => {
+        const captured: Record<string, string> = {}
+        for (const entry of opts.env ?? []) {
+          const eq = entry.indexOf("=")
+          captured[entry.slice(0, eq)] = entry.slice(eq + 1)
+        }
+        envs.push(captured)
+        return { exitCode: 0, timedOut: false, aborted: false }
+      }
+      const manager = refine<ContainerManager>({ exec })
+      const tool = createBashTool(
+        "/workspace",
+        "c",
+        manager,
+        sdkExecEnv("agent-9")
+      )
+      await invoke(tool, "echo 1")
+      // A later execute re-mints (different exp → different token); 30min
+      // keeps the first token inside its TTL for the verify below.
+      setSystemTime(t0 + 1_800_000)
+      await invoke(tool, "echo 2")
+
+      expect(envs).toHaveLength(2)
+      for (const env of envs) {
+        expect(env["AEGISX_AGENT_ID"]).toBe("agent-9")
+        expect(verifyAgentToken(env["AEGISX_TOKEN"] ?? "")).toEqual({
+          agentId: "agent-9",
+        })
+      }
+      expect(envs[1]["AEGISX_TOKEN"]).not.toBe(envs[0]["AEGISX_TOKEN"])
+    } finally {
+      setSystemTime()
+    }
   })
 })

@@ -4,6 +4,7 @@ import type { LiveEvent } from "@aegisx/shared/live-event"
 import { Hono } from "hono"
 
 import { agentAuth } from "../../src/infrastructure/agent-auth"
+import { mintAgentToken } from "../../src/infrastructure/agent-credentials"
 import { registerRunRoutes } from "../../src/run/routes"
 import { makeAgentService, seedAgent } from "../helpers"
 import { refine } from "../support"
@@ -128,13 +129,13 @@ describe("GET /api/stream (multiplexed live stream)", () => {
 
   test("agent tokens are refused — the stream is the user face", async () => {
     const harness = makeAgentService({})
-    seedAgent(harness.db, { id: "agent-1", token: "tok-agent-1" })
+    seedAgent(harness.db, { id: "agent-1" })
     try {
       const app = new Hono()
       app.use("*", agentAuth(harness.db))
       registerRunRoutes(app, { db: harness.db, agentService: harness.service })
       const response = await app.request("/api/stream", {
-        headers: { authorization: "Bearer tok-agent-1" },
+        headers: { authorization: `Bearer ${mintAgentToken("agent-1")}` },
       })
       expect(response.status).toBe(403)
     } finally {

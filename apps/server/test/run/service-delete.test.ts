@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { eq } from "drizzle-orm"
 
 import { agents, spawnQueue } from "../../src/db/schema"
-import { challengeContainerName } from "../../src/run/workspace-resolver"
+import { challengeCacheVolume } from "../../src/run/workspace-resolver"
 import {
   makeAgentService,
   seedAgent,
@@ -20,7 +20,13 @@ function makeService() {
   const h = makeAgentService({
     createHost: mock(async () => stubHostAgentSession()),
   })
-  return { h, db: h.db, dir: h.dir, service: h.service, killed: h.stubs.killed }
+  return {
+    h,
+    db: h.db,
+    dir: h.dir,
+    service: h.service,
+    removedVolumes: h.stubs.removedVolumes,
+  }
 }
 
 describe("deleteAgent", () => {
@@ -87,23 +93,24 @@ describe("deleteAgent", () => {
   })
 })
 
-describe("workspace deletion (teardown of the cached context + container)", () => {
-  test("deleteChallengeWorkspace evicts the context + container; a fresh spawn rebuilds from scratch", async () => {
+describe("workspace deletion (teardown of the cached context + cache volume)", () => {
+  test("deleteChallengeWorkspace evicts the context + cache volume; a fresh spawn rebuilds from scratch", async () => {
     const made = makeService()
     try {
-      const { db, dir, service, killed } = made
+      const { db, dir, service, removedVolumes } = made
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
+      const agent = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
       const challengesRoot = join(dir, "events", "evt-1", "challenges")
       expect(existsSync(join(challengesRoot, "ch-1", "workspace"))).toBe(true)
-      expect(service.containerLifecycle.registered("ch-1")).toBe(true)
 
       service.deleteChallengeWorkspace("evt-1", "ch-1")
 
-      // The tree, the registry entry, and the container itself are gone.
+      // The tree and the challenge's cache volume are gone.
       expect(existsSync(join(challengesRoot, "ch-1"))).toBe(false)
-      expect(service.containerLifecycle.registered("ch-1")).toBe(false)
-      expect(killed).toContain(challengeContainerName("ch-1"))
+      expect(removedVolumes).toContain(challengeCacheVolume("ch-1"))
 
       // A fresh agent on another challenge rebuilds everything cleanly —
       // nothing cached for the deleted workspace is reused or crashes.
@@ -115,17 +122,17 @@ describe("workspace deletion (teardown of the cached context + container)", () =
         USER
       )
       expect(fresh.challengeId).toBe("ch-2")
+      expect(fresh.id).not.toBe(agent.id)
       expect(existsSync(join(challengesRoot, "ch-2", "workspace"))).toBe(true)
-      expect(service.containerLifecycle.registered("ch-2")).toBe(true)
     } finally {
       await made.h.close()
     }
   })
 
-  test("deleteEventWorkspaces evicts every challenge context + the orchestrator context", async () => {
+  test("deleteEventWorkspaces evicts every challenge context + cache volumes + the orchestrator context", async () => {
     const made = makeService()
     try {
-      const { db, dir, service, killed } = made
+      const { db, dir, service, removedVolumes } = made
       seedChallenge(db, { id: "ch-2", eventId: "evt-1" })
       await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       await service.spawn({ eventId: "evt-1", challengeId: "ch-2" }, USER)
@@ -136,10 +143,8 @@ describe("workspace deletion (teardown of the cached context + container)", () =
       expect(existsSync(join(eventsRoot, "challenges", "ch-1"))).toBe(false)
       expect(existsSync(join(eventsRoot, "challenges", "ch-2"))).toBe(false)
       expect(existsSync(join(eventsRoot, "orchestrator"))).toBe(false)
-      expect(service.containerLifecycle.registered("ch-1")).toBe(false)
-      expect(service.containerLifecycle.registered("ch-2")).toBe(false)
-      expect(killed).toContain(challengeContainerName("ch-1"))
-      expect(killed).toContain(challengeContainerName("ch-2"))
+      expect(removedVolumes).toContain(challengeCacheVolume("ch-1"))
+      expect(removedVolumes).toContain(challengeCacheVolume("ch-2"))
     } finally {
       await made.h.close()
     }

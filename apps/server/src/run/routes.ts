@@ -463,9 +463,9 @@ export function registerRunRoutes(
 
   // --- agent detail / stream / actions --------------------------------------
 
-  app.get("/api/agents/:agentId", (c) => {
+  app.get("/api/agents/:agentId", async (c) => {
     try {
-      const detail = agentService.getAgentDetail(
+      const detail = await agentService.getAgentDetail(
         c.req.param("agentId"),
         principalOf(c)
       )

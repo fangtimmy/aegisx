@@ -15,7 +15,6 @@ import {
   events,
   spawnQueue,
 } from "../db/schema"
-import { newAgentToken } from "../infrastructure/agent-auth"
 import {
   loadTemplateMap,
   renderTemplate,
@@ -27,7 +26,6 @@ import { generateModelsJson } from "../providers/models-json"
 import type { AgentStatus } from "./agent-status"
 import type { ChannelService } from "./channels"
 import type { SendOutcome } from "./channels-context"
-import type { ContainerLifecycle } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
 import { sdkContainerEnv, sdkExecEnv } from "./container/env-contract"
 import {
@@ -59,7 +57,8 @@ import type { QueueService } from "./queue"
 import { createMainTools, type AgentToolContext } from "./tools"
 import {
   agentContainerDir,
-  challengeContainerName,
+  agentContainerName,
+  challengeCacheVolume,
   challengeRoot,
   orchestratorContainerName,
   orchestratorKey,
@@ -119,8 +118,8 @@ function schedulerSdkContainerOpts(
 /** Solver container extras: the same env — but NO /challenges mount (a
  * solver reaches its own challenge workspace at /workspace — other
  * challenges are not its business). Per-agent identity (AEGISX_AGENT_ID +
- * AEGISX_TOKEN) rides the per-exec env of the bash tool: one challenge's N
- * agents share this container. */
+ * a minted AEGISX_TOKEN) rides the per-exec env provider of the bash tool:
+ * it is minted at each execute, never stored. */
 function solverSdkContainerOpts(eventId: string): {
   extraBinds: string[]
   env: string[]
@@ -138,7 +137,6 @@ export type WorkspaceContext = {
   key: string
   /** Host root of the workspace tree. */
   rootDir: string
-  containerName: string
   containerWorkspace: string
   modelRuntime: RunModelRuntime
   /** `configStore.configVersion` at the last ModelRuntime refresh — 0 at
@@ -170,7 +168,6 @@ export type AgentFactoryDeps = {
   db: Database
   dataDir: string
   containerManager: ContainerManager
-  containerLifecycle: ContainerLifecycle
   platformService: PlatformService
   providers: () => ProviderConnection[]
   /** Loopback origin of this server — exact-endpoint gateway providers route
@@ -254,6 +251,18 @@ function workspaceKeyOf(row: {
   return row.challengeId ?? orchestratorKey(row.eventId)
 }
 
+/** The agent's own sandbox name: per-agent for solvers, the event's
+ * orchestrator container for the scheduler. */
+function sandboxNameOf(row: {
+  id: string
+  eventId: string
+  challengeId: string | null
+}): string {
+  return row.challengeId
+    ? agentContainerName(row.id)
+    : orchestratorContainerName(row.eventId)
+}
+
 /** Render the solver's first-turn prompt. `override` mode returns the raw
  * prompt verbatim; otherwise the `initial` template renders with the
  * spawn prompt as the Strategy section. `capabilities` are the same
@@ -275,16 +284,15 @@ function solverInitialPrompt(
 
 /**
  * v19 spawn + prepare + reopen orchestration (the execution unit is the
- * agent). One spawn = one agent row + a lazily-managed per-challenge
- * container + the primed first turn. The workspace is a derived path; the
- * model runtime is shared per workspace (single-flighted).
+ * agent). One spawn = one agent row + a one-shot per-agent sandbox (prepare
+ * creates it, settle destroys it) + the primed first turn. The workspace is
+ * a derived path; the model runtime is shared per workspace (single-flighted).
  */
 export function createAgentFactory(deps: AgentFactoryDeps) {
   const {
     db,
     dataDir,
     containerManager,
-    containerLifecycle,
     platformService,
     providers,
     relayOrigin,
@@ -310,6 +318,9 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
 
   const contexts = new Map<string, WorkspaceContext>()
   const building = new Map<string, Promise<WorkspaceContext>>()
+  /** In-flight sandbox builds per agent id (concurrent prepares of one agent
+   * coalesce; different agents build independently). */
+  const buildingContainers = new Map<string, Promise<void>>()
   /** In-flight ModelRuntime refreshes per workspace (coalesce concurrent
    * callers onto the pending refresh). */
   const runtimeRefreshes = new Map<string, Promise<void>>()
@@ -344,9 +355,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       const ctx: WorkspaceContext = {
         key,
         rootDir: root,
-        containerName: row.challengeId
-          ? challengeContainerName(row.challengeId)
-          : orchestratorContainerName(row.eventId),
         containerWorkspace,
         modelRuntime,
         lastRefreshVersion: configVersion(),
@@ -422,38 +430,62 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     runtimeRefreshes.delete(key)
   }
 
-  /** Get-or-create the workspace's container (registry + isRunning check
-   * inside; slow I/O runs outside every lock). */
+  /** Get-or-create one agent's sandbox. Keyed per agent (in-flight map keeps
+   * concurrent prepares of the same agent single-flighted; two agents on one
+   * challenge build independent containers). A still-running sandbox is
+   * reused — create would remove-first. Slow I/O runs outside every lock. */
   async function ensureContainerFor(
-    row: { eventId: string; challengeId: string | null },
+    row: { id: string; eventId: string; challengeId: string | null },
     ctx: WorkspaceContext
   ): Promise<void> {
-    const settings = getSettings()
-    await containerLifecycle.ensureContainer(
-      {
-        key: ctx.key,
-        containerName: ctx.containerName,
-        sweepable: row.challengeId !== null,
-      },
-      async () => {
-        await containerManager.create({
-          name: ctx.containerName,
-          image: get(settings, "container.image"),
-          workingDir: ctx.containerWorkspace,
-          binds: [`${workspaceDir(ctx.rootDir)}:${ctx.containerWorkspace}`],
-          limits: {
-            cpus: get(settings, "container.cpus"),
-            memoryMb: get(settings, "container.memoryMb"),
-            pidsLimit: get(settings, "container.pidsLimit"),
-          },
-          tmpfsSize: get(settings, "container.tmpfsSize"),
-          networkMode: get(settings, "container.networkMode"),
-          ...(row.challengeId
-            ? solverSdkContainerOpts(row.eventId)
-            : schedulerSdkContainerOpts(row.eventId, dataDir)),
-        })
+    const pending = buildingContainers.get(row.id)
+    if (pending) return pending
+    const promise = (async () => {
+      const name = sandboxNameOf(row)
+      if (await containerManager.isRunning(name)) return
+      const settings = getSettings()
+      // Challenge tool caches live on a named docker volume shared by the
+      // challenge's agent containers (a plain host dir under the local
+      // backend); the scheduler has no cache (it keeps /challenges:ro).
+      const cacheSource =
+        row.challengeId === null
+          ? undefined
+          : isLocalExecBackend()
+            ? join(ctx.rootDir, "cache")
+            : challengeCacheVolume(row.challengeId)
+      const sdk = row.challengeId
+        ? solverSdkContainerOpts(row.eventId)
+        : schedulerSdkContainerOpts(row.eventId, dataDir)
+      await containerManager.create({
+        name,
+        image: get(settings, "container.image"),
+        workingDir: ctx.containerWorkspace,
+        binds: [
+          `${workspaceDir(ctx.rootDir)}:${ctx.containerWorkspace}`,
+          ...(cacheSource
+            ? [
+                `${cacheSource}:/var/cache/apt/archives`,
+                `${cacheSource}:/opt/aegisx-cache`,
+              ]
+            : []),
+        ],
+        limits: {
+          cpus: get(settings, "container.cpus"),
+          memoryMb: get(settings, "container.memoryMb"),
+          pidsLimit: get(settings, "container.pidsLimit"),
+        },
+        tmpfsSize: get(settings, "container.tmpfsSize"),
+        networkMode: get(settings, "container.networkMode"),
+        extraBinds: sdk.extraBinds,
+        env: sdk.env,
+      })
+    })().finally(() => {
+      if (buildingContainers.get(row.id) === promise) {
+        buildingContainers.delete(row.id)
       }
-    )
+    })
+    buildingContainers.set(row.id, promise)
+    return promise
   }
 
   // --- native tool context --------------------------------------------------
@@ -586,7 +618,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     }
 
     const agentId = crypto.randomUUID()
-    const agentToken = newAgentToken()
     const isSolver = input.role === "solver"
     const name = isSolver ? `agent-${agentId.slice(0, 8)}` : "Scheduler"
 
@@ -714,8 +745,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           throw new RunActionError("capacity", decision.message)
         }
       }
-      // The agents row is the agent.spawned projection; the token rides as a
-      // projector command input — it must never enter the append-only stream.
+      // The agents row is the agent.spawned projection.
       emitDomainEvent(db, {
         type: "agent.spawned",
         eventId: input.eventId,
@@ -737,7 +767,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           queueItemId: input.queueItemId ?? null,
           createdAt: ts,
         },
-        projectorInput: { agentToken },
       })
     })
 
@@ -745,7 +774,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     // row stays as a failed attempt (it never counted live — status idle →
     // hmm, idle counts). Mark failed + rethrow.
     try {
-      await ensureContainerFor(probe, wsCtx)
+      await ensureContainerFor({ ...probe, id: agentId }, wsCtx)
       // The agent's own directory (host side; the container sees it via the
       // workspace bind).
       if (isSolver) {
@@ -848,7 +877,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         channel: agentId,
         agentId,
         cwd,
-        containerName: ctx.containerName,
+        containerName: sandboxNameOf(row),
         containerManager,
         modelRuntime: ctx.modelRuntime,
         model: sdkModel,
@@ -858,11 +887,10 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         extraTools: nativeTools,
         extraToolNames: snapshotTools,
         // Per-agent identity for the container-side `aegisx` SDK (the name
-        // contract lives in container/env-contract.ts): one challenge's N
-        // agents share a container, so identity cannot be container-wide
-        // env — the agent id + its bearer token ride the per-exec env of
-        // the bash tool.
-        execEnv: sdkExecEnv(agentId, row.token),
+        // contract lives in container/env-contract.ts): the provider mints a
+        // fresh short-lived token at every bash execute, so credentials are
+        // never stored and never go stale on long-idling agents.
+        execEnv: sdkExecEnv(agentId),
         ...(row.sessionFile
           ? { resumeFrom: { sessionId: row.sessionFile } }
           : {}),
@@ -917,16 +945,16 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
 
   // --- boot recovery ---------------------------------------------------------
 
-  /** Boot recovery: no registry survives a crash (process memory). Live
-   * agents flip to idle (files persist; a message reopens on demand and
-   * rebuilds the container). Orphan containers under our naming scheme are
-   * removed best-effort; running queue items reset to pending; queues with
-   * visible items start paused (interactive only — see below). Every event
-   * with recovery activity gets a boot.recovered summary fact. */
+  /** Boot recovery: no sandbox survives a crash (all state is rebuildable —
+   * workspaces on binds/volumes, sessions in the DB). Live agents flip to
+   * idle (a message reopens them and prepare rebuilds the sandbox); every
+   * orphan container under our naming prefixes is swept deterministically;
+   * running queue items reset to pending; queues with visible items start
+   * paused (interactive only — see below). Every event with recovery
+   * activity gets a boot.recovered summary fact. */
   async function recoverOnBoot(): Promise<void> {
     const rows = db.select().from(agents).all()
     const ts = now()
-    const seenWorkspaces = new Set<string>()
     const seenQueueEvents = new Set<string>()
     const stats = new Map<
       string,
@@ -953,18 +981,26 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         })
         statOf(row.eventId).liveFlipped += 1
       }
-      const key = workspaceKeyOf(row)
-      if (seenWorkspaces.has(key)) continue
-      seenWorkspaces.add(key)
-      const name = row.challengeId
-        ? challengeContainerName(row.challengeId)
-        : orchestratorContainerName(row.eventId)
-      await containerManager.remove(name).catch(() => undefined)
       if (row.queueItemId && !seenQueueEvents.has(row.eventId)) {
         seenQueueEvents.add(row.eventId)
         deps.queue.get().resetRunning(row.eventId)
         statOf(row.eventId).queuesReset = 1
       }
+    }
+    // Orphan sweep: list by prefix + remove — replaces the old
+    // remove-first-for-live-workspaces gamble with a deterministic clear.
+    // Volumes (caches) are kept. The scheduler prefix is included: a restart
+    // invalidates every sandbox equally and the scheduler's reopen rebuilds.
+    let swept = 0
+    for (const prefix of ["aegisx-agent-", "aegisx-orch-"]) {
+      const names = await containerManager.list(prefix).catch(() => [])
+      for (const name of names) {
+        await containerManager.remove(name).catch(() => undefined)
+        swept += 1
+      }
+    }
+    if (swept > 0) {
+      console.info("boot orphan sandbox sweep", { removed: swept })
     }
     // Events with visible queue items. Interactive: every queue starts paused
     // so the human reviews what the crash left behind before it re-fires —
@@ -1013,6 +1049,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     contexts,
     ensureWorkspaceContext,
     ensureContainerFor,
+    sandboxNameOf,
     refreshWorkspaceRuntime,
     ensureWorkspaceRuntimeFresh,
     forgetWorkspace,

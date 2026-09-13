@@ -210,6 +210,7 @@ export function stubContainerManager() {
   const created: unknown[] = []
   const killed: string[] = []
   const removed: string[] = []
+  const removedVolumes: string[] = []
   const stub = {
     create: async (opts: unknown) => {
       created.push(opts)
@@ -221,6 +222,10 @@ export function stubContainerManager() {
     kill: async (name: string) => {
       killed.push(name)
     },
+    list: async () => [],
+    removeVolume: async (name: string) => {
+      removedVolumes.push(name)
+    },
     isRunning: async () => true,
     exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     capture: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
@@ -228,7 +233,33 @@ export function stubContainerManager() {
     get: () => ({}),
   }
   const manager = refine<ContainerManager>(stub)
-  return { manager, created, killed, removed }
+  return { manager, created, killed, removed, removedVolumes }
+}
+
+/** Recording manager that additionally tracks running state: create starts a
+ * container, remove kills it, isRunning reflects both — so the factory's
+ * reuse-vs-build decision is exercised faithfully (the bare stub above
+ * reports everything running, which skips builds entirely). */
+export function statefulContainerManager() {
+  const { manager, created, killed, removed, removedVolumes } =
+    stubContainerManager()
+  const running = new Set<string>()
+  const tracker = {
+    ...manager,
+    create: async (opts: unknown) => {
+      created.push(opts)
+      const name = refine<{ name: string }>(opts).name
+      running.add(name)
+      return { id: name }
+    },
+    remove: async (name: string) => {
+      removed.push(name)
+      running.delete(name)
+    },
+    isRunning: async (name: string) => running.has(name),
+    list: async () => [],
+  } as typeof manager
+  return { manager: tracker, created, killed, removed, removedVolumes, running }
 }
 
 /** No-op HostAgentSession. By default prompt resolves; pass `hang` to leave the
@@ -313,7 +344,12 @@ type AgentServiceHarness = {
   /** Captured calls of the default recording container manager (the same
    * arrays `stubContainerManager()` returns). Meaningless when a custom
    * `containerManager` was injected. */
-  stubs: { created: unknown[]; killed: string[]; removed: string[] }
+  stubs: {
+    created: unknown[]
+    killed: string[]
+    removed: string[]
+    removedVolumes: string[]
+  }
 }
 
 /** Assemble the canonical test agent service: fresh on-disk SQLite + seeded
@@ -345,8 +381,6 @@ export function makeAgentService(
       | "createHost"
       | "timeoutGraceMs"
       | "closeAbortGraceMs"
-      | "sweepIntervalMs"
-      | "idleTtlMs"
       | "flushIntervalMs"
       | "solvedWrapupMs"
       | "decisionTimings"
@@ -364,7 +398,8 @@ export function makeAgentService(
     seedChallenge(store.db, { id: challenge, eventId: event })
   }
 
-  const { manager, created, killed, removed } = stubContainerManager()
+  const { manager, created, killed, removed, removedVolumes } =
+    stubContainerManager()
   const service = createAgentService({
     db: store.db,
     dataDir: store.dir,
@@ -384,8 +419,6 @@ export function makeAgentService(
     createHost: opts.createHost ?? (async () => stubHostAgentSession()),
     timeoutGraceMs: opts.timeoutGraceMs,
     closeAbortGraceMs: opts.closeAbortGraceMs,
-    sweepIntervalMs: opts.sweepIntervalMs,
-    idleTtlMs: opts.idleTtlMs,
     flushIntervalMs: opts.flushIntervalMs,
     solvedWrapupMs: opts.solvedWrapupMs,
     decisionTimings: opts.decisionTimings,
@@ -403,6 +436,6 @@ export function makeAgentService(
       await service.close()
       if (ownsStore) store.close()
     },
-    stubs: { created, killed, removed },
+    stubs: { created, killed, removed, removedVolumes },
   }
 }

@@ -1,8 +1,9 @@
-import { and, eq, ne } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import type { Context, MiddlewareHandler } from "hono"
 
 import type { Database } from "../db"
 import { agents, challenges } from "../db/schema"
+import { verifyAgentToken } from "./agent-credentials"
 import { jsonError } from "./http-errors"
 
 /** The authenticated agent identity, derived from the bearer token — never
@@ -30,14 +31,6 @@ export type AgentPrincipal = {
  *    HTTP request can claim it.
  */
 export type Principal = { kind: "user" } | { kind: "system" } | AgentPrincipal
-
-/** Spawn-time credential (64 hex). Injected per-exec as AEGISX_TOKEN. */
-export function newAgentToken(): string {
-  return (
-    crypto.randomUUID().replace(/-/g, "") +
-    crypto.randomUUID().replace(/-/g, "")
-  )
-}
 
 type Verdict = { ok: true } | { ok: false; reason: string }
 
@@ -167,7 +160,10 @@ export function agentAuth(db: Database): MiddlewareHandler {
       return await next()
     }
     const token = header.slice(7).trim()
-    const row = token
+    // Stateless minted credential: verify the HMAC + expiry, then restore the
+    // agent row (401 on tampered/expired tokens and unknown agents alike).
+    const payload = token ? verifyAgentToken(token) : null
+    const row = payload
       ? db
           .select({
             id: agents.id,
@@ -176,11 +172,7 @@ export function agentAuth(db: Database): MiddlewareHandler {
             role: agents.role,
           })
           .from(agents)
-          // The redundant token != '' term is load-bearing: the partial index
-          // agents_token_unique only covers non-empty tokens, and SQLite will
-          // not use a partial index unless the query implies its WHERE clause
-          // (an empty bearer already short-circuits above).
-          .where(and(eq(agents.token, token), ne(agents.token, "")))
+          .where(eq(agents.id, payload.agentId))
           .get()
       : undefined
     if (!row) {

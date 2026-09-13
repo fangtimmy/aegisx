@@ -7,6 +7,7 @@ import {
   makeAgentService,
   now,
   seedAgent,
+  statefulContainerManager,
   stubHostAgentSession,
   TEST_MODEL_REF,
   USER,
@@ -16,7 +17,9 @@ import { refine } from "../support"
 /** Service with a stubbed container + host session (no real Docker / LLM). */
 function makeService(opts: { hang?: boolean } = {}) {
   const hang = opts.hang ?? true
+  const { manager, created } = statefulContainerManager()
   const h = makeAgentService({
+    containerManager: manager,
     createHost: mock(async (input: { agentId: string }) => {
       const stub = stubHostAgentSession("sess-" + input.agentId.slice(0, 6), {
         hang,
@@ -35,7 +38,7 @@ function makeService(opts: { hang?: boolean } = {}) {
     db: h.db,
     dir: h.dir,
     service: h.service,
-    created: h.stubs.created,
+    created,
   }
 }
 

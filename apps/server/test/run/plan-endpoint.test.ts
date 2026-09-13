@@ -12,6 +12,7 @@ import {
   domainEvents,
   events as eventsTable,
 } from "../../src/db/schema"
+import { mintAgentToken } from "../../src/infrastructure/agent-credentials"
 
 const tempDirs: string[] = []
 const closeDatabases: Array<() => void | Promise<void>> = []
@@ -33,12 +34,9 @@ function createTestApp() {
 
 const now = () => new Date("2025-01-01T00:00:00Z").toISOString()
 
-const token = () =>
-  crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "")
-
 function seedPlanFixture(db: ReturnType<typeof createTestApp>["db"]) {
-  const schedulerToken = token()
-  const solverToken = token()
+  const schedulerToken = mintAgentToken("a-sched")
+  const solverToken = mintAgentToken("a-solver")
   db.insert(eventsTable)
     .values({
       id: "evt-1",
@@ -57,14 +55,13 @@ function seedPlanFixture(db: ReturnType<typeof createTestApp>["db"]) {
       updatedAt: now(),
     })
     .run()
-  for (const [id, authToken, challengeId, role] of [
-    ["a-sched", schedulerToken, null, "orchestrator"],
-    ["a-solver", solverToken, "ch-1", "solver"],
+  for (const [id, challengeId, role] of [
+    ["a-sched", null, "orchestrator"],
+    ["a-solver", "ch-1", "solver"],
   ] as const) {
     db.insert(agentsTable)
       .values({
         id,
-        token: authToken,
         eventId: "evt-1",
         challengeId,
         role,

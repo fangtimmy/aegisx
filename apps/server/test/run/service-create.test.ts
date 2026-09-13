@@ -4,7 +4,12 @@ import { eq } from "drizzle-orm"
 
 import { agents } from "../../src/db/schema"
 import type { HostAgentSession } from "../../src/run/host/host-session"
-import { makeAgentService, stubHostAgentSession, USER } from "../helpers"
+import {
+  makeAgentService,
+  statefulContainerManager,
+  stubHostAgentSession,
+  USER,
+} from "../helpers"
 import { refine } from "../support"
 
 describe("agentService.spawn", () => {
@@ -12,7 +17,8 @@ describe("agentService.spawn", () => {
     const createHost = mock(async () =>
       stubHostAgentSession("sess-1", { hang: true })
     )
-    const h = makeAgentService({ createHost })
+    const { manager, created } = statefulContainerManager()
+    const h = makeAgentService({ containerManager: manager, createHost })
     try {
       const agent = await h.service.spawn(
         {
@@ -37,8 +43,8 @@ describe("agentService.spawn", () => {
       expect(row?.systemPrompt).toBeTruthy()
       expect(row?.name).toBe(`agent-${agent.id.slice(0, 8)}`)
 
-      // Tool-box container created (bound to the challenge workspace).
-      expect(h.stubs.created).toHaveLength(1)
+      // Tool-box sandbox created (bound to the challenge workspace).
+      expect(created).toHaveLength(1)
       const opts = refine<{
         image: string
         workingDir: string
@@ -46,7 +52,7 @@ describe("agentService.spawn", () => {
         limits: { cpus: number; memoryMb: number; pidsLimit: number }
         tmpfsSize: string
         networkMode?: string
-      }>(h.stubs.created[0])
+      }>(created[0])
       expect(opts.workingDir).toBe("/workspace")
       expect(opts.binds[0]).toMatch(/:\/workspace$/)
       expect(opts.limits).toEqual({
@@ -137,19 +143,27 @@ describe("agentService.spawn", () => {
     }
   })
 
-  test("two spawns on the same challenge share ONE container (never re-build it)", async () => {
+  test("two spawns on the same challenge each get their own sandbox (per-agent containers)", async () => {
     const createHost = mock(async () =>
       stubHostAgentSession(undefined, { hang: true })
     )
-    const h = makeAgentService({ createHost })
+    const { manager, created } = statefulContainerManager()
+    const h = makeAgentService({ containerManager: manager, createHost })
     try {
       await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       await h.service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
       await h.service.close()
 
-      // One container for the whole challenge; two agents share it.
-      expect(h.stubs.created).toHaveLength(1)
+      // One sandbox per agent, both bound to the same challenge workspace.
+      expect(created).toHaveLength(2)
       expect(createHost).toHaveBeenCalledTimes(2)
+      const names = created.map((opts) => refine<{ name: string }>(opts).name)
+      expect(new Set(names).size).toBe(2)
+      for (const opts of created) {
+        expect(refine<{ binds: string[] }>(opts).binds[0]).toMatch(
+          /:\/workspace$/
+        )
+      }
     } finally {
       await h.close()
     }

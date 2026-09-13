@@ -7,9 +7,9 @@ import { join } from "node:path"
  * scheduler owns data/events/<eventId>/orchestrator/. Each holds workspace/
  * (container bind → /workspace) and runtime/ subdirectories.
  *
- * Container identity: one container per challenge workspace (shared by every
- * agent attacking the challenge), one for the scheduler workspace. Keyed by
- * challengeId / `orch:<eventId>`; the container name embeds a short slice.
+ * Sandbox identity: one one-shot container per agent (prepare → settle), one
+ * for the scheduler agent per event. The challenge-level shared resource is
+ * the named cache volume (apt/pip/go caches survive container churn).
  */
 
 const ORCH_KEY_PREFIX = "orch:"
@@ -57,12 +57,19 @@ export function agentContainerDir(
   return `${containerWorkspace.replace(/\/$/, "")}/agents/${agentId8(agentId)}`
 }
 
-/** Container name for a challenge workspace. */
-export function challengeContainerName(challengeId: string): string {
-  return `aegisx-ws-${agentId8(challengeId)}`
+/** Container name for one agent's one-shot sandbox. */
+export function agentContainerName(agentId: string): string {
+  return `aegisx-agent-${agentId8(agentId)}`
 }
 
 /** Container name for the scheduler workspace. */
 export function orchestratorContainerName(eventId: string): string {
   return `aegisx-orch-${agentId8(eventId)}`
+}
+
+/** Named docker volume holding a challenge's tool caches (apt archives +
+ * /opt/aegisx-cache); shared by the challenge's agent containers, removed
+ * with the challenge. */
+export function challengeCacheVolume(challengeId: string): string {
+  return `aegisx-ch-cache-${challengeId}`
 }

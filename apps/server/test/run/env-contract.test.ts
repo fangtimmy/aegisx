@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { verifyAgentToken } from "../../src/infrastructure/agent-credentials"
 import {
   SDK_CONTAINER_ENV,
   SDK_EXEC_ENV,
@@ -32,10 +33,16 @@ describe("env contract (server injection ↔ docs/env.md ↔ Python SDK)", () =>
       "AEGISX_EVENT_ID=evt-1",
       "AEGISX_API_URL=http://host:3000",
     ])
-    expect(sdkExecEnv("agent-1", "tok")).toEqual([
+    // The exec env is a provider: invoking it mints a short-lived bearer
+    // bound to the agent (verified with the same module agent-auth uses).
+    const env = sdkExecEnv("agent-1")()
+    expect(env).toEqual([
       "AEGISX_AGENT_ID=agent-1",
-      "AEGISX_TOKEN=tok",
+      expect.stringMatching(/^AEGISX_TOKEN=/),
     ])
+    expect(verifyAgentToken(env[1].slice("AEGISX_TOKEN=".length))).toEqual({
+      agentId: "agent-1",
+    })
   })
 
   test("the server builds SDK env only through the contract", () => {

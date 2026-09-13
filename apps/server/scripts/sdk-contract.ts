@@ -23,6 +23,7 @@ import {
   sessionEntries,
   sessions,
 } from "../src/db/schema"
+import { mintAgentToken } from "../src/infrastructure/agent-credentials"
 
 const repoRoot = resolve(import.meta.dir, "../../..")
 const dataDir = mkdtempSync(join(tmpdir(), "aegisx-sdk-contract-"))
@@ -36,10 +37,10 @@ const solverId = "agent-solver-contract"
 // Disposable second solver: seeded TERMINAL (aborted) so the submit_plan
 // wrong_state path has a fresh (non-self) agent id to be asserted against.
 const solver2Id = "agent-solver2-contract"
-const token = () =>
-  crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "")
-const schedulerToken = token()
-const solverToken = token()
+// Credentials are minted per-boot (no DB column): the harness mints through
+// the same module the exec path uses — valid ~1h, plenty for the run.
+const schedulerToken = mintAgentToken(schedulerId)
+const solverToken = mintAgentToken(solverId)
 
 function seed(database: Database): void {
   database
@@ -64,16 +65,15 @@ function seed(database: Database): void {
       updatedAt: now,
     })
     .run()
-  for (const [id, t, challengeId_, role, name, status] of [
-    [schedulerId, schedulerToken, null, "orchestrator", "Scheduler", "idle"],
-    [solverId, solverToken, challengeId, "solver", "agent-solver", "idle"],
-    [solver2Id, token(), challengeId, "solver", "agent-solver2", "aborted"],
+  for (const [id, challengeId_, role, name, status] of [
+    [schedulerId, null, "orchestrator", "Scheduler", "idle"],
+    [solverId, challengeId, "solver", "agent-solver", "idle"],
+    [solver2Id, challengeId, "solver", "agent-solver2", "aborted"],
   ] as const) {
     database
       .insert(agents)
       .values({
         id,
-        token: t,
         eventId,
         challengeId: challengeId_,
         role,

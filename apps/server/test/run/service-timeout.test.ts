@@ -5,6 +5,7 @@ import { and, eq } from "drizzle-orm"
 import { agents } from "../../src/db/schema"
 import { orchKey } from "../../src/run/channels"
 import type { HostAgentSession } from "../../src/run/host/host-session"
+import { agentContainerName } from "../../src/run/workspace-resolver"
 import {
   makeAgentService,
   seedAgent,
@@ -19,7 +20,7 @@ import { refine } from "../support"
  * true → abort clears streaming so the agent settles within the grace and
  * stays warm (`outcome: 'idle'`); false → abort is a no-op, the agent is
  * still streaming past the grace and gets force-disposed
- * (`outcome: 'aborted'` — the shared container is NEVER killed).
+ * (`outcome: 'aborted'` — the sandbox goes with the settle's destroy step).
  */
 function streamingSession(abortResolves: boolean): HostAgentSession {
   const session = {
@@ -60,14 +61,20 @@ async function createHangingAgent(abortResolves: boolean) {
     },
     USER
   )
-  return { h, agent, killed: h.stubs.killed }
+  return {
+    h,
+    agent,
+    sandbox: agentContainerName(agent.id),
+    created: h.stubs.created,
+    removed: h.stubs.removed,
+  }
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe("agent timeout", () => {
-  test("deadline → abort → settle within grace → agent stays idle (warm), container kept", async () => {
-    const { h, agent, killed } = await createHangingAgent(true)
+  test("deadline → abort → settle within grace → agent stays idle (warm), sandbox kept", async () => {
+    const { h, agent, removed } = await createHangingAgent(true)
     try {
       // deadline(30ms) fires → abort clears streaming → grace(40ms) sees
       // nothing streaming → outcome idle, no force-abort.
@@ -83,15 +90,15 @@ describe("agent timeout", () => {
       // unbounded instead of re-arming a stale one).
       expect(row.deadlineAt).toBeNull()
       expect(row.status).toBe("idle")
-      // Warm: the shared container is NEVER killed by a timeout.
-      expect(killed).toEqual([])
+      // Warm: an idle agent's sandbox is NEVER destroyed (only settle kills).
+      expect(removed).toEqual([])
     } finally {
       await h.close()
     }
   })
 
-  test("deadline → still streaming past grace → session force-disposed → agent aborted; container NEVER killed", async () => {
-    const { h, agent, killed } = await createHangingAgent(false)
+  test("deadline → still streaming past grace → session force-disposed → agent aborted; sandbox destroyed", async () => {
+    const { h, agent, sandbox, removed } = await createHangingAgent(false)
     try {
       // A connected SSE tab's replay snapshots exist before the fire…
       h.service.bus.emit(agent.id, {
@@ -111,9 +118,9 @@ describe("agent timeout", () => {
       expect(row.lastTimeoutAt).toBeTruthy()
       expect(row.deadlineAt).toBeNull()
       expect(row.status).toBe("aborted")
-      // v19 red line: the agent is terminal, but the challenge's shared
-      // container survives (only the idle sweep may reclaim it).
-      expect(killed).toEqual([])
+      // The sandbox lifetime ends with the agent: one remove(force), named
+      // after the agent itself.
+      expect(removed).toEqual([sandbox])
       // …and the force-abort settle forgot them (no terminal agent keeps
       // live-bus state around).
       expect(h.service.bus.getQueue(agent.id)).toBeUndefined()

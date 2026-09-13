@@ -1,6 +1,5 @@
 CREATE TABLE `agents` (
 	`id` text PRIMARY KEY NOT NULL,
-	`token` text DEFAULT '' NOT NULL,
 	`event_id` text NOT NULL,
 	`challenge_id` text,
 	`role` text NOT NULL,
@@ -34,7 +33,6 @@ CREATE INDEX `agents_event_id_idx` ON `agents` (`event_id`);--> statement-breakp
 CREATE INDEX `agents_challenge_id_idx` ON `agents` (`challenge_id`);--> statement-breakpoint
 CREATE INDEX `agents_status_idx` ON `agents` (`status`);--> statement-breakpoint
 CREATE UNIQUE INDEX `agents_event_orchestrator_unique` ON `agents` (`event_id`) WHERE "agents"."role" = 'orchestrator';--> statement-breakpoint
-CREATE UNIQUE INDEX `agents_token_unique` ON `agents` (`token`) WHERE "agents"."token" != '';--> statement-breakpoint
 CREATE TABLE `attachments` (
 	`id` text PRIMARY KEY NOT NULL,
 	`challenge_id` text NOT NULL,

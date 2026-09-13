@@ -47,9 +47,7 @@ function payloadOf<K extends DomainEventType>(
  */
 export function projectDomainEvent(
   tx: ProjectionDb,
-  event: AppendedEvent,
-  /** Command inputs kept out of the stream — agent.spawned's credential. */
-  extra?: { agentToken?: string }
+  event: AppendedEvent
 ): boolean {
   switch (event.type) {
     // --- spawn_queue / queue_state ----------------------------------------
@@ -432,13 +430,9 @@ export function projectDomainEvent(
 
     case "agent.spawned": {
       const p = payloadOf("agent.spawned", event.payload)
-      if (!extra?.agentToken) {
-        throw new Error("agent.spawned requires the token projector input")
-      }
       tx.insert(agents)
         .values({
           id: event.agentId!,
-          token: extra.agentToken,
           eventId: p.eventId,
           challengeId: p.challengeId,
           role: p.role,

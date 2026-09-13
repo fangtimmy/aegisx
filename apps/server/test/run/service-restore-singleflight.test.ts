@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 
 import { agents, channelMessages } from "../../src/db/schema"
+import { agentContainerName } from "../../src/run/workspace-resolver"
 import {
   makeAgentService,
   now,
@@ -11,14 +12,16 @@ import {
   stubContainerManager,
   USER,
 } from "../helpers"
+import { refine } from "../support"
 
 /** Container manager whose create is SLOW (simulates a real docker build) and
- * records calls — lets two concurrent reopens overlap and race the shared
- * challenge container. */
+ * records calls — lets two concurrent reopens overlap on the same challenge. */
 function slowContainerManager(delayMs: number) {
   const { manager, created, removed } = stubContainerManager()
   const slow = {
     ...manager,
+    // Nothing is up yet — every reopen must go through the (slow) build.
+    isRunning: async () => false,
     create: async (opts: unknown) => {
       await new Promise((resolve) => setTimeout(resolve, delayMs))
       created.push(opts)
@@ -29,7 +32,7 @@ function slowContainerManager(delayMs: number) {
 }
 
 describe("reopen single-flight (v19)", () => {
-  test("concurrent reopens of terminal agents on the same challenge restore the shared container exactly once", async () => {
+  test("concurrent reopens of terminal agents on the same challenge each build their own sandbox exactly once", async () => {
     const { manager, created, removed } = slowContainerManager(30)
     const promptLog = new Map<string, string[]>()
     const h = makeAgentService({
@@ -59,16 +62,20 @@ describe("reopen single-flight (v19)", () => {
       })
 
       // Two agents woken at once — each takes its own agent lock, so both
-      // reach prepareAgent concurrently and race the shared challenge
-      // container build.
+      // reach prepareAgent concurrently and race their own sandbox build.
       await Promise.all([
         h.service.sendMessage("a-1", { text: "wake 1" }, USER),
         h.service.sendMessage("a-2", { text: "wake 2" }, USER),
       ])
 
-      // The shared challenge container was built ONCE.
-      expect(created).toHaveLength(1)
+      // Per-agent sandboxes: two builds, named after the agents.
+      expect(created).toHaveLength(2)
       expect(removed).toHaveLength(0)
+      const names = created.map((opts) => refine<{ name: string }>(opts).name)
+      expect(names.toSorted()).toEqual([
+        agentContainerName("a-1"),
+        agentContainerName("a-2"),
+      ])
       // Both agents came online and both messages were driven.
       expect([...promptLog.keys()].toSorted()).toEqual(["a-1", "a-2"])
       expect(promptLog.get("a-1")![0]).toContain("wake 1")

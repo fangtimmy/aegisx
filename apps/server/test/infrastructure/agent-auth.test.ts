@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,6 +7,7 @@ import { type Context, Hono } from "hono"
 
 import { createDatabase } from "../../src/db"
 import { agentAuth } from "../../src/infrastructure/agent-auth"
+import { mintAgentToken } from "../../src/infrastructure/agent-credentials"
 
 const echo = (c: Context) => c.json({ ok: true })
 
@@ -14,6 +15,7 @@ const tempDirs: string[] = []
 const closeFns: Array<() => void> = []
 
 afterEach(async () => {
+  setSystemTime()
   for (const close of closeFns.splice(0)) close()
   for (const path of tempDirs.splice(0)) {
     rmSync(path, { recursive: true, force: true })
@@ -38,20 +40,19 @@ function createTestApp() {
   )
   const agent = (
     id: string,
-    token: string,
     eventId: string,
     challengeId: string | null,
     role: "solver" | "orchestrator"
   ) =>
     sqlite.run(
-      `insert into agents (id,token,event_id,challenge_id,role,model,system_prompt,tools,status,source,created_at,updated_at)
-       values (?, ?, ?, ?, ?, 'm', 'p', '[]', 'running', 'manual', 't', 't')`,
-      [id, token, eventId, challengeId, role]
+      `insert into agents (id,event_id,challenge_id,role,model,system_prompt,tools,status,source,created_at,updated_at)
+       values (?, ?, ?, ?, 'm', 'p', '[]', 'running', 'manual', 't', 't')`,
+      [id, eventId, challengeId, role]
     )
-  agent("solver-e1", "SOLVER-1", "e1", "c1", "solver")
-  agent("orch-e1", "ORCH-1", "e1", null, "orchestrator")
-  agent("solver-e2", "SOLVER-2", "e2", "c2", "solver")
-  agent("orch-e2", "ORCH-2", "e2", null, "orchestrator")
+  agent("solver-e1", "e1", "c1", "solver")
+  agent("orch-e1", "e1", null, "orchestrator")
+  agent("solver-e2", "e2", "c2", "solver")
+  agent("orch-e2", "e2", null, "orchestrator")
 
   const app = new Hono()
   app.use("*", agentAuth(db))
@@ -82,7 +83,11 @@ describe("agentAuth — agent API surface", () => {
       "/api/agents/solver-e1/channels",
     ]) {
       expect(
-        (await app.request(path, { headers: authed("SOLVER-1") })).status
+        (
+          await app.request(path, {
+            headers: authed(mintAgentToken("solver-e1")),
+          })
+        ).status
       ).toBe(200)
     }
   })
@@ -102,7 +107,7 @@ describe("agentAuth — agent API surface", () => {
         (
           await app.request(path, {
             method,
-            headers: authed("SOLVER-1"),
+            headers: authed(mintAgentToken("solver-e1")),
           })
         ).status
       ).toBe(403)
@@ -120,14 +125,18 @@ describe("agentAuth — agent API surface", () => {
       "/api/challenges/c1",
     ]) {
       expect(
-        (await app.request(path, { headers: authed("ORCH-1") })).status
+        (
+          await app.request(path, {
+            headers: authed(mintAgentToken("orch-e1")),
+          })
+        ).status
       ).toBe(200)
     }
     expect(
       (
         await app.request("/api/events/e1/queue", {
           method: "POST",
-          headers: authed("ORCH-1"),
+          headers: authed(mintAgentToken("orch-e1")),
         })
       ).status
     ).toBe(200)
@@ -135,7 +144,7 @@ describe("agentAuth — agent API surface", () => {
       (
         await app.request("/api/events/e1/queue/q1", {
           method: "DELETE",
-          headers: authed("ORCH-1"),
+          headers: authed(mintAgentToken("orch-e1")),
         })
       ).status
     ).toBe(200)
@@ -147,7 +156,7 @@ describe("agentAuth — agent API surface", () => {
       (
         await app.request("/api/events/e1/queue/q1", {
           method: "PATCH",
-          headers: authed("ORCH-1"),
+          headers: authed(mintAgentToken("orch-e1")),
         })
       ).status
     ).toBe(403)
@@ -167,21 +176,33 @@ describe("agentAuth — agent API surface", () => {
         (
           await app.request(path, {
             method,
-            headers: authed("ORCH-1"),
+            headers: authed(mintAgentToken("orch-e1")),
           })
         ).status
       ).toBe(403)
     }
   })
 
-  test("an invalid token is 401, not a pass-through", async () => {
+  test("401 matrix: tampered, unknown-agent, and expired tokens never pass", async () => {
     const app = createTestApp()
+    setSystemTime(Date.parse("2026-01-01T00:00:00Z"))
+    // A signature-valid mint for an agent row that does not exist.
+    const ghost = mintAgentToken("agent-ghost")
+    // A valid mint that will age out.
+    const aging = mintAgentToken("solver-e1")
+    setSystemTime(Date.now() + 1_000)
     expect(
-      (
-        await app.request("/api/agents/solver-e1", {
-          headers: authed("bogus"),
-        })
-      ).status
+      (await app.request("/api/agents/solver-e1", { headers: authed("bogus") }))
+        .status
+    ).toBe(401)
+    expect(
+      (await app.request("/api/agents/solver-e1", { headers: authed(ghost) }))
+        .status
+    ).toBe(401)
+    setSystemTime(Date.now() + 3_600_000 * 1000)
+    expect(
+      (await app.request("/api/agents/solver-e1", { headers: authed(aging) }))
+        .status
     ).toBe(401)
   })
 

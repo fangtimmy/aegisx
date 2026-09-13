@@ -212,6 +212,10 @@ function runLocal(
   })
 }
 
+/** Named docker volumes do not exist on the local backend: the cache is a
+ * host directory under the challenge root and dies with that tree. */
+async function removeVolume(_name: string): Promise<void> {}
+
 export function createLocalContainerManager(options?: {
   /** Time layer (default: the system clock); drives the per-exec timeout. */
   clock?: Clock
@@ -276,6 +280,13 @@ export function createLocalContainerManager(options?: {
 
   async function isRunning(name: string): Promise<boolean> {
     return workspaces.has(name)
+  }
+
+  /** Workspace names under `prefix` — the boot orphan sweep's listing seam.
+   * Process memory does not survive a restart, so this is empty at boot in
+   * practice; the interface stays uniform with the docker backend. */
+  async function list(prefix: string): Promise<string[]> {
+    return [...workspaces.keys()].filter((name) => name.startsWith(prefix))
   }
 
   async function exec(
@@ -379,6 +390,8 @@ export function createLocalContainerManager(options?: {
     create,
     kill,
     remove,
+    list,
+    removeVolume,
     isRunning,
     exec,
     capture,

@@ -85,8 +85,8 @@ export type ExecOptions = {
   /** Timeout in seconds (matches the bash tool schema; converted to ms in exec). */
   timeout?: number
   /** Per-call env additions as "KEY=value" entries (dockerode exec Env).
-   * Per-agent identity injection for shared containers — e.g. the solver SDK's
-   * AEGISX_AGENT_ID. */
+   * Per-exec identity injection for the in-container SDK — e.g. the solver
+   * SDK's AEGISX_AGENT_ID + AEGISX_TOKEN. */
   env?: string[]
 }
 
@@ -121,6 +121,14 @@ export type DockerLike = {
     id: string
     start(): Promise<unknown>
   }>
+  /** Daemon-wide container list (the boot orphan sweep's name-prefix scan). */
+  listContainers(opts: {
+    all?: boolean
+    filters?: string
+  }): Promise<Array<{ Id: string; Names?: string[] }>>
+  getVolume(name: string): {
+    remove(): Promise<unknown>
+  }
   modem: {
     demuxStream(
       stream: NodeJS.ReadableStream,
@@ -202,6 +210,29 @@ export function createContainerManager(options?: {
       await get(name).remove({ force, v: true })
     } catch (error) {
       if (!/no such (container|image)/i.test(String(error))) throw error
+    }
+  }
+
+  /** Names of every daemon container whose name starts with `prefix` (docker
+   * name filters match substrings, so the result is narrowed here). The boot
+   * orphan sweep lists by our naming prefixes. */
+  async function list(prefix: string): Promise<string[]> {
+    const containers = await docker.listContainers({
+      all: true,
+      filters: JSON.stringify({ name: [prefix] }),
+    })
+    return containers
+      .flatMap((c) => c.Names ?? [])
+      .map((name) => name.replace(/^\//, ""))
+      .filter((name) => name.startsWith(prefix))
+  }
+
+  /** Remove a named volume (the challenge cache volume; best-effort 404). */
+  async function removeVolume(name: string): Promise<void> {
+    try {
+      await docker.getVolume(name).remove()
+    } catch (error) {
+      if (!/no such/i.test(String(error))) throw error
     }
   }
 
@@ -424,6 +455,8 @@ export function createContainerManager(options?: {
     create,
     kill,
     remove,
+    list,
+    removeVolume,
     isRunning,
     exec,
     capture,

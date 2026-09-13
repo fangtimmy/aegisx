@@ -10,6 +10,7 @@ import {
   execTimeoutMs,
   type DockerLike,
 } from "../../src/run/container/container-manager"
+import { refine } from "../support"
 
 /**
  * Regression guard for the seconds→ms timeout contract. exec/capture receive a
@@ -116,6 +117,9 @@ const dockerModem = new Docker().modem
 function fakeDocker(
   behavior: {
     inspect?: () => { Running?: boolean; ExitCode?: number | null }
+    /** Daemon-wide container inventory for the `list` prefix scan. */
+    names?: string[]
+    volumes?: Map<string, boolean>
   } = {},
   /** Inject a fake clock to drive exec timeouts / poll backoffs
    * deterministically (see the timeout + pollExitCode tests). */
@@ -124,10 +128,12 @@ function fakeDocker(
   manager: ReturnType<typeof createContainerManager>
   stream: PassThrough
   hijacked: Promise<void>
+  volumes: Map<string, boolean>
 } {
   const stream = new PassThrough()
   let hijack!: () => void
   const hijacked = new Promise<void>((resolve) => (hijack = resolve))
+  const volumes = behavior.volumes ?? new Map<string, boolean>()
   const docker: DockerLike = {
     getContainer: () => ({
       exec: async () => ({
@@ -144,6 +150,18 @@ function fakeDocker(
       putArchive: async () => undefined,
     }),
     createContainer: async () => ({ id: "fake", start: async () => undefined }),
+    listContainers: async ({ filters }) => {
+      const wanted = refine<{ name?: string[] }>(JSON.parse(filters ?? "{}"))
+      const prefix = wanted.name?.[0] ?? ""
+      return (behavior.names ?? [])
+        .filter((name) => name.includes(prefix))
+        .map((Id) => ({ Id, Names: [`/${Id}`] }))
+    },
+    getVolume: (name: string) => ({
+      remove: async () => {
+        if (!volumes.get(name)) throw new Error("no such volume")
+      },
+    }),
     modem: {
       demuxStream: (source, out, err) =>
         dockerModem.demuxStream(source, out, err),
@@ -153,6 +171,7 @@ function fakeDocker(
     manager: createContainerManager({ ...(clock ? { clock } : {}), docker }),
     stream,
     hijacked,
+    volumes,
   }
 }
 
@@ -316,5 +335,32 @@ describe("capture", () => {
     expect(result.stdout.toString()).toBe("OUT-1")
     expect(result.stderr).toBe("ERR")
     expect(result.exitCode).toBe(0)
+  })
+})
+
+describe("sandbox bookkeeping (boot sweep + cache volume)", () => {
+  test("list returns names under the prefix, demoting docker's leading slash", async () => {
+    const { manager } = fakeDocker({
+      names: [
+        "aegisx-agent-aaaa",
+        "aegisx-agent-bbbb",
+        "aegisx-orch-cccc",
+        "other-box",
+      ],
+    })
+    expect(await manager.list("aegisx-agent-")).toEqual([
+      "aegisx-agent-aaaa",
+      "aegisx-agent-bbbb",
+    ])
+    expect(await manager.list("aegisx-orch-")).toEqual(["aegisx-orch-cccc"])
+    expect(await manager.list("aegisx-nope-")).toEqual([])
+  })
+
+  test("removeVolume deletes an existing volume and tolerates a missing one", async () => {
+    const volumes = new Map([["aegisx-ch-cache-1", true]])
+    const { manager } = fakeDocker({ volumes })
+    await manager.removeVolume("aegisx-ch-cache-1")
+    // Best-effort semantics: a 404 resolves instead of throwing.
+    await manager.removeVolume("aegisx-ch-cache-gone")
   })
 })

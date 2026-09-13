@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { createApp } from "../../src/app"
+import { mintAgentToken } from "../../src/infrastructure/agent-credentials"
 import { responseJson } from "../../src/lib/guards"
 
 const tempDirs: string[] = []
@@ -30,7 +31,7 @@ function createTestApp() {
     `insert into challenges (id,event_id,name,description,category,points,created_at,updated_at) values ('c2','e2','C2','','web',100,'t','t')`
   )
   db.run(
-    `insert into agents (id,token,event_id,challenge_id,role,model,system_prompt,tools,status,source,created_at,updated_at) values ('solver-e1','SOLVER-TOKEN','e1',null,'solver','m','p','[]','running','manual','t','t')`
+    `insert into agents (id,event_id,challenge_id,role,model,system_prompt,tools,status,source,created_at,updated_at) values ('solver-e1','e1',null,'solver','m','p','[]','running','manual','t','t')`
   )
   db.close()
   return instance
@@ -47,7 +48,7 @@ describe("POST /api/channels/:channelKey/messages — multipart author face", ()
     const { app } = createTestApp()
     const response = await app.request("/api/channels/team:c2/messages", {
       method: "POST",
-      headers: { authorization: "Bearer SOLVER-TOKEN" },
+      headers: { authorization: `Bearer ${mintAgentToken("solver-e1")}` },
       body: multipartForm("hi"),
     })
     expect(response.status).toBe(400)
@@ -69,7 +70,7 @@ describe("POST /api/channels/:channelKey/messages — multipart author face", ()
     const response = await app.request("/api/channels/team:c2/messages", {
       method: "POST",
       headers: {
-        authorization: "Bearer SOLVER-TOKEN",
+        authorization: `Bearer ${mintAgentToken("solver-e1")}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({ text: "hi" }),

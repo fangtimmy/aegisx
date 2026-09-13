@@ -91,7 +91,7 @@ await step("exec merges container env and per-call env", async () => {
     `printf %s:%s "$${SDK_CONTAINER_ENV.eventId}" "$${SDK_EXEC_ENV.agentId}"`,
     {
       onData: (data) => chunks.push(data),
-      env: sdkExecEnv("agent-9", "token-unused"),
+      env: sdkExecEnv("agent-9")(),
     }
   )
   assert(result.exitCode === 0, `exit ${result.exitCode}`)
