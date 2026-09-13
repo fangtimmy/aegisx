@@ -4,7 +4,8 @@ import { and, eq, inArray } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents, queueState, spawnQueue } from "../db/schema"
 import type { Clock, ClockTimer } from "./clock"
-import { createTimerHub, systemClock } from "./clock"
+import { systemClock } from "./clock"
+import { createEffects } from "./effects"
 
 /** Alert cadence for the fleet health check. */
 export const FLEET_WATCHDOG_INTERVAL_MS = 2 * 60_000
@@ -68,7 +69,7 @@ type ProgressState = { marker: string; progressAt: number; fired: boolean }
  */
 export function createFleetWatchdog(deps: FleetWatchdogDeps) {
   const clock = deps.clock ?? systemClock
-  const hub = createTimerHub(clock)
+  const effects = createEffects(clock)
   const intervalMs = deps.intervalMs ?? FLEET_WATCHDOG_INTERVAL_MS
   const stallMs = deps.stallMs ?? FLEET_STALL_MS
   const unattended = deps.unattended ?? false
@@ -196,11 +197,11 @@ export function createFleetWatchdog(deps: FleetWatchdogDeps) {
 
   function start(): void {
     if (timer) return
-    timer = hub.setInterval(checkOnce, intervalMs)
+    timer = effects.every(intervalMs, checkOnce)
   }
 
   function close(): void {
-    hub.disposeAll()
+    effects.dispose()
     timer = undefined
     state.clear()
   }

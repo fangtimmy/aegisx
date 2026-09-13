@@ -18,7 +18,7 @@ import {
 } from "./channels-context"
 import { fmtClock, MAX_DELIVER_CHARS, renderDelivery } from "./channels-render"
 import type { ClockTimer } from "./clock"
-import { createTimerHub } from "./clock"
+import { createEffects } from "./effects"
 
 function isActive(agent: AgentRow): boolean {
   return isActiveAgentStatus(agent.status)
@@ -62,27 +62,24 @@ export function createDeliveryEngine(
   // NOT done here — the runtime folds a second steer into the first (see
   // agent-runtime send), which holds regardless of how far apart the posts
   // are and costs the first delivery no latency.
-  const chains = new Map<string, Promise<void>>()
+  const clock = ctx.clock
+  const effects = createEffects(clock)
   /** Last ACCEPTED delivery per agent — the heartbeat's silence clock. */
   const lastDeliveredAt = new Map<string, number>()
 
-  /** Chain a delivery task for one agent. An idle chain starts it
-   * synchronously (an urgent post reaches its reader without an extra tick);
-   * only overlapping tasks queue. */
+  /** Chain a delivery task for one agent (the effect layer's per-key
+   * single-flight). An idle chain starts it synchronously (an urgent post
+   * reaches its reader without an extra tick); only overlapping tasks
+   * queue. */
   function enqueue(agentId: string, task: () => Promise<void>): void {
-    const prior = chains.get(agentId)
-    const next = (
-      prior ? prior.catch(() => undefined).then(task) : task()
-    ).catch((error) => {
-      console.error("channel delivery failed", {
-        agentId,
-        error: error instanceof Error ? error.message : String(error),
+    effects.chain(agentId, () =>
+      task().catch((error) => {
+        console.error("channel delivery failed", {
+          agentId,
+          error: error instanceof Error ? error.message : String(error),
+        })
       })
-    })
-    chains.set(agentId, next)
-    void next.then(() => {
-      if (chains.get(agentId) === next) chains.delete(agentId)
-    })
+    )
   }
 
   function enqueueDelivery(
@@ -276,8 +273,6 @@ export function createDeliveryEngine(
 
   // --- flush tick -----------------------------------------------------------
 
-  const clock = ctx.clock
-  const hub = createTimerHub(clock)
   let flushTimer: ClockTimer | null = null
   let nextFlushAt: number | null = null
 
@@ -286,7 +281,7 @@ export function createDeliveryEngine(
   function startFlushLoop(): void {
     if (flushTimer) return
     nextFlushAt = clock.now() + ctx.intervalMs
-    flushTimer = hub.setInterval(() => runFlushTick(), ctx.intervalMs)
+    flushTimer = effects.every(ctx.intervalMs, runFlushTick)
   }
 
   /** The tick: every live agent delivers its unread backlog (one single
@@ -369,13 +364,10 @@ export function createDeliveryEngine(
   }
 
   function stopFlushLoop(): void {
-    if (flushTimer) {
-      hub.clear(flushTimer)
-      flushTimer = null
-    }
-    // Drop the delivery chain with the loop: a closed service must not fire a
-    // delivery afterwards.
-    chains.clear()
+    // The flush interval and the delivery chains drop with the loop: a
+    // closed service must not fire a delivery afterwards.
+    effects.dispose()
+    flushTimer = null
     lastDeliveredAt.clear()
     nextFlushAt = null
   }

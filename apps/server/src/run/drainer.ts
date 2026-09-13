@@ -3,8 +3,9 @@ import { eq } from "drizzle-orm"
 
 import type { Database } from "../db"
 import { challenges, type spawnQueue } from "../db/schema"
-import type { Clock, ClockTimer } from "./clock"
-import { createTimerHub, systemClock } from "./clock"
+import type { Clock } from "./clock"
+import { systemClock } from "./clock"
+import { createEffects } from "./effects"
 import { RunActionError } from "./errors"
 import { checkSpawnFence, type FenceDecision } from "./fence"
 
@@ -108,15 +109,12 @@ function isCapacity(error: unknown): boolean {
 
 export function createQueueDrainer(deps: QueueDrainerDeps) {
   const retryMs = deps.retryMs ?? CAPACITY_RETRY_MS
-  const hub = createTimerHub(deps.clock ?? systemClock)
+  const effects = createEffects(deps.clock ?? systemClock)
 
-  let drainTimer: ClockTimer | null = null
   let draining = false
-  let drainRequested = false
-  let capacityRetry: ClockTimer | null = null
 
-  function runPass(): void {
-    void drainOnce().catch((error) => {
+  function runPass(): Promise<void> {
+    return drainOnce().catch((error) => {
       console.error("spawn queue drain failed", {
         error: error instanceof Error ? error.message : String(error),
       })
@@ -125,41 +123,27 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
 
   /** Re-arm the bounded capacity retry (at most one pending). */
   function armCapacityRetry(): void {
-    if (capacityRetry || deps.isDisposed()) return
-    capacityRetry = hub.setTimeout(() => {
-      capacityRetry = null
-      runPass()
-    }, retryMs)
+    if (deps.isDisposed()) return
+    effects.retry("drain", retryMs, runPass)
   }
 
   /** Debounced drain: collapses a burst of triggers (enqueue / agent
-   * terminal / boot) into one pass. A trigger arriving mid-pass only sets
-   * {@link drainRequested}; the running pass re-arms the debounce when it
+   * terminal / boot) into one pass. A trigger arriving mid-pass only marks
+   * a rerun on the effect key; the fresh window opens once the pass
    * finishes so the trigger is not lost. An external trigger supersedes any
    * pending capacity retry — the pass it opens covers the same need. */
   function scheduleDrain(): void {
-    if (capacityRetry) {
-      hub.clear(capacityRetry)
-      capacityRetry = null
-    }
-    if (draining) {
-      drainRequested = true
-      return
-    }
-    if (drainTimer) return
-    drainTimer = hub.setTimeout(() => {
-      drainTimer = null
-      runPass()
-    }, DRAIN_DEBOUNCE_MS)
+    effects.debounce("drain", DRAIN_DEBOUNCE_MS, runPass)
   }
 
   /**
    * One drain pass over pending items in FIFO order. Each item's fate is
    * {@link planDrainStep} over the fence decision; a launch failure marks
    * the item failed + notifies, a (racy) capacity reject stays pending.
-   * Single-flight: a trigger arriving mid-pass is recorded via
-   * scheduleDrain → drainRequested; the finished pass re-arms the debounce
-   * so the trailing trigger opens a fresh pass instead of being dropped.
+   * Passes started through {@link scheduleDrain} or the capacity retry are
+   * single-flighted by the effect layer (a mid-pass trigger re-opens the
+   * debounce window instead of racing a second pass); the guard keeps the
+   * same promise for direct callers.
    */
   async function drainOnce(): Promise<void> {
     if (draining || deps.isDisposed()) return
@@ -208,19 +192,13 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
       }
     } finally {
       draining = false
-      const rerun = drainRequested
-      drainRequested = false
-      if (rerun && !deps.isDisposed()) scheduleDrain()
     }
   }
 
   /** Cancel any pending debounced drain or capacity retry (called from the
    * service close so no timer fires against a disposed service/db). */
   function cancelDrain(): void {
-    drainRequested = false
-    hub.disposeAll()
-    drainTimer = null
-    capacityRetry = null
+    effects.dispose()
   }
 
   return { scheduleDrain, drainOnce, cancelDrain }

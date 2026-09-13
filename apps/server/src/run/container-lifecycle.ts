@@ -4,8 +4,9 @@ import { and, inArray, isNotNull } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents } from "../db/schema"
 import type { Clock, ClockTimer } from "./clock"
-import { createTimerHub, systemClock } from "./clock"
+import { systemClock } from "./clock"
 import type { ContainerManager } from "./container/container-manager"
+import { createEffects } from "./effects"
 
 /** Idle-sweep cadence for challenge containers. */
 const SWEEP_INTERVAL_MS = 60_000
@@ -59,12 +60,12 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
   const sweepIntervalMs = deps.sweepIntervalMs ?? SWEEP_INTERVAL_MS
   const idleTtlMs = deps.idleTtlMs ?? CONTAINER_IDLE_TTL_MS
   const clock = deps.clock ?? systemClock
-  const hub = createTimerHub(clock)
+  const effects = createEffects(clock)
   const registry = new Map<string, WorkspaceContainerState>()
   /** In-flight ensure builds per key (single-flight: a concurrent ensure
    * waits for the first build instead of racing a second one). */
   const building = new Map<string, Promise<void>>()
-  /** SIGTERM→SIGKILL grace timer per container key (hub-registered). */
+  /** SIGTERM→SIGKILL grace timer per container key. */
   const forceKillTimers = new Map<string, ClockTimer>()
   let sweepTimer: ClockTimer | null = null
 
@@ -113,7 +114,7 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
   function clearForceKill(key: string): void {
     const timer = forceKillTimers.get(key)
     if (timer) {
-      hub.clear(timer)
+      effects.clear(timer)
       forceKillTimers.delete(key)
     }
   }
@@ -127,7 +128,7 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
     clearForceKill(key)
     if (!state) return
     void containerManager.kill(state.name, "SIGTERM").catch(() => undefined)
-    const timer = hub.setTimeout(() => {
+    const timer = effects.after(FORCE_KILL_GRACE_MS, () => {
       forceKillTimers.delete(key)
       void containerManager
         .isRunning(state.name)
@@ -139,7 +140,7 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
             : undefined
         )
         .catch(() => undefined)
-    }, FORCE_KILL_GRACE_MS)
+    })
     forceKillTimers.set(key, timer)
   }
 
@@ -190,12 +191,12 @@ export function createContainerLifecycle(deps: ContainerLifecycleDeps) {
 
   function start(): void {
     if (sweepTimer) return
-    sweepTimer = hub.setInterval(() => sweep(), sweepIntervalMs)
+    sweepTimer = effects.every(sweepIntervalMs, () => sweep())
   }
 
   function close(): void {
     // The sweep interval + every pending SIGKILL grace timer, one call.
-    hub.disposeAll()
+    effects.dispose()
     sweepTimer = null
     forceKillTimers.clear()
   }
