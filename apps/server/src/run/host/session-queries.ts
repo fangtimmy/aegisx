@@ -44,6 +44,9 @@ export function usageTotalsSql(
       reasoning: sql<number>`COALESCE(SUM(${sessionEntries.reasoningTokens}), 0)`,
       cost: sql<number>`COALESCE(SUM(${sessionEntries.cost}), 0)`,
       turns: sql<number>`SUM(CASE WHEN ${sessionEntries.role} = 'assistant' THEN 1 ELSE 0 END)`,
+      // "Latest" is per-session (seq restarts per session) — only well-defined
+      // when `where` scopes to a single session. No production consumer today
+      // (sumUsageTotals drops it; the live strip uses the JS fold).
       cacheHitRate: sql<number | null>`(
         SELECT ${sessionEntries.cacheReadTokens} * 100.0 /
           (${sessionEntries.inputTokens} + ${sessionEntries.cacheReadTokens} + ${sessionEntries.cacheWriteTokens})

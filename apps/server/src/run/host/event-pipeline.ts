@@ -178,7 +178,7 @@ export type AgentEventPipeline = ReturnType<typeof createAgentEventPipeline>
  * session_entries as pi appends) — this pipeline never writes storage itself.
  *
  * `message.committed` is driven by the storage layer: the session adapter fires
- * `onAppend(entry, seq)` from its `commit()` for every persisted entry (pi emits
+ * `onAppend(entry, seq)` from its persist step for every persisted entry (pi emits
  * no equivalent event for regular messages — it `_emit`s `message_end` *before*
  * calling `appendMessage`). That callback is the authoritative "entry just
  * persisted" signal, carrying the entry's real `seq`. No tree diffing, no

@@ -583,8 +583,8 @@ export function createAgentService(options: AgentServiceOptions) {
     return requireAgent(agentId)
   }
 
-  /** Per-agent stop: abort the current turn; it settles to idle (the shared
-   * container stays warm). */
+  /** Per-agent stop: abort the current turn; it settles to idle (the
+   * sandbox stays warm). */
   async function stopAgent(
     agentId: string,
     principal: Principal
@@ -1455,8 +1455,8 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Disable the scheduler (W3): set paused=1 (the event gate drops its
-   * agent-lifecycle notifications) + abort the current turn (the container
-   * stays warm — scheduler containers are lifecycle-managed, never swept). */
+   * agent-lifecycle notifications) + abort the current turn (the sandbox
+   * stays warm — the scheduler agent stays idle, not terminal). */
   async function pauseScheduler(eventId: string): Promise<AgentSummary | null> {
     const admin = schedulerAdminPort.get()
     admin.setSchedulerPaused(eventId, true)

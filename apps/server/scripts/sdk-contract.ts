@@ -1,8 +1,8 @@
 /**
  * SDK test runner (design notes in docs/archive/sdk-refactor.md): boots a real
  * app on a temp data dir, seeds fixtures straight into the DB (event +
- * challenge + scheduler/solver agent rows with tokens + three solver session
- * entries), serves it on an ephemeral port, then runs apps/sdk/python via uv
+ * challenge + scheduler/solver agent rows (credentials minted at runtime) +
+ * three solver session entries), serves it on an ephemeral port, then runs apps/sdk/python via uv
  * against the live server — contract.py (HTTP contract) plus test_models.py
  * (wire mapping / time visibility, stdlib unittest). Exit 0 = the SDK and the
  * server agree.

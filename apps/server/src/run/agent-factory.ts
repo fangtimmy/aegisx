@@ -771,8 +771,8 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     })
 
     // Build the container outside the fence lock (slow I/O). On failure the
-    // row stays as a failed attempt (it never counted live — status idle →
-    // hmm, idle counts). Mark failed + rethrow.
+    // row is landed failed through the single terminal path (it counted live
+    // as idle while building). Mark failed + rethrow.
     try {
       await ensureContainerFor({ ...probe, id: agentId }, wsCtx)
       // The agent's own directory (host side; the container sees it via the

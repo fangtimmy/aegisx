@@ -3,6 +3,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -250,7 +251,9 @@ function runLocal(
 }
 
 /** Named docker volumes do not exist on the local backend: the cache is a
- * host directory under the challenge root and dies with that tree. */
+ * host directory under the challenge root and dies with that tree. Global
+ * container paths (/opt/aegisx-cache) are first-wins across workspaces —
+ * acceptable for the single-user appliance. */
 async function removeVolume(_name: string): Promise<void> {}
 
 export function createLocalContainerManager(options?: {
@@ -277,6 +280,12 @@ export function createLocalContainerManager(options?: {
       // equivalent is a symlink at the container path — commands using
       // container-internal absolute paths (/workspace/..., /challenges/...)
       // keep working unmodified.
+      // A symlink left dangling by a deleted challenge tree (global container
+      // paths are first-wins across workspaces) is re-created here.
+      const stale = lstatSync(rule.containerPath, { throwIfNoEntry: false })
+      if (stale?.isSymbolicLink() && !existsSync(rule.containerPath)) {
+        rmSync(rule.containerPath)
+      }
       if (
         !existsSync(rule.containerPath) &&
         !lstatSync(rule.containerPath, { throwIfNoEntry: false })

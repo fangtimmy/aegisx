@@ -17,10 +17,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INPUT=1 \
+    PIP_CACHE_DIR=/opt/aegisx-cache/pip \
+    GOMODCACHE=/opt/aegisx-cache/go/mod \
+    GOCACHE=/opt/aegisx-cache/go/build \
     KNOWLEDGES_DIR=/opt/solver/knowledges \
     TOOLS_DIR=/opt/solver/tools \
     VENV_BIN=/opt/venv/bin/python \
     PYTHONPATH=/opt/aegisx-sdk
+
+# Runtime cache mount point (the server binds the per-challenge named volume
+# at /opt/aegisx-cache and /var/cache/apt/archives — the env above routes
+# pip/go into it; inert for tools that never run).
+RUN mkdir -p /opt/aegisx-cache/pip /opt/aegisx-cache/go/mod /opt/aegisx-cache/go/build
 
 # === Base toolchain (shared by all tiers) ===
 # core/files · net/tunnel · binary/pwn triage · python venv core

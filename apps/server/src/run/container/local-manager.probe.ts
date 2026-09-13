@@ -55,7 +55,7 @@ const manager = createLocalContainerManager({ clock: systemClock })
 
 async function setup(): Promise<string> {
   await manager.create({
-    name: "aegisx-ws-test",
+    name: "aegisx-local-probe",
     image: "ignored",
     workingDir: containerWorkspace,
     binds: [`${workspace}:${containerWorkspace}`],
@@ -64,7 +64,7 @@ async function setup(): Promise<string> {
     limits: { cpus: 1, memoryMb: 512, pidsLimit: 64 },
     tmpfsSize: "1g",
   })
-  return "aegisx-ws-test"
+  return "aegisx-local-probe"
 }
 
 await step("exec maps container workdir onto the bind host dir", async () => {
@@ -92,7 +92,7 @@ await step("exec maps container workdir onto the bind host dir", async () => {
 })
 
 await step("exec merges container env and per-call env", async () => {
-  const name = "aegisx-ws-test"
+  const name = "aegisx-local-probe"
   const chunks: Buffer[] = []
   const result = await manager.exec(
     name,
@@ -110,7 +110,7 @@ await step("exec merges container env and per-call env", async () => {
 })
 
 await step("exec reports non-zero exit codes", async () => {
-  const result = await manager.exec("aegisx-ws-test", "exit 3", {
+  const result = await manager.exec("aegisx-local-probe", "exit 3", {
     onData: () => undefined,
   })
   assert(result.exitCode === 3, `exit ${result.exitCode}`)
@@ -118,7 +118,7 @@ await step("exec reports non-zero exit codes", async () => {
 
 await step("exec timeout kills the process group", async () => {
   const started = Date.now()
-  const result = await manager.exec("aegisx-ws-test", "sleep 30", {
+  const result = await manager.exec("aegisx-local-probe", "sleep 30", {
     timeout: 1,
     onData: () => undefined,
   })
@@ -128,7 +128,7 @@ await step("exec timeout kills the process group", async () => {
 
 await step("exec abort signal kills the process group", async () => {
   const controller = new AbortController()
-  const pending = manager.exec("aegisx-ws-test", "sleep 30", {
+  const pending = manager.exec("aegisx-local-probe", "sleep 30", {
     signal: controller.signal,
     onData: () => undefined,
   })
@@ -140,7 +140,7 @@ await step("exec abort signal kills the process group", async () => {
 await step("capture separates stdout/stderr across mounts", async () => {
   writeFileSync(join(challenges, "note.txt"), "hello")
   const result = await manager.capture(
-    "aegisx-ws-test",
+    "aegisx-local-probe",
     `cat ${containerChallenges}/note.txt; echo oops 1>&2`
   )
   assert(result.exitCode === 0, `exit ${result.exitCode}`)
@@ -151,7 +151,7 @@ await step("capture separates stdout/stderr across mounts", async () => {
 await step("putArchive extracts into the mapped path", async () => {
   const tar = await buildSingleFileTar("flag.txt", "CTF{local}")
   await manager.putArchive(
-    "aegisx-ws-test",
+    "aegisx-local-probe",
     `${containerWorkspace}/agents/ab12cd34`,
     tar
   )
@@ -167,7 +167,7 @@ await step(
   async () => {
     writeFileSync(join(challenges, "solve.sh"), "echo solved\n")
     const result = await manager.capture(
-      "aegisx-ws-test",
+      "aegisx-local-probe",
       `bash ${containerChallenges}/solve.sh`
     )
     assert(result.exitCode === 0, `exit ${result.exitCode}`)
@@ -178,20 +178,26 @@ await step(
 await step(
   "kill terminates running execs; remove forgets the workspace",
   async () => {
-    const pending = manager.exec("aegisx-ws-test", "sleep 30 && echo done", {
-      onData: () => undefined,
-    })
-    await manager.kill("aegisx-ws-test", "SIGKILL")
+    const pending = manager.exec(
+      "aegisx-local-probe",
+      "sleep 30 && echo done",
+      {
+        onData: () => undefined,
+      }
+    )
+    await manager.kill("aegisx-local-probe", "SIGKILL")
     const result = await pending
     assert(result.exitCode === null, `exit ${result.exitCode}`)
-    await manager.remove("aegisx-ws-test")
+    await manager.remove("aegisx-local-probe")
     assert(
-      !(await manager.isRunning("aegisx-ws-test")),
+      !(await manager.isRunning("aegisx-local-probe")),
       "still running after remove"
     )
     let threw = false
     try {
-      await manager.exec("aegisx-ws-test", "true", { onData: () => undefined })
+      await manager.exec("aegisx-local-probe", "true", {
+        onData: () => undefined,
+      })
     } catch {
       threw = true
     }
