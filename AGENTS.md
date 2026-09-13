@@ -39,7 +39,7 @@ knip 会卡未使用的导出：新增导出若无消费方，`bun run check` �
 
 ## 架构边界
 
-- agent loop 在宿主 server 进程内运行（`@earendil-works/pi-coding-agent`，版本由根 package.json 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）；bash 与文件工具不落宿主进程——每题一个长寿 Kali 容器，命令经 dockerode `exec` 送入，工作区双向 bind mount。
+- agent loop 在宿主 server 进程内运行（`@earendil-works/pi-coding-agent`，版本由根 package.json 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）；bash 与文件工具不落宿主进程——每 agent 一个一次性 Kali 沙箱（`aegisx-agent-<id8>`，prepare 创建、settle 销毁，同题只共享 workspace bind 与缓存卷），命令经 dockerode `exec` 送入，工作区双向 bind mount；agent 凭据是 exec 时短时铸造的（无持久 token 列）。
 - `apps/server/src/run/` 是运行时心脏：`service.ts` 组装根与策略，`agent-factory.ts` 单次 spawn 组装（容器 → host session → 工具注入），`agent-runtime.ts` 是每个存活 agent 的所有权根与唯一终态路径，`run/host/` 是 pi 会话宿主子层（不得反向依赖编排层，oxlint 强制），`run/clock.ts` + `run/effects.ts` 是运行时定时器与延迟动作语义（debounce/chain/retry/every）的唯一来源，`fence.ts` 强制并发上限与槽位——系统约束在启动侧强制校验，不依赖调度者自觉。
 - 控制平面事实走领域事件流：`run/domain-events/`（registry / store / projector）在同一个 SQLite 事务里 append `domain_events` + 更新投影表，projector 是基线表（agents / spawn_queue / challenge_flags / challenge_remote / challenges 控制字段）的唯一写者；`GET /api/events/:eventId/decisions` 是决策日志读面。
 - 授权分两层：中间件每请求解析 `Principal`（user / agent / system），数据层作用域由 `run/principal-scope.ts` 的断言在 service 内强制——路由层不拼 scope 条件。

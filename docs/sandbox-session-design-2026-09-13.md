@@ -1,6 +1,6 @@
 # 沙箱生命周期对齐（D）与自有会话模型（E）
 
-日期：2026-09-13 · 状态：**设计提案（未实施）** · 范围：每 agent 一次性沙箱 / 凭证面收紧 / 自有会话 schema / pi 适配层
+日期：2026-09-13 · 状态：**已实施（同日落地，实施记录见文末）** · 范围：每 agent 一次性沙箱 / 凭证面收紧 / 自有会话 schema / pi 适配层
 
 本文只做设计与取舍记录，不改动任何代码。现状结论带 `文件:行号` 实证。标注 **【已定】** 的是方向性决策，**【建议】** 的仍是开放项。控制平面（A/B/C）的设计与实施见 [control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)；本文是其 §1 遗留的 D、E 两项。
 
@@ -163,3 +163,20 @@ D 与 E 的文件面仅相交于 `schema.ts` 与 `agent-factory.ts`（token 铸�
 
 - **D**：并发容器数 = 存活 agent 数（上限即 `maxConcurrentAgents`）；每次 spawn 多一次 create（亚秒级）；**内存上限按 agent 相乘**（存活数 × memoryMb，见 §1.4——容量规划口径改变，或调低 per-agent 默认）；缓存卷是新的磁盘资源（随题删除）；铸造凭据引入 per-boot secret 的内存管理（一行）与 1h 的凭据寿命上界（适用于 exec 派生的整个进程树，含 `nohup` 后台进程）——比永久 bearer 严格更好。
 - **E**：B2 是本设计最重的一批（522 行管理器删除、批量装载重放、usage/统计 SQL 迁移、五个测试夹具重写），风险集中在 resume 路径——重放 parity 测试是主防线；body 双写期不存在（基线制无旧库，直接切换）。
+
+
+## 5. 实施记录（2026-09-13 同日落地）
+
+| 批次 | 内容 | 提交 |
+|---|---|---|
+| B1 | 每 agent 一次性沙箱（`aegisx-agent-<id8>`，settle 时 remove(force)，boot 前缀孤儿清扫）+ 题级缓存卷 + `agents.token` 废除（per-boot HMAC 铸造，execEnv 变 per-exec 提供者，基线 v25）；`container-lifecycle.ts` 整体删除 | `0446578` |
+| B2 | 自有会话存储：session_entries v2（role/tool_name/usage 列 + canonical body + active_leaf_id）、`PiSessionAdapter` 继承真实 inMemory 管理器、批量装载重放、`DbSessionManager` 与 SessionManager cast 删除、usage/toolName 统计纯 SQL 化（基线 v26） | `61dc9ca` |
+| B3 | wire 收编：shared 自有 `SessionEntryView`（shared 从此零 `@earendil-works` 依赖），两个映射点经 codec 出 view，web 消费者仅类型更换 | `cb0ba86` |
+
+**实施中的偏差记录**（与正文对照）：
+
+- §2.1 的适配器形态：pi 0.85.1 的 `SessionManager` 声明了 `private constructor`，TS 层 `extends` 被阻断（运行时字段公有）——适配器以「构造签名收窄的基类转型 + super() 传 inMemory 同参」落地，`as unknown as` 桥接点仍消失（is-a 成立）；附带发现 pi 基类构造经虚方法 `newSession()` 初始化，适配器的 `newSession` 桩需 `ready` 标志放行构造期。
+- §2.2 的 body envelope：message 行把整个 pi `message` 存于 `payload`（可查询字段已提列），未知 kind 原样存——与正文一致。
+- §2.4 的 `SessionEntryView`：**不带**未知 kind 的开放变体（`type: string & {}` 会破坏判别联合收窄，web 全部 `entry.type ===` 检查碎裂）；未知 kind 沿既有路径处理——codec 服务端默认接受（保往返）、REST 按可渲染类过滤、web 端 `isSessionEntry` 拒收。message role 收为封闭 3 值联合（pi 扩展 role UI 运行时忽略路径不变），边界处三处带注释的转型。
+- `active_leaf_id` 在每次写入时维护（不只 branch/resetLeaf——否则 resetLeaf 的 null 与从未 branch 无法在重开时区分）；backtrack 的尾删后陈旧指针回落到最后一行并归一化（专测钉住）。
+- 附带修复一个先于本项目的测试 flake：local-manager 探针间歇性空输出——Bun 的 child `close` 可先于管道末包抵达，exec 收尾条件从「child 关闭」改为「child + 双 stdio 管道均关闭」，stdio fd 退化时响亮失败（`08ca860`，18 连绿验证）。

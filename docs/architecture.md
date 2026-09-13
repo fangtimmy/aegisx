@@ -1,6 +1,6 @@
 # AegisX 架构概览
 
-活文档：描述当前（schema v25）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)，控制平面重设计（领域事件 / 计划 / 决策点）的取舍记录见 [control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)；沙箱生命周期对齐与自有会话模型的设计见 [sandbox-session-design-2026-09-13.md](sandbox-session-design-2026-09-13.md)。
+活文档：描述当前（schema v26）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)，控制平面重设计（领域事件 / 计划 / 决策点）的取舍记录见 [control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)；沙箱生命周期对齐与自有会话模型的设计见 [sandbox-session-design-2026-09-13.md](sandbox-session-design-2026-09-13.md)。
 
 ## 总览
 
