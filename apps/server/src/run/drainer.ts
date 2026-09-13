@@ -5,6 +5,7 @@ import type { Database } from "../db"
 import { challenges, type spawnQueue } from "../db/schema"
 import type { Clock } from "./clock"
 import { systemClock } from "./clock"
+import { emitDomainEvent } from "./domain-events/store"
 import { createEffects } from "./effects"
 import { RunActionError } from "./errors"
 import { checkSpawnFence, type FenceDecision } from "./fence"
@@ -107,6 +108,23 @@ function isCapacity(error: unknown): boolean {
   return error instanceof RunActionError && error.code === "capacity"
 }
 
+/** Every fence rejection leaves a trace (the decision log's raw material).
+ * global_capacity stops the whole pass (one fact per pass, not per item);
+ * target_slots / challenge_solved are per-item fates. */
+function emitFenceBlocked(
+  db: Database,
+  item: QueueRow,
+  decision: Exclude<FenceDecision, { ok: true }>
+): void {
+  emitDomainEvent(db, {
+    type: "fence.blocked",
+    eventId: item.eventId,
+    challengeId: item.challengeId,
+    actor: { kind: "system", actorId: "drainer" },
+    payload: { code: decision.code, message: decision.message, via: "queue" },
+  })
+}
+
 export function createQueueDrainer(deps: QueueDrainerDeps) {
   const retryMs = deps.retryMs ?? CAPACITY_RETRY_MS
   const effects = createEffects(deps.clock ?? systemClock)
@@ -154,6 +172,36 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
           eventId: item.eventId,
           challengeId: item.challengeId,
         })
+        if (decision.ok) {
+          try {
+            const agentId = await deps.launch(item)
+            if (deps.store.markRunning(item.id, agentId)) continue
+            // Lost race: the item was cancelled (e.g. full-solve cleanup) or
+            // removed while the launch ran. The agent just spawned live on
+            // abandoned work — settle it instead of letting it attack a solved
+            // challenge until its deadline. Fire-and-forget: a settle failure
+            // must not abort the pass or throw out of drainOnce.
+            void Promise.resolve(deps.onSupersededLaunch?.(agentId)).catch(
+              (error) => {
+                console.error("superseded launch settle failed", {
+                  agentId,
+                  error: error instanceof Error ? error.message : String(error),
+                })
+              }
+            )
+          } catch (error) {
+            if (isCapacity(error)) continue // race with another spawn; stay pending
+            const message =
+              error instanceof Error ? error.message : String(error)
+            deps.store.markFailed(item.id, message)
+            deps.onEmergency(
+              item.eventId,
+              launchFailureInfo(deps.db, item, message)
+            )
+          }
+          continue
+        }
+        emitFenceBlocked(deps.db, item, decision)
         const action = planDrainStep(decision)
         if (action.kind === "stop") {
           armCapacityRetry()
@@ -161,34 +209,8 @@ export function createQueueDrainer(deps: QueueDrainerDeps) {
         }
         if (action.kind === "cancel") {
           deps.store.markCancelled(item.id)
-          continue
         }
-        if (action.kind === "skip") continue
-        try {
-          const agentId = await deps.launch(item)
-          if (deps.store.markRunning(item.id, agentId)) continue
-          // Lost race: the item was cancelled (e.g. full-solve cleanup) or
-          // removed while the launch ran. The agent just spawned live on
-          // abandoned work — settle it instead of letting it attack a solved
-          // challenge until its deadline. Fire-and-forget: a settle failure
-          // must not abort the pass or throw out of drainOnce.
-          void Promise.resolve(deps.onSupersededLaunch?.(agentId)).catch(
-            (error) => {
-              console.error("superseded launch settle failed", {
-                agentId,
-                error: error instanceof Error ? error.message : String(error),
-              })
-            }
-          )
-        } catch (error) {
-          if (isCapacity(error)) continue // race with another spawn; stay pending
-          const message = error instanceof Error ? error.message : String(error)
-          deps.store.markFailed(item.id, message)
-          deps.onEmergency(
-            item.eventId,
-            launchFailureInfo(deps.db, item, message)
-          )
-        }
+        // skip: only this item is blocked; try the rest.
       }
     } finally {
       draining = false

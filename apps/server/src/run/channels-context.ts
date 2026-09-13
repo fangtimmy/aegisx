@@ -77,6 +77,17 @@ export type AttachmentInput = {
   size: number
 }
 
+/** The runtime send's result: what the delivery engine needs to know about
+ * an ACCEPTED delivery (the via path + the delivered text size) — the
+ * agent.delivered fact's payload source. */
+export type SendOutcome =
+  | { delivered: false }
+  | {
+      delivered: true
+      via: "steer" | "followUp" | "fresh" | "cold_resume"
+      chars: number
+    }
+
 export type ChannelServiceDeps = {
   db: Database
   dataDir: string
@@ -90,7 +101,7 @@ export type ChannelServiceDeps = {
     text: string,
     deliverAs?: "steer" | "followUp",
     opts?: { assertLive?: (id: string) => boolean }
-  ): Promise<boolean>
+  ): Promise<SendOutcome>
   now(): string
   /** Host root of a challenge's workspace tree (attachment copy target). */
   challengeWorkspaceRoot(eventId: string, challengeId: string): string

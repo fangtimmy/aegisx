@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm"
 import type { Database } from "../db"
 import { challengeRemote, challenges, type eventPlatforms } from "../db/schema"
 import { type Clock, systemClock } from "../run/clock"
+import { emitDomainEvent } from "../run/domain-events/store"
 import { getChallengeRemote, isTargetCapable } from "./challenge-state"
 import {
   type CtfPlatformAdapter,
@@ -184,10 +185,16 @@ export function createPlatformTargets(
         "Stop the remote target before removing it from AegisX"
       )
     }
-    db.update(challengeRemote)
-      .set({ targetIgnored: true })
-      .where(eq(challengeRemote.challengeId, challengeId))
-      .run()
+    // The operator override rides the challenge.overridden fact — the
+    // projector owns the challenge_remote mirror (no syncedAt bump: this is
+    // an operator edit, not a platform sync).
+    emitDomainEvent(db, {
+      type: "challenge.overridden",
+      eventId: remote.eventId,
+      challengeId,
+      actor: { kind: "user" },
+      payload: { targetIgnored: true },
+    })
   }
 
   /** Every target-capable, non-ignored challenge of the event. */

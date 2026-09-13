@@ -4,8 +4,10 @@ import type { Database } from "../db"
 import { agents } from "../db/schema"
 import type { AgentStatus } from "./agent-status"
 import { orchKey, type ChannelService } from "./channels"
+import type { SendOutcome } from "./channels-context"
 import type { Clock, ClockTimer } from "./clock"
 import { createTimerHub } from "./clock"
+import { emitDomainEvent, type DomainEventActor } from "./domain-events/store"
 import { RunActionError } from "./errors"
 import type { HostAgentSession } from "./host/host-session"
 
@@ -40,10 +42,14 @@ export type SettleOptions = {
   abort: boolean
   status: "completed" | "aborted" | "failed"
   summary?: string
+  /** Spawn-failure landing's launch error (completedAt stays null). */
+  error?: string
   event?: "agent.finished"
   /** Who drove the transition (user vs scheduler) — the finish event's
    * origin label. */
   actor?: "user" | "scheduler"
+  /** The terminal fact's producer (user / agent / system subsystem). */
+  by?: DomainEventActor
   /** Delete-only teardown, run after the terminal status has landed. */
   afterSettle?: () => void
 }
@@ -68,10 +74,7 @@ export type AgentRuntimeDeps = {
   /** The service's per-agent lock — turns serialize against bespoke ops
    * (create / close / finish / ...) and a service close rejects them. */
   withLock<T>(agentId: string, op: () => T | Promise<T>): Promise<T>
-  updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
   now(): string
-  /** Current DB status of the agent (null when gone). */
-  getAgentStatus(agentId: string): (typeof agents.$inferSelect)["status"] | null
   /** Drop the runtime from the service's registry (settle). */
   forget(agentId: string): void
   /** Cold-resume a session-less agent so send() can start a new turn. */
@@ -128,7 +131,7 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
   function drive(driven: HostAgentSession, text: string): void {
     turnGen += 1
     const gen = turnGen
-    deps.status.agentTurnStart(agentId)
+    deps.status.agentTurnStart(agentId, driven.sessionId)
     void (async () => {
       let error: string | null = null
       try {
@@ -159,6 +162,7 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
             status: "completed",
             summary: pendingFinish,
             event: "agent.finished",
+            by: { kind: "agent", agentId },
           })
           return
         }
@@ -177,28 +181,32 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
       })
   }
 
-  /** Deliver a message: steer / followUp while streaming, else a fresh turn.
-   * Resolves false WITHOUT delivering when `opts.assertLive` rejects the id
-   * inside the lock before any resume (the delivery path re-checked liveness
-   * outside the lock and may have lost a race to a concurrent close), or when
-   * a resume could not produce a session. */
+  /** Deliver a message: steer / followUp while streaming, else a fresh turn
+   * (cold_resume when the send had to rebuild the session first). Resolves
+   * `{ delivered: false }` WITHOUT delivering when `opts.assertLive` rejects
+   * the id inside the lock before any resume (the delivery path re-checked
+   * liveness outside the lock and may have lost a race to a concurrent
+   * close), or when a resume could not produce a session. */
   async function send(
     text: string,
     deliverAs?: "steer" | "followUp",
     opts?: { assertLive?: (id: string) => boolean }
-  ): Promise<boolean> {
-    return deps.withLock(agentId, async (): Promise<boolean> => {
-      if (opts?.assertLive && !opts.assertLive(agentId)) return false
+  ): Promise<SendOutcome> {
+    return deps.withLock(agentId, async (): Promise<SendOutcome> => {
+      if (opts?.assertLive && !opts.assertLive(agentId))
+        return { delivered: false }
       let current = session
+      let resumed = false
       if (!current) {
         await deps.resumeAgent(agentId)
         current = session
-        if (!current) return false
+        if (!current) return { delivered: false }
+        resumed = true
       }
       if (current.session.isStreaming) {
         if (deliverAs === "followUp") {
           await current.session.followUp(text)
-          return true
+          return { delivered: true, via: "followUp", chars: text.length }
         }
         // pi queues every steer() as its OWN message, so a second delivery
         // during the same turn would reach the agent as a separate injection
@@ -207,18 +215,23 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
         const pending = current.session.getSteeringMessages()
         if (pending.length === 0) {
           await current.session.steer(text)
-          return true
+          return { delivered: true, via: "steer", chars: text.length }
         }
         // clearQueue drops follow-ups too: restore them after re-queuing the
         // merged steer (their relative order is preserved).
         const { followUp } = current.session.clearQueue()
-        await current.session.steer([...pending, text].join("\n\n"))
+        const merged = [...pending, text].join("\n\n")
+        await current.session.steer(merged)
         for (const queued of followUp) await current.session.followUp(queued)
-        return true
+        return { delivered: true, via: "steer", chars: merged.length }
       }
       pendingFinish = undefined
       drive(current, text)
-      return true
+      return {
+        delivered: true,
+        via: resumed ? "cold_resume" : "fresh",
+        chars: text.length,
+      }
     })
   }
 
@@ -260,16 +273,35 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     const delay = new Date(deadlineAt).getTime() - clock.now()
     if (delay <= 0) return
     deadlineTimer = hub.setTimeout(() => {
-      // One-shot: consume the deadline so warm reuse / reopen stays unbounded
-      // instead of silently re-arming a stale one.
-      deps.updateAgent(agentId, { lastTimeoutAt: deps.now(), deadlineAt: null })
+      // One-shot: the agent.timed_out fact consumes the deadline (its
+      // projection nulls it) so warm reuse / reopen stays unbounded instead
+      // of silently re-arming a stale one.
+      const at = deps.now()
+      const row = deps.db
+        .select({
+          eventId: agents.eventId,
+          challengeId: agents.challengeId,
+          status: agents.status,
+        })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .get()
       // Only a live turn can time out. An agent that already settled idle or
       // was closed since the timer was armed just loses its stale deadline —
       // aborting it (or reporting agent.timedOut to the scheduler) would be
       // misleading.
       const live =
-        deps.getAgentStatus(agentId) === "running" ||
-        Boolean(session?.session.isStreaming)
+        row?.status === "running" || Boolean(session?.session.isStreaming)
+      if (row) {
+        emitDomainEvent(deps.db, {
+          type: "agent.timed_out",
+          eventId: row.eventId,
+          challengeId: row.challengeId,
+          agentId,
+          actor: { kind: "system", actorId: "deadline" },
+          payload: { outcome: live ? "aborted" : "idle", at },
+        })
+      }
       if (!live) return
       void abort().catch(() => undefined)
       graceTimer = hub.setTimeout(() => {
@@ -277,7 +309,11 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
         // aborted. A clean settle already landed idle.
         const stillStreaming = Boolean(session?.session.isStreaming)
         if (stillStreaming) {
-          void settle({ abort: false, status: "aborted" })
+          void settle({
+            abort: false,
+            status: "aborted",
+            by: { kind: "system", actorId: "deadline" },
+          })
         }
         deps.status.emitAgentEvent(agentId, {
           type: "agent.timedOut",
@@ -384,8 +420,10 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     deps.status.terminalizeAgent(agentId, {
       status: opts.status,
       summary: opts.summary,
+      error: opts.error,
       event: opts.event,
       actor: opts.actor,
+      by: opts.by,
     })
     opts.afterSettle?.()
   }

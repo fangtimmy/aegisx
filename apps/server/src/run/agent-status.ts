@@ -1,12 +1,17 @@
 import { eq } from "drizzle-orm"
 
 import type { Database } from "../db"
-import { agents, challenges } from "../db/schema"
+import { challenges } from "../db/schema"
 import { logEvent } from "../lib/log"
 import type { NOTICE_TEMPLATE_DEFAULTS } from "../orchestration/prompt-defaults"
 import { renderTemplateBody } from "../orchestration/prompt-templates"
 import type { EventScopePayload } from "../orchestration/types"
 import { orchKey, type ChannelService } from "./channels"
+import {
+  emitDomainEvent,
+  actorLabel,
+  type DomainEventActor,
+} from "./domain-events/store"
 import type { LiveBus } from "./host/live"
 import type { RunPort } from "./ports"
 import type { AgentQueries } from "./queries"
@@ -25,10 +30,6 @@ export type AgentStatusDeps = {
    * agent justifies holding (the challenge's platform target instance). */
   onAgentTerminal(agentId: string): void
   now: () => string
-  updateAgent: (
-    agentId: string,
-    patch: Partial<typeof agents.$inferInsert>
-  ) => void
   /** Late-bound queue port (agent terminal → item done + re-drain); bound by
    * the assembly root before any agent can terminalize. */
   queue: RunPort<QueueService>
@@ -87,13 +88,14 @@ function eventBody(
 
 /**
  * Agent status writes + live emits + the orch event feed (v19: per-agent).
- * Turn start/settle maintain the agent row; the runtime consumes a pending
+ * Turn start/settle and the terminal landing are agent.* domain facts — the
+ * agents row follows from their projections; the runtime consumes a pending
  * finish_run (→ completed + summary) and arms the stall watchdog around
- * these writes; lifecycle events post as system messages into the event's
+ * them; lifecycle events post as system messages into the event's
  * orch channel (urgent per the §五 table — timedOut only).
  */
 export function createAgentStatus(deps: AgentStatusDeps) {
-  const { db, queries, bus, channels, now, updateAgent, templateBody } = deps
+  const { db, queries, bus, channels, now, templateBody } = deps
 
   function emitAgent(agentId: string) {
     const agent = queries.getAgent(agentId)
@@ -155,22 +157,45 @@ export function createAgentStatus(deps: AgentStatusDeps) {
     )
   }
 
-  /** Mark an agent's turn starting. */
-  function agentTurnStart(agentId: string): void {
-    updateAgent(agentId, { status: "running", error: null, updatedAt: now() })
+  /** Mark an agent's turn starting: the agent.turn_started fact (its
+   * projection lands status running + error cleared). */
+  function agentTurnStart(agentId: string, sessionId?: string): void {
+    const row = queries.getAgentRow(agentId)
+    if (!row) return
+    emitDomainEvent(db, {
+      type: "agent.turn_started",
+      eventId: row.eventId,
+      challengeId: row.challengeId,
+      agentId,
+      actor: { kind: "agent", agentId },
+      payload: {
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        at: now(),
+      },
+    })
     emitAgent(agentId)
   }
 
   /** Mark an agent's turn settled. `error` (already logged by the runtime)
-   * sends the agent to `failed`; a clean settle lands idle. The runtime arms
+   * settles the fact `failed`; a clean settle lands idle. The runtime arms
    * the stall check after this. */
   function agentTurnSettled(agentId: string, error: string | null): void {
     const ts = now()
-    updateAgent(agentId, {
-      status: error ? "failed" : "idle",
-      ...(error ? { error } : {}),
-      updatedAt: ts,
-    })
+    const row = queries.getAgentRow(agentId)
+    if (row) {
+      emitDomainEvent(db, {
+        type: "agent.turn_settled",
+        eventId: row.eventId,
+        challengeId: row.challengeId,
+        agentId,
+        actor: { kind: "agent", agentId },
+        payload: {
+          outcome: error ? "failed" : "idle",
+          ...(error ? { error } : {}),
+          at: ts,
+        },
+      })
+    }
     emitAgent(agentId)
     emitAgentEvent(agentId, {
       type: "agent.idle",
@@ -181,32 +206,47 @@ export function createAgentStatus(deps: AgentStatusDeps) {
 
   /** Terminal transition shared by finish_run (settle path), the HTTP
    * finish, close, the timeout force-abort, and the spawn-failure landing:
-   * stamp the row, release the queue item, emit, and forget the agent's
-   * live-bus snapshots (context/queue/activity/running tools — a terminal
-   * agent has nothing in flight to replay). The caller handles session
-   * disposal/abort before this. */
+   * the agent.terminated fact (its projection stamps the row), then release
+   * the queue item, emit, and forget the agent's live-bus snapshots
+   * (context/queue/activity/running tools — a terminal agent has nothing in
+   * flight to replay). The caller handles session disposal/abort before
+   * this. */
   function terminalizeAgent(
     agentId: string,
     opts: {
       status: "completed" | "aborted" | "failed"
       summary?: string
+      /** Spawn-failure landing's launch error (completedAt stays null). */
+      error?: string
       event?: "agent.finished"
       /** Who drove the transition (user vs scheduler) — the finish event's
        * origin label. */
       actor?: "user" | "scheduler"
+      /** The fact's producer (user / agent / system subsystem). */
+      by?: DomainEventActor
     }
   ): void {
     const ts = now()
-    const patch: Partial<typeof agents.$inferInsert> = {
-      status: opts.status,
-      updatedAt: ts,
-      completedAt: ts,
+    const row = queries.getAgentRow(agentId)
+    const by = opts.by ?? { kind: "system" as const, actorId: "run" }
+    if (row) {
+      emitDomainEvent(db, {
+        type: "agent.terminated",
+        eventId: row.eventId,
+        challengeId: row.challengeId,
+        agentId,
+        actor: by,
+        payload: {
+          status: opts.status,
+          ...(opts.summary !== undefined ? { summary: opts.summary } : {}),
+          ...(opts.error !== undefined ? { error: opts.error } : {}),
+          at: ts,
+          actor: actorLabel(by),
+        },
+      })
     }
-    if (opts.summary !== undefined) patch.summary = opts.summary
-    updateAgent(agentId, patch)
     emitAgent(agentId)
     bus.forget([agentId])
-    const row = queries.getAgentRow(agentId)
     deps.queue.get().markDone(row?.queueItemId, agentId)
     deps.queue.get().scheduleDrain()
     deps.onAgentTerminal(agentId)

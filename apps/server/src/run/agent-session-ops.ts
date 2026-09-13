@@ -4,6 +4,7 @@ import { and, asc, count, eq, gt, inArray } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents, sessionEntries, sessions } from "../db/schema"
 import type { Principal } from "../infrastructure/agent-auth"
+import { actorFromPrincipal, emitDomainEvent } from "./domain-events/store"
 import { RunActionError } from "./errors"
 import type { HostAgentSession } from "./host/host-session"
 import { assertMayTouchAgent } from "./principal-scope"
@@ -24,7 +25,6 @@ export type AgentSessionOpsDeps = {
    * event + deadline re-arm) — session switches must land the same
    * converged state as a cold resume. */
   resumeAgent(agentId: string): Promise<void>
-  updateAgent(agentId: string, patch: Partial<typeof agents.$inferInsert>): void
   emitAgent(agentId: string): void
   requireAgent(agentId: string): AgentSummary
   now(): string
@@ -38,6 +38,42 @@ export type AgentSessionOpsDeps = {
  * (a running turn is rejected, matching /compact). */
 export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
   const { db } = deps
+
+  /** The agent.eventId/challengeId dims for an emission (null when gone —
+   * the ops run under the agent's lock, so a mid-op delete cannot race). */
+  function dimsOf(agentId: string): {
+    eventId: string | null
+    challengeId: string | null
+  } {
+    const row = db
+      .select({ eventId: agents.eventId, challengeId: agents.challengeId })
+      .from(agents)
+      .where(eq(agents.id, agentId))
+      .get()
+    return {
+      eventId: row?.eventId ?? null,
+      challengeId: row?.challengeId ?? null,
+    }
+  }
+
+  /** The agent.session_switched fact — its projection moves the active
+   * session pointer (null = /new, which makes the next prepare build a
+   * fresh session). */
+  function emitSessionSwitched(
+    agentId: string,
+    sessionId: string | null,
+    principal: Principal
+  ): void {
+    const { eventId, challengeId } = dimsOf(agentId)
+    emitDomainEvent(db, {
+      type: "agent.session_switched",
+      eventId,
+      challengeId,
+      agentId,
+      actor: actorFromPrincipal(principal),
+      payload: { sessionId, at: deps.now() },
+    })
+  }
 
   /** Reject a session op while the agent's turn is in flight. */
   function requireIdleAgent(agentId: string): void {
@@ -127,7 +163,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
       requireIdleAgent(agentId)
       // Nulling the pointer makes prepareAgent's createHost build a fresh
       // DbSessionManager (new sessions row) and write the new id back.
-      deps.updateAgent(agentId, { sessionFile: null, updatedAt: deps.now() })
+      emitSessionSwitched(agentId, null, principal)
       await rebuildAgentSession(agentId)
       deps.emitAgent(agentId)
       return deps.requireAgent(agentId)
@@ -167,10 +203,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         currentStatus === "completed" ||
         currentStatus === "aborted" ||
         currentStatus === "failed"
-      deps.updateAgent(agentId, {
-        sessionFile: sessionId,
-        updatedAt: deps.now(),
-      })
+      emitSessionSwitched(agentId, sessionId, principal)
       await disposeLiveAgent(agentId)
       // A terminal agent's switch is a reopen: converge through the same
       // path as a cold resume (idle flip + reopened event + timers), not a

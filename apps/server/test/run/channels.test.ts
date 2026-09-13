@@ -81,7 +81,7 @@ function makeService(
     // agents' runtimes).
     send: async (agentId: string, text: string) => {
       sent.push({ agentId, text })
-      return true
+      return { delivered: true, via: "fresh" as const, chars: text.length }
     },
     now: () => new Date().toISOString(),
     challengeWorkspaceRoot: (eventId, challengeId) =>

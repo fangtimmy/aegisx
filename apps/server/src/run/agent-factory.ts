@@ -26,6 +26,7 @@ import type { createPlatformService } from "../platforms/service"
 import { generateModelsJson } from "../providers/models-json"
 import type { AgentStatus } from "./agent-status"
 import type { ChannelService } from "./channels"
+import type { SendOutcome } from "./channels-context"
 import type { ContainerLifecycle } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
 import { sdkContainerEnv, sdkExecEnv } from "./container/env-contract"
@@ -193,7 +194,7 @@ export type AgentFactoryDeps = {
   /** Arm the agent's hard-deadline timers (spawn + reopen). */
   armDeadline(agentId: string, deadlineAt: string | null): void
   /** Drive a turn (the spawn's priming prompt). */
-  send(agentId: string, text: string): Promise<boolean>
+  send(agentId: string, text: string): Promise<SendOutcome>
   /** finish_run winner: the agent self-terminates at its turn settle. */
   requestFinish(agentId: string, summary: string): void
   /** finish_run's missing-flag warning, once per agent. */
@@ -202,18 +203,15 @@ export type AgentFactoryDeps = {
   withFence: <T>(op: () => T | Promise<T>) => Promise<T>
   getSettings: () => FlatSettings
   now: () => string
-  updateAgent: (
-    agentId: string,
-    patch: Partial<typeof agents.$inferInsert>
-  ) => void
   status: AgentStatus
   /** Late-bound queue port (boot recovery resets running items); bound by the
    * assembly root before any spawn runs. */
   queue: RunPort<QueueService>
   /** Land a failed spawn through the runtime's single terminal path (disposes
    * a session that a late failure already mounted; forgets the runtime).
-   * Without a runtime the agent terminalizes straight to `failed`. */
-  settleFailedSpawn(agentId: string): Promise<void>
+   * Without a runtime the agent terminalizes straight to `failed` with the
+   * launch error recorded (completedAt stays null). */
+  settleFailedSpawn(agentId: string, error: string): Promise<void>
   agentSettings: () => AgentLoopSettings
   /** Test seam: override the host-session creation (default = createAgentHost). */
   createHost: typeof createAgentHost
@@ -241,6 +239,13 @@ const SOLVER_TOOLS = (targetSupported: boolean): string[] => [
     ? ["get_target", "start_target", "extend_target", "stop_target"]
     : []),
 ]
+
+const BOOT_RECOVERY_ACTOR: DomainEventActor = {
+  kind: "system",
+  actorId: "boot-recovery",
+}
+const PREPARE_ACTOR: DomainEventActor = { kind: "system", actorId: "prepare" }
+const RESUME_ACTOR: DomainEventActor = { kind: "system", actorId: "resume" }
 
 function workspaceKeyOf(row: {
   eventId: string
@@ -291,7 +296,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     withFence,
     getSettings,
     now,
-    updateAgent,
     status,
     agentSettings,
     createHost,
@@ -710,29 +714,31 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           throw new RunActionError("capacity", decision.message)
         }
       }
-      db.insert(agents)
-        .values({
-          id: agentId,
-          token: agentToken,
+      // The agents row is the agent.spawned projection; the token rides as a
+      // projector command input — it must never enter the append-only stream.
+      emitDomainEvent(db, {
+        type: "agent.spawned",
+        eventId: input.eventId,
+        challengeId: input.challengeId,
+        agentId,
+        actor: input.actor,
+        payload: {
           eventId: input.eventId,
           challengeId: input.challengeId,
           role: input.role,
           name,
           model: slotModel.ref,
           systemPrompt,
-          tools: JSON.stringify(tools),
-          status: "idle",
-          sessionFile: null,
+          tools,
           prompt: input.prompt ?? null,
           source,
           timeoutMs,
           deadlineAt: deadlineAtIso,
           queueItemId: input.queueItemId ?? null,
           createdAt: ts,
-          startedAt: ts,
-          updatedAt: ts,
-        })
-        .run()
+        },
+        projectorInput: { agentToken },
+      })
     })
 
     // Build the container outside the fence lock (slow I/O). On failure the
@@ -761,18 +767,23 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       // Land through the runtime's single terminal path. A failure after the
       // session was mounted (send / delivery) otherwise strands a runtime
       // entry holding a live session; settling disposes that session and
-      // forgets the runtime. Without a runtime this is the plain terminalize.
-      await deps.settleFailedSpawn(agentId)
-      updateAgent(agentId, {
-        error: `Failed to start agent: ${message}`,
-        completedAt: null,
-      })
+      // forgets the runtime. Without a runtime this is the plain terminalize
+      // (with the launch error recorded, completedAt nulled).
+      await deps.settleFailedSpawn(agentId, `Failed to start agent: ${message}`)
       throw new RunActionError("launch_failed", message)
     }
 
     deps.armDeadline(agentId, deadlineAtIso)
     status.emitAgent(agentId)
     status.emitAgentEvent(agentId, { type: "agent.started", agentId })
+    emitDomainEvent(db, {
+      type: "agent.started",
+      eventId: input.eventId,
+      challengeId: input.challengeId,
+      agentId,
+      actor: input.actor,
+      payload: {},
+    })
     return agentId
   }
 
@@ -864,9 +875,18 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       throw new RunActionError("launch_failed", message)
     }
 
-    updateAgent(agentId, {
-      sessionFile: agentSession.sessionId ?? null,
-      toolDefinitions: snapshotActiveToolDefinitions(agentSession.session),
+    // The prepare-boundary fact: session pointer + active tool definitions
+    // (no updatedAt bump — preparation is not an activity transition).
+    emitDomainEvent(db, {
+      type: "agent.session_prepared",
+      eventId: row.eventId,
+      challengeId: row.challengeId,
+      agentId,
+      actor: PREPARE_ACTOR,
+      payload: {
+        sessionId: agentSession.sessionId ?? null,
+        toolDefinitions: snapshotActiveToolDefinitions(agentSession.session),
+      },
     })
     deps.mountSession(agentId, agentSession)
   }
@@ -881,7 +901,14 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     const reopen = isTerminalAgentStatus(row.status)
     await prepareAgent(agentId)
     if (reopen) {
-      updateAgent(agentId, { status: "idle", updatedAt: now() })
+      emitDomainEvent(db, {
+        type: "agent.reopened",
+        eventId: row.eventId,
+        challengeId: row.challengeId,
+        agentId,
+        actor: RESUME_ACTOR,
+        payload: { at: now() },
+      })
       status.emitAgent(agentId)
       status.emitAgentEvent(agentId, { type: "agent.reopened", agentId })
     }
@@ -894,16 +921,37 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
    * agents flip to idle (files persist; a message reopens on demand and
    * rebuilds the container). Orphan containers under our naming scheme are
    * removed best-effort; running queue items reset to pending; queues with
-   * visible items start paused (interactive only — see below). */
+   * visible items start paused (interactive only — see below). Every event
+   * with recovery activity gets a boot.recovered summary fact. */
   async function recoverOnBoot(): Promise<void> {
     const rows = db.select().from(agents).all()
     const ts = now()
     const seenWorkspaces = new Set<string>()
     const seenQueueEvents = new Set<string>()
+    const stats = new Map<
+      string,
+      { liveFlipped: number; queuesReset: number; queuesPaused: number }
+    >()
+    const statOf = (eventId: string) => {
+      let s = stats.get(eventId)
+      if (!s) {
+        s = { liveFlipped: 0, queuesReset: 0, queuesPaused: 0 }
+        stats.set(eventId, s)
+      }
+      return s
+    }
     for (const row of rows) {
       if (row.status !== "running" && row.status !== "idle") continue
       if (row.status === "running") {
-        updateAgent(row.id, { status: "idle", updatedAt: ts })
+        emitDomainEvent(db, {
+          type: "agent.recovered",
+          eventId: row.eventId,
+          challengeId: row.challengeId,
+          agentId: row.id,
+          actor: BOOT_RECOVERY_ACTOR,
+          payload: { from: row.status, to: "idle", at: ts },
+        })
+        statOf(row.eventId).liveFlipped += 1
       }
       const key = workspaceKeyOf(row)
       if (seenWorkspaces.has(key)) continue
@@ -915,6 +963,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       if (row.queueItemId && !seenQueueEvents.has(row.eventId)) {
         seenQueueEvents.add(row.eventId)
         deps.queue.get().resetRunning(row.eventId)
+        statOf(row.eventId).queuesReset = 1
       }
     }
     // Events with visible queue items. Interactive: every queue starts paused
@@ -932,14 +981,25 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       .all()
     if (deps.unattended) {
       if (pendingEvents.length > 0) deps.queue.get().scheduleDrain()
-      return
+    } else {
+      for (const { eventId } of pendingEvents) {
+        emitDomainEvent(db, {
+          type: "queue.paused",
+          eventId,
+          actor: BOOT_RECOVERY_ACTOR,
+          payload: { source: "boot" },
+        })
+        statOf(eventId).queuesPaused = 1
+      }
     }
-    for (const { eventId } of pendingEvents) {
+    for (const [eventId, s] of stats) {
+      if (s.liveFlipped === 0 && s.queuesReset === 0 && s.queuesPaused === 0)
+        continue
       emitDomainEvent(db, {
-        type: "queue.paused",
+        type: "boot.recovered",
         eventId,
-        actor: { kind: "system", actorId: "boot-recovery" },
-        payload: { source: "boot" },
+        actor: BOOT_RECOVERY_ACTOR,
+        payload: s,
       })
     }
   }

@@ -24,6 +24,7 @@ import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
 import { collapseToAttempts } from "../platforms/wire"
 import { fmtMs } from "./agent-runtime"
 import { fmtClock } from "./channels-render"
+import { emitDomainEvent, type DomainEventActor } from "./domain-events/store"
 import { RunActionError } from "./errors"
 import { fenceSnapshot } from "./fence"
 import { usageTotalsSql } from "./host"
@@ -83,22 +84,32 @@ export function createSchedulerAdmin(deps: SchedulerAdminDeps) {
     )
   }
 
-  /** Set / extend / shorten an agent's hard deadline. Persists the new
-   * deadline; re-arming the timer is the caller's (service) job. Usable on
-   * terminal agents (pre-sets the deadline for the next reopen). */
+  /** Set / extend / shorten an agent's hard deadline: the agent.deadline_armed
+   * fact (its projection persists the deadline). Re-arming the timer is the
+   * caller's (service) job. Usable on terminal agents (pre-sets the deadline
+   * for the next reopen). */
   function setAgentTimeout(
     agentId: string,
     timeoutMs: number,
-    updateAgent: (
-      agentId: string,
-      patch: Partial<typeof agents.$inferInsert>
-    ) => void
+    actor: DomainEventActor
   ): AgentSummary {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new Error("timeoutMs must be positive")
     }
-    const deadlineAt = new Date(Date.now() + timeoutMs).toISOString()
-    updateAgent(agentId, { timeoutMs, deadlineAt, updatedAt: now() })
+    const row = queries.getAgentRow(agentId)
+    if (!row) throw new Error("Agent not found")
+    emitDomainEvent(db, {
+      type: "agent.deadline_armed",
+      eventId: row.eventId,
+      challengeId: row.challengeId,
+      agentId,
+      actor,
+      payload: {
+        deadlineAt: new Date(Date.now() + timeoutMs).toISOString(),
+        timeoutMs,
+        at: now(),
+      },
+    })
     const agent = queries.getAgent(agentId)
     if (!agent) throw new Error("Agent not found")
     return agent

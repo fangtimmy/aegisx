@@ -29,6 +29,13 @@ export function actorFromPrincipal(
   return { kind: "user" }
 }
 
+/** Compact payload label for a fact's transition driver: 'user' | 'agent' |
+ * the system tag ('drainer' / 'deadline' / 'spawn-failure' / ...). */
+export function actorLabel(actor: DomainEventActor): string {
+  if (actor.kind === "system") return actor.actorId
+  return actor.kind
+}
+
 export type DomainEventInput<T extends DomainEventType = DomainEventType> = {
   type: T
   /** Hot dimensions — pass what the fact naturally carries, null otherwise. */
@@ -39,6 +46,11 @@ export type DomainEventInput<T extends DomainEventType = DomainEventType> = {
   /** The triggering event's id, when one is naturally at hand. */
   causationId?: number | null
   payload: DomainEventPayloadOf<T>
+  /** Command inputs the projector consumes but the payload must NOT carry
+   * (agent.spawned's per-spawn credential — append-only streams cannot be
+   * scrubbed; a projection rebuild regenerates/invalidates historical
+   * tokens, which is acceptable for a per-spawn credential). */
+  projectorInput?: { agentToken?: string }
 }
 
 export type DomainEventEmitResult = {
@@ -86,14 +98,18 @@ export function emitDomainEvent<T extends DomainEventType>(
       .returning({ id: domainEvents.id })
       .get()
     const id = inserted?.id ?? 0
-    const applied = projectDomainEvent(tx, {
-      id,
-      type: input.type,
-      eventId: input.eventId ?? null,
-      challengeId: input.challengeId ?? null,
-      agentId: input.agentId ?? null,
-      payload: input.payload,
-    })
+    const applied = projectDomainEvent(
+      tx,
+      {
+        id,
+        type: input.type,
+        eventId: input.eventId ?? null,
+        challengeId: input.challengeId ?? null,
+        agentId: input.agentId ?? null,
+        payload: input.payload,
+      },
+      input.projectorInput
+    )
     result = { id, applied }
   })
   return result

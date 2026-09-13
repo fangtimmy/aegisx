@@ -47,7 +47,7 @@ function makeRuntime(
     db,
     dataDir: dir,
     bus: createLiveBus(),
-    send: async () => false,
+    send: async () => ({ delivered: false }),
     now: () => new Date(clock.now()).toISOString(),
     challengeWorkspaceRoot: (eventId, challengeId) =>
       `${dir}/events/${eventId}/challenges/${challengeId}/workspace`,
@@ -55,8 +55,7 @@ function makeRuntime(
   })
   const runtimes = new Map<string, AgentRuntime>()
   const runtimeFor = (agentId: string): AgentRuntime => {
-    let runtime = runtimes.get(agentId)
-    if (!runtime) {
+    if (!runtimes.has(agentId)) {
       const deps: AgentRuntimeDeps = {
         db,
         channels,
@@ -66,23 +65,15 @@ function makeRuntime(
         closeAbortGraceMs: 5_000,
         isSchedulerPaused: () => opts.paused ?? false,
         withLock: (_agentId, op) => Promise.resolve(op()),
-        updateAgent: (id, patch) =>
-          db.update(agents).set(patch).where(eq(agents.id, id)).run(),
         now: () => new Date(clock.now()).toISOString(),
-        getAgentStatus: (id) =>
-          db
-            .select({ status: agents.status })
-            .from(agents)
-            .where(eq(agents.id, id))
-            .get()?.status ?? null,
         forget: (id) => runtimes.delete(id),
         resumeAgent: async () => {},
         ...(opts.stallMs !== undefined ? { stallMs: opts.stallMs } : {}),
       }
-      runtime = createAgentRuntime(agentId, deps)
+      const runtime = createAgentRuntime(agentId, deps)
       runtimes.set(agentId, runtime)
     }
-    return runtime
+    return runtimes.get(agentId)!
   }
   const close = async () => {
     await Promise.allSettled([...runtimes.values()].map((rt) => rt.dispose()))

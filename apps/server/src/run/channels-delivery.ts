@@ -18,6 +18,7 @@ import {
 } from "./channels-context"
 import { fmtClock, MAX_DELIVER_CHARS, renderDelivery } from "./channels-render"
 import type { ClockTimer } from "./clock"
+import { emitDomainEvent } from "./domain-events/store"
 import { createEffects } from "./effects"
 
 function isActive(agent: AgentRow): boolean {
@@ -172,7 +173,7 @@ export function createDeliveryEngine(
     // close mid-abort holds it), the agent can go terminal. The predicate
     // runs inside send()'s lock BEFORE any resume, so a lost race bails
     // instead of cold-reviving an aborted agent; only a DM cold-wake may.
-    const delivered = await deps.send(
+    const outcome = await deps.send(
       agentId,
       withDigest,
       opts.deliverAs ?? "steer",
@@ -183,8 +184,17 @@ export function createDeliveryEngine(
         },
       }
     )
-    if (!delivered) return
+    if (!outcome.delivered) return
     lastDeliveredAt.set(agentId, nowMs)
+    // The accepted-delivery fact: what was pushed, how, and how big.
+    emitDomainEvent(db, {
+      type: "agent.delivered",
+      eventId: agent.eventId,
+      challengeId: agent.challengeId,
+      agentId,
+      actor: { kind: "system", actorId: "delivery-engine" },
+      payload: { via: outcome.via, chars: outcome.chars },
+    })
     // Cursors advance only on an accepted delivery — a bail above leaves
     // them untouched (nothing marked read that was never delivered), and
     // only past messages the render actually carried (an over-budget
@@ -354,13 +364,13 @@ export function createDeliveryEngine(
       `[当前时间] ${fmtClock(nowMs)}\n` +
       `[心跳] 距上次唤醒 ${silent}，期间无新消息 — 例行复核，不是新事件。` +
       (digest ? `\n\n${digest}` : "")
-    const delivered = await deps.send(agentId, body, "steer", {
+    const outcome = await deps.send(agentId, body, "steer", {
       assertLive: (id) => {
         const row = ctx.agentRow(id)
         return row !== undefined && isActive(row)
       },
     })
-    if (delivered) lastDeliveredAt.set(agentId, nowMs)
+    if (outcome.delivered) lastDeliveredAt.set(agentId, nowMs)
   }
 
   function stopFlushLoop(): void {

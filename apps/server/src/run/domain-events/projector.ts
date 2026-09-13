@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, ne } from "drizzle-orm"
 
 import type { Database } from "../../db"
 import {
+  agents,
   challengeFlags,
   challengeRemote,
   challenges,
@@ -38,15 +39,17 @@ function payloadOf<K extends DomainEventType>(
 }
 
 /**
- * THE single writer of the projection tables (spawn_queue, queue_state,
- * challenge_flags, challenge_remote, the challenges control fields). Every
- * command emits its fact first; this switch performs the table write inside
- * the SAME transaction. Returns whether the projection actually changed a
- * row (guarded updates can legitimately miss).
+ * THE single writer of the projection tables (agents, spawn_queue,
+ * queue_state, challenge_flags, challenge_remote, the challenges control
+ * fields). Every command emits its fact first; this switch performs the table
+ * write inside the SAME transaction. Returns whether the projection actually
+ * changed a row (guarded updates can legitimately miss).
  */
 export function projectDomainEvent(
   tx: ProjectionDb,
-  event: AppendedEvent
+  event: AppendedEvent,
+  /** Command inputs kept out of the stream — agent.spawned's credential. */
+  extra?: { agentToken?: string }
 ): boolean {
   switch (event.type) {
     // --- spawn_queue / queue_state ----------------------------------------
@@ -367,10 +370,20 @@ export function projectDomainEvent(
     }
     case "challenge.overridden": {
       const p = payloadOf("challenge.overridden", event.payload)
-      tx.update(challenges)
-        .set({ manualSolveState: p.manualSolveState, updatedAt: now() })
-        .where(eq(challenges.id, event.challengeId!))
-        .run()
+      if (p.manualSolveState !== undefined) {
+        tx.update(challenges)
+          .set({ manualSolveState: p.manualSolveState, updatedAt: now() })
+          .where(eq(challenges.id, event.challengeId!))
+          .run()
+      }
+      if (p.targetIgnored !== undefined) {
+        // Operator target-visibility override: syncedAt is the sync clock,
+        // not an edit clock — this write never bumps it.
+        tx.update(challengeRemote)
+          .set({ targetIgnored: p.targetIgnored })
+          .where(eq(challengeRemote.challengeId, event.challengeId!))
+          .run()
+      }
       return true
     }
     case "challenge.solved": {
@@ -408,8 +421,151 @@ export function projectDomainEvent(
       return true
     }
 
+    // --- agents projection --------------------------------------------------
+
+    case "agent.spawned": {
+      const p = payloadOf("agent.spawned", event.payload)
+      if (!extra?.agentToken) {
+        throw new Error("agent.spawned requires the token projector input")
+      }
+      tx.insert(agents)
+        .values({
+          id: event.agentId!,
+          token: extra.agentToken,
+          eventId: p.eventId,
+          challengeId: p.challengeId,
+          role: p.role,
+          name: p.name,
+          model: p.model,
+          systemPrompt: p.systemPrompt,
+          tools: JSON.stringify(p.tools),
+          status: "idle",
+          sessionFile: null,
+          prompt: p.prompt,
+          source: p.source,
+          timeoutMs: p.timeoutMs,
+          deadlineAt: p.deadlineAt,
+          queueItemId: p.queueItemId,
+          createdAt: p.createdAt,
+          startedAt: p.createdAt,
+          updatedAt: p.createdAt,
+        })
+        .run()
+      return true
+    }
+    case "agent.turn_started": {
+      const p = payloadOf("agent.turn_started", event.payload)
+      tx.update(agents)
+        .set({ status: "running", error: null, updatedAt: p.at })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.turn_settled": {
+      const p = payloadOf("agent.turn_settled", event.payload)
+      // An idle settle leaves a previous error in place — only a failed
+      // settle writes the error field (mirrors the write it replaced).
+      tx.update(agents)
+        .set({
+          status: p.outcome,
+          ...(p.error !== undefined ? { error: p.error } : {}),
+          updatedAt: p.at,
+        })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.session_prepared": {
+      const p = payloadOf("agent.session_prepared", event.payload)
+      tx.update(agents)
+        .set({ sessionFile: p.sessionId, toolDefinitions: p.toolDefinitions })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.session_switched": {
+      const p = payloadOf("agent.session_switched", event.payload)
+      tx.update(agents)
+        .set({ sessionFile: p.sessionId, updatedAt: p.at })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.model_switched": {
+      const p = payloadOf("agent.model_switched", event.payload)
+      tx.update(agents)
+        .set({ model: p.to, updatedAt: p.at })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.deadline_armed": {
+      const p = payloadOf("agent.deadline_armed", event.payload)
+      tx.update(agents)
+        .set({
+          deadlineAt: p.deadlineAt,
+          ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
+          updatedAt: p.at,
+        })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.timed_out": {
+      const p = payloadOf("agent.timed_out", event.payload)
+      // One-shot deadline consumption: no updatedAt bump (the fire is not an
+      // activity transition — mirrors the write it replaced).
+      tx.update(agents)
+        .set({ lastTimeoutAt: p.at, deadlineAt: null })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.reopened": {
+      const p = payloadOf("agent.reopened", event.payload)
+      tx.update(agents)
+        .set({ status: "idle", updatedAt: p.at })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.terminated": {
+      const p = payloadOf("agent.terminated", event.payload)
+      tx.update(agents)
+        .set({
+          status: p.status,
+          updatedAt: p.at,
+          // A failed spawn never completed — only that landing nulls
+          // completedAt; every other terminal transition stamps it.
+          completedAt: p.status === "failed" ? null : p.at,
+          ...(p.summary !== undefined ? { summary: p.summary } : {}),
+          ...(p.error !== undefined ? { error: p.error } : {}),
+        })
+        .where(eq(agents.id, event.agentId!))
+        .run()
+      return true
+    }
+    case "agent.recovered": {
+      const p = payloadOf("agent.recovered", event.payload)
+      return (
+        tx
+          .update(agents)
+          .set({ status: p.to, updatedAt: p.at })
+          .where(and(eq(agents.id, event.agentId!), eq(agents.status, p.from)))
+          .returning({ id: agents.id })
+          .get() !== undefined
+      )
+    }
+    case "agent.deleted": {
+      tx.delete(agents).where(eq(agents.id, event.agentId!)).run()
+      return true
+    }
+
     // --- facts without a projection ----------------------------------------
 
+    case "agent.started":
+    case "agent.delivered":
+    case "boot.recovered":
     case "fence.blocked":
     case "channel.posted":
       return true

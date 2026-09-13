@@ -55,6 +55,7 @@ import { createAgentSessionOps } from "./agent-session-ops"
 import { createAgentStatus, type AgentStatus } from "./agent-status"
 import { notifyBootReentry } from "./boot-reentry"
 import { createChannelService, type ChannelService } from "./channels"
+import type { SendOutcome } from "./channels-context"
 import type { Clock } from "./clock"
 import { systemClock } from "./clock"
 import {
@@ -62,7 +63,11 @@ import {
   type ContainerLifecycle,
 } from "./container-lifecycle"
 import type { ContainerManager } from "./container/container-manager"
-import { actorFromPrincipal } from "./domain-events/store"
+import {
+  actorFromPrincipal,
+  actorLabel,
+  emitDomainEvent,
+} from "./domain-events/store"
 import { RunActionError } from "./errors"
 import { createFleetWatchdog } from "./fleet-watchdog"
 import { applyModelSwitch } from "./host/agent-ops"
@@ -236,13 +241,6 @@ export function createAgentService(options: AgentServiceOptions) {
   const challengeWorkspaceRoot = (eventId: string, challengeId: string) =>
     workspaceDirOf(challengeRoot(dataDir, eventId, challengeId))
 
-  function updateAgent(
-    agentId: string,
-    patch: Partial<typeof agents.$inferInsert>
-  ) {
-    db.update(agents).set(patch).where(eq(agents.id, agentId)).run()
-  }
-
   function requireAgent(agentId: string): AgentSummary {
     const agent = queries.getAgent(agentId)
     if (!agent) throw new RunActionError("not_found", "Agent not found")
@@ -346,7 +344,6 @@ export function createAgentService(options: AgentServiceOptions) {
         .catch(() => undefined)
     },
     now,
-    updateAgent,
     queue: queuePort,
   })
 
@@ -365,9 +362,7 @@ export function createAgentService(options: AgentServiceOptions) {
     isSchedulerPaused: (eventId) =>
       schedulerAdminPort.get().isSchedulerPaused(eventId),
     withLock,
-    updateAgent,
     now,
-    getAgentStatus: (agentId) => queries.getAgentRow(agentId)?.status ?? null,
     forget: (agentId) => runtimes.delete(agentId),
     resumeAgent: (agentId) => factoryPort.get().resumeAgent(agentId),
   }
@@ -391,7 +386,7 @@ export function createAgentService(options: AgentServiceOptions) {
     text: string,
     deliverAs?: "steer" | "followUp",
     opts?: { assertLive?: (id: string) => boolean }
-  ): Promise<boolean> {
+  ): Promise<SendOutcome> {
     return runtimeOf(agentId).send(text, deliverAs, opts)
   }
 
@@ -412,8 +407,10 @@ export function createAgentService(options: AgentServiceOptions) {
     status.terminalizeAgent(agentId, {
       status: opts.status,
       summary: opts.summary,
+      error: opts.error,
       event: opts.event,
       actor: opts.actor,
+      by: opts.by,
     })
     opts.afterSettle?.()
   }
@@ -453,7 +450,6 @@ export function createAgentService(options: AgentServiceOptions) {
     withLock,
     prepareAgent: (agentId) => factoryPort.get().prepareAgent(agentId),
     resumeAgent: (agentId) => factoryPort.get().resumeAgent(agentId),
-    updateAgent,
     emitAgent: status.emitAgent,
     requireAgent,
     now,
@@ -520,7 +516,11 @@ export function createAgentService(options: AgentServiceOptions) {
       if (current && isTerminalAgentStatus(current.status)) {
         throw new RunActionError("invalid_state", "Agent is already closed")
       }
-      await settleAgent(agentId, { abort: true, status: "aborted" })
+      await settleAgent(agentId, {
+        abort: true,
+        status: "aborted",
+        by: actorFromPrincipal(principal),
+      })
     })
     return requireAgent(agentId)
   }
@@ -552,6 +552,7 @@ export function createAgentService(options: AgentServiceOptions) {
         summary,
         event: "agent.finished",
         actor,
+        by: actorFromPrincipal(principal),
       })
       return requireAgent(agentId)
     })
@@ -746,13 +747,23 @@ export function createAgentService(options: AgentServiceOptions) {
       const { target } = result
       // Persist the ACTUAL (SDK-clamped) thinking level so the agent
       // snapshot matches runtime reality.
-      updateAgent(agentId, {
-        model: formatModelRef(
-          target.provider,
-          target.model,
-          result.thinkingLevel
-        ),
-        updatedAt: now(),
+      const to = formatModelRef(
+        target.provider,
+        target.model,
+        result.thinkingLevel
+      )
+      emitDomainEvent(db, {
+        type: "agent.model_switched",
+        eventId: agentRow?.eventId ?? null,
+        challengeId: agentRow?.challengeId ?? null,
+        agentId,
+        actor: actorFromPrincipal(principal),
+        payload: {
+          from: agentRow?.model ?? null,
+          to,
+          thinkingLevel: result.thinkingLevel,
+          at: now(),
+        },
       })
       status.emitAgent(agentId)
       return requireAgent(agentId)
@@ -817,7 +828,7 @@ export function createAgentService(options: AgentServiceOptions) {
     assertMayTouchAgent(principal, requireAgent(agentId))
     const agent = schedulerAdminPort
       .get()
-      .setAgentTimeout(agentId, timeoutMs, updateAgent)
+      .setAgentTimeout(agentId, timeoutMs, actorFromPrincipal(principal))
     const row = queries.getAgentRow(agentId)
     if (row && isActiveAgentStatus(row.status)) {
       runtimeOf(agentId).armDeadline(row.deadlineAt)
@@ -967,12 +978,25 @@ export function createAgentService(options: AgentServiceOptions) {
       await settleAgent(agentId, {
         abort: true,
         status: "aborted",
+        by: actorFromPrincipal(principal),
         afterSettle: () => {
           channels.cleanupAgentChannels(agentId)
           if (row.role === "orchestrator") {
             containerLifecycle.removeContainer(orchestratorKey(row.eventId))
           }
-          db.delete(agents).where(eq(agents.id, agentId)).run()
+          // The last fact before the row vanishes — its projection IS the
+          // delete (cascading the agent's sessions and queue reference).
+          emitDomainEvent(db, {
+            type: "agent.deleted",
+            eventId: row.eventId,
+            challengeId: row.challengeId,
+            agentId,
+            actor: actorFromPrincipal(principal),
+            payload: {
+              role: row.role,
+              actor: actorLabel(actorFromPrincipal(principal)),
+            },
+          })
         },
       })
     })
@@ -1212,7 +1236,14 @@ export function createAgentService(options: AgentServiceOptions) {
     const horizon = clock.now() + ms
     if (row.deadlineAt && Date.parse(row.deadlineAt) <= horizon) return
     const iso = new Date(horizon).toISOString()
-    updateAgent(agentId, { deadlineAt: iso, updatedAt: now() })
+    emitDomainEvent(db, {
+      type: "agent.deadline_armed",
+      eventId: row.eventId,
+      challengeId: row.challengeId,
+      agentId,
+      actor: { kind: "system", actorId: "solve-cleanup" },
+      payload: { deadlineAt: iso, at: now() },
+    })
     runtimeOf(agentId).armDeadline(iso)
   }
 
@@ -1347,14 +1378,18 @@ export function createAgentService(options: AgentServiceOptions) {
     withFence,
     getSettings,
     now,
-    updateAgent,
     status,
     queue: queuePort,
     agentSettings,
     createHost,
     unattended,
-    settleFailedSpawn: (agentId) =>
-      settleAgent(agentId, { abort: false, status: "failed" }),
+    settleFailedSpawn: (agentId, error) =>
+      settleAgent(agentId, {
+        abort: false,
+        status: "failed",
+        error,
+        by: { kind: "system", actorId: "spawn-failure" },
+      }),
     getSchedulerConfig: (eventId) =>
       schedulerAdminPort.get().getSchedulerConfig(eventId),
     hasLiveSession: (agentId) => runtimes.get(agentId)?.hasSession() ?? false,
@@ -1408,7 +1443,11 @@ export function createAgentService(options: AgentServiceOptions) {
     // semantics — no abort (the turn may be mid-flight), dispose and land
     // aborted (the shared container is NEVER killed).
     onSupersededLaunch: (agentId) => {
-      void settleAgent(agentId, { abort: false, status: "aborted" })
+      void settleAgent(agentId, {
+        abort: false,
+        status: "aborted",
+        by: { kind: "system", actorId: "drainer" },
+      })
     },
     onQueueEmergency: (event) => notices.publish(event),
     onQueueNotice: (event) => notices.publish(event),
