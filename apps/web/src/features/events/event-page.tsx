@@ -4,6 +4,7 @@ import {
   ChartColumn,
   Crosshair,
   Flag,
+  History,
   LayoutPanelTop,
   ListFilter,
   ListTree,
@@ -57,6 +58,7 @@ import { TasksPage } from "@/features/tasks/tasks-page"
 import { AgentsGraph } from "./agents-graph"
 import { ChallengeCard } from "./challenge-card"
 import { ChallengeDialog } from "./challenge-dialog"
+import { EventDecisionLog } from "./decision-log"
 import { POLL_INTERVAL_MS } from "./event-agents-shared"
 import { EventSettings } from "./event-settings"
 import {
@@ -81,6 +83,7 @@ type EventTab =
   | "tasks"
   | "agents"
   | "challenges"
+  | "decisions"
   | "stats"
   | "settings"
 
@@ -89,6 +92,7 @@ const EVENT_TABS = [
   "tasks",
   "agents",
   "challenges",
+  "decisions",
   "stats",
   "settings",
 ] as const satisfies readonly EventTab[]
@@ -100,6 +104,7 @@ function isEventTab(value: string): value is EventTab {
 function tabFromPath(pathname: string, eventId: string): EventTab {
   if (pathname === `/events/${eventId}/settings`) return "settings"
   if (pathname === `/events/${eventId}/stats`) return "stats"
+  if (pathname === `/events/${eventId}/decisions`) return "decisions"
   if (pathname === `/events/${eventId}/challenges`) return "challenges"
   if (pathname === `/events/${eventId}/agents`) return "agents"
   if (pathname === `/events/${eventId}/tasks`) return "tasks"
@@ -108,6 +113,7 @@ function tabFromPath(pathname: string, eventId: string): EventTab {
 
 function pathForTab(eventId: string, tab: EventTab) {
   if (tab === "challenges") return `/events/${eventId}/challenges`
+  if (tab === "decisions") return `/events/${eventId}/decisions`
   if (tab === "settings") return `/events/${eventId}/settings`
   if (tab === "agents") return `/events/${eventId}/agents`
   if (tab === "tasks") return `/events/${eventId}/tasks`
@@ -356,6 +362,9 @@ export function EventPage() {
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="stats">
                 <ChartColumn /> 统计
+              </TabsTab>
+              <TabsTab className="justify-start gap-2" value="decisions">
+                <History /> 决策日志
               </TabsTab>
               <TabsTab className="justify-start gap-2" value="settings">
                 <Settings /> 设置
@@ -647,6 +656,12 @@ export function EventPage() {
             </TabsPanel>
             <TabsPanel className="h-[calc(100svh-5.5rem)]" value="stats">
               <EventStatsPanel eventId={eventId} />
+            </TabsPanel>
+            <TabsPanel className="h-[calc(100svh-5.5rem)]" value="decisions">
+              <EventDecisionLog
+                challenges={eventQuery.data.challenges}
+                eventId={eventId}
+              />
             </TabsPanel>
             <TabsPanel className="pt-0" value="settings">
               <EventSettings event={eventQuery.data.event} />

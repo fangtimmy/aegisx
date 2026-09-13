@@ -18,6 +18,7 @@ const settingsSections = ["general", "models", "prompts", "settings"] as const
 const eventTabs = [
   "agents",
   "challenges",
+  "decisions",
   "tasks",
   "stats",
   "settings",

@@ -61,6 +61,11 @@ export {
 
 export type { ContextSnapshot } from "@aegisx/shared/live-event"
 
+export type {
+  DecisionLogEntry,
+  DecisionLogPage,
+} from "@aegisx/shared/domain-events"
+
 import type {
   FlatSettings,
   FleetInfo,

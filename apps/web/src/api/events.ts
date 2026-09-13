@@ -3,6 +3,7 @@ import type {
   AgentUsage,
   Challenge,
   ChallengeInput,
+  DecisionLogPage,
   EventInput,
   EventStats,
   EventSummary,
@@ -110,6 +111,22 @@ export function getEventUsage(eventId: string) {
 /** Per-event statistics view (score/billing/efficiency/concurrency/…). */
 export function getEventStats(eventId: string) {
   return apiRequest<{ stats: EventStats }>(`/events/${eventId}/stats`)
+}
+
+/** The event's decision log: control-plane facts from the decision-log type
+ * set (queue / flag / challenge / fence.blocked), newest first. Older windows
+ * page by echoing the previous page's `nextBeforeId` as `beforeId`. */
+export function getEventDecisions(
+  eventId: string,
+  options: { beforeId?: number; limit?: number } = {}
+) {
+  const params = new URLSearchParams()
+  if (options.beforeId !== undefined && options.beforeId > 0) {
+    params.set("beforeId", String(options.beforeId))
+  }
+  if (options.limit !== undefined) params.set("limit", String(options.limit))
+  const query = params.toString() ? `?${params.toString()}` : ""
+  return apiRequest<DecisionLogPage>(`/events/${eventId}/decisions${query}`)
 }
 
 export function createChallenge(eventId: string, input: ChallengeInput) {
