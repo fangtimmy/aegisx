@@ -1,23 +1,18 @@
-"""`aegisx.queue` — the event's task queue (the plan)."""
+"""`aegisx.queue` — the read view of the event's task queue.
+
+The queue IS the plan's landing zone: `submit_plan` mutates it
+(enqueue / cancel_item / reorder / set_queue_paused — see `aegisx.plan`).
+This module is the read side: what the queue looks like right now is the
+fastest feedback on what a plan just did.
+"""
 from __future__ import annotations
 
-from typing import Any, Literal
-
 from .client import get_client
-from .errors import AegisxError
 from .models import QueueItem, from_dict
 
-#: Hoisted aliases — the module-level name `list` shadows the builtin for
+#: Hoisted alias — the module-level name `list` shadows the builtin for
 #: every later annotation, so annotations must not subscript `list` directly.
 QueueItemList = list[QueueItem]
-
-
-def _item(data: Any) -> QueueItem:
-    """from_dict narrowed to non-None (the server always sends the item)."""
-    item = from_dict(QueueItem, data)
-    if item is None:
-        raise AegisxError("bad_response", "malformed queue item payload")
-    return item
 
 
 def list() -> QueueItemList:
@@ -38,96 +33,3 @@ def state() -> str:
     client = get_client()
     data = client.request("GET", client.event_path("/queue"))
     return data.get("state", "")
-
-
-def enqueue(
-    challenge_id: str,
-    prompt: str | None = None,
-    model: str | None = None,
-    timeout_ms: int | None = None,
-    prompt_mode: Literal["strategy", "override"] | None = None,
-) -> QueueItem:
-    """Append a spawn item in the queue — one challenge may hold several
-    pending items (parallel attempts are a legal plan). The queue drains FIFO
-    under the concurrency caps; with a free slot the agent spawns right away.
-
-    `prompt` is the spawned agent's strategy (appended as a Strategy section;
-    `prompt_mode="override"` replaces the first prompt entirely). A capacity
-    rejection stays pending (no failure); adjust the plan, do not retry
-    blindly. Prefer this over `aegisx.agents.start` for planned work."""
-    body: dict = {"challengeId": challenge_id}
-    if prompt:
-        body["prompt"] = prompt
-    if model:
-        body["model"] = model
-    if timeout_ms:
-        body["timeoutMs"] = timeout_ms
-    if prompt_mode:
-        body["promptMode"] = prompt_mode
-    data = get_client().request(
-        "POST", get_client().event_path("/queue"), body=body
-    )
-    return _item(data)
-
-
-def edit(
-    item_id: str,
-    *,
-    prompt: str | None = None,
-    timeout_ms: int | None = None,
-    params: dict[str, Any] | None = None,
-) -> QueueItem:
-    """Edit a pending queue item in place — its FIFO position is kept
-    (remove+enqueue would lose it). Omitted arguments leave the current
-    values untouched. Usable while the queue is paused or running."""
-    body: dict = {}
-    if prompt:
-        body["prompt"] = prompt
-    if timeout_ms:
-        body["timeoutMs"] = timeout_ms
-    if params:
-        body["params"] = params
-    client = get_client()
-    data = client.request(
-        "PATCH", client.event_path(f"/queue/{item_id}"), body=body
-    )
-    return _item(data)
-
-
-def pause() -> None:
-    """Pause the queue: blocks FUTURE launches only — running agents keep
-    going (pause ≠ kill). Enqueue/edit/reorder/remove still work."""
-    get_client().request(
-        "POST", get_client().event_path("/queue/pause"), body={}
-    )
-
-
-def resume() -> None:
-    """Resume the queue (re-enables the drainer)."""
-    get_client().request(
-        "POST", get_client().event_path("/queue/resume"), body={}
-    )
-
-
-def remove(item_id: str) -> None:
-    """Remove a queue item (pending/done/cancelled/failed). A running item
-    cannot be removed — close its agent first."""
-    client = get_client()
-    client.request("DELETE", client.event_path(f"/queue/{item_id}"))
-
-
-def clear() -> None:
-    """Remove every non-running queue item (pending + failed)."""
-    client = get_client()
-    client.request("POST", client.event_path("/queue/clear"), body={})
-
-
-def reorder(item_ids: list[str]) -> None:
-    """Reorder pending queue items by listing their ids front-first.
-    Running/failed items keep their place."""
-    client = get_client()
-    client.request(
-        "POST",
-        client.event_path("/queue/reorder"),
-        body={"itemIds": item_ids},
-    )

@@ -22,9 +22,12 @@ import { createEffects } from "../effects"
  * outcome: a `submit_plan` inside the turn window closes the point `plan`
  * (an explicit noOp IS a plan); a silent turn gets ONE strict re-prompt,
  * then closes `violation`; consecutive violations escalate
- * (`watchdog.escalated` + the urgent orch notice). A failed turn (provider
- * error) is never a violation — the same point re-issues after a bounded
- * backoff.
+ * (`watchdog.escalated` + the urgent orch notice). An all-noOp close arms
+ * the stall episode (§3.7 r1): a situation still fingerprint-identical after
+ * `stallMs` escalates the same alarm once per episode — the per-agent stall
+ * watchdog contracted into the engine (escalation keys on decision-point
+ * outcomes, never on an idle agent alone). A failed turn (provider error) is
+ * never a violation — the same point re-issues after a bounded backoff.
  *
  * The engine is the ONE wake gate for the scheduler: queue paused or
  * scheduler paused (W3) → no decision points, no violation escalation. The
@@ -40,6 +43,9 @@ export type DecisionTimings = {
   errorRetryMs: number
   /** Periodic re-examination cadence (the old delivery heartbeat slot). */
   periodicMs: number
+  /** §3.7 r1: a noOp'd situation persisting this long escalates once (the
+   * per-agent stall watchdog contracted into the engine). */
+  stallMs: number
   /** Consecutive violations before the escalation alarm fires. */
   violationsToEscalate: number
   /** Failed-turn re-issues before a decision point gives up (outcome=error). */
@@ -50,9 +56,31 @@ const DEFAULT_TIMINGS: DecisionTimings = {
   coalesceMs: 2_000,
   errorRetryMs: 5_000,
   periodicMs: FLUSH_INTERVAL_MS,
+  stallMs: 2 * 60_000,
   violationsToEscalate: 3,
   maxErrorRetries: 2,
 }
+
+/** The shipped timing seam (§3.7): the old per-agent watchdog's 2-minute
+ * stall threshold lives on here as the engine's `stallMs` default. */
+export { DEFAULT_TIMINGS }
+
+/** The engine's two alarm faces (each lands as a watchdog.escalated fact +
+ * the urgent orch notice through the dep): the violation ladder's bound, and
+ * a noOp'd situation that persisted ≥ stallMs (§3.7 r1 — the per-agent stall
+ * watchdog's contraction; escalation keys on decision-point outcomes, never
+ * on an idle agent alone). */
+export type DecisionEscalation =
+  | {
+      reason: "scheduler_violation"
+      decisionPointId: string
+      consecutive: number
+    }
+  | {
+      reason: "scheduler_stalled"
+      decisionPointId: string
+      stalledMs: number
+    }
 
 /** One thing the scheduler should look at. Facts ride the trigger; the
  * payload renders them as readable lines. */
@@ -171,6 +199,15 @@ type EventState = {
   /** Fleet fingerprint at the last explicit no-decision close — the
    * periodic trigger skips while the fingerprint is unchanged (§3.6 r4). */
   quietFingerprint: string | null
+  /** The quiet-stall episode (§3.7 r1): armed by an all-noOp close, cleared
+   * by a real plan or a moved situation, escalating once per episode after
+   * stallMs of an unchanged fingerprint. */
+  stall: {
+    pointId: string
+    sinceMs: number
+    fingerprint: string
+    escalated: boolean
+  } | null
 }
 
 export type DecisionPointEngineDeps = {
@@ -186,13 +223,9 @@ export type DecisionPointEngineDeps = {
   digestOf(eventId: string): { digest: string; fingerprint: string }
   /** W3 gate: a disabled scheduler receives nothing. */
   isSchedulerPaused(eventId: string): boolean
-  /** The violation escalation's user-facing alarm (the urgent orch notice —
-   * today's eventStalled channel, the unattended alarm face). */
-  escalateNotice(
-    eventId: string,
-    decisionPointId: string,
-    consecutive: number
-  ): void
+  /** The escalation's user-facing alarm (the urgent orch notice — the
+   * unattended appliance's pager) for both escalation kinds. */
+  escalateNotice(eventId: string, escalation: DecisionEscalation): void
   timings?: Partial<DecisionTimings>
 }
 
@@ -211,6 +244,7 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
         open: null,
         violations: 0,
         quietFingerprint: null,
+        stall: null,
       }
       states.set(eventId, state)
     }
@@ -429,19 +463,30 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
       }
       if (Date.parse(parsed.at) < open.startedAtMs) continue
       // A plan (noOp included) closes the point. An all-noOp plan is an
-      // explicit no-decision — record the fingerprint for the periodic skip.
+      // explicit no-decision — it records the quiet fingerprint for the
+      // periodic skip and arms the stall episode (§3.7 r1); a real plan
+      // clears both.
+      const { fingerprint } = deps.digestOf(eventId)
       const allNoOp =
         parsed.actions.length > 0 &&
         parsed.actions.every((a) => isRecord(a) && a.kind === "noOp")
-      state.quietFingerprint = allNoOp
-        ? deps.digestOf(eventId).fingerprint
+      state.quietFingerprint = allNoOp ? fingerprint : null
+      state.stall = allNoOp
+        ? {
+            pointId: open.id,
+            sinceMs: clock.now(),
+            fingerprint,
+            escalated: false,
+          }
         : null
       state.violations = 0
       closeDecisionPoint(eventId, "plan")
       flushPending(eventId)
       return
     }
-    // No plan in the window — the violation ladder (§3.6 rule 3).
+    // No plan in the window — the violation ladder (§3.6 rule 3). The stall
+    // episode stays armed: a noOp followed by persistent non-deciding on an
+    // unchanged situation is exactly what it escalates.
     if (open.phase !== "reprompt") {
       open.phase = "reprompt"
       open.awaiting = true
@@ -453,19 +498,11 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     state.violations += 1
     if (state.violations >= timings.violationsToEscalate) {
       state.violations = 0
-      const detail = {
+      escalate(eventId, {
+        reason: "scheduler_violation",
         decisionPointId: open.id.slice(0, 8),
         consecutive: timings.violationsToEscalate,
-      }
-      emitDomainEvent(db, {
-        type: "watchdog.escalated",
-        eventId,
-        agentId: sched.id,
-        actor: { kind: "system", actorId: "decision-engine" },
-        payload: { reason: "scheduler_violation", detail, at: deps.now() },
       })
-      deps.escalateNotice(eventId, detail.decisionPointId, detail.consecutive)
-      logEvent("scheduler", "violation_escalated", { eventId, ...detail })
     }
     flushPending(eventId)
   }
@@ -567,6 +604,25 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     else scheduleFlush(eventId)
   }
 
+  /** The shared alarm face: a watchdog.escalated fact + the urgent orch
+   * notice through the dep (the violation ladder's bound and the stall
+   * episode both land here). */
+  function escalate(eventId: string, escalation: DecisionEscalation): void {
+    emitDomainEvent(db, {
+      type: "watchdog.escalated",
+      eventId,
+      agentId: schedulerRow(eventId)?.id ?? null,
+      actor: { kind: "system", actorId: "decision-engine" },
+      payload: {
+        reason: escalation.reason,
+        detail: escalation,
+        at: deps.now(),
+      },
+    })
+    deps.escalateNotice(eventId, escalation)
+    logEvent("scheduler", "escalated", { eventId, ...escalation })
+  }
+
   // --- periodic re-examination (the old heartbeat's replacement) -------------------
 
   function periodicTick(): void {
@@ -578,10 +634,30 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
       .all()
     for (const { eventId } of rows) {
       if (gated(eventId)) continue
-      // Skip the tick when the fleet is fingerprint-identical to the last
-      // explicit no-decision — a quiet event burns no heartbeat turn (§3.6 r4).
       const { fingerprint } = deps.digestOf(eventId)
       const state = stateOf(eventId)
+      // Stall contraction (§3.7 r1): an all-noOp close armed an episode; a
+      // real plan disarms it and a moved situation cancels it (the periodic
+      // point below then re-judges). Only an unchanged situation persisting
+      // ≥ stallMs escalates — once per episode.
+      const stall = state.stall
+      if (stall) {
+        if (stall.fingerprint !== fingerprint) {
+          state.stall = null
+        } else if (
+          !stall.escalated &&
+          clock.now() - stall.sinceMs >= timings.stallMs
+        ) {
+          stall.escalated = true
+          escalate(eventId, {
+            reason: "scheduler_stalled",
+            decisionPointId: stall.pointId.slice(0, 8),
+            stalledMs: clock.now() - stall.sinceMs,
+          })
+        }
+      }
+      // Skip the tick when the fleet is fingerprint-identical to the last
+      // explicit no-decision — a quiet event burns no heartbeat turn (§3.6 r4).
       if (
         state.quietFingerprint !== null &&
         state.quietFingerprint === fingerprint
@@ -651,7 +727,7 @@ function payloadMessage(
     `[决策点 ${id.slice(0, 8)}]（引擎注入，非频道消息）\n` +
     `触发：\n${lines.join("\n")}\n` +
     (digest ? `\n${digest}\n` : "") +
-    `\n回合协议：先处理触发事项——通信保持自由文本（aegisx.channels.post 回答/广播、aegisx.agents.message 定向），` +
+    `\n回合协议：先处理触发事项——通信保持自由文本（aegisx.channels.post 回答/广播/私信 dm:<agentId>），` +
     `状态细节用 aegisx.snapshot() / aegisx.agents.read 现查；然后必须以 aegisx.submit_plan(rationale, actions) 收束本回合，` +
     `确实无需行动时提交 aegisx.no_op("原因")。不交计划的回合会被重试一次并计入违约。`
   )

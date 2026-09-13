@@ -1,12 +1,15 @@
-"""`aegisx.agents` — agent-level addressing (v19). Scheduler-only management
-face: a solver calling these gets `forbidden` from the server."""
-from __future__ import annotations
+"""`aegisx.agents` — the agent-level read face.
 
-from typing import Literal
+Reads only: list the fleet, inspect one agent, replay its recent message
+lines. Lifecycle and steering are the plan's business (`aegisx.submit_plan`
+with message / stop / close / finish / set_deadline actions); hitting the
+management endpoints from a solver token gets `forbidden` from the server.
+"""
+from __future__ import annotations
 
 from .client import get_client
 from .errors import AegisxError
-from .models import AgentSummary, ChannelMessage, AgentRead, from_dict
+from .models import AgentSummary, AgentRead, from_dict
 
 #: Hoisted above `def list` — the module-level name shadows the builtin for
 #: every later annotation.
@@ -25,9 +28,9 @@ def list(
     status: str | None = None,
 ) -> AgentSummaries:
     """The event's SOLVER agents, optionally scoped to one challenge /
-    status. Use to pick an agent id for `aegisx.agents.read` /
-    `aegisx.agents.message`. The scheduler agent itself is NOT included —
-    it is `aegisx.snapshot().scheduler_agent`."""
+    status. Use to pick an agent id for `aegisx.agents.read` or a plan
+    action's target. The scheduler agent itself is NOT included — it is
+    `aegisx.snapshot().scheduler_agent`."""
     client = get_client()
     path = client.event_path("/fleet")
     data = client.request("GET", path)
@@ -52,31 +55,6 @@ def get(agent_id: str) -> AgentRead:
     if read is None:
         raise AegisxError("bad_response", "malformed agent payload")
     return read
-
-
-def message(
-    agent_id: str,
-    text: str,
-    urgent: bool = True,
-    deliver_as: str | None = None,
-) -> ChannelMessage:
-    """Send guidance to one specific agent by id (an IM post into its
-    dm:<agentId> channel — the ledger keeps your directives). Default
-    urgent=True: the target is woken immediately (streaming → steer at turn
-    end; idle → fresh turn; a terminal agent is reopened keeping files +
-    memory — only that agent wakes). urgent=False merges into the next
-    delivery tick. `deliver_as` steers ("steer") into or queues ("followUp")
-    after a streaming turn."""
-    body: dict = {"text": text, "urgent": bool(urgent)}
-    if deliver_as:
-        body["deliverAs"] = deliver_as
-    data = get_client().request(
-        "POST", f"/api/channels/dm:{agent_id}/messages", body=body
-    )
-    message = from_dict(ChannelMessage, data)
-    if message is None:
-        raise AegisxError("bad_response", "malformed message payload")
-    return message
 
 
 def read(agent_id: str, limit: int | None = None) -> AgentRead:
@@ -108,81 +86,3 @@ def read(agent_id: str, limit: int | None = None) -> AgentRead:
         lines.append(f"[{role}] {text}" if role else text)
     read.messages = lines[-limit:] if limit is not None else lines
     return read
-
-
-def stop(agent_id: str) -> AgentSummary:
-    """Abort the named agent's current turn (it settles to idle; the shared
-    challenge container stays warm). Use before re-directing a stuck or
-    off-track agent."""
-    data = get_client().request(
-        "POST", f"/api/agents/{agent_id}/stop", body={}
-    )
-    return _summary(data)
-
-
-def close(agent_id: str) -> AgentSummary:
-    """Terminal close (aborted): files + session survive; a message reopens
-    on demand. Use for agents you are done with so they stop occupying the
-    agent cap."""
-    data = get_client().request(
-        "POST", f"/api/agents/{agent_id}/close", body={}
-    )
-    return _summary(data)
-
-
-def finish(agent_id: str, summary: str = "") -> AgentSummary:
-    """Force-finish an agent: terminal completed + summary — the sanctioned
-    terminal transition for an agent that has delivered its result. Idempotent
-    on an already-completed agent; rejected (invalid_state) on a closed one."""
-    data = get_client().request(
-        "POST", f"/api/agents/{agent_id}/finish", body={"summary": summary}
-    )
-    return _summary(data)
-
-
-def compact(agent_id: str) -> AgentSummary:
-    """Manually compact an agent's context (frees tokens on a long-lived
-    agent). Rejected (invalid_state) without a live idle session — send the
-    agent a message first if it is terminal."""
-    data = get_client().request(
-        "POST", f"/api/agents/{agent_id}/compact", body={}
-    )
-    return _summary(data)
-
-
-def set_timeout(agent_id: str, timeout_ms: int) -> AgentSummary:
-    """Set / extend / shorten the agent's hard deadline. Usable on a terminal
-    agent (pre-sets the deadline for the next reopen)."""
-    data = get_client().request(
-        "POST",
-        f"/api/agents/{agent_id}/timeout",
-        body={"timeoutMs": timeout_ms},
-    )
-    return _summary(data)
-
-
-def start(
-    challenge_id: str,
-    prompt: str | None = None,
-    model: str | None = None,
-    timeout_ms: int | None = None,
-    prompt_mode: Literal["strategy", "override"] | None = None,
-) -> AgentSummary:
-    """ESCAPE HATCH: spawn an agent on the challenge IMMEDIATELY (bypasses the
-    queue — the fence cap rejects with code "capacity" when full). Prefer
-    `aegisx.queue.enqueue` for ordinary planning. The agent's `prompt` is its
-    strategy (appended as a Strategy section; `prompt_mode="override"`
-    replaces the first prompt entirely)."""
-    body: dict = {}
-    if prompt:
-        body["prompt"] = prompt
-    if model:
-        body["model"] = model
-    if timeout_ms:
-        body["timeoutMs"] = timeout_ms
-    if prompt_mode:
-        body["promptMode"] = prompt_mode
-    data = get_client().request(
-        "POST", f"/api/challenges/{challenge_id}/agents", body=body
-    )
-    return _summary(data)

@@ -32,10 +32,35 @@ SOLVER2_ID = ARGS["solver2-id"]
 
 aegisx.configure(api_url=BASE_URL, event_id=EVENT_ID)
 
+# The management verbs were cut (control-plane §3.3/§3.8): submit_plan is the
+# ONE management write, everything else is reads + the channels face.
+for module, gone in [
+    (aegisx.queue, ("enqueue", "edit", "pause", "resume", "remove", "clear", "reorder")),
+    (
+        aegisx.agents,
+        ("message", "stop", "close", "finish", "compact", "set_timeout", "start"),
+    ),
+]:
+    for name in gone:
+        assert not hasattr(module, name), f"{module.__name__}.{name} must be gone"
+
 
 def become(token: str, agent_id: str) -> None:
     os.environ["AEGISX_TOKEN"] = token
     os.environ["AEGISX_AGENT_ID"] = agent_id
+
+
+def queue_pause() -> None:
+    """Fixture control via the user-face REST route (the SDK verb is gone)."""
+    aegisx.get_client().request(
+        "POST", aegisx.get_client().event_path("/queue/pause"), body={}
+    )
+
+
+def queue_resume() -> None:
+    aegisx.get_client().request(
+        "POST", aegisx.get_client().event_path("/queue/resume"), body={}
+    )
 
 
 def ok(name: str) -> None:
@@ -90,54 +115,14 @@ read = aegisx.agents.read(SOLVER_ID, limit=2)
 assert len(read.messages or []) <= 2, "agents.read: limit ignored"
 ok("agents read limit tail cap")
 
-aegisx.agents.message(SOLVER_ID, "contract directive")
-ok("agents message (dm directive)")
-
-stopped = aegisx.agents.stop(SOLVER_ID)
-assert stopped.id == SOLVER_ID and stopped.status == "idle"
-ok("agents stop")
-
-# Queue lifecycle on a paused queue: enqueue stays pending (no real spawn).
-assert aegisx.queue.state() == "running"
-aegisx.queue.pause()
-assert aegisx.queue.state() == "paused"
-item = aegisx.queue.enqueue(CHALLENGE_ID, prompt="contract probe")
-assert item.status == "pending", f"paused queue launched: {item.status}"
-listed = aegisx.queue.list()
-assert any(i.id == item.id for i in listed)
-aegisx.queue.reorder([item.id])
-aegisx.queue.remove(item.id)
-assert not any(i.id == item.id for i in aegisx.queue.list())
-doomed = aegisx.queue.enqueue(CHALLENGE_ID, prompt="contract clear probe")
-aegisx.queue.clear()
-assert not any(i.id == doomed.id for i in aegisx.queue.list())
-aegisx.queue.resume()
-assert aegisx.queue.state() == "running"
-ok("queue pause/enqueue/reorder/remove/clear/resume")
-
-after_timeout = aegisx.agents.set_timeout(SOLVER_ID, 3_600_000)
-assert after_timeout.id == SOLVER_ID
-ok("agents set_timeout")
-
-finished = aegisx.agents.finish(SOLVER_ID, summary="contract finish")
-assert finished.status == "completed"
-ok("agents finish (sanctioned terminal)")
-
-expect_error(
-    "invalid_state", 409, lambda: aegisx.agents.compact(SOLVER_ID),
-    "agents compact error contract (no live session)",
-)
 expect_error(
     "not_found", 404, lambda: aegisx.agents.get("no-such-agent"),
     "agents get error contract (not_found)",
 )
 
-closed = aegisx.agents.close(SOLVER2_ID)
-assert closed.id == SOLVER2_ID and closed.status == "aborted"
-ok("agents close (terminal aborted)")
+# --- submit_plan (the ONE management write) -----------------------------------
 
-# --- submit_plan (the typed control surface) -----------------------------------
-
+assert aegisx.queue.state() == "running"
 res = aegisx.submit_plan("contract: deliberate pass", [aegisx.no_op("nothing to do")])
 first = res.results[0]
 assert first.ok and first.kind == "noOp" and first.ref, first
@@ -153,7 +138,7 @@ assert res.results[0].code == "wrong_state"
 ok("submit_plan per-ref validation errors")
 
 # Any failing ref rejects the WHOLE plan: the valid enqueue is NOT applied.
-aegisx.queue.pause()
+queue_pause()
 res = aegisx.submit_plan(
     "mixed",
     [aegisx.enqueue(CHALLENGE_ID, prompt="plan probe"), aegisx.enqueue("ch-nope")],
@@ -179,7 +164,7 @@ ok("submit_plan enqueue + queueAfter + idempotent replay")
 
 res = aegisx.submit_plan("plan cancel", [aegisx.cancel_item(item_ref.item_id, ref="c1")])
 assert res.results[0].ok
-aegisx.queue.resume()
+queue_resume()
 ok("submit_plan cancelItem")
 
 # Solver face: the plan surface is scheduler-only; malformed envelope is a 400.
@@ -270,7 +255,11 @@ expect_error(
     "forbidden", 403, aegisx.queue.list, "solver forbidden: queue.list"
 )
 expect_error(
-    "forbidden", 403, lambda: aegisx.queue.pause(), "solver forbidden: queue.pause"
+    "forbidden", 403,
+    lambda: aegisx.get_client().request(
+        "POST", aegisx.get_client().event_path("/queue/pause"), body={}
+    ),
+    "solver forbidden: queue pause route",
 )
 expect_error(
     "forbidden", 403,

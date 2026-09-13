@@ -24,10 +24,10 @@ per line):
     print([(r.ref, r.ok) for r in res.results])
 
 Error handling: every failure raises `aegisx.AegisxError` with `.code`
-mirroring the server's error code (e.g. "capacity" → back off and adjust the
-plan; "not_found" → re-read state; "forbidden" → outside your surface). Never
-parse error text. Plan validation errors are the exception: they are per-ref
-results on `submit_plan`'s return value, not raised exceptions.
+mirroring the server's error code (e.g. "not_found" → re-read state;
+"forbidden" → outside your surface). Never parse error text. Plan
+validation errors are the exception: they are per-ref results on
+`submit_plan`'s return value, not raised exceptions.
 
 Rules:
 - Keep printed output small (bash truncates at ~64KB): print summaries, write

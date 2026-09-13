@@ -22,6 +22,9 @@
 // decision point closes with submit_plan, the fleet digest moved from
 // deliveries into the payload, the wake-up model (event/merge/heartbeat)
 // and the delivery example were replaced.
+// v27: the SDK's management verbs were cut (control-plane §3.3/§3.8) —
+// submit_plan is the ONE management write; prompt mentions of agents.start /
+// agents.message and the capacity plan-ref error are gone with them.
 
 /** Shared head section: the event's deployment brief (role-merged by the
  * prompt-context builder — solver agents get common+solver, the scheduler
@@ -70,13 +73,13 @@ All management actions go through the \`aegisx\` Python SDK (in-image at /opt/ae
 Every management write goes through ONE verb: \`aegisx.submit_plan(rationale, actions)\` — the server validates it, applies fast actions inline, defers the slow ones, and returns per-ref results in the SAME call. Your task list is still the explicit queue: an \`enqueue\` action appends a spawn item (one challenge may hold several pending items — parallel attempts are a legal plan) and the system drains it FIFO under the hard caps below (a queued item spawns an agent automatically when a slot frees).
 - Build actions with the helpers, never hand-built JSON: \`aegisx.enqueue(challenge_id, prompt=...)\`, \`message(agent_id, text)\`, \`stop\` / \`close\` / \`finish(agent_id, summary)\`, \`set_deadline\`, \`cancel_item\`, \`reorder\`, \`set_queue_paused\`, \`no_op\`. The \`prompt\` is the spawned agent's strategy — be specific (attack surface, hypotheses, constraints).
 - Listing order IS application order; the plan is not a transaction. Validation errors are RESULTS: any failing ref rejects the WHOLE plan (nothing applied) — fix the failing refs and resubmit within the same turn.
-- \`aegisx.agents.start(challenge_id, prompt=...)\` is an ESCAPE HATCH for spawning an agent immediately (it bypasses the queue). Do **not** use it for ordinary planning — plan an \`enqueue\`. Do not enqueue more tasks than the concurrency cap unless you deliberately intend to fill every slot.
+- Enqueueing never fails on a full cap — the item stays pending until a slot frees (the drainer launches it). Do not enqueue more tasks than the concurrency cap unless you deliberately intend to fill every slot.
 - Stand-down is yours to call: when your plan is complete and nothing more should launch, submit \`aegisx.set_queue_paused(true)\` — launches stop; \`set_queue_paused(false)\` before enqueueing the next batch (while paused, pending items never launch). Your pause carries its plan's id into the decision log.
 
 ## Channels：广播与定向的分工
 频道是派生键：每题一个 #team（同题全部 agent 共享），每 solver agent 一个 DM，以及你的 orch 频道（solver 问询、系统事件、队列通知都落在这里——它是账本，你用 \`aegisx.channels.read\` 回看，不再有投递推给你）：
 - **FYI 广播 → \`aegisx.channels.announce(challenge_id, text)\`**（发到该题的 #team，非紧急——随周期合并投递给 solver）。方针、全局信息、优先级调整用广播；也可 \`aegisx.channels.post\` 直接发（频道键来自 \`aegisx.channels.list()\`）。
-- **定向指令 → 计划里的 \`message\` 动作**（或 \`aegisx.agents.message(agent_id, text)\`——发到该 agent 的 DM，urgent=True 立即投递并只唤醒它）。具体任务指派、纠偏、催促用 DM。
+- **定向指令 → 计划里的 \`message\` 动作**（urgent=True 立即投递并只唤醒它；非紧急自由文本也可 \`aegisx.channels.post("dm:<agentId>", text)\`）。具体任务指派、纠偏、催促用 DM。
 - solver 的发现/死路/附件会出现在 #team —— \`aegisx.channels.read(键)\`（键来自 \`aegisx.channels.list()\`）随时回看。附件即 shared/ 路径：消息 📎 行给出 \`shared/from-<id8>/x.py\`，你的容器挂载了全部题工作区（只读），直接读 \`/challenges/<challenge_id>/workspace/shared/...\` 即可。
 - solver 可能 \`aegisx.ask()\` 你（决策/资源请求）：问询落进 orch 账本，并作为 \`solver.asked\` 触发合并进决策点——未读内容本身就会唤醒你，无需轮询频道。
 
@@ -92,7 +95,7 @@ Every management write goes through ONE verb: \`aegisx.submit_plan(rationale, ac
 ## Hard guardrails (server-enforced — you cannot violate)
 - Live solver agents (running or idle) ≤ the global agent cap (local container resources). You (the scheduler agent) never count.
 - Distinct target-capable challenges with a live agent ≤ the target-slot cap. A target is a per-challenge platform instance: several agents on the SAME target-capable challenge share one slot.
-- A cap rejection surfaces as a failing plan ref (code \`capacity\`) or a queued item that stays pending — a reason to adjust the plan, not to retry blindly.
+- A full agent cap is NOT an error: the queued item simply stays pending until a slot frees — a reason to adjust the plan (cut/retarget), not to retry blindly.
 - While the event's 已解题禁止新 agent setting is on (default), spawning on a fully-solved challenge is rejected (\`solved_blocked\`) — do NOT re-attack a solved challenge. Reproduction/writeup agents on a solved challenge are the user's call (the setting), not yours.
 
 ## Manual agents
@@ -328,6 +331,10 @@ export const NOTICE_TEMPLATE_DEFAULTS = {
   /** schedulerViolation — consecutive decision points closed without a plan
    * (urgent; the violation escalation alarm). */
   noticeSchedulerViolation: `调度违约：调度者已连续 {{consecutive}} 个决策点未提交计划（最近 {{decisionPointId}}）——引擎已停止等待，请检查调度者状态并人工介入。`,
+  /** schedulerStalled — the scheduler judged "no action needed" and the
+   * situation then persisted unchanged ≥ stallMs (urgent; the contracted
+   * stall watchdog, §3.7 r1). */
+  noticeSchedulerStalled: `调度停滞：调度者在 {{decisionPointId}} 判定无需行动后，局面已持续 {{stalled}} 无变化——请人工确认该判断是否仍成立。`,
 
   // --- agent lifecycle lines (run/agent-status.ts) ---------------------------
   // The orch event ledger the scheduler reads; `tag` is the pre-derived

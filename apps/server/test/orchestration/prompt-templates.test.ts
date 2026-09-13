@@ -16,7 +16,6 @@ import {
   sampleOrchestratorPromptContext,
   samplePromptContext,
 } from "../../src/orchestration/prompt-templates"
-import { AGENT_STALL_MS } from "../../src/run/agent-runtime"
 import { DEFAULT_TIMEOUT_SEC, MAX_BYTES } from "../../src/run/bash-tool"
 import { FLUSH_INTERVAL_MS } from "../../src/run/channels-context"
 import {
@@ -256,10 +255,9 @@ describe("numeric contracts (prompt wording ↔ runtime constants)", () => {
     expect(DEFAULT_MAIN_SYSTEM_PROMPT_TEMPLATE).toContain("每 5 分钟合并投递")
   })
 
-  test("solver idle-stall threshold (>2 min)", () => {
-    expect(AGENT_STALL_MS).toBe(2 * 60_000)
-    // The stall line is orch-ledger-only since the engine took over the
-    // wakes (§3.7 row 1) — the scheduler prompt no longer quotes it.
+  test("solver idle-stall quoting", () => {
+    // The stall alarm is engine-owned since §3.7 row 1 — the scheduler
+    // prompt no longer quotes a per-agent stall line.
     expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).not.toContain(
       "idle >2 minutes"
     )
@@ -413,17 +411,17 @@ describe("notice variable list sync (NOTICE_TEMPLATE_VARIABLES ↔ defaults ↔ 
 
 describe("template registry (every builtin renders + declares its variables)", () => {
   // Generalized drift guard: the registry is the single declaration of the
-  // 24 builtin templates. Each entry must (a) render against its own sample
+  // 23 builtin templates. Each entry must (a) render against its own sample
   // context — strict handlebars throws on any variable the sample lacks, so
   // a template edit referencing an undeclared field fails here instead of at
   // spawn or in the settings preview — and (b) only extend variables its
   // palette declares.
 
-  test("all 22 builtin keys are declared exactly once", () => {
+  test("all 23 builtin keys are declared exactly once", () => {
     const keys = PROMPT_TEMPLATES.map((entry) => entry.key)
-    expect(keys).toHaveLength(22)
-    expect(new Set(keys).size).toBe(22)
-    expect(new Set(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).size).toBe(16)
+    expect(keys).toHaveLength(23)
+    expect(new Set(keys).size).toBe(23)
+    expect(new Set(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).size).toBe(17)
   })
 
   test("each default renders against its sample and references declared variables only", () => {

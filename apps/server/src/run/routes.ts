@@ -39,8 +39,8 @@ const enqueueInput = Type.Object(
 )
 
 /** Direct spawn (POST /api/challenges/:challengeId/agents): bypasses the
- * queue; the fence cap rejects with 429 capacity. The SDK's
- * `agents.start` escape hatch. */
+ * queue; the fence cap rejects with 429 capacity. The web spawn dialog's
+ * immediate-start path (the scheduler plans through /plan instead). */
 const spawnInput = Type.Object(
   {
     prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
@@ -50,16 +50,6 @@ const spawnInput = Type.Object(
     timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
     model: Type.Optional(Type.String({ maxLength: 300 })),
   },
-  { additionalProperties: false }
-)
-
-const timeoutInput = Type.Object(
-  { timeoutMs: Type.Integer({ minimum: 60_000 }) },
-  { additionalProperties: false }
-)
-
-const finishInput = Type.Object(
-  { summary: Type.Optional(Type.String({ maxLength: 20_000 })) },
   { additionalProperties: false }
 )
 
@@ -576,46 +566,6 @@ export function registerRunRoutes(
       try {
         return c.json(
           await agentService.closeAgent(c.req.param("agentId"), principalOf(c))
-        )
-      } catch (error) {
-        return runError(c, error)
-      }
-    }
-  )
-
-  /** Force-finish: completed + summary (the sanctioned terminal transition
-   * for a live agent; idempotent on an already-completed one). */
-  app.post(
-    "/api/agents/:agentId/finish",
-    validateJson(finishInput),
-    async (c) => {
-      try {
-        const summary = c.req.valid("json").summary?.trim() ?? ""
-        return c.json(
-          await agentService.finishAgent(
-            c.req.param("agentId"),
-            summary,
-            principalOf(c).kind === "agent" ? "scheduler" : "user",
-            principalOf(c)
-          )
-        )
-      } catch (error) {
-        return runError(c, error)
-      }
-    }
-  )
-
-  app.post(
-    "/api/agents/:agentId/timeout",
-    validateJson(timeoutInput),
-    async (c) => {
-      try {
-        return c.json(
-          agentService.setAgentTimeout(
-            c.req.param("agentId"),
-            c.req.valid("json").timeoutMs,
-            principalOf(c)
-          )
         )
       } catch (error) {
         return runError(c, error)

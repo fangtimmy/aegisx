@@ -141,7 +141,7 @@ describe("settings meta notice contract", () => {
         noticePromptVariables: string[]
       }
     }>(response)
-    expect(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).toHaveLength(16)
+    expect(Object.keys(NOTICE_TEMPLATE_DEFAULTS)).toHaveLength(17)
     for (const [key, body] of Object.entries(NOTICE_TEMPLATE_DEFAULTS)) {
       expect(meta.promptTemplateDefaults[key]).toBe(body)
     }

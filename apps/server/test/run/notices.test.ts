@@ -210,6 +210,16 @@ describe("notice events render the shipped wording (byte-level)", () => {
     ).toEqual([
       "调度违约：调度者已连续 3 个决策点未提交计划（最近 a1b2c3d4）——引擎已停止等待，请检查调度者状态并人工介入。",
     ])
+    expect(
+      text({
+        type: "schedulerStalled",
+        eventId: "evt-1",
+        decisionPointId: "a1b2c3d4",
+        stalledMs: 130_000,
+      })
+    ).toEqual([
+      "调度停滞：调度者在 a1b2c3d4 判定无需行动后，局面已持续 2m10s 无变化——请人工确认该判断是否仍成立。",
+    ])
   })
 
   test("queueStateChanged: pause/resume, manual flips marked", () => {

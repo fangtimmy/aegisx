@@ -7,10 +7,11 @@ do. This file is the usage reference; `help(aegisx)` lists exact signatures.
 
 ## Roles and surfaces
 
-- **Scheduler** (the event's orchestrator): the management face — challenges,
-  agents, the spawn queue, broadcasts. Everything below.
+- **Scheduler** (the event's orchestrator): reads everything, communicates in
+  free text, and lands every CONTROL decision — spawning, steering, stopping,
+  the queue — through ONE typed verb, `submit_plan`. Everything below.
 - **Solver**: the communication face — channels (`post` / `read` / `list`) and
-  `aegisx.ask`. Management calls return `AegisxError` with `.code ==
+  `aegisx.ask`. Anything else returns `AegisxError` with `.code ==
 "forbidden"`; that answer is authoritative — never fall back to curl or the
   platform's HTTP API.
 
@@ -55,10 +56,10 @@ has `.messages .has_more .next_after`. A `ChannelMessage` has `.id
 
 ## Submitting plans (the control surface)
 
-The scheduler's management writes go through ONE verb — `submit_plan`. You
-produce a typed plan (rationale + ordered actions); the server validates it,
-applies the fast actions inline and defers the slow ones. Build actions with
-the helpers, never hand-built JSON:
+Every management write goes through ONE verb — `submit_plan`. You produce a
+typed plan (rationale + ordered actions); the server validates it, applies
+the fast actions inline and defers the slow ones. Build actions with the
+helpers, never hand-built JSON:
 
     python3 - <<'PY'
     import aegisx
@@ -89,7 +90,9 @@ Exact signatures:
 Semantics:
 
 - `rationale` is the 1-3 sentence decision reason (decision log only, never
-  executed). "Do nothing" is still a plan: `[aegisx.no_op("reason")]`.
+  executed). "Do nothing" is still a plan: `[aegisx.no_op("reason")]` — but a
+  noOp on a situation that then stays unchanged is escalated to the user as a
+  stall alarm, so only pass when nothing genuinely needs doing.
 - Listing order IS application order; the plan is not a transaction — per-ref
   results + the next snapshot are the recovery model.
 - `submit_plan` returns per-ref results (`r.ok` / `r.code` / `r.message`) —
@@ -112,22 +115,19 @@ Semantics:
     aegisx.snapshot()                 # challenges + agents + queue + status (one picture)
     aegisx.status()                   # caps-only view (live/max agents, target slots)
     aegisx.challenges.list() / .get(id)
-    aegisx.submit_plan(rationale, actions)             # THE management write (see above)
-    aegisx.queue.list() / .state() / .enqueue(challenge_id, prompt=..., model=..., timeout_ms=...)
-    aegisx.queue.pause() / .resume() / .remove(id) / .clear() / .reorder(ids)
-    aegisx.agents.list(challenge_id=..., status=...)   # solvers only (scheduler: snapshot().scheduler_agent)
+    aegisx.agents.list(challenge_id=..., status=...)   # solvers (scheduler: snapshot().scheduler_agent)
     aegisx.agents.get(id) / .read(id, limit=N)
-    aegisx.agents.message(id, text, urgent=True)       # directive into the agent's DM
-    aegisx.agents.start(challenge_id, prompt=...)      # ESCAPE HATCH: spawn immediately, bypasses the queue
-    aegisx.agents.stop(id) / .close(id) / .finish(id, summary) / .compact(id) / .set_timeout(id, ms)
+    aegisx.queue.list() / .state()                     # read views of the plan's landing zone
+    aegisx.submit_plan(rationale, actions)             # THE control write (see above)
     aegisx.channels.list() / .read("#team" | "orch" | key) / .post("#team", text, tags=..., files=..., urgent=...)
     aegisx.channels.announce(challenge_id, text)       # FYI broadcast to the challenge's #team
     aegisx.ask(text, urgent=False, files=None)         # solver → scheduler question (orch channel)
 
-The `queue.*` / `agents.stop` / `.close` / `.finish` / `.message` /
-`.set_timeout` / `.start` management verbs above keep working but are
-DEPRECATED in favor of `submit_plan` (removal lands next batch); reads and
-the channels face stay as-is.
+That is the whole surface: reads and the channels face are open to the
+scheduler; everything that changes lifecycle or queue state is a plan action.
+Directing ONE agent in free text is `channels.post("dm:<agentId>", ...)` (or
+a plan `message` action — urgent=True wakes it now); a #team FYI is
+`channels.announce`.
 
 Channel keys are derived: `#team` (one per challenge, shared by its agents),
 `dm:<agentId>` (directives to one agent), `orch` (solver asks + system
@@ -153,8 +153,8 @@ periodic re-examination, a boot re-sync) plus a [调度快照] block
    never silence. A turn that ends without a plan is a protocol violation:
    the engine re-prompts once, then escalates to the user.
 3. Communication stays free-text: answer solvers on orch, broadcast to
-   #team, DM a solver (`channels.post` / `agents.message`) any time during
-   the turn — only CONTROL decisions go through the plan.
+   #team, DM a solver (`channels.post`) any time during the turn — only
+   CONTROL decisions go through the plan.
 4. Read the per-ref results in the same call and repair immediately
    (`wrong_state` → re-read state; `solved_blocked` → pick another target).
    The queue drains FIFO under the caps; slow actions report via plan.result.
@@ -169,16 +169,16 @@ Every failure raises `aegisx.AegisxError` with `.code`, `.message`,
 | -------------------------------- | --------------------------------------------------------------------------------- |
 | `forbidden`                      | Outside your role's surface (or a foreign event). Do not retry via another path.  |
 | `unauthorized`                   | Bad/expired token — a runtime problem, not a plan problem.                        |
-| `capacity`                       | Concurrency cap full (spawn/enqueue). Adjust the plan; queued work stays pending. |
-| `not_found`                      | Stale id — re-read state (`snapshot()`).                                          |
-| `invalid_state`                  | e.g. compaction without a live session, close on a closed agent.                  |
+| `not_found`                      | Unknown/stale id in a read (e.g. `agents.get`) — re-read `snapshot()`.            |
 | `invalid_request`                | Body failed the server's schema validation (wrong types/fields). Fix the call.    |
 | `invalid`                        | Semantically bad input (unknown channel key, empty text, bad id format).          |
-| `launch_failed`                  | The agent process failed to launch (model/container problem) — report, don't retry blindly. |
-| `not_bound`                      | No platform connected for that target — bind one first (user face).               |
-| `platform_error`                 | The remote platform integration failed — treat as external outage.                |
 | `internal_error`                 | Server fault — one careful retry is reasonable, then report.                      |
 | `network_error` / `bad_response` | Transport/protocol failure — one careful retry is reasonable.                     |
+
+Control errors are NOT in this table: plan validation failures are per-ref
+results on `submit_plan`'s return value (`unknown_challenge`, `wrong_state`,
+`solved_blocked`, `self_target`, `duplicate_ref`, …), and a stalled or
+misbehaving queue reports through decision points, not exceptions.
 
 A non-JSON error body (proxy HTML page, plain-text 404) degrades to
 `http_error` with only the HTTP status preserved — treat it as an unknown

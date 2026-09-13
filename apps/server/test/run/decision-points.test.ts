@@ -4,9 +4,11 @@ import { eq } from "drizzle-orm"
 
 import { createDatabase } from "../../src/db"
 import { agents, domainEvents, queueState } from "../../src/db/schema"
+import { FLUSH_INTERVAL_MS } from "../../src/run/channels-context"
 import { createFakeClock } from "../../src/run/clock"
 import {
   createDecisionPointEngine,
+  DEFAULT_TIMINGS,
   type DecisionTimings,
 } from "../../src/run/decision-points/engine"
 import { now, seedAgent, seedChallenge, seedEvent } from "../helpers"
@@ -15,6 +17,7 @@ const TIMINGS: DecisionTimings = {
   coalesceMs: 1_000,
   errorRetryMs: 5_000,
   periodicMs: 60_000,
+  stallMs: 120_000,
   violationsToEscalate: 3,
   maxErrorRetries: 2,
 }
@@ -52,8 +55,10 @@ async function makeEngine(
   const sends: string[] = []
   const escalations: Array<{
     eventId: string
-    id: string
-    consecutive: number
+    reason: string
+    decisionPointId: string
+    consecutive?: number
+    stalledMs?: number
   }> = []
   const schedulerStatus = opts.schedulerStatus
   if (schedulerStatus && schedulerStatus !== "idle") {
@@ -75,8 +80,8 @@ async function makeEngine(
       fingerprint: `fp-${db.select().from(agents).all().length}`,
     }),
     isSchedulerPaused: () => opts.schedulerPaused ?? false,
-    escalateNotice: (eventId, id, consecutive) =>
-      escalations.push({ eventId, id, consecutive }),
+    escalateNotice: (eventId, escalation) =>
+      escalations.push({ eventId, ...escalation }),
     timings: { ...TIMINGS, ...opts.timings },
   })
   return { engine, clock, sends, escalations }
@@ -116,6 +121,11 @@ function submitPlanEvent(db: Db, actions: unknown[], atMs: number): void {
 }
 
 describe("decision-point engine (§3.6)", () => {
+  test("production timings: the per-agent stall threshold landed as the engine's stallMs default", () => {
+    expect(DEFAULT_TIMINGS.stallMs).toBe(2 * 60_000)
+    expect(DEFAULT_TIMINGS.periodicMs).toBe(FLUSH_INTERVAL_MS)
+  })
+
   test("non-urgent triggers coalesce into ONE decision point; the turn protocol is in the payload", async () => {
     const { db, close } = setupDbLite()
     try {
@@ -278,6 +288,7 @@ describe("decision-point engine (§3.6)", () => {
       expect(closed.every((c) => c!.outcome === "violation")).toBe(true)
       // The bound tripped: watchdog.escalated + the urgent notice.
       expect(escalations).toHaveLength(1)
+      expect(escalations[0].reason).toBe("scheduler_violation")
       expect(escalations[0].consecutive).toBe(3)
       const escalated = events(db, "watchdog.escalated")
       expect(escalated).toHaveLength(1)
@@ -450,6 +461,104 @@ describe("decision-point engine (§3.6)", () => {
       clock.advance(TIMINGS.periodicMs + TIMINGS.coalesceMs)
       await settle()
       expect(sends).toHaveLength(2)
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("stall contraction: a noOp'd situation persisting ≥ stallMs escalates once per episode (§3.7 r1)", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      const { engine, clock, sends, escalations } = await makeEngine(db)
+      // A decision point closes with an explicit noOp → the stall episode
+      // arms. The periodic skip means NO further points fire while quiet.
+      engine.trigger("evt-1", {
+        kind: "agent.settled",
+        agentId: "a1",
+        status: "idle",
+      })
+      clock.advance(TIMINGS.coalesceMs)
+      await settle()
+      submitPlanEvent(
+        db,
+        [{ ref: "r1", kind: "noOp", reason: "quiet" }],
+        clock.now()
+      )
+      engine.onTurnSettled("sched", null)
+      await settle()
+      expect(events(db, "decision_point.closed")[0].outcome).toBe("plan")
+
+      // Inside the stall window: silent.
+      clock.advance(TIMINGS.stallMs / 2)
+      await settle()
+      expect(escalations).toHaveLength(0)
+
+      // The unchanged situation crosses stallMs at the next periodic tick →
+      // ONE escalation (alarm only — the quiet event still burns no turn).
+      clock.advance(TIMINGS.periodicMs + TIMINGS.stallMs + TIMINGS.coalesceMs)
+      await settle()
+      expect(escalations).toHaveLength(1)
+      expect(escalations[0].reason).toBe("scheduler_stalled")
+      expect(escalations[0].stalledMs).toBeGreaterThanOrEqual(TIMINGS.stallMs)
+      expect(sends).toHaveLength(1)
+      expect(events(db, "watchdog.escalated")[0].reason).toBe(
+        "scheduler_stalled"
+      )
+      // No re-escalation while the situation stays unchanged.
+      clock.advance(TIMINGS.periodicMs * 3)
+      await settle()
+      expect(escalations).toHaveLength(1)
+
+      // The situation moves → the episode cancels; the fresh point re-judges.
+      seedAgent(db, { id: "a-new", status: "idle" })
+      clock.advance(TIMINGS.periodicMs + TIMINGS.coalesceMs)
+      await settle()
+      expect(sends).toHaveLength(2)
+      expect(escalations).toHaveLength(1)
+      // A second noOp on the new situation re-arms; it escalates again only
+      // after another full stall window.
+      submitPlanEvent(
+        db,
+        [{ ref: "r2", kind: "noOp", reason: "still quiet" }],
+        clock.now()
+      )
+      engine.onTurnSettled("sched", null)
+      await settle()
+      clock.advance(TIMINGS.periodicMs + TIMINGS.stallMs + TIMINGS.coalesceMs)
+      await settle()
+      expect(escalations).toHaveLength(2)
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a real plan clears the stall episode — no alarm while actions land", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      const { engine, clock, escalations } = await makeEngine(db)
+      engine.trigger("evt-1", {
+        kind: "agent.settled",
+        agentId: "a1",
+        status: "idle",
+      })
+      clock.advance(TIMINGS.coalesceMs)
+      await settle()
+      // A plan WITH actions closes the point: nothing arms.
+      submitPlanEvent(
+        db,
+        [{ ref: "r1", kind: "enqueue", challengeId: "ch-1" }],
+        clock.now()
+      )
+      engine.onTurnSettled("sched", null)
+      await settle()
+      expect(events(db, "decision_point.closed")[0].outcome).toBe("plan")
+      clock.advance(TIMINGS.periodicMs + TIMINGS.stallMs + TIMINGS.coalesceMs)
+      await settle()
+      expect(escalations).toHaveLength(0)
       engine.close()
     } finally {
       close()

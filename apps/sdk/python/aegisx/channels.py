@@ -139,8 +139,9 @@ def ask(
 def announce(challenge_id: str, text: str) -> ChannelMessage:
     """Broadcast to the challenge's #team (one shared team channel per
     challenge — every live agent on the challenge receives it on the next
-    delivery tick; non-urgent FYI by design). Use for FYI guidance; use
-    `aegisx.agents.message` for directives targeting one agent."""
+    delivery tick; non-urgent FYI by design). Use for FYI guidance; direct
+    one agent with `channels.post("dm:<agentId>", ...)` or a plan `message`
+    action."""
     team = f"team:{challenge_id}"
     data = get_client().request(
         "POST",

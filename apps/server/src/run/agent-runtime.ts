@@ -3,7 +3,6 @@ import { eq } from "drizzle-orm"
 import type { Database } from "../db"
 import { agents } from "../db/schema"
 import type { AgentStatus } from "./agent-status"
-import { orchKey, type ChannelService } from "./channels"
 import type { SendOutcome } from "./channels-context"
 import type { Clock, ClockTimer } from "./clock"
 import { createTimerHub } from "./clock"
@@ -14,11 +13,7 @@ import type { HostAgentSession } from "./host/host-session"
 /** Grace between deadline-abort and a forced session dispose. */
 const TIMEOUT_GRACE_MS = 30_000
 
-/** agent 停滞判定：turn settle 后超过该时长仍 idle/failed → urgent orch
- * 消息（§五）。 */
-export const AGENT_STALL_MS = 2 * 60_000
-
-/** 时间格式化（watchdog 行与 SDK `fmt_ms` 共用格式约定）：
+/** 时间格式化（快照行与 SDK `fmt_ms` 共用格式约定）：
  *  3500 → "4s"；210000 → "3m30s"；-45000 → "-45s(超时)"。 */
 export function fmtMs(ms: number): string {
   if (ms < 0) return `-${fmtMs(-ms)}(超时)`
@@ -56,21 +51,15 @@ export type SettleOptions = {
 
 export type AgentRuntimeDeps = {
   db: Database
-  channels: ChannelService
   /** Status core: turn markers, the terminal landing, the orch event feed. */
   status: AgentStatus
-  /** Time layer: arms the deadline/grace/stall timers, bounds aborts, reads
-   * the stall age. */
+  /** Time layer: arms the deadline/grace timers, bounds aborts. */
   clock: Clock
   /** Test seam passthrough: bound on `session.abort()` inside close paths. */
   closeAbortGraceMs: number
   /** Test seam passthrough: grace between deadline-abort and a forced
    * dispose. */
   timeoutGraceMs?: number
-  /** Test seam passthrough: stall watchdog threshold. */
-  stallMs?: number
-  /** W3: the event's scheduler is paused → stall checks do not arm. */
-  isSchedulerPaused(eventId: string): boolean
   /** The service's per-agent lock — turns serialize against bespoke ops
    * (create / close / finish / ...) and a service close rejects them. */
   withLock<T>(agentId: string, op: () => T | Promise<T>): Promise<T>
@@ -86,8 +75,8 @@ export type AgentRuntime = ReturnType<typeof createAgentRuntime>
 /**
  * One live agent's ENTIRE in-process ownership root: the mounted host
  * session, the monotonic turn generation, the finish_run bookkeeping, the
- * deadline/grace timers, the stall-watchdog timer, and the single terminal
- * path. Nothing per-agent lives anywhere else — the run service holds
+ * deadline/grace timers, and the single terminal path. Nothing per-agent
+ * lives anywhere else — the run service holds
  * `Map<agentId, AgentRuntime>` and every terminal flow converges on
  * {@link AgentRuntime.settle}, so "forgetting to clear one registry" is
  * structurally impossible.
@@ -99,7 +88,6 @@ export type AgentRuntime = ReturnType<typeof createAgentRuntime>
 export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
   const { clock } = deps
   const hub = createTimerHub(clock)
-  const stallMs = deps.stallMs ?? AGENT_STALL_MS
   const timeoutGraceMs = deps.timeoutGraceMs ?? TIMEOUT_GRACE_MS
 
   /** The mounted host session (absent until prepare / after unmount). */
@@ -112,7 +100,6 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
   let finishFlagWarned = false
   let deadlineTimer: ClockTimer | undefined
   let graceTimer: ClockTimer | undefined
-  let stallTimer: ClockTimer | undefined
 
   // --- session mount ---------------------------------------------------------
 
@@ -167,7 +154,6 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
           return
         }
         deps.status.agentTurnSettled(agentId, error)
-        noteTurnSettled()
       })
       .catch((err) => {
         // A service close mid-turn rejects the lock with invalid_state — a
@@ -335,67 +321,6 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     }
   }
 
-  // --- stall watchdog ----------------------------------------------------------
-
-  /** Arm the stall check for a turn that just settled idle/failed. The fire
-   * time re-checks the DB, so a mid-timer resume/finish is judged from
-   * current state (race-safe). Solver agents only; paused events skip.
-   * Each idle cycle fires at most once (a fresh settle re-arms). */
-  function noteTurnSettled(): void {
-    const row = deps.db
-      .select({
-        role: agents.role,
-        eventId: agents.eventId,
-        status: agents.status,
-      })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .get()
-    if (!row || row.role !== "solver") return
-    if (deps.isSchedulerPaused(row.eventId)) return
-    clearStallTimer()
-    stallTimer = hub.setTimeout(() => {
-      stallTimer = undefined
-      checkStall()
-    }, stallMs)
-  }
-
-  function clearStallTimer(): void {
-    if (stallTimer) {
-      hub.clear(stallTimer)
-      stallTimer = undefined
-    }
-  }
-
-  /** Stall timer fired: re-check the agent — an idle/failed agent still idle
-   * ≥ stallMs posts the urgent orch message (the scheduler reads it on
-   * catch-up when offline); otherwise silent. A terminal agent never fires a
-   * false alarm. */
-  function checkStall(): void {
-    const row = deps.db
-      .select()
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .get()
-    if (!row || row.role !== "solver") return
-    if (row.status !== "idle" && row.status !== "failed") {
-      return
-    }
-    if (deps.isSchedulerPaused(row.eventId)) return
-    const nowMs = clock.now()
-    if (nowMs - Date.parse(row.updatedAt) < stallMs) return
-    deps.channels.post(
-      {
-        channelKey: orchKey(row.eventId),
-        author: { type: "system" },
-        body: `停滞：agent-${agentId.slice(0, 8)} 已闲置 ${fmtMs(nowMs - Date.parse(row.updatedAt))}`,
-        meta: { agentId, noticeType: "emergency" },
-        urgent: true,
-      },
-      { kind: "system" }
-    )
-  }
-
   // --- the one terminal path ---------------------------------------------------
 
   /** Land the terminal state and release every in-process resource: bounded
@@ -413,7 +338,6 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     hub.disposeAll()
     deadlineTimer = undefined
     graceTimer = undefined
-    stallTimer = undefined
     pendingFinish = undefined
     finishFlagWarned = false
     deps.forget(agentId)
@@ -450,7 +374,6 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     hub.disposeAll()
     deadlineTimer = undefined
     graceTimer = undefined
-    stallTimer = undefined
     pendingFinish = undefined
     finishFlagWarned = false
     turnGen = 0
@@ -470,7 +393,6 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     hasFinishFlagWarned,
     markFinishFlagWarned,
     armDeadline,
-    noteTurnSettled,
     settle,
     dispose,
   }

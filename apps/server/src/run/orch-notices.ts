@@ -116,6 +116,16 @@ export type NoticeEvent =
       decisionPointId: string
       consecutive: number
     }
+  /** The scheduler judged "no action needed" and the situation then persisted
+   * unchanged ≥ stallMs (§3.7 r1 — the contracted stall watchdog; urgent). */
+  | {
+      type: "schedulerStalled"
+      eventId: string
+      /** The noOp'd decision point, shortened for display. */
+      decisionPointId: string
+      /** How long the situation has persisted since the noOp. */
+      stalledMs: number
+    }
 
 /** One channel post derived from a notice event. */
 export type NoticeDelivery = {
@@ -281,6 +291,19 @@ export function noticeDeliveries(event: NoticeEvent): NoticeDelivery[] {
           context: {
             decisionPointId: event.decisionPointId,
             consecutive: event.consecutive,
+          },
+          meta: { noticeType: "emergency" },
+          urgent: true,
+        },
+      ]
+    case "schedulerStalled":
+      return [
+        {
+          ...notice,
+          template: "noticeSchedulerStalled",
+          context: {
+            decisionPointId: event.decisionPointId,
+            stalled: fmtMs(event.stalledMs),
           },
           meta: { noticeType: "emergency" },
           urgent: true,

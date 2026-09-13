@@ -348,7 +348,6 @@ export function makeAgentService(
       | "sweepIntervalMs"
       | "idleTtlMs"
       | "flushIntervalMs"
-      | "stallMs"
       | "solvedWrapupMs"
       | "decisionTimings"
       | "clock"
@@ -388,7 +387,6 @@ export function makeAgentService(
     sweepIntervalMs: opts.sweepIntervalMs,
     idleTtlMs: opts.idleTtlMs,
     flushIntervalMs: opts.flushIntervalMs,
-    stallMs: opts.stallMs,
     solvedWrapupMs: opts.solvedWrapupMs,
     decisionTimings: opts.decisionTimings,
     unattended: opts.unattended ?? false,

@@ -33,8 +33,8 @@ const eventId = "evt-contract"
 const challengeId = "ch-contract"
 const schedulerId = "agent-scheduler-contract"
 const solverId = "agent-solver-contract"
-// Disposable second solver: agents.close lands a TERMINAL aborted status, so
-// it cannot share the fixture that the finish/compact tests need live.
+// Disposable second solver: seeded TERMINAL (aborted) so the submit_plan
+// wrong_state path has a fresh (non-self) agent id to be asserted against.
 const solver2Id = "agent-solver2-contract"
 const token = () =>
   crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "")
@@ -64,10 +64,10 @@ function seed(database: Database): void {
       updatedAt: now,
     })
     .run()
-  for (const [id, t, challengeId_, role, name] of [
-    [schedulerId, schedulerToken, null, "orchestrator", "Scheduler"],
-    [solverId, solverToken, challengeId, "solver", "agent-solver"],
-    [solver2Id, token(), challengeId, "solver", "agent-solver2"],
+  for (const [id, t, challengeId_, role, name, status] of [
+    [schedulerId, schedulerToken, null, "orchestrator", "Scheduler", "idle"],
+    [solverId, solverToken, challengeId, "solver", "agent-solver", "idle"],
+    [solver2Id, token(), challengeId, "solver", "agent-solver2", "aborted"],
   ] as const) {
     database
       .insert(agents)
@@ -81,7 +81,7 @@ function seed(database: Database): void {
         model: "aegisx-contract/model:off",
         systemPrompt: "sys",
         tools: "[]",
-        status: "idle",
+        status,
         sessionFile: id === solverId ? "sess-contract" : null,
         source: "manual",
         timeoutMs: 3_600_000,

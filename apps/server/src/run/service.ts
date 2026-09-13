@@ -135,8 +135,6 @@ export type AgentServiceOptions = {
   idleTtlMs?: number
   /** Test seam: channel flush tick interval (default 5min). */
   flushIntervalMs?: number
-  /** Test seam: stall watchdog threshold (default 2min). */
-  stallMs?: number
   /** Test seam: solved write-up wrap-up bound (default SOLVED_WRAPUP_MS). */
   solvedWrapupMs?: number
   /** Test seam overrides for the decision-point engine's timings. */
@@ -196,7 +194,7 @@ export function createAgentService(options: AgentServiceOptions) {
   db.run(`DELETE FROM prompt_templates WHERE plugin != 'builtin'`)
 
   /** Live agents' in-process resources: one runtime per touched agent (the
-   * mounted session, deadline/grace + stall timers, finish_run bookkeeping,
+   * mounted session, deadline/grace timers, finish_run bookkeeping,
    * turn generation). The ONLY per-agent registry — settle() is the single
    * path that empties an entry. Cold-restored idle/terminal agents have no
    * entry (the DB row is their state; a message rebuilds the runtime). */
@@ -360,15 +358,24 @@ export function createAgentService(options: AgentServiceOptions) {
     },
     isSchedulerPaused: (eventId) =>
       schedulerAdminPort.get().isSchedulerPaused(eventId),
-    // The violation escalation's alarm face — the same urgent orch channel
-    // today's eventStalled uses (the unattended appliance's pager).
-    escalateNotice: (eventId, decisionPointId, consecutive) =>
-      notices.publish({
-        type: "schedulerViolation",
-        eventId,
-        decisionPointId,
-        consecutive,
-      }),
+    // Both escalation alarms land on the same urgent orch channel — the
+    // unattended appliance's pager.
+    escalateNotice: (eventId, escalation) =>
+      notices.publish(
+        escalation.reason === "scheduler_violation"
+          ? {
+              type: "schedulerViolation",
+              eventId,
+              decisionPointId: escalation.decisionPointId,
+              consecutive: escalation.consecutive,
+            }
+          : {
+              type: "schedulerStalled",
+              eventId,
+              decisionPointId: escalation.decisionPointId,
+              stalledMs: escalation.stalledMs,
+            }
+      ),
     ...(options.decisionTimings ? { timings: options.decisionTimings } : {}),
   })
 
@@ -441,16 +448,12 @@ export function createAgentService(options: AgentServiceOptions) {
    * only the agentId differs (passed to createAgentRuntime). */
   const runtimeDeps: AgentRuntimeDeps = {
     db,
-    channels,
     status,
     clock,
     closeAbortGraceMs,
     ...(options.timeoutGraceMs !== undefined
       ? { timeoutGraceMs: options.timeoutGraceMs }
       : {}),
-    ...(options.stallMs !== undefined ? { stallMs: options.stallMs } : {}),
-    isSchedulerPaused: (eventId) =>
-      schedulerAdminPort.get().isSchedulerPaused(eventId),
     withLock,
     now,
     forget: (agentId) => runtimes.delete(agentId),
@@ -1661,7 +1664,7 @@ export function createAgentService(options: AgentServiceOptions) {
     fleetWatchdog.close()
     queue.cancelDrain()
     planApplier.close()
-    // Each runtime owns its agent's timers (deadline/grace/stall), finish
+    // Each runtime owns its agent's timers (deadline/grace), finish
     // bookkeeping and session: disposing them releases every per-agent
     // resource in one sweep — there is no other registry to clear.
     await Promise.allSettled([...runtimes.values()].map((rt) => rt.dispose()))
