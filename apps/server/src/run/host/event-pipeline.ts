@@ -161,10 +161,10 @@ export type AgentEventPipeline = ReturnType<typeof createAgentEventPipeline>
 /**
  * Per-agent event pipeline. Subscribed to one AgentSession; translates SDK
  * events into live SSE progress (ephemeral) over the bus. Durable persistence
- * is owned by the injected SessionManager (DbSessionManager writes
+ * is owned by the injected SessionManager (the session adapter writes
  * session_entries as pi appends) — this pipeline never writes storage itself.
  *
- * `message.committed` is driven by the storage layer: DbSessionManager fires
+ * `message.committed` is driven by the storage layer: the session adapter fires
  * `onAppend(entry, seq)` from its `commit()` for every persisted entry (pi emits
  * no equivalent event for regular messages — it `_emit`s `message_end` *before*
  * calling `appendMessage`). That callback is the authoritative "entry just
@@ -200,7 +200,7 @@ export function createAgentEventPipeline(options: {
   // toolResult messages (tool_execution_start → tool_execution_end). The pi
   // pipeline skips message_start for toolResult, so its duration comes only
   // from tool execution. Finalized timing is read by `metaFor` (the
-  // DbSessionManager metaProvider) and attached to the committed entry, then
+  // the session adapter metaProvider) and attached to the committed entry, then
   // dropped to bound memory.
   let assistantT0: number | null = null
   const blockTimings = new Map<
@@ -272,7 +272,7 @@ export function createAgentEventPipeline(options: {
   }
 
   /** Timing meta for a session entry, or null when none was recorded. The
-   * DbSessionManager calls this pre-commit (metaProvider) to write the `meta`
+   * the session adapter calls this pre-commit (metaProvider) to write the `meta`
    * column; `commitEntry` calls it again to attach meta to the live
    * message.committed item. */
   function metaFor(entry: SessionEntry): TimingMeta | null {
@@ -288,7 +288,7 @@ export function createAgentEventPipeline(options: {
     return null
   }
 
-  /** Called by DbSessionManager.onAppend for every persisted entry. Emits
+  /** Called by the session adapter.onAppend for every persisted entry. Emits
    * message.committed for renderable kinds with the entry's real seq, and
    * refreshes context/totals when a compaction/branch_summary lands (they carry
    * their own usage). Non-renderable kinds (model_change, custom, ...) are
@@ -383,7 +383,7 @@ export function createAgentEventPipeline(options: {
         // the message right after emitting message_end, so this runs before
         // the commit that consumes it via `metaFor`.
         finalizeAssistant(event.message)
-        // The entry is committed via DbSessionManager.onAppend (pi appends the
+        // The entry is committed via the session adapter.onAppend (pi appends the
         // message right after emitting message_end). Here we only refresh the
         // stat strip.
         emitContext()

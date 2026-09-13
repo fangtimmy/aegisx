@@ -22,8 +22,8 @@ type MessageProgress = Extract<LiveEvent, { type: "message.progress" }>
 type Activity = Extract<LiveEvent, { type: "agent.activity" }>
 
 /** A pipeline wired to a recording bus. Persistence is owned by the
- * SessionManager; the pipeline's `commitEntry` is driven by
- * DbSessionManager.onAppend (the authoritative "entry just persisted" signal,
+ * SessionManager; the pipeline's `commitEntry` is driven by the session
+ * adapter's onAppend (the authoritative "entry just persisted" signal,
  * since pi emits no equivalent event for regular messages). */
 function setup() {
   const emitted: LiveEvent[] = []

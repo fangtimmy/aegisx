@@ -162,7 +162,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
     return deps.withLock(agentId, async () => {
       requireIdleAgent(agentId)
       // Nulling the pointer makes prepareAgent's createHost build a fresh
-      // DbSessionManager (new sessions row) and write the new id back.
+      // PiSessionAdapter (new sessions row) and write the new id back.
       emitSessionSwitched(agentId, null, principal)
       await rebuildAgentSession(agentId)
       deps.emitAgent(agentId)

@@ -7,19 +7,18 @@ import {
   createExtensionRuntime,
   type ModelRuntime,
   type ResourceLoader,
-  SessionManager,
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 
 import type { Database } from "../../db"
-import { DbSessionManager } from "./db-session-manager"
 import {
   type AgentEventPipeline,
   computeContextSample,
   createAgentEventPipeline,
 } from "./event-pipeline"
 import type { LiveBus } from "./live"
+import { PiSessionAdapter } from "./pi-session-adapter"
 
 /**
  * Who a host-side session belongs to: exactly one agent (v19 — sessions
@@ -84,22 +83,9 @@ export type CreateHostAgentSessionInput = {
   bus: LiveBus
 }
 
-/** Map a {@link SessionOwner} onto `DbSessionManager` create/open params. */
+/** Map a {@link SessionOwner} onto the session adapter create/open params. */
 function ownerManagerOpts(owner: SessionOwner) {
   return { agentId: owner.agentId }
-}
-
-/**
- * pi's SessionManager carries private state that defeats a TypeScript
- * `implements`/structural check, so DbSessionManager (validated against pi's
- * SessionManager in db-session-manager.test) is bridged here. This is the
- * single point that crosses the type boundary.
- */
-function asSdkSessionManager(sm: DbSessionManager): SessionManager {
-  // SessionManager carries private pi state; structural equivalence is
-  // asserted by db-session-manager.test — this is the single bridge point.
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  return sm as unknown as SessionManager
 }
 
 function minimalResourceLoader(systemPrompt: string): ResourceLoader {
@@ -131,7 +117,7 @@ function minimalResourceLoader(systemPrompt: string): ResourceLoader {
  * prompt is exposed, so workspace files and global pi resources never leak into
  * the agent context.
  *
- * Persistence: the DB is the single source of truth. DbSessionManager writes
+ * Persistence: the DB is the single source of truth. PiSessionAdapter writes
  * `session_entries` as pi appends; its `onAppend(entry, seq)` is the
  * authoritative "entry just persisted" signal (pi emits no equivalent for
  * regular messages — it `_emit`s `message_end` *before* `appendMessage`), so
@@ -157,17 +143,15 @@ export async function createHostAgentSession(
   } = input
 
   // --- Session backend: the DB is the single backend ------------------------
-  //  - new session  -> DbSessionManager.create
-  //  - resume       -> DbSessionManager.open
+  //  - new session  -> PiSessionAdapter.create
+  //  - resume       -> PiSessionAdapter.open
   const resume = input.resumeFrom
-  const dbSession = resume
-    ? DbSessionManager.open(resume.sessionId, {
+  const sessionManager = resume
+    ? PiSessionAdapter.open(resume.sessionId, {
         ...ownerManagerOpts(owner),
         db,
       })
-    : DbSessionManager.create({ ...ownerManagerOpts(owner), cwd, db })
-  const sessionManager = asSdkSessionManager(dbSession)
-
+    : PiSessionAdapter.create({ ...ownerManagerOpts(owner), cwd, db })
   const settingsManager = SettingsManager.inMemory({
     // Long CTF runs / orchestrator strategy loops need compaction to survive
     // context overflow; retry absorbs transient provider errors. Both
@@ -196,8 +180,8 @@ export async function createHostAgentSession(
 
   // metaProvider is pre-commit (writes the meta column); onAppend stays
   // post-insert (SSE notification only).
-  dbSession.metaProvider = (entry) => pipeline.metaFor(entry)
-  dbSession.onAppend = (entry, seq) => pipeline.commitEntry(entry, seq)
+  sessionManager.metaProvider = (entry) => pipeline.metaFor(entry)
+  sessionManager.onAppend = (entry, seq) => pipeline.commitEntry(entry, seq)
 
   const { session } = await createAgentSession({
     cwd,
@@ -223,7 +207,7 @@ export async function createHostAgentSession(
       // pi's abort does not interrupt an in-flight tool call; a late
       // message_end must not append through the retired manager and fork the
       // session tree against the reopened one.
-      dbSession?.close()
+      sessionManager.close()
     },
   }
 }

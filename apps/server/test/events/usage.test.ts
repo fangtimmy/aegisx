@@ -7,8 +7,10 @@ import { join } from "node:path"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 
 import { createApp } from "../../src/app"
-import { agents, sessionEntries } from "../../src/db/schema"
+import * as schema from "../../src/db/schema"
+import { agents } from "../../src/db/schema"
 import { responseJson } from "../../src/lib/guards"
+import { seedSessionEntry } from "../helpers"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -34,7 +36,7 @@ function createTestApp() {
 function seedDb(dataDir: string) {
   const raw = new Database(join(dataDir, "aegisx.sqlite"))
   raw.run("PRAGMA foreign_keys = OFF")
-  return drizzle(raw)
+  return drizzle(raw, { schema })
 }
 
 /** Assistant-message usage payload (entry-usage.ts accumulator shape). */
@@ -84,20 +86,21 @@ function seedEntry(
   seq: number,
   usage: ReturnType<typeof assistantUsage>
 ) {
-  db.insert(sessionEntries)
-    .values({
-      id: `entry-${seq}`,
-      sessionId: "sess-1",
-      agentId,
-      seq,
-      type: "message",
-      data: JSON.stringify({
-        type: "message",
-        message: { role: "assistant", usage, timestamp: 0 },
-      }),
-      createdAt: "2025-01-01T00:00:00Z",
-    })
-    .run()
+  seedSessionEntry(db, {
+    sessionId: "sess-1",
+    agentId,
+    seq,
+    id: `entry-${seq}`,
+    createdAt: "2025-01-01T00:00:00Z",
+    message: { role: "assistant", usage, timestamp: 0 },
+    usage: {
+      input: usage.input,
+      output: usage.output,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      cost: usage.cost.total,
+    },
+  })
 }
 
 describe("event usage API (session_entries.agentId aggregation)", () => {

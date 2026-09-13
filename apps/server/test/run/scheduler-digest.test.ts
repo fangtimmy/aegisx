@@ -6,13 +6,20 @@ import {
   challengeFlags,
   challengeRemote,
   queueState,
+  sessions,
   spawnQueue,
 } from "../../src/db/schema"
 import { DEFAULT_SCHEDULER_DIGEST_TEMPLATE } from "../../src/orchestration/prompt-defaults"
 import { renderTemplateBody } from "../../src/orchestration/prompt-templates"
 import { createAgentQueries } from "../../src/run/queries"
 import { createSchedulerAdmin } from "../../src/run/scheduler-admin"
-import { flatSettings, seedChallenge, seedEvent, now } from "../helpers"
+import {
+  flatSettings,
+  seedChallenge,
+  seedEvent,
+  seedSessionEntry,
+  now,
+} from "../helpers"
 import { refine } from "../support"
 
 function setup() {
@@ -330,26 +337,20 @@ describe("scheduler digest: invested attempts + cumulative tokens", () => {
           .run()
       }
       // One assistant entry on a1: 1.5M prompt tokens.
-      db.insert(require("../../src/db/schema").sessions)
+      db.insert(sessions)
         .values({ id: "s-a1", agentId: "a1", cwd: "/w", createdAt: now() })
         .run()
-      db.insert(require("../../src/db/schema").sessionEntries)
-        .values({
-          id: "e-1",
-          sessionId: "s-a1",
-          agentId: "a1",
-          seq: 1,
-          type: "message",
-          data: JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              usage: { input: 1_500_000, output: 0 },
-            },
-          }),
-          createdAt: now(),
-        })
-        .run()
+      seedSessionEntry(db, {
+        sessionId: "s-a1",
+        agentId: "a1",
+        seq: 1,
+        id: "e-1",
+        message: {
+          role: "assistant",
+          usage: { input: 1_500_000, output: 0 },
+        },
+        usage: { input: 1_500_000, output: 0 },
+      })
 
       const ctx = admin.getDigestContext("evt-1")
       const web1 = ctx.challenges.find((c) => c.name === "web1")!

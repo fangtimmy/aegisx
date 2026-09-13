@@ -6,85 +6,61 @@ import {
   type TimingMeta,
 } from "@aegisx/shared"
 import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { and, asc, gt, sql, type SQL } from "drizzle-orm"
+import { and, asc, desc, gt, inArray, sql, type SQL } from "drizzle-orm"
 
 import type { Database } from "../../db"
 import { sessionEntries } from "../../db/schema"
-import { parseJson } from "../../lib/guards"
 import { type EntryUsageTotals } from "./entry-usage"
 import { entryKeyOf } from "./event-pipeline"
+import { entryFromRow } from "./session-entry-codec"
 
 /** Only renderable session-entry kinds are surfaced to message lists. */
-const RENDERABLE_TYPES = new Set([
+const RENDERABLE_TYPES = [
   "message",
   "compaction",
   "branch_summary",
   "model_change",
   "thinking_level_change",
-])
-
-/** One usage field value, JSON-validity guarded: malformed `data` rows are
- * skipped (json_extract raises on invalid JSON; the JS side parses and skips
- * them, so the SQL must contribute 0 the same way). Exported for aggregate
- * queries that join session_entries with agents (e.g. per-model billing). */
-export const usageField = (path: string) => sql<number>`
-    CAST(
-      COALESCE(
-        json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${path}),
-        0
-      ) AS REAL
-    )
-  `
-/** Extract `$.message.role` with the same guard (null when data is invalid). */
-export const roleField = sql`json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${"$.message.role"})`
+] as const
 
 /** One aggregate SQL pass over session_entries matching `where`: token/cost
- * sums (the parity twin of {@link accumulateEntryUsage} — see
- * {@link sumUsageTotals}).
- *
- * Reads only the needed fields via SQLite JSON1 (json_extract) instead of
- * parsing every `data` blob: the denormalized `type` column picks the usage
- * location (message.usage for assistant/toolResult messages, top-level usage
- * for compaction/branch_summary); missing/malformed fields coalesce to 0,
- * matching the JS accumulator's toNum semantics for non-numeric values
- * (SQLite CAST of a non-numeric to REAL yields 0). Malformed `data` rows
- * contribute nothing on both sides (the JS reader skips them; json_extract
- * returns NULL). `totalTokens` stays a JS sum (pi formula: input + output +
- * cacheRead + cacheWrite). */
+ * sums straight off the first-class usage columns (the SQL twin of
+ * {@link accumulateEntryUsage} — the JS fold stays for live sampling; both
+ * are same-sourced from what the adapter writes). `turns` counts assistant
+ * message rows (pi getSessionStats counts every assistant message, usage or
+ * not). `cacheHitRate` mirrors the fold's rule: the LATEST assistant row with
+ * prompt tokens (input + cacheRead + cacheWrite > 0) wins. */
 export function usageTotalsSql(
   db: Database,
   where: SQL | undefined
-): EntryUsageTotals & { turns: number } {
-  /** SUM of one usage field: top-level path for compaction/branch_summary,
-   * message path for assistant/toolResult messages. */
-  const sumField = (msgPath: string, entryPath: string) => sql<number>`
-    SUM(
-      CASE
-        WHEN ${sessionEntries.type} IN ('compaction', 'branch_summary')
-          THEN ${usageField(entryPath)}
-        WHEN ${sessionEntries.type} = 'message'
-          AND ${roleField} IN ('assistant', 'toolResult')
-          THEN ${usageField(msgPath)}
-        ELSE 0
-      END
-    )
-  `
+): EntryUsageTotals & { turns: number; cacheHitRate: number | null } {
+  const scope = where ? sql`${where} AND ` : sql``
   const row = db
     .select({
-      input: sumField("$.message.usage.input", "$.usage.input"),
-      output: sumField("$.message.usage.output", "$.usage.output"),
-      cacheRead: sumField("$.message.usage.cacheRead", "$.usage.cacheRead"),
-      cacheWrite: sumField("$.message.usage.cacheWrite", "$.usage.cacheWrite"),
-      reasoning: sumField("$.message.usage.reasoning", "$.usage.reasoning"),
-      cost: sumField("$.message.usage.cost.total", "$.usage.cost.total"),
-      // pi getSessionStats counts EVERY assistant message as a turn (before
-      // the usage guard) — same rule as accumulateEntryUsage.
-      turns: sql<number>`SUM(CASE WHEN ${sessionEntries.type} = 'message' AND ${roleField} = 'assistant' THEN 1 ELSE 0 END)`,
+      input: sql<number>`COALESCE(SUM(${sessionEntries.inputTokens}), 0)`,
+      output: sql<number>`COALESCE(SUM(${sessionEntries.outputTokens}), 0)`,
+      cacheRead: sql<number>`COALESCE(SUM(${sessionEntries.cacheReadTokens}), 0)`,
+      cacheWrite: sql<number>`COALESCE(SUM(${sessionEntries.cacheWriteTokens}), 0)`,
+      reasoning: sql<number>`COALESCE(SUM(${sessionEntries.reasoningTokens}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${sessionEntries.cost}), 0)`,
+      turns: sql<number>`SUM(CASE WHEN ${sessionEntries.role} = 'assistant' THEN 1 ELSE 0 END)`,
+      cacheHitRate: sql<number | null>`(
+        SELECT ${sessionEntries.cacheReadTokens} * 100.0 /
+          (${sessionEntries.inputTokens} + ${sessionEntries.cacheReadTokens} + ${sessionEntries.cacheWriteTokens})
+        FROM ${sessionEntries}
+        WHERE ${scope}${sessionEntries.role} = 'assistant'
+          AND ${sessionEntries.inputTokens} + ${sessionEntries.cacheReadTokens} + ${sessionEntries.cacheWriteTokens} > 0
+        ORDER BY ${sessionEntries.seq} DESC
+        LIMIT 1
+      )`,
     })
     .from(sessionEntries)
     .where(where)
     .get()
-  const totals: EntryUsageTotals & { turns: number } = {
+  const totals: EntryUsageTotals & {
+    turns: number
+    cacheHitRate: number | null
+  } = {
     input: row?.input ?? 0,
     output: row?.output ?? 0,
     cacheRead: row?.cacheRead ?? 0,
@@ -92,6 +68,7 @@ export function usageTotalsSql(
     reasoning: row?.reasoning ?? 0,
     cost: row?.cost ?? 0,
     turns: row?.turns ?? 0,
+    cacheHitRate: row?.cacheHitRate ?? null,
     // pi getSessionStats total — NOT the provider-reported totalTokens field.
     totalTokens: 0,
   }
@@ -101,9 +78,9 @@ export function usageTotalsSql(
 }
 
 /** Sum token usage + cost across entries matching `where`. Returns undefined
- * when nothing was used (so callers can omit the field). Runs as a single
- * aggregate SQL query (JSON1) instead of an O(N) full-row JSON.parse per call
- * — usageTotals sits on hot paths (each turn start/settle, flag, compaction). */
+ * when nothing was used (so callers can omit the field). Single aggregate SQL
+ * query over the usage columns — usageTotals sits on hot paths (each turn
+ * start/settle, flag, compaction). */
 export function sumUsageTotals(
   db: Database,
   where: SQL | undefined
@@ -129,9 +106,9 @@ export function sumUsageTotals(
  * it). Every row carries its agent_id (v8: notNull).
  *
  * The cursor is the per-session append position (`unique(sessionId, seq)`);
- * `nextAfter` echoes the highest SCANNED seq — renderable or not — so a
- * session whose tail is non-renderable rows (label / session_info) does not
- * pin clients into re-pulling them forever. */
+ * `nextAfter` echoes the highest seq above the cursor — renderable or not —
+ * so a session whose tail is non-renderable rows (label / session_info) does
+ * not pin clients into re-pulling them forever. */
 export function listRenderableEntries(
   db: Database,
   scopeWhere: SQL | undefined,
@@ -139,28 +116,41 @@ export function listRenderableEntries(
 ): MessageList {
   const rows = db
     .select({
-      data: sessionEntries.data,
+      id: sessionEntries.id,
+      parentId: sessionEntries.parentId,
+      createdAt: sessionEntries.createdAt,
+      body: sessionEntries.body,
       meta: sessionEntries.meta,
       seq: sessionEntries.seq,
       agentId: sessionEntries.agentId,
     })
     .from(sessionEntries)
-    .where(and(scopeWhere, gt(sessionEntries.seq, opts.after)))
+    .where(
+      and(
+        scopeWhere,
+        gt(sessionEntries.seq, opts.after),
+        inArray(sessionEntries.type, [...RENDERABLE_TYPES])
+      )
+    )
     .orderBy(asc(sessionEntries.seq))
     .all()
+  const tail = db
+    .select({ seq: sessionEntries.seq })
+    .from(sessionEntries)
+    .where(and(scopeWhere, gt(sessionEntries.seq, opts.after)))
+    .orderBy(desc(sessionEntries.seq))
+    .limit(1)
+    .get()
   const items: MessageListItem[] = []
-  let nextAfter = opts.after
   for (const row of rows) {
-    nextAfter = row.seq
     let entry: SessionEntry
     try {
-      // Written by DbSessionManager (typed at commit time); parse only
-      // guards against corrupt/truncated rows.
-      entry = parseJson<SessionEntry>(row.data)
+      // Written by the adapter (typed at commit time); parse only guards
+      // against corrupt/truncated rows.
+      entry = entryFromRow(row)
     } catch {
       continue
     }
-    if (!RENDERABLE_TYPES.has(entry.type)) continue
     let meta: TimingMeta | undefined
     if (row.meta) {
       try {
@@ -177,5 +167,5 @@ export function listRenderableEntries(
       ...(meta ? { meta } : {}),
     })
   }
-  return { items, nextAfter }
+  return { items, nextAfter: tail?.seq ?? opts.after }
 }

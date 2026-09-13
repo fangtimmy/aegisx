@@ -215,9 +215,17 @@ CREATE TABLE `session_entries` (
 	`parent_id` text,
 	`seq` integer NOT NULL,
 	`type` text NOT NULL,
-	`data` text NOT NULL,
-	`meta` text,
+	`role` text,
+	`tool_name` text,
 	`created_at` text NOT NULL,
+	`input_tokens` integer,
+	`output_tokens` integer,
+	`cache_read_tokens` integer,
+	`cache_write_tokens` integer,
+	`reasoning_tokens` integer,
+	`cost` real,
+	`meta` text,
+	`body` text NOT NULL,
 	FOREIGN KEY (`session_id`) REFERENCES `sessions`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE cascade
 );
@@ -229,6 +237,7 @@ CREATE TABLE `sessions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`agent_id` text NOT NULL,
 	`cwd` text NOT NULL,
+	`active_leaf_id` text,
 	`created_at` text NOT NULL,
 	FOREIGN KEY (`agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE cascade
 );

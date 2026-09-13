@@ -11,7 +11,7 @@ import { join } from "node:path"
 import { defaultSettings } from "@aegisx/shared"
 
 import { createDatabase, type Database } from "../src/db"
-import { agents, challenges, events } from "../src/db/schema"
+import { agents, challenges, events, sessionEntries } from "../src/db/schema"
 import type {
   AgentPrincipal,
   Principal,
@@ -52,6 +52,79 @@ export function setupDb(): {
 }
 
 export const now = () => new Date("2025-01-01T00:00:00Z").toISOString()
+
+/** First-class usage columns for {@link seedSessionEntry}. */
+export type EntryUsageSeed = {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  reasoning?: number
+  cost?: number
+}
+
+/** Seed one canonical `session_entries` row (the owned v26 shape: queryable
+ * fields as columns + the `{kind, ...typed, payload}` body envelope). Message
+ * rows pass `message` (pi payload, verbatim); other kinds pass `kind` with
+ * optional `typed` / `payload`. `usage` fills the usage columns at the
+ * location the adapter would extract them from. */
+export function seedSessionEntry(
+  db: Database,
+  seed: {
+    sessionId: string
+    agentId: string
+    seq: number
+    id?: string
+    parentId?: string | null
+    createdAt?: string
+    message?: Record<string, unknown>
+    kind?: string
+    typed?: Record<string, unknown>
+    payload?: Record<string, unknown>
+    usage?: EntryUsageSeed
+    meta?: string
+  }
+) {
+  const kind = seed.kind ?? (seed.message ? "message" : undefined)
+  if (!kind) throw new Error("seedSessionEntry: message or kind required")
+  const message = seed.message
+  const messageRole =
+    message && typeof message.role === "string" ? message.role : null
+  const role =
+    messageRole === "user" ||
+    messageRole === "assistant" ||
+    messageRole === "toolResult"
+      ? messageRole
+      : null
+  const body =
+    kind === "message"
+      ? { kind, payload: message ? { message } : {} }
+      : { kind, ...seed.typed, payload: seed.payload ?? {} }
+  db.insert(sessionEntries)
+    .values({
+      id: seed.id ?? `${seed.sessionId}-e${seed.seq}`,
+      sessionId: seed.sessionId,
+      agentId: seed.agentId,
+      parentId: seed.parentId ?? null,
+      seq: seed.seq,
+      type: kind,
+      role,
+      toolName:
+        messageRole === "toolResult" && typeof message?.toolName === "string"
+          ? message.toolName
+          : null,
+      createdAt: seed.createdAt ?? now(),
+      inputTokens: seed.usage?.input ?? null,
+      outputTokens: seed.usage?.output ?? null,
+      cacheReadTokens: seed.usage?.cacheRead ?? null,
+      cacheWriteTokens: seed.usage?.cacheWrite ?? null,
+      reasoningTokens: seed.usage?.reasoning ?? null,
+      cost: seed.usage?.cost ?? null,
+      ...(seed.meta ? { meta: seed.meta } : {}),
+      body: JSON.stringify(body),
+    })
+    .run()
+}
 
 /** Principal fixtures for service-level tests. `agentPrincipal()` matches the
  * {@link seedAgent} defaults (evt-1 / ch-1 / solver) so most call sites need

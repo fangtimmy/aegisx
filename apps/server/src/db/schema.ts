@@ -6,6 +6,7 @@ import {
   index,
   integer,
   primaryKey,
+  real,
   sqliteTable,
   text,
   unique,
@@ -19,7 +20,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 25
+export const SCHEMA_VERSION = 26
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -231,12 +232,11 @@ export const agents = sqliteTable(
 )
 
 /**
- * Database-backed session tree (replaces per-agent jsonl files).
- *
- * One `sessions` row = one pi session (one agent's conversation), owned by
- * exactly one agent. Each `session_entries` row is one append-only
- * SessionTreeEntry — byte-for-byte the JSON pi would have written to a jsonl
- * line. Driven by `DbSessionManager`.
+ * Owned session store (E). One `sessions` row = one pi session (one agent's
+ * conversation), owned by exactly one agent. Each `session_entries` row is one
+ * canonical entry written by `pi-session-adapter.ts`: queryable fields are
+ * first-class columns, the pi-specific remainder rides in `body` verbatim.
+ * The adapter is the only writer.
  */
 export const sessions = sqliteTable(
   "sessions",
@@ -246,6 +246,11 @@ export const sessions = sqliteTable(
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
     cwd: text("cwd").notNull(),
+    /** Persisted branch position (pi's leaf pointer) — survives restart so a
+     * branch taken without a following append is not lost. Maintained by the
+     * adapter on every write; null = before any entry (resetLeaf state of an
+     * empty session). */
+    activeLeafId: text("active_leaf_id"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [index("sessions_agent_id_idx").on(table.agentId)]
@@ -264,15 +269,30 @@ export const sessionEntries = sqliteTable(
     parentId: text("parent_id"),
     /** Monotonic append order within the session (= jsonl line number). */
     seq: integer("seq").notNull(),
+    /** Canonical entry kind (registry in run/host/session-entry-codec.ts). */
     type: text("type").notNull(),
-    /** Full SessionEntry JSON (byte-for-byte a pi jsonl line). */
-    data: text("data").notNull(),
+    /** user | assistant | toolResult — message rows only, null otherwise. */
+    role: text("role"),
+    /** The toolResult row's tool name (stats per-tool breakdown). */
+    toolName: text("tool_name"),
+    /** The entry's own timestamp (pi entry.timestamp). */
+    createdAt: text("created_at").notNull(),
+    /** First-class usage columns (assistant/toolResult messages +
+     * compaction/branch_summary); null when the entry carries none. */
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    cacheWriteTokens: integer("cache_write_tokens"),
+    reasoningTokens: integer("reasoning_tokens"),
+    cost: real("cost"),
     /** Timing metadata JSON (nullable; v10). Assistant message rows carry
      * durationMs + per-block timing; toolResult rows carry durationMs; all
-     * other rows + pre-v10 rows are null. Produced by the event pipeline and
-     * injected pre-commit via DbSessionManager.metaProvider. */
+     * other rows are null. Produced by the event pipeline and injected
+     * pre-commit via the adapter's metaProvider. */
     meta: text("meta"),
-    createdAt: text("created_at").notNull(),
+    /** Canonical JSON envelope ({kind, ...typedFields, payload}) — owned by
+     * the adapter; de-canonicalizes back to the pi entry on resume. */
+    body: text("body").notNull(),
   },
   (table) => [
     uniqueIndex("session_entries_session_seq_unique").on(

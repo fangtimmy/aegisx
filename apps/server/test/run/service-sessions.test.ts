@@ -7,13 +7,14 @@ import {
   makeAgentService,
   makeModel,
   makeProvider,
+  seedSessionEntry,
   stubHostAgentSession,
   USER,
 } from "../helpers"
 
 /** Stub service: every createHost call records the prepared agent and returns
- * a stub session (no real pi / DbSessionManager). Session rows/entries are
- * seeded directly via the DB in the tests below. */
+ * a stub session (no real pi / adapter). Session rows/entries are seeded
+ * directly via the DB in the tests below. */
 function makeService() {
   const prepared: string[] = []
   const h = makeAgentService({
@@ -24,7 +25,7 @@ function makeService() {
         resumeFrom?: { sessionId: string }
       }) => {
         prepared.push(input.agentId)
-        // Honor the resume pointer like DbSessionManager.open would.
+        // Honor the resume pointer like PiSessionAdapter.open would.
         const id =
           input.resumeFrom?.sessionId ?? "sess-" + input.agentId.slice(0, 6)
         return stubHostAgentSession(id)
@@ -32,17 +33,6 @@ function makeService() {
     ),
   })
   return { h, db: h.db, service: h.service, prepared }
-}
-
-/** A minimal message session_entries row (valid SessionEntry JSON). */
-function entryData(role: string, text: string, id: string): string {
-  return JSON.stringify({
-    type: "message",
-    id,
-    parentId: null,
-    timestamp: new Date().toISOString(),
-    message: { role, content: text, timestamp: Date.now() },
-  })
 }
 
 /** Seed one session for the agent with `n` entries (seq 1..n). */
@@ -57,21 +47,18 @@ function seedSession(
     .values({ id: sessionId, agentId, cwd: "/ws", createdAt })
     .run()
   for (let seq = 1; seq <= n; seq += 1) {
-    db.insert(sessionEntries)
-      .values({
-        id: `${sessionId}-e${seq}`,
-        sessionId,
-        agentId,
-        seq,
-        type: "message",
-        data: entryData(
-          seq % 2 === 1 ? "user" : "assistant",
-          `m${seq}`,
-          `${sessionId}-e${seq}`
-        ),
-        createdAt: new Date().toISOString(),
-      })
-      .run()
+    seedSessionEntry(db, {
+      id: `${sessionId}-e${seq}`,
+      sessionId,
+      agentId,
+      seq,
+      createdAt: new Date().toISOString(),
+      message: {
+        role: seq % 2 === 1 ? "user" : "assistant",
+        content: `m${seq}`,
+        timestamp: Date.now(),
+      },
+    })
   }
 }
 

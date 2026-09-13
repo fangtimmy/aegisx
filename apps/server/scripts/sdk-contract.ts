@@ -111,11 +111,12 @@ function seed(database: Database): void {
         parentId: null,
         seq,
         type: "message",
-        data: JSON.stringify({
-          type: "message",
-          message: { role: "user", content: `line ${seq}` },
-        }),
+        role: "user",
         createdAt: now,
+        body: JSON.stringify({
+          kind: "message",
+          payload: { message: { role: "user", content: `line ${seq}` } },
+        }),
       })
       .run()
   }

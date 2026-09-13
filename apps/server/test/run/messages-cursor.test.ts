@@ -1,7 +1,13 @@
 import { describe, expect, mock, test } from "bun:test"
 
-import { agents, sessionEntries, sessions } from "../../src/db/schema"
-import { makeAgentService, now, stubHostAgentSession, USER } from "../helpers"
+import { agents, sessions } from "../../src/db/schema"
+import {
+  makeAgentService,
+  seedSessionEntry,
+  now,
+  stubHostAgentSession,
+  USER,
+} from "../helpers"
 
 /** A minimal service whose listMessages is the per-agent query under test. */
 function makeService() {
@@ -21,27 +27,18 @@ function insertMessage(
   seq: number
 ) {
   entryCounter += 1
-  db.insert(sessionEntries)
-    .values({
-      id: `entry-${entryCounter}`,
-      sessionId,
-      agentId,
-      seq,
-      type: "message",
-      data: JSON.stringify({
-        type: "message",
-        id: `m-${entryCounter}`,
-        parentId: null,
-        timestamp: new Date(1000 + entryCounter).toISOString(),
-        message: {
-          role: "user",
-          timestamp: 1000 + entryCounter,
-          content: [{ type: "text", text: `msg ${entryCounter}` }],
-        },
-      }),
-      createdAt: now(),
-    })
-    .run()
+  seedSessionEntry(db, {
+    id: `entry-${entryCounter}`,
+    sessionId,
+    agentId,
+    seq,
+    createdAt: new Date(1000 + entryCounter).toISOString(),
+    message: {
+      role: "user",
+      timestamp: 1000 + entryCounter,
+      content: [{ type: "text", text: `msg ${entryCounter}` }],
+    },
+  })
 }
 
 function seedAgentWithSession(

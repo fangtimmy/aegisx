@@ -12,6 +12,7 @@ import type {
 } from "@aegisx/shared"
 import { progressOf } from "@aegisx/shared"
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm"
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 
 import type { Database } from "../db"
 import {
@@ -27,7 +28,6 @@ import {
   isPlatformIntegrated,
   type ChallengeRemote,
 } from "../platforms/challenge-state"
-import { roleField, usageField } from "../run/host"
 
 /** Per-group usage rollup bucket (tokens carried without toolCalls). */
 type UsageTotals = {
@@ -39,43 +39,27 @@ type UsageTotals = {
   turns: number
 }
 
-/** Sum of one guarded usage field over entries joined to the event's agents.
- * Shares the JSON1 extractors with sumUsageTotals (run/host/session-queries). */
-const sumUsageField = (msgPath: string, entryPath: string) => sql<number>`
-    SUM(
-      CASE
-        WHEN ${sessionEntries.type} IN ('compaction', 'branch_summary')
-          THEN ${usageField(entryPath)}
-        WHEN ${sessionEntries.type} = 'message'
-          AND ${roleField} IN ('assistant', 'toolResult')
-          THEN ${usageField(msgPath)}
-        ELSE 0
-      END
-    )
-  `
+/** One usage column summed over the group's rows (NULL rows contribute
+ * nothing; an all-NULL group sums to 0). */
+const sumColumn = (column: AnySQLiteColumn) =>
+  sql<number>`COALESCE(SUM(${column}), 0)`
 
 /** The single aggregate pass over the event's session_entries, grouped by
  * agent: per-model and per-challenge usage roll up from these rows in JS
  * (agentRows carry model/challengeId) instead of re-scanning the largest
- * table. Shares the JSON1 extractors with sumUsageTotals
+ * table. Reads the same first-class usage columns as sumUsageTotals
  * (run/host/session-queries). */
 function usageByAgentRows(db: Database, eventId: string) {
   return db
     .select({
       key: agents.id,
-      input: sumUsageField("$.message.usage.input", "$.usage.input"),
-      output: sumUsageField("$.message.usage.output", "$.usage.output"),
-      cacheRead: sumUsageField(
-        "$.message.usage.cacheRead",
-        "$.usage.cacheRead"
-      ),
-      cacheWrite: sumUsageField(
-        "$.message.usage.cacheWrite",
-        "$.usage.cacheWrite"
-      ),
-      cost: sumUsageField("$.message.usage.cost.total", "$.usage.cost.total"),
-      turns: sql<number>`SUM(CASE WHEN ${sessionEntries.type} = 'message' AND ${roleField} = 'assistant' THEN 1 ELSE 0 END)`,
-      toolCalls: sql<number>`SUM(CASE WHEN ${sessionEntries.type} = 'message' AND ${roleField} = 'toolResult' THEN 1 ELSE 0 END)`,
+      input: sumColumn(sessionEntries.inputTokens),
+      output: sumColumn(sessionEntries.outputTokens),
+      cacheRead: sumColumn(sessionEntries.cacheReadTokens),
+      cacheWrite: sumColumn(sessionEntries.cacheWriteTokens),
+      cost: sumColumn(sessionEntries.cost),
+      turns: sql<number>`SUM(CASE WHEN ${sessionEntries.role} = 'assistant' THEN 1 ELSE 0 END)`,
+      toolCalls: sql<number>`SUM(CASE WHEN ${sessionEntries.role} = 'toolResult' THEN 1 ELSE 0 END)`,
     })
     .from(sessionEntries)
     .innerJoin(agents, eq(sessionEntries.agentId, agents.id))
@@ -561,19 +545,14 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
   }
 
   // --- Tool usage -------------------------------------------------------
-  const toolExpr = sql<string>`json_extract(CASE WHEN json_valid(${sessionEntries.data}) THEN ${sessionEntries.data} END, ${"$.message.toolName"})`
   const toolRows = db
-    .select({ tool: toolExpr, calls: count() })
+    .select({ tool: sessionEntries.toolName, calls: count() })
     .from(sessionEntries)
     .innerJoin(agents, eq(sessionEntries.agentId, agents.id))
     .where(
-      and(
-        eq(agents.eventId, eventId),
-        eq(sessionEntries.type, "message"),
-        sql`${roleField} = 'toolResult'`
-      )
+      and(eq(agents.eventId, eventId), eq(sessionEntries.role, "toolResult"))
     )
-    .groupBy(toolExpr)
+    .groupBy(sessionEntries.toolName)
     .orderBy(desc(count()))
     .limit(10)
     .all()

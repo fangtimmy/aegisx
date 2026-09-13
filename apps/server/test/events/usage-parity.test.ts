@@ -1,18 +1,16 @@
 import { describe, expect, test } from "bun:test"
 
-import type { SessionEntry } from "@earendil-works/pi-coding-agent"
-import { eq, sql, type SQL } from "drizzle-orm"
+import { isRecord } from "@aegisx/shared"
+import { eq, type SQL } from "drizzle-orm"
 
 import { sessionEntries, sessions } from "../../src/db/schema"
-import { parseJson } from "../../src/lib/guards"
 import {
   accumulateEntryUsage,
   type EntryUsage,
 } from "../../src/run/host/entry-usage"
+import { entryFromRow } from "../../src/run/host/session-entry-codec"
 import {
-  roleField,
   sumUsageTotals,
-  usageField,
   usageTotalsSql,
 } from "../../src/run/host/session-queries"
 import { seedAgent, seedChallenge, seedEvent, setupDb, now } from "../helpers"
@@ -32,101 +30,87 @@ function usage(overrides: Partial<EntryUsage> = {}): EntryUsage {
   }
 }
 
-/** Insert a session entry with a given type + data (JSON), keeping the row's
- * `type` column and the entry's own `type` consistent (SQL reads the column,
- * the JS reader reads the JSON). */
+/** Seed one session the way the adapter would persist it: canonical body +
+ * first-class columns extracted from the entry's usage. For non-message kinds
+ * the usage object rides in `payload` (the fold reads it there); message rows
+ * carry it inside `message`. */
 function insertEntry(
   db: Db,
   agentId: string,
   sessionId: string,
   seq: number,
   entry: {
-    type: string
-    message?: { role: string; usage?: unknown }
+    kind: string
+    typed?: Record<string, unknown>
+    payload?: Record<string, unknown>
     usage?: EntryUsage
   }
 ) {
+  const rawMessage = entry.payload?.message
+  const message: Record<string, unknown> | undefined =
+    entry.kind === "message" && isRecord(rawMessage)
+      ? { ...rawMessage, usage: entry.usage }
+      : undefined
+  const messageRole = typeof message?.role === "string" ? message.role : null
   db.insert(sessionEntries)
     .values({
       id: `parity-${seq}`,
       sessionId,
       agentId,
       seq,
-      type: entry.type,
-      data: JSON.stringify(entry),
+      type: entry.kind,
+      role:
+        messageRole === "user" ||
+        messageRole === "assistant" ||
+        messageRole === "toolResult"
+          ? messageRole
+          : null,
+      inputTokens: entry.usage?.input ?? null,
+      outputTokens: entry.usage?.output ?? null,
+      cacheReadTokens: entry.usage?.cacheRead ?? null,
+      cacheWriteTokens: entry.usage?.cacheWrite ?? null,
+      reasoningTokens: entry.usage?.reasoning ?? null,
+      cost: entry.usage?.cost?.total ?? null,
       createdAt: now(),
+      body: JSON.stringify(
+        message
+          ? { kind: entry.kind, payload: { message } }
+          : {
+              kind: entry.kind,
+              ...entry.typed,
+              payload: { ...entry.payload, usage: entry.usage },
+            }
+      ),
     })
     .run()
 }
 
-/** JS side of the parity: parse committed `data` rows, skipping malformed
- * ones (rows are typed at commit time by DbSessionManager; the parse only
- * guards against corrupt/truncated rows). */
-function readEntries(db: Db, where: SQL): SessionEntry[] {
+/** JS side of the parity: de-canonicalize committed rows, skipping corrupt
+ * ones (rows are typed at commit time by the adapter; the parse only guards
+ * against corruption). */
+function readEntries(db: Db, where: SQL) {
   const rows = db
-    .select({ data: sessionEntries.data })
+    .select({
+      id: sessionEntries.id,
+      parentId: sessionEntries.parentId,
+      createdAt: sessionEntries.createdAt,
+      body: sessionEntries.body,
+    })
     .from(sessionEntries)
     .where(where)
     .all()
-  const entries: SessionEntry[] = []
+  const entries = []
   for (const row of rows) {
     try {
-      entries.push(parseJson<SessionEntry>(row.data))
+      entries.push(entryFromRow(row))
     } catch {
-      // skip malformed
+      // skip corrupt
     }
   }
   return entries
 }
 
-/** One guarded usage-field sum — structural replica of events/stats.ts's
- * `sumUsageField` (the sessionEntries JSON1 aggregation event stats actually
- * run). The JSON1 extractors are imported from production (session-queries);
- * if this CASE drifts from stats.ts, event stats drift from the JS totals. */
-const statsSumField = (msgPath: string, entryPath: string) => sql<number>`
-    SUM(
-      CASE
-        WHEN ${sessionEntries.type} IN ('compaction', 'branch_summary')
-          THEN ${usageField(entryPath)}
-        WHEN ${sessionEntries.type} = 'message'
-          AND ${roleField} IN ('assistant', 'toolResult')
-          THEN ${usageField(msgPath)}
-        ELSE 0
-      END
-    )
-  `
-
-/** stats.ts-shaped one-pass aggregate over a scope. */
-function statsUsageTotals(db: Db, where: SQL) {
-  return db
-    .select({
-      input: statsSumField("$.message.usage.input", "$.usage.input"),
-      output: statsSumField("$.message.usage.output", "$.usage.output"),
-      cacheRead: statsSumField(
-        "$.message.usage.cacheRead",
-        "$.usage.cacheRead"
-      ),
-      cacheWrite: statsSumField(
-        "$.message.usage.cacheWrite",
-        "$.usage.cacheWrite"
-      ),
-      reasoning: statsSumField(
-        "$.message.usage.reasoning",
-        "$.usage.reasoning"
-      ),
-      cost: statsSumField("$.message.usage.cost.total", "$.usage.cost.total"),
-      turns: sql<number>`SUM(CASE WHEN ${sessionEntries.type} = 'message' AND ${roleField} = 'assistant' THEN 1 ELSE 0 END)`,
-    })
-    .from(sessionEntries)
-    .where(where)
-    .get()
-}
-
-function setup(
-  db: Db,
-  _sqlite: ReturnType<typeof setupDb>["sqlite"],
-  _dir: string
-) {
+function setup(db: Db) {
   seedEvent(db, "evt-1")
   seedChallenge(db, { id: "ch-1", eventId: "evt-1" })
   seedAgent(db, { id: "a-1", challengeId: "ch-1", sessionFile: "sess-1" })
@@ -142,67 +126,45 @@ function setup(
 
 const scopeOf = (_db: Db) => eq(sessionEntries.agentId, "a-1")
 
-describe("usage aggregation SQL/JS parity", () => {
+describe("usage aggregation column/fold parity", () => {
   test("mixed entry mix aggregates identically (tokens, cost, turns)", () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, close } = setupDb()
     try {
-      setup(db, sqlite, dir)
+      setup(db)
       // assistant w/ usage, toolResult w/ usage, assistant w/o usage,
-      // compaction w/ usage, branch_summary w/ usage, malformed usage field,
-      // and a row whose data is not JSON at all.
+      // compaction w/ usage, branch_summary w/ usage, assistant w/o usage.
       insertEntry(db, "a-1", "sess-1", 1, {
-        type: "message",
-        message: {
-          role: "assistant",
-          usage: usage({ input: 100, cost: { total: 2 } }),
-        },
+        kind: "message",
+        payload: { message: { role: "assistant" } },
+        usage: usage({ input: 100, cost: { total: 2 } }),
       })
       insertEntry(db, "a-1", "sess-1", 2, {
-        type: "message",
-        message: { role: "toolResult", usage: usage({ input: 7, output: 0 }) },
+        kind: "message",
+        payload: { message: { role: "toolResult" } },
+        usage: usage({ input: 7, output: 0 }),
       })
       insertEntry(db, "a-1", "sess-1", 3, {
-        type: "message",
-        message: { role: "assistant" }, // no usage at all
+        kind: "message",
+        payload: { message: { role: "assistant" } }, // no usage at all
       })
       insertEntry(db, "a-1", "sess-1", 4, {
-        type: "compaction",
+        kind: "compaction",
+        typed: { summary: "s", firstKeptEntryId: "x", tokensBefore: 1000 },
         usage: usage({ input: 50, reasoning: 1, cost: { total: 0.5 } }),
       })
       insertEntry(db, "a-1", "sess-1", 5, {
-        type: "branch_summary",
+        kind: "branch_summary",
+        typed: { fromId: "root", summary: "s" },
         usage: usage({ input: 3, cost: { total: 0.1 } }),
       })
       insertEntry(db, "a-1", "sess-1", 6, {
-        type: "message",
-        message: { role: "assistant", usage: "garbage" }, // non-object usage
+        kind: "message",
+        payload: { message: { role: "assistant", content: "hi" } },
       })
-      // The JS side skips malformed data; json_extract yields NULL (→ 0).
-      db.insert(sessionEntries)
-        .values({
-          id: "parity-bad-json",
-          sessionId: "sess-1",
-          agentId: "a-1",
-          seq: 7,
-          type: "message",
-          data: "{not json",
-          createdAt: now(),
-        })
-        .run()
 
       const js = accumulateEntryUsage(readEntries(db, scopeOf(db)))
-      const stats = statsUsageTotals(db, scopeOf(db))
       const totals = usageTotalsSql(db, scopeOf(db))
 
-      expect(stats?.input).toBe(js.input)
-      expect(stats?.output).toBe(js.output)
-      expect(stats?.cacheRead).toBe(js.cacheRead)
-      expect(stats?.cacheWrite).toBe(js.cacheWrite)
-      expect(stats?.reasoning).toBe(js.reasoning)
-      expect(stats?.cost).toBe(js.cost)
-      expect(stats?.turns).toBe(js.turns)
-      // The per-agent/run aggregate (usageTotalsSql, the billing + overview
-      // path) must agree with both.
       expect(totals.input).toBe(js.input)
       expect(totals.output).toBe(js.output)
       expect(totals.cacheRead).toBe(js.cacheRead)
@@ -212,7 +174,7 @@ describe("usage aggregation SQL/JS parity", () => {
       expect(totals.turns).toBe(js.turns)
       expect(totals.totalTokens).toBe(js.totalTokens)
       // Sanity on the actual values (3 assistant messages incl. the
-      // garbage-usage one — turns counts assistant messages before the guard).
+      // usage-less one — turns counts assistant messages before the guard).
       expect(js.turns).toBe(3)
       expect(js.input).toBe(100 + 7 + 50 + 3)
     } finally {
@@ -221,34 +183,30 @@ describe("usage aggregation SQL/JS parity", () => {
   })
 
   test("empty scope: SQL matches JS zeros; sumUsageTotals returns undefined", () => {
-    const { db, sqlite, dir, close } = setupDb()
+    const { db, close } = setupDb()
     try {
-      setup(db, sqlite, dir)
+      setup(db)
       // A toolResult with zeroed usage: turns counts assistant messages only,
       // so turns=0 and every total is zero → sumUsageTotals stays undefined.
       insertEntry(db, "a-1", "sess-1", 1, {
-        type: "message",
-        message: {
-          role: "toolResult",
-          usage: usage({
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            reasoning: 0,
-            cost: { total: 0 },
-          }),
-        },
+        kind: "message",
+        payload: { message: { role: "toolResult" } },
+        usage: usage({
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          reasoning: 0,
+          cost: { total: 0 },
+        }),
       })
 
       const js = accumulateEntryUsage(readEntries(db, scopeOf(db)))
-      const stats = statsUsageTotals(db, scopeOf(db))
       const totals = usageTotalsSql(db, scopeOf(db))
-      expect(stats?.turns).toBe(js.turns)
-      expect(stats?.input).toBe(js.input)
-      expect(stats?.cost).toBe(js.cost)
       expect(totals.turns).toBe(js.turns)
-      expect(totals.totalTokens).toBe(js.totalTokens)
+      expect(totals.input).toBe(js.input)
+      expect(totals.cost).toBe(js.cost)
+      expect(totals.cacheHitRate).toBeNull()
       expect(js.turns).toBe(0)
       // All-zero → the sumUsageTotals "nothing used → undefined" rule.
       expect(sumUsageTotals(db, scopeOf(db))).toBeUndefined()
@@ -257,38 +215,32 @@ describe("usage aggregation SQL/JS parity", () => {
     }
   })
 
-  test("cacheHitRate reflects the LATEST assistant message with prompt tokens", () => {
-    const { db, sqlite, dir, close } = setupDb()
+  test("cacheHitRate: the LATEST assistant row with prompt tokens wins (SQL matches fold)", () => {
+    const { db, close } = setupDb()
     try {
-      setup(db, sqlite, dir)
+      setup(db)
       insertEntry(db, "a-1", "sess-1", 1, {
-        type: "message",
-        message: {
-          role: "assistant",
-          usage: usage({ input: 100, cacheRead: 50, cacheWrite: 0 }), // 50% hit
-        },
+        kind: "message",
+        payload: { message: { role: "assistant" } },
+        usage: usage({ input: 100, cacheRead: 50, cacheWrite: 0 }), // 50% hit
       })
       insertEntry(db, "a-1", "sess-1", 2, {
-        type: "message",
-        message: {
-          role: "assistant",
-          usage: usage({ input: 100, cacheRead: 25, cacheWrite: 0 }), // 25% hit
-        },
+        kind: "message",
+        payload: { message: { role: "assistant" } },
+        usage: usage({ input: 100, cacheRead: 25, cacheWrite: 0 }), // 25% hit
       })
       // A later assistant with no prompt tokens must NOT overwrite the rate.
       insertEntry(db, "a-1", "sess-1", 3, {
-        type: "message",
-        message: {
-          role: "assistant",
-          usage: usage({ input: 0, cacheRead: 0, cacheWrite: 0 }),
-        },
+        kind: "message",
+        payload: { message: { role: "assistant" } },
+        usage: usage({ input: 0, cacheRead: 0, cacheWrite: 0 }),
       })
 
-      // Pure-JS behavior guard: the accumulator's rate feeds the live context
-      // snapshot (event-pipeline) — latest assistant WITH prompt tokens wins.
       const js = accumulateEntryUsage(readEntries(db, scopeOf(db)))
+      const totals = usageTotalsSql(db, scopeOf(db))
       // prompt = input + cacheRead + cacheWrite = 125 → 25/125 = 20%.
       expect(js.cacheHitRate).toBe(20)
+      expect(totals.cacheHitRate).toBe(20)
     } finally {
       close()
     }

@@ -140,8 +140,8 @@ const ENTRY_TYPES = new Set([
  *
  * The event pipeline (server `event-pipeline.ts`) is the single producer — it
  * times the streaming assistant message and the tool execution, then injects
- * the result pre-commit via `DbSessionManager.metaProvider`. The frontend reads
- * it back to render block-level durations and the tool "参数生成 · 执行"
+ * the result pre-commit via the session adapter's `metaProvider`. The frontend
+ * reads it back to render block-level durations and the tool "参数生成 · 执行"
  * double timing.
  *
  * `blocks` (assistant only): one entry per timed content block, `index` = the

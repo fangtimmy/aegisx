@@ -8,16 +8,17 @@ import type { EventStats } from "@aegisx/shared"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 
 import { createApp } from "../../src/app"
+import * as schema from "../../src/db/schema"
 import {
   agents,
   challengeFlags,
   challengeRemote,
   challenges,
   channelMessages,
-  sessionEntries,
   spawnQueue,
 } from "../../src/db/schema"
 import { responseJson } from "../../src/lib/guards"
+import { seedSessionEntry } from "../helpers"
 import { json } from "../support"
 
 const tempDirs: string[] = []
@@ -43,7 +44,7 @@ function createTestApp() {
 function seedDb(dataDir: string) {
   const raw = new Database(join(dataDir, "aegisx.sqlite"))
   raw.run("PRAGMA foreign_keys = OFF")
-  return drizzle(raw)
+  return drizzle(raw, { schema })
 }
 
 function seedChallenge(
@@ -98,30 +99,25 @@ function seedUsage(
   output: number,
   cost: number
 ) {
-  db.insert(sessionEntries)
-    .values({
-      id: `entry-${agentId}-${seq}`,
-      sessionId: `sess-${agentId}`,
-      agentId,
-      seq,
-      type: "message",
-      data: JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          usage: {
-            input,
-            output,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: input + output,
-            cost: { total: cost },
-          },
-        },
-      }),
-      createdAt: "2025-01-01T00:00:00Z",
-    })
-    .run()
+  seedSessionEntry(db, {
+    sessionId: `sess-${agentId}`,
+    agentId,
+    seq,
+    id: `entry-${agentId}-${seq}`,
+    createdAt: "2025-01-01T00:00:00Z",
+    message: {
+      role: "assistant",
+      usage: {
+        input,
+        output,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: input + output,
+        cost: { total: cost },
+      },
+    },
+    usage: { input, output, cost },
+  })
 }
 
 function seedToolResult(
@@ -130,20 +126,14 @@ function seedToolResult(
   seq: number,
   toolName: string
 ) {
-  db.insert(sessionEntries)
-    .values({
-      id: `entry-tool-${agentId}-${seq}`,
-      sessionId: `sess-${agentId}`,
-      agentId,
-      seq,
-      type: "message",
-      data: JSON.stringify({
-        type: "message",
-        message: { role: "toolResult", toolCallId: `t${seq}`, toolName },
-      }),
-      createdAt: "2025-01-01T00:00:00Z",
-    })
-    .run()
+  seedSessionEntry(db, {
+    sessionId: `sess-${agentId}`,
+    agentId,
+    seq,
+    id: `entry-tool-${agentId}-${seq}`,
+    createdAt: "2025-01-01T00:00:00Z",
+    message: { role: "toolResult", toolCallId: `t${seq}`, toolName },
+  })
 }
 
 /** Usage row token total as the stats module computes it (the four summed

@@ -94,7 +94,7 @@ export type AgentHostInput = {
  * Create a host-side pi `AgentSession` for ANY agent kind — solver or the
  * event scheduler. This is the single, homogeneous creation path: it wires
  * the shared container file tools, merges the profile's extra tools, and
- * builds the host session (event pipeline + DbSessionManager +
+ * builds the host session (event pipeline + PiSessionAdapter +
  * zero-discovery resource loader).
  *
  * It is also the test seam: services accept a `createHost` override (default =
