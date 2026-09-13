@@ -17,18 +17,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INPUT=1 \
-    PIP_CACHE_DIR=/opt/aegisx-cache/pip \
-    GOMODCACHE=/opt/aegisx-cache/go/mod \
-    GOCACHE=/opt/aegisx-cache/go/build \
     KNOWLEDGES_DIR=/opt/solver/knowledges \
     TOOLS_DIR=/opt/solver/tools \
     VENV_BIN=/opt/venv/bin/python \
     PYTHONPATH=/opt/aegisx-sdk
 
-# Runtime cache mount point (the server binds the per-challenge named volume
-# at /opt/aegisx-cache and /var/cache/apt/archives — the env above routes
-# pip/go into it; inert for tools that never run).
-RUN mkdir -p /opt/aegisx-cache/pip /opt/aegisx-cache/go/mod /opt/aegisx-cache/go/build
 
 # === Base toolchain (shared by all tiers) ===
 # core/files · net/tunnel · binary/pwn triage · python venv core
@@ -67,6 +60,16 @@ RUN printf 'set follow-fork-mode child\nset pagination off\n' >> /root/.gdbinit 
 # === minimal: a few hundred MB. Base toolchain + agent SDK, no CTF breadth.
 # Anything missing goes through the in-image "缺工具 SOP" (pip / apt at solve time).
 FROM base AS minimal
+# Runtime cache routing: the server binds the per-challenge named volume at
+# /opt/aegisx-cache and /var/cache/apt/archives, so pip/go caches survive
+# sandbox recreation and are shared across an attempt. Kept in the volatile
+# tail — build-time pip/go must keep their BuildKit cache mounts and root
+# defaults, and an ENV here does not bust the heavy toolchain layers.
+ENV PIP_CACHE_DIR=/opt/aegisx-cache/pip \
+    GOMODCACHE=/opt/aegisx-cache/go/mod \
+    GOCACHE=/opt/aegisx-cache/go/build
+RUN mkdir -p /opt/aegisx-cache/pip /opt/aegisx-cache/go/mod /opt/aegisx-cache/go/build
+
 COPY apps/sdk/python /opt/aegisx-sdk
 RUN --mount=type=bind,src=containers/solver/gen-environment.py,target=/tmp/gen-environment.py \
     python3 /tmp/gen-environment.py > /opt/solver/ENVIRONMENT.md
@@ -149,6 +152,16 @@ RUN --mount=type=cache,id=solver-git,target=/var/cache/solver/git,sharing=locked
     install -m755 /tmp/pycdc-build/pycdc /tmp/pycdc-build/pycdas /usr/local/bin && \
     rm -rf /tmp/pycdc-src /tmp/pycdc-build
 
+# Runtime cache routing: the server binds the per-challenge named volume at
+# /opt/aegisx-cache and /var/cache/apt/archives, so pip/go caches survive
+# sandbox recreation and are shared across an attempt. Kept in the volatile
+# tail — build-time pip/go must keep their BuildKit cache mounts and root
+# defaults, and an ENV here does not bust the heavy toolchain layers.
+ENV PIP_CACHE_DIR=/opt/aegisx-cache/pip \
+    GOMODCACHE=/opt/aegisx-cache/go/mod \
+    GOCACHE=/opt/aegisx-cache/go/build
+RUN mkdir -p /opt/aegisx-cache/pip /opt/aegisx-cache/go/mod /opt/aegisx-cache/go/build
+
 COPY apps/sdk/python /opt/aegisx-sdk
 RUN --mount=type=bind,src=containers/solver/gen-environment.py,target=/tmp/gen-environment.py \
     python3 /tmp/gen-environment.py > /opt/solver/ENVIRONMENT.md
@@ -206,6 +219,20 @@ RUN PWNDBG_GDBINIT=$(find / -name "gdbinit.py" -path "*pwndbg*" 2>/dev/null | he
 RUN --mount=type=cache,id=solver-pip,target=/root/.cache/pip,sharing=locked \
     --mount=type=bind,src=containers/solver/requirements-full.txt,target=/tmp/requirements.txt \
     /opt/venv/bin/pip install -r /tmp/requirements.txt
+
+# === Tools whose upstream metadata over-pins shared libraries ===
+# bloodyAD 2.5.5 pins cryptography==44.0.2, certipy 5.1.0 pins ~=42.0.8
+# (mutually exclusive, and both against the essential layer's 48.0.1), and
+# coercer 2.4.3 caps impacket<0.11 which would downgrade the essential
+# layer's 0.13.1. Installed --no-deps over the shared venv; their REAL
+# dependencies follow explicitly. kerbad needs cryptography>=44.0.2: 48.0.1
+# satisfies it.
+RUN --mount=type=bind,src=containers/solver/requirements-ad-tools.txt,target=/tmp/ad-requirements.txt \
+    /opt/venv/bin/pip install --no-deps bloodyAD==2.5.5 certipy-ad==5.1.0 coercer==2.4.3 && \
+    /opt/venv/bin/pip install "asn1crypto==1.5.1" "winacl==0.1.9" "badldap>=0.7.6" \
+        "kerbad>=0.5.10" "pyasn1~=0.6.1" "dnspython~=2.7.0" "requests~=2.32.3" \
+        "httpx~=0.28.1" "beautifulsoup4~=4.13.4" "argcomplete~=3.6.2" \
+        "xlsxwriter>=3.0.0"
 
 # === Playwright Chromium ===
 # Browsers download into the cache mount (network skip on rebuilds) and are
@@ -268,6 +295,16 @@ RUN W=/usr/share/seclists/Discovery/Web-Content && \
 
 # The image COPYs apps/sdk/python — run `bun run test:sdk` before rebuilding so
 # a stale in-image SDK never drifts against the server it talks to.
+# Runtime cache routing: the server binds the per-challenge named volume at
+# /opt/aegisx-cache and /var/cache/apt/archives, so pip/go caches survive
+# sandbox recreation and are shared across an attempt. Kept in the volatile
+# tail — build-time pip/go must keep their BuildKit cache mounts and root
+# defaults, and an ENV here does not bust the heavy toolchain layers.
+ENV PIP_CACHE_DIR=/opt/aegisx-cache/pip \
+    GOMODCACHE=/opt/aegisx-cache/go/mod \
+    GOCACHE=/opt/aegisx-cache/go/build
+RUN mkdir -p /opt/aegisx-cache/pip /opt/aegisx-cache/go/mod /opt/aegisx-cache/go/build
+
 COPY apps/sdk/python /opt/aegisx-sdk
 RUN --mount=type=bind,src=containers/solver/gen-environment.py,target=/tmp/gen-environment.py \
     python3 /tmp/gen-environment.py > /opt/solver/ENVIRONMENT.md

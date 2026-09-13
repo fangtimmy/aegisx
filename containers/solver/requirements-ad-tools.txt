@@ -1,0 +1,5 @@
+# Tools installed with --no-deps (see containers/solver/Dockerfile): their
+# upstream metadata over-pins shared libraries in mutually exclusive ways
+# (cryptography caps, impacket<0.11). The explicit dependency install in the
+# Dockerfile brings their real dependencies; cryptography comes from the
+# essential layer (48.0.1).

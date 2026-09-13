@@ -19,8 +19,11 @@ impacket==0.13.1
 ldap3==2.9.1
 git-dumper==1.0.9
 mitmproxy==12.2.3
-cryptography==50.0.1
-pyOpenSSL==26.4.0
+# cryptography/pyOpenSSL are a constraint chain with mitmproxy 12.2.3
+# (cryptography<=48.1): 48.0.1 is the newest it allows and 26.2.0 is the
+# newest pyOpenSSL that accepts it (26.3+/26.4 demand cryptography>=49).
+cryptography==48.0.1
+pyOpenSSL==26.2.0
 pyjwt==2.13.0
 flask-unsign==1.2.1
 cysignals==1.12.6
