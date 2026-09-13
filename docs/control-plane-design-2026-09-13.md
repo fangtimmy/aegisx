@@ -1,6 +1,6 @@
 # 控制平面重设计：领域事件流、调度者计划与效果调度器
 
-日期：2026-09-13 · 状态：**设计提案（未实施）** · 范围：领域事件流（A）/ 调度者计划（B）/ 效果调度器（C）
+日期：2026-09-13 · 状态：**已实施（同日落地，实施记录见文末）** · 范围：领域事件流（A）/ 调度者计划（B）/ 效果调度器（C）
 
 本文只做设计与取舍记录，不改动任何代码。文中现状结论带 `文件:行号` 实证，行号对应当日 main。标注 **【已定】** 的是讨论中收敛的决策，**【建议】** 的仍是开放项。
 
@@ -391,3 +391,23 @@ effects.every(ms, fn)              // 周期（flush、watchdog、sweep）
 - **A**：写入放大（每次状态变化多一条事件写；单机 SQLite 无压力）+ projector 是新的表维护逻辑面。
 - **B**：调度者产品手感从「常驻顾问」变「被点名的规划者」；提示词与模板语料重写是最重工程量；控制路径与调度者容器共享失效域（§3.3 已标注缓解）。
 - **C**：一次性迁移 churn，行为不变。
+
+## 7. 实施记录（2026-09-13 同日落地）
+
+| 批次 | 内容 | 提交 |
+|---|---|---|
+| 1（并行） | A：`domain_events` 表 + registry/store/projector（同事务投影）+ 决策日志 API，queue/flags/challenges 写路径迁移（schema v24 基线）∥ C：`run/effects.ts`（debounce/chain/retry/after/every），drainer / 投递 / 看门狗 / 容器 sweep 行为不变迁移 | `431892a` ∥ `6546eab` |
+| 2（并行） | A：agents 表全部写迁移到事件流（token 走 projectorInput 不入载荷；drainer 侧 `fence.blocked`；targets.ts targetIgnored 收口）∥ W：web「决策日志」页签 | `39a7ca0` ∥ `24e3b66` |
+| 3 | B：`POST /api/events/:eventId/plan` + `run/plan/applier.ts` + `aegisx.submit_plan`（双轨，SDK 管理动词暂留）；`plan.proposed`/`plan.result` 事件 | `c8c6891` |
+| 4 | B：决策点引擎（`run/decision-points/engine.ts`）接管调度者唤醒；投递引擎退回 solver 面；heartbeat / boot-reentry / starved 边沿 / inbox hold / 调度者 digest 附着删除；提示词语料切换计划协议 | `a67dd23` |
+| 5（并行） | SDK 砍管理动词（保留读 + 通信 + submit_plan；删除孤儿路由 agents/finish、agents/timeout）；per-agent 停滞定时器删除、收缩进引擎（noOp 后指纹停滞 ≥ stallMs 升级）∥ web 决策日志补全 plan / decision_point / agent 全族渲染与因果链引用 | `eb4e2f6` ∥ `47c5d64` |
+| 收尾 | 本文档状态转已实施 + architecture.md / AGENTS.md 同步 | （本提交） |
+
+**实施中的偏差记录**（与 §2–§4 正文对照）：
+
+- 事件目录按投影需求扩展：新增 `queue.item_reset/removed/edited/cleared`、`flag.deleted`、`challenge.progress_reset`、`agent.session_switched`、`agent.recovered`；`decision_point.closed` 的 outcome 无 `no_plan` 值（noOp 计为 plan，避免死值）。
+- §2.2 的投影写强制收敛为**模块边界**（单一 projector 文件）+ 约定，非 lint 语义（`no-restricted-imports` 分不清读写）。
+- §2.7 的 SSE Last-Event-ID 未实施（正文已降级为后续增强）。
+- §3.4 的 `stop` 有界化落地为 applier 内 `stopAgentBounded`（closeAbortGraceMs 上限，超界走标准 settle 路径）。
+- `platform.target` 触发器暂缓（platforms 层组装先于 agent service，无引擎通路；靶机失败经 agent.settled/timedOut 间接到达）。
+- §3.8 的 `setQueuePaused` 自动过期未做，落地为 `queue.paused` 事件的 planId 标注（正文的「或」分支）。

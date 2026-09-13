@@ -40,10 +40,11 @@ knip 会卡未使用的导出：新增导出若无消费方，`bun run check` �
 ## 架构边界
 
 - agent loop 在宿主 server 进程内运行（`@earendil-works/pi-coding-agent`，版本由根 package.json 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）；bash 与文件工具不落宿主进程——每题一个长寿 Kali 容器，命令经 dockerode `exec` 送入，工作区双向 bind mount。
-- `apps/server/src/run/` 是运行时心脏：`service.ts` 组装根与策略，`agent-factory.ts` 单次 spawn 组装（容器 → host session → 工具注入），`agent-runtime.ts` 是每个存活 agent 的所有权根与唯一终态路径，`run/host/` 是 pi 会话宿主子层（不得反向依赖编排层，oxlint 强制），`run/clock.ts` 是所有运行时定时器的唯一来源，`fence.ts` 强制并发上限与槽位——系统约束在启动侧强制校验，不依赖调度者自觉。
+- `apps/server/src/run/` 是运行时心脏：`service.ts` 组装根与策略，`agent-factory.ts` 单次 spawn 组装（容器 → host session → 工具注入），`agent-runtime.ts` 是每个存活 agent 的所有权根与唯一终态路径，`run/host/` 是 pi 会话宿主子层（不得反向依赖编排层，oxlint 强制），`run/clock.ts` + `run/effects.ts` 是运行时定时器与延迟动作语义（debounce/chain/retry/every）的唯一来源，`fence.ts` 强制并发上限与槽位——系统约束在启动侧强制校验，不依赖调度者自觉。
+- 控制平面事实走领域事件流：`run/domain-events/`（registry / store / projector）在同一个 SQLite 事务里 append `domain_events` + 更新投影表，projector 是基线表（agents / spawn_queue / challenge_flags / challenge_remote / challenges 控制字段）的唯一写者；`GET /api/events/:eventId/decisions` 是决策日志读面。
 - 授权分两层：中间件每请求解析 `Principal`（user / agent / system），数据层作用域由 `run/principal-scope.ts` 的断言在 service 内强制——路由层不拼 scope 条件。
-- 调度者是 agent 而非代码循环：消费 `orch` 频道事件，用 Python SDK 产出计划，`run/queue.ts` 排水落地；系统→调度者的通知是类型化事件 + 可编辑模板（`run/orch-notices.ts`）。
-- 无人值守可靠性：`run/fleet-watchdog.ts` 对「有 pending 却无存活 solver 且排水无进展」的赛事发 urgent 告警（兼唤醒调度者）；`run/boot-reentry.ts` 在重启恢复后提示各赛事调度者重新同步。会话数据（`session_entries`）**没有自动清理**——只在显式删除 agent/session 时消失，长赛事下需自行留意库体积。
+- 调度者是 agent：决策点引擎（`run/decision-points/`）合并触发、驱动其回合并以 `submit_plan` 收束；`run/plan/applier.ts` 校验落地计划（快动作 inline，慢动作 per-event 单飞链），`run/queue.ts` 排水；系统→调度者的通知是类型化事件 + 可编辑模板（`run/orch-notices.ts`）。
+- 无人值守可靠性：`run/fleet-watchdog.ts` 对「有 pending 却无存活 solver 且排水无进展」的赛事升级告警（`watchdog.escalated`）并开 `fleet.stalled` 决策点；调度者唤醒的唯一来源是决策点引擎（违约阶梯确定性升级）。会话数据（`session_entries`）**没有自动清理**——只在显式删除 agent/session 时消失，长赛事下需自行留意库体积。
 - 频道键全部派生、无频道表：`team:<challengeId>` / `dm:<agentId>` / `orch:<eventId>`；`channel_messages` 是全部 agent 间通信的唯一账本，`channels-delivery.ts` 是唯一推送出口。
 - 数据模型 Event → Challenge → Agent（`apps/server/src/db/schema.ts`）；Workspace 是派生路径无表行；数据全落 `data/`（`AEGISX_DATA_DIR` 可改址）。
 - web 侧 SSE 是一条全局多路复用流（`GET /api/stream` → `stream/live-connection.ts` 进程级单 EventSource；`conversation-store.ts` 是按 agentId 键控的状态 + selector，无单流约束）；前端 API 类型直接取自 `@aegisx/shared`。
