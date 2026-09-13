@@ -7,7 +7,9 @@ import { isRecord } from "@aegisx/shared"
 
 type QueueSource = "manual" | "scheduler"
 
-/** Full spawn-spec snapshot — the payload rebuilds the spawn_queue row. */
+/** Full spawn-spec snapshot — the payload rebuilds the spawn_queue row. A
+ * plan-sourced enqueue carries `plan:<planId>` (§2.4); the spawn_queue row's
+ * `source` column keeps the actor face ('scheduler'). */
 type QueueEnqueuedPayload = {
   itemId: string
   ord: number
@@ -15,7 +17,7 @@ type QueueEnqueuedPayload = {
   params: Record<string, unknown>
   timeoutMs: number | null
   prompt: string
-  source: QueueSource
+  source: QueueSource | `plan:${string}`
 }
 type QueueLaunchedPayload = { itemId: string; agentId: string }
 type QueueItemFailedPayload = { itemId: string; error: string }
@@ -117,6 +119,27 @@ type ChannelPostedPayload = {
   authorType: "system" | "user" | "agent"
   authorAgentId?: string
   urgent?: boolean
+}
+
+// --- plan family (§B) -------------------------------------------------------
+
+/** An accepted plan (validation errors reject the whole plan BEFORE any
+ * proposal — only a fully-valid plan is proposed). Actions are the wire
+ * PlanAction dicts; `schedulerAgentId` is the submitter key the idempotency
+ * dedup resolves against. */
+type PlanProposedPayload = {
+  planId: string
+  rationale: string
+  actions: Record<string, unknown>[]
+  schedulerAgentId: string
+  at: string
+}
+/** The plan's per-ref outcomes, emitted when the plan's deferred application
+ * chain completes (synchronously for all-fast plans). */
+type PlanResultPayload = {
+  planId: string
+  results: Record<string, unknown>[]
+  at: string
 }
 
 // --- agent family (§2.4) ----------------------------------------------------
@@ -244,13 +267,21 @@ export type DomainEventPayloads = {
   "agent.deleted": AgentDeletedPayload
   "agent.recovered": AgentRecoveredPayload
   "boot.recovered": BootRecoveredPayload
+  "plan.proposed": PlanProposedPayload
+  "plan.result": PlanResultPayload
 }
 
 export type DomainEventType = keyof DomainEventPayloads
 export type DomainEventPayloadOf<T extends DomainEventType> =
   DomainEventPayloads[T]
 
-type FieldKind = "string" | "number" | "boolean" | "string[]" | "record"
+type FieldKind =
+  | "string"
+  | "number"
+  | "boolean"
+  | "string[]"
+  | "record"
+  | "record[]"
 type FieldRule = {
   kind: FieldKind
   optional?: boolean
@@ -264,6 +295,14 @@ function fieldMatches(kind: FieldKind, value: unknown): boolean {
   if (kind === "boolean") return typeof value === "boolean"
   if (kind === "string[]") {
     return Array.isArray(value) && value.every((v) => typeof v === "string")
+  }
+  if (kind === "record[]") {
+    return (
+      Array.isArray(value) &&
+      value.every(
+        (v) => typeof v === "object" && v !== null && !Array.isArray(v)
+      )
+    )
   }
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -544,6 +583,22 @@ const DOMAIN_EVENT_REGISTRY: {
       queuesPaused: { kind: "number" },
     },
   },
+  "plan.proposed": {
+    fields: {
+      planId: { kind: "string" },
+      rationale: { kind: "string" },
+      actions: { kind: "record[]" },
+      schedulerAgentId: { kind: "string" },
+      at: { kind: "string" },
+    },
+  },
+  "plan.result": {
+    fields: {
+      planId: { kind: "string" },
+      results: { kind: "record[]" },
+      at: { kind: "string" },
+    },
+  },
 }
 
 /** Validate a payload against its type's registry entry. Returns the problem
@@ -556,7 +611,7 @@ export function validateDomainEventPayload<T extends DomainEventType>(
 }
 
 /** The decision-log type set the web view queries (§2.5). Later batches add
- * decision_point.* / plan.* / watchdog.escalated. */
+ * decision_point.* / watchdog.escalated. */
 export const DECISION_LOG_EVENT_TYPES: DomainEventType[] = [
   "queue.enqueued",
   "queue.launched",
@@ -582,4 +637,6 @@ export const DECISION_LOG_EVENT_TYPES: DomainEventType[] = [
   "challenge.progress_reset",
   "agent.terminated",
   "boot.recovered",
+  "plan.proposed",
+  "plan.result",
 ]

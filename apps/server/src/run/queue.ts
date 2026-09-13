@@ -41,6 +41,9 @@ export type EnqueueInput = {
   promptMode?: "strategy" | "override"
   timeoutMs?: number | null
   source: "manual" | "scheduler"
+  /** Plan provenance (§2.4): when set, the queue.enqueued fact's source reads
+   * `plan:<planId>`; the row's `source` column keeps the actor face. */
+  planId?: string
 }
 
 /** Serialize the spawn specs into the `params` JSON value (prompt excluded —
@@ -240,7 +243,7 @@ export function createQueueService(deps: QueueServiceDeps) {
         params: launchParamsOf(input),
         timeoutMs: input.timeoutMs ?? null,
         prompt: input.prompt ?? "",
-        source: input.source,
+        source: input.planId ? (`plan:${input.planId}` as const) : input.source,
       },
     })
     logEvent("queue", "enqueued", {
@@ -337,6 +340,36 @@ export function createQueueService(deps: QueueServiceDeps) {
     }
     if (rows.length > 0) checkStarved(eventId)
     return rows.length
+  }
+
+  /** Cancel ONE pending item (the plan path — a per-item counterpart of
+   * {@link cancelPendingForChallenge}'s challenge-scoped sweep). Same-event
+   * scoping like remove; non-pending items reject (a running item goes
+   * through its agent's stop/close instead). */
+  function cancelItem(
+    eventId: string,
+    itemId: string,
+    principal: Principal
+  ): void {
+    assertMayTouchEvent(principal, eventId)
+    const row = getRow(itemId)
+    if (!row || row.eventId !== eventId) {
+      throw new RunActionError("not_found", "Queue item not found")
+    }
+    if (row.status !== "pending") {
+      throw new RunActionError(
+        "invalid_state",
+        "Only pending queue items can be cancelled"
+      )
+    }
+    emitDomainEvent(db, {
+      type: "queue.item_cancelled",
+      eventId,
+      challengeId: row.challengeId,
+      actor: actorFromPrincipal(principal),
+      payload: { itemId },
+    })
+    checkStarved(eventId)
   }
 
   /** Update a pending item's prompt / timeout / params. Only
@@ -623,6 +656,7 @@ export function createQueueService(deps: QueueServiceDeps) {
     remove,
     clear,
     cancelPendingForChallenge,
+    cancelItem,
     markCancelled,
     update,
     reorder,

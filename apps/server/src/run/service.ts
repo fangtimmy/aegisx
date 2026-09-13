@@ -5,6 +5,7 @@ import type {
   AgentDetail,
   AgentSummary,
   FleetInfo,
+  Plan,
   SwitchModelInput,
   WorkspaceFile,
   WorkspaceInfo,
@@ -77,6 +78,7 @@ import { createLiveBus, type LiveBus } from "./host/live"
 import { chainLock } from "./locks"
 import { createModelResolver } from "./model-resolver"
 import { createNoticePublisher } from "./orch-notices"
+import { createPlanApplier } from "./plan/applier"
 import { createRunPort } from "./ports"
 import {
   assertMayTouchAgent,
@@ -498,6 +500,37 @@ export function createAgentService(options: AgentServiceOptions) {
       ?.abort()
       .catch(() => undefined)
     return requireAgent(agentId)
+  }
+
+  /** Plan-path stop (run/plan): pi's abort does not interrupt an in-flight
+   * tool call, so the abort wait is BOUNDED — on expiry the agent force-
+   * disposes through the standard settle path (the close semantics), never
+   * hanging the plan application chain. */
+  async function stopAgentBounded(
+    agentId: string,
+    principal: Principal
+  ): Promise<void> {
+    const runtime = runtimes.get(agentId)
+    if (!runtime) return
+    let aborted = false
+    await Promise.race([
+      runtime
+        .abort()
+        .catch(() => undefined)
+        .then(() => {
+          aborted = true
+        }),
+      clock.sleep(closeAbortGraceMs),
+    ])
+    if (aborted) return
+    const current = runtime.session()
+    if (current?.session.isStreaming) {
+      await settleAgent(agentId, {
+        abort: false,
+        status: "aborted",
+        by: actorFromPrincipal(principal),
+      })
+    }
   }
 
   /** Terminal close (user/scheduler): abort + dispose the session, land
@@ -1454,6 +1487,21 @@ export function createAgentService(options: AgentServiceOptions) {
   })
   queuePort.bind(queue)
 
+  // The scheduler's typed-plan surface: validates + proposes + applies fast
+  // actions inline, defers slow ones on the per-event chain (run/plan).
+  const planApplier = createPlanApplier({
+    db,
+    clock,
+    modelResolver,
+    queue,
+    stopAgentBounded,
+    closeAgent,
+    finishAgent,
+    sendMessage,
+    setAgentTimeout,
+    now,
+  })
+
   // Event-level vital signs: pending work with no live solver and no drain
   // progress → ONE urgent orch notice per episode (which also wakes the
   // scheduler). Deliberately narrow trigger; see run/fleet-watchdog.ts.
@@ -1476,6 +1524,7 @@ export function createAgentService(options: AgentServiceOptions) {
     containerLifecycle.close()
     fleetWatchdog.close()
     queue.cancelDrain()
+    planApplier.close()
     // Each runtime owns its agent's timers (deadline/grace/stall), finish
     // bookkeeping and session: disposing them releases every per-agent
     // resource in one sweep — there is no other registry to clear.
@@ -1560,6 +1609,8 @@ export function createAgentService(options: AgentServiceOptions) {
     compactAgent,
     setQueue,
     setAgentTimeout,
+    submitPlan: (eventId: string, plan: Plan, principal: Principal) =>
+      planApplier.submitPlan(eventId, plan, principal),
     listAgentSessions: sessionOps.listAgentSessions,
     createAgentSession: sessionOps.createAgentSession,
     activateAgentSession: sessionOps.activateAgentSession,

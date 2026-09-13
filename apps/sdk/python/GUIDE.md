@@ -53,11 +53,66 @@ has `.messages .has_more .next_after`. A `ChannelMessage` has `.id
 .created_at .files` — print `.author_name` and `.body`, not
 `.sender`/`.from` (those do not exist).
 
+## Submitting plans (the control surface)
+
+The scheduler's management writes go through ONE verb — `submit_plan`. You
+produce a typed plan (rationale + ordered actions); the server validates it,
+applies the fast actions inline and defers the slow ones. Build actions with
+the helpers, never hand-built JSON:
+
+    python3 - <<'PY'
+    import aegisx
+    res = aegisx.submit_plan(
+        "web-01 收官，预算转向 web-02",
+        [
+            aegisx.close("agent-a3f1"),                     # free the slot
+            aegisx.enqueue("ch-web02", prompt="pwn it"),    # refill via queue
+        ],
+    )
+    for r in res.results:
+        print(r.ref, r.kind, "ok" if r.ok else f"{r.code}: {r.message}")
+    print("deferred:", [(d.ref, d.kind) for d in res.deferred])
+    PY
+
+Exact signatures:
+
+    aegisx.submit_plan(rationale, actions) -> SubmitPlanResult
+    aegisx.enqueue(challenge_id, prompt=None, model=None, timeout_ms=None, ref=None)
+    aegisx.message(agent_id, text, urgent=False, ref=None)
+    aegisx.stop(agent_id, ref=None) / aegisx.close(agent_id, ref=None)
+    aegisx.finish(agent_id, summary, ref=None)
+    aegisx.set_deadline(agent_id, timeout_ms, ref=None)
+    aegisx.cancel_item(item_id, ref=None) / aegisx.reorder(item_ids, ref=None)
+    aegisx.set_queue_paused(paused, ref=None)
+    aegisx.no_op(reason, ref=None)
+
+Semantics:
+
+- `rationale` is the 1-3 sentence decision reason (decision log only, never
+  executed). "Do nothing" is still a plan: `[aegisx.no_op("reason")]`.
+- Listing order IS application order; the plan is not a transaction — per-ref
+  results + the next snapshot are the recovery model.
+- `submit_plan` returns per-ref results (`r.ok` / `r.code` / `r.message`) —
+  validation errors are RESULTS, not exceptions: any failing ref rejects the
+  WHOLE plan (nothing applied), so fix the failing refs and resubmit. Only a
+  malformed envelope (HTTP 400) and auth errors raise `AegisxError`.
+- `res.queue_after` is the queue after the fast phase; `res.deferred` lists
+  the slow actions (stop/close/finish/cold wakes) whose outcomes land in the
+  plan.result decision-log entry.
+- Refs: helpers leave `ref` unset and `submit_plan` derives it from the
+  action's content — re-running the same script after a timeout replays the
+  SAME refs, so the server dedupes: identical action → original result (no
+  double-enqueue), same ref with different content → `duplicate_ref`. Pass
+  `ref=` explicitly to control correlation yourself.
+- Targeting yourself (stop/close/finish on your own agent id) is rejected
+  (`self_target`) — your lifecycle belongs to the engine and the user.
+
 ## Namespace reference
 
     aegisx.snapshot()                 # challenges + agents + queue + status (one picture)
     aegisx.status()                   # caps-only view (live/max agents, target slots)
     aegisx.challenges.list() / .get(id)
+    aegisx.submit_plan(rationale, actions)             # THE management write (see above)
     aegisx.queue.list() / .state() / .enqueue(challenge_id, prompt=..., model=..., timeout_ms=...)
     aegisx.queue.pause() / .resume() / .remove(id) / .clear() / .reorder(ids)
     aegisx.agents.list(challenge_id=..., status=...)   # solvers only (scheduler: snapshot().scheduler_agent)
@@ -68,6 +123,11 @@ has `.messages .has_more .next_after`. A `ChannelMessage` has `.id
     aegisx.channels.list() / .read("#team" | "orch" | key) / .post("#team", text, tags=..., files=..., urgent=...)
     aegisx.channels.announce(challenge_id, text)       # FYI broadcast to the challenge's #team
     aegisx.ask(text, urgent=False, files=None)         # solver → scheduler question (orch channel)
+
+The `queue.*` / `agents.stop` / `.close` / `.finish` / `.message` /
+`.set_timeout` / `.start` management verbs above keep working but are
+DEPRECATED in favor of `submit_plan` (removal lands next batch); reads and
+the channels face stay as-is.
 
 Channel keys are derived: `#team` (one per challenge, shared by its agents),
 `dm:<agentId>` (directives to one agent), `orch` (solver asks + system
@@ -80,12 +140,11 @@ events). `channels.list()` returns your visible keys with unread counts.
 2. Finer detail: `snapshot()` first; `agents.read(id, limit=…)` for one
    agent's recent lines; `challenges.get(id)` before committing to an
    unknown challenge.
-3. Plan = the queue: `queue.enqueue(challenge_id, prompt=...)` per task; the
-   system drains FIFO under the caps. `agents.start` only for deliberate
-   immediate spawns.
-4. Steer with `agents.message`; stop a stuck turn with `agents.stop`; free
-   the cap with `agents.close`; record a delivered result with
-   `agents.finish(id, summary)`.
+3. Submit one typed plan: `submit_plan(rationale, [...])` — enqueue new work,
+   steer/stop/close the agents that need it. The queue drains FIFO under the
+   caps; slow actions report via plan.result.
+4. Read the per-ref results in the same call and repair immediately
+   (`wrong_state` → re-read state; `solved_blocked` → pick another target).
 5. Do not poll or sleep-loop — events wake you.
 
 ## Errors

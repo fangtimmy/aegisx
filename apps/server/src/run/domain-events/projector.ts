@@ -57,6 +57,13 @@ export function projectDomainEvent(
     case "queue.enqueued": {
       const p = payloadOf("queue.enqueued", event.payload)
       const ts = now()
+      // The fact may be plan-sourced (`plan:<planId>`); the row column keeps
+      // the actor face (the plan-spawned item launches via the scheduler's
+      // drainer path).
+      const rowSource: "manual" | "scheduler" =
+        p.source === "manual" || p.source === "scheduler"
+          ? p.source
+          : "scheduler"
       tx.insert(spawnQueue)
         .values({
           id: p.itemId,
@@ -66,7 +73,7 @@ export function projectDomainEvent(
           params: JSON.stringify(p.params),
           timeoutMs: p.timeoutMs,
           prompt: p.prompt,
-          source: p.source,
+          source: rowSource,
           status: "pending",
           agentId: null,
           error: null,
@@ -568,6 +575,8 @@ export function projectDomainEvent(
     case "boot.recovered":
     case "fence.blocked":
     case "channel.posted":
+    case "plan.proposed":
+    case "plan.result":
       return true
   }
   return true

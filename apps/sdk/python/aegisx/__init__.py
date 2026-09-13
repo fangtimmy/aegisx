@@ -16,14 +16,18 @@ per line):
     for c in snap.challenges:         # weighted pick
         if not c.solved_now and c.points:
             print(c.id, c.points, c.name, c.agent_status_counts)
-    # ...decide, then act in the same script:
-    item = aegisx.queue.enqueue("ch-xxx", prompt="pwn, check remote first")
-    print(item.status, item.id)
+    # ...decide, then act in the same script — one typed plan:
+    res = aegisx.submit_plan("web-01 done; budget moves to web-02", [
+        aegisx.close("agent-a3f1"),
+        aegisx.enqueue("ch-web02", prompt="pwn, check remote first"),
+    ])
+    print([(r.ref, r.ok) for r in res.results])
 
 Error handling: every failure raises `aegisx.AegisxError` with `.code`
 mirroring the server's error code (e.g. "capacity" → back off and adjust the
 plan; "not_found" → re-read state; "forbidden" → outside your surface). Never
-parse error text.
+parse error text. Plan validation errors are the exception: they are per-ref
+results on `submit_plan`'s return value, not raised exceptions.
 
 Rules:
 - Keep printed output small (bash truncates at ~64KB): print summaries, write
@@ -37,7 +41,7 @@ Rules:
 """
 from __future__ import annotations
 
-from . import agents, challenges, channels, queue
+from . import agents, challenges, channels, plan, queue
 from .client import configure, get_client
 from .errors import AegisxError
 from .models import (
@@ -46,13 +50,29 @@ from .models import (
     Channel,
     ChannelFile,
     ChannelMessage,
+    DeferredAction,
     MessageList,
+    PlanRefResult,
     QueueItem,
     AgentRead,
     SchedulerStatus,
     Snapshot,
+    SubmitPlanResult,
     fmt_ms,
     from_dict,
+)
+from .plan import (
+    cancel_item,
+    close,
+    enqueue,
+    finish,
+    message,
+    no_op,
+    reorder,
+    set_deadline,
+    set_queue_paused,
+    stop,
+    submit_plan,
 )
 from typing import TypeVar
 
@@ -60,25 +80,40 @@ T = TypeVar("T")
 
 __all__ = [
     "AegisxError",
+    "AgentRead",
     "AgentSummary",
     "Challenge",
     "Channel",
     "ChannelFile",
     "ChannelMessage",
+    "DeferredAction",
     "MessageList",
+    "PlanRefResult",
     "QueueItem",
-    "AgentRead",
     "SchedulerStatus",
     "Snapshot",
+    "SubmitPlanResult",
     "agents",
     "ask",
+    "cancel_item",
     "challenges",
     "channels",
+    "close",
     "configure",
+    "enqueue",
+    "finish",
     "fmt_ms",
+    "message",
+    "no_op",
+    "plan",
     "queue",
+    "reorder",
+    "set_deadline",
+    "set_queue_paused",
     "snapshot",
     "status",
+    "stop",
+    "submit_plan",
 ]
 
 

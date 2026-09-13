@@ -115,6 +115,10 @@ function verdict(
     if (sub === "scheduler" && seg.length === 4 && method === "GET") {
       return { ok: true }
     }
+    // The typed-plan surface (control-plane §B): scheduler-only, own event.
+    if (sub === "plan" && seg.length === 4 && method === "POST") {
+      return { ok: true }
+    }
     if (sub === "queue") {
       if (seg.length === 4 && (method === "GET" || method === "POST")) {
         return { ok: true }

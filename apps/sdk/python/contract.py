@@ -136,6 +136,70 @@ closed = aegisx.agents.close(SOLVER2_ID)
 assert closed.id == SOLVER2_ID and closed.status == "aborted"
 ok("agents close (terminal aborted)")
 
+# --- submit_plan (the typed control surface) -----------------------------------
+
+res = aegisx.submit_plan("contract: deliberate pass", [aegisx.no_op("nothing to do")])
+first = res.results[0]
+assert first.ok and first.kind == "noOp" and first.ref, first
+ok("submit_plan noOp")
+
+# Per-ref validation errors are 200 results, not exceptions.
+res = aegisx.submit_plan("bad target", [aegisx.enqueue("ch-nope")])
+assert not res.results[0].ok and res.results[0].code == "unknown_challenge"
+res = aegisx.submit_plan("self target", [aegisx.close(SCHEDULER_ID)])
+assert res.results[0].code == "self_target"
+res = aegisx.submit_plan("stale target", [aegisx.close(SOLVER2_ID)])
+assert res.results[0].code == "wrong_state"
+ok("submit_plan per-ref validation errors")
+
+# Any failing ref rejects the WHOLE plan: the valid enqueue is NOT applied.
+aegisx.queue.pause()
+res = aegisx.submit_plan(
+    "mixed",
+    [aegisx.enqueue(CHALLENGE_ID, prompt="plan probe"), aegisx.enqueue("ch-nope")],
+)
+assert all(not r.ok for r in res.results) and res.results[0].code is None
+assert not any(i.prompt == "plan probe" for i in aegisx.queue.list())
+
+# Plan enqueue lands in queue_after; an identical resubmission (content-derived
+# ref) is an idempotent replay — no double-enqueue.
+res = aegisx.submit_plan("plan enqueue", [aegisx.enqueue(CHALLENGE_ID, prompt="plan probe")])
+item_ref = res.results[0]
+assert item_ref.ok and item_ref.item_id
+assert any(i.id == item_ref.item_id for i in res.queue_after)
+count = len(aegisx.queue.list())
+res = aegisx.submit_plan(
+    "plan enqueue (timeout retry)", [aegisx.enqueue(CHALLENGE_ID, prompt="plan probe")]
+)
+assert res.results[0].ok, res.results[0]
+assert len(aegisx.queue.list()) == count, "idempotent replay double-enqueued"
+res = aegisx.submit_plan("ref reuse", [aegisx.no_op("different", ref=item_ref.ref)])
+assert res.results[0].code == "duplicate_ref"
+ok("submit_plan enqueue + queueAfter + idempotent replay")
+
+res = aegisx.submit_plan("plan cancel", [aegisx.cancel_item(item_ref.item_id, ref="c1")])
+assert res.results[0].ok
+aegisx.queue.resume()
+ok("submit_plan cancelItem")
+
+# Solver face: the plan surface is scheduler-only; malformed envelope is a 400.
+become(SOLVER_TOKEN, SOLVER_ID)
+expect_error(
+    "forbidden", 403,
+    lambda: aegisx.submit_plan("x", [aegisx.no_op("y")]),
+    "solver forbidden: submit_plan",
+)
+become(SCHEDULER_TOKEN, SCHEDULER_ID)
+expect_error(
+    "invalid_request", 400,
+    lambda: aegisx.get_client().request(
+        "POST",
+        aegisx.get_client().event_path("/plan"),
+        body={"rationale": "x", "actions": [{"kind": "bogus"}]},
+    ),
+    "submit_plan malformed schema (400)",
+)
+
 team_key = f"team:{CHALLENGE_ID}"
 msg = aegisx.channels.announce(CHALLENGE_ID, "contract announce")
 assert msg.channel_key == team_key

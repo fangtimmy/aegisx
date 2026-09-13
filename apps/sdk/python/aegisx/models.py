@@ -304,6 +304,7 @@ class ChannelFile:
 # call time).
 _NESTED_TYPES["ChannelFile"] = ChannelFile
 _NESTED_TYPES["AgentSummary"] = AgentSummary
+_NESTED_TYPES["QueueItem"] = QueueItem
 
 
 @dataclass
@@ -363,3 +364,47 @@ class Snapshot:
     queue_state: str
     scheduler_config: dict[str, Any] | None
     status: SchedulerStatus
+
+
+@dataclass
+class PlanRefResult:
+    """One plan action's outcome (submit_plan): ok, or a validation
+    rejection with the server's plan error code (`unknown_challenge`,
+    `wrong_state`, `duplicate_ref`, `solved_blocked`, `self_target`, …).
+    `agent_id` / `item_id` back-fill the addressed resource where
+    applicable."""
+
+    ref: str
+    kind: str
+    ok: bool
+    code: str | None = None
+    message: str | None = None
+    agent_id: str | None = None
+    item_id: str | None = None
+
+
+@dataclass
+class DeferredAction:
+    """A plan action the server deferred (slow phase — stop/close/finish/
+    cold wakes); its outcome lands in the plan.result decision-log entry."""
+
+    ref: str
+    kind: str
+
+
+@dataclass
+class SubmitPlanResult:
+    """The submit_plan response: per-ref outcomes (validation rejections are
+    results, not exceptions), the queue view after the fast phase, and the
+    deferred actions whose results ride plan.result."""
+
+    results: list[PlanRefResult]
+    queue_after: list[QueueItem]
+    deferred: list[DeferredAction]
+
+
+# Plan result types register after their definitions (from_dict looks
+# _NESTED_TYPES up at call time, but the registration itself needs the class
+# objects to exist).
+_NESTED_TYPES["PlanRefResult"] = PlanRefResult
+_NESTED_TYPES["DeferredAction"] = DeferredAction
