@@ -37,6 +37,12 @@ import { PlatformActionError, platformError } from "./errors"
 type Storage = ReturnType<typeof createStorage>
 type StoredPlatform = typeof eventPlatforms.$inferSelect
 
+/** Gap between per-challenge detail/attachment pulls. A sync is a burst of
+ * N+M requests; platforms rate-limit hard exactly there (DASCTF handed out
+ * ten 429s during one rehearsal boot). Transport retries stay as the safety
+ * net — this keeps the burst under the limiter in the first place. */
+const SYNC_PACE_MS = 250
+
 export function createPlatformSync(
   db: Database,
   storage: Storage,
@@ -342,7 +348,10 @@ export function createPlatformSync(
     const available = new Map(inventory.remote.map((item) => [item.id, item]))
     const results: ChallengeSyncItem[] = []
     const ids = [...new Set(remoteIds)]
-    for (const remoteId of ids) {
+    for (const [index, remoteId] of ids.entries()) {
+      if (index > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SYNC_PACE_MS))
+      }
       const summary = available.get(remoteId)
       let result: ChallengeSyncItem
       if (!summary) {

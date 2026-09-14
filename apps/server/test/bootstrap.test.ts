@@ -12,13 +12,14 @@ import {
   readBootstrapSpec,
   readEventPreset,
   runBootstrap,
+  syncChallenges,
   type BootstrapDeps,
   type EventPreset,
 } from "../src/bootstrap"
-import { events } from "../src/db/schema"
+import { events, eventPlatforms } from "../src/db/schema"
 import { createConfigStore } from "../src/infrastructure/config-store"
 import type { ConfigStore } from "../src/infrastructure/config-store"
-import { setupDb } from "./helpers"
+import { setupDb, now } from "./helpers"
 import { refine } from "./support"
 
 function specFrom(env: Record<string, string | undefined>) {
@@ -713,6 +714,135 @@ describe("bootstrap event preset", () => {
       const brief = parseEventPromptBrief(event?.promptBrief ?? "")
       expect(brief.common).toBe("v1 简报")
       expect(brief.flagFormats).toEqual(["flag{<uuid>}"])
+    } finally {
+      dbh.close()
+    }
+  })
+})
+
+/** A platform-bound event plus a sync double: challenges named in `flaky`
+ * fail their first N appearances (the 429-storm shape); records the remoteIds
+ * of each sync call. */
+function syncStub(
+  items: Array<{ id: string; imported: boolean }>,
+  flaky: Record<string, number> = {}
+) {
+  const calls: string[][] = []
+  const seen: Record<string, number> = {}
+  const platformService = refine<BootstrapDeps["platformService"]>({
+    discoverChallenges: async () => ({
+      syncedAt: now(),
+      items: items.map((item) => ({
+        id: item.id,
+        name: `ch-${item.id}`,
+        category: null,
+        points: null,
+        solved: false,
+        imported: item.imported,
+        localChallengeId: null,
+      })),
+    }),
+    syncChallenges: async (_eventId: string, remoteIds: string[]) => {
+      calls.push([...remoteIds])
+      return {
+        syncedAt: now(),
+        results: remoteIds.map((remoteId) => {
+          seen[remoteId] = (seen[remoteId] ?? 0) + 1
+          return (seen[remoteId] ?? 0) <= (flaky[remoteId] ?? 0)
+            ? { remoteId, status: "failed", error: "rate limited" }
+            : {
+                remoteId,
+                challengeId: `c-${remoteId}`,
+                status: "created",
+                name: `ch-${remoteId}`,
+                category: null,
+                points: null,
+                attachments: [],
+              }
+        }),
+      }
+    },
+  })
+  return { platformService, calls }
+}
+
+function seedBoundEvent(db: BootstrapDeps["db"], name: string) {
+  const id = crypto.randomUUID()
+  const ts = now()
+  db.insert(events)
+    .values({ id, name, promptBrief: "", createdAt: ts, updatedAt: ts })
+    .run()
+  db.insert(eventPlatforms)
+    .values({
+      eventId: id,
+      type: "dasctf",
+      baseUrl: "https://plat.example.com",
+      credential: "k",
+      remoteEventId: "",
+      sourceKey: "dasctf:match",
+      createdAt: ts,
+      updatedAt: ts,
+    })
+    .run()
+  return id
+}
+
+describe("bootstrap challenge sync convergence", () => {
+  test("re-pulls only the failed set until it lands", async () => {
+    const dbh = setupDb()
+    try {
+      const eventId = seedBoundEvent(dbh.db, "sync-evt")
+      const { platformService, calls } = syncStub(
+        [
+          { id: "1", imported: false },
+          { id: "2", imported: false },
+          { id: "3", imported: true },
+        ],
+        { "1": 1 }
+      )
+      await syncChallenges(
+        refine<BootstrapDeps>({ db: dbh.db, platformService }),
+        eventId,
+        [1, 1]
+      )
+      expect(calls).toEqual([["1", "2"], ["1"]])
+    } finally {
+      dbh.close()
+    }
+  })
+
+  test("gives up after the bounded rounds without throwing", async () => {
+    const dbh = setupDb()
+    try {
+      const eventId = seedBoundEvent(dbh.db, "sync-stuck")
+      const { platformService, calls } = syncStub(
+        [{ id: "1", imported: false }],
+        { "1": 99 }
+      )
+      await syncChallenges(
+        refine<BootstrapDeps>({ db: dbh.db, platformService }),
+        eventId,
+        [1, 1]
+      )
+      expect(calls.length).toBe(3) // initial pass + one round per injected delay
+    } finally {
+      dbh.close()
+    }
+  })
+
+  test("a clean first pass runs exactly one round", async () => {
+    const dbh = setupDb()
+    try {
+      const eventId = seedBoundEvent(dbh.db, "sync-clean")
+      const { platformService, calls } = syncStub([
+        { id: "1", imported: false },
+      ])
+      await syncChallenges(
+        refine<BootstrapDeps>({ db: dbh.db, platformService }),
+        eventId,
+        [1, 1]
+      )
+      expect(calls).toEqual([["1"]])
     } finally {
       dbh.close()
     }

@@ -104,11 +104,20 @@ export class PlatformError extends Error {
    * when the platform exposes one. Lets adapters distinguish cases that share
    * an HTTP status (TSecBench's 409 duplicate vs invalid_state). */
   readonly code?: string
+  /** Server-advised wait from a numeric `Retry-After` header, in seconds.
+   * Feeds the transport retry's delay decision. */
+  readonly retryAfterSec?: number
 
-  constructor(message: string, status?: number, code?: string) {
+  constructor(
+    message: string,
+    status?: number,
+    code?: string,
+    retryAfterSec?: number
+  ) {
     super(message)
     this.status = status
     this.code = code
+    this.retryAfterSec = retryAfterSec
   }
 }
 
@@ -140,6 +149,34 @@ function headerRecord(init?: HeadersInit): Record<string, string> {
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const MAX_REDIRECTS = 5
+/** Transient responses worth one more attempt on an idempotent read: rate
+ * limiting and gateway-level errors. */
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504])
+/** Retry attempts AFTER the initial one. */
+const MAX_RETRIES = 3
+const RETRY_BASE_DELAY_MS = 1_000
+const RETRY_MAX_DELAY_MS = 30_000
+
+/** Wait before one retry: a numeric `Retry-After` wins (capped), else
+ * exponential backoff (1s → 2s → 4s) with jitter so concurrent syncs do not
+ * re-hammer the limiter in lockstep. */
+function retryDelayMs(attempt: number, retryAfterSec: number | undefined) {
+  if (retryAfterSec !== undefined && retryAfterSec > 0) {
+    return Math.min(retryAfterSec * 1000, RETRY_MAX_DELAY_MS)
+  }
+  return (
+    Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS) +
+    Math.random() * 500
+  )
+}
+
+function retryAfterOf(response: Response): number | undefined {
+  const header = response.headers.get("retry-after")
+  const trimmed = header?.trim()
+  return trimmed !== undefined && trimmed !== "" && /^\d+$/.test(trimmed)
+    ? Number(trimmed)
+    : undefined
+}
 
 export class PlatformHttp {
   readonly origin: string
@@ -161,7 +198,11 @@ export class PlatformHttp {
     }
   }
 
-  async request(path: string, init: RequestInit = {}, authenticated = true) {
+  /**
+   * One HTTP attempt (redirect-following, timeout, error mapping). No retry
+   * policy lives here — `request` layers that on top.
+   */
+  private async send(path: string, init: RequestInit, authenticated: boolean) {
     const method = init.method ?? "GET"
     const extraHeaders = headerRecord(init.headers)
     const requestBody = typeof init.body === "string" ? init.body : null
@@ -253,9 +294,51 @@ export class PlatformHttp {
         responseBody,
         error: null,
       })
-      throw new PlatformError(message, response.status, code)
+      throw new PlatformError(
+        message,
+        response.status,
+        code,
+        retryAfterOf(response)
+      )
     }
     return response
+  }
+
+  /**
+   * HTTP with bounded retries for transient failures on idempotent reads:
+   * a challenge pull that loses a detail/attachment request to a 429 storm
+   * must recover by itself. Only body-less GETs replay — flag verdicts and
+   * target start/stop (POST) must never be re-sent by a transport retry. An
+   * aborted signal stops the loop at the next check; `Retry-After` steers the
+   * wait (see {@link retryDelayMs}).
+   */
+  async request(path: string, init: RequestInit = {}, authenticated = true) {
+    const method = init.method ?? "GET"
+    const retryable = method === "GET" && init.body === undefined
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.send(path, init, authenticated)
+      } catch (error) {
+        if (
+          !retryable ||
+          attempt >= MAX_RETRIES ||
+          init.signal?.aborted ||
+          !(error instanceof PlatformError) ||
+          error.status === undefined ||
+          !RETRYABLE_STATUSES.has(error.status)
+        ) {
+          throw error
+        }
+        const delay = retryDelayMs(attempt, error.retryAfterSec)
+        console.warn("platform: retrying transient failure", {
+          url: path,
+          status: error.status,
+          attempt: attempt + 1,
+          delayMs: Math.round(delay),
+        })
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
   }
 
   async json<T>(path: string, init: RequestInit = {}) {

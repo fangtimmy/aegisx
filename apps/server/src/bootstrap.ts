@@ -521,8 +521,23 @@ async function ensureEventAndPlatform(
   return eventId
 }
 
-/** Sync every not-yet-imported remote challenge into the event. */
-async function syncChallenges(deps: BootstrapDeps, eventId: string) {
+/** Gaps between convergence rounds that re-pull the challenges a rate-limit
+ * burst knocked out (transport retries have already run inside each round).
+ * Bounded on purpose: a permanently failed challenge (e.g. delisted on the
+ * platform) must not block the scheduler from ever starting. */
+const SYNC_RETRY_DELAYS_MS = [10_000, 20_000, 40_000] as const
+
+/** Sync every not-yet-imported remote challenge into the event. A failed
+ * challenge rolls back whole, so a mid-pull 429 leaves a hole that nothing
+ * else would fill: re-pull only the failed set for a bounded number of
+ * rounds, then log what is still missing loudly — the next boot re-pulls
+ * absent rows by itself. `retryDelaysMs` is injectable for tests.
+ * Exported for tests. */
+export async function syncChallenges(
+  deps: BootstrapDeps,
+  eventId: string,
+  retryDelaysMs: readonly number[] = SYNC_RETRY_DELAYS_MS
+) {
   const bound = deps.db
     .select()
     .from(eventPlatforms)
@@ -532,14 +547,38 @@ async function syncChallenges(deps: BootstrapDeps, eventId: string) {
   const { items } = await deps.platformService.discoverChallenges(eventId)
   const missing = items.filter((item) => !item.imported).map((item) => item.id)
   if (missing.length === 0) return
-  await deps.platformService.syncChallenges(eventId, missing, undefined, {
-    kind: "system",
-    actorId: "platform-sync",
-  })
-  console.log("bootstrap: challenges synced", {
-    eventId,
-    count: missing.length,
-  })
+  let failed: string[] = missing
+  for (let round = 0; round <= retryDelaysMs.length; round++) {
+    if (round > 0) {
+      console.warn(
+        "bootstrap: challenge sync incomplete — retrying the failed set",
+        { eventId, round, failed }
+      )
+      await new Promise((resolve) =>
+        setTimeout(resolve, retryDelaysMs[round - 1] ?? 0)
+      )
+    }
+    const { results } = await deps.platformService.syncChallenges(
+      eventId,
+      failed,
+      undefined,
+      { kind: "system", actorId: "platform-sync" }
+    )
+    failed = results
+      .filter((result) => result.status === "failed")
+      .map((result) => result.remoteId)
+    if (failed.length === 0) {
+      console.log("bootstrap: challenges synced", {
+        eventId,
+        count: missing.length,
+      })
+      return
+    }
+  }
+  console.error(
+    "bootstrap: challenges INCOMPLETE after retries — re-sync from the UI or restart to retry",
+    { eventId, missing: failed }
+  )
 }
 
 /** Configure (first time only — later edits are the user's) and start the
