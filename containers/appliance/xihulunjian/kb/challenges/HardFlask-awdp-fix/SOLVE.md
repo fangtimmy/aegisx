@@ -1,4 +1,4 @@
-# HardFlask-awdp-fix（决赛新题型 · AWDP · Web · 100 分）
+# HardFlask-awdp-fix（决赛新题型 · AWDP · Web · 200 分）**已解出（2026-09-14 验证）**
 
 原型为 DASCTF 2022.07 赋能赛 WEB1 HardFlask（Flask SSTI bypass + 盲注，原题 flag 文件 `/f1agggghere`）。
 决赛 AWDP-fix 新题型：无附件、`remote_target` 单靶机 + flag 提交预算（50 次）。经典 AWDP 有 attack（打靶机拿
@@ -8,8 +8,9 @@ flag）/ fix（修补自己服务拿防御分）双形态；**本平台测试赛
 环境变量是陷阱，真值只在 `/flag`）。
 
 **测试赛（2026-09-10）此题为平台坏题**：RCE 与 SSH 双通道读到 `/flag`，整串 / 内层全部 rejected；调度者查
-管理面确认无预登记期望值，判定部署 / 平台不一致，全队止损（共烧 4 次提交，剩 46）。决赛若再现：可能已修复
-（正常交 flag），可能仍是坏题（走下方 SOP 止损）。
+管理面确认无预登记期望值，判定部署 / 平台不一致，全队止损（共烧 4 次提交，剩 46）。
+**2026-09-14 测试赛已修复**：`/flag` 值轮换为新值（≠ 测试轮 `688f...`），按备忘「值变化 ⇒ 平台重新注入过
+⇒ 大概率已修复」走正常流程，RCE 后**第 1 次提交裸值即 accepted**。题名注意：平台侧为 `HardFlask-awdp `（尾部带空格）。
 
 ## RCE 路径（本题核心资产，约 5 分钟）
 
@@ -19,16 +20,18 @@ flag）/ fix（修补自己服务拿防御分）双形态；**本平台测试赛
 python3 /opt/solver/knowledges/xihulunjian/challenges/HardFlask-awdp-fix/exp/solve.py "http://$THOST:$TPORT"
 ```
 
-预期输出：
+预期输出（2026-09-14 实测原文）：
 
 ```
-[*] target     : http://1.14.76.59:20805
+[*] target     : http://1.14.76.59:32210
 [*] fingerprint: Age Test / Werkzeug/2.0.3 Python/3.8.20
 [*] SSTI probe : alive
 [*] RCE        : lipsum chain triggered
-[+] FLAG       : DASCTF{688f238b08ac8b9086a54e9188d1f5c3}
-[*] submit     : 688f238b08ac8b9086a54e9188d1f5c3  (备选整串 DASCTF{688f238b08ac8b9086a54e9188d1f5c3})
+[+] FLAG       : DASCTF{85627000467600223426463750646827}
+[*] submit     : 85627000467600223426463750646827  (rejected then try full DASCTF{85627000467600223426463750646827})
 ```
+
+裸值第 1 次提交即 accepted（2026-09-14）。
 
 手动分步（脚本即此流程）：
 
@@ -106,8 +109,8 @@ services:[]}]`；flags 字段仅上述 4 条 rejected，**无预登记期望值*
 
 ## 决赛备忘
 
-- 决策树：先跑 RCE（≤5 分钟）→ 读值 → 交裸值 → **accepted = 平台已修复，正常收工**；
-  两拒 = 仍是坏题 → 走 SOP 第 3 步止损。
+- 决策树（2026-09-14 已实证「值变化 ⇒ 已修复」分支）：先跑 RCE（≤5 分钟）→ 读值 → 交裸值 →
+  **accepted = 平台已修复，正常收工**；两拒 = 仍是坏题 → 走 SOP 第 3 步止损。
 - 若 `/flag` 值 ≠ 测试轮 `688f...`（md5 对不上），说明平台重新注入过 flag——大概率已修复，按正常题流程交。
 - 时间盒：RCE 路径 5 分钟内完成（一键脚本）；SOP 止损后本题为零投入，等待调度申诉结果。
 - 测试轮靶机 `1.14.76.59`（HTTP / SSH 端口与 SSH 口令随实例轮换，以赛事面 / `$THOST:$TPORT` 为准）；

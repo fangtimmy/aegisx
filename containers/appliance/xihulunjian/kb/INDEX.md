@@ -18,7 +18,7 @@ status 含义：`verified`=exp 已实跑验证；`authored`=已写 runbook 未�
 | EZheap_2 | EZheap_2 / PWN-06 | pwn | dynamic | researched | 未解 | - | `EZheap_2的附件.zip` `9f05be813b5e`<br>`ezheap` `ad971e7ad984`<br>`libc.so.6` `acf8ac6d219b` |
 | GCD，杠上了 | CRYPTO-09 / GCD，杠上了 | Crypto | static | verified | 解出 | - | `GCD，杠上了的附件.zip` `5866126e0530` |
 | HK的怪兽 | HK的怪兽 / MISC-03 | Misc | static | verified | 解出 | - | `HK的怪兽的附件.zip` `4547cb06511b` |
-| HardFlask-awdp-fix | HardFlask-awdp-fix | Web | dynamic | researched | - | 出现 | - |
+| HardFlask-awdp-fix | HardFlask-awdp-fix / HardFlask-awdp / HardFlask-awdp  | Web | dynamic | verified | - | 解出 | - |
 | How_many_rot_are_there | CRYPTO-02 / How_many_rot_are_there | Crypto | static | verified | 解出 | - | `How_many_rot_are_there的附件.zip` `adf8d741edd6` |
 | Messy_heap | Messy_heap / PWN-07 | pwn | dynamic | researched | 未解 | - | `Messy_heap的附件.zip` `e0574cf87c3b` |
 | MirrorShield | MirrorShield / REVERSE-02 | Reverse | static | verified | 解出 | - | `MirrorShield的附件.zip` `cb020727df41` |
@@ -51,7 +51,7 @@ status 含义：`verified`=exp 已实跑验证；`authored`=已写 runbook 未�
 | upup_exec | upup_exec | Web | dynamic | researched | - | 解出 | - |
 | what_heap | PWN-01 / what_heap | pwn | dynamic | researched | 未解 | 解出 | `what_heap的附件.zip` `be0f999e41fc`<br>`what_heap` `97cd62919fb7`<br>`libc.so.6` `acf8ac6d219b` |
 | why_not_heap | PWN-04 / why_not_heap | pwn | dynamic | verified | 未解 | - | `why_not_heap的附件.zip` `2f6cde979caf`<br>`pwn` `3bd13dee5eb6`<br>`libc.so.6` `9b5bf1626e39`<br>`ld-linux-x86-64.so.2` `46973706a7e7` |
-| wish | PWN-05 / wish | pwn | dynamic | researched | 未解 | 出现 | `wish的附件.zip` `0c772d12cc68` |
+| wish | PWN-05 / wish | pwn | dynamic | verified | 未解 | 解出 | `wish的附件.zip` `0c772d12cc68` |
 | zistel | REVERSE-08 / zistel | Reverse | static | verified | 解出 | - | `zistel的附件.zip` `15b175ad1cd5` |
 | 特殊流量 | MISC-04 / 特殊流量 | Misc | static | verified | 解出 | - | `特殊流量的附件.zip` `deede029aae4` |
 | 特殊流量2 | MISC-06 / 特殊流量2 | Misc | rotated | verified | 解出 | 解出 | `特殊流量2的附件.zip` `3a40c4a63f1a` |

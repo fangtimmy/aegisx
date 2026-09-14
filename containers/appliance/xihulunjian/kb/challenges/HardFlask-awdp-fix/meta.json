@@ -1,18 +1,22 @@
 {
   "key": "HardFlask-awdp-fix",
   "names": [
-    "HardFlask-awdp-fix"
+    "HardFlask-awdp-fix",
+    "HardFlask-awdp",
+    "HardFlask-awdp "
   ],
   "category": "Web",
   "quali": null,
   "attachments": [],
   "flag_policy": "dynamic",
-  "flags": {},
-  "rehearsal": {
-    "name": "HardFlask-awdp-fix",
-    "solved": false
+  "flags": {
+    "rehearsal": "85627000467600223426463750646827"
   },
-  "status": "researched",
+  "rehearsal": {
+    "name": "HardFlask-awdp",
+    "solved": true
+  },
+  "status": "verified",
   "deps": [
     "requests"
   ]

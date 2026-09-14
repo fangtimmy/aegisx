@@ -18,12 +18,14 @@
     }
   ],
   "flag_policy": "dynamic",
-  "flags": {},
+  "flags": {
+    "rehearsal": "65080658855683335639327030552326"
+  },
   "rehearsal": {
     "name": "wish",
-    "solved": false
+    "solved": true
   },
-  "status": "researched",
+  "status": "verified",
   "deps": [
     "pwntools"
   ]
