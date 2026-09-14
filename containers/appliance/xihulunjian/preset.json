@@ -2,9 +2,11 @@
   "brief": {
     "common": "平台：DASCTF（西湖论剑决赛·客观评测）。决赛复用初赛原题，没有新增题——题名沿用原始题名（如 gogogo_3、logbool），category 字段是题型（Crypto/Misc/Reverse/Web/pwn），不是难度；绝大多数初赛题已内置解题手册。环境完全离线——无公网，缺工具换技术路线，禁止 pip/apt 安装，LLM 走平台网关。平台 API 有 429 限流，遇 429 退避重试不要连续 hammer。",
     "solver": "【每题必做的开局首步】先查内置手册：1) rg -F -n \"<题名>\" /opt/solver/knowledges/xihulunjian/INDEX.md；2) 未命中再对每个附件 sha256sum 后比对 INDEX 指纹列（题名可能改，附件字节不会变）；3) 命中 → 读 challenges/<key>/SOLVE.md 照「快速路径」执行，处置方式以 INDEX 的 flag_policy 列为准——static 题 exp 通常 1 分钟内出 flag，rotated 题以 exp 现算值为准，dynamic 题按手册打实例；手册没写的失败分支再自由发挥；4) 未命中 → 新题，正常解题，同题型条目思路可参考。提交纪律（每题 50 次预算）：解出的值先自洽验证（exp 复算或实例回显交叉确认）再提交；提交裸值（花括号内内容）优先，被拒不猜变体，最多换完整 DASCTF{...} 形态再试一次；两种形态都被拒且已有 RCE/实例证据 → 疑似坏题，停止提交并升级裁决（实测止损流程只需 4 次提交，实测一题烧 38 次逼近上限的教训）；禁止边推边交、禁止格式变体枚举。靶机纪律：build-exercise-env 异步拉起需轮询等 ready；靶机带过期时间（expireTime），长战线题在过期前完成利用，快到期先 aegisx.ask 调度者。",
-    "orchestrator": "收割优先级：KB 命中的题优先快速收割建立分数底盘，新难题放中后段，尾声只保已推进的题收尾。park 纪律：同题连续多次 spawn 无进展（无 accepted、无新增关键产出文件）→ 降优先级或 park 让出槽位。事实边界：你没有「提交计数」类 API，不要引用或幻想该指标——flag 事件流是唯一真实来源。"
+    "orchestrator": "时间预算：评测总时长 3 小时（自启动起算），每题运行上限 60 分钟——剩余时间不足一次尝试的 1.2 倍超时（<72 分钟）就不要再启动新题。收割优先级：KB 命中的题优先快速收割建立分数底盘，新难题放中后段，尾声只保已推进的题收尾。park 纪律：同题连续多次 spawn 无进展（无 accepted、无新增关键产出文件）→ 降优先级或 park 让出槽位。事实边界：你没有「提交计数」类 API，不要引用或幻想该指标——flag 事件流是唯一真实来源。"
   },
-  "flagFormats": ["DASCTF{...}"],
+  "flagFormats": [
+    "DASCTF{...}"
+  ],
   "offline": {
     "enabled": true,
     "note": "本镜像为断网决赛沙箱构建: 没有公网, 只有平台网关（LLM）与 DASCTF 平台可达。\n**不要尝试 `pip install` / `apt-get install`** — 会直接失败。\n预装工具见上文清单; 缺工具时换不需要该工具的技术路线, 不要在安装上耗时。"
