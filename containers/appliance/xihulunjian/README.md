@@ -103,9 +103,13 @@ app 产物（`aegisx/app-build`），差异全部在 target 专属层：
 
 镜像体积：未压缩 5.05GB，gzip 压缩后 **1.85GB**（2026-09-14 复测于 `:test`，与 tsecbench 同在 3GB 量级以内）。
 
+交付 tag 用日期命名（与交付文件名一致）：先重打 tag 再导出——tar 内嵌的
+RepoTags 决定 `docker load` 后的镜像名。
+
 ```sh
-docker save aegisx/xihulunjian:test | gzip > /tmp/aegisx-xihulunjian-<版本>.tar.gz
-shasum -a 256 /tmp/aegisx-xihulunjian-<版本>.tar.gz   # 上传前记录，平台侧核对
+docker tag aegisx/xihulunjian:test aegisx/xihulunjian:<日期>
+docker save aegisx/xihulunjian:<日期> | gzip > /tmp/aegisx-xihulunjian-<日期>.tar.gz
+shasum -a 256 /tmp/aegisx-xihulunjian-<日期>.tar.gz   # 上传前记录，平台侧核对
 ```
 
 主办方侧的导入/启动说明见 [ORGANIZER.md](./ORGANIZER.md)（`docker load` 直接支持 .tar.gz）。

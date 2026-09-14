@@ -15,6 +15,7 @@
 ## 2. 导入与启动
 
 ```bash
+# <版本> = 交付日期 tag（如 20260914），与交付文件名一致
 docker load -i aegisx-xihulunjian-<版本>.tar.gz
 
 docker run -d --name aegisx-eval \
