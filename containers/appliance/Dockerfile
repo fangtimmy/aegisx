@@ -202,14 +202,5 @@ RUN --mount=type=bind,src=containers/solver/gen-environment.py,target=/tmp/gen-e
 RUN echo xihulunjian > /opt/solver/VARIANT && \
     test -s /opt/solver/knowledges/xihulunjian/INDEX.md
 # Event name is explicit because bootstrap's platform-bound default is the
-# tsecbench name. The rest are the deployment facts of the finals interface
-# contract: the organizer injects only PLATFORM_BASE_URL / PLATFORM_ACCESS_KEY /
-# LLM_BASE_URL / LLM_API_KEY, so protocol + model must be baked (values proven
-# in the 2026-09-14 test round; AEGISX_MODEL_* stay overridable at runtime).
-ENV AEGISX_EVENT_NAME=xihulunjian-finals \
-    AEGISX_PLATFORM_TYPE=dasctf \
-    AEGISX_PROVIDER_TYPE=openai-responses \
-    AEGISX_PROVIDER_EXACT_ENDPOINT=1 \
-    AEGISX_MODEL_ID=deepseek-flash \
-    AEGISX_MODEL_PROFILE=deepseek/deepseek-v4-flash-vision-exp \
-    AEGISX_MODEL_EFFORT=high
+# tsecbench name.
+ENV AEGISX_EVENT_NAME=xihulunjian-finals

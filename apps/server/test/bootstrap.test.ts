@@ -237,7 +237,6 @@ describe("readBootstrapSpec", () => {
       PLATFORM_ACCESS_KEY: "ak_live_x",
       LLM_BASE_URL: "https://gw.example.com/llm",
       LLM_API_KEY: "sk-1",
-      // Deployment facts baked into the appliance image ENV.
       AEGISX_PLATFORM_TYPE: "dasctf",
       AEGISX_MODEL_ID: "deepseek-flash",
     }

@@ -30,27 +30,27 @@ docker run -d --name aegisx-eval \
 
 ### 环境变量
 
-决赛接口约定 4 个接入变量（由赛事方按实际信息填入 `aegisx.env`）：
+接入变量按决赛接口约定命名；网关协议、模型等部署事实仍由赛事方按网关实际信息填写。
 
-| 变量 | 填什么 |
-|---|---|
-| `PLATFORM_BASE_URL` | 评测平台地址 |
-| `PLATFORM_ACCESS_KEY` | 评测平台 AccessKey |
-| `LLM_BASE_URL` | LLM 网关地址（完整端点） |
-| `LLM_API_KEY` | 网关 key |
-
-网关协议与模型已内建镜像（无需设置）：平台 `dasctf`；网关 `openai-responses` +
-exact-endpoint；模型 `deepseek-flash`（profile `deepseek/deepseek-v4-flash-vision-exp`、
-effort `high`）。换模型/协议（高级，可选）用 `AEGISX_MODEL_ID` / `AEGISX_MODEL_PROFILE` /
-`AEGISX_PROVIDER_TYPE` 覆盖；同名时契约变量（`LLM_*`/`PLATFORM_*`）优先于 `AEGISX_*`。
+| 变量 | 必填 | 填什么 |
+|---|---|---|
+| `LLM_BASE_URL` | ✅ | LLM 网关地址 |
+| `AEGISX_PROVIDER_TYPE` | ✅ | 网关协议：`openai-responses` / `openai-compatible` / `anthropic-messages` |
+| `LLM_API_KEY` | ✅ | 网关 key |
+| `AEGISX_MODEL_ID` | ✅ | 模型 id（按网关注册名） |
+| `AEGISX_PROVIDER_EXACT_ENDPOINT` | 视网关 | 网关地址本身已是完整端点时设 `1`（否则无法连通，典型如 DASCTF 网关） |
+| `AEGISX_MODEL_PROFILE` | 视网关 | 网关模型为变体名时，由镜像提供方给出对应取值（见下方示例） |
+| `AEGISX_PLATFORM_TYPE` | ✅ | `dasctf` |
+| `PLATFORM_BASE_URL` | ✅ | 评测平台地址 |
+| `PLATFORM_ACCESS_KEY` | ✅ | 评测平台 AccessKey |
 
 **DASCTF 网关（deepseek-flash）填写示例**：
 
 ```text
-PLATFORM_BASE_URL=https://pro.dasctf.com
-PLATFORM_ACCESS_KEY=ak_live_xxx
-LLM_BASE_URL=https://llm-gateway.dasctf.com/llm-gateway/proxy/e/xxxx
-LLM_API_KEY=sk-xxxx
+AEGISX_PROVIDER_TYPE=openai-responses
+AEGISX_PROVIDER_EXACT_ENDPOINT=1
+AEGISX_MODEL_ID=deepseek-flash
+AEGISX_MODEL_PROFILE=deepseek/deepseek-v4-flash-vision-exp
 ```
 
 其余变量均有默认值，无需设置。
@@ -118,7 +118,7 @@ docker run --rm --platform linux/amd64 --entrypoint /bin/bash \
 
 ## 8. FAQ
 
-- **页面/接口一直 404 或网关不通？** exact-endpoint（URL 即完整端点）已内建镜像，此情况多为 `LLM_BASE_URL` 填的不是完整端点（少了末段路径）——核对赛事方提供的网关地址后重启容器。
+- **页面/接口一直 404 或网关不通？** 多为网关为「完整端点」型而未设 `AEGISX_PROVIDER_EXACT_ENDPOINT=1`，补设后 `docker restart aegisx-eval`。
 - **平台返回 429？** 平台限流，系统会自动重试，无需处理；若日志出现 `challenges INCOMPLETE`，重启容器即会自动补拉缺失题。
 - **提交显示「此题已被解出」？** 平台对已判分题目的固定应答，系统不会重试、不消耗提交预算。
 - **想更换模型或网关？** 停止容器，换全新数据卷并以新环境变量启动。
