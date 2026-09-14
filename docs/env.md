@@ -12,6 +12,15 @@ event preset（`/opt/aegisx-preset/preset.json`，见 `containers/appliance/tsec
 
 ### Appliance bootstrap（`AEGISX_BOOTSTRAP=1` 时生效）
 
+决赛接口契约别名（优先级最高，四个取值槽的覆盖顺序均为 **契约变量 > `AEGISX_*` > `BENCHMARK_*`**）：
+
+| 契约变量 | 等价槽位 |
+|---|---|
+| `PLATFORM_BASE_URL` | `AEGISX_PLATFORM_BASE_URL`（平台地址） |
+| `PLATFORM_ACCESS_KEY` | `AEGISX_PLATFORM_CREDENTIAL`（平台凭据） |
+| `LLM_BASE_URL` | `AEGISX_PROVIDER_BASE_URL`（LLM base URL，仍须与 `AEGISX_MODEL_ID` 成对） |
+| `LLM_API_KEY` | `AEGISX_PROVIDER_API_KEY`（LLM key） |
+
 | 变量 | 必填 | 说明 |
 |---|---|---|
 | `AEGISX_PROVIDER_BASE_URL` | 推荐 | LLM API base URL（须 http/https），与 `AEGISX_MODEL_ID` 成对生效，二者齐备才创建 provider |

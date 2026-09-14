@@ -30,24 +30,21 @@ docker buildx build -f containers/app-build/Dockerfile \
 docker buildx build -f containers/appliance/Dockerfile \
   --platform linux/amd64 --target xihulunjian -t aegisx/xihulunjian:test .
 
-# 运行（LLM/平台凭据走环境变量；调优经 preset 在首启落库）
-# DASCTF LLM 网关是 exact-endpoint 型：URL 即完整端点，必须设 EXACT_ENDPOINT=1
+# 运行（决赛接口约定：只注入 4 个接入变量；网关协议与模型已内建镜像）
 docker run -d --name aegisx-xihu \
   -p 3000:3000 \
   -v aegisx-xihu-data:/data \
-  -e AEGISX_PROVIDER_BASE_URL=<LLM网关> \
-  -e AEGISX_PROVIDER_TYPE=openai-responses \
-  -e AEGISX_PROVIDER_EXACT_ENDPOINT=1 \
-  -e AEGISX_PROVIDER_API_KEY=<key> \
-  -e AEGISX_MODEL_ID=<model> \
-  -e AEGISX_MODEL_EFFORT=high \
-  # 网关模型是目录变体时绑定元数据（deepseek-flash 实为 v4.1-flash，目录暂无该条目）：
-  -e AEGISX_MODEL_PROFILE=deepseek/deepseek-v4-flash-vision-exp \
-  -e AEGISX_PLATFORM_TYPE=dasctf \
-  -e AEGISX_PLATFORM_BASE_URL=https://pro.dasctf.com \
-  -e AEGISX_PLATFORM_CREDENTIAL=<AccessKey> \
+  -e PLATFORM_BASE_URL=<评测平台地址> \
+  -e PLATFORM_ACCESS_KEY=<平台AccessKey> \
+  -e LLM_BASE_URL=<LLM网关完整端点> \
+  -e LLM_API_KEY=<网关key> \
   aegisx/xihulunjian:test
 ```
+
+内建默认（镜像 ENV，无需设置）：平台 `dasctf`；网关 `openai-responses` + exact-endpoint
+（URL 即完整端点）；模型 `deepseek-flash`（profile `deepseek/deepseek-v4-flash-vision-exp`、
+effort `high`）。换模型/协议时用 `AEGISX_MODEL_ID` / `AEGISX_MODEL_PROFILE` /
+`AEGISX_PROVIDER_TYPE` 等覆盖；同名取值契约变量（`LLM_*`/`PLATFORM_*`）优先于 `AEGISX_*`。
 
 事件名默认 `xihulunjian-finals`（镜像 ENV，可用 `AEGISX_EVENT_NAME` 覆盖）——
 bootstrap 绑定平台时的事件名默认值是 tsecbench 的名字，这里显式钉住。

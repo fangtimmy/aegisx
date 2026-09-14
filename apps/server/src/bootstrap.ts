@@ -246,7 +246,10 @@ export function ensurePresetSettings(
 
 export function readBootstrapSpec(env: Record<string, string | undefined>) {
   const spec: BootstrapSpec = {}
-  if (env.AEGISX_PROVIDER_BASE_URL && env.AEGISX_MODEL_ID) {
+  // Organizer contract aliases (PLATFORM_*/LLM_*) win over our AEGISX_* names;
+  // BENCHMARK_* stays the lowest-priority hosted-harness fallback.
+  const providerBaseUrl = env.LLM_BASE_URL ?? env.AEGISX_PROVIDER_BASE_URL
+  if (providerBaseUrl && env.AEGISX_MODEL_ID) {
     const type = env.AEGISX_PROVIDER_TYPE ?? "openai-compatible"
     if (
       type !== "openai-compatible" &&
@@ -255,7 +258,7 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
     ) {
       throw new Error(`AEGISX_PROVIDER_TYPE is not a provider type: ${type}`)
     }
-    const baseUrl = env.AEGISX_PROVIDER_BASE_URL
+    const baseUrl = providerBaseUrl
     if (!PROTOCOL.test(baseUrl)) {
       throw new Error("AEGISX_PROVIDER_BASE_URL must be an HTTP(S) URL")
     }
@@ -263,7 +266,7 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
       label: env.AEGISX_PROVIDER_LABEL ?? "Bootstrap",
       type,
       baseUrl,
-      apiKey: env.AEGISX_PROVIDER_API_KEY ?? "",
+      apiKey: env.LLM_API_KEY ?? env.AEGISX_PROVIDER_API_KEY ?? "",
       modelId: env.AEGISX_MODEL_ID,
       ...(env.AEGISX_PROVIDER_EXACT_ENDPOINT === "1" ||
       env.AEGISX_PROVIDER_EXACT_ENDPOINT === "true"
@@ -287,7 +290,10 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
   const platformType =
     env.AEGISX_PLATFORM_TYPE ??
     (env.BENCHMARK_BASE_URL ? "tsecbench" : undefined)
-  const platformBaseUrl = env.AEGISX_PLATFORM_BASE_URL ?? env.BENCHMARK_BASE_URL
+  const platformBaseUrl =
+    env.PLATFORM_BASE_URL ??
+    env.AEGISX_PLATFORM_BASE_URL ??
+    env.BENCHMARK_BASE_URL
   if (platformType && platformBaseUrl) {
     if (!isPlatformType(platformType)) {
       throw new Error(
@@ -300,7 +306,11 @@ export function readBootstrapSpec(env: Record<string, string | undefined>) {
     spec.platform = {
       type: platformType,
       baseUrl: platformBaseUrl,
-      credential: env.AEGISX_PLATFORM_CREDENTIAL ?? env.BENCHMARK_TOKEN ?? "",
+      credential:
+        env.PLATFORM_ACCESS_KEY ??
+        env.AEGISX_PLATFORM_CREDENTIAL ??
+        env.BENCHMARK_TOKEN ??
+        "",
       ...(env.AEGISX_PLATFORM_REMOTE_EVENT_ID
         ? { remoteEventId: env.AEGISX_PLATFORM_REMOTE_EVENT_ID }
         : {}),

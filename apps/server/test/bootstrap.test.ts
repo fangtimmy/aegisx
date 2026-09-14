@@ -231,6 +231,46 @@ describe("readBootstrapSpec", () => {
     ).toThrow(/not a builtin model/)
   })
 
+  describe("organizer contract variables", () => {
+    const contract = {
+      PLATFORM_BASE_URL: "https://pro.example.com",
+      PLATFORM_ACCESS_KEY: "ak_live_x",
+      LLM_BASE_URL: "https://gw.example.com/llm",
+      LLM_API_KEY: "sk-1",
+      // Deployment facts baked into the appliance image ENV.
+      AEGISX_PLATFORM_TYPE: "dasctf",
+      AEGISX_MODEL_ID: "deepseek-flash",
+    }
+
+    test("the four contract variables alone configure provider and platform", () => {
+      const { spec } = specFrom(contract)
+      expect(spec.provider).toMatchObject({
+        baseUrl: "https://gw.example.com/llm",
+        apiKey: "sk-1",
+        modelId: "deepseek-flash",
+      })
+      expect(spec.platform).toEqual({
+        type: "dasctf",
+        baseUrl: "https://pro.example.com",
+        credential: "ak_live_x",
+      })
+    })
+
+    test("contract variables win over the AEGISX_* names", () => {
+      const { spec } = specFrom({
+        ...contract,
+        AEGISX_PLATFORM_BASE_URL: "https://legacy-platform.example.com",
+        AEGISX_PLATFORM_CREDENTIAL: "ak_legacy",
+        AEGISX_PROVIDER_BASE_URL: "https://legacy-gw.example.com",
+        AEGISX_PROVIDER_API_KEY: "sk-legacy",
+      })
+      expect(spec.provider?.baseUrl).toBe("https://gw.example.com/llm")
+      expect(spec.provider?.apiKey).toBe("sk-1")
+      expect(spec.platform?.baseUrl).toBe("https://pro.example.com")
+      expect(spec.platform?.credential).toBe("ak_live_x")
+    })
+  })
+
   describe("hosted TSecBench benchmark variables", () => {
     test("BENCHMARK_BASE_URL/TOKEN alone bind a tsecbench platform", () => {
       const spec = readBootstrapSpec({
