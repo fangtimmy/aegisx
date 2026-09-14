@@ -101,7 +101,7 @@ app 产物（`aegisx/app-build`），差异全部在 target 专属层：
 
 ## 交付（分发）
 
-镜像体积：未压缩 5.05GB，gzip 压缩后 **1.85GB**（2026-09-12 于 `:test` 实测，与 tsecbench 同在 3GB 量级以内）。
+镜像体积：未压缩 5.05GB，gzip 压缩后 **1.85GB**（2026-09-14 复测于 `:test`，与 tsecbench 同在 3GB 量级以内）。
 
 ```sh
 docker save aegisx/xihulunjian:test | gzip > /tmp/aegisx-xihulunjian-<版本>.tar.gz
